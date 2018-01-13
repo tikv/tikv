@@ -156,8 +156,6 @@ pub struct Store<T, C: 'static> {
 
     pub coprocessor_host: Arc<CoprocessorHost>,
 
-    compaction_listener: Option<StdReceiver<CompactedEvent>>,
-
     snap_mgr: SnapManager,
 
     raft_metrics: RaftMetrics,
@@ -199,7 +197,6 @@ impl<T, C> Store<T, C> {
         mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
         mut coprocessor_host: CoprocessorHost,
-        compaction_listener: Option<StdReceiver<CompactedEvent>>,
     ) -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
         cfg.validate()?;
@@ -234,7 +231,6 @@ impl<T, C> Store<T, C> {
             trans: trans,
             pd_client: pd_client,
             coprocessor_host: Arc::new(coprocessor_host),
-            compaction_listener: compaction_listener,
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
             entry_cache_metries: Rc::new(RefCell::new(CacheQueryStats::default())),
@@ -1794,89 +1790,71 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
-    fn poll_compaction_event(&mut self) {
-        if self.compaction_listener.is_none() {
+    fn on_compaction_finished(&mut self, event: CompactedEvent) {
+        // If size declining is trivial, skip.
+        let total_bytes_declined = if event.total_input_bytes > event.total_output_bytes {
+            event.total_input_bytes - event.total_output_bytes
+        } else {
+            0
+        };
+        if total_bytes_declined < self.cfg.region_split_check_diff.0 ||
+            total_bytes_declined * 10 < event.total_input_bytes
+        {
             return;
         }
 
-        let mut events = vec![];
-        loop {
-            match self.compaction_listener.as_ref().unwrap().try_recv() {
-                Ok(event) => events.push(event),
-                Err(TryRecvError::Empty) => break,
-                Err(e) => panic!("unexpected error {:?}", e),
+        let output_level_str = event.output_level.to_string();
+        COMPACTION_DECLINED_BYTES
+            .with_label_values(&[&output_level_str])
+            .observe(total_bytes_declined as f64);
+
+        // Calculate influenced regions.
+        let mut influenced_regions = vec![];
+        for (end_key, region_id) in self.region_ranges
+            .range((Included(event.start_key), Included(event.end_key)))
+        {
+            influenced_regions.push((region_id, end_key.clone()));
+        }
+        // Compaction may happens between the gap of two valid regions.
+        if influenced_regions.is_empty() {
+            return;
+        }
+
+        let mut region_declined_bytes = vec![];
+        let mut last_end_key = data_key(b"");
+        for (region_id, end_key) in influenced_regions.drain(..) {
+            let mut old_size = 0;
+            for prop in &event.input_props {
+                old_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
+            }
+            let mut new_size = 0;
+            for prop in &event.output_props {
+                new_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
+            }
+            last_end_key = end_key.clone();
+
+            if old_size > new_size &&
+                old_size - new_size > self.cfg.region_split_check_diff.0 / 16
+            {
+                region_declined_bytes.push((region_id, old_size - new_size));
             }
         }
 
-        for event in events.drain(..) {
-            // If size declining is trivial, skip.
-            let total_bytes_declined = if event.total_input_bytes > event.total_output_bytes {
-                event.total_input_bytes - event.total_output_bytes
-            } else {
-                0
-            };
-            if total_bytes_declined < self.cfg.region_split_check_diff.0 ||
-                total_bytes_declined * 10 < event.total_input_bytes
-            {
-                continue;
-            }
+        COMPACTION_RELATED_REGION_COUNT
+            .with_label_values(&[&output_level_str])
+            .observe(region_declined_bytes.len() as f64);
 
-            let output_level_str = event.output_level.to_string();
-            COMPACTION_DECLINED_BYTES
-                .with_label_values(&[&output_level_str])
-                .observe(total_bytes_declined as f64);
-
-            // Calculate influenced regions.
-            let mut influenced_regions = vec![];
-            for (end_key, region_id) in self.region_ranges
-                .range((Included(event.start_key), Included(event.end_key)))
-            {
-                influenced_regions.push((region_id, end_key.clone()));
-            }
-            // Compaction may happens between the gap of two valid regions.
-            if influenced_regions.is_empty() {
-                continue;
-            }
-
-            let mut region_declined_bytes = vec![];
-            let mut last_end_key = data_key(b"");
-            for (region_id, end_key) in influenced_regions.drain(..) {
-                let mut old_size = 0;
-                for prop in &event.input_props {
-                    old_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
-                }
-                let mut new_size = 0;
-                for prop in &event.output_props {
-                    new_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
-                }
-                last_end_key = end_key.clone();
-
-                if old_size > new_size &&
-                    old_size - new_size > self.cfg.region_split_check_diff.0 / 16
-                {
-                    region_declined_bytes.push((region_id, old_size - new_size));
-                }
-            }
-
-            COMPACTION_RELATED_REGION_COUNT
-                .with_label_values(&[&output_level_str])
-                .observe(region_declined_bytes.len() as f64);
-
-            for (region_id, declined_bytes) in region_declined_bytes.drain(..) {
-                if let Some(peer) = self.region_peers.get_mut(region_id) {
-                    peer.compaction_declined_bytes += declined_bytes;
-                    if peer.compaction_declined_bytes >= self.cfg.region_split_check_diff.0 {
-                        UPDATE_REGION_SIZE_BY_COMPACTION_COUNTER.inc();
-                    }
+        for (region_id, declined_bytes) in region_declined_bytes.drain(..) {
+            if let Some(peer) = self.region_peers.get_mut(region_id) {
+                peer.compaction_declined_bytes += declined_bytes;
+                if peer.compaction_declined_bytes >= self.cfg.region_split_check_diff.0 {
+                    UPDATE_REGION_SIZE_BY_COMPACTION_COUNTER.inc();
                 }
             }
         }
     }
 
     fn on_split_region_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        // Poll all compaction finished event.
-        self.poll_compaction_event();
-
         // To avoid frequent scan, we only add new scan tasks if all previous tasks
         // have finished.
         // TODO: check whether a gc progress has been started.
@@ -2590,6 +2568,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 region_id,
                 region_size,
             } => self.on_approximate_region_size(region_id, region_size),
+            Msg::CompactedEvent(event) => self.on_compaction_finished(event),
         }
     }
 

@@ -69,7 +69,7 @@ use tikv::storage::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::resolve;
-use tikv::raftstore::store::{self, size_change_filter, Engines, SnapManager};
+use tikv::raftstore::store::{self, size_change_filter, Engines, Msg as StoreMsg, SnapManager};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
@@ -170,12 +170,20 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
     let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
     let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), significant_msg_sender);
+    let raftstore_ch = store_sendch.clone();
+    let compacted_handler = |compacted_event| if let Err(e) =
+        raftstore_ch.try_send(StoreMsg::CompactedEvent(compacted_event))
+    {
+        error!(
+            "Send compaction finished event to raftstore failed: {:?}",
+            e
+        );
+    };
 
     // Create kv engine, storage.
     let mut kv_db_opts = cfg.rocksdb.build_opt();
-    let (compaction_tx, compaction_rx) = mpsc::channel();
     kv_db_opts.add_event_listener(CompactionListener::new(
-        compaction_tx,
+        compacted_handler,
         Some(size_change_filter),
     ));
     let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
@@ -245,7 +253,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         significant_msg_receiver,
         pd_worker,
         coprocessor_host,
-        Some(compaction_rx),
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));
 

@@ -27,7 +27,7 @@ fn flush<T: Simulator>(cluster: &mut Cluster<T>) {
 fn test_update_regoin_size<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
-    cluster.cfg.raft_store.region_split_check_diff = ReadableSize::kb(4);
+    cluster.cfg.raft_store.region_split_check_diff = ReadableSize::kb(1);
     // Promoting data in level 0 flow to level 1.
     cluster
         .cfg
@@ -36,9 +36,9 @@ fn test_update_regoin_size<T: Simulator>(cluster: &mut Cluster<T>) {
         .level0_file_num_compaction_trigger = 1;
     // Promoting data in level 1 flow to level 2.
     cluster.cfg.rocksdb.defaultcf.max_bytes_for_level_base = ReadableSize::kb(16);
-    cluster.run();
+    cluster.start();
 
-    for _ in 0..4 {
+    for _ in 0..2 {
         for i in 0..1000 {
             let (k, v) = (format!("k{}", i), format!("value{}", i));
             cluster.must_put(k.as_bytes(), v.as_bytes());

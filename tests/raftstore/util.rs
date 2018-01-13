@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::thread;
 
-use rocksdb::DB;
+use rocksdb::{CompactionJobInfo, DB};
 use protobuf;
 
 use kvproto::metapb::{self, RegionEpoch};
@@ -300,4 +300,8 @@ pub fn new_pd_transfer_leader(peer: metapb::Peer) -> Option<RegionHeartbeatRespo
     let mut resp = RegionHeartbeatResponse::new();
     resp.set_transfer_leader(transfer_leader);
     Some(resp)
+}
+
+pub fn dummpy_filter(_: &CompactionJobInfo) -> bool {
+    true
 }

@@ -20,6 +20,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::RegionEpoch;
 use raft::SnapshotStatus;
 use util::escape;
+use util::rocksdb::CompactedEvent;
 
 pub type Callback = Box<FnBox(RaftCmdResponse) + Send>;
 pub type BatchCallback = Box<FnBox(Vec<Option<RaftCmdResponse>>) + Send>;
@@ -86,6 +87,9 @@ pub enum Msg {
 
     // For region size
     ApproximateRegionSize { region_id: u64, region_size: u64 },
+
+    // Compaction finished event
+    CompactedEvent(CompactedEvent),
 }
 
 impl fmt::Debug for Msg {
@@ -121,6 +125,7 @@ impl fmt::Debug for Msg {
                 region_id,
                 region_size
             ),
+            Msg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),
         }
     }
 }

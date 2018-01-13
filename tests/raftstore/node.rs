@@ -14,14 +14,15 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, RwLock};
-use std::sync::mpsc::Receiver;
 use std::time::Duration;
 use std::boxed::FnBox;
 use std::ops::Deref;
+use std::path::Path;
 
 use tempdir::TempDir;
 
 use super::cluster::{Cluster, Simulator};
+use super::util::dummpy_filter;
 use tikv::server::Node;
 use tikv::raftstore::store::*;
 use kvproto::metapb;
@@ -34,9 +35,10 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::HandyRwLock;
 use tikv::util::worker::FutureWorker;
 use tikv::util::transport::SendCh;
-use tikv::util::rocksdb::CompactedEvent;
+use tikv::util::rocksdb::{self, CompactionListener};
 use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::raft::SnapshotStatus;
+use tikv::storage::CF_DEFAULT;
 use super::pd::TestPdClient;
 use super::transport_simulate::*;
 
@@ -158,9 +160,8 @@ impl Simulator for NodeCluster {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        engines: Engines,
-        cl: Option<Receiver<CompactedEvent>>,
-    ) -> u64 {
+        engines: Option<Engines>,
+    ) -> (u64, Engines, Option<TempDir>) {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
 
         let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
@@ -174,6 +175,36 @@ impl Simulator for NodeCluster {
             &cfg.raft_store,
             self.pd_client.clone(),
         );
+
+        // Create engine
+        let mut path = None;
+        let engines = match engines {
+            Some(e) => e,
+            None => {
+                path = Some(TempDir::new("test_cluster").unwrap());
+                let mut kv_db_opt = cfg.rocksdb.build_opt();
+                let store_ch = node.get_sendch();
+                let cmpacted_handler =
+                    |event| { store_ch.send(Msg::CompactedEvent(event)).unwrap(); };
+                kv_db_opt.add_event_listener(CompactionListener::new(
+                    cmpacted_handler,
+                    Some(dummpy_filter),
+                ));
+                let kv_cfs_opt = cfg.rocksdb.build_cf_opts();
+                let engine = Arc::new(
+                    rocksdb::new_engine_opt(
+                        path.as_ref().unwrap().path().to_str().unwrap(),
+                        kv_db_opt,
+                        kv_cfs_opt,
+                    ).unwrap(),
+                );
+                let raft_path = path.as_ref().unwrap().path().join(Path::new("raft"));
+                let raft_engine = Arc::new(
+                    rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
+                );
+                Engines::new(engine, raft_engine)
+            }
+        };
 
         let (snap_mgr, tmp) =
             if node_id == 0 || !self.trans.rl().snap_paths.contains_key(&node_id) {
@@ -198,7 +229,6 @@ impl Simulator for NodeCluster {
             snap_status_receiver,
             pd_worker,
             coprocessor_host,
-            cl,
         ).unwrap();
         assert!(
             engines
@@ -230,7 +260,7 @@ impl Simulator for NodeCluster {
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, simulate_trans);
 
-        node_id
+        (node_id, engines, path)
     }
 
     fn get_snap_dir(&self, node_id: u64) -> String {

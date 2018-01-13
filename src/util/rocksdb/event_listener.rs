@@ -12,8 +12,6 @@
 // limitations under the License.
 
 use std::cmp;
-use std::sync::mpsc::Sender;
-use std::sync::Mutex;
 
 use rocksdb::{self, CompactionJobInfo, FlushJobInfo, IngestionInfo};
 use util::rocksdb::engine_metrics::*;
@@ -92,22 +90,24 @@ impl CompactedEvent {
     }
 }
 
-pub struct CompactionListener<F> {
-    notifier: Mutex<Sender<CompactedEvent>>,
+pub struct CompactionListener<CH, F> {
+    ch: CH,
     filter: Option<F>,
 }
 
-impl<F> CompactionListener<F> {
-    pub fn new(notifier: Sender<CompactedEvent>, filter: Option<F>) -> CompactionListener<F> {
+impl<CH, F> CompactionListener<CH, F> {
+    pub fn new(ch: CH, filter: Option<F>) -> CompactionListener<CH, F> {
         CompactionListener {
-            notifier: Mutex::new(notifier),
+            ch: ch,
             filter: filter,
         }
     }
 }
 
-impl<F: Fn(&CompactionJobInfo) -> bool + Sync + Send> rocksdb::EventListener
-    for CompactionListener<F> {
+impl<
+    F: Fn(&CompactionJobInfo) -> bool + Sync + Send,
+    CH: Fn(CompactedEvent) + Send + Sync,
+> rocksdb::EventListener for CompactionListener<CH, F> {
     fn on_compaction_completed(&self, info: &CompactionJobInfo) {
         if self.filter.is_some() && !self.filter.as_ref().unwrap()(info) {
             return;
@@ -167,16 +167,12 @@ impl<F: Fn(&CompactionJobInfo) -> bool + Sync + Send> rocksdb::EventListener
             return;
         }
 
-        self.notifier
-            .lock()
-            .unwrap()
-            .send(CompactedEvent::new(
-                info,
-                smallest_key.unwrap(),
-                largest_key.unwrap(),
-                input_props,
-                output_props,
-            ))
-            .unwrap();
+        (self.ch)(CompactedEvent::new(
+            info,
+            smallest_key.unwrap(),
+            largest_key.unwrap(),
+            input_props,
+            output_props,
+        ));
     }
 }

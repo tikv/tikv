@@ -13,14 +13,15 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, RwLock};
-use std::sync::mpsc::Receiver;
 use std::time::Duration;
 use std::boxed::FnBox;
+use std::path::Path;
 
 use grpc::EnvBuilder;
 use tempdir::TempDir;
 
 use super::cluster::{Cluster, Simulator};
+use super::util::dummpy_filter;
 use tikv::config::TiKvConfig;
 use tikv::server::{Server, ServerTransport};
 use tikv::server::{create_raft_storage, Config, Node, PdStoreAddrResolver, RaftClient};
@@ -33,8 +34,8 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::transport::SendCh;
 use tikv::util::security::SecurityManager;
 use tikv::util::worker::{FutureWorker, Worker};
-use tikv::util::rocksdb::CompactedEvent;
-use tikv::storage::Engine;
+use tikv::util::rocksdb::{self, CompactionListener};
+use tikv::storage::{Engine, CF_DEFAULT};
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
 
@@ -95,9 +96,8 @@ impl Simulator for ServerCluster {
         &mut self,
         node_id: u64,
         mut cfg: TiKvConfig,
-        engines: Engines,
-        cl: Option<Receiver<CompactedEvent>>,
-    ) -> u64 {
+        engines: Option<Engines>,
+    ) -> (u64, Engines, Option<TempDir>) {
         assert!(node_id == 0 || !self.metas.contains_key(&node_id));
 
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
@@ -120,6 +120,36 @@ impl Simulator for ServerCluster {
         let (snap_status_sender, snap_status_receiver) = mpsc::channel();
         let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), snap_status_sender);
         let sim_router = SimulateTransport::new(raft_router);
+
+        // Create engine
+        let mut path = None;
+        let engines = match engines {
+            Some(e) => e,
+            None => {
+                path = Some(TempDir::new("test_cluster").unwrap());
+                let mut kv_db_opt = cfg.rocksdb.build_opt();
+                let store_ch = store_sendch.clone();
+                let cmpacted_handler =
+                    |event| { store_ch.send(StoreMsg::CompactedEvent(event)).unwrap(); };
+                kv_db_opt.add_event_listener(CompactionListener::new(
+                    cmpacted_handler,
+                    Some(dummpy_filter),
+                ));
+                let kv_cfs_opt = cfg.rocksdb.build_cf_opts();
+                let engine = Arc::new(
+                    rocksdb::new_engine_opt(
+                        path.as_ref().unwrap().path().to_str().unwrap(),
+                        kv_db_opt,
+                        kv_cfs_opt,
+                    ).unwrap(),
+                );
+                let raft_path = path.as_ref().unwrap().path().join(Path::new("raft"));
+                let raft_engine = Arc::new(
+                    rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
+                );
+                Engines::new(engine, raft_engine)
+            }
+        };
 
         // Create storage.
         let mut store =
@@ -164,13 +194,12 @@ impl Simulator for ServerCluster {
 
         node.start(
             event_loop,
-            engines,
+            engines.clone(),
             simulate_trans.clone(),
             snap_mgr.clone(),
             snap_status_receiver,
             pd_worker,
             coprocessor_host,
-            cl,
         ).unwrap();
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
@@ -193,7 +222,7 @@ impl Simulator for ServerCluster {
         );
         self.addrs.insert(node_id, format!("{}", addr));
 
-        node_id
+        (node_id, engines, path)
     }
 
     fn get_snap_dir(&self, node_id: u64) -> String {
