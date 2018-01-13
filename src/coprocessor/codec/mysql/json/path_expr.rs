@@ -68,7 +68,6 @@ pub type PathExpressionFlag = u8;
 pub const PATH_EXPRESSION_CONTAINS_ASTERISK: PathExpressionFlag = 0x01;
 pub const PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK: PathExpressionFlag = 0x02;
 
-
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct PathExpression {
     pub legs: Vec<PathLeg>,
@@ -77,9 +76,9 @@ pub struct PathExpression {
 
 impl PathExpression {
     pub fn contains_any_asterisk(&self) -> bool {
-        (self.flags &
-            (PATH_EXPRESSION_CONTAINS_ASTERISK | PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK)) !=
-            0
+        (self.flags
+            & (PATH_EXPRESSION_CONTAINS_ASTERISK | PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK))
+            != 0
     }
 }
 

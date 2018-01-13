@@ -317,8 +317,8 @@ impl Cursor {
             return Ok(false);
         }
 
-        if self.scan_mode == ScanMode::Forward && self.valid() &&
-            self.iter.key() >= key.encoded().as_slice()
+        if self.scan_mode == ScanMode::Forward && self.valid()
+            && self.iter.key() >= key.encoded().as_slice()
         {
             return Ok(true);
         }
@@ -342,8 +342,8 @@ impl Cursor {
             return self.seek(key, statistics);
         }
         let ord = self.iter.key().cmp(key.encoded());
-        if ord == Ordering::Equal ||
-            (self.scan_mode == ScanMode::Forward && ord == Ordering::Greater)
+        if ord == Ordering::Equal
+            || (self.scan_mode == ScanMode::Forward && ord == Ordering::Greater)
         {
             return Ok(true);
         }
@@ -404,8 +404,8 @@ impl Cursor {
             return Ok(false);
         }
 
-        if self.scan_mode == ScanMode::Backward && self.valid() &&
-            self.iter.key() <= key.encoded().as_slice()
+        if self.scan_mode == ScanMode::Backward && self.valid()
+            && self.iter.key() <= key.encoded().as_slice()
         {
             return Ok(true);
         }
@@ -425,8 +425,7 @@ impl Cursor {
             return self.seek_for_prev(key, statistics);
         }
         let ord = self.iter.key().cmp(key.encoded());
-        if ord == Ordering::Equal ||
-            (self.scan_mode == ScanMode::Backward && ord == Ordering::Less)
+        if ord == Ordering::Equal || (self.scan_mode == ScanMode::Backward && ord == Ordering::Less)
         {
             return Ok(true);
         }
@@ -781,8 +780,7 @@ mod tests {
             .unwrap();
         let mut statistics = CFStatistics::default();
         assert!(!iter.seek(&make_key(b"z\x00"), &mut statistics).unwrap());
-        assert!(!iter.reverse_seek(&make_key(b"x"), &mut statistics)
-            .unwrap());
+        assert!(!iter.reverse_seek(&make_key(b"x"), &mut statistics).unwrap());
         must_delete(engine, b"x");
         must_delete(engine, b"z");
     }

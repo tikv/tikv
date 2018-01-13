@@ -22,21 +22,21 @@
 
 #[macro_use]
 extern crate clap;
+extern crate fs2;
 #[cfg(feature = "mem-profiling")]
 extern crate jemallocator;
-extern crate tikv;
+extern crate libc;
 #[macro_use]
 extern crate log;
-extern crate rocksdb;
-extern crate toml;
-extern crate libc;
-extern crate fs2;
-#[cfg(unix)]
-extern crate signal;
 #[cfg(unix)]
 extern crate nix;
 extern crate prometheus;
+extern crate rocksdb;
 extern crate serde_json;
+#[cfg(unix)]
+extern crate signal;
+extern crate tikv;
+extern crate toml;
 
 mod signal_handler;
 #[cfg(unix)]
@@ -153,9 +153,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let snap_path = store_path.join(Path::new("snap"));
     let raft_db_path = Path::new(&cfg.raft_store.raftdb_path);
 
-    let f = File::create(lock_path.as_path()).unwrap_or_else(|e| {
-        fatal!("failed to create lock at {}: {:?}", lock_path.display(), e)
-    });
+    let f = File::create(lock_path.as_path())
+        .unwrap_or_else(|e| fatal!("failed to create lock at {}: {:?}", lock_path.display(), e));
     if f.try_lock_exclusive().is_err() {
         fatal!(
             "lock {:?} failed, maybe another instance is using this directory.",
@@ -198,9 +197,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let (mut worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
         .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
     let limiter = if cfg.server.snap_max_write_bytes_per_sec.0 > 0 {
-        Some(Arc::new(
-            IOLimiter::new(cfg.server.snap_max_write_bytes_per_sec.0),
-        ))
+        Some(Arc::new(IOLimiter::new(
+            cfg.server.snap_max_write_bytes_per_sec.0,
+        )))
     } else {
         None
     };
@@ -361,9 +360,7 @@ fn main() {
     let matches = App::new("TiKV")
         .long_version(long_version.as_ref())
         .author("PingCAP Inc. <info@pingcap.com>")
-        .about(
-            "A Distributed transactional key-value database powered by Rust and Raft",
-        )
+        .about("A Distributed transactional key-value database powered by Rust and Raft")
         .arg(
             Arg::with_name("config")
                 .short("C")
@@ -465,9 +462,9 @@ fn main() {
         process::exit(0);
     }
 
-    let mut config = matches.value_of("config").map_or_else(
-        TiKvConfig::default,
-        |path| {
+    let mut config = matches
+        .value_of("config")
+        .map_or_else(TiKvConfig::default, |path| {
             File::open(&path)
                 .map_err::<Box<Error>, _>(|e| Box::new(e))
                 .and_then(|mut f| {
@@ -479,8 +476,7 @@ fn main() {
                 .unwrap_or_else(|e| {
                     fatal!("invalid configuration file {:?}: {}", path, e);
                 })
-        },
-    );
+        });
 
     overwrite_config_with_cmd_args(&mut config, &matches);
 

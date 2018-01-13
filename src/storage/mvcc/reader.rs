@@ -169,11 +169,9 @@ impl MvccReader {
 
         let cursor = self.write_cursor.as_mut().unwrap();
         let ok = if reverse {
-            cursor
-                .near_seek_for_prev(&key.append_ts(ts), &mut self.statistics.write)?
+            cursor.near_seek_for_prev(&key.append_ts(ts), &mut self.statistics.write)?
         } else {
-            cursor
-                .near_seek(&key.append_ts(ts), &mut self.statistics.write)?
+            cursor.near_seek(&key.append_ts(ts), &mut self.statistics.write)?
         };
         if !ok {
             return Ok(None);
@@ -306,9 +304,8 @@ impl MvccReader {
 
         while ok {
             if Write::parse(cursor.value())?.start_ts == ts {
-                return Ok(Some(
-                    Key::from_encoded(cursor.key().to_vec()).truncate_ts()?,
-                ));
+                return Ok(Some(Key::from_encoded(cursor.key().to_vec())
+                    .truncate_ts()?));
             }
             ok = cursor.next(&mut self.statistics.write);
         }
@@ -677,9 +674,7 @@ mod tests {
             CFOptions::new(CF_LOCK, rocksdb::ColumnFamilyOptions::new()),
             CFOptions::new(CF_WRITE, cf_opts),
         ];
-        Arc::new(
-            rocksdb_util::new_engine_opt(path, db_opts, cfs_opts).unwrap(),
-        )
+        Arc::new(rocksdb_util::new_engine_opt(path, db_opts, cfs_opts).unwrap())
     }
 
     fn make_region(id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Region {

@@ -63,9 +63,7 @@ impl SyncStorage {
     }
 
     pub fn get(&self, ctx: Context, key: &Key, start_ts: u64) -> Result<Option<Value>> {
-        wait_op!(|cb| {
-            self.store.async_get(ctx, key.to_owned(), start_ts, cb)
-        }).unwrap()
+        wait_op!(|cb| self.store.async_get(ctx, key.to_owned(), start_ts, cb)).unwrap()
     }
 
     #[allow(dead_code)]
@@ -75,10 +73,9 @@ impl SyncStorage {
         keys: &[Key],
         start_ts: u64,
     ) -> Result<Vec<Result<KvPair>>> {
-        wait_op!(|cb| {
-            self.store
-                .async_batch_get(ctx, keys.to_owned(), start_ts, cb)
-        }).unwrap()
+        wait_op!(|cb| self.store
+            .async_batch_get(ctx, keys.to_owned(), start_ts, cb))
+            .unwrap()
     }
 
     pub fn scan(
@@ -89,16 +86,14 @@ impl SyncStorage {
         key_only: bool,
         start_ts: u64,
     ) -> Result<Vec<Result<KvPair>>> {
-        wait_op!(|cb| {
-            self.store.async_scan(
-                ctx,
-                key,
-                limit,
-                start_ts,
-                Options::new(0, false, key_only),
-                cb,
-            )
-        }).unwrap()
+        wait_op!(|cb| self.store.async_scan(
+            ctx,
+            key,
+            limit,
+            start_ts,
+            Options::new(0, false, key_only),
+            cb,
+        )).unwrap()
     }
 
     pub fn prewrite(
@@ -108,10 +103,14 @@ impl SyncStorage {
         primary: Vec<u8>,
         start_ts: u64,
     ) -> Result<Vec<Result<()>>> {
-        wait_op!(|cb| {
-            self.store
-                .async_prewrite(ctx, mutations, primary, start_ts, Options::default(), cb)
-        }).unwrap()
+        wait_op!(|cb| self.store.async_prewrite(
+            ctx,
+            mutations,
+            primary,
+            start_ts,
+            Options::default(),
+            cb
+        )).unwrap()
     }
 
     pub fn commit(
@@ -121,17 +120,15 @@ impl SyncStorage {
         start_ts: u64,
         commit_ts: u64,
     ) -> Result<()> {
-        wait_op!(|cb| {
-            self.store.async_commit(ctx, keys, start_ts, commit_ts, cb)
-        }).unwrap()
+        wait_op!(|cb| self.store.async_commit(ctx, keys, start_ts, commit_ts, cb)).unwrap()
     }
 
     pub fn cleanup(&self, ctx: Context, key: Key, start_ts: u64) -> Result<()> {
-        wait_op!(|cb| { self.store.async_cleanup(ctx, key, start_ts, cb) }).unwrap()
+        wait_op!(|cb| self.store.async_cleanup(ctx, key, start_ts, cb)).unwrap()
     }
 
     pub fn rollback(&self, ctx: Context, keys: Vec<Key>, start_ts: u64) -> Result<()> {
-        wait_op!(|cb| { self.store.async_rollback(ctx, keys, start_ts, cb) }).unwrap()
+        wait_op!(|cb| self.store.async_rollback(ctx, keys, start_ts, cb)).unwrap()
     }
 
     pub fn scan_lock(&self, ctx: Context, max_ts: u64) -> Result<Vec<LockInfo>> {
@@ -141,12 +138,12 @@ impl SyncStorage {
     pub fn resolve_lock(&self, ctx: Context, start_ts: u64, commit_ts: Option<u64>) -> Result<()> {
         let mut txn_status = HashMap::default();
         txn_status.insert(start_ts, commit_ts.unwrap_or(0));
-        wait_op!(|cb| { self.store.async_resolve_lock(ctx, txn_status, cb) }).unwrap()
+        wait_op!(|cb| self.store.async_resolve_lock(ctx, txn_status, cb)).unwrap()
     }
 
     pub fn resolve_lock_batch(&self, ctx: Context, txns: Vec<(u64, u64)>) -> Result<()> {
         let txn_status: HashMap<u64, u64> = txns.into_iter().collect();
-        wait_op!(|cb| { self.store.async_resolve_lock(ctx, txn_status, cb) }).unwrap()
+        wait_op!(|cb| self.store.async_resolve_lock(ctx, txn_status, cb)).unwrap()
     }
 
     pub fn gc(&self, ctx: Context, safe_point: u64) -> Result<()> {
@@ -171,9 +168,7 @@ impl SyncStorage {
         start_key: Vec<u8>,
         limit: usize,
     ) -> Result<Vec<Result<KvPair>>> {
-        wait_op!(|cb| {
-            self.store.async_raw_scan(ctx, start_key, limit, cb)
-        }).unwrap()
+        wait_op!(|cb| self.store.async_raw_scan(ctx, start_key, limit, cb)).unwrap()
     }
 }
 

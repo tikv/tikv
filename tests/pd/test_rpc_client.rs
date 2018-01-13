@@ -104,12 +104,12 @@ fn test_rpc_client() {
         .name_prefix(thd_name!("poller"))
         .create();
     let (tx, rx) = mpsc::channel();
-    let f = client.handle_region_heartbeat_response(1, move |resp| { let _ = tx.send(resp); });
+    let f = client.handle_region_heartbeat_response(1, move |resp| {
+        let _ = tx.send(resp);
+    });
     poller.spawn(f).forget();
     poller
-        .spawn(
-            client.region_heartbeat(region.clone(), peer.clone(), RegionStat::default()),
-        )
+        .spawn(client.region_heartbeat(region.clone(), peer.clone(), RegionStat::default()))
         .forget();
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
@@ -213,7 +213,9 @@ fn test_retry_async() {
 
 #[test]
 fn test_retry_sync() {
-    let sync = |client: &RpcClient| { client.get_store(1).unwrap(); };
+    let sync = |client: &RpcClient| {
+        client.get_store(1).unwrap();
+    };
     test_retry(sync)
 }
 

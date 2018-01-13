@@ -24,22 +24,22 @@
 #![allow(needless_pass_by_value)]
 #![allow(unreadable_literal)]
 
+extern crate futures;
+extern crate futures_cpupool;
+extern crate grpcio as grpc;
 #[cfg(feature = "mem-profiling")]
 extern crate jemallocator;
+extern crate kvproto;
 #[macro_use]
 extern crate log;
 extern crate protobuf;
-#[macro_use]
-extern crate tikv;
 extern crate rand;
 extern crate rocksdb;
 extern crate tempdir;
-extern crate kvproto;
-extern crate tipb;
 extern crate test;
-extern crate grpcio as grpc;
-extern crate futures;
-extern crate futures_cpupool;
+#[macro_use]
+extern crate tikv;
+extern crate tipb;
 extern crate toml;
 
 mod raft;

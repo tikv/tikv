@@ -31,7 +31,6 @@ const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: usize = 10 * 1024 * 1024;
 const INITIAL_BUFFER_CAP: usize = 1024;
 
-
 static CONN_ID: AtomicUsize = ATOMIC_USIZE_INIT;
 
 struct Conn {
@@ -76,11 +75,7 @@ impl Conn {
                 .map_err(|_| ())
                 .select(
                     sink.sink_map_err(Error::from)
-                        .send_all(
-                            rx.map(stream::iter_ok)
-                                .flatten()
-                                .map_err(|()| Error::Sink),
-                        )
+                        .send_all(rx.map(stream::iter_ok).flatten().map_err(|()| Error::Sink))
                         .then(move |r| {
                             alive.store(false, Ordering::SeqCst);
                             r
@@ -153,7 +148,6 @@ impl RaftClient {
         Ok(())
     }
 
-
     pub fn flush(&mut self) {
         let addrs = &mut self.addrs;
         self.conns.retain(|&(ref addr, _), conn| {
@@ -176,8 +170,7 @@ impl RaftClient {
             if let Err(e) = conn.stream.unbounded_send(msgs) {
                 error!(
                     "server: drop conn with tikv endpoint {} flush conn error: {:?}",
-                    addr,
-                    e
+                    addr, e
                 );
 
                 if let Some(addr_current) = addrs.remove(&store_id) {

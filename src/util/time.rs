@@ -101,19 +101,19 @@ impl Monitor {
         let (tx, rx) = mpsc::channel();
         let h = Builder::new()
             .name(thd_name!("time-monitor-worker"))
-            .spawn(move || while let Err(_) = rx.try_recv() {
-                let before = now();
-                thread::sleep(Duration::from_millis(DEFAULT_WAIT_MS));
+            .spawn(move || {
+                while let Err(_) = rx.try_recv() {
+                    let before = now();
+                    thread::sleep(Duration::from_millis(DEFAULT_WAIT_MS));
 
-                let after = now();
-                if let Err(e) = after.duration_since(before) {
-                    error!(
-                        "system time jumped back, {:?} -> {:?}, err {:?}",
-                        before,
-                        after,
-                        e
-                    );
-                    on_jumped()
+                    let after = now();
+                    if let Err(e) = after.duration_since(before) {
+                        error!(
+                            "system time jumped back, {:?} -> {:?}, err {:?}",
+                            before, after, e
+                        );
+                        on_jumped()
+                    }
                 }
             })
             .unwrap();
@@ -293,10 +293,10 @@ impl Instant {
     // Use millisecond resolution for ignoring the error.
     // See more: https://linux.die.net/man/2/clock_gettime
     fn elapsed_duration_coarse(later: Timespec, earlier: Timespec) -> Duration {
-        let later_ms =
-            later.sec * MILLISECOND_PER_SECOND + i64::from(later.nsec) / NANOSECONDS_PER_MILLISECOND;
-        let earlier_ms = earlier.sec * MILLISECOND_PER_SECOND +
-            i64::from(earlier.nsec) / NANOSECONDS_PER_MILLISECOND;
+        let later_ms = later.sec * MILLISECOND_PER_SECOND
+            + i64::from(later.nsec) / NANOSECONDS_PER_MILLISECOND;
+        let earlier_ms = earlier.sec * MILLISECOND_PER_SECOND
+            + i64::from(earlier.nsec) / NANOSECONDS_PER_MILLISECOND;
         let dur = later_ms - earlier_ms;
         if dur >= 0 {
             Duration::from_millis(dur as u64)
@@ -314,8 +314,8 @@ impl Instant {
 impl PartialEq for Instant {
     fn eq(&self, other: &Instant) -> bool {
         match (*self, *other) {
-            (Instant::Monotonic(this), Instant::Monotonic(other)) |
-            (Instant::MonotonicCoarse(this), Instant::MonotonicCoarse(other)) => this.eq(&other),
+            (Instant::Monotonic(this), Instant::Monotonic(other))
+            | (Instant::MonotonicCoarse(this), Instant::MonotonicCoarse(other)) => this.eq(&other),
             _ => false,
         }
     }
@@ -324,8 +324,8 @@ impl PartialEq for Instant {
 impl PartialOrd for Instant {
     fn partial_cmp(&self, other: &Instant) -> Option<Ordering> {
         match (*self, *other) {
-            (Instant::Monotonic(this), Instant::Monotonic(other)) |
-            (Instant::MonotonicCoarse(this), Instant::MonotonicCoarse(other)) => {
+            (Instant::Monotonic(this), Instant::Monotonic(other))
+            | (Instant::MonotonicCoarse(this), Instant::MonotonicCoarse(other)) => {
                 this.partial_cmp(&other)
             }
             // The Order of different types of Instants is meaningless.
@@ -395,15 +395,19 @@ mod tests {
     fn test_time_monitor() {
         let jumped = Arc::new(AtomicBool::new(false));
         let triggered = AtomicBool::new(false);
-        let now = move || if !triggered.load(Ordering::SeqCst) {
-            triggered.store(true, Ordering::SeqCst);
-            SystemTime::now()
-        } else {
-            SystemTime::now().sub(Duration::from_secs(2))
+        let now = move || {
+            if !triggered.load(Ordering::SeqCst) {
+                triggered.store(true, Ordering::SeqCst);
+                SystemTime::now()
+            } else {
+                SystemTime::now().sub(Duration::from_secs(2))
+            }
         };
 
         let jumped2 = Arc::clone(&jumped);
-        let on_jumped = move || { jumped2.store(true, Ordering::SeqCst); };
+        let on_jumped = move || {
+            jumped2.store(true, Ordering::SeqCst);
+        };
 
         let _m = Monitor::new(on_jumped, now);
         thread::sleep(Duration::from_secs(1));

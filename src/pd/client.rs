@@ -305,11 +305,9 @@ impl PdClient for RpcClient {
                     Box::new(
                         sender
                             .sink_map_err(Error::Grpc)
-                            .send_all(
-                                rx.map_err(|e| {
-                                    Error::Other(box_err!("failed to recv heartbeat: {:?}", e))
-                                }).map(|r| (r, WriteFlags::default())),
-                            )
+                            .send_all(rx.map_err(|e| {
+                                Error::Other(box_err!("failed to recv heartbeat: {:?}", e))
+                            }).map(|r| (r, WriteFlags::default())))
                             .map(|(mut sender, _)| sender.get_mut().cancel()),
                     ) as PdFuture<_>
                 }

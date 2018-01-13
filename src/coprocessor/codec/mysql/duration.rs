@@ -221,8 +221,8 @@ impl Duration {
             return Ok(());
         }
         self.fsp = fsp;
-        let nanos =
-            f64::from(self.dur.subsec_nanos()) / f64::from(10u32.pow(NANO_WIDTH - u32::from(self.fsp)));
+        let nanos = f64::from(self.dur.subsec_nanos())
+            / f64::from(10u32.pow(NANO_WIDTH - u32::from(self.fsp)));
         let nanos = (nanos.round() as u32) * (10u32.pow(NANO_WIDTH - u32::from(self.fsp)));
         self.dur = StdDuration::new(self.dur.as_secs(), nanos);
         Ok(())

@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::fs;
 use std::time::{Duration, Instant};
 use std::sync::{Arc, Mutex, RwLock};
@@ -63,10 +62,10 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let value = format!("{:01024}", 0);
     must_get_equal(&engine_2, key.as_bytes(), value.as_bytes());
     let stale = Arc::new(AtomicBool::new(false));
-    cluster
-        .sim
-        .wl()
-        .add_recv_filter(3, box LeadingDuplicatedSnapshotFilter::new(Arc::clone(&stale)));
+    cluster.sim.wl().add_recv_filter(
+        3,
+        box LeadingDuplicatedSnapshotFilter::new(Arc::clone(&stale)),
+    );
     pd_client.must_add_peer(r1, new_peer(3, 3));
     let mut i = 2 * 1024;
     loop {
@@ -322,8 +321,8 @@ impl Filter<RaftMessage> for Arc<StaleSnap> {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         let mut res = Vec::with_capacity(msgs.len());
         for mut m in msgs.drain(..) {
-            if m.get_message().get_msg_type() == MessageType::MsgSnapshot &&
-                m.get_to_peer().get_store_id() == 3
+            if m.get_message().get_msg_type() == MessageType::MsgSnapshot
+                && m.get_to_peer().get_store_id() == 3
             {
                 if self.first_snap.rl().is_none() {
                     *self.first_snap.wl() = Some(m.take_message());
@@ -413,8 +412,8 @@ impl Filter<Msg> for SnapshotAppendFilter {
             if let Msg::RaftMessage(ref msg) = m {
                 should_collect =
                     !stale && msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
-                stale = !pending_msg.is_empty() &&
-                    msg.get_message().get_msg_type() == MessageType::MsgAppend;
+                stale = !pending_msg.is_empty()
+                    && msg.get_message().get_msg_type() == MessageType::MsgAppend;
             }
             if should_collect {
                 pending_msg.push(m);

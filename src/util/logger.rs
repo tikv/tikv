@@ -65,8 +65,8 @@ impl<W: LogWriter + Sync + Send> Log for Logger<W> {
     }
 
     fn log(&self, record: &LogRecord) {
-        if self.tikv_only &&
-            ENABLED_TARGETS
+        if self.tikv_only
+            && ENABLED_TARGETS
                 .iter()
                 .all(|target| !record.target().starts_with(target))
         {

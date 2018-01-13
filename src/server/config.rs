@@ -47,8 +47,7 @@ pub const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    #[serde(skip)]
-    pub cluster_id: u64,
+    #[serde(skip)] pub cluster_id: u64,
 
     // Server listening address.
     pub addr: String,
@@ -70,8 +69,7 @@ pub struct Config {
     pub snap_max_write_bytes_per_sec: ReadableSize,
 
     // Server labels to specify some attributes about this server.
-    #[serde(with = "config::order_map_serde")]
-    pub labels: HashMap<String, String>,
+    #[serde(with = "config::order_map_serde")] pub labels: HashMap<String, String>,
 }
 
 impl Default for Config {
@@ -227,14 +225,7 @@ mod tests {
         }
 
         let valid_cases = vec![
-            "a",
-            "0",
-            "a.1-2",
-            "Cab",
-            "abC",
-            "b_1.2",
-            "cab-012",
-            "3ac.8b2",
+            "a", "0", "a.1-2", "Cab", "abC", "b_1.2", "cab-012", "3ac.8b2"
         ];
 
         for case in valid_cases {

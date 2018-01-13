@@ -101,7 +101,6 @@ where
             "{:?}",
             resp
         );
-
     }
 }
 
@@ -603,8 +602,7 @@ fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
         if try_cnt == 500 {
             panic!(
                 "expect split cnt {}, but got {}",
-                min_region_cnt,
-                region_cnt
+                min_region_cnt, region_cnt
             );
         }
     }
@@ -688,15 +686,13 @@ fn test_node_split_stale_epoch_right_derive() {
     test_split_stale_epoch(&mut cluster, true);
 }
 
-
 // For the peer which is the leader of the region before split,
 // it should campaigns immediately. and then this peer may take the leadership earlier.
 // `test_quick_election_after_split` is a helper function for testing this feature.
 fn test_quick_election_after_split<T: Simulator>(cluster: &mut Cluster<T>) {
     // Calculate the reserved time before a new campaign after split.
-    let reserved_time = Duration::from_millis(
-        cluster.cfg.raft_store.raft_base_tick_interval.as_millis() * 2,
-    );
+    let reserved_time =
+        Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval.as_millis() * 2);
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");

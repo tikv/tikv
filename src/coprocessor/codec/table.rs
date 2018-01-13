@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::io::Write;
 use std::{cmp, u8};
 use tipb::schema::ColumnInfo;
@@ -36,7 +35,6 @@ pub const INDEX_PREFIX_SEP: &[u8] = b"_i";
 pub const SEP_LEN: usize = 2;
 pub const TABLE_PREFIX_LEN: usize = 1;
 pub const TABLE_PREFIX_KEY_LEN: usize = TABLE_PREFIX_LEN + ID_LEN;
-
 
 trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {

@@ -96,9 +96,10 @@ impl Stream for SnapChunk {
                 self.remain_bytes -= buf.len();
                 let mut chunk = SnapshotChunk::new();
                 chunk.set_data(buf);
-                Ok(Async::Ready(
-                    Some((chunk, WriteFlags::default().buffer_hint(true))),
-                ))
+                Ok(Async::Ready(Some((
+                    chunk,
+                    WriteFlags::default().buffer_hint(true),
+                ))))
             }
             Err(e) => Err(box_err!("failed to read snapshot chunk: {}", e)),
         }
@@ -238,8 +239,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                     Err(e) => {
                         error!(
                             "failed to create snapshot file for token {:?}: {:?}",
-                            token,
-                            e
+                            token, e
                         );
                         return;
                     }

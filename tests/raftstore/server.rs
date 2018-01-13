@@ -39,10 +39,8 @@ use super::cluster::{Cluster, Simulator};
 use super::util::wait_cb;
 
 type SimulateStoreTransport = SimulateTransport<StoreMsg, ServerRaftStoreRouter>;
-type SimulateServerTransport = SimulateTransport<
-    RaftMessage,
-    ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>,
->;
+type SimulateServerTransport =
+    SimulateTransport<RaftMessage, ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
 
 struct ServerMeta {
     node: Node<TestPdClient>,

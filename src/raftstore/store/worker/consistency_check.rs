@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::fmt::{self, Display, Formatter};
 
 use crc::crc32::{self, Digest, Hasher32};
@@ -118,8 +117,7 @@ impl<C: MsgSender> Runner<C> {
         if let Err(e) = self.ch.try_send(msg) {
             warn!(
                 "[region {}] failed to send hash compute result, err {:?}",
-                region_id,
-                e
+                region_id, e
             );
         }
     }

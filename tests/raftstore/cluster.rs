@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::collections::{HashMap, HashSet};
 use std::sync::{self, Arc, RwLock};
 use std::time::*;
@@ -409,7 +408,6 @@ impl<T: Simulator> Cluster<T> {
         rid
     }
 
-
     // This is only for fixed id test.
     fn bootstrap_cluster(&mut self, region: metapb::Region) {
         self.pd_client
@@ -778,8 +776,8 @@ impl<T: Simulator> Cluster<T> {
                 self.split_region(region, split_key, Callback::Write(check));
             }
 
-            if self.pd_client.check_split(region, split_key) &&
-                self.pd_client.get_split_count() > split_count
+            if self.pd_client.check_split(region, split_key)
+                && self.pd_client.get_split_count() > split_count
             {
                 return;
             }
@@ -812,15 +810,12 @@ impl<T: Simulator> Cluster<T> {
             if try_cnt > 250 {
                 panic!(
                     "region {} doesn't exist on store {} after {} tries",
-                    region_id,
-                    store_id,
-                    try_cnt
+                    region_id, store_id, try_cnt
                 );
             }
             try_cnt += 1;
             sleep_ms(20);
         }
-
     }
 
     pub fn must_remove_region(&mut self, store_id: u64, region_id: u64) {

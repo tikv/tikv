@@ -61,12 +61,14 @@ pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
     let mut size = 0;
     let limit = entries
         .iter()
-        .take_while(|&e| if size == 0 {
-            size += u64::from(Message::compute_size(e));
-            true
-        } else {
-            size += u64::from(Message::compute_size(e));
-            size <= max
+        .take_while(|&e| {
+            if size == 0 {
+                size += u64::from(Message::compute_size(e));
+                true
+            } else {
+                size += u64::from(Message::compute_size(e));
+                size <= max
+            }
         })
         .count();
 

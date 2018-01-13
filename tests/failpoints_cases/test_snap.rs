@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::*;
 use std::sync::Arc;
 use std::time::*;
@@ -21,7 +20,6 @@ use tikv::util::config::*;
 
 use raftstore::node::new_node_cluster;
 use raftstore::util::*;
-
 
 #[test]
 fn test_overlap_cleanup() {

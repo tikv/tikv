@@ -148,7 +148,6 @@ impl Executor for TopNExecutor {
     }
 }
 
-
 #[cfg(test)]
 pub mod test {
     use std::sync::Arc;

@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, RwLock};
 use std::time::Duration;
@@ -167,17 +166,17 @@ impl Simulator for NodeCluster {
             Arc::clone(&self.pd_client),
         );
 
-        let (snap_mgr, tmp) =
-            if node_id == 0 || !self.trans.rl().snap_paths.contains_key(&node_id) {
-                let tmp = TempDir::new("test_cluster").unwrap();
-                let snap_mgr =
-                    SnapManager::new(tmp.path().to_str().unwrap(), Some(node.get_sendch()), None);
-                (snap_mgr, Some(tmp))
-            } else {
-                let trans = self.trans.rl();
-                let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
-                (snap_mgr.clone(), None)
-            };
+        let (snap_mgr, tmp) = if node_id == 0 || !self.trans.rl().snap_paths.contains_key(&node_id)
+        {
+            let tmp = TempDir::new("test_cluster").unwrap();
+            let snap_mgr =
+                SnapManager::new(tmp.path().to_str().unwrap(), Some(node.get_sendch()), None);
+            (snap_mgr, Some(tmp))
+        } else {
+            let trans = self.trans.rl();
+            let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
+            (snap_mgr.clone(), None)
+        };
 
         // Create coprocessor.
         let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());

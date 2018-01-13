@@ -25,7 +25,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use kvproto::eraftpb::{ConfState, Entry, HardState, Snapshot};
@@ -192,7 +191,6 @@ impl MemStorageCore {
         } else {
             ents
         };
-
 
         let offset = te[0].get_index() - self.entries[0].get_index();
         if self.entries.len() as u64 > offset {

@@ -173,9 +173,10 @@ pub trait NumberDecoder: Read {
             let b = self.read_u8()?;
             if b < 0x80 {
                 if i > 9 || i == 9 && b > 1 {
-                    return Err(Error::Io(
-                        io::Error::new(ErrorKind::InvalidData, "overflow"),
-                    ));
+                    return Err(Error::Io(io::Error::new(
+                        ErrorKind::InvalidData,
+                        "overflow",
+                    )));
                 }
                 return Ok(x | (u64::from(b) << s));
             }

@@ -132,7 +132,6 @@ pub fn prepare_bootstrap(
     Ok(region)
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

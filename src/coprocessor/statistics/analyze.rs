@@ -139,7 +139,6 @@ impl AnalyzeContext {
     }
 }
 
-
 struct SampleBuilder {
     data: TableScanExecutor,
     cols: Vec<ColumnInfo>,

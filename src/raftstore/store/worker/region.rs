@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
@@ -117,8 +116,7 @@ impl SnapContext {
             info!(
                 "[region {}] failed to notify snap result, maybe leadership has changed, \
                  ignore: {:?}",
-                region_id,
-                e
+                region_id, e
             );
         }
         Ok(())
@@ -172,16 +170,16 @@ impl SnapContext {
         check_abort(&abort)?;
 
         let state_key = keys::apply_state_key(region_id);
-        let apply_state: RaftApplyState =
-            match box_try!(self.kv_db.get_msg_cf(CF_RAFT, &state_key)) {
-                Some(state) => state,
-                None => {
-                    return Err(box_err!(
-                        "failed to get raftstate from {}",
-                        escape(&state_key)
-                    ))
-                }
-            };
+        let apply_state: RaftApplyState = match box_try!(self.kv_db.get_msg_cf(CF_RAFT, &state_key))
+        {
+            Some(state) => state,
+            None => {
+                return Err(box_err!(
+                    "failed to get raftstate from {}",
+                    escape(&state_key)
+                ))
+            }
+        };
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
@@ -207,10 +205,7 @@ impl SnapContext {
         region_state.set_state(PeerState::Normal);
         let handle = box_try!(rocksdb::get_cf_handle(&self.kv_db, CF_RAFT));
         box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
-        box_try!(wb.delete_cf(
-            handle,
-            &keys::snapshot_raft_state_key(region_id)
-        ));
+        box_try!(wb.delete_cf(handle, &keys::snapshot_raft_state_key(region_id)));
         self.kv_db.write(wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
@@ -231,7 +226,9 @@ impl SnapContext {
         match self.apply_snap(region_id, Arc::clone(&status)) {
             Ok(()) => {
                 status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
-                SNAP_COUNTER_VEC.with_label_values(&["apply", "success"]).inc();
+                SNAP_COUNTER_VEC
+                    .with_label_values(&["apply", "success"])
+                    .inc();
             }
             Err(Error::Abort) => {
                 warn!("applying snapshot for region {} is aborted.", region_id);

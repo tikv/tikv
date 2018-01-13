@@ -173,7 +173,6 @@ impl PartialOrd for SortRow {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -325,7 +324,13 @@ mod tests {
         let std_key: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2)];
         let row_data = RowColsDict::new(HashMap::default(), b"name:1".to_vec());
         topn_heap
-            .try_add_row(0 as i64, row_data, std_key, Arc::clone(&order_cols), Arc::clone(&ctx))
+            .try_add_row(
+                0 as i64,
+                row_data,
+                std_key,
+                Arc::clone(&order_cols),
+                Arc::clone(&ctx),
+            )
             .unwrap();
 
         let std_key2: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(3)];

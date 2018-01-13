@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::fs::File;
 use std::error::Error;
 use std::io::Read;
@@ -28,8 +27,7 @@ pub struct SecurityConfig {
     pub cert_path: String,
     pub key_path: String,
     // Test purpose only.
-    #[serde(skip)]
-    pub override_ssl_target: String,
+    #[serde(skip)] pub override_ssl_target: String,
 }
 
 impl Default for SecurityConfig {
@@ -48,9 +46,7 @@ fn check_key_file(tag: &str, path: &str) -> Result<Option<File>, Box<Error>> {
         return Ok(None);
     }
     match File::open(path) {
-        Err(e) => Err(
-            format!("failed to open {} to load {}: {:?}", path, tag, e).into(),
-        ),
+        Err(e) => Err(format!("failed to open {} to load {}: {:?}", path, tag, e).into()),
         Ok(f) => Ok(Some(f)),
     }
 }
@@ -61,9 +57,7 @@ fn load_key(tag: &str, path: &str) -> Result<Vec<u8>, Box<Error>> {
     match f {
         None => return Ok(vec![]),
         Some(mut f) => if let Err(e) = f.read_to_end(&mut key) {
-            return Err(
-                format!("failed to load {} from path {}: {:?}", tag, path, e).into(),
-            );
+            return Err(format!("failed to load {} from path {}: {:?}", tag, path, e).into());
         },
     }
     Ok(key)
@@ -75,8 +69,8 @@ impl SecurityConfig {
         check_key_file("cert key", &self.cert_path)?;
         check_key_file("private key", &self.key_path)?;
         // TODO: validate whether ca, cert and private key match.
-        if (!self.ca_path.is_empty() || !self.cert_path.is_empty() || !self.key_path.is_empty()) &&
-            (self.ca_path.is_empty() || self.cert_path.is_empty() || self.key_path.is_empty())
+        if (!self.ca_path.is_empty() || !self.cert_path.is_empty() || !self.key_path.is_empty())
+            && (self.ca_path.is_empty() || self.cert_path.is_empty() || self.key_path.is_empty())
         {
             return Err("ca, cert and private key should be all configured.".into());
         }

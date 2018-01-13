@@ -24,9 +24,7 @@ fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<
     }
     panic!(
         "got {:?}, want {} peers which should include {:?}",
-        peers,
-        count,
-        peer
+        peers, count, peer
     );
 }
 
@@ -138,8 +136,7 @@ fn test_pending_peers<T: Simulator>(cluster: &mut Cluster<T>) {
         if tried_times > 100 {
             panic!(
                 "pending peer {:?} still exists after {} tries.",
-                pending_peers,
-                tried_times
+                pending_peers, tried_times
             );
         }
     }

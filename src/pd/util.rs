@@ -123,12 +123,10 @@ impl LeaderClient {
             receiver: None,
             inner: Arc::clone(&self.inner),
         };
-        Box::new(
-            recv.for_each(move |resp| {
-                f(resp);
-                Ok(())
-            }).map_err(|e| panic!("unexpected error: {:?}", e)),
-        )
+        Box::new(recv.for_each(move |resp| {
+            f(resp);
+            Ok(())
+        }).map_err(|e| panic!("unexpected error: {:?}", e)))
     }
 
     pub fn request<Req, Resp, F>(&self, req: Req, f: F, retry: usize) -> Request<Req, Resp, F>
@@ -406,9 +404,7 @@ pub fn try_connect_leader(
                     } else {
                         panic!(
                             "{} no longer belongs to cluster {}, it is in {}",
-                            ep,
-                            cluster_id,
-                            new_cluster_id
+                            ep, cluster_id, new_cluster_id
                         );
                     }
                 }

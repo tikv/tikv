@@ -102,9 +102,10 @@ impl FnCall {
             Ok(Some(self.produce_float_with_specified_tp(ctx, val as f64)?))
         } else {
             let uval = val as u64;
-            Ok(Some(
-                self.produce_float_with_specified_tp(ctx, uval as f64)?,
-            ))
+            Ok(Some(self.produce_float_with_specified_tp(
+                ctx,
+                uval as f64,
+            )?))
         }
     }
 
@@ -182,7 +183,6 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         self.produce_dec_with_specified_tp(ctx, val).map(Some)
-
     }
 
     pub fn cast_str_as_decimal<'a, 'b: 'a>(
@@ -226,7 +226,6 @@ impl FnCall {
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
             .map(Some)
     }
-
 
     pub fn cast_json_as_decimal<'a, 'b: 'a>(
         &'b self,
@@ -297,7 +296,6 @@ impl FnCall {
         self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
             .map(Some)
     }
-
 
     pub fn cast_duration_as_str<'a, 'b: 'a>(
         &'b self,
@@ -689,7 +687,7 @@ mod test {
         let mut ctx = EvalContext::default();
         ctx.ignore_truncate = true;
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
-	#[allow(inconsistent_digit_grouping)]
+        #[allow(inconsistent_digit_grouping)]
         let time_int = 2012_12_12_12_00_23i64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
@@ -800,7 +798,7 @@ mod test {
         let mut ctx = EvalContext::default();
         ctx.ignore_truncate = true;
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
-	#[allow(inconsistent_digit_grouping)]
+        #[allow(inconsistent_digit_grouping)]
         let int_t = 2012_12_12_12_00_23u64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
@@ -1715,7 +1713,6 @@ mod test {
             t.set_tp(types::DATE).unwrap();
             t
         };
-
 
         let cases = vec![
             (

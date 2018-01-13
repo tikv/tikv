@@ -212,11 +212,9 @@ mod tests {
                 return Err(box_err!("quick fail"));
             }
             let addr = self.addr.lock().unwrap();
-            cb(
-                addr.as_ref()
-                    .map(|s| s.to_owned())
-                    .ok_or(box_err!("not set")),
-            );
+            cb(addr.as_ref()
+                .map(|s| s.to_owned())
+                .ok_or(box_err!("not set")));
             Ok(())
         }
     }

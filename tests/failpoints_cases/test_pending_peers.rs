@@ -21,7 +21,6 @@ use tikv::util::config::*;
 use raftstore::node::new_node_cluster;
 use raftstore::util::*;
 
-
 #[test]
 fn test_pending_peers() {
     let _guard = ::setup();

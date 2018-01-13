@@ -136,7 +136,6 @@ quick_error!{
     }
 }
 
-
 pub type Result<T> = result::Result<T, Error>;
 
 impl Into<errorpb::Error> for Error {

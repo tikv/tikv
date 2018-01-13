@@ -89,10 +89,7 @@ impl RotatingFileLoggerCore {
         self.close();
         let mut s = self.file_path.clone();
         s.push_str(".");
-        s.push_str(&time::strftime(
-            "%Y%m%d",
-            &one_day_before(self.rollover_time),
-        ).unwrap());
+        s.push_str(&time::strftime("%Y%m%d", &one_day_before(self.rollover_time)).unwrap());
         fs::rename(&self.file_path, &s).unwrap();
         self.update_rollover_time();
         self.open()
@@ -139,7 +136,6 @@ impl Drop for RotatingFileLogger {
         core.close()
     }
 }
-
 
 #[cfg(test)]
 mod tests {

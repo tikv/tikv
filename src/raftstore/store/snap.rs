@@ -44,7 +44,6 @@ use util::rocksdb::{prepare_sst_for_ingestion, validate_sst_for_ingestion};
 use raftstore::store::engine::{Iterable, Snapshot as DbSnapshot};
 use raftstore::store::keys::{self, enc_end_key, enc_start_key};
 
-
 use raftstore::store::metrics::{SNAPSHOT_BUILD_TIME_HISTOGRAM, SNAPSHOT_CF_KV_COUNT,
                                 SNAPSHOT_CF_SIZE};
 use raftstore::store::peer_storage::JOB_STATUS_CANCELLING;
@@ -710,26 +709,20 @@ impl Snap {
                     .as_ref()
                     .map_or(0 as i64, |l| l.get_max_bytes_per_time());
                 let mut bytes: i64 = 0;
-                snap.scan_cf(
-                    cf,
-                    &begin_key,
-                    &end_key,
-                    false,
-                    &mut |key, value| {
-                        let l = key.len() + value.len();
-                        if let Some(ref limiter) = self.limiter {
-                            if bytes >= base {
-                                bytes = 0;
-                                limiter.request(base);
-                            }
-                            bytes += l as i64;
+                snap.scan_cf(cf, &begin_key, &end_key, false, &mut |key, value| {
+                    let l = key.len() + value.len();
+                    if let Some(ref limiter) = self.limiter {
+                        if bytes >= base {
+                            bytes = 0;
+                            limiter.request(base);
                         }
-                        size += l;
-                        key_count += 1;
-                        self.add_kv(key, value)?;
-                        Ok(true)
-                    },
-                )?;
+                        bytes += l as i64;
+                    }
+                    size += l;
+                    key_count += 1;
+                    self.add_kv(key, value)?;
+                    Ok(true)
+                })?;
                 (key_count, size)
             };
             snap_key_count += cf_key_count;
@@ -769,19 +762,13 @@ pub fn build_plain_cf_file<E: BytesEncoder>(
 ) -> RaftStoreResult<(usize, usize)> {
     let mut cf_key_count = 0;
     let mut cf_size = 0;
-    snap.scan_cf(
-        cf,
-        start_key,
-        end_key,
-        false,
-        &mut |key, value| {
-            cf_key_count += 1;
-            cf_size += key.len() + value.len();
-            encoder.encode_compact_bytes(key)?;
-            encoder.encode_compact_bytes(value)?;
-            Ok(true)
-        },
-    )?;
+    snap.scan_cf(cf, start_key, end_key, false, &mut |key, value| {
+        cf_key_count += 1;
+        cf_size += key.len() + value.len();
+        encoder.encode_compact_bytes(key)?;
+        encoder.encode_compact_bytes(value)?;
+        Ok(true)
+    })?;
     // use an empty byte array to indicate that cf reaches an end.
     box_try!(encoder.encode_compact_bytes(b""));
     Ok((cf_key_count, cf_size))
@@ -856,8 +843,8 @@ impl Snapshot for Snap {
     fn exists(&self) -> bool {
         self.cf_files
             .iter()
-            .all(|cf_file| cf_file.size == 0 || file_exists(&cf_file.path)) &&
-            file_exists(&self.meta_file.path)
+            .all(|cf_file| cf_file.size == 0 || file_exists(&cf_file.path))
+            && file_exists(&self.meta_file.path)
     }
 
     fn delete(&self) {
@@ -1046,8 +1033,8 @@ impl Drop for Snap {
         // cleanup if some of the cf files and meta file is partly written
         if self.cf_files
             .iter()
-            .any(|cf_file| file_exists(&cf_file.tmp_path)) ||
-            file_exists(&self.meta_file.tmp_path)
+            .any(|cf_file| file_exists(&cf_file.tmp_path))
+            || file_exists(&self.meta_file.tmp_path)
         {
             self.delete();
             return;
@@ -1476,10 +1463,7 @@ mod test {
                 if p2 != p1 {
                     panic!(
                         "cf {}: key {:?}, value {:?}, expected {:?}",
-                        cf,
-                        key,
-                        p2,
-                        p1
+                        cf, key, p2, p1
                     );
                 }
             }
@@ -1590,9 +1574,12 @@ mod test {
         assert_eq!(stat.kv_count, get_kv_count(&snapshot));
 
         // Ensure this snapshot could be read for sending.
-        let mut s2 =
-            Snap::new_for_sending(src_dir.path(), &key, Arc::clone(&size_track), deleter.clone())
-                .unwrap();
+        let mut s2 = Snap::new_for_sending(
+            src_dir.path(),
+            &key,
+            Arc::clone(&size_track),
+            deleter.clone(),
+        ).unwrap();
         assert!(s2.exists());
 
         // TODO check meta data correct.
@@ -1820,9 +1807,12 @@ mod test {
         snapshot_meta: SnapshotMeta,
         deleter: Box<DummyDeleter>,
     ) {
-        let mut from =
-            Snap::new_for_sending(from_dir.path(), key, Arc::clone(&size_track), deleter.clone())
-                .unwrap();
+        let mut from = Snap::new_for_sending(
+            from_dir.path(),
+            key,
+            Arc::clone(&size_track),
+            deleter.clone(),
+        ).unwrap();
         assert!(from.exists());
 
         let mut to = Snap::new_for_receiving(
@@ -1877,7 +1867,8 @@ mod test {
         corrupt_snapshot_size_in(dir.path());
 
         assert!(
-            Snap::new_for_sending(dir.path(), &key, Arc::clone(&size_track), deleter.clone()).is_err()
+            Snap::new_for_sending(dir.path(), &key, Arc::clone(&size_track), deleter.clone())
+                .is_err()
         );
 
         let mut s2 = Snap::new_for_building(
@@ -1912,9 +1903,12 @@ mod test {
         assert_eq!(1, metas.len());
         let snap_meta = metas.pop().unwrap();
 
-        let mut s5 =
-            Snap::new_for_applying(dst_dir.path(), &key, Arc::clone(&size_track), deleter.clone())
-                .unwrap();
+        let mut s5 = Snap::new_for_applying(
+            dst_dir.path(),
+            &key,
+            Arc::clone(&size_track),
+            deleter.clone(),
+        ).unwrap();
         assert!(s5.exists());
 
         let dst_db_dir = TempDir::new("test-snap-corruption-dst-db").unwrap();
@@ -1939,8 +1933,12 @@ mod test {
             ).is_err()
         );
         assert!(
-            Snap::new_for_applying(dst_dir.path(), &key, Arc::clone(&size_track), deleter.clone())
-                .is_err()
+            Snap::new_for_applying(
+                dst_dir.path(),
+                &key,
+                Arc::clone(&size_track),
+                deleter.clone()
+            ).is_err()
         );
     }
 
@@ -1981,7 +1979,8 @@ mod test {
         assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
 
         assert!(
-            Snap::new_for_sending(dir.path(), &key, Arc::clone(&size_track), deleter.clone()).is_err()
+            Snap::new_for_sending(dir.path(), &key, Arc::clone(&size_track), deleter.clone())
+                .is_err()
         );
 
         let mut s2 = Snap::new_for_building(
@@ -2015,8 +2014,12 @@ mod test {
         assert_eq!(1, corrupt_snapshot_meta_file(dst_dir.path()));
 
         assert!(
-            Snap::new_for_applying(dst_dir.path(), &key, Arc::clone(&size_track), deleter.clone())
-                .is_err()
+            Snap::new_for_applying(
+                dst_dir.path(),
+                &key,
+                Arc::clone(&size_track),
+                deleter.clone()
+            ).is_err()
         );
         assert!(
             Snap::new_for_receiving(

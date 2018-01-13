@@ -37,9 +37,7 @@ impl Display for Task {
         write!(
             f,
             "GC Raft Log Task [region: {}, from: {}, to: {}]",
-            self.region_id,
-            self.start_idx,
-            self.end_idx
+            self.region_id, self.start_idx, self.end_idx
         )
     }
 }
@@ -113,8 +111,7 @@ impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         debug!(
             "[region {}] execute gc log to {}",
-            task.region_id,
-            task.end_idx
+            task.region_id, task.end_idx
         );
         match self.gc_raft_log(
             task.raft_engine,

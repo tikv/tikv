@@ -114,14 +114,7 @@ const MAX_FRACTION: u8 = 30;
 const DEFAULT_DIV_FRAC_INCR: u8 = 4;
 const DIG_2_BYTES: &[u8] = &[0, 1, 1, 2, 2, 3, 3, 4, 4, 4];
 const FRAC_MAX: &[u32] = &[
-    900000000,
-    990000000,
-    999000000,
-    999900000,
-    999990000,
-    999999000,
-    999999900,
-    999999990,
+    900000000, 990000000, 999000000, 999900000, 999990000, 999999000, 999999900, 999999990
 ];
 const NOT_FIXED_DEC: u8 = 31;
 
@@ -267,8 +260,8 @@ fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, Sub
         }
         l_frac_word_cnt = (l_end + 1 - l_stop as isize) as u8;
         r_frac_word_cnt = (r_end + 1 - r_stop as isize) as u8;
-        while l_idx as isize <= l_end && r_idx as isize <= r_end &&
-            lhs.word_buf[l_idx] == rhs.word_buf[r_idx]
+        while l_idx as isize <= l_end && r_idx as isize <= r_end
+            && lhs.word_buf[l_idx] == rhs.word_buf[r_idx]
         {
             l_idx += 1;
             r_idx += 1;
@@ -620,13 +613,13 @@ fn do_div_mod(
                 guess = i64::from(WORD_BASE) - 1;
             }
             if r_len > 0 {
-                if i64::from(rhs.word_buf[r_start + 1]) * guess >
-                    (x - guess * i64::from(rhs.word_buf[r_start])) * i64::from(WORD_BASE) + y
+                if i64::from(rhs.word_buf[r_start + 1]) * guess
+                    > (x - guess * i64::from(rhs.word_buf[r_start])) * i64::from(WORD_BASE) + y
                 {
                     guess -= 1;
                 }
-                if i64::from(rhs.word_buf[r_start + 1]) * guess >
-                    (x - guess * i64::from(rhs.word_buf[r_start])) * i64::from(WORD_BASE) + y
+                if i64::from(rhs.word_buf[r_start + 1]) * guess
+                    > (x - guess * i64::from(rhs.word_buf[r_start])) * i64::from(WORD_BASE) + y
                 {
                     guess -= 1;
                 }
@@ -1042,9 +1035,8 @@ impl Decimal {
             self.word_buf[buf_from - 1] = self.word_buf[buf_from] / TEN_POW[c_shift];
         }
         while buf_from < buf_end {
-            self.word_buf[buf_from] = (self.word_buf[buf_from] % TEN_POW[c_shift]) *
-                TEN_POW[shift] +
-                self.word_buf[buf_from + 1] / TEN_POW[c_shift];
+            self.word_buf[buf_from] = (self.word_buf[buf_from] % TEN_POW[c_shift]) * TEN_POW[shift]
+                + self.word_buf[buf_from + 1] / TEN_POW[c_shift];
             buf_from += 1;
         }
         self.word_buf[buf_from] = (self.word_buf[buf_from] % TEN_POW[c_shift]) * TEN_POW[shift];
@@ -1064,8 +1056,8 @@ impl Decimal {
                 (self.word_buf[buf_from] % TEN_POW[shift]) * TEN_POW[c_shift];
         }
         while buf_from > buf_end {
-            self.word_buf[buf_from] = self.word_buf[buf_from] / TEN_POW[shift] +
-                (self.word_buf[buf_from - 1] % TEN_POW[shift]) * TEN_POW[c_shift];
+            self.word_buf[buf_from] = self.word_buf[buf_from] / TEN_POW[shift]
+                + (self.word_buf[buf_from - 1] % TEN_POW[shift]) * TEN_POW[c_shift];
             buf_from -= 1;
         }
         self.word_buf[buf_from] /= TEN_POW[shift];
@@ -1344,13 +1336,11 @@ impl Decimal {
                 return Res::Truncated(self);
             }
             end = (end as isize - diff) as u8;
-            Res::Truncated(
-                self.round_with_word_buf_len(
-                    end as i8 - point as i8,
-                    word_buf_len,
-                    RoundMode::HalfEven,
-                ).unwrap(),
-            )
+            Res::Truncated(self.round_with_word_buf_len(
+                end as i8 - point as i8,
+                word_buf_len,
+                RoundMode::HalfEven,
+            ).unwrap())
         } else {
             Res::Ok(self)
         };
@@ -1374,8 +1364,7 @@ impl Decimal {
                 mini_shift = r_mini_shift as i8;
             }
             new_point += mini_shift as isize;
-            if shift + mini_shift as isize == 0 &&
-                (new_point - int_cnt) < DIGITS_PER_WORD as isize
+            if shift + mini_shift as isize == 0 && (new_point - int_cnt) < DIGITS_PER_WORD as isize
             {
                 res.int_cnt = int_cnt as u8;
                 res.frac_cnt = frac_cnt as u8;
@@ -1763,7 +1752,8 @@ macro_rules! read_word {
             2 => ((i32::from(buf[0] as i8) << 8) + i32::from(buf[1])) as u32,
             3 => {
                 if buf[0] & 128 > 0 {
-                    (255 << 24) | (u32::from(buf[0]) << 16) | (u32::from(buf[1]) << 8) | u32::from(buf[2])
+                    (255 << 24) | (u32::from(buf[0]) << 16) | (u32::from(buf[1]) << 8)
+                        | u32::from(buf[2])
                 } else {
                     (u32::from(buf[0]) << 16) | (u32::from(buf[1]) << 8) | u32::from(buf[2])
                 }
@@ -1876,8 +1866,9 @@ pub trait DecimalEncoder: Write {
             while src_trailing_digits < lim && DIG_2_BYTES[src_trailing_digits] == i {
                 src_trailing_digits += 1;
             }
-            let x = (d.word_buf[src_word_start_idx] /
-                TEN_POW[DIGITS_PER_WORD as usize - src_trailing_digits]) ^ mask;
+            let x = (d.word_buf[src_word_start_idx]
+                / TEN_POW[DIGITS_PER_WORD as usize - src_trailing_digits])
+                ^ mask;
             write_word!(self, x, i as usize, written);
         }
 
@@ -2001,10 +1992,12 @@ impl Ord for Decimal {
     fn cmp(&self, right: &Decimal) -> Ordering {
         if self.negative == right.negative {
             let (carry, _, _, _) = calc_sub_carry(self, right);
-            carry.map_or(Ordering::Equal, |carry| if (carry > 0) == self.negative {
-                Ordering::Greater
-            } else {
-                Ordering::Less
+            carry.map_or(Ordering::Equal, |carry| {
+                if (carry > 0) == self.negative {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                }
             })
         } else if self.negative {
             Ordering::Less

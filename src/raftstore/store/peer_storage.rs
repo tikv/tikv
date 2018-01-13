@@ -57,7 +57,6 @@ pub const JOB_STATUS_CANCELLED: usize = 3;
 pub const JOB_STATUS_FINISHED: usize = 4;
 pub const JOB_STATUS_FAILED: usize = 5;
 
-
 #[derive(Debug)]
 pub enum SnapState {
     Relax,
@@ -69,9 +68,9 @@ pub enum SnapState {
 impl PartialEq for SnapState {
     fn eq(&self, other: &SnapState) -> bool {
         match (self, other) {
-            (&SnapState::Relax, &SnapState::Relax) |
-            (&SnapState::ApplyAborted, &SnapState::ApplyAborted) |
-            (&SnapState::Generating(_), &SnapState::Generating(_)) => true,
+            (&SnapState::Relax, &SnapState::Relax)
+            | (&SnapState::ApplyAborted, &SnapState::ApplyAborted)
+            | (&SnapState::Generating(_), &SnapState::Generating(_)) => true,
             (&SnapState::Applying(ref b1), &SnapState::Applying(ref b2)) => {
                 b1.load(Ordering::Relaxed) == b2.load(Ordering::Relaxed)
             }
@@ -185,17 +184,15 @@ impl EntryCache {
                     let left = self.cache.len() - (cache_last_index - first_index + 1) as usize;
                     self.cache.truncate(left);
                 }
-                if self.cache.len() + entries.len() < SHRINK_CACHE_CAPACITY &&
-                    self.cache.capacity() > SHRINK_CACHE_CAPACITY
+                if self.cache.len() + entries.len() < SHRINK_CACHE_CAPACITY
+                    && self.cache.capacity() > SHRINK_CACHE_CAPACITY
                 {
                     self.cache.shrink_to_fit();
                 }
             } else if cache_last_index + 1 < first_index {
                 panic!(
                     "{} unexpected hole: {} < {}",
-                    tag,
-                    cache_last_index,
-                    first_index
+                    tag, cache_last_index, first_index
                 );
             }
         }
@@ -225,8 +222,7 @@ impl EntryCache {
         let cache_last_idx = self.cache.back().unwrap().get_index();
         self.cache
             .drain(..(cmp::min(cache_last_idx, idx) - cache_first_idx) as usize);
-        if self.cache.len() < SHRINK_CACHE_CAPACITY &&
-            self.cache.capacity() > SHRINK_CACHE_CAPACITY
+        if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY
         {
             // So the peer storage doesn't have much writes since the proposal of compaction,
             // we can consider this peer is going to be inactive.
@@ -327,8 +323,7 @@ impl InvokeContext {
 
     #[inline]
     pub fn save_raft_state_to(&self, raft_wb: &mut WriteBatch) -> Result<()> {
-        raft_wb
-            .put_msg(&keys::raft_state_key(self.region_id), &self.raft_state)?;
+        raft_wb.put_msg(&keys::raft_state_key(self.region_id), &self.raft_state)?;
         Ok(())
     }
 
@@ -422,21 +417,21 @@ pub fn init_raft_state(raft_engine: &DB, region: &Region) -> Result<RaftLocalSta
 }
 
 pub fn init_apply_state(kv_engine: &DB, region: &Region) -> Result<RaftApplyState> {
-    Ok(match try!(
-        kv_engine.get_msg_cf(CF_RAFT, &keys::apply_state_key(region.get_id()))
-    ) {
-        Some(s) => s,
-        None => {
-            let mut apply_state = RaftApplyState::new();
-            if !region.get_peers().is_empty() {
-                apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
-                let state = apply_state.mut_truncated_state();
-                state.set_index(RAFT_INIT_LOG_INDEX);
-                state.set_term(RAFT_INIT_LOG_TERM);
+    Ok(
+        match kv_engine.get_msg_cf(CF_RAFT, &keys::apply_state_key(region.get_id()))? {
+            Some(s) => s,
+            None => {
+                let mut apply_state = RaftApplyState::new();
+                if !region.get_peers().is_empty() {
+                    apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
+                    let state = apply_state.mut_truncated_state();
+                    state.set_index(RAFT_INIT_LOG_INDEX);
+                    state.set_term(RAFT_INIT_LOG_TERM);
+                }
+                apply_state
             }
-            apply_state
-        }
-    })
+        },
+    )
 }
 
 fn init_last_term(
@@ -541,9 +536,10 @@ impl PeerStorage {
 
     fn check_range(&self, low: u64, high: u64) -> raft::Result<()> {
         if low > high {
-            return Err(storage_error(
-                format!("low: {} is greater that high: {}", low, high),
-            ));
+            return Err(storage_error(format!(
+                "low: {} is greater that high: {}",
+                low, high
+            )));
         } else if low <= self.truncated_index() {
             return Err(RaftError::Store(StorageError::Compacted));
         } else if high > self.last_index() + 1 {
@@ -727,8 +723,7 @@ impl PeerStorage {
         if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
             error!(
                 "{} decode snapshot fail, it may be corrupted: {:?}",
-                self.tag,
-                e
+                self.tag, e
             );
             STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
                 .with_label_values(&["decode"])
@@ -740,9 +735,7 @@ impl PeerStorage {
         if snap_epoch.get_conf_ver() < latest_epoch.get_conf_ver() {
             info!(
                 "{} snapshot epoch {:?} < {:?}, generate again.",
-                self.tag,
-                snap_epoch,
-                latest_epoch
+                self.tag, snap_epoch, latest_epoch
             );
             STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
                 .with_label_values(&["epoch"])
@@ -783,8 +776,7 @@ impl PeerStorage {
                 None => {
                     warn!(
                         "{} snapshot generating failed at {} try time",
-                        self.tag,
-                        *tried_cnt
+                        self.tag, *tried_cnt
                     );
                 }
             }
@@ -797,9 +789,10 @@ impl PeerStorage {
         if *tried_cnt >= MAX_SNAP_TRY_CNT {
             let cnt = *tried_cnt;
             *tried_cnt = 0;
-            return Err(raft::Error::Store(
-                box_err!("failed to get snapshot after {} times", cnt),
-            ));
+            return Err(raft::Error::Store(box_err!(
+                "failed to get snapshot after {} times",
+                cnt
+            )));
         }
 
         info!("{} requesting snapshot...", self.tag);
@@ -814,8 +807,7 @@ impl PeerStorage {
         if let Err(e) = self.region_sched.schedule(task) {
             error!(
                 "{} failed to schedule task snap generation: {:?}",
-                self.tag,
-                e
+                self.tag, e
             );
             // update the status next time the function is called, also backoff for retry.
         }
@@ -919,9 +911,7 @@ impl PeerStorage {
 
         info!(
             "{} apply snapshot for region {:?} with state {:?} ok",
-            self.tag,
-            region,
-            ctx.apply_state
+            self.tag, region, ctx.apply_state
         );
 
         ctx.snap_region = Some(region);
@@ -967,16 +957,18 @@ impl PeerStorage {
         let (new_start_key, new_end_key) = (enc_start_key(new_region), enc_end_key(new_region));
         let region_id = new_region.get_id();
         if old_start_key < new_start_key {
-            box_try!(
-                self.region_sched
-                    .schedule(RegionTask::destroy(region_id, old_start_key, new_start_key))
-            );
+            box_try!(self.region_sched.schedule(RegionTask::destroy(
+                region_id,
+                old_start_key,
+                new_start_key
+            )));
         }
         if new_end_key < old_end_key {
-            box_try!(
-                self.region_sched
-                    .schedule(RegionTask::destroy(region_id, new_end_key, old_end_key))
-            );
+            box_try!(self.region_sched.schedule(RegionTask::destroy(
+                region_id,
+                new_end_key,
+                old_end_key
+            )));
         }
         Ok(())
     }
@@ -1030,14 +1022,18 @@ impl PeerStorage {
     /// Cancel applying snapshot, return true if the job can be considered not be run again.
     pub fn cancel_applying_snap(&mut self) -> bool {
         let is_cancelled = match *self.snap_state.borrow() {
-            SnapState::Applying(ref status) => if status
-                .compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_CANCELLING, Ordering::SeqCst) ==
-                JOB_STATUS_PENDING
+            SnapState::Applying(ref status) => if status.compare_and_swap(
+                JOB_STATUS_PENDING,
+                JOB_STATUS_CANCELLING,
+                Ordering::SeqCst,
+            ) == JOB_STATUS_PENDING
             {
                 true
-            } else if status
-                .compare_and_swap(JOB_STATUS_RUNNING, JOB_STATUS_CANCELLING, Ordering::SeqCst) ==
-                JOB_STATUS_RUNNING
+            } else if status.compare_and_swap(
+                JOB_STATUS_RUNNING,
+                JOB_STATUS_CANCELLING,
+                Ordering::SeqCst,
+            ) == JOB_STATUS_RUNNING
             {
                 return false;
             } else {
@@ -1167,8 +1163,7 @@ impl PeerStorage {
                 // store is restarted.
                 error!(
                     "{} cleanup data fail, may leave some dirty data: {:?}",
-                    self.tag,
-                    e
+                    self.tag, e
                 );
             }
         }
@@ -1202,15 +1197,10 @@ pub fn clear_meta(
     let mut first_index = last_index + 1;
     let begin_log_key = keys::raft_log_key(region_id, 0);
     let end_log_key = keys::raft_log_key(region_id, first_index);
-    raft_engine.scan(
-        &begin_log_key,
-        &end_log_key,
-        false,
-        &mut |key, _| {
-            first_index = keys::raft_log_index(key).unwrap();
-            Ok(false)
-        },
-    )?;
+    raft_engine.scan(&begin_log_key, &end_log_key, false, &mut |key, _| {
+        first_index = keys::raft_log_index(key).unwrap();
+        Ok(false)
+    })?;
     for id in first_index..last_index + 1 {
         raft_wb.delete(&keys::raft_log_key(region_id, id))?;
     }
@@ -1248,9 +1238,7 @@ pub fn do_snapshot(
     let term = if idx == apply_state.get_truncated_state().get_index() {
         apply_state.get_truncated_state().get_term()
     } else {
-        match raft_db
-            .get_msg::<Entry>(&keys::raft_log_key(region_id, idx))?
-        {
+        match raft_db.get_msg::<Entry>(&keys::raft_log_key(region_id, idx))? {
             None => return Err(box_err!("entry {} of {} not found.", idx, region_id)),
             Some(entry) => entry.get_term(),
         }
@@ -1313,8 +1301,7 @@ pub fn write_initial_raft_state<T: Mutable>(raft_wb: &T, region_id: u64) -> Resu
     raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
     raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
 
-    raft_wb
-        .put_msg(&keys::raft_state_key(region_id), &raft_state)?;
+    raft_wb.put_msg(&keys::raft_state_key(region_id), &raft_state)?;
     Ok(())
 }
 
@@ -1335,8 +1322,7 @@ pub fn write_initial_apply_state<T: Mutable>(
         .set_term(RAFT_INIT_LOG_TERM);
 
     let handle = rocksdb::get_cf_handle(kv_engine, CF_RAFT)?;
-    kv_wb
-        .put_msg_cf(handle, &keys::apply_state_key(region_id), &apply_state)?;
+    kv_wb.put_msg_cf(handle, &keys::apply_state_key(region_id), &apply_state)?;
     Ok(())
 }
 
@@ -1351,8 +1337,7 @@ pub fn write_peer_state<T: Mutable>(
     region_state.set_state(state);
     region_state.set_region(region.clone());
     let handle = rocksdb::get_cf_handle(kv_engine, CF_RAFT)?;
-    kv_wb
-        .put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
+    kv_wb.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
     Ok(())
 }
 
@@ -1409,13 +1394,10 @@ mod test {
     use super::*;
 
     fn new_storage(sched: Scheduler<RegionTask>, path: &TempDir) -> PeerStorage {
-        let kv_db = Arc::new(
-            new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap(),
-        );
+        let kv_db = Arc::new(new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap());
         let raft_path = path.path().join(Path::new("raft"));
-        let raft_db = Arc::new(
-            new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
-        );
+        let raft_db =
+            Arc::new(new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap());
         let engines = Engines::new(Arc::clone(&kv_db), Arc::clone(&raft_db));
         bootstrap::bootstrap_store(&engines, 1, 1).expect("");
         let region = bootstrap::prepare_bootstrap(&engines, 1, 1, 1).expect("");
@@ -1656,9 +1638,10 @@ mod test {
             let sched = worker.scheduler();
             let store = new_storage_from_ents(sched, &td, &ents);
             let mut ctx = InvokeContext::new(&store);
-            let res = store.term(idx).map_err(From::from).and_then(|term| {
-                compact_raft_log(&store.tag, &mut ctx.apply_state, idx, term)
-            });
+            let res = store
+                .term(idx)
+                .map_err(From::from)
+                .and_then(|term| compact_raft_log(&store.tag, &mut ctx.apply_state, idx, term));
             // TODO check exact error type after refactoring error.
             if res.is_err() ^ werr.is_err() {
                 panic!("#{}: want {:?}, got {:?}", i, werr, res);
@@ -1684,7 +1667,13 @@ mod test {
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched, &td, &ents);
-        let runner = RegionRunner::new(Arc::clone(&s.kv_engine), Arc::clone(&s.raft_engine), mgr, 0, true);
+        let runner = RegionRunner::new(
+            Arc::clone(&s.kv_engine),
+            Arc::clone(&s.raft_engine),
+            mgr,
+            0,
+            true,
+        );
         worker.start(runner).unwrap();
         let snap = s.snapshot();
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
@@ -2026,16 +2015,16 @@ mod test {
         let mut s = new_storage(sched, &td);
 
         // PENDING can be canceled directly.
-        s.snap_state = RefCell::new(SnapState::Applying(
-            Arc::new(AtomicUsize::new(JOB_STATUS_PENDING)),
-        ));
+        s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
+            JOB_STATUS_PENDING,
+        ))));
         assert!(s.cancel_applying_snap());
         assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
 
         // RUNNING can't be canceled directly.
-        s.snap_state = RefCell::new(SnapState::Applying(
-            Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
-        ));
+        s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
+            JOB_STATUS_RUNNING,
+        ))));
         assert!(!s.cancel_applying_snap());
         assert_eq!(
             *s.snap_state.borrow(),
@@ -2044,22 +2033,22 @@ mod test {
         // CANCEL can't be canceled again.
         assert!(!s.cancel_applying_snap());
 
-        s.snap_state = RefCell::new(SnapState::Applying(
-            Arc::new(AtomicUsize::new(JOB_STATUS_CANCELLED)),
-        ));
+        s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
+            JOB_STATUS_CANCELLED,
+        ))));
         // canceled snapshot can be cancel directly.
         assert!(s.cancel_applying_snap());
         assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
 
-        s.snap_state = RefCell::new(SnapState::Applying(
-            Arc::new(AtomicUsize::new(JOB_STATUS_FINISHED)),
-        ));
+        s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
+            JOB_STATUS_FINISHED,
+        ))));
         assert!(s.cancel_applying_snap());
         assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
 
-        s.snap_state = RefCell::new(SnapState::Applying(
-            Arc::new(AtomicUsize::new(JOB_STATUS_FAILED)),
-        ));
+        s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
+            JOB_STATUS_FAILED,
+        ))));
         let res = recover_safe!(|| s.cancel_applying_snap());
         assert!(res.is_err());
     }
@@ -2097,18 +2086,18 @@ mod test {
         assert!(!s.check_applying_snap());
         assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
 
-        s.snap_state = RefCell::new(SnapState::Applying(
-            Arc::new(AtomicUsize::new(JOB_STATUS_FINISHED)),
-        ));
+        s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
+            JOB_STATUS_FINISHED,
+        ))));
         assert!(!s.check_applying_snap());
         assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
         // Relax is not applying snapshot.
         assert!(!s.check_applying_snap());
         assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
 
-        s.snap_state = RefCell::new(SnapState::Applying(
-            Arc::new(AtomicUsize::new(JOB_STATUS_FAILED)),
-        ));
+        s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
+            JOB_STATUS_FAILED,
+        ))));
         let res = recover_safe!(|| s.check_applying_snap());
         assert!(res.is_err());
     }

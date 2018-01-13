@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 /// Worker contains all workers that do the expensive job in background.
 
 mod metrics;

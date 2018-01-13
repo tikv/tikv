@@ -20,7 +20,6 @@ use raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
 use raftstore::store::{keys, util, PeerStorage};
 use raftstore::Result;
 
-
 /// Snapshot of a region.
 ///
 /// Only data within a region can be accessed.
@@ -340,9 +339,7 @@ mod tests {
     fn new_temp_engine(path: &TempDir) -> (Arc<DB>, Arc<DB>) {
         let raft_path = path.path().join(Path::new("raft"));
         (
-            Arc::new(
-                rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap(),
-            ),
+            Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap()),
             Arc::new(
                 rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
             ),
@@ -419,7 +416,8 @@ mod tests {
     fn test_iterate() {
         let path = TempDir::new("test-raftstore").unwrap();
         let (engine, raft_engine) = new_temp_engine(&path);
-        let (store, base_data) = load_default_dataset(Arc::clone(&engine), Arc::clone(&raft_engine));
+        let (store, base_data) =
+            load_default_dataset(Arc::clone(&engine), Arc::clone(&raft_engine));
 
         let snap = RegionSnapshot::new(&store);
         let mut data = vec![];
@@ -533,15 +531,16 @@ mod tests {
     fn test_reverse_iterate() {
         let path = TempDir::new("test-raftstore").unwrap();
         let (engine, raft_engine) = new_temp_engine(&path);
-        let (store, test_data) = load_default_dataset(Arc::clone(&engine), Arc::clone(&raft_engine));
+        let (store, test_data) =
+            load_default_dataset(Arc::clone(&engine), Arc::clone(&raft_engine));
 
         let snap = RegionSnapshot::new(&store);
         let mut statistics = CFStatistics::default();
         let mut iter = Cursor::new(Box::new(snap.iter(IterOption::default())), ScanMode::Mixed);
-        assert!(!iter.reverse_seek(
-            &Key::from_encoded(b"a2".to_vec()),
-            &mut statistics
-        ).unwrap());
+        assert!(
+            !iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics)
+                .unwrap()
+        );
         assert!(
             iter.reverse_seek(&Key::from_encoded(b"a7".to_vec()), &mut statistics)
                 .unwrap()
@@ -554,10 +553,10 @@ mod tests {
         );
         pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
-        assert!(!iter.reverse_seek(
-            &Key::from_encoded(b"a3".to_vec()),
-            &mut statistics
-        ).unwrap());
+        assert!(
+            !iter.reverse_seek(&Key::from_encoded(b"a3".to_vec()), &mut statistics)
+                .unwrap()
+        );
         assert!(
             iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics)
                 .is_err()
@@ -585,10 +584,10 @@ mod tests {
         let store = new_peer_storage(Arc::clone(&engine), Arc::clone(&raft_engine), &region);
         let snap = RegionSnapshot::new(&store);
         let mut iter = Cursor::new(Box::new(snap.iter(IterOption::default())), ScanMode::Mixed);
-        assert!(!iter.reverse_seek(
-            &Key::from_encoded(b"a1".to_vec()),
-            &mut statistics
-        ).unwrap());
+        assert!(
+            !iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics)
+                .unwrap()
+        );
         assert!(
             iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics)
                 .unwrap()
@@ -623,7 +622,8 @@ mod tests {
     fn test_reverse_iterate_with_lower_bound() {
         let path = TempDir::new("test-raftstore").unwrap();
         let (engine, raft_engine) = new_temp_engine(&path);
-        let (store, test_data) = load_default_dataset(Arc::clone(&engine), Arc::clone(&raft_engine));
+        let (store, test_data) =
+            load_default_dataset(Arc::clone(&engine), Arc::clone(&raft_engine));
 
         let snap = RegionSnapshot::new(&store);
         let mut iter_opt = IterOption::default();

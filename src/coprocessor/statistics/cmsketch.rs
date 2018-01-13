@@ -98,8 +98,8 @@ mod test {
             vals.sort();
             min(
                 min_counter,
-                vals[(self.depth - 1) / 2] +
-                    (vals[self.depth / 2] - vals[(self.depth - 1) / 2]) / 2,
+                vals[(self.depth - 1) / 2]
+                    + (vals[self.depth / 2] - vals[(self.depth - 1) / 2]) / 2,
             )
         }
 

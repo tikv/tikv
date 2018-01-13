@@ -239,7 +239,6 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_3, b"k1");
     must_get_none(&engine_3, b"k4");
 
-
     // TODO: add more tests.
 }
 
@@ -286,8 +285,7 @@ fn wait_till_reach_count(pd_client: Arc<TestPdClient>, region_id: u64, c: usize)
     }
     panic!(
         "replica count {} still not meet {} after 10 secs",
-        replica_count,
-        c
+        replica_count, c
     );
 }
 
@@ -393,9 +391,7 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.stop_node(3);
 
-    pd_client.set_rule(box move |region, _| {
-        new_pd_remove_change_peer(region, new_peer(1, 1))
-    });
+    pd_client.set_rule(box move |region, _| new_pd_remove_change_peer(region, new_peer(1, 1)));
 
     let epoch = cluster
         .pd_client

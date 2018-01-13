@@ -166,8 +166,8 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
         if self.row_versions == 1 {
             self.cur_index_handle.size += 1;
             self.cur_index_handle.offset += 1;
-            if self.cur_index_handle.offset == 1 ||
-                self.cur_index_handle.size >= PROP_ROWS_INDEX_DISTANCE
+            if self.cur_index_handle.offset == 1
+                || self.cur_index_handle.size >= PROP_ROWS_INDEX_DISTANCE
             {
                 self.row_index_handles
                     .insert(self.last_row.clone(), self.cur_index_handle.clone());
@@ -270,10 +270,7 @@ impl IndexHandles {
         if end_offset < start_offset {
             panic!(
                 "start {:?} end {:?} start_offset {} end_offset {}",
-                start,
-                end,
-                start_offset,
-                end_offset
+                start, end, start_offset, end_offset
             );
         }
         end_offset - start_offset
@@ -503,8 +500,10 @@ mod tests {
         }
 
         let mut collector = MvccPropertiesCollector::new();
-        b.iter(|| for &(ref k, ref v) in &entries {
-            collector.add(k, v, DBEntryType::Put, 0, 0);
+        b.iter(|| {
+            for &(ref k, ref v) in &entries {
+                collector.add(k, v, DBEntryType::Put, 0, 0);
+            }
         });
     }
 

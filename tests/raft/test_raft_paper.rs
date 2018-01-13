@@ -116,9 +116,8 @@ fn test_update_term_from_message(state: StateRole) {
 #[test]
 fn test_reject_stale_term_message() {
     let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
-    let panic_before_step_state = Box::new(|_: &Message| {
-        panic!("before step state function hook called unexpectedly")
-    });
+    let panic_before_step_state =
+        Box::new(|_: &Message| panic!("before step state function hook called unexpectedly"));
     r.before_step_state = Some(panic_before_step_state);
     r.load_state(hard_state(2, 0, 0));
 
@@ -238,7 +237,6 @@ fn test_leader_election_in_one_round_rpc() {
         ),
         (5, map!(2 => true, 3 => true, 4 => true), StateRole::Leader),
         (5, map!(2 => true, 3 => true), StateRole::Leader),
-
         // return to follower state if it receives vote denial from a majority
         (3, map!(2 => false, 3 => false), StateRole::Follower),
         (
@@ -251,7 +249,6 @@ fn test_leader_election_in_one_round_rpc() {
             map!(2 => true, 3 => false, 4 => false, 5 => false),
             StateRole::Follower,
         ),
-
         // stay in candidate if it does not obtain the majority
         (3, map!(), StateRole::Candidate),
         (5, map!(2 => true), StateRole::Candidate),
@@ -635,9 +632,7 @@ fn test_follower_commit_entry() {
         if r.raft_log.committed != commit {
             panic!(
                 "#{}: committed = {}, want {}",
-                i,
-                r.raft_log.committed,
-                commit
+                i, r.raft_log.committed, commit
             );
         }
         let wents = Some(ents[..commit as usize].to_vec());
@@ -662,7 +657,6 @@ fn test_follower_check_msg_append() {
         (ents[0].get_term(), ents[0].get_index(), 1, false, 0),
         // match with uncommitted entries
         (ents[1].get_term(), ents[1].get_index(), 2, false, 0),
-
         // unmatch with existing entry
         (
             ents[0].get_term(),
@@ -723,7 +717,6 @@ fn test_follower_append_entries() {
             vec![empty_entry(1, 1), empty_entry(2, 2), empty_entry(3, 3)],
             vec![empty_entry(3, 3)],
         ),
-
         (
             1,
             1,
@@ -731,7 +724,6 @@ fn test_follower_append_entries() {
             vec![empty_entry(1, 1), empty_entry(3, 2), empty_entry(4, 3)],
             vec![empty_entry(3, 2), empty_entry(4, 3)],
         ),
-
         (
             0,
             0,
@@ -900,9 +892,7 @@ fn test_leader_sync_follower_log() {
         if lead_str != follower_str {
             panic!(
                 "#{}: lead str: {}, follower_str: {}",
-                i,
-                lead_str,
-                follower_str
+                i, lead_str, follower_str
             );
         }
     }
@@ -1056,9 +1046,7 @@ fn test_leader_only_commits_log_from_current_term() {
         if r.raft_log.committed != wcommit {
             panic!(
                 "#{}: commit = {}, want {}",
-                i,
-                r.raft_log.committed,
-                wcommit
+                i, r.raft_log.committed, wcommit
             );
         }
     }
