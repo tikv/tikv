@@ -70,19 +70,19 @@ fn test_upload_sst() {
     // Mismatch crc32
     let meta = new_sst_meta(0, length);
     upload.set_meta(meta);
-    assert!(send_upload_sst(&import, upload.clone()).is_err());
+    assert!(send_upload_sst(&import, &upload).is_err());
 
     // Mismatch length
     let meta = new_sst_meta(crc32, 0);
     upload.set_meta(meta);
-    assert!(send_upload_sst(&import, upload.clone()).is_err());
+    assert!(send_upload_sst(&import, &upload).is_err());
 
     let meta = new_sst_meta(crc32, length);
     upload.set_meta(meta);
-    send_upload_sst(&import, upload.clone()).unwrap();
+    send_upload_sst(&import, &upload).unwrap();
 
     // Can't upload the same uuid file again.
-    assert!(send_upload_sst(&import, upload.clone()).is_err());
+    assert!(send_upload_sst(&import, &upload).is_err());
 }
 
 fn new_sst_meta(crc32: u32, length: u64) -> SSTMeta {
@@ -93,8 +93,8 @@ fn new_sst_meta(crc32: u32, length: u64) -> SSTMeta {
     m
 }
 
-fn send_upload_sst(client: &ImportSstClient, m: UploadRequest) -> Result<UploadResponse> {
+fn send_upload_sst(client: &ImportSstClient, m: &UploadRequest) -> Result<UploadResponse> {
     let (tx, rx) = client.upload().unwrap();
-    let stream = stream::once({ Ok((m, WriteFlags::default().buffer_hint(true))) });
+    let stream = stream::once({ Ok((m.clone(), WriteFlags::default().buffer_hint(true))) });
     stream.forward(tx).and_then(|_| rx).wait()
 }
