@@ -295,7 +295,6 @@ fn sst_meta_to_path(meta: &SSTMeta) -> Result<PathBuf> {
 mod tests {
     use super::*;
     use import::tests::*;
-    use std::io::Read;
     use tempdir::TempDir;
     use util::rocksdb::new_engine;
 
@@ -309,13 +308,11 @@ mod tests {
 
         let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
 
-        for (i, &(start, end)) in cases.iter().enumerate() {
+        for (i, &range) in cases.iter().enumerate() {
             let path = temp_dir.path().join(format!("{}.sst", i));
 
             // Generate a valid SST file.
-            let meta = gen_sst_file(&path, start, end);
-            let mut data = Vec::new();
-            File::open(&path).unwrap().read_to_end(&mut data).unwrap();
+            let (meta, data) = gen_sst_file(&path, range);
 
             // Write the SST file to the dir.
             let mut f = dir.create(&meta).unwrap();
@@ -323,7 +320,7 @@ mod tests {
             f.finish().unwrap();
 
             dir.ingest(&meta, &db).unwrap();
-            check_db_range(&db, start, end);
+            check_db_range(&db, range);
         }
     }
 
