@@ -52,9 +52,9 @@ use storage::engine::{self, Callback as EngineCallback, CbContext, Error as Engi
 use raftstore::store::engine::IterOption;
 use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
 use util::timer::Timer;
-use util::time::SlowTimer;
+use util::time::{Instant, SlowTimer};
 use util::collections::HashMap;
-use util::worker::{self, Runnable, RunnableWithTimer, ScheduleError, Worker};
+use util::worker::{self, Runnable, ScheduleError, Worker};
 
 use super::Result;
 use super::Error;
@@ -336,6 +336,10 @@ pub struct Scheduler {
     // to schedule the execution of commands
     worker: Worker<Msg>,
 
+    // to store command id based on their time sequence
+    timer: Timer<u64>,
+    timeout_duration: Duration,
+
     // cmd id generator
     id_alloc: u64,
 
@@ -400,6 +404,7 @@ impl Scheduler {
     pub fn new(
         engine: Box<Engine>,
         worker: Worker<Msg>,
+        timeout_duration: usize,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
@@ -412,6 +417,8 @@ impl Scheduler {
                 Default::default(),
             )),
             worker: worker,
+            timer: Timer::new(CMD_BATCH_SIZE),
+            timeout_duration: Duration::from_secs(timeout_duration as u64),
             id_alloc: 0,
             latches: Latches::new(concurrency),
             sched_pending_write_threshold: sched_pending_write_threshold,
@@ -1071,78 +1078,6 @@ impl ThreadContext for SchedContext {
     }
 }
 
-impl Runnable<Msg> for Scheduler {
-    fn run(&mut self, msg: Msg) {
-        match msg {
-            Msg::Quit => { self.shutdown(); return ; },
-            Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
-            Msg::RetryGetSnapshots(batch) => self.on_retry_get_snapshots(batch),
-            Msg::SnapshotFinished {
-                cids,
-                cb_ctx,
-                snapshot,
-            } => self.on_snapshot_finished(cids, cb_ctx, snapshot),
-            Msg::BatchSnapshotFinished { batch } => for (cids, cb_ctx, snapshot) in batch {
-                self.on_snapshot_finished(cids, cb_ctx, snapshot)
-            },
-            Msg::ReadFinished { cid, pr } => self.on_read_finished(cid, pr),
-            Msg::WritePrepareFinished {
-                cid,
-                cmd,
-                pr,
-                to_be_write,
-                rows,
-            } => self.on_write_prepare_finished(cid, cmd, pr, to_be_write, rows),
-            Msg::WritePrepareFailed { cid, err } => self.on_write_prepare_failed(cid, err),
-            Msg::WriteFinished {
-                cid, pr, result, ..
-            } => self.on_write_finished(cid, pr, result),
-        }
-    }
-
-    fn run_batch(&mut self, msgs: &mut Vec<Msg>) {
-        for msg in msgs.drain(..) {
-            self.run(msg);
-        }
-    }
-
-    fn on_tick(&mut self) {
-        if self.grouped_cmds.as_ref().unwrap().is_empty() {
-            return ;
-        }
-
-        if let Some(cmds) = self.grouped_cmds.take() {
-            self.grouped_cmds = Some(HashMap::with_capacity_and_hasher(
-                CMD_BATCH_SIZE,
-                Default::default(),
-            ));
-            let batch = cmds.into_iter().map(|(hash_ctx, cids)| {
-                BATCH_COMMANDS
-                    .with_label_values(&["all"])
-                    .observe(cids.len() as f64);
-                (hash_ctx.0, cids)
-            });
-            self.batch_get_snapshot(batch.collect());
-        }
-    }
-
-    fn shutdown(&mut self) {
-        if let Err(e) = self.worker_pool.stop() {
-            panic!("scheduler run err:{:?}", e);
-        }
-        if let Err(e) = self.high_priority_pool.stop() {
-            panic!("scheduler run err:{:?}", e);
-        }
-        info!("scheduler stopped");
-    }
-}
-
-impl RunnableWithTimer<Msg, Msg> for Scheduler {
-    fn on_timeout(&mut self, _: &mut Timer<Msg>, _: Msg) {
-        // TODO
-    }
-}
-
 impl Scheduler {
     /// Generates the next command ID.
     fn gen_id(&mut self) -> u64 {
@@ -1158,6 +1093,7 @@ impl Scheduler {
             self.has_gc_command = true;
         }
         let cid = ctx.cid;
+        self.timer.add_task(self.timeout_duration, cid);
         if self.cmd_ctxs.insert(cid, ctx).is_some() {
             panic!("command cid={} shouldn't exist", cid);
         }
@@ -1166,6 +1102,9 @@ impl Scheduler {
     }
 
     fn remove_ctx(&mut self, cid: u64) -> RunningCtx {
+        // TODO: remove task from timer
+        // self.timer.remove_task(cid);
+
         let ctx = self.cmd_ctxs.remove(&cid).unwrap();
         assert_eq!(ctx.cid, cid);
         if ctx.lock.is_write_lock() {
@@ -1595,6 +1534,78 @@ impl Scheduler {
                 .or_insert_with(Vec::new);
             group.push(cid);
         }
+    }
+}
+
+impl Runnable<Msg> for Scheduler {
+    fn run(&mut self, msg: Msg) {
+        match msg {
+            Msg::Quit => { self.shutdown(); return ; },
+            Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
+            Msg::RetryGetSnapshots(batch) => self.on_retry_get_snapshots(batch),
+            Msg::SnapshotFinished {
+                cids,
+                cb_ctx,
+                snapshot,
+            } => self.on_snapshot_finished(cids, cb_ctx, snapshot),
+            Msg::BatchSnapshotFinished { batch } => for (cids, cb_ctx, snapshot) in batch {
+                self.on_snapshot_finished(cids, cb_ctx, snapshot)
+            },
+            Msg::ReadFinished { cid, pr } => self.on_read_finished(cid, pr),
+            Msg::WritePrepareFinished {
+                cid,
+                cmd,
+                pr,
+                to_be_write,
+                rows,
+            } => self.on_write_prepare_finished(cid, cmd, pr, to_be_write, rows),
+            Msg::WritePrepareFailed { cid, err } => self.on_write_prepare_failed(cid, err),
+            Msg::WriteFinished {
+                cid, pr, result, ..
+            } => self.on_write_finished(cid, pr, result),
+        }
+    }
+
+    fn run_batch(&mut self, msgs: &mut Vec<Msg>) {
+        for msg in msgs.drain(..) {
+            self.run(msg);
+        }
+    }
+
+    fn on_tick(&mut self) {
+        if self.grouped_cmds.as_ref().unwrap().is_empty() {
+            return ;
+        }
+
+        if let Some(cmds) = self.grouped_cmds.take() {
+            self.grouped_cmds = Some(HashMap::with_capacity_and_hasher(
+                CMD_BATCH_SIZE,
+                Default::default(),
+            ));
+            let batch = cmds.into_iter().map(|(hash_ctx, cids)| {
+                BATCH_COMMANDS
+                    .with_label_values(&["all"])
+                    .observe(cids.len() as f64);
+                (hash_ctx.0, cids)
+            });
+            self.batch_get_snapshot(batch.collect());
+        }
+
+        // deal with timeout task
+        let now = Instant::now();
+        while let Some(cid) = self.timer.pop_task_before(now) {
+            self.finish_with_err(cid, Error::from(Error::Other(From::from("timeout"))));
+        }
+    }
+
+    fn shutdown(&mut self) {
+        if let Err(e) = self.worker_pool.stop() {
+            panic!("scheduler run err:{:?}", e);
+        }
+        if let Err(e) = self.high_priority_pool.stop() {
+            panic!("scheduler run err:{:?}", e);
+        }
+        info!("scheduler stopped");
     }
 }
 

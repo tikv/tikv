@@ -16,10 +16,13 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::error;
 use std::io::Error as IoError;
 use std::u64;
-use kvproto::kvrpcpb::{CommandPri, LockInfo};
+use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 use kvproto::errorpb;
-use util::collections::HashMap;
 use self::metrics::*;
+use self::mvcc::Lock;
+use self::txn::CMD_BATCH_SIZE;
+use util::collections::HashMap;
+use util::worker::{Builder, Worker};
 
 pub mod engine;
 pub mod mvcc;
@@ -36,11 +39,6 @@ pub use self::engine::raftkv::RaftKv;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
 pub use self::types::{make_key, Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
-
-use self::mvcc::Lock;
-use kvproto::kvrpcpb::Context;
-use self::txn::CMD_BATCH_SIZE;
-use util::worker::{Builder, Worker};
 
 pub type CfName = &'static str;
 pub const CF_DEFAULT: CfName = "default";
@@ -509,6 +507,7 @@ impl Storage {
         let scheduler = Scheduler::new(
             self.engine.clone(),
             self.worker.clone(),
+            60, // timeout_duration    TODO: make it configurable
             sched_concurrency,
             sched_worker_pool_size,
             sched_pending_write_threshold,
