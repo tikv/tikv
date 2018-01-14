@@ -24,8 +24,8 @@ use pd::RegionInfo;
 use storage::types::Key;
 use util::escape;
 
-use super::{Config, Engine, Error, ImportClient, Result};
-use super::region::*;
+use super::{Client, Config, Engine, Error, Result};
+use super::common::*;
 
 const MAX_RETRY_TIMES: u64 = 3;
 const RETRY_INTERVAL_SECS: u64 = 1;
@@ -35,18 +35,16 @@ pub struct PrepareJob<C> {
     cfg: Config,
     client: Arc<C>,
     engine: Arc<Engine>,
-    cf_name: String,
     counter: Arc<AtomicUsize>,
 }
 
-impl<C: ImportClient + Send + Sync + 'static> PrepareJob<C> {
-    pub fn new(cfg: Config, client: Arc<C>, engine: Arc<Engine>, cf_name: String) -> PrepareJob<C> {
+impl<C: Client + Send + Sync + 'static> PrepareJob<C> {
+    pub fn new(cfg: Config, client: Arc<C>, engine: Arc<Engine>) -> PrepareJob<C> {
         PrepareJob {
-            tag: format!("[PrepareJob {}:{}]", engine.uuid(), cf_name),
+            tag: format!("[PrepareJob {}]", engine.uuid()),
             cfg: cfg,
             client: client,
             engine: engine,
-            cf_name: cf_name,
             counter: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -74,23 +72,23 @@ impl<C: ImportClient + Send + Sync + 'static> PrepareJob<C> {
     fn run_prepare_stream(&self, tx: mpsc::Sender<RangeInfo>) -> Vec<RangeInfo> {
         let mut ranges = Vec::new();
 
-        let mut ctx = RegionContext::new(self.client.clone(), self.cfg.region_split_size);
-        let mut iter = self.engine.new_iter(&self.cf_name, false);
+        let mut rctx = RangeContext::new(self.client.clone(), self.cfg.region_split_size);
+        let mut iter = self.engine.new_iter(false);
         iter.seek(SeekKey::Start);
 
+        // Cut the start range.
         if iter.valid() {
-            // Make a start range for split.
             let range = RangeInfo::new(iter.key(), iter.key(), 0);
             tx.send(range).unwrap();
         }
 
         while iter.valid() {
             let start = iter.key().to_owned();
+            rctx.reset(&start);
 
-            ctx.reset(iter.key());
             loop {
-                ctx.add(iter.key(), iter.value());
-                if !iter.next() || ctx.should_stop_before(iter.key()) {
+                rctx.add(iter.key(), iter.value());
+                if !iter.next() || rctx.should_stop_before(iter.key()) {
                     break;
                 }
             }
@@ -98,11 +96,11 @@ impl<C: ImportClient + Send + Sync + 'static> PrepareJob<C> {
             let end = if iter.valid() {
                 iter.key()
             } else {
-                ctx.end_key()
+                rctx.end_key()
             };
-            let range = RangeInfo::new(&start, end, ctx.raw_size());
-            ranges.push(range.clone());
 
+            let range = RangeInfo::new(&start, end, rctx.raw_size());
+            ranges.push(range.clone());
             tx.send(range).unwrap();
         }
 
@@ -112,14 +110,13 @@ impl<C: ImportClient + Send + Sync + 'static> PrepareJob<C> {
     fn new_prepare_thread(&self, rx: Arc<Mutex<mpsc::Receiver<RangeInfo>>>) -> JoinHandle<()> {
         let client = self.client.clone();
         let engine = self.engine.clone();
-        let cf_name = self.cf_name.clone();
         let counter = self.counter.clone();
 
         thread::Builder::new()
             .name("prepare-job".to_owned())
             .spawn(move || while let Ok(range) = rx.lock().unwrap().recv() {
                 let id = counter.fetch_add(1, Ordering::SeqCst);
-                let tag = format!("[PrepareJob {}:{}:{}]", engine.uuid(), cf_name, id);
+                let tag = format!("[PrepareJob {}:{}]", engine.uuid(), id);
                 let job = PrepareRangeJob::new(tag, range, client.clone());
                 let _ = job.run(); // Don't care about error here.
             })
@@ -142,7 +139,7 @@ struct PrepareRangeJob<C> {
     client: Arc<C>,
 }
 
-impl<C: ImportClient> PrepareRangeJob<C> {
+impl<C: Client> PrepareRangeJob<C> {
     fn new(tag: String, range: RangeInfo, client: Arc<C>) -> PrepareRangeJob<C> {
         PrepareRangeJob {
             tag: tag,
@@ -157,13 +154,18 @@ impl<C: ImportClient> PrepareRangeJob<C> {
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
-                warn!("{} retry #{}", self.tag, i);
                 thread::sleep(Duration::from_secs(RETRY_INTERVAL_SECS));
             }
 
-            if self.prepare().is_ok() {
-                info!("{} takes {:?}", self.tag, start.elapsed());
-                return Ok(());
+            match self.prepare() {
+                Ok(_) => {
+                    info!("{} takes {:?}", self.tag, start.elapsed());
+                    return Ok(());
+                }
+                Err(e) => {
+                    error!("{}: {:?}", self.tag, e);
+                    continue;
+                }
             }
         }
 
@@ -171,20 +173,21 @@ impl<C: ImportClient> PrepareRangeJob<C> {
     }
 
     fn prepare(&self) -> Result<()> {
+        let split_key = self.range.get_end().to_owned();
         let mut region = self.client.get_region(self.range.get_start())?;
 
         for _ in 0..MAX_RETRY_TIMES {
-            if !is_before_end(self.range.get_end(), region.get_end_key()) {
+            if split_key.is_empty() || !before_end(&split_key, region.get_end_key()) {
                 break;
             }
-            match self.split_region(&region, self.range.get_end()) {
+            match self.split_region(&region, &split_key) {
                 Ok(new_region) => region = new_region,
                 Err(Error::NotLeader(new_leader)) => region.leader = new_leader,
                 Err(Error::StaleEpoch(new_regions)) => for new_region in new_regions {
-                    if is_before_end(self.range.get_end(), new_region.get_end_key()) {
+                    if before_end(&split_key, new_region.get_end_key()) {
                         let new_leader = region
                             .leader
-                            .and_then(|p| find_peer_in_store(&new_region, p.get_store_id()));
+                            .and_then(|p| find_region_peer(&new_region, p.get_store_id()));
                         region = RegionInfo::new(new_region, new_leader);
                         break;
                     }
@@ -229,7 +232,7 @@ impl<C: ImportClient> PrepareRangeJob<C> {
                 );
                 // Just assume that the leader will be at the same store.
                 let new_region = resp.take_left();
-                let new_leader = find_peer_in_store(&new_region, store_id);
+                let new_leader = find_region_peer(&new_region, store_id);
                 Ok(RegionInfo::new(new_region, new_leader))
             }
             Err(e) => {
@@ -270,8 +273,7 @@ mod tests {
         let dir = TempDir::new("test_import_prepare_job").unwrap();
         let uuid = Uuid::new_v4();
         let opts = DbConfig::default();
-        let engine = Arc::new(Engine::new(uuid, dir.path(), opts).unwrap());
-        let cf_name = "default".to_owned();
+        let engine = Arc::new(Engine::new(dir.path(), uuid, opts).unwrap());
 
         // Generate entries to prepare.
         // Entry size is 16 + 27 = 43.
@@ -291,7 +293,7 @@ mod tests {
             let mut client = MockClient::new();
             client.add_region_range(b"", b"");
             let client = Arc::new(client);
-            run_and_check_prepare_job(cfg.clone(), client, engine.clone(), cf_name.clone());
+            run_and_check_prepare_job(cfg.clone(), client.clone(), engine.clone());
         }
 
         // Test with some region ranges.
@@ -316,17 +318,12 @@ mod tests {
             client.add_region_range(b"abc", b"");
 
             let client = Arc::new(client);
-            run_and_check_prepare_job(cfg.clone(), client, engine.clone(), cf_name.clone());
+            run_and_check_prepare_job(cfg.clone(), client.clone(), engine.clone());
         }
     }
 
-    fn run_and_check_prepare_job(
-        cfg: Config,
-        client: Arc<MockClient>,
-        engine: Arc<Engine>,
-        cf_name: String,
-    ) {
-        let job = PrepareJob::new(cfg, client.clone(), engine, cf_name);
+    fn run_and_check_prepare_job(cfg: Config, client: Arc<MockClient>, engine: Arc<Engine>) {
+        let job = PrepareJob::new(cfg, client.clone(), engine.clone());
         let ranges = job.run();
         for range in ranges {
             let region = client.get_region(range.get_start()).unwrap();

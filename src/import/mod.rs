@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod config;
+mod common;
 mod client;
-mod errors;
+mod config;
 mod engine;
-mod server;
-mod region;
+mod errors;
 mod import;
+mod server;
 mod stream;
 mod prepare;
 mod metrics;
@@ -29,7 +29,7 @@ mod sst_service;
 mod sst_importer;
 
 use self::client::{Client, ImportClient, UploadStream};
-use self::engine::Engine;
+use self::engine::{Engine, SSTInfo};
 use self::import::ImportJob;
 
 pub use self::errors::{Error, Result};

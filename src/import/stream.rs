@@ -12,168 +12,125 @@
 // limitations under the License.
 
 use std::fmt;
-use std::io::Read;
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use crc::crc32::{self, Hasher32};
-use tempdir::TempDir;
 use uuid::Uuid;
+use crc::crc32::{self, Hasher32};
 
 use raftstore::store::keys;
 
-use rocksdb::{DBIterator, ExternalSstFileInfo, SeekKey, SstFileWriter, DB};
+use rocksdb::{DBIterator, SeekKey, DB};
 use kvproto::metapb::*;
 use kvproto::importpb::*;
 
-use super::{Config, Engine, ImportClient, Result};
-use super::region::*;
-
-pub struct SSTInfo {
-    path: PathBuf,
-    range: Range,
-    next: Vec<u8>,
-}
-
-impl SSTInfo {
-    pub fn gen_sst(&self, engine: &Engine, cf_name: &str) -> Result<SSTFile> {
-        let mut data = Vec::new();
-        let mut f = engine.new_sst_reader(&self.path)?;
-        f.read_to_end(&mut data)?;
-        let _ = engine.delete_sst_file(&self.path);
-
-        let mut digest = crc32::Digest::new(crc32::IEEE);
-        digest.write(&data);
-
-        // This range doesn't contain the data prefix, like region range.
-        let mut range = Range::new();
-        range.set_start(keys::origin_key(self.range.get_start()).to_owned());
-        range.set_end(keys::origin_key(self.range.get_end()).to_owned());
-
-        let mut meta = SSTMeta::new();
-        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-        meta.set_range(range);
-        meta.set_crc32(digest.sum32());
-        meta.set_length(data.len() as u64);
-        meta.set_cf_name(cf_name.to_owned());
-
-        Ok(SSTFile {
-            meta: meta,
-            data: data,
-            next: self.next.clone(),
-        })
-    }
-}
+use super::{Client, Config, Engine, Result, SSTInfo};
+use super::common::*;
 
 pub struct SSTFile {
     pub meta: SSTMeta,
     pub data: Vec<u8>,
-    next: Vec<u8>,
 }
 
 impl SSTFile {
     pub fn is_inside(&self, region: &Region) -> bool {
         let range = self.meta.get_range();
         range.get_start() >= region.get_start_key() &&
-            belongs_in_end(range.get_end(), region.get_end_key())
-    }
-
-    pub fn extended_range(&self) -> Range {
-        new_range(self.meta.get_range().get_start(), &self.next)
+            before_end(range.get_end(), region.get_end_key())
     }
 }
 
-impl fmt::Display for SSTFile {
+impl fmt::Debug for SSTFile {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "SSTFile {{uuid: {}, range: {{{:?}}}, length: {}, cf_name: {}}}",
-            Uuid::from_bytes(self.meta.get_uuid()).unwrap(),
-            self.meta.get_range(),
-            self.meta.get_length(),
-            self.meta.get_cf_name(),
-        )
+        let uuid = Uuid::from_bytes(self.meta.get_uuid()).unwrap();
+        f.debug_struct("SSTFile")
+            .field("uuid", &uuid)
+            .field("range", self.meta.get_range())
+            .field("length", &self.meta.get_length())
+            .field("cf_name", &self.meta.get_cf_name().to_owned())
+            .finish()
     }
 }
+
+pub type SSTRange = (Range, Vec<SSTFile>);
 
 pub struct SSTFileStream<C> {
-    dir: TempDir,
-    fileno: u64,
     engine: Arc<Engine>,
-    cf_name: String,
-    range_iter: RangeIterator,
-    region_ctx: RegionContext<C>,
+    rctx: RangeContext<C>,
+    iter: RangeIterator,
 }
 
-impl<C: ImportClient> SSTFileStream<C> {
+impl<C: Client> SSTFileStream<C> {
     pub fn new(
         cfg: Config,
-        dir: TempDir,
         client: Arc<C>,
         engine: Arc<Engine>,
-        cf_name: String,
-        sst_range: Range,
+        stream_range: Range,
         finished_ranges: Vec<Range>,
     ) -> SSTFileStream<C> {
-        let iter = engine.new_iter(&cf_name, true);
-        let range_iter = RangeIterator::new(iter, sst_range, finished_ranges);
-        let region_ctx = RegionContext::new(client, cfg.region_split_size);
+        let rctx = RangeContext::new(client, cfg.region_split_size);
+        let iter = RangeIterator::new(engine.new_iter(true), stream_range, finished_ranges);
 
         SSTFileStream {
-            dir: dir,
-            fileno: 0,
             engine: engine,
-            cf_name: cf_name,
-            range_iter: range_iter,
-            region_ctx: region_ctx,
+            rctx: rctx,
+            iter: iter,
         }
     }
 
-    pub fn next(&mut self) -> Result<Option<SSTInfo>> {
-        if !self.range_iter.valid() {
+    pub fn next(&mut self) -> Result<Option<SSTRange>> {
+        if !self.iter.valid() {
             return Ok(None);
         }
 
-        let mut writer = self.new_sst_writer()?;
-        self.region_ctx.reset(self.range_iter.key());
+        let mut w = self.engine.new_sst_writer()?;
+        let start = self.iter.key().to_owned();
+        self.rctx.reset(&start);
 
         loop {
-            {
-                let k = self.range_iter.key();
-                let v = self.range_iter.value();
-                self.region_ctx.add(k, v);
-                writer.put(&keys::data_key(k), v)?;
-            }
-            if !self.range_iter.next() ||
-                self.region_ctx.should_stop_before(self.range_iter.key())
-            {
+            w.put(self.iter.key(), self.iter.value())?;
+            self.rctx.add(self.iter.key(), self.iter.value());
+            if !self.iter.next() || self.rctx.should_stop_before(self.iter.key()) {
                 break;
             }
         }
 
-        let next = if self.range_iter.valid() {
-            self.range_iter.key().to_owned()
+        let end = if self.iter.valid() {
+            self.iter.key()
         } else {
-            self.region_ctx.end_key().to_owned()
+            self.rctx.end_key()
         };
+        let range = new_range(&start, end);
 
-        let info = writer.finish()?;
-        Ok(Some(self.new_sst_info(info, next)))
+        let infos = w.finish()?;
+        let mut ssts = Vec::new();
+        for info in infos {
+            ssts.push(self.new_sst_file(info));
+        }
+
+        Ok(Some((range, ssts)))
     }
 
-    fn new_sst_writer(&mut self) -> Result<SstFileWriter> {
-        self.fileno += 1;
-        let name = format!("{}.sst", self.fileno);
-        let path = self.dir.path().join(name);
-        assert!(!path.exists());
-        self.engine.new_sst_writer(&self.cf_name, path)
-    }
+    fn new_sst_file(&self, info: SSTInfo) -> SSTFile {
+        let mut digest = crc32::Digest::new(crc32::IEEE);
+        digest.write(&info.data);
+        let crc32 = digest.sum32();
+        let length = info.data.len() as u64;
 
-    fn new_sst_info(&self, info: ExternalSstFileInfo, next: Vec<u8>) -> SSTInfo {
-        SSTInfo {
-            path: info.file_path(),
-            range: new_range(info.smallest_key(), info.largest_key()),
-            next: next,
+        // This range doesn't contain the data prefix, like region range.
+        let mut range = Range::new();
+        range.set_start(keys::origin_key(info.range.get_start()).to_owned());
+        range.set_end(keys::origin_key(info.range.get_end()).to_owned());
+
+        let mut meta = SSTMeta::new();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+        meta.set_range(range);
+        meta.set_crc32(crc32);
+        meta.set_length(length);
+        meta.set_cf_name(info.cf_name.clone());
+
+        SSTFile {
+            meta: meta,
+            data: info.data,
         }
     }
 }
@@ -195,19 +152,21 @@ impl RangeIterator {
         // Collect unfinished ranges.
         let mut ranges = Vec::new();
         let mut last_end = range.get_start();
+        let mut reach_max = false;
         for range in &finished_ranges {
             if last_end < range.get_start() {
                 ranges.push(new_range(last_end, range.get_start()));
             }
-            if belongs_in_end(last_end, range.get_end()) {
+            if before_end(last_end, range.get_end()) {
                 last_end = range.get_end();
             }
             if last_end == RANGE_MAX {
+                reach_max = true;
                 break;
             }
         }
         // Handle the last unfinished range.
-        if finished_ranges.is_empty() || is_before_end(last_end, range.get_end()) {
+        if !reach_max && before_end(last_end, range.get_end()) {
             ranges.push(new_range(last_end, range.get_end()));
         }
 
@@ -228,7 +187,7 @@ impl RangeIterator {
         }
         {
             let range = &self.ranges[self.ranges_index];
-            if belongs_in_end(self.iter.key(), range.get_end()) {
+            if before_end(self.iter.key(), range.get_end()) {
                 return true;
             }
             self.ranges_index += 1;
@@ -238,18 +197,11 @@ impl RangeIterator {
 
     fn seek_next(&mut self) -> bool {
         while let Some(range) = self.ranges.get(self.ranges_index) {
-            // Write CF use a slice transform with fixed size, so we can not
-            // just seek to RANGE_MIN.
-            let seek_key = if range.get_start() == RANGE_MIN {
-                SeekKey::Start
-            } else {
-                SeekKey::Key(range.get_start())
-            };
-            if !self.iter.seek(seek_key) {
+            if !self.iter.seek(SeekKey::Key(range.get_start())) {
                 break;
             }
             assert!(self.iter.key() >= range.get_start());
-            if belongs_in_end(self.iter.key(), range.get_end()) {
+            if before_end(self.iter.key(), range.get_end()) {
                 break;
             }
             self.ranges_index += 1;
@@ -277,8 +229,12 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
+    use tempdir::TempDir;
+
     use config::DbConfig;
     use rocksdb::{DBIterator, DBOptions, ReadOptions, Writable, DB};
+
+    use storage::types::Key;
 
     use import::client::tests::MockClient;
 
@@ -434,20 +390,27 @@ mod tests {
         );
     }
 
+    fn new_encoded_range(start: u8, end: u8) -> Range {
+        let k1 = Key::from_raw(&[start]).append_ts(0);
+        let k2 = Key::from_raw(&[end]).append_ts(0);
+        new_range(k1.encoded(), k2.encoded())
+    }
+
     #[test]
     fn test_sst_file_stream() {
         let dir = TempDir::new("test_import_sst_file_stream").unwrap();
         let uuid = Uuid::new_v4();
         let opts = DbConfig::default();
-        let engine = Arc::new(Engine::new(uuid, dir.path(), opts).unwrap());
+        let engine = Arc::new(Engine::new(dir.path(), uuid, opts).unwrap());
 
         for i in 0..16 {
-            let b = &[i];
-            engine.put(b, b).unwrap();
+            let k = Key::from_raw(&[i]).append_ts(0);
+            assert_eq!(k.encoded().len(), 17);
+            engine.put(k.encoded(), k.encoded()).unwrap();
         }
 
         let mut cfg = Config::default();
-        cfg.region_split_size = 8; // A region contains at most 4 entries.
+        cfg.region_split_size = 128; // A region contains at most 4 entries.
 
         let mut client = MockClient::new();
         let keys = vec![
@@ -459,9 +422,10 @@ mod tests {
             16,
         ];
         let mut last = vec![];
-        for k in keys {
-            client.add_region_range(&last, &[k]);
-            last = vec![k];
+        for i in keys {
+            let k = Key::from_raw(&[i]).append_ts(0);
+            client.add_region_range(&last, k.encoded());
+            last = k.encoded().clone();
         }
         // Add an unrelated range.
         client.add_region_range(&last, b"abc");
@@ -487,10 +451,10 @@ mod tests {
 
         // Test sst range [1, 15) with finished ranges [3, 5), [7, 10).
         {
-            let sst_range = new_range(&[1], &[15]);
+            let sst_range = new_encoded_range(1, 15);
             let mut finished_ranges = Vec::new();
-            finished_ranges.push(new_range(&[3], &[5]));
-            finished_ranges.push(new_range(&[7], &[11]));
+            finished_ranges.push(new_encoded_range(3, 5));
+            finished_ranges.push(new_encoded_range(7, 11));
             let expected_ranges = vec![(1, 6, 11), (11, 14, 16)];
             run_and_check_stream(
                 cfg.clone(),
@@ -511,24 +475,19 @@ mod tests {
         finished_ranges: Vec<Range>,
         expected_ranges: Vec<(u8, u8, u8)>,
     ) {
-        let dir = TempDir::new("test_run_and_check_stream").unwrap();
-        let cf_name = "default";
-        let mut stream = SSTFileStream::new(
-            cfg,
-            dir,
-            client,
-            engine.clone(),
-            cf_name.to_owned(),
-            sst_range,
-            finished_ranges,
-        );
-        for expected_range in expected_ranges {
-            let info = stream.next().unwrap().unwrap();
-            let sst = info.gen_sst(&engine, cf_name).unwrap();
-            let range = sst.meta.get_range();
-            assert_eq!(range.get_start(), &[expected_range.0]);
-            assert_eq!(range.get_end(), &[expected_range.1]);
-            assert_eq!(&sst.next, &[expected_range.2]);
+        let mut stream = SSTFileStream::new(cfg, client, engine, sst_range, finished_ranges);
+        for (start, end, range_end) in expected_ranges {
+            let (range, ssts) = stream.next().unwrap().unwrap();
+            let start = Key::from_raw(&[start]).append_ts(0);
+            let end = Key::from_raw(&[end]).append_ts(0);
+            let range_end = Key::from_raw(&[range_end]).append_ts(0);
+            assert_eq!(range.get_start(), start.encoded().as_slice());
+            assert_eq!(range.get_end(), range_end.encoded().as_slice());
+            for sst in ssts {
+                let range = sst.meta.get_range();
+                assert_eq!(range.get_start(), start.encoded().as_slice());
+                assert_eq!(range.get_end(), end.encoded().as_slice());
+            }
         }
         assert!(stream.next().unwrap().is_none());
     }

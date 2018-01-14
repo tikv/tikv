@@ -29,7 +29,7 @@ use pd::{PdClient, RegionInfo, RpcClient};
 
 use super::{Error, Result};
 
-pub trait ImportClient {
+pub trait Client {
     fn get_region(&self, _: &[u8]) -> Result<RegionInfo> {
         unimplemented!()
     }
@@ -51,19 +51,19 @@ pub trait ImportClient {
     }
 }
 
-pub struct Client {
+pub struct ImportClient {
     rpc: Arc<RpcClient>,
     env: Arc<Environment>,
     channels: Mutex<HashMap<u64, Channel>>,
 }
 
-impl Client {
-    pub fn new(rpc: Arc<RpcClient>, cq_count: usize) -> Client {
+impl ImportClient {
+    pub fn new(rpc: Arc<RpcClient>, cq_count: usize) -> ImportClient {
         let env = EnvBuilder::new()
             .cq_count(cq_count)
             .name_prefix("import-client")
             .build();
-        Client {
+        ImportClient {
             rpc: rpc,
             env: Arc::new(env),
             channels: Mutex::new(HashMap::new()),
@@ -96,7 +96,7 @@ impl Client {
     }
 }
 
-impl ImportClient for Client {
+impl Client for ImportClient {
     fn get_region(&self, key: &[u8]) -> Result<RegionInfo> {
         self.rpc.get_region_info(key).map_err(Error::from)
     }
@@ -223,7 +223,7 @@ pub mod tests {
         }
     }
 
-    impl ImportClient for MockClient {
+    impl Client for MockClient {
         fn get_region(&self, key: &[u8]) -> Result<RegionInfo> {
             for r in self.regions.lock().unwrap().values() {
                 if key >= r.get_start_key() &&

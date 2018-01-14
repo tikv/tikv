@@ -108,7 +108,7 @@ quick_error! {
         PrepareRangeJobFailed(tag: String) {
             display("{}", tag)
         }
-        SSTFileOutOfRange {}
+        SSTFileCrossRegion {}
     }
 }
 

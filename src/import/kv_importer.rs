@@ -24,12 +24,12 @@ use uuid::Uuid;
 use config::DbConfig;
 use kvproto::importpb::*;
 
-use super::{Client, Config, Engine, Error, ImportJob, Result};
+use super::{Config, Engine, Error, ImportClient, ImportJob, Result};
 
 pub type Token = usize;
 
 struct Inner {
-    jobs: HashMap<Uuid, Arc<ImportJob>>,
+    jobs: HashMap<Uuid, Arc<ImportJob<ImportClient>>>,
     engines: HashMap<Uuid, Arc<EngineFile>>,
     clients: HashMap<Token, Arc<EngineFile>>,
 }
@@ -105,9 +105,9 @@ impl KVImporter {
         }
     }
 
-    pub fn write(&self, token: Token, batch: WriteBatch, options: WriteOptions) -> Result<usize> {
+    pub fn write(&self, token: Token, batch: WriteBatch) -> Result<usize> {
         match self.remove(token) {
-            Some(engine) => match engine.write(batch, options) {
+            Some(engine) => match engine.write(batch) {
                 Ok(v) => {
                     self.insert(token, engine);
                     Ok(v)
@@ -153,14 +153,14 @@ impl KVImporter {
 
     /// Import the engine to the cluster.
     /// Engine can not be imported if it hasn't been closed.
-    pub fn import(&self, uuid: Uuid, client: Arc<Client>) -> Result<()> {
+    pub fn import(&self, uuid: Uuid, client: Arc<ImportClient>) -> Result<()> {
         let job = {
             let mut inner = self.inner.lock().unwrap();
             if inner.jobs.contains_key(&uuid) || inner.engines.contains_key(&uuid) {
                 return Err(Error::EngineInUse(uuid));
             }
             let engine = self.dir.open(uuid)?;
-            let job = Arc::new(ImportJob::new(self.cfg.clone(), engine, client)?);
+            let job = Arc::new(ImportJob::new(self.cfg.clone(), client, engine));
             inner.jobs.insert(uuid, job.clone());
             job
         };
@@ -247,7 +247,7 @@ impl EngineDir {
 
     fn open(&self, uuid: Uuid) -> Result<Engine> {
         let path = self.join(uuid);
-        Engine::new(uuid, path.save, self.opts.clone())
+        Engine::new(&path.save, uuid, self.opts.clone())
     }
 
     fn create(&self, uuid: Uuid) -> Result<EngineFile> {
@@ -296,7 +296,7 @@ pub struct EngineFile {
 
 impl EngineFile {
     fn new(uuid: Uuid, path: EnginePath, opts: DbConfig) -> Result<EngineFile> {
-        let engine = Engine::new(uuid, &path.temp, opts)?;
+        let engine = Engine::new(&path.temp, uuid, opts)?;
         Ok(EngineFile {
             uuid: uuid,
             path: path,
@@ -304,12 +304,12 @@ impl EngineFile {
         })
     }
 
-    fn write(&self, batch: WriteBatch, options: WriteOptions) -> Result<usize> {
-        self.engine.as_ref().unwrap().write(batch, options)
+    fn write(&self, batch: WriteBatch) -> Result<usize> {
+        self.engine.as_ref().unwrap().write(batch)
     }
 
     fn close(&mut self) -> Result<()> {
-        self.engine.take().unwrap().flush()?;
+        self.engine.take().unwrap().flush(true)?;
         if self.path.save.exists() {
             return Err(Error::FileExists(self.path.save.clone()));
         }

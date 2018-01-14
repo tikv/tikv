@@ -28,13 +28,13 @@ use util::time::duration_to_sec;
 
 use super::service::*;
 use super::metrics::*;
-use super::{Client, Config, Error, KVImporter};
+use super::{Config, Error, ImportClient, KVImporter};
 
 #[derive(Clone)]
 pub struct ImportKVService {
     cfg: Config,
     pool: CpuPool,
-    client: Arc<Client>,
+    client: Arc<ImportClient>,
     importer: Arc<KVImporter>,
 }
 
@@ -44,7 +44,7 @@ impl ImportKVService {
             .name_prefix("import-kv")
             .pool_size(cfg.num_threads)
             .create();
-        let client = Arc::new(Client::new(rpc, cfg.max_import_jobs));
+        let client = Arc::new(ImportClient::new(rpc, cfg.max_import_jobs));
         ImportKVService {
             cfg: cfg.clone(),
             pool: pool,
@@ -79,12 +79,7 @@ impl ImportKv for ImportKVService {
                         import1.attach(token, uuid)?;
                     }
                     if chunk.has_batch() {
-                        let options = if chunk.has_options() {
-                            chunk.take_options()
-                        } else {
-                            WriteOptions::new()
-                        };
-                        let size = import1.write(token, chunk.take_batch(), options)?;
+                        let size = import1.write(token, chunk.take_batch())?;
                         IMPORT_WRITE_STREAM_CHUNK_SIZE.observe(size as f64);
                     }
                     Ok(())

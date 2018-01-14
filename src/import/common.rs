@@ -20,7 +20,7 @@ use kvproto::importpb::*;
 
 use pd::RegionInfo;
 
-use super::ImportClient;
+use super::Client;
 
 // Just used as a mark, don't use them in comparison.
 pub const RANGE_MIN: &'static [u8] = &[];
@@ -33,19 +33,7 @@ pub fn new_range(start: &[u8], end: &[u8]) -> Range {
     range
 }
 
-// Use this to check if `end1` is before `end2`.
-pub fn is_before_end(end1: &[u8], end2: &[u8]) -> bool {
-    if end1 == RANGE_MAX {
-        false
-    } else if end2 == RANGE_MAX {
-        true
-    } else {
-        end1 < end2
-    }
-}
-
-// Use this to check if the `key` belongs in the `end`.
-pub fn belongs_in_end(key: &[u8], end: &[u8]) -> bool {
+pub fn before_end(key: &[u8], end: &[u8]) -> bool {
     key < end || end == RANGE_MAX
 }
 
@@ -72,40 +60,16 @@ impl Deref for RangeInfo {
     }
 }
 
-pub fn new_context(region: &RegionInfo) -> Context {
-    let peer = if let Some(ref leader) = region.leader {
-        leader.clone()
-    } else {
-        // We don't know the leader, just choose the first one.
-        region.get_peers().first().unwrap().clone()
-    };
-
-    let mut ctx = Context::new();
-    ctx.set_region_id(region.get_id());
-    ctx.set_region_epoch(region.get_region_epoch().clone());
-    ctx.set_peer(peer.clone());
-    ctx
-}
-
-pub fn find_peer_in_store(region: &Region, store_id: u64) -> Option<Peer> {
-    region
-        .get_peers()
-        .iter()
-        .find(|p| p.get_store_id() == store_id)
-        .cloned()
-}
-
-/// A helper to decide how to cut ranges according to the size and region ranges.
-pub struct RegionContext<C> {
+pub struct RangeContext<C> {
     client: Arc<C>,
     region: Option<RegionInfo>,
     raw_size: usize,
     limit_size: usize,
 }
 
-impl<C: ImportClient> RegionContext<C> {
-    pub fn new(client: Arc<C>, limit_size: usize) -> RegionContext<C> {
-        RegionContext {
+impl<C: Client> RangeContext<C> {
+    pub fn new(client: Arc<C>, limit_size: usize) -> RangeContext<C> {
+        RangeContext {
             client: client,
             region: None,
             raw_size: 0,
@@ -121,7 +85,7 @@ impl<C: ImportClient> RegionContext<C> {
     pub fn reset(&mut self, key: &[u8]) {
         self.raw_size = 0;
         if let Some(ref region) = self.region {
-            if belongs_in_end(key, region.get_end_key()) {
+            if before_end(key, region.get_end_key()) {
                 // Still belongs in this region, no need to update.
                 return;
             }
@@ -148,11 +112,34 @@ impl<C: ImportClient> RegionContext<C> {
 
     /// Check size and region range to see if we should stop before this key.
     pub fn should_stop_before(&self, key: &[u8]) -> bool {
-        if !belongs_in_end(key, self.end_key()) {
+        if !before_end(key, self.end_key()) {
             return true;
         }
         self.raw_size >= self.limit_size
     }
+}
+
+pub fn new_context(region: &RegionInfo) -> Context {
+    let peer = if let Some(ref leader) = region.leader {
+        leader.clone()
+    } else {
+        // We don't know the leader, just choose the first one.
+        region.get_peers().first().unwrap().clone()
+    };
+
+    let mut ctx = Context::new();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(peer.clone());
+    ctx
+}
+
+pub fn find_region_peer(region: &Region, store_id: u64) -> Option<Peer> {
+    region
+        .get_peers()
+        .iter()
+        .find(|p| p.get_store_id() == store_id)
+        .cloned()
 }
 
 #[cfg(test)]
@@ -161,30 +148,20 @@ mod tests {
     use import::client::tests::MockClient;
 
     #[test]
-    fn test_is_before_end() {
-        assert!(!is_before_end(b"ab", b"ab"));
-        assert!(is_before_end(b"ab", b"bc"));
-        assert!(!is_before_end(b"cd", b"bc"));
-        assert!(is_before_end(b"cd", RANGE_MAX));
-        assert!(!is_before_end(RANGE_MAX, RANGE_MAX));
+    fn test_before_end() {
+        assert!(before_end(b"ab", b"bc"));
+        assert!(!before_end(b"ab", b"ab"));
+        assert!(!before_end(b"cd", b"bc"));
+        assert!(before_end(b"cd", RANGE_MAX));
     }
 
     #[test]
-    fn test_belongs_in_end() {
-        assert!(!belongs_in_end(b"ab", b"ab"));
-        assert!(belongs_in_end(b"ab", b"bc"));
-        assert!(!belongs_in_end(b"cd", b"bc"));
-        assert!(belongs_in_end(b"cd", RANGE_MAX));
-        assert!(belongs_in_end(RANGE_MAX, RANGE_MAX));
-    }
-
-    #[test]
-    fn test_region_context() {
+    fn test_range_context() {
         let mut client = MockClient::new();
         client.add_region_range(b"", b"k4");
         client.add_region_range(b"k4", b"");
 
-        let mut ctx = RegionContext::new(Arc::new(client), 8);
+        let mut ctx = RangeContext::new(Arc::new(client), 8);
 
         ctx.add(b"k1", b"v1");
         assert!(!ctx.should_stop_before(b"k2"));

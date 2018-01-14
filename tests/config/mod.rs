@@ -365,7 +365,7 @@ fn test_serde_custom_tikv_config() {
         max_import_jobs: 123,
         max_import_sst_jobs: 123,
         stream_channel_size: 123,
-        region_split_size: 123,
+        region_split_size: 0,
     };
 
     let custom = read_file_in_project_dir("tests/config/test-custom.toml");
