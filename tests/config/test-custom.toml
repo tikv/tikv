@@ -75,6 +75,7 @@ raft-store-max-leader-lease = "12s"
 right-derive-when-split = false
 allow-remove-leader = true
 use-delete-range = true
+sst-importer-gc-interval = "12m"
 
 [coprocessor]
 split-region-on-table = true
@@ -303,3 +304,10 @@ max-bytes-for-level-multiplier = 8
 ca-path = "invalid path"
 cert-path = "invalid path"
 key-path = "invalid path"
+
+[import]
+import-dir = "/tmp/test/import"
+num-threads = 123
+max-import-jobs = 123
+max-import-sst-jobs = 123
+stream-channel-size = 123

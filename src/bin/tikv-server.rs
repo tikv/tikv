@@ -74,6 +74,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
+use tikv::import::{ImportSSTService, SSTImporter, Server as ImportServer};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -152,6 +153,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let db_path = store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
     let snap_path = store_path.join(Path::new("snap"));
     let raft_db_path = Path::new(&cfg.raft_store.raftdb_path);
+    let import_path = store_path.join("import");
 
     let f = File::create(lock_path.as_path()).unwrap_or_else(|e| {
         fatal!("failed to create lock at {}: {:?}", lock_path.display(), e)
@@ -211,6 +213,10 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     );
 
     let server_cfg = Arc::new(cfg.server.clone());
+
+    let importer = Arc::new(SSTImporter::new(import_path).unwrap());
+    let import_service = ImportSSTService::new(&cfg.import, storage.clone(), importer.clone());
+
     // Create server
     let mut server = Server::new(
         &server_cfg,
@@ -222,6 +228,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         snap_mgr.clone(),
         pd_worker.scheduler(),
         Some(engines.clone()),
+        Some(import_service),
     ).unwrap_or_else(|e| fatal!("failed to create server: {:?}", e));
     let trans = server.transport();
 
@@ -239,6 +246,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         significant_msg_receiver,
         pd_worker,
         coprocessor_host,
+        importer,
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));
 
@@ -262,7 +270,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     server
         .start(server_cfg, security_mgr)
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
-    signal_handler::handle_signal(engines, &cfg.rocksdb.backup_dir);
+    signal_handler::handle_signal(Some(engines));
 
     // Stop.
     server
@@ -276,6 +284,15 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     if let Some(Err(e)) = worker.stop().map(|j| j.join()) {
         info!("ignore failure when stopping resolver: {:?}", e);
     }
+}
+
+fn run_import_server(cfg: &TiKvConfig, pd_client: RpcClient) {
+    let mut server = ImportServer::new(cfg, Arc::new(pd_client));
+    server.start();
+    info!("import server started");
+    signal_handler::handle_signal(None);
+    server.shutdown();
+    info!("import server shutdown");
 }
 
 fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches) {
@@ -453,6 +470,11 @@ fn main() {
                 ),
         )
         .arg(
+            Arg::with_name("import")
+                .long("import")
+                .help("Run as an import server"),
+        )
+        .arg(
             Arg::with_name("print-sample-config")
                 .long("print-sample-config")
                 .help("Print a sample config to stdout"),
@@ -522,6 +544,12 @@ fn main() {
     }
     config.server.cluster_id = cluster_id;
     info!("connect to PD cluster {}", cluster_id);
+
+    // Run as an import server.
+    if matches.is_present("import") {
+        run_import_server(&config, pd_client);
+        return;
+    }
 
     let _m = Monitor::default();
     run_raft_server(pd_client, &config, security_mgr);

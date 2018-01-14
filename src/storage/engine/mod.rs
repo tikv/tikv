@@ -22,6 +22,7 @@ use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
 use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
 use kvproto::errorpb::Error as ErrorHeader;
+use kvproto::importpb::SSTMeta;
 
 use config;
 
@@ -71,6 +72,11 @@ pub enum Modify {
 
 pub trait Engine: Send + Debug {
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
+
+    fn async_ingest(&self, _: &Context, _: SSTMeta, _: Callback<()>) -> Result<()> {
+        unimplemented!();
+    }
+
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()>;
     /// Snapshots are token by `Context`s, the results are send to the `on_finished` callback,
     /// with the same order. If a read-index is occurred, a `None` is placed in the corresponding

@@ -424,3 +424,14 @@
 # ca-path = ""
 # cert-path = ""
 # key-path = ""
+
+[import]
+# import-dir = "/tmp/tikv/import"
+# number of threads to handle RPC requests.
+# num-threads = 8
+# maximum concurrent import jobs.
+# max-import-jobs = 8
+# maximum concurrent import sst jobs.
+# max-import-sst-jobs = 4
+# stream channel buffer size, stream will be blocked on channel full.
+# stream-channel-size = 128

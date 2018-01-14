@@ -31,6 +31,7 @@ use kvproto::raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData, RaftTrunc
                              RegionLocalState};
 use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
+use kvproto::importpb::SSTMeta;
 use util::{escape, rocksdb};
 use util::time::{duration_to_sec, SlowTimer};
 use pd::{PdClient, PdRunner, PdTask};
@@ -48,6 +49,7 @@ use util::sys as util_sys;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
+use import::SSTImporter;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
                     ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
                     RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
@@ -155,6 +157,8 @@ pub struct Store<T, C: 'static> {
 
     pub coprocessor_host: Arc<CoprocessorHost>,
 
+    pub importer: Arc<SSTImporter>,
+
     snap_mgr: SnapManager,
 
     raft_metrics: RaftMetrics,
@@ -196,6 +200,7 @@ impl<T, C> Store<T, C> {
         mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
         mut coprocessor_host: CoprocessorHost,
+        importer: Arc<SSTImporter>,
     ) -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
         cfg.validate()?;
@@ -230,6 +235,7 @@ impl<T, C> Store<T, C> {
             trans: trans,
             pd_client: pd_client,
             coprocessor_host: Arc::new(coprocessor_host),
+            importer: importer,
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
             entry_cache_metries: Rc::new(RefCell::new(CacheQueryStats::default())),
@@ -501,6 +507,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_snap_mgr_gc_tick(event_loop);
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
+        self.register_sst_importer_gc_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(
             self.kv_engine.clone(),
@@ -1541,6 +1548,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::DeleteRange { .. } => {
                     // TODO: clean user properties?
                 }
+                ExecResult::IngestSST { ssts } => self.on_ready_ingest_sst(ssts),
             }
         }
     }
@@ -2179,6 +2187,56 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
         }
     }
+
+    fn on_cleanup_import_sst(&self, sst: SSTMeta) {
+        if !self.region_peers.contains_key(&sst.get_region_id()) {
+            // If the region epoch is fresher than the SST and this node doesn't
+            // contain the peer, then the SST will not be ingested anymore.
+            let _ = self.importer.delete(&sst);
+        }
+    }
+
+    fn handle_sst_importer_gc(&mut self) -> Result<()> {
+        let ssts = self.importer.list_ssts()?;
+        for sst in &ssts {
+            if let Some(peer) = self.region_peers.get(&sst.get_region_id()) {
+                let sst_epoch = sst.get_region_epoch();
+                let region_epoch = peer.region().get_region_epoch();
+                if util::is_epoch_stale(sst_epoch, region_epoch) {
+                    // If the local peer is fresher than the SST, then the SST
+                    // will not be ingested anymore.
+                    let _ = self.importer.delete(sst);
+                }
+            } else {
+                // If this node doesn't contain the peer, we need to validate it through PD.
+                let task = PdTask::ValidateSST {
+                    sst: sst.clone(),
+                    store_id: self.store_id(),
+                };
+                if let Err(e) = self.pd_worker.schedule(task) {
+                    error!("schedule pd to validate sst: {:?}", e);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn on_sst_importer_gc_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = self.handle_sst_importer_gc() {
+            error!("{} failed to gc sst importer: {:?}", self.tag, e);
+        }
+        self.register_sst_importer_gc_tick(event_loop);
+    }
+
+    fn register_sst_importer_gc_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(
+            event_loop,
+            Tick::SSTImporterGc,
+            self.cfg.sst_importer_gc_interval.as_millis(),
+        ) {
+            error!("{} register sst importer gc tick err: {:?}", self.tag, e);
+        }
+    }
 }
 
 // Consistency Check implementation.
@@ -2367,6 +2425,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             );
         }
     }
+
+    fn on_ready_ingest_sst(&mut self, ssts: Vec<SSTMeta>) {
+        for sst in &ssts {
+            self.region_peers
+                .get_mut(&sst.get_region_id())
+                .unwrap()
+                .size_diff_hint += sst.get_length();
+            let _ = self.importer.delete(sst);
+        }
+    }
 }
 
 fn new_admin_request(region_id: u64, peer: metapb::Peer) -> RaftCmdRequest {
@@ -2499,6 +2567,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 region_id,
                 region_size,
             } => self.on_approximate_region_size(region_id, region_size),
+            Msg::CleanupImportSST { sst } => self.on_cleanup_import_sst(sst),
         }
     }
 
@@ -2514,6 +2583,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
+            Tick::SSTImporterGc => self.on_sst_importer_gc_tick(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }

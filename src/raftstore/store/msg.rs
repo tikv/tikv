@@ -18,6 +18,7 @@ use std::fmt;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::RegionEpoch;
+use kvproto::importpb::SSTMeta;
 use raft::SnapshotStatus;
 use util::escape;
 
@@ -35,6 +36,7 @@ pub enum Tick {
     SnapGc,
     CompactLockCf,
     ConsistencyCheck,
+    SSTImporterGc,
 }
 
 #[derive(Debug, PartialEq)]
@@ -86,6 +88,8 @@ pub enum Msg {
 
     // For region size
     ApproximateRegionSize { region_id: u64, region_size: u64 },
+
+    CleanupImportSST { sst: SSTMeta },
 }
 
 impl fmt::Debug for Msg {
@@ -121,6 +125,7 @@ impl fmt::Debug for Msg {
                 region_id,
                 region_size
             ),
+            Msg::CleanupImportSST { ref sst } => write!(fmt, "Cleanup import sst {:?}", sst),
         }
     }
 }

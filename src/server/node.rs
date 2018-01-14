@@ -29,6 +29,7 @@ use util::worker::FutureWorker;
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::store::{self, keys, Config as StoreConfig, Engines, Msg, Peekable, SignificantMsg,
                        SnapManager, Store, StoreChannel, Transport};
+use import::SSTImporter;
 use super::Result;
 use server::Config as ServerConfig;
 use storage::{Config as StorageConfig, RaftKv, Storage};
@@ -129,6 +130,7 @@ where
         significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
         coprocessor_host: CoprocessorHost,
+        importer: Arc<SSTImporter>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -168,6 +170,7 @@ where
             significant_msg_receiver,
             pd_worker,
             coprocessor_host,
+            importer,
         )?;
         Ok(())
     }
@@ -322,6 +325,7 @@ where
         significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
         coprocessor_host: CoprocessorHost,
+        importer: Arc<SSTImporter>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -354,6 +358,7 @@ where
                 snap_mgr,
                 pd_worker,
                 coprocessor_host,
+                importer,
             ) {
                 Err(e) => panic!("construct store {} err {:?}", store_id, e),
                 Ok(s) => s,

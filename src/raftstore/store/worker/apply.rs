@@ -28,6 +28,7 @@ use kvproto::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftTruncatedState};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType,
                           RaftCmdRequest, RaftCmdResponse, Request, Response};
+use kvproto::importpb::SSTMeta;
 
 use util::worker::Runnable;
 use util::{escape, rocksdb, MustConsumeVec};
@@ -43,6 +44,7 @@ use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply
                                      write_peer_state};
 use raftstore::store::peer::{check_epoch, parse_data_at, Peer};
 use raftstore::store::metrics::*;
+use import::SSTImporter;
 
 use super::metrics::*;
 
@@ -165,6 +167,7 @@ pub enum ExecResult {
     },
     VerifyHash { index: u64, hash: Vec<u8> },
     DeleteRange { ranges: Vec<Range> },
+    IngestSST { ssts: Vec<SSTMeta> },
 }
 
 struct ApplyCallback {
@@ -192,6 +195,7 @@ impl ApplyCallback {
 
 struct ApplyContext<'a> {
     host: &'a CoprocessorHost,
+    importer: Arc<SSTImporter>,
     wb: WriteBatch,
     cbs: MustConsumeVec<ApplyCallback>,
     wb_last_bytes: u64,
@@ -202,9 +206,14 @@ struct ApplyContext<'a> {
 }
 
 impl<'a> ApplyContext<'a> {
-    fn new(host: &CoprocessorHost, use_delete_range: bool) -> ApplyContext {
+    fn new(
+        host: &CoprocessorHost,
+        importer: Arc<SSTImporter>,
+        use_delete_range: bool,
+    ) -> ApplyContext {
         ApplyContext {
             host: host,
+            importer: importer,
             wb: WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE),
             cbs: MustConsumeVec::new("callback of apply context"),
             wb_last_bytes: 0,
@@ -284,10 +293,13 @@ fn should_flush_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
         return true;
     }
 
-    // When encounter DeleteRange command, we must flush current write batch to engine first,
-    // because current write batch may contains keys are covered by DeleteRange.
+    // Some commands may modify keys covered by the current write batch, so we
+    // must flush the current write batch to the engine first.
     for req in cmd.get_requests() {
         if req.has_delete_range() {
+            return true;
+        }
+        if req.has_ingest_sst() {
             return true;
         }
     }
@@ -601,7 +613,8 @@ impl ApplyDelegate {
                 ExecResult::ComputeHash { .. } |
                 ExecResult::VerifyHash { .. } |
                 ExecResult::CompactLog { .. } |
-                ExecResult::DeleteRange { .. } => {}
+                ExecResult::DeleteRange { .. } |
+                ExecResult::IngestSST { .. } => {}
                 ExecResult::SplitRegion {
                     ref left,
                     ref right,
@@ -1030,6 +1043,7 @@ impl ApplyDelegate {
         let mut responses = Vec::with_capacity(requests.len());
 
         let mut ranges = vec![];
+        let mut ssts = vec![];
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
@@ -1038,6 +1052,7 @@ impl ApplyDelegate {
                 CmdType::DeleteRange => {
                     self.handle_delete_range(req, &mut ranges, ctx.use_delete_range())
                 }
+                CmdType::IngestSST => self.handle_ingest_sst(ctx, req, &mut ssts),
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
                 // It's also safe to skip them here, because a restart must have happened,
@@ -1067,10 +1082,14 @@ impl ApplyDelegate {
         resp.mut_header().set_uuid(uuid);
         resp.set_responses(RepeatedField::from_vec(responses));
 
-        let exec_res = if ranges.is_empty() {
-            None
-        } else {
+        // TODO: Should we let them work together?
+        assert!(ranges.is_empty() || ssts.is_empty());
+        let exec_res = if !ranges.is_empty() {
             Some(ExecResult::DeleteRange { ranges: ranges })
+        } else if !ssts.is_empty() {
+            Some(ExecResult::IngestSST { ssts: ssts })
+        } else {
+            None
         };
 
         Ok((resp, exec_res))
@@ -1215,6 +1234,31 @@ impl ApplyDelegate {
 
         Ok(resp)
     }
+
+    fn handle_ingest_sst(
+        &mut self,
+        ctx: &ApplyContext,
+        req: &Request,
+        ssts: &mut Vec<SSTMeta>,
+    ) -> Result<Response> {
+        let sst = req.get_ingest_sst().get_sst();
+
+        if let Err(e) = check_sst_for_region(sst, &self.region) {
+            error!("ingest {:?} to region {:?}: {:?}", sst, self.region, e);
+            // This file is not valid, we can delete it here.
+            let _ = ctx.importer.delete(sst);
+            return Err(e);
+        }
+
+        ctx.importer.ingest(sst, &self.engine).unwrap_or_else(|e| {
+            // If this failed, it means that the file is corrupted or something
+            // is wrong with the engine, we can't handle that.
+            panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
+        });
+
+        ssts.push(sst.clone());
+        Ok(Response::new())
+    }
 }
 
 pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
@@ -1232,6 +1276,34 @@ pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
 fn check_data_key(key: &[u8], region: &Region) -> Result<()> {
     // region key range has no data prefix, so we must use origin key to check.
     util::check_key_in_region(key, region)?;
+
+    Ok(())
+}
+
+fn check_sst_for_region(sst: &SSTMeta, region: &Region) -> Result<()> {
+    if sst.get_region_id() != region.get_id() {
+        return Err(box_err!(
+            "region id does not match: {} != {}",
+            sst.get_region_id(),
+            region.get_id()
+        ));
+    }
+
+    // Check region epoch.
+    let epoch = region.get_region_epoch();
+    if sst.get_region_epoch().get_conf_ver() != epoch.get_conf_ver() ||
+        sst.get_region_epoch().get_version() != epoch.get_version()
+    {
+        return Err(box_err!(
+            "region epoch does not match: {:?} != {:?}",
+            sst.get_region_epoch(),
+            epoch
+        ));
+    }
+
+    // Check region range.
+    util::check_key_in_region(sst.get_range().get_start(), region)?;
+    util::check_key_in_region(sst.get_range().get_end(), region)?;
 
     Ok(())
 }
@@ -1465,6 +1537,7 @@ pub enum TaskRes {
 pub struct Runner {
     db: Arc<DB>,
     host: Arc<CoprocessorHost>,
+    importer: Arc<SSTImporter>,
     delegates: HashMap<u64, ApplyDelegate>,
     notifier: Sender<TaskRes>,
     sync_log: bool,
@@ -1487,6 +1560,7 @@ impl Runner {
         Runner {
             db: store.kv_engine(),
             host: store.coprocessor_host.clone(),
+            importer: store.importer.clone(),
             delegates: delegates,
             notifier: notifier,
             sync_log: sync_log,
@@ -1499,7 +1573,11 @@ impl Runner {
         let t = SlowTimer::new();
 
         let mut applys_res = Vec::with_capacity(applys.len());
-        let mut apply_ctx = ApplyContext::new(self.host.as_ref(), self.use_delete_range);
+        let mut apply_ctx = ApplyContext::new(
+            self.host.as_ref(),
+            self.importer.clone(),
+            self.use_delete_range,
+        );
         let mut committed_count = 0;
         for apply in applys {
             if apply.entries.is_empty() {
@@ -1679,10 +1757,22 @@ mod tests {
         (path, db)
     }
 
-    fn new_runner(db: Arc<DB>, host: Arc<CoprocessorHost>, tx: Sender<TaskRes>) -> Runner {
+    pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
+        let dir = TempDir::new(path).unwrap();
+        let importer = Arc::new(SSTImporter::new(dir.path()).unwrap());
+        (dir, importer)
+    }
+
+    fn new_runner(
+        db: Arc<DB>,
+        host: Arc<CoprocessorHost>,
+        importer: Arc<SSTImporter>,
+        tx: Sender<TaskRes>,
+    ) -> Runner {
         Runner {
             db: db,
             host: host,
+            importer: importer,
             delegates: HashMap::default(),
             notifier: tx,
             sync_log: false,
@@ -1732,7 +1822,8 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let (_tmp, db) = create_tmp_engine("apply-basic");
         let host = Arc::new(CoprocessorHost::default());
-        let mut runner = new_runner(db.clone(), host, tx);
+        let (_dir, importer) = create_tmp_importer("apply-basic");
+        let mut runner = new_runner(db.clone(), host, importer, tx);
 
         let mut reg = Registration::default();
         reg.id = 1;
@@ -1996,7 +2087,8 @@ mod tests {
         let obs = ApplyObserver::default();
         host.registry
             .register_query_observer(1, Box::new(obs.clone()));
-        let mut apply_ctx = ApplyContext::new(&host, true);
+        let (_dir, importer) = create_tmp_importer("test-delegate");
+        let mut apply_ctx = ApplyContext::new(&host, importer.clone(), true);
         let res = delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
         for cbs in apply_ctx.cbs.drain(..) {
@@ -2023,7 +2115,7 @@ mod tests {
             .put_cf(CF_LOCK, b"k1", b"v1")
             .epoch(1, 3)
             .build();
-        let mut apply_ctx = ApplyContext::new(&host, true);
+        let mut apply_ctx = ApplyContext::new(&host, importer.clone(), true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
         for cbs in apply_ctx.cbs.drain(..) {
@@ -2046,7 +2138,7 @@ mod tests {
             .epoch(1, 1)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new(&host, true);
+        let mut apply_ctx = ApplyContext::new(&host, importer.clone(), true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
         for cbs in apply_ctx.cbs.drain(..) {
@@ -2063,7 +2155,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new(&host, true);
+        let mut apply_ctx = ApplyContext::new(&host, importer.clone(), true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
         for cbs in apply_ctx.cbs.drain(..) {
@@ -2089,7 +2181,7 @@ mod tests {
         let lock_written_bytes = delegate.metrics.lock_cf_written_bytes;
         let delete_keys_hint = delegate.metrics.delete_keys_hint;
         let size_diff_hint = delegate.metrics.size_diff_hint;
-        let mut apply_ctx = ApplyContext::new(&host, true);
+        let mut apply_ctx = ApplyContext::new(&host, importer.clone(), true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
         for cbs in apply_ctx.cbs.drain(..) {
@@ -2113,7 +2205,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new(&host, true);
+        let mut apply_ctx = ApplyContext::new(&host, importer.clone(), true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_entry]);
         db.write(apply_ctx.wb).unwrap();
         for cbs in apply_ctx.cbs.drain(..) {
@@ -2127,7 +2219,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new(&host, true);
+        let mut apply_ctx = ApplyContext::new(&host, importer.clone(), true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
         db.write(apply_ctx.wb).unwrap();
         for cbs in apply_ctx.cbs.drain(..) {
@@ -2144,7 +2236,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new(&host, true);
+        let mut apply_ctx = ApplyContext::new(&host, importer.clone(), true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
         db.write(apply_ctx.wb).unwrap();
         for cbs in apply_ctx.cbs.drain(..) {
@@ -2165,7 +2257,7 @@ mod tests {
                 .build();
             entries.push(put_entry);
         }
-        let mut apply_ctx = ApplyContext::new(&host, true);
+        let mut apply_ctx = ApplyContext::new(&host, importer.clone(), true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, entries);
         db.write(apply_ctx.wb).unwrap();
         for cbs in apply_ctx.cbs.drain(..) {

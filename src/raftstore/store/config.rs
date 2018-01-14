@@ -94,6 +94,8 @@ pub struct Config {
 
     pub use_delete_range: bool,
 
+    pub sst_importer_gc_interval: ReadableDuration,
+
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
     #[doc(hidden)]
@@ -146,6 +148,7 @@ impl Default for Config {
             right_derive_when_split: true,
             allow_remove_leader: false,
             use_delete_range: false,
+            sst_importer_gc_interval: ReadableDuration::minutes(30),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),

@@ -22,6 +22,7 @@ use kvproto::eraftpb::ConfChangeType;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::pdpb;
+use kvproto::importpb::SSTMeta;
 use rocksdb::DB;
 use fs2;
 
@@ -72,6 +73,7 @@ pub enum Task {
     },
     ReadStats { read_stats: HashMap<u64, FlowStatistics>, },
     DestroyPeer { region_id: u64 },
+    ValidateSST { sst: SSTMeta, store_id: u64 },
 }
 
 pub struct StoreStat {
@@ -150,6 +152,10 @@ impl Display for Task {
                 write!(f, "get the read statistics {:?}", read_stats)
             }
             Task::DestroyPeer { ref region_id } => write!(f, "destroy peer {}", region_id),
+            Task::ValidateSST {
+                ref sst,
+                ref store_id,
+            } => write!(f, "validate sst {:?} for store {}", sst, store_id),
         }
     }
 }
@@ -458,6 +464,38 @@ impl<T: PdClient> Runner<T> {
             Some(_) => info!("[region {}] remove peer statistic record in pd", region_id),
         }
     }
+
+    fn handle_validate_sst(&mut self, handle: &Handle, sst: SSTMeta, store_id: u64) {
+        let ch = self.ch.clone();
+        let f = self.pd_client.get_region_by_id(sst.get_region_id()).then(
+            move |resp| {
+                match resp {
+                    Ok(Some(region)) => {
+                        if is_epoch_stale(region.get_region_epoch(), sst.get_region_epoch()) {
+                            // Region epoch has not been updated.
+                            return Ok(());
+                        }
+                        if region
+                            .get_peers()
+                            .into_iter()
+                            .all(|p| p.get_store_id() != store_id)
+                        {
+                            // The SST does not belong to this node anymore.
+                            send_cleanup_sst_message(ch, sst);
+                        }
+                    }
+                    Ok(None) => {
+                        // TODO: handle merge
+                    }
+                    Err(e) => {
+                        error!("get region failed {:?}", e);
+                    }
+                }
+                Ok(())
+            },
+        );
+        handle.spawn(f);
+    }
 }
 
 impl<T: PdClient> Runnable<Task> for Runner<T> {
@@ -530,6 +568,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(handle, region, peer),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
             Task::DestroyPeer { region_id } => self.handle_destroy_peer(region_id),
+            Task::ValidateSST { sst, store_id } => self.handle_validate_sst(handle, sst, store_id),
         };
     }
 }
@@ -613,5 +652,11 @@ fn send_destroy_peer_message(
             local_region.get_id(),
             e
         )
+    }
+}
+
+fn send_cleanup_sst_message(ch: SendCh<Msg>, sst: SSTMeta) {
+    if let Err(e) = ch.try_send(Msg::CleanupImportSST { sst }) {
+        error!("send cleanup import sst request: {:?}", e);
     }
 }
