@@ -51,8 +51,7 @@ use storage::engine::{self, Callback as EngineCallback, CbContext, Error as Engi
                       Result as EngineResult};
 use raftstore::store::engine::IterOption;
 use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
-use util::timer::Timer;
-use util::time::{Instant, SlowTimer};
+use util::time::SlowTimer;
 use util::collections::HashMap;
 use util::worker::{self, Runnable, ScheduleError, Worker};
 
@@ -336,10 +335,6 @@ pub struct Scheduler {
     // to schedule the execution of commands
     worker: Worker<Msg>,
 
-    // to store command id based on their time sequence
-    timer: Timer<u64>,
-    timeout_duration: Duration,
-
     // cmd id generator
     id_alloc: u64,
 
@@ -404,7 +399,6 @@ impl Scheduler {
     pub fn new(
         engine: Box<Engine>,
         worker: Worker<Msg>,
-        timeout_duration: usize,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
@@ -417,8 +411,6 @@ impl Scheduler {
                 Default::default(),
             )),
             worker: worker,
-            timer: Timer::new(CMD_BATCH_SIZE),
-            timeout_duration: Duration::from_secs(timeout_duration as u64),
             id_alloc: 0,
             latches: Latches::new(concurrency),
             sched_pending_write_threshold: sched_pending_write_threshold,
@@ -1093,7 +1085,6 @@ impl Scheduler {
             self.has_gc_command = true;
         }
         let cid = ctx.cid;
-        self.timer.add_task(self.timeout_duration, cid);
         if self.cmd_ctxs.insert(cid, ctx).is_some() {
             panic!("command cid={} shouldn't exist", cid);
         }
@@ -1102,9 +1093,6 @@ impl Scheduler {
     }
 
     fn remove_ctx(&mut self, cid: u64) -> RunningCtx {
-        // TODO: remove task from timer
-        // self.timer.remove_task(cid);
-
         let ctx = self.cmd_ctxs.remove(&cid).unwrap();
         assert_eq!(ctx.cid, cid);
         if ctx.lock.is_write_lock() {
@@ -1589,12 +1577,6 @@ impl Runnable<Msg> for Scheduler {
                 (hash_ctx.0, cids)
             });
             self.batch_get_snapshot(batch.collect());
-        }
-
-        // deal with timeout task
-        let now = Instant::now();
-        while let Some(cid) = self.timer.pop_task_before(now) {
-            self.finish_with_err(cid, Error::from(Error::Other(From::from("timeout"))));
         }
     }
 

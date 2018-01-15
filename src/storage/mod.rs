@@ -507,7 +507,6 @@ impl Storage {
         let scheduler = Scheduler::new(
             self.engine.clone(),
             self.worker.clone(),
-            60, // timeout_duration    TODO: make it configurable
             sched_concurrency,
             sched_worker_pool_size,
             sched_pending_write_threshold,
