@@ -35,7 +35,7 @@ pub use self::store::{create_event_loop, new_compaction_listener, Engines, Store
                       StoreStat};
 pub use self::config::Config;
 pub use self::transport::Transport;
-pub use self::peer::{Peer, PeerStat};
+pub use self::peer::Peer;
 pub use self::bootstrap::{bootstrap_store, clear_prepare_bootstrap, clear_prepare_bootstrap_state,
                           prepare_bootstrap, write_prepare_bootstrap};
 pub use self::engine::{Iterable, Mutable, Peekable};

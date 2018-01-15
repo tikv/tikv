@@ -203,6 +203,8 @@ struct Cluster {
 
     store_stats: HashMap<u64, pdpb::StoreStats>,
     split_count: usize,
+    region_heartbeat_count: usize,
+    reconnect_handler: Option<Box<Fn() + Send + Sync + 'static>>,
 
     // region id -> Operator
     operators: HashMap<u64, Operator>,
@@ -236,6 +238,8 @@ impl Cluster {
             down_peers: HashMap::new(),
             pending_peers: HashMap::new(),
             is_bootstraped: false,
+            region_heartbeat_count: 0,
+            reconnect_handler: None,
         }
     }
 
@@ -289,9 +293,10 @@ impl Cluster {
     }
 
     fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
-        Ok(self.region_id_keys
+        let region = self.region_id_keys
             .get(&region_id)
-            .and_then(|k| self.regions.get(k).cloned()))
+            .and_then(|k| self.regions.get(k).cloned());
+        Ok(region)
     }
 
     fn get_region_size(&self, region_id: u64) -> Option<u64> {
@@ -555,6 +560,7 @@ impl Cluster {
         self.region_sizes
             .insert(region.get_id(), region_stat.approximate_size);
 
+        self.region_heartbeat_count += 1;
         self.handle_heartbeat_version(region.clone())?;
         self.handle_heartbeat_conf_ver(region, leader)
     }
@@ -835,6 +841,18 @@ impl TestPdClient {
     pub fn get_region_size(&self, region_id: u64) -> Option<u64> {
         self.cluster.rl().get_region_size(region_id)
     }
+
+    pub fn call_handle_reconnect(&self) {
+        self.cluster
+            .rl()
+            .reconnect_handler
+            .as_ref()
+            .map(|handle_reconnet| handle_reconnet());
+    }
+
+    pub fn get_region_heartbeat_count(&self) -> usize {
+        self.cluster.wl().region_heartbeat_count
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -997,5 +1015,9 @@ impl PdClient for TestPdClient {
         }
         self.cluster.wl().split_count += 1;
         Box::new(ok(()))
+    }
+
+    fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, f: F) {
+        self.cluster.wl().reconnect_handler = Some(Box::new(f));
     }
 }

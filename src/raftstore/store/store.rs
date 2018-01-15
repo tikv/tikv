@@ -123,6 +123,7 @@ pub struct DestroyPeerJob {
     pub peer: metapb::Peer,
 }
 
+#[derive(Debug)]
 pub struct StoreInfo {
     pub engine: Arc<DB>,
     pub capacity: u64,

@@ -12,12 +12,13 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::fmt::{self, Display, Formatter};
 
 use futures::Future;
 use tokio_core::reactor::Handle;
 
-use kvproto::metapb;
+use kvproto::metapb::{Peer, Region, RegionEpoch};
 use raft::eraftpb::ConfChangeType;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest};
 use kvproto::raft_serverpb::RaftMessage;
@@ -29,7 +30,6 @@ use util::worker::FutureRunnable as Runnable;
 use util::escape;
 use util::transport::SendCh;
 use util::rocksdb::*;
-use pd::{PdClient, RegionStat};
 use raftstore::store::Msg;
 use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
 use raftstore::store::store::StoreInfo;
@@ -37,25 +37,28 @@ use raftstore::store::Callback;
 use storage::FlowStatistics;
 use util::collections::HashMap;
 use prometheus::local::LocalHistogram;
+
+use super::{PdClient, RegionStat};
 use super::metrics::*;
 
 // Use an asynchronous thread to tell pd something.
+#[derive(Debug)]
 pub enum Task {
     AskSplit {
-        region: metapb::Region,
+        region: Region,
         split_key: Vec<u8>,
-        peer: metapb::Peer,
+        peer: Peer,
         // If true, right region derive origin region_id.
         right_derive: bool,
         callback: Callback,
     },
     Heartbeat {
-        region: metapb::Region,
-        peer: metapb::Peer,
+        region: Region,
+        peer: Peer,
         down_peers: Vec<pdpb::PeerStats>,
-        pending_peers: Vec<metapb::Peer>,
-        written_bytes: u64,
-        written_keys: u64,
+        pending_peers: Vec<Peer>,
+        total_written_bytes: u64,
+        total_written_keys: u64,
         region_size: Option<u64>,
     },
     StoreHeartbeat {
@@ -63,12 +66,12 @@ pub enum Task {
         store_info: StoreInfo,
     },
     ReportSplit {
-        left: metapb::Region,
-        right: metapb::Region,
+        left: Region,
+        right: Region,
     },
     ValidatePeer {
-        region: metapb::Region,
-        peer: metapb::Peer,
+        region: Region,
+        peer: Peer,
         merge_source: Option<u64>,
     },
     ReadStats {
@@ -107,14 +110,115 @@ impl Default for StoreStat {
     }
 }
 
-#[derive(Default)]
-pub struct PeerStat {
-    pub read_bytes: u64,
-    pub read_keys: u64,
-    pub last_read_bytes: u64,
-    pub last_read_keys: u64,
-    pub last_written_bytes: u64,
-    pub last_written_keys: u64,
+#[derive(Default, Debug)]
+struct RegionHeartbeatCache {
+    region: Region,
+    peer: Peer,
+    down_peers: Vec<pdpb::PeerStats>,
+    pending_peers: Vec<Peer>,
+    approximate_size: u64,
+
+    read_bytes_delta: u64,
+    read_keys_delta: u64,
+    written_bytes_delta: u64,
+    written_keys_delta: u64,
+
+    last_written_bytes: u64,
+    last_written_keys: u64,
+
+    valid: bool,
+}
+
+impl RegionHeartbeatCache {
+    fn heartbeat(&mut self) -> Option<(Region, Peer, RegionStat)> {
+        if self.valid {
+            None
+        } else {
+            self.valid = true;
+            let region_stat = RegionStat::new(
+                self.down_peers.clone(),
+                self.pending_peers.clone(),
+                self.written_bytes_delta,
+                self.written_keys_delta,
+                self.read_bytes_delta,
+                self.read_keys_delta,
+                self.approximate_size,
+            );
+            self.read_bytes_delta = 0;
+            self.read_keys_delta = 0;
+            self.written_bytes_delta = 0;
+            self.written_keys_delta = 0;
+            Some((self.region.clone(), self.peer.clone(), region_stat))
+        }
+    }
+
+    fn merge_flow_statistics(&mut self, stats: FlowStatistics) {
+        if stats.read_bytes > 0 {
+            self.read_bytes_delta += stats.read_bytes as u64;
+            self.valid = false;
+        }
+        if stats.read_keys > 0 {
+            self.read_keys_delta += stats.read_keys as u64;
+            self.valid = false;
+        }
+    }
+
+    fn merge_heartbeat(&mut self, db: &DB, hb_task: Task) {
+        match hb_task {
+            Task::Heartbeat {
+                region,
+                peer,
+                down_peers,
+                pending_peers,
+                total_written_bytes,
+                total_written_keys,
+                region_size,
+            } => {
+                let approximate_size = match region_size {
+                    Some(size) => size,
+                    None => get_region_approximate_size(db, &region).unwrap_or(0),
+                };
+                if self.approximate_size != approximate_size {
+                    self.approximate_size = approximate_size;
+                    self.valid = false;
+                }
+
+                if self.region != region {
+                    self.region = region;
+                    self.valid = false;
+                }
+
+                if self.peer != peer {
+                    self.peer = peer;
+                    self.valid = false;
+                }
+
+                if self.down_peers != down_peers {
+                    self.down_peers = down_peers;
+                    self.valid = false;
+                }
+
+                if self.pending_peers != pending_peers {
+                    self.pending_peers = pending_peers;
+                    self.valid = false;
+                }
+
+                if self.last_written_bytes < total_written_bytes {
+                    self.written_bytes_delta += total_written_bytes - self.last_written_bytes;
+                    self.last_written_bytes = total_written_bytes;
+                    self.valid = false;
+                }
+                // TODO: what if last_written_bytes > total_written_bytes?
+
+                if self.last_written_keys < total_written_keys {
+                    self.written_keys_delta += total_written_keys - self.last_written_keys;
+                    self.last_written_keys = total_written_keys;
+                    self.valid = false;
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 impl Display for Task {
@@ -169,9 +273,12 @@ pub struct Runner<T: PdClient> {
     pd_client: Arc<T>,
     ch: SendCh<Msg>,
     db: Arc<DB>,
-    region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
+    is_handle_reconnect_scheduled: bool,
+
+    invalidate_cache: Arc<AtomicBool>,
+    heartbeat_cache: HashMap<u64, RegionHeartbeatCache>,
 }
 
 impl<T: PdClient> Runner<T> {
@@ -182,17 +289,19 @@ impl<T: PdClient> Runner<T> {
             ch: ch,
             db: db,
             is_hb_receiver_scheduled: false,
-            region_peers: HashMap::default(),
+            is_handle_reconnect_scheduled: false,
             store_stat: StoreStat::default(),
+            invalidate_cache: Arc::new(AtomicBool::new(false)),
+            heartbeat_cache: HashMap::default(),
         }
     }
 
     fn handle_ask_split(
         &self,
         handle: &Handle,
-        mut region: metapb::Region,
+        mut region: Region,
         split_key: Vec<u8>,
-        peer: metapb::Peer,
+        peer: Peer,
         right_derive: bool,
         callback: Callback,
     ) {
@@ -226,37 +335,37 @@ impl<T: PdClient> Runner<T> {
         handle.spawn(f)
     }
 
-    fn handle_heartbeat(
-        &self,
-        handle: &Handle,
-        region: metapb::Region,
-        peer: metapb::Peer,
-        region_stat: RegionStat,
-    ) {
+    fn handle_heartbeat(&mut self, handle: &Handle, region_id: u64, hb_task: Task) {
+        let cache = self.heartbeat_cache
+            .entry(region_id)
+            .or_insert_with(RegionHeartbeatCache::default);
+        info!("debug: before merge {:?}\n{:?}", cache, hb_task);
+        cache.merge_heartbeat(&self.db, hb_task);
+        info!("debug: after merge {:?}", cache);
+
         self.store_stat
             .region_bytes_written
-            .observe(region_stat.written_bytes as f64);
+            .observe(cache.written_bytes_delta as f64);
         self.store_stat
             .region_keys_written
-            .observe(region_stat.written_keys as f64);
+            .observe(cache.written_keys_delta as f64);
         self.store_stat
             .region_bytes_read
-            .observe(region_stat.read_bytes as f64);
+            .observe(cache.read_bytes_delta as f64);
         self.store_stat
             .region_keys_read
-            .observe(region_stat.read_keys as f64);
+            .observe(cache.read_keys_delta as f64);
 
         // Now we use put region protocol for heartbeat.
-        let f = self.pd_client
-            .region_heartbeat(region.clone(), peer.clone(), region_stat)
-            .map_err(move |e| {
-                debug!(
-                    "[region {}] failed to send heartbeat: {:?}",
-                    region.get_id(),
-                    e
-                );
-            });
-        handle.spawn(f);
+        if let Some((region, peer, region_stat)) = cache.heartbeat() {
+            debug!("[region {}] send changed heartbeat to pd", region_id);
+            let f = self.pd_client
+                .region_heartbeat(region, peer, region_stat)
+                .map_err(move |e| {
+                    debug!("[region {}] failed to send heartbeat: {:?}", region_id, e);
+                });
+            handle.spawn(f);
+        }
     }
 
     fn handle_store_heartbeat(
@@ -330,7 +439,7 @@ impl<T: PdClient> Runner<T> {
         handle.spawn(f);
     }
 
-    fn handle_report_split(&self, handle: &Handle, left: metapb::Region, right: metapb::Region) {
+    fn handle_report_split(&self, handle: &Handle, left: Region, right: Region) {
         let f = self.pd_client.report_split(left, right).map_err(|e| {
             debug!("report split failed {:?}", e);
         });
@@ -340,8 +449,8 @@ impl<T: PdClient> Runner<T> {
     fn handle_validate_peer(
         &self,
         handle: &Handle,
-        local_region: metapb::Region,
-        peer: metapb::Peer,
+        local_region: Region,
+        peer: Peer,
         merge_source: Option<u64>,
     ) {
         let ch = self.ch.clone();
@@ -477,20 +586,34 @@ impl<T: PdClient> Runner<T> {
         self.is_hb_receiver_scheduled = true;
     }
 
+    fn handle_reconnect(&mut self) {
+        if self.is_handle_reconnect_scheduled {
+            if self.invalidate_cache.swap(false, Ordering::Relaxed) {
+                info!("invalidate region heartbeat cache");
+                self.heartbeat_cache.clear();
+            }
+        } else {
+            self.is_handle_reconnect_scheduled = true;
+            let invalidate_cache = Arc::clone(&self.invalidate_cache);
+            self.pd_client
+                .handle_reconnect(move || invalidate_cache.store(true, Ordering::Relaxed));
+        }
+    }
+
     fn handle_read_stats(&mut self, read_stats: HashMap<u64, FlowStatistics>) {
         for (region_id, stats) in read_stats {
-            let peer_stat = self.region_peers
-                .entry(region_id)
-                .or_insert_with(PeerStat::default);
-            peer_stat.read_bytes += stats.read_bytes as u64;
-            peer_stat.read_keys += stats.read_keys as u64;
             self.store_stat.engine_total_bytes_read += stats.read_bytes as u64;
             self.store_stat.engine_total_keys_read += stats.read_keys as u64;
+
+            let cache = self.heartbeat_cache
+                .entry(region_id)
+                .or_insert_with(RegionHeartbeatCache::default);
+            cache.merge_flow_statistics(stats)
         }
     }
 
     fn handle_destroy_peer(&mut self, region_id: u64) {
-        match self.region_peers.remove(&region_id) {
+        match self.heartbeat_cache.remove(&region_id) {
             None => return,
             Some(_) => info!("[region {}] remove peer statistic record in pd", region_id),
         }
@@ -504,6 +627,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
         if !self.is_hb_receiver_scheduled {
             self.schedule_heartbeat_receiver(handle);
         }
+        self.handle_reconnect();
 
         match task {
             Task::AskSplit {
@@ -518,46 +642,23 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 peer,
                 down_peers,
                 pending_peers,
-                written_bytes,
-                written_keys,
+                total_written_bytes,
+                total_written_keys,
                 region_size,
             } => {
-                let approximate_size = match region_size {
-                    Some(size) => size,
-                    None => get_region_approximate_size(&self.db, &region).unwrap_or(0),
-                };
-                let (read_bytes_delta, read_keys_delta, written_bytes_delta, written_keys_delta) = {
-                    let peer_stat = self.region_peers
-                        .entry(region.get_id())
-                        .or_insert_with(PeerStat::default);
-                    let read_bytes_delta = peer_stat.read_bytes - peer_stat.last_read_bytes;
-                    let read_keys_delta = peer_stat.read_keys - peer_stat.last_read_keys;
-                    let written_bytes_delta = written_bytes - peer_stat.last_written_bytes;
-                    let written_keys_delta = written_keys - peer_stat.last_written_keys;
-                    peer_stat.last_written_bytes = written_bytes;
-                    peer_stat.last_written_keys = written_keys;
-                    peer_stat.last_read_bytes = peer_stat.read_bytes;
-                    peer_stat.last_read_keys = peer_stat.read_keys;
-                    (
-                        read_bytes_delta,
-                        read_keys_delta,
-                        written_bytes_delta,
-                        written_keys_delta,
-                    )
-                };
+                let region_id = region.get_id();
                 self.handle_heartbeat(
                     handle,
-                    region,
-                    peer,
-                    RegionStat::new(
+                    region_id,
+                    Task::Heartbeat {
+                        region,
+                        peer,
                         down_peers,
                         pending_peers,
-                        written_bytes_delta,
-                        written_keys_delta,
-                        read_bytes_delta,
-                        read_keys_delta,
-                        approximate_size,
-                    ),
+                        total_written_bytes,
+                        total_written_keys,
+                        region_size,
+                    },
                 )
             }
             Task::StoreHeartbeat { stats, store_info } => {
@@ -575,7 +676,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
     }
 }
 
-fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
+fn new_change_peer_request(change_type: ConfChangeType, peer: Peer) -> AdminRequest {
     let mut req = AdminRequest::new();
     req.set_cmd_type(AdminCmdType::ChangePeer);
     req.mut_change_peer().set_change_type(change_type);
@@ -598,7 +699,7 @@ fn new_split_region_request(
     req
 }
 
-fn new_transfer_leader_request(peer: metapb::Peer) -> AdminRequest {
+fn new_transfer_leader_request(peer: Peer) -> AdminRequest {
     let mut req = AdminRequest::new();
     req.set_cmd_type(AdminCmdType::TransferLeader);
     req.mut_transfer_leader().set_peer(peer);
@@ -616,8 +717,8 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
 fn send_admin_request(
     ch: &SendCh<Msg>,
     region_id: u64,
-    epoch: metapb::RegionEpoch,
-    peer: metapb::Peer,
+    epoch: RegionEpoch,
+    peer: Peer,
     request: AdminRequest,
     callback: Callback,
 ) {
@@ -646,12 +747,7 @@ fn send_merge_fail(ch: SendCh<Msg>, source: u64) {
 }
 
 // send a raft message to destroy the specified stale peer
-fn send_destroy_peer_message(
-    ch: SendCh<Msg>,
-    local_region: metapb::Region,
-    peer: metapb::Peer,
-    pd_region: metapb::Region,
-) {
+fn send_destroy_peer_message(ch: SendCh<Msg>, local_region: Region, peer: Peer, pd_region: Region) {
     let mut message = RaftMessage::new();
     message.set_region_id(local_region.get_id());
     message.set_from_peer(peer.clone());
