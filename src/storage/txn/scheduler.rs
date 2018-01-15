@@ -1528,7 +1528,10 @@ impl Scheduler {
 impl Runnable<Msg> for Scheduler {
     fn run(&mut self, msg: Msg) {
         match msg {
-            Msg::Quit => { self.shutdown(); return ; },
+            Msg::Quit => {
+                self.shutdown();
+                return;
+            }
             Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
             Msg::RetryGetSnapshots(batch) => self.on_retry_get_snapshots(batch),
             Msg::SnapshotFinished {
@@ -1562,7 +1565,7 @@ impl Runnable<Msg> for Scheduler {
 
     fn on_tick(&mut self) {
         if self.grouped_cmds.as_ref().unwrap().is_empty() {
-            return ;
+            return;
         }
 
         if let Some(cmds) = self.grouped_cmds.take() {
