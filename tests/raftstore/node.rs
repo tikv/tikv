@@ -234,7 +234,7 @@ impl Simulator for NodeCluster {
             engines
                 .kv_engine
                 .clone()
-                .get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
+                .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
                 .unwrap()
                 .is_none()
         );
