@@ -38,6 +38,7 @@ pub struct MvccReader {
     lower_bound: Option<Vec<u8>>,
     upper_bound: Option<Vec<u8>>,
     isolation_level: IsolationLevel,
+    seek_data_last_time: bool,
 }
 
 impl MvccReader {
@@ -61,6 +62,7 @@ impl MvccReader {
             fill_cache: fill_cache,
             lower_bound: lower_bound,
             upper_bound: upper_bound,
+            seek_data_last_time: false,
         }
     }
 
@@ -72,7 +74,7 @@ impl MvccReader {
         self.key_only = key_only;
     }
 
-    pub fn load_data(&mut self, key: &Key, ts: u64) -> Result<Value> {
+    pub fn load_data(&mut self, key: &Key, ts: u64, use_seek: bool) -> Result<Value> {
         if self.key_only {
             return Ok(vec![]);
         }
@@ -82,23 +84,26 @@ impl MvccReader {
         }
 
         let k = key.append_ts(ts);
-        let res = if let Some(ref mut cursor) = self.data_cursor {
-            match cursor.get(&k, &mut self.statistics.data)? {
-                None => panic!("key {} not found, ts {}", key, ts),
-                Some(v) => v.to_vec(),
-            }
+        let res = if use_seek && self.data_cursor.is_some() {
+            let mut cursor = self.data_cursor.as_mut().unwrap();
+            cursor
+                .get(&k, &mut self.statistics.data)?
+                .map(|v| v.to_vec())
         } else {
             self.statistics.data.get += 1;
-            match self.snapshot.get(&k)? {
-                None => panic!("key {} not found, ts: {}", key, ts),
-                Some(v) => v,
-            }
+            self.snapshot.get(&k)?
         };
 
+        let value = match res {
+            None => panic!("key {} not found, ts {}", key, ts),
+            Some(v) => v,
+        };
+        self.seek_data_last_time = use_seek;
         self.statistics.data.processed += 1;
-        self.statistics.data.flow_stats.read_bytes += k.raw().unwrap_or_default().len() + res.len();
+        self.statistics.data.flow_stats.read_bytes +=
+            k.raw().unwrap_or_default().len() + value.len();
         self.statistics.data.flow_stats.read_keys += 1;
-        Ok(res)
+        Ok(value)
     }
 
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
@@ -221,6 +226,7 @@ impl MvccReader {
             },
             IsolationLevel::RC => {}
         }
+
         loop {
             match self.seek_write(key, ts)? {
                 Some((commit_ts, mut write)) => match write.write_type {
@@ -231,7 +237,11 @@ impl MvccReader {
                             }
                             return Ok(write.short_value.take());
                         }
-                        return self.load_data(key, write.start_ts).map(Some);
+                        let seek_write = self.write_cursor.as_mut().unwrap().seek_last_time();
+                        // if we use seek in write cf(there are many history versions),
+                        // use get in default cf to make read faster
+                        let seek_data = !seek_write;
+                        return self.load_data(key, write.start_ts, seek_data).map(Some);
                     }
                     WriteType::Delete => {
                         return Ok(None);
