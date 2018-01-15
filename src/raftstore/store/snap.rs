@@ -819,7 +819,10 @@ fn apply_plain_cf_file<D: CompactBytesDecoder>(
 
 impl fmt::Debug for Snap {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "Snap")
+        f.debug_struct("Snap")
+            .field("key", &self.key)
+            .field("display_path", &self.display_path)
+            .finish()
     }
 }
 
