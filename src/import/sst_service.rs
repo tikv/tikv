@@ -72,15 +72,15 @@ impl ImportSst for ImportSSTService {
             bounded_stream
                 .map_err(Error::from)
                 .for_each(move |chunk| {
-                    let import = import1.clone();
+                    let import1 = import1.clone();
                     thread1.spawn_fn(move || {
                         let start = Instant::now_coarse();
                         if chunk.has_meta() {
-                            import.create(token, chunk.get_meta())?;
+                            import1.create(token, chunk.get_meta())?;
                         }
                         if !chunk.get_data().is_empty() {
                             let data = chunk.get_data();
-                            import.append(token, data)?;
+                            import1.append(token, data)?;
                             IMPORT_UPLOAD_CHUNK_SIZE.observe(data.len() as f64);
                         }
                         IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
@@ -88,11 +88,10 @@ impl ImportSst for ImportSSTService {
                     })
                 })
                 .then(move |res| {
-                    let import = import2.clone();
                     thread2.spawn_fn(move || match res {
-                        Ok(_) => import.finish(token),
+                        Ok(_) => import2.finish(token),
                         Err(e) => {
-                            if let Some(f) = import.remove(token) {
+                            if let Some(f) = import2.remove(token) {
                                 error!("remove {:?}: {:?}", f, e);
                             }
                             Err(e)
