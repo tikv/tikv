@@ -40,14 +40,14 @@
 # max recursion level allowed when decoding dag expression
 # end-point-recursion-limit = 1000
 
-# enable or disable dist-sql cache feature
+# enable or disable the dist-sql cache feature
 # enable-distsql-cache = false
 
-# dist-sql cache size default is 256MB.
+# The default size of the dist-sql cache is 256MB.
 # distsql-cache-size = "256MB"
 
-# dist-sql cache entry max size, if result set is bigger than this, dist-sql
-# cache will not cache it.
+# The max size of the dist-sql cache entry, if the result set is bigger than the value,
+# the dist-sql cache does not cache it.
 # distsql-cache-entry-max-size = "5MB"
 
 # the max bytes that snapshot can be written to disk in one second,

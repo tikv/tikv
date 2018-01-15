@@ -124,7 +124,8 @@ impl DAGContext {
                     self.exec.collect_output_counts(&mut counts);
                     sel_resp.set_output_counts(counts);
                     let data = box_try!(sel_resp.write_to_bytes());
-                    // If result data is greater than 5MB should not cache it.
+                    // If the result set is bigger than distsql_cache_entry_max_size
+                    // it cannot be cached.
                     if self.can_cache_with_size(&data) {
                         debug!("Cache It: {}, region_id: {}", &self.cache_key, region_id);
                         DISTSQL_CACHE

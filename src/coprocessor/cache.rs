@@ -24,26 +24,36 @@ const DISTSQL_CACHE_ENTRY_ADDITION_SIZE: usize = 40;
 pub struct DistSQLCacheEntry {
     region_id: u64,
     version: u64,
-    result: Vec<u8>,
+    value: Vec<u8>,
+    // size track each query result cached size in bytes. It calculate by:
+    //  len(value) + DISTSQL_CACHE_ENTRY_ADDITION_SIZE + 2 * len(key)
+    // cache key will stored in DistSQLCache.map and DistSQLCache.regions so
+    // mutilply 2
     size: usize,
 }
 
 impl DistSQLCacheEntry {
-    pub fn new(region_id: u64, version: u64, key_size: usize, r: Vec<u8>) -> DistSQLCacheEntry {
-        let size = r.len() + DISTSQL_CACHE_ENTRY_ADDITION_SIZE + 2 * key_size;
+    pub fn new(region_id: u64, version: u64, key_size: usize, value: Vec<u8>) -> DistSQLCacheEntry {
+        let size = value.len() + DISTSQL_CACHE_ENTRY_ADDITION_SIZE + 2 * key_size;
         DistSQLCacheEntry {
             region_id: region_id,
             version: version,
-            result: r,
+            value: value,
             size: size,
         }
     }
 
-    pub fn update(&mut self, region_id: u64, version: u64, key_size: usize, res: Vec<u8>) -> usize {
+    pub fn update(
+        &mut self,
+        region_id: u64,
+        version: u64,
+        key_size: usize,
+        value: Vec<u8>,
+    ) -> usize {
         let old_size = self.size;
-        self.size = res.len() + (key_size * 2) + DISTSQL_CACHE_ENTRY_ADDITION_SIZE;
+        self.size = value.len() + (key_size * 2) + DISTSQL_CACHE_ENTRY_ADDITION_SIZE;
         self.version = version;
-        self.result = res;
+        self.value = value;
         self.region_id = region_id;
         self.size - old_size
     }
@@ -112,7 +122,7 @@ impl DistSQLCache {
             self.update_regions(region_id, k);
         }
 
-        // Remove entry untile cache size is less or equals than capacity
+        // Remove entry until cache size is less or equals than capacity
         while self.size() > self.capacity() {
             self.remove_lru();
         }
@@ -156,7 +166,7 @@ impl DistSQLCache {
             }
         }
         self.check_evict_key(region_id, k);
-        (region_version, self.map.get_refresh(k).map(|t| &t.result))
+        (region_version, self.map.get_refresh(k).map(|t| &t.value))
     }
 
     pub fn get_region_version(&self, region_id: u64) -> u64 {
@@ -169,7 +179,7 @@ impl DistSQLCache {
         }
 
         self.check_evict_key(region_id, k);
-        self.map.get_refresh(k).map(|t| &t.result)
+        self.map.get_refresh(k).map(|t| &t.value)
     }
 
     pub fn remove(&mut self, k: &str) {
