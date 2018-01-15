@@ -86,9 +86,15 @@ impl MvccReader {
         let k = key.append_ts(ts);
         let res = if use_seek && self.data_cursor.is_some() {
             let mut cursor = self.data_cursor.as_mut().unwrap();
-            cursor
-                .get(&k, &mut self.statistics.data)?
-                .map(|v| v.to_vec())
+            if self.seek_data_last_time {
+                cursor
+                    .get(&k, &mut self.statistics.data)?
+                    .map(|v| v.to_vec())
+            } else {
+                cursor
+                    .get_with_seek(&k, &mut self.statistics.data)?
+                    .map(|v| v.to_vec())
+            }
         } else {
             self.statistics.data.get += 1;
             self.snapshot.get(&k)?

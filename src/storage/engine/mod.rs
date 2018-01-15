@@ -387,12 +387,6 @@ impl Cursor {
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should `seek` first.
     pub fn get(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<Option<&[u8]>> {
-        if !self.seek_last_time {
-            if self.seek(key, statistics)? && self.iter.key() == &**key.encoded() {
-                return Ok(Some(self.iter.value()));
-            }
-            return Ok(None);
-        }
         if self.scan_mode != ScanMode::Backward {
             if self.near_seek(key, statistics)? && self.iter.key() == &**key.encoded() {
                 return Ok(Some(self.iter.value()));
@@ -400,6 +394,24 @@ impl Cursor {
             return Ok(None);
         }
         if self.near_seek_for_prev(key, statistics)? && self.iter.key() == &**key.encoded() {
+            return Ok(Some(self.iter.value()));
+        }
+        Ok(None)
+    }
+
+    /// Get the value of specified key with seek.
+    pub fn get_with_seek(
+        &mut self,
+        key: &Key,
+        statistics: &mut CFStatistics,
+    ) -> Result<Option<&[u8]>> {
+        if self.scan_mode != ScanMode::Backward {
+            if self.seek(key, statistics)? && self.iter.key() == &**key.encoded() {
+                return Ok(Some(self.iter.value()));
+            }
+            return Ok(None);
+        }
+        if self.seek_for_prev(key, statistics)? && self.iter.key() == &**key.encoded() {
             return Ok(Some(self.iter.value()));
         }
         Ok(None)
