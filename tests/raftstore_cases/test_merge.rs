@@ -83,6 +83,8 @@ fn test_node_base_merge() {
     assert!(!resp.get_header().has_error(), "{:?}", resp);
     assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
 
+    let version = left.get_region_epoch().get_version();
+    let conf_ver = left.get_region_epoch().get_conf_ver();
     'outer: for i in 1..4 {
         let state_key = keys::region_state_key(left.get_id());
         let mut state = RegionLocalState::default();
@@ -92,7 +94,11 @@ fn test_node_base_merge() {
                 .get_msg_cf(CF_RAFT, &state_key)
                 .unwrap()
                 .unwrap();
-            if state.get_state() == PeerState::Tombstone && *state.get_region() == left {
+            if state.get_state() == PeerState::Tombstone {
+                let region = state.get_region();
+                if region.get_region_epoch().get_version() == version + 1 {
+                    assert_eq!(region.get_region_epoch().get_conf_ver(), conf_ver + 1);
+                }
                 continue 'outer;
             }
             thread::sleep(Duration::from_millis(500));

@@ -1162,6 +1162,7 @@ impl ApplyDelegate {
         }
         write_peer_state(&self.engine, &ctx.wb, &region, PeerState::Normal)
             .and_then(|_| {
+                // Should source_region be used?
                 write_peer_state(&self.engine, &ctx.wb, exist_region, PeerState::Tombstone)
             })
             .unwrap_or_else(|e| {

@@ -13,7 +13,6 @@
 
 
 use std::time::*;
-use std::thread;
 
 use fail;
 use futures::Future;
@@ -74,25 +73,7 @@ fn test_node_merge_rollback() {
     assert_eq!(region.get_region_epoch().get_conf_ver(), 3);
     fail::remove(schedule_merge_fp);
     // Wait till rollback.
-    let timer = Instant::now();
-    loop {
-        let resp = cluster.request(
-            b"k11",
-            vec![new_put_cmd(b"k11", b"v11")],
-            false,
-            Duration::from_secs(5),
-        );
-        if !resp.get_header().has_error() {
-            break;
-        }
-        if !resp.get_header().get_error().get_message().contains("read only") {
-            panic!("response {:?} has error", resp);
-        }
-        if timer.elapsed() > Duration::from_secs(5) {
-            panic!("region still in read only mode after 5 secs");
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
+    cluster.must_put(b"k11", b"v11");
 
     for i in 1..3 {
         let state_key = keys::region_state_key(region.get_id());
@@ -183,4 +164,52 @@ fn test_node_merge_restart() {
         assert!(state.get_region().get_start_key().is_empty());
         assert!(state.get_region().get_end_key().is_empty());
     }
+}
+
+
+#[test]
+fn test_node_merge_recover_snapshot() {
+    let _guard = ::setup();
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_rule();
+
+    cluster.run();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = pd_client.get_region(b"k3").unwrap();
+    let epoch = region.get_region_epoch();
+
+    let schedule_merge_fp = "on_schedule_merge";
+    fail::cfg(schedule_merge_fp, "return()").unwrap();
+
+    let pre_merge = util::new_pre_merge(MergeDirection::Backward);
+    let req = util::new_admin_request(region.get_id(), &epoch, pre_merge);
+    // The callback will be called when pre-merge is applied.
+    let res = cluster.call_command_on_leader(req, Duration::from_secs(3));
+    assert!(res.is_ok(), "{:?}", res);
+    
+    // Add a peer to trigger rollback.
+    pd_client.must_remove_peer(left.get_id(), left.get_peers()[0].to_owned());
+    util::must_get_none(&cluster.get_engine(3), b"k4");
+
+    let step_store_3_region_1 = "step_message_3_1";
+    fail::cfg(step_store_3_region_1, "return()").unwrap();
+    fail::remove(schedule_merge_fp);
+    
+    for i in 0..100 {
+        cluster.must_put(format!("k4{}", i).as_bytes(), b"v4");
+    }
+    fail::remove(step_store_3_region_1);
+    util::must_get_equal(&cluster.get_engine(3), b"k40", b"v4");
+    cluster.must_transfer_leader(1, new_peer(3, 3));
+    cluster.must_put(b"k40", b"v5");
 }

@@ -527,6 +527,11 @@ impl<T: Simulator> Cluster<T> {
                 sleep_ms(100);
                 continue;
             }
+            if resp.get_header().get_error().get_message().contains("read only mode") {
+                warn!("seems waiting for merge, let's retry");
+                sleep_ms(100);
+                continue;
+            }
             return resp;
         }
         panic!("request failed after retry for 20 times");
