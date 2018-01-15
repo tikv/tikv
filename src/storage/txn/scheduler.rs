@@ -568,6 +568,7 @@ fn process_read(
         Command::ScanLock {
             ref ctx,
             max_ts,
+            ref start_key,
             limit,
             ..
         } => {
@@ -580,7 +581,7 @@ fn process_read(
                 ctx.get_isolation_level(),
             );
             let res = reader
-                .scan_lock(None, |lock| lock.ts <= max_ts, limit)
+                .scan_lock(Some(start_key.clone()), |lock| lock.ts <= max_ts, limit)
                 .map_err(Error::from)
                 .and_then(|(v, _)| {
                     let mut locks = vec![];
@@ -1625,6 +1626,7 @@ mod tests {
             Command::ScanLock {
                 ctx: Context::new(),
                 max_ts: 5,
+                start_key: make_key(b""),
                 limit: 0,
             },
             Command::ResolveLock {

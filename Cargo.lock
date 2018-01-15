@@ -387,7 +387,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/wentaoxu/kvproto.git?branch=limit_data_size_for_scan_lock#3f5da532feb24e35fc0f24d790eeb1661a7f560f"
+source = "git+https://github.com/wentaoxu/kvproto.git?branch=limit_data_size_for_scan_lock#8502ad43609e06e8fb21674653595ceba52cc2dc"
 dependencies = [
  "futures 0.1.16 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
