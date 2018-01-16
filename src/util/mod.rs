@@ -13,14 +13,13 @@
 
 use std::ops::Deref;
 use std::ops::DerefMut;
-use std::io;
 use std::{slice, thread};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::collections::vec_deque::{Iter, VecDeque};
-use std::u64;
+use std::{io, u64};
 
 use prometheus;
 use rand::{self, ThreadRng};

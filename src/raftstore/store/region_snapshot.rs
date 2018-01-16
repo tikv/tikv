@@ -24,6 +24,7 @@ use raftstore::Result;
 /// Snapshot of a region.
 ///
 /// Only data within a region can be accessed.
+#[derive(Debug)]
 pub struct RegionSnapshot {
     snap: SyncSnapshot,
     region: Arc<Region>,

@@ -24,15 +24,15 @@ use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::{self, Message, MessageStatic};
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
-use kvproto::raft_cmdpb::{AdminCmdType, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse,
-                          TransferLeaderRequest, TransferLeaderResponse};
+use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
+                          RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{PeerState, RaftMessage};
 use kvproto::pdpb::PeerStats;
 
 use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX};
 use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::Config;
+use raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
 use raftstore::store::worker::apply::ExecResult;
 use raftstore::store::worker::{Apply, ApplyRes, ApplyTask};
@@ -47,7 +47,6 @@ use pd::{PdTask, INVALID_ID};
 use super::store::{DestroyPeerJob, Store, StoreStat};
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::util::{self, Lease, LeaseState};
-use super::msg::Callback;
 use super::cmd_resp;
 use super::transport::Transport;
 use super::engine::Snapshot;
@@ -850,7 +849,7 @@ impl Peer {
                     // TODO: we should add test case that a split happens before pending
                     // read-index is handled. To do this we need to control async-apply
                     // procedure precisely.
-                    cb(self.handle_read(req));
+                    cb.invoke_read(self.handle_read(req));
                 }
                 propose_time = Some(read.renew_lease_time);
             }
@@ -922,7 +921,7 @@ impl Peer {
             for _ in 0..self.pending_reads.ready_cnt {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 for (req, cb) in read.cmds.drain(..) {
-                    cb(self.handle_read(req));
+                    cb.invoke_read(self.handle_read(req));
                 }
             }
             self.pending_reads.ready_cnt = 0;
@@ -1020,7 +1019,7 @@ impl Peer {
         match res {
             Err(e) => {
                 cmd_resp::bind_error(&mut err_resp, e);
-                cb(err_resp);
+                cb.invoke_with_response(err_resp);
                 false
             }
             Ok(idx) => {
@@ -1042,11 +1041,12 @@ impl Peer {
         &mut self,
         req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
-    ) -> Option<RaftCmdResponse> {
+    ) -> Option<ReadResponse> {
+        let snapshot = None;
         if self.pending_remove {
-            let mut resp = RaftCmdResponse::new();
-            cmd_resp::bind_error(&mut resp, box_err!("peer is pending remove"));
-            return Some(resp);
+            let mut response = RaftCmdResponse::new();
+            cmd_resp::bind_error(&mut response, box_err!("peer is pending remove"));
+            return Some(ReadResponse { response, snapshot });
         }
         metrics.all += 1;
 
@@ -1061,9 +1061,9 @@ impl Peer {
             Ok(RequestPolicy::ReadIndex) => None,
             Ok(_) => unreachable!(),
             Err(e) => {
-                let mut resp = cmd_resp::new_error(e);
-                cmd_resp::bind_term(&mut resp, self.term());
-                Some(resp)
+                let mut response = cmd_resp::new_error(e);
+                cmd_resp::bind_term(&mut response, self.term());
+                Some(ReadResponse { response, snapshot })
             }
         }
     }
@@ -1262,7 +1262,7 @@ impl Peer {
 
     fn read_local(&mut self, req: RaftCmdRequest, cb: Callback, metrics: &mut RaftProposeMetrics) {
         metrics.local_read += 1;
-        cb(self.handle_read(req));
+        cb.invoke_read(self.handle_read(req))
     }
 
     fn read_index(
@@ -1318,7 +1318,7 @@ impl Peer {
                     term: self.term(),
                     renew_lease_time: Some(renew_lease_time),
                 };
-                self.post_propose(meta, false, box |_| {});
+                self.post_propose(meta, false, Callback::None);
             }
         }
 
@@ -1382,7 +1382,7 @@ impl Peer {
 
         // transfer leader command doesn't need to replicate log and apply, so we
         // return immediately. Note that this command may fail, we can view it just as an advice
-        cb(make_transfer_leader_response());
+        cb.invoke_with_response(make_transfer_leader_response());
 
         transferred
     }
@@ -1434,16 +1434,19 @@ impl Peer {
         Ok(propose_index)
     }
 
-    fn handle_read(&mut self, req: RaftCmdRequest) -> RaftCmdResponse {
+    fn handle_read(&mut self, req: RaftCmdRequest) -> ReadResponse {
         let mut resp = self.exec_read(&req).unwrap_or_else(|e| {
             match e {
                 Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
                 _ => error!("{} execute raft command err: {:?}", self.tag, e),
             }
-            cmd_resp::new_error(e)
+            ReadResponse {
+                response: cmd_resp::new_error(e),
+                snapshot: None,
+            }
         });
 
-        cmd_resp::bind_term(&mut resp, self.term());
+        cmd_resp::bind_term(&mut resp.response, self.term());
         resp
     }
 
@@ -1629,37 +1632,42 @@ impl Peer {
         Ok(())
     }
 
-    fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<RaftCmdResponse> {
+    fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<ReadResponse> {
         check_epoch(self.region(), req)?;
-        let mut snap = None;
+        let mut need_snapshot = false;
+        let snapshot = Snapshot::new(self.kv_engine.clone());
         let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
 
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Get => {
-                    if snap.is_none() {
-                        snap = Some(Snapshot::new(self.kv_engine.clone()));
-                    }
-                    apply::do_get(&self.tag, self.region(), snap.as_ref().unwrap(), req)?
+                CmdType::Get => apply::do_get(&self.tag, self.region(), &snapshot, req)?,
+                CmdType::Snap => {
+                    need_snapshot = true;
+                    raft_cmdpb::Response::new()
                 }
-                CmdType::Snap => apply::do_snap(self.region().to_owned())?,
                 CmdType::Prewrite |
                 CmdType::Put |
                 CmdType::Delete |
                 CmdType::DeleteRange |
                 CmdType::Invalid => unreachable!(),
             };
-
             resp.set_cmd_type(cmd_type);
-
             responses.push(resp);
         }
 
-        let mut resp = RaftCmdResponse::new();
-        resp.set_responses(protobuf::RepeatedField::from_vec(responses));
-        Ok(resp)
+        let mut response = RaftCmdResponse::new();
+        response.set_responses(protobuf::RepeatedField::from_vec(responses));
+        let snapshot = if need_snapshot {
+            Some(RegionSnapshot::from_snapshot(
+                snapshot.into_sync(),
+                self.region().to_owned(),
+            ))
+        } else {
+            None
+        };
+        Ok(ReadResponse { response, snapshot })
     }
 }
 

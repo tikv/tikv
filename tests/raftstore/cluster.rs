@@ -746,7 +746,7 @@ impl<T: Simulator> Cluster<T> {
             region_id: region.get_id(),
             region_epoch: region.get_region_epoch().clone(),
             split_key: split_key.clone(),
-            callback: Some(cb),
+            callback: cb,
         }).unwrap();
     }
 
@@ -758,7 +758,8 @@ impl<T: Simulator> Cluster<T> {
             if try_cnt % 50 == 0 {
                 self.reset_leader_of_region(region.get_id());
                 let key = split_key.to_vec();
-                let check = Box::new(move |mut resp: RaftCmdResponse| {
+                let check = Box::new(move |write_resp: WriteResponse| {
+                    let mut resp = write_resp.response;
                     if resp.get_header().has_error() {
                         let error = resp.get_header().get_error();
                         if error.has_stale_epoch() || error.has_not_leader() {
@@ -774,7 +775,7 @@ impl<T: Simulator> Cluster<T> {
                     assert_eq!(left.get_end_key(), key.as_slice());
                     assert_eq!(left.take_end_key(), right.take_start_key());
                 });
-                self.split_region(region, split_key, check);
+                self.split_region(region, split_key, Callback::Write(check));
             }
 
             if self.pd_client.check_split(region, split_key) &&
