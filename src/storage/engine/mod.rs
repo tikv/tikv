@@ -121,7 +121,7 @@ pub trait Engine: Send + Debug {
     fn clone(&self) -> Box<Engine + 'static>;
 }
 
-pub trait Snapshot: Send {
+pub trait Snapshot: Send + Debug {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
     #[allow(needless_lifetimes)]

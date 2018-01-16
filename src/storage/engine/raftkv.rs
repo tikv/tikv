@@ -470,6 +470,12 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
     }
 }
 
+impl fmt::Debug for RegionSnapshot {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "RegionSnapshot")
+    }
+}
+
 impl Snapshot for RegionSnapshot {
     fn get(&self, key: &Key) -> engine::Result<Option<Value>> {
         fail_point!("raftkv_snapshot_get", |_| {

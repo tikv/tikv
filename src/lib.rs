@@ -92,5 +92,6 @@ pub mod raftstore;
 pub mod pd;
 pub mod server;
 pub mod coprocessor;
+pub mod readpool;
 
 pub use storage::Storage;

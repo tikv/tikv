@@ -817,6 +817,12 @@ fn apply_plain_cf_file<D: CompactBytesDecoder>(
     Ok(())
 }
 
+impl fmt::Debug for Snap {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "Snap")
+    }
+}
+
 impl Snapshot for Snap {
     fn build(
         &mut self,
