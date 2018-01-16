@@ -13,6 +13,8 @@
 
 use std::sync::Arc;
 use std::cmp;
+use std::fmt::{self, Formatter};
+
 use rocksdb::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use kvproto::metapb::Region;
 
@@ -27,6 +29,14 @@ use raftstore::Result;
 pub struct RegionSnapshot {
     snap: SyncSnapshot,
     region: Arc<Region>,
+}
+
+impl fmt::Debug for RegionSnapshot {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.debug_struct("RegionSnapshot")
+            .field("region", &self.region)
+            .finish()
+    }
 }
 
 impl RegionSnapshot {
