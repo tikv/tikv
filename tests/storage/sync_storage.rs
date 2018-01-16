@@ -150,7 +150,7 @@ impl SyncStorage {
         &self,
         ctx: Context,
         max_ts: u64,
-        start_key: Key,
+        start_key: Vec<u8>,
         limit: usize,
     ) -> Result<Vec<LockInfo>> {
         wait_op!(|cb| {

@@ -133,7 +133,7 @@ pub enum Command {
     ScanLock {
         ctx: Context,
         max_ts: u64,
-        start_key: Key,
+        start_key: Option<Key>,
         limit: usize,
     },
     ResolveLock {
@@ -252,7 +252,7 @@ impl Display for Command {
                 ..
             } => write!(
                 f,
-                "kv::scan_lock {} {} @ {} | {:?}",
+                "kv::scan_lock {:?} {} @ {} | {:?}",
                 start_key,
                 limit,
                 max_ts,
@@ -778,14 +778,18 @@ impl Storage {
         &self,
         ctx: Context,
         max_ts: u64,
-        start_key: Key,
+        start_key: Vec<u8>,
         limit: usize,
         callback: Callback<Vec<LockInfo>>,
     ) -> Result<()> {
         let cmd = Command::ScanLock {
             ctx: ctx,
             max_ts: max_ts,
-            start_key: start_key,
+            start_key: if start_key.eq(&b"".to_vec()) {
+                None
+            } else {
+                Some(Key::from_encoded(start_key))
+            },
             limit: limit,
         };
         let tag = cmd.tag();
