@@ -53,7 +53,7 @@ use raftstore::store::engine::IterOption;
 use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
 use util::time::SlowTimer;
 use util::collections::HashMap;
-use util::worker::{self, Runnable, ScheduleError, Worker};
+use util::worker::{self, Runnable, ScheduleError};
 
 use super::Result;
 use super::Error;
@@ -332,8 +332,8 @@ pub struct Scheduler {
     // Context -> cids
     grouped_cmds: Option<HashMap<HashableContext, Vec<u64>>>,
 
-    // to schedule the execution of commands
-    worker: Worker<Msg>,
+    // actual scheduler to schedule the execution of commands
+    scheduler: worker::Scheduler<Msg>,
 
     // cmd id generator
     id_alloc: u64,
@@ -398,7 +398,7 @@ impl Scheduler {
     /// Creates a scheduler.
     pub fn new(
         engine: Box<Engine>,
-        worker: Worker<Msg>,
+        scheduler: worker::Scheduler<Msg>,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
@@ -410,7 +410,7 @@ impl Scheduler {
                 CMD_BATCH_SIZE,
                 Default::default(),
             )),
-            worker: worker,
+            scheduler: scheduler,
             id_alloc: 0,
             latches: Latches::new(concurrency),
             sched_pending_write_threshold: sched_pending_write_threshold,
@@ -1139,7 +1139,7 @@ impl Scheduler {
         let readcmd = cmd.readonly();
         let worker_pool = self.fetch_worker_pool(cmd.priority());
         let tag = cmd.tag();
-        let scheduler = self.worker.scheduler();
+        let scheduler = self.scheduler.clone();
         if readcmd {
             worker_pool.execute(move |ctx: &mut SchedContext| {
                 let _processing_read_timer = ctx.processing_read_duration
@@ -1269,7 +1269,7 @@ impl Scheduler {
                 .inc();
         }
         let cids1 = cids.clone();
-        let scheduler = self.worker.scheduler();
+        let scheduler = self.scheduler.clone();
         let cb = box move |(cb_ctx, snapshot)| match scheduler.schedule(Msg::SnapshotFinished {
             cids: cids1,
             cb_ctx: cb_ctx,
@@ -1309,7 +1309,7 @@ impl Scheduler {
             all_cids.extend(cids);
         }
 
-        let scheduler = self.worker.scheduler();
+        let scheduler = self.scheduler.clone();
         let batch1 = batch.iter().map(|&(ref ctx, _)| ctx.clone()).collect();
         let on_finished: engine::BatchCallback<Box<Snapshot>> = box move |results: Vec<_>| {
             let mut ready = Vec::with_capacity(results.len());
@@ -1465,7 +1465,7 @@ impl Scheduler {
         if to_be_write.is_empty() {
             return self.on_write_finished(cid, pr, Ok(()));
         }
-        let engine_cb = make_engine_cb(cmd.tag(), cid, pr, self.worker.scheduler(), rows);
+        let engine_cb = make_engine_cb(cmd.tag(), cid, pr, self.scheduler.clone(), rows);
         if let Err(e) = self.engine
             .async_write(cmd.get_context(), to_be_write, engine_cb)
         {

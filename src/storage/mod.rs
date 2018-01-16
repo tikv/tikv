@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::boxed::FnBox;
+use std::sync::{Arc, Mutex};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::error;
 use std::io::Error as IoError;
@@ -473,7 +474,7 @@ pub struct Storage {
     engine: Box<Engine>,
 
     // to schedule the execution of storage commands
-    worker: Worker<Msg>,
+    worker: Arc<Mutex<Worker<Msg>>>,
 
     // Storage configurations.
     gc_ratio_threshold: f64,
@@ -486,10 +487,10 @@ impl Storage {
 
         Ok(Storage {
             engine: engine,
-            worker: Builder::new("storage-command-scheduler")
+            worker: Arc::new(Mutex::new(Builder::new("storage-scheduler")
                 .batch_size(CMD_BATCH_SIZE)
                 .pending_capacity(config.scheduler_notify_capacity)
-                .create(),
+                .create())),
             gc_ratio_threshold: config.gc_ratio_threshold,
             max_key_size: config.max_key_size,
         })
@@ -504,25 +505,26 @@ impl Storage {
         let sched_concurrency = config.scheduler_concurrency;
         let sched_worker_pool_size = config.scheduler_worker_pool_size;
         let sched_pending_write_threshold = config.scheduler_pending_write_threshold.0 as usize;
+        let mut worker = self.worker.lock().unwrap();
         let scheduler = Scheduler::new(
             self.engine.clone(),
-            self.worker.clone(),
+            worker.scheduler(),
             sched_concurrency,
             sched_worker_pool_size,
             sched_pending_write_threshold,
         );
-
-        self.worker.start(scheduler)?;
+        worker.start(scheduler)?;
         Ok(())
     }
 
     pub fn stop(&mut self) -> Result<()> {
-        if let Err(e) = self.worker.schedule(Msg::Quit) {
+        let mut worker = self.worker.lock().unwrap();
+        if let Err(e) = worker.schedule(Msg::Quit) {
             error!("send quit cmd to scheduler failed, error:{:?}", e);
             return Err(box_err!("failed to ask sched to quit: {:?}", e));
         }
 
-        let h = self.worker.stop().unwrap();
+        let h = worker.stop().unwrap();
         if let Err(e) = h.join() {
             return Err(box_err!("failed to join sched_handle, err:{:?}", e));
         }
@@ -537,7 +539,8 @@ impl Storage {
 
     fn schedule(&self, cmd: Command, cb: StorageCb) -> Result<()> {
         fail_point!("storage_drop_message", |_| Ok(()));
-        box_try!(self.worker.schedule(Msg::RawCmd { cmd: cmd, cb: cb }));
+        let worker = self.worker.lock().unwrap();
+        box_try!(worker.schedule(Msg::RawCmd { cmd: cmd, cb: cb }));
         Ok(())
     }
 

@@ -244,24 +244,18 @@ impl<S: Into<String>> Builder<S> {
 
         Worker {
             scheduler: scheduler,
-            handle: Arc::new(Mutex::new(WorkerHandle {
-                handle: None,
-                receiver: Some(rx),
-            })),
+            receiver: Mutex::new(Some(rx)),
+            handle: None,
             batch_size: self.batch_size,
         }
     }
 }
 
-struct WorkerHandle<T: Display> {
-    handle: Option<JoinHandle<()>>,
-    receiver: Option<Receiver<Option<T>>>,
-}
-
 /// A worker that can schedule time consuming tasks.
 pub struct Worker<T: Display> {
     scheduler: Scheduler<T>,
-    handle: Arc<Mutex<WorkerHandle<T>>>,
+    receiver: Mutex<Option<Receiver<Option<T>>>>,
+    handle: Option<JoinHandle<()>>,
     batch_size: usize,
 }
 
@@ -302,8 +296,8 @@ fn poll<R, T, U>(
             let now = Instant::now();
             while let Some(task) = timer.pop_task_before(now) {
                 runner.on_timeout(&mut timer, task);
+                tick_time = None;
             }
-            tick_time = None;
         }
         runner.on_tick();
     }
@@ -357,20 +351,20 @@ impl<T: Display + Send + 'static> Worker<T> {
         R: RunnableWithTimer<T, U> + Send + 'static,
         U: Send + 'static,
     {
-        let mut handle = self.handle.lock().unwrap();
+        let mut receiver = self.receiver.lock().unwrap();
         info!("starting working thread: {}", self.scheduler.name);
-        if handle.receiver.is_none() {
+        if receiver.is_none() {
             warn!("worker {} has been started.", self.scheduler.name);
             return Ok(());
         }
 
-        let rx = handle.receiver.take().unwrap();
+        let rx = receiver.take().unwrap();
         let counter = self.scheduler.counter.clone();
         let batch_size = self.batch_size;
         let h = ThreadBuilder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
             .spawn(move || poll(runner, rx, counter, batch_size, timer))?;
-        handle.handle = Some(h);
+        self.handle = Some(h);
         Ok(())
     }
 
@@ -388,8 +382,7 @@ impl<T: Display + Send + 'static> Worker<T> {
 
     /// Check if underlying worker can't handle task immediately.
     pub fn is_busy(&self) -> bool {
-        let handle = self.handle.lock().unwrap();
-        handle.handle.is_none() || self.scheduler.is_busy()
+        self.handle.is_none() || self.scheduler.is_busy()
     }
 
     pub fn name(&self) -> &str {
@@ -400,8 +393,7 @@ impl<T: Display + Send + 'static> Worker<T> {
     pub fn stop(&mut self) -> Option<thread::JoinHandle<()>> {
         // close sender explicitly so the background thread will exit.
         info!("stoping {}", self.scheduler.name);
-        let mut handle = self.handle.lock().unwrap();
-        if handle.handle.is_none() {
+        if self.handle.is_none() {
             return None;
         }
         let send_result = match self.scheduler.sender {
@@ -411,17 +403,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         if let Err(e) = send_result {
             warn!("failed to stop worker thread: {:?}", e);
         }
-        handle.handle.take()
-    }
-}
-
-impl<T: Display + Send + 'static> Clone for Worker<T> {
-    fn clone(&self) -> Worker<T> {
-        Worker {
-            scheduler: self.scheduler.clone(),
-            handle: self.handle.clone(),
-            batch_size: self.batch_size,
-        }
+        self.handle.take()
     }
 }
 
