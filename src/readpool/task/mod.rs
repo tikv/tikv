@@ -18,7 +18,6 @@ mod util;
 
 use std::{boxed, fmt, result};
 use storage;
-use type_name;
 use kvproto::coprocessor as coppb;
 
 use super::*;
