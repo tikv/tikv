@@ -25,17 +25,14 @@ fn flush<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn test_update_regoin_size<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
-    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);
     cluster.cfg.raft_store.region_split_check_diff = ReadableSize::kb(1);
-    // Promoting data in level 0 flow to level 1.
     cluster
         .cfg
         .rocksdb
         .defaultcf
-        .level0_file_num_compaction_trigger = 1;
-    // Promoting data in level 1 flow to level 2.
-    cluster.cfg.rocksdb.defaultcf.max_bytes_for_level_base = ReadableSize::kb(16);
+        .level0_file_num_compaction_trigger = 10;
     cluster.start();
 
     for _ in 0..2 {
@@ -61,6 +58,7 @@ fn test_update_regoin_size<T: Simulator>(cluster: &mut Cluster<T>) {
     let old_region_size = cluster.pd_client.get_region_size(region_id).unwrap();
 
     cluster.compact_data();
+
     thread::sleep(time::Duration::from_millis(300));
     let new_region_size = cluster.pd_client.get_region_size(region_id).unwrap();
 

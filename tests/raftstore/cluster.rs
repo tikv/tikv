@@ -154,7 +154,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn compact_data(&self) {
         for engine in self.engines.values() {
             let handle = rocksdb::get_cf_handle(&engine.kv_engine, "default").unwrap();
-            rocksdb::compact_range(&engine.kv_engine, handle, None, None, true);
+            rocksdb::compact_range(&engine.kv_engine, handle, None, None, false);
         }
     }
 

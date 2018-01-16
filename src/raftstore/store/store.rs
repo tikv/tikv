@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
 use std::rc::Rc;
 use std::cell::RefCell;
@@ -44,7 +44,7 @@ use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
 use util::transport::SendCh;
 use util::RingQueue;
 use util::collections::{HashMap, HashSet};
-use util::rocksdb::CompactedEvent;
+use util::rocksdb::{CompactedEvent, CompactionListener};
 use util::sys as util_sys;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
@@ -1810,18 +1810,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // Calculate influenced regions.
         let mut influenced_regions = vec![];
+        if let Some((end_key, region_id)) = self.region_ranges
+            .range((Included(event.end_key.clone()), Unbounded))
+            .next()
+        {
+            influenced_regions.push((region_id, end_key.clone()));
+        }
         for (end_key, region_id) in self.region_ranges
             .range((Included(event.start_key), Included(event.end_key)))
         {
             influenced_regions.push((region_id, end_key.clone()));
         }
-        // Compaction may happens between the gap of two valid regions.
-        if influenced_regions.is_empty() {
-            return;
-        }
 
         let mut region_declined_bytes = vec![];
-        let mut last_end_key = data_key(b"");
+        let mut last_end_key: Vec<u8> = vec![];
         for (region_id, end_key) in influenced_regions.drain(..) {
             let mut old_size = 0;
             for prop in &event.input_props {
@@ -2667,7 +2669,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 }
 
-pub fn size_change_filter(info: &CompactionJobInfo) -> bool {
+fn size_change_filter(info: &CompactionJobInfo) -> bool {
     // When calculating region size, we only consider write and default
     // column families.
     let cf = info.cf_name();
@@ -2680,4 +2682,18 @@ pub fn size_change_filter(info: &CompactionJobInfo) -> bool {
     }
 
     true
+}
+
+pub fn new_compaction_listener(ch: SendCh<Msg>) -> CompactionListener {
+    let ch = Mutex::new(ch);
+    let compacted_handler = box move |compacted_event: CompactedEvent| if let Err(e) = ch.lock()
+        .unwrap()
+        .try_send(Msg::CompactedEvent(compacted_event))
+    {
+        error!(
+            "Send compaction finished event to raftstore failed: {:?}",
+            e
+        );
+    };
+    CompactionListener::new(compacted_handler, Some(size_change_filter))
 }

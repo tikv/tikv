@@ -13,7 +13,7 @@
 
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::boxed::FnBox;
 use std::ops::Deref;
@@ -183,9 +183,14 @@ impl Simulator for NodeCluster {
             None => {
                 path = Some(TempDir::new("test_cluster").unwrap());
                 let mut kv_db_opt = cfg.rocksdb.build_opt();
-                let store_ch = node.get_sendch();
-                let cmpacted_handler =
-                    |event| { store_ch.send(Msg::CompactedEvent(event)).unwrap(); };
+                let store_ch = Mutex::new(node.get_sendch());
+                let cmpacted_handler = box move |event| {
+                    store_ch
+                        .lock()
+                        .unwrap()
+                        .send(Msg::CompactedEvent(event))
+                        .unwrap();
+                };
                 kv_db_opt.add_event_listener(CompactionListener::new(
                     cmpacted_handler,
                     Some(dummpy_filter),

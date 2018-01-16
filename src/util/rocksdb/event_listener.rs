@@ -90,13 +90,18 @@ impl CompactedEvent {
     }
 }
 
-pub struct CompactionListener<CH, F> {
-    ch: CH,
-    filter: Option<F>,
+pub type Filter = fn(&CompactionJobInfo) -> bool;
+
+pub struct CompactionListener {
+    ch: Box<Fn(CompactedEvent) + Send + Sync>,
+    filter: Option<Filter>,
 }
 
-impl<CH, F> CompactionListener<CH, F> {
-    pub fn new(ch: CH, filter: Option<F>) -> CompactionListener<CH, F> {
+impl CompactionListener {
+    pub fn new(
+        ch: Box<Fn(CompactedEvent) + Send + Sync>,
+        filter: Option<Filter>,
+    ) -> CompactionListener {
         CompactionListener {
             ch: ch,
             filter: filter,
@@ -104,13 +109,12 @@ impl<CH, F> CompactionListener<CH, F> {
     }
 }
 
-impl<
-    F: Fn(&CompactionJobInfo) -> bool + Sync + Send,
-    CH: Fn(CompactedEvent) + Send + Sync,
-> rocksdb::EventListener for CompactionListener<CH, F> {
+impl rocksdb::EventListener for CompactionListener {
     fn on_compaction_completed(&self, info: &CompactionJobInfo) {
-        if self.filter.is_some() && !self.filter.as_ref().unwrap()(info) {
-            return;
+        if let Some(ref f) = self.filter {
+            if !f(info) {
+                return;
+            }
         }
 
         let mut input_files = HashSet::default();
@@ -136,6 +140,7 @@ impl<
                     output_props.push(prop);
                 }
             } else {
+                warn!("Decode size properties from sst file failed.");
                 return;
             }
         }
