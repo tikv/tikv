@@ -47,7 +47,7 @@ pub enum Task {
         peer: metapb::Peer,
         // If true, right region derive origin region_id.
         right_derive: bool,
-        callback: Option<Callback>,
+        callback: Callback,
     },
     Heartbeat {
         region: metapb::Region,
@@ -184,7 +184,7 @@ impl<T: PdClient> Runner<T> {
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Option<Callback>,
+        callback: Callback,
     ) {
         let ch = self.ch.clone();
         let f = self.pd_client.ask_split(region.clone()).then(move |resp| {
@@ -410,7 +410,7 @@ impl<T: PdClient> Runner<T> {
                         change_peer.get_change_type().into(),
                         change_peer.take_peer(),
                     );
-                    send_admin_request(&ch, region_id, epoch, peer, req, None);
+                    send_admin_request(&ch, region_id, epoch, peer, req, Callback::None);
                 } else if resp.has_transfer_leader() {
                     PD_HEARTBEAT_COUNTER_VEC
                         .with_label_values(&["transfer leader"])
@@ -424,7 +424,7 @@ impl<T: PdClient> Runner<T> {
                         transfer_leader.get_peer()
                     );
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
-                    send_admin_request(&ch, region_id, epoch, peer, req, None)
+                    send_admin_request(&ch, region_id, epoch, peer, req, Callback::None);
                 } else {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                 }
@@ -570,7 +570,7 @@ fn send_admin_request(
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
     request: AdminRequest,
-    callback: Option<Callback>,
+    callback: Callback,
 ) {
     let cmd_type = request.get_cmd_type();
 
@@ -581,10 +581,7 @@ fn send_admin_request(
 
     req.set_admin_request(request);
 
-    if let Err(e) = ch.try_send(Msg::new_raft_cmd(
-        req,
-        callback.unwrap_or_else(|| Box::new(|_| {})),
-    )) {
+    if let Err(e) = ch.try_send(Msg::new_raft_cmd(req, callback)) {
         error!(
             "[region {}] send {:?} request err {:?}",
             region_id,

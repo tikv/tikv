@@ -40,7 +40,7 @@ use server::transport::RaftStoreRouter;
 use server::snap::Task as SnapTask;
 use server::metrics::*;
 use server::Error;
-use raftstore::store::Msg as StoreMessage;
+use raftstore::store::{Callback, Msg as StoreMessage};
 use coprocessor::{EndPointTask, RequestTask};
 
 const SCHEDULER_IS_BUSY: &'static str = "scheduler is busy";
@@ -963,7 +963,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             region_id: req.get_context().get_region_id(),
             region_epoch: req.take_context().take_region_epoch(),
             split_key: Key::from_raw(req.get_split_key()).encoded().clone(),
-            callback: Some(cb),
+            callback: Callback::Write(cb),
         };
 
         if let Err(e) = self.ch.try_send(req) {
@@ -975,10 +975,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|mut v| {
                 let mut resp = SplitRegionResponse::new();
-                if v.get_header().has_error() {
-                    resp.set_region_error(v.mut_header().take_error());
+                if v.response.get_header().has_error() {
+                    resp.set_region_error(v.response.mut_header().take_error());
                 } else {
-                    let admin_resp = v.mut_admin_response();
+                    let admin_resp = v.response.mut_admin_response();
                     let split_resp = admin_resp.mut_split();
                     resp.set_left(split_resp.take_left());
                     resp.set_right(split_resp.take_right());

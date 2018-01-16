@@ -563,7 +563,7 @@ mod tests {
     use storage::engine::Modify;
     use storage::mvcc::{MvccReader, MvccTxn};
     use tempdir::TempDir;
-    use raftstore::coprocessor::RegionSnapshot;
+    use raftstore::store::RegionSnapshot;
     use raftstore::store::keys;
     use util::rocksdb::{self as rocksdb_util, CFOptions};
     use util::properties::{MvccProperties, MvccPropertiesCollectorFactory};

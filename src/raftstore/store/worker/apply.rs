@@ -181,7 +181,7 @@ impl ApplyCallback {
     fn invoke_all(self, host: &CoprocessorHost) {
         for (cb, mut resp) in self.cbs {
             host.post_apply(&self.region, &mut resp);
-            cb.map(|cb| cb(resp));
+            cb.map(|cb| cb.invoke_with_response(resp));
         }
     }
 
@@ -252,7 +252,7 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
 pub fn notify_req_region_removed(region_id: u64, cb: Callback) {
     let region_not_found = Error::RegionNotFound(region_id);
     let resp = cmd_resp::new_error(region_not_found);
-    cb(resp);
+    cb.invoke_with_response(resp);
 }
 
 /// Call the callback of `cmd` when it can not be processed further.
@@ -268,7 +268,7 @@ fn notify_stale_command(tag: &str, term: u64, mut cmd: PendingCmd) {
 
 pub fn notify_stale_req(term: u64, cb: Callback) {
     let resp = cmd_resp::err_resp(Error::StaleCommand, term);
-    cb(resp);
+    cb.invoke_with_response(resp);
 }
 
 fn should_flush_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
@@ -1267,12 +1267,6 @@ pub fn do_get(tag: &str, region: &Region, snap: &Snapshot, req: &Request) -> Res
     Ok(resp)
 }
 
-pub fn do_snap(region: Region) -> Result<Response> {
-    let mut resp = Response::new();
-    resp.mut_snap().set_region(region);
-    Ok(resp)
-}
-
 // Consistency Check
 impl ApplyDelegate {
     fn exec_compute_hash(
@@ -1665,11 +1659,13 @@ mod tests {
     use protobuf::Message;
     use kvproto::metapb::RegionEpoch;
     use kvproto::raft_cmdpb::CmdType;
-    use raftstore::coprocessor::*;
 
-    use super::*;
+    use raftstore::coprocessor::*;
+    use raftstore::store::msg::WriteResponse;
     use storage::{ALL_CFS, CF_WRITE};
     use util::collections::HashMap;
+
+    use super::*;
 
     pub fn create_tmp_engine(path: &str) -> (TempDir, Arc<DB>) {
         let path = TempDir::new(path).unwrap();
@@ -1758,7 +1754,9 @@ mod tests {
             false,
             1,
             0,
-            box move |resp| { resp_tx.send(resp).unwrap(); },
+            Callback::Write(box move |resp: WriteResponse| {
+                resp_tx.send(resp.response).unwrap();
+            }),
         );
         let region_proposal = RegionProposal::new(1, 1, vec![p]);
         runner.run(Task::Proposals(vec![region_proposal]));
@@ -1769,8 +1767,15 @@ mod tests {
 
         let (cc_tx, cc_rx) = mpsc::channel();
         let pops = vec![
-            Proposal::new(false, 2, 0, box |_| {}),
-            Proposal::new(true, 3, 0, box move |resp| { cc_tx.send(resp).unwrap(); }),
+            Proposal::new(false, 2, 0, Callback::None),
+            Proposal::new(
+                true,
+                3,
+                0,
+                Callback::Write(box move |write: WriteResponse| {
+                    cc_tx.send(write.response).unwrap();
+                }),
+            ),
         ];
         let region_proposal = RegionProposal::new(1, 2, pops);
         runner.run(Task::Proposals(vec![region_proposal]));
@@ -1785,7 +1790,7 @@ mod tests {
             assert_eq!(cc.as_ref().map(|c| c.index), Some(3));
         }
 
-        let p = Proposal::new(true, 4, 0, box move |_| {});
+        let p = Proposal::new(true, 4, 0, Callback::None);
         let region_proposal = RegionProposal::new(1, 2, vec![p]);
         runner.run(Task::Proposals(vec![region_proposal]));
         assert!(rx.try_recv().is_err());
@@ -1871,7 +1876,9 @@ mod tests {
             let cmd = PendingCmd::new(
                 self.entry.get_index(),
                 self.entry.get_term(),
-                box move |r| tx.send(r).unwrap(),
+                Callback::Write(box move |resp: WriteResponse| {
+                    tx.send(resp.response).unwrap();
+                }),
             );
             delegate.pending_cmds.append_normal(cmd);
             self

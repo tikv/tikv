@@ -474,11 +474,14 @@ fn test_node_leader_change_with_log_overlap() {
         .sim
         .rl()
         .get_node_router(1)
-        .send_command(put_req, box move |resp: RaftCmdResponse| {
-            called_.store(true, Ordering::SeqCst);
-            assert!(resp.get_header().has_error());
-            assert!(resp.get_header().get_error().has_stale_command());
-        })
+        .send_command(
+            put_req,
+            Callback::Write(box move |resp: WriteResponse| {
+                called_.store(true, Ordering::SeqCst);
+                assert!(resp.response.get_header().has_error());
+                assert!(resp.response.get_header().get_error().has_stale_command());
+            }),
+        )
         .unwrap();
 
     // Now let peer(1, 1) steps down. Can't use transfer leader here, because
@@ -723,9 +726,12 @@ fn test_node_dropped_proposal() {
         .sim
         .rl()
         .get_node_router(1)
-        .send_command(put_req, box move |resp: RaftCmdResponse| {
-            let _ = tx.send(resp);
-        })
+        .send_command(
+            put_req,
+            Callback::Write(box move |resp: WriteResponse| {
+                let _ = tx.send(resp.response);
+            }),
+        )
         .unwrap();
 
     // Although proposal is dropped, callback should be cleaned up in time.
