@@ -124,9 +124,10 @@ impl Debugger {
         let db = self.get_db_from_type(db)?;
         match db.get_value_cf(cf, key) {
             Ok(Some(v)) => Ok(v.to_vec()),
-            Ok(None) => Err(Error::NotFound(
-                format!("value for key {:?} in db {:?}", key, db),
-            )),
+            Ok(None) => Err(Error::NotFound(format!(
+                "value for key {:?} in db {:?}",
+                key, db
+            ))),
             Err(e) => Err(box_err!(e)),
         }
     }
@@ -137,8 +138,7 @@ impl Debugger {
             Ok(Some(entry)) => Ok(entry),
             Ok(None) => Err(Error::NotFound(format!(
                 "raft log for region {} at index {}",
-                region_id,
-                log_index
+                region_id, log_index
             ))),
             Err(e) => Err(box_err!(e)),
         }
@@ -279,7 +279,7 @@ impl Debugger {
         let to = keys::REGION_META_MAX_KEY.to_owned();
         let readopts = IterOption::new(Some(from.clone()), Some(to), false).build_read_opts();
         let handle = box_try!(get_cf_handle(&self.engines.kv_engine, CF_RAFT));
-        let mut iter = DBIterator::new_cf(self.engines.kv_engine.clone(), handle, readopts);
+        let mut iter = DBIterator::new_cf(Arc::clone(&self.engines.kv_engine), handle, readopts);
         iter.seek(SeekKey::from(from.as_ref()));
 
         let fake_snap_worker = Worker::new("fake snap worker");
@@ -308,8 +308,8 @@ impl Debugger {
 
             let tag = format!("[region {}] {}", region.get_id(), peer_id);
             let peer_storage = box_try!(PeerStorage::new(
-                self.engines.kv_engine.clone(),
-                self.engines.raft_engine.clone(),
+                Arc::clone(&self.engines.kv_engine),
+                Arc::clone(&self.engines.raft_engine),
                 region,
                 fake_snap_worker.scheduler(),
                 tag.clone(),
@@ -349,7 +349,7 @@ impl Debugger {
 
     fn get_store_id(&self) -> Result<u64> {
         let db = &self.engines.kv_engine;
-        db.get_msg::<StoreIdent>(&keys::store_ident_key())
+        db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
             .map_err(|e| box_err!(e))
             .and_then(|ident| match ident {
                 Some(ident) => Ok(ident.get_store_id()),
@@ -369,16 +369,17 @@ pub struct MvccInfoIterator {
 impl MvccInfoIterator {
     fn new(db: &Arc<DB>, from: &[u8], to: &[u8], limit: u64) -> Result<Self> {
         if !keys::validate_data_key(from) {
-            return Err(Error::InvalidArgument(
-                format!("from non-mvcc area {:?}", from),
-            ));
+            return Err(Error::InvalidArgument(format!(
+                "from non-mvcc area {:?}",
+                from
+            )));
         }
 
         let gen_iter = |cf: &str| -> Result<_> {
             let to = if to.is_empty() { None } else { Some(to) };
             let readopts = IterOption::new(None, to.map(Vec::from), false).build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
-            let mut iter = DBIterator::new_cf(db.clone(), handle, readopts);
+            let mut iter = DBIterator::new_cf(Arc::clone(db), handle, readopts);
             iter.seek(SeekKey::from(from));
             Ok(iter)
         };
@@ -524,14 +525,15 @@ impl Iterator for MvccInfoIterator {
 
 pub fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
     match (db, cf) {
-        (DBType::KV, CF_DEFAULT) |
-        (DBType::KV, CF_WRITE) |
-        (DBType::KV, CF_LOCK) |
-        (DBType::KV, CF_RAFT) |
-        (DBType::RAFT, CF_DEFAULT) => Ok(()),
-        _ => Err(Error::InvalidArgument(
-            format!("invalid cf {:?} for db {:?}", cf, db),
-        )),
+        (DBType::KV, CF_DEFAULT)
+        | (DBType::KV, CF_WRITE)
+        | (DBType::KV, CF_LOCK)
+        | (DBType::KV, CF_RAFT)
+        | (DBType::RAFT, CF_DEFAULT) => Ok(()),
+        _ => Err(Error::InvalidArgument(format!(
+            "invalid cf {:?} for db {:?}",
+            cf, db
+        ))),
     }
 }
 
@@ -592,7 +594,7 @@ mod tests {
             ).unwrap(),
         );
 
-        let engines = Engines::new(engine.clone(), engine);
+        let engines = Engines::new(Arc::clone(&engine), engine);
         Debugger::new(engines)
     }
 
@@ -624,11 +626,8 @@ mod tests {
         entry.set_index(1);
         entry.set_entry_type(EntryType::EntryNormal);
         entry.set_data(vec![42]);
-        engine.put_msg(key.as_slice(), &entry).unwrap();
-        assert_eq!(
-            engine.get_msg::<Entry>(key.as_slice()).unwrap().unwrap(),
-            entry
-        );
+        engine.put_msg(&key, &entry).unwrap();
+        assert_eq!(engine.get_msg::<Entry>(&key).unwrap().unwrap(), entry);
 
         assert_eq!(debugger.raft_log(region_id, log_index).unwrap(), entry);
         match debugger.raft_log(region_id + 1, log_index + 1) {
@@ -694,7 +693,6 @@ mod tests {
             _ => panic!("expect Error::NotFound(_)"),
         }
     }
-
 
     #[test]
     fn test_region_size() {

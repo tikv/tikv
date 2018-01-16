@@ -18,16 +18,16 @@
 #![allow(needless_pass_by_value)]
 #![allow(unreadable_literal)]
 
+extern crate kvproto;
 extern crate log;
-extern crate test;
 extern crate mio;
+extern crate protobuf;
 extern crate rand;
+extern crate rocksdb;
+extern crate tempdir;
+extern crate test;
 extern crate tikv;
 extern crate time;
-extern crate tempdir;
-extern crate rocksdb;
-extern crate protobuf;
-extern crate kvproto;
 
 mod channel;
 mod writebatch;

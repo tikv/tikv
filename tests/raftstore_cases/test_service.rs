@@ -564,12 +564,9 @@ fn test_debug_raft_log() {
     entry.set_index(1);
     entry.set_entry_type(eraftpb::EntryType::EntryNormal);
     entry.set_data(vec![42]);
-    engine.put_msg(key.as_slice(), &entry).unwrap();
+    engine.put_msg(&key, &entry).unwrap();
     assert_eq!(
-        engine
-            .get_msg::<eraftpb::Entry>(key.as_slice())
-            .unwrap()
-            .unwrap(),
+        engine.get_msg::<eraftpb::Entry>(&key).unwrap().unwrap(),
         entry
     );
 

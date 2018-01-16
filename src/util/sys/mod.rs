@@ -1,4 +1,3 @@
-
 pub const HIGH_PRI: i32 = -1;
 
 #[cfg(target_os = "linux")]

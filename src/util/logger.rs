@@ -19,7 +19,7 @@ use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
 
 pub use log::LogLevelFilter;
 
-const ENABLED_TARGETS: &[&'static str] = &["tikv::", "tests::", "benches::"];
+const ENABLED_TARGETS: &[&str] = &["tikv::", "tests::", "benches::"];
 
 pub fn init_log<W: LogWriter + Sync + Send + 'static>(
     writer: W,
@@ -65,8 +65,8 @@ impl<W: LogWriter + Sync + Send> Log for Logger<W> {
     }
 
     fn log(&self, record: &LogRecord) {
-        if self.tikv_only &&
-            ENABLED_TARGETS
+        if self.tikv_only
+            && ENABLED_TARGETS
                 .iter()
                 .all(|target| !record.target().starts_with(target))
         {

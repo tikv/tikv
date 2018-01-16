@@ -12,6 +12,7 @@
 // limitations under the License.
 
 //! A module contains test cases of stale peers gc.
+use std::sync::Arc;
 
 use kvproto::eraftpb::MessageType;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
@@ -41,7 +42,7 @@ use super::util::*;
 /// and it would check with pd to confirm whether it's still a member of the cluster.
 /// If not, it should destroy itself as a stale peer which is removed out already.
 fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
     pd_client.disable_default_rule();
 
@@ -121,7 +122,7 @@ fn test_server_stale_peer_out_of_region() {
 fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
     pd_client.disable_default_rule();
 
