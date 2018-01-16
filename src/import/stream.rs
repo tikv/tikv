@@ -17,8 +17,6 @@ use std::sync::Arc;
 use uuid::Uuid;
 use crc::crc32::{self, Hasher32};
 
-use raftstore::store::keys;
-
 use rocksdb::{DBIterator, SeekKey, DB};
 use kvproto::metapb::*;
 use kvproto::importpb::*;
@@ -54,9 +52,10 @@ impl fmt::Debug for SSTFile {
 pub type SSTRange = (Range, Vec<SSTFile>);
 
 pub struct SSTFileStream<C> {
-    engine: Arc<Engine>,
-    rctx: RangeContext<C>,
+    ctx: RangeContext<C>,
     iter: RangeIterator,
+    engine: Arc<Engine>,
+    stream_range: Range,
 }
 
 impl<C: Client> SSTFileStream<C> {
@@ -67,13 +66,15 @@ impl<C: Client> SSTFileStream<C> {
         stream_range: Range,
         finished_ranges: Vec<Range>,
     ) -> SSTFileStream<C> {
-        let rctx = RangeContext::new(client, cfg.region_split_size);
-        let iter = RangeIterator::new(engine.new_iter(true), stream_range, finished_ranges);
+        let ctx = RangeContext::new(client, cfg.region_split_size);
+        let engine_iter = engine.new_iter(true);
+        let iter = RangeIterator::new(engine_iter, stream_range.clone(), finished_ranges);
 
         SSTFileStream {
-            engine: engine,
-            rctx: rctx,
+            ctx: ctx,
             iter: iter,
+            engine: engine,
+            stream_range: stream_range,
         }
     }
 
@@ -84,12 +85,12 @@ impl<C: Client> SSTFileStream<C> {
 
         let mut w = self.engine.new_sst_writer()?;
         let start = self.iter.key().to_owned();
-        self.rctx.reset(&start);
+        self.ctx.reset(&start);
 
         loop {
             w.put(self.iter.key(), self.iter.value())?;
-            self.rctx.add(self.iter.key(), self.iter.value());
-            if !self.iter.next() || self.rctx.should_stop_before(self.iter.key()) {
+            self.ctx.add(self.iter.key(), self.iter.value());
+            if !self.iter.next() || self.ctx.should_stop_before(self.iter.key()) {
                 break;
             }
         }
@@ -97,7 +98,7 @@ impl<C: Client> SSTFileStream<C> {
         let end = if self.iter.valid() {
             self.iter.key()
         } else {
-            self.rctx.end_key()
+            self.stream_range.get_end()
         };
         let range = new_range(&start, end);
 
@@ -116,14 +117,9 @@ impl<C: Client> SSTFileStream<C> {
         let crc32 = digest.sum32();
         let length = info.data.len() as u64;
 
-        // This range doesn't contain the data prefix, like region range.
-        let mut range = Range::new();
-        range.set_start(keys::origin_key(info.range.get_start()).to_owned());
-        range.set_end(keys::origin_key(info.range.get_end()).to_owned());
-
         let mut meta = SSTMeta::new();
         meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-        meta.set_range(range);
+        meta.set_range(info.range.clone());
         meta.set_crc32(crc32);
         meta.set_length(length);
         meta.set_cf_name(info.cf_name.clone());
@@ -414,12 +410,11 @@ mod tests {
 
         let mut client = MockClient::new();
         let keys = vec![
-            // [0, 4), [4, 7)
+            // [0, 3], [4, 6]
             7,
-            // [7, 10)
+            // [7, 9]
             10,
-            // [10, 14), [14, 16)
-            16,
+            // [10, 13], [14, 15]
         ];
         let mut last = vec![];
         for i in keys {
@@ -437,8 +432,13 @@ mod tests {
         {
             let sst_range = new_range(RANGE_MIN, RANGE_MAX);
             let finished_ranges = Vec::new();
-            let expected_ranges =
-                vec![(0, 3, 4), (4, 6, 7), (7, 9, 10), (10, 13, 14), (14, 15, 16)];
+            let expected_ranges = vec![
+                (0, 3, Some(4)),
+                (4, 6, Some(7)),
+                (7, 9, Some(10)),
+                (10, 13, Some(14)),
+                (14, 15, None),
+            ];
             run_and_check_stream(
                 cfg.clone(),
                 client.clone(),
@@ -455,7 +455,7 @@ mod tests {
             let mut finished_ranges = Vec::new();
             finished_ranges.push(new_encoded_range(3, 5));
             finished_ranges.push(new_encoded_range(7, 11));
-            let expected_ranges = vec![(1, 6, 11), (11, 14, 16)];
+            let expected_ranges = vec![(1, 6, Some(11)), (11, 14, Some(15))];
             run_and_check_stream(
                 cfg.clone(),
                 client.clone(),
@@ -473,20 +473,22 @@ mod tests {
         engine: Arc<Engine>,
         sst_range: Range,
         finished_ranges: Vec<Range>,
-        expected_ranges: Vec<(u8, u8, u8)>,
+        expected_ranges: Vec<(u8, u8, Option<u8>)>,
     ) {
         let mut stream = SSTFileStream::new(cfg, client, engine, sst_range, finished_ranges);
         for (start, end, range_end) in expected_ranges {
             let (range, ssts) = stream.next().unwrap().unwrap();
-            let start = Key::from_raw(&[start]).append_ts(0);
-            let end = Key::from_raw(&[end]).append_ts(0);
-            let range_end = Key::from_raw(&[range_end]).append_ts(0);
-            assert_eq!(range.get_start(), start.encoded().as_slice());
-            assert_eq!(range.get_end(), range_end.encoded().as_slice());
+            let start = Key::from_raw(&[start]).append_ts(0).encoded().clone();
+            let end = Key::from_raw(&[end]).append_ts(0).encoded().clone();
+            let range_end = match range_end {
+                Some(v) => Key::from_raw(&[v]).append_ts(0).encoded().clone(),
+                None => RANGE_MAX.to_owned(),
+            };
+            assert_eq!(range.get_start(), start.as_slice());
+            assert_eq!(range.get_end(), range_end.as_slice());
             for sst in ssts {
-                let range = sst.meta.get_range();
-                assert_eq!(range.get_start(), start.encoded().as_slice());
-                assert_eq!(range.get_end(), end.encoded().as_slice());
+                assert_eq!(sst.meta.get_range().get_start(), start.as_slice());
+                assert_eq!(sst.meta.get_range().get_end(), end.as_slice());
             }
         }
         assert!(stream.next().unwrap().is_none());

@@ -31,6 +31,7 @@ const MAX_RETRY_TIMES: u64 = 5;
 const RETRY_INTERVAL_SECS: u64 = 3;
 
 pub struct ImportJob<C> {
+    tag: String,
     cfg: Config,
     client: Arc<C>,
     engine: Arc<Engine>,
@@ -40,6 +41,7 @@ pub struct ImportJob<C> {
 impl<C: Client + Send + Sync + 'static> ImportJob<C> {
     pub fn new(cfg: Config, client: Arc<C>, engine: Engine) -> ImportJob<C> {
         ImportJob {
+            tag: format!("[ImportJob {}]", engine.uuid()),
             cfg: cfg,
             client: client,
             engine: Arc::new(engine),
@@ -48,12 +50,14 @@ impl<C: Client + Send + Sync + 'static> ImportJob<C> {
     }
 
     pub fn run(&self) -> Result<()> {
+        let start = Instant::now();
+        info!("{} start", self.tag);
+
         let cfg = self.cfg.clone();
         let client = self.client.clone();
         let engine = self.engine.clone();
-
         let job = PrepareJob::new(cfg, client, engine);
-        let ranges = job.run();
+        let ranges = job.run()?;
         let handles = self.run_import_threads(ranges);
 
         let mut res = Ok(());
@@ -62,7 +66,17 @@ impl<C: Client + Send + Sync + 'static> ImportJob<C> {
                 res = Err(e)
             }
         }
-        res
+
+        match res {
+            Ok(v) => {
+                info!("{} takes {:?}", self.tag, start.elapsed());
+                Ok(v)
+            }
+            Err(e) => {
+                error!("{}: {:?}", self.tag, e);
+                Err(e)
+            }
+        }
     }
 
     fn new_import_thread(&self, id: u64, range: RangeInfo) -> JoinHandle<Result<()>> {
@@ -84,11 +98,12 @@ impl<C: Client + Send + Sync + 'static> ImportJob<C> {
         // Calculate the range size of each sub import job.
         let size = ranges.iter().fold(0, |acc, r| acc + r.size);
         info!(
-            "import job contains {} bytes and {} ranges",
+            "{} contains {} bytes and {} ranges",
+            self.tag,
             size,
             ranges.len()
         );
-        let job_size = size / self.cfg.max_import_jobs;
+        let job_size = (size + self.cfg.max_import_jobs - 1) / self.cfg.max_import_jobs;
 
         // Calculate the range of each sub import job.
         let mut start = RANGE_MIN;
@@ -123,6 +138,7 @@ struct SubImportJob<C> {
     client: Arc<C>,
     engine: Arc<Engine>,
     counter: Arc<AtomicUsize>,
+    num_errors: Arc<AtomicUsize>,
     finished_ranges: Arc<Mutex<Vec<Range>>>,
 }
 
@@ -137,12 +153,13 @@ impl<C: Client + Send + Sync + 'static> SubImportJob<C> {
     ) -> SubImportJob<C> {
         SubImportJob {
             id: id,
-            tag: format!("[ImportJob {}:{}]", engine.uuid(), id),
+            tag: format!("[SubImportJob {}:{}]", engine.uuid(), id),
             cfg: cfg,
             range: range,
             client: client,
             engine: engine,
             counter: counter,
+            num_errors: Arc::new(AtomicUsize::new(0)),
             finished_ranges: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -156,9 +173,20 @@ impl<C: Client + Send + Sync + 'static> SubImportJob<C> {
                 thread::sleep(Duration::from_secs(RETRY_INTERVAL_SECS));
             }
 
-            if !self.import() {
+            let (tx, rx) = mpsc::sync_channel(self.cfg.max_import_sst_jobs);
+            let handles = self.run_import_threads(rx);
+            if let Err(e) = self.run_import_stream(tx) {
+                error!("{} import stream: {:?}", self.tag, e);
                 continue;
             }
+            for h in handles {
+                h.join().unwrap();
+            }
+            // Check and reset number of errors.
+            if self.num_errors.swap(0, Ordering::SeqCst) > 0 {
+                continue;
+            }
+
             // Make sure that we don't miss some ranges.
             let mut stream = self.new_import_stream();
             assert!(stream.next().unwrap().is_none());
@@ -175,22 +203,6 @@ impl<C: Client + Send + Sync + 'static> SubImportJob<C> {
         }
 
         Err(Error::SubImportJobFailed(self.tag.clone()))
-    }
-
-    fn import(&self) -> bool {
-        let (tx, rx) = mpsc::sync_channel(self.cfg.max_import_sst_jobs);
-        let handles = self.run_import_threads(rx);
-        let mut done = true;
-        if let Err(e) = self.run_import_stream(tx) {
-            error!("{} import stream: {:?}", self.tag, e);
-            done = false;
-        }
-        for h in handles {
-            if !h.join().unwrap() {
-                done = false;
-            }
-        }
-        done
     }
 
     fn new_import_stream(&self) -> SSTFileStream<C> {
@@ -211,38 +223,34 @@ impl<C: Client + Send + Sync + 'static> SubImportJob<C> {
         Ok(())
     }
 
-    fn new_import_thread(&self, rx: Arc<Mutex<mpsc::Receiver<SSTRange>>>) -> JoinHandle<bool> {
+    fn new_import_thread(&self, rx: Arc<Mutex<mpsc::Receiver<SSTRange>>>) -> JoinHandle<()> {
         let sub_id = self.id;
         let client = self.client.clone();
         let engine = self.engine.clone();
         let counter = self.counter.clone();
+        let num_errors = self.num_errors.clone();
         let finished_ranges = self.finished_ranges.clone();
 
         thread::Builder::new()
             .name("import-sst".to_owned())
             .spawn(move || {
-                // Done if no error occurs.
-                let mut done = true;
-
                 'OUTER_LOOP: while let Ok((range, ssts)) = rx.lock().unwrap().recv() {
                     for sst in ssts {
                         let id = counter.fetch_add(1, Ordering::SeqCst);
-                        let tag = format!("[ImportSST {}:{}:{}]", engine.uuid(), sub_id, id);
+                        let tag = format!("[ImportSSTJob {}:{}:{}]", engine.uuid(), sub_id, id);
                         let mut job = ImportSSTJob::new(tag, sst, client.clone());
                         if job.run().is_err() {
-                            done = false;
+                            num_errors.fetch_add(1, Ordering::SeqCst);
                             continue 'OUTER_LOOP;
                         }
                     }
                     finished_ranges.lock().unwrap().push(range);
                 }
-
-                done
             })
             .unwrap()
     }
 
-    fn run_import_threads(&self, rx: mpsc::Receiver<SSTRange>) -> Vec<JoinHandle<bool>> {
+    fn run_import_threads(&self, rx: mpsc::Receiver<SSTRange>) -> Vec<JoinHandle<()>> {
         let mut handles = Vec::new();
         let rx = Arc::new(Mutex::new(rx));
         for _ in 0..self.cfg.max_import_sst_jobs {

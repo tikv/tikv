@@ -99,23 +99,19 @@ impl<C: Client> RangeContext<C> {
         }
     }
 
-    pub fn end_key(&self) -> &[u8] {
-        match self.region {
-            Some(ref region) => region.get_end_key(),
-            None => RANGE_MAX,
-        }
-    }
-
     pub fn raw_size(&self) -> usize {
         self.raw_size
     }
 
     /// Check size and region range to see if we should stop before this key.
     pub fn should_stop_before(&self, key: &[u8]) -> bool {
-        if !before_end(key, self.end_key()) {
+        if self.raw_size >= self.limit_size {
             return true;
         }
-        self.raw_size >= self.limit_size
+        match self.region {
+            Some(ref region) => !before_end(key, region.get_end_key()),
+            None => false,
+        }
     }
 }
 

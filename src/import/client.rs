@@ -244,17 +244,28 @@ pub mod tests {
         fn split_region(&self, _: u64, req: SplitRegionRequest) -> Result<SplitRegionResponse> {
             let mut regions = self.regions.lock().unwrap();
 
-            let split_key = Key::from_raw(req.get_split_key());
-            let region_id = req.get_context().get_region_id();
-            let region = regions.remove(&region_id).unwrap();
+            let key = Key::from_raw(req.get_split_key());
+            let split_key = key.encoded().as_slice();
+
+            let region = regions
+                .iter()
+                .map(|(_, r)| r)
+                .find(|r| {
+                    split_key >= r.get_start_key() &&
+                        (split_key < r.get_end_key() || r.get_end_key().is_empty())
+                })
+                .unwrap()
+                .clone();
+
+            regions.remove(&region.get_id());
 
             let mut left = region.clone();
             left.set_id(self.alloc_id());
-            left.set_end_key(split_key.encoded().clone());
+            left.set_end_key(split_key.to_vec());
             regions.insert(left.get_id(), left.clone());
 
             let mut right = region.clone();
-            right.set_start_key(split_key.encoded().clone());
+            right.set_start_key(split_key.to_vec());
             regions.insert(right.get_id(), right.clone());
 
             let mut resp = SplitRegionResponse::new();
