@@ -286,27 +286,27 @@ mod tests {
     use std::thread;
     use std::time::Duration;
     use storage;
-    use kvproto::kvrpcpb;
+    // use kvproto::kvrpcpb;
     use super::*;
     use super::task::*;
 
-    fn expect_ok(done: Sender<i32>, id: i32) -> Callback {
-        Box::new(move |x: Result| {
-            assert!(x.is_ok());
-            done.send(id).unwrap();
-        })
-    }
+    // fn expect_ok(done: Sender<i32>, id: i32) -> Callback {
+    //     Box::new(move |x: Result| {
+    //         assert!(x.is_ok());
+    //         done.send(id).unwrap();
+    //     })
+    // }
 
-    fn expect_get_none(done: Sender<i32>, id: i32) -> Callback {
-        Box::new(move |x: Result| {
-            assert!(x.is_ok());
-            match x.unwrap() {
-                Value::StorageValue(val) => assert_eq!(val, None),
-                _ => unreachable!(),
-            }
-            done.send(id).unwrap();
-        })
-    }
+    // fn expect_get_none(done: Sender<i32>, id: i32) -> Callback {
+    //     Box::new(move |x: Result| {
+    //         assert!(x.is_ok());
+    //         match x.unwrap() {
+    //             Value::StorageValue(val) => assert_eq!(val, None),
+    //             _ => unreachable!(),
+    //         }
+    //         done.send(id).unwrap();
+    //     })
+    // }
 
     fn expect_get_val(done: Sender<i32>, v: Vec<u8>, id: i32) -> Callback {
         Box::new(move |x: Result| {
@@ -355,6 +355,7 @@ mod tests {
         val: Option<Result>,
     }
     impl SubTask for Foo {
+        #[allow(boxed_local)]
         fn async_work(
             mut self: Box<Self>,
             _context: &mut WorkerThreadContext,
@@ -383,6 +384,7 @@ mod tests {
         rx: Option<Receiver<Result>>,
     }
     impl SubTask for FooAsync {
+        #[allow(boxed_local)]
         fn async_work(
             mut self: Box<Self>,
             _context: &mut WorkerThreadContext,
@@ -461,8 +463,9 @@ mod tests {
             val: Option<Vec<u8>>,
         }
         impl SubTask for Bar {
+            #[allow(boxed_local)]
             fn async_work(
-                mut self: Box<Self>,
+                self: Box<Self>,
                 _context: &mut WorkerThreadContext,
                 on_done: SubTaskCallback,
             ) {

@@ -18,7 +18,7 @@ use std::{cell, fmt, sync};
 use super::*;
 
 pub trait SnapshotNextSubTaskBuilder: Send {
-    fn build(mut self: Box<Self>, snapshot: Box<storage::Snapshot>) -> Box<SubTask>;
+    fn build(self: Box<Self>, snapshot: Box<storage::Snapshot>) -> Box<SubTask>;
 }
 
 pub trait SnapshotSubTask: Send + fmt::Debug {
@@ -48,6 +48,7 @@ unsafe impl<T> Sync for UnsafeOnetimeCell<T> {}
 
 impl<R: SnapshotSubTask> SubTask for R {
     #[inline]
+    #[allow(boxed_local)]
     fn async_work(
         mut self: Box<Self>,
         context: &mut WorkerThreadContext,

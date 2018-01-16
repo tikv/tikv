@@ -55,6 +55,7 @@ struct KvBatchGetSubTaskSecond {
 }
 
 impl SubTask for KvBatchGetSubTaskSecond {
+    #[allow(boxed_local)]
     fn async_work(
         mut self: Box<Self>,
         _context: &mut WorkerThreadContext,
@@ -100,6 +101,7 @@ struct KvBatchGetSubTaskSecondBuilder {
 }
 
 impl SnapshotNextSubTaskBuilder for KvBatchGetSubTaskSecondBuilder {
+    #[allow(boxed_local)]
     fn build(mut self: Box<Self>, snapshot: Box<storage::Snapshot>) -> Box<SubTask> {
         box KvBatchGetSubTaskSecond {
             snapshot: Some(snapshot),

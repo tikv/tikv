@@ -43,6 +43,7 @@ struct CoprocessorSubTaskSecondBuilder {
 }
 
 impl SnapshotNextSubTaskBuilder for CoprocessorSubTaskSecondBuilder {
+    #[allow(boxed_local)]
     fn build(mut self: Box<Self>, snapshot: Box<storage::Snapshot>) -> Box<SubTask> {
         box CoprocessorSubTaskSecond {
             snapshot: Some(snapshot),
@@ -58,6 +59,7 @@ struct CoprocessorSubTaskSecond {
 }
 
 impl SubTask for CoprocessorSubTaskSecond {
+    #[allow(boxed_local)]
     fn async_work(
         mut self: Box<Self>,
         context: &mut WorkerThreadContext,
@@ -72,7 +74,8 @@ impl SubTask for CoprocessorSubTaskSecond {
             on_response,
             context.end_point_recursion_limit,
         );
-        let statistics = endpoint.handle_request(request_task, context.end_point_batch_row_limit);
+        /* let statistics = */
+        endpoint.handle_request(request_task, context.end_point_batch_row_limit);
         // TODO: handle statistics
     }
 }
