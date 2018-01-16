@@ -35,7 +35,7 @@ use super::super::raftstore::store::engine::IterOption;
 // only used for rocksdb without persistent.
 pub const TEMP_DIR: &'static str = "";
 
-const SEEK_BOUND: usize = 30;
+pub const SEEK_BOUND: usize = 30;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
 const STAT_TOTAL: &'static str = "total";
@@ -326,7 +326,7 @@ impl Cursor {
         }
 
         statistics.seek += 1;
-
+        self.seek_last_time = true;
         if !self.iter.seek(key)? {
             self.max_key = Some(key.encoded().to_owned());
             return Ok(false);
