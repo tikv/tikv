@@ -372,9 +372,9 @@ trait DebugExecutor {
         }
     }
 
-    fn unsafe_recover(&self, region_id: u64) {
+    fn unsafe_recover(&self, region_ids: Vec<u64>) {
         self.check_local_mode();
-        self.do_unsafe_recover(region_id);
+        self.do_unsafe_recover(region_ids);
     }
 
     fn check_local_mode(&self);
@@ -400,7 +400,7 @@ trait DebugExecutor {
 
     fn set_region_tombstone(&self, region_id: u64, region: Region);
 
-    fn do_unsafe_recover(&self, u64);
+    fn do_unsafe_recover(&self, Vec<u64>);
 }
 
 
@@ -497,7 +497,7 @@ impl DebugExecutor for DebugClient {
         unimplemented!();
     }
 
-    fn do_unsafe_recover(&self, _: u64) {
+    fn do_unsafe_recover(&self, _: Vec<u64>) {
         unimplemented!();
     }
 }
@@ -557,9 +557,16 @@ impl DebugExecutor for Debugger {
             .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e))
     }
 
-    fn do_unsafe_recover(&self, region_id: u64) {
-        self.do_unsafe_recover(region_id)
-            .unwrap_or_else(|e| perror_and_exit("Debugger::do_unsafe_recover", e))
+    fn do_unsafe_recover(&self, region_ids: Vec<u64>) {
+        let fails = self.do_unsafe_recover(region_ids)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::unsafe_recover", e));
+        if !fails.is_empty() {
+            for (region_id, error) in fails {
+                println!("recover region {} fail: {}", region_id, error);
+            }
+            return;
+        }
+        println!("success!")
     }
 }
 
@@ -888,10 +895,13 @@ fn main() {
             SubCommand::with_name("unsafe-recover")
                 .about("recover the instance even if it's the only server")
                 .arg(
-                    Arg::with_name("region")
+                    Arg::with_name("regions")
                         .required(true)
                         .short("r")
                         .takes_value(true)
+                        .multiple(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
                         .help("region id"),
                 ),
         );
@@ -988,8 +998,12 @@ fn main() {
         }
         debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, region);
     } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
-        let region = matches.value_of("region").unwrap().parse().unwrap();
-        debug_executor.unsafe_recover(region);
+        let regions = matches
+            .values_of("regions")
+            .unwrap()
+            .map(|r| r.parse().expect("parse region id list fail"))
+            .collect();
+        debug_executor.unsafe_recover(regions);
     } else {
         let _ = app.print_help();
     }

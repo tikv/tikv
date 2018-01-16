@@ -266,41 +266,54 @@ impl Debugger {
         }
     }
 
-    pub fn do_unsafe_recover(&self, region_id: u64) -> Result<()> {
+    pub fn do_unsafe_recover(&self, region_ids: Vec<u64>) -> Result<Vec<(u64, Error)>> {
         let db = &self.engines.kv_engine;
-        let key = keys::region_state_key(region_id);
-        let mut region_state = box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)).unwrap();
-        if region_state.state == PeerState::Tombstone {
-            return Ok(());
-        }
-
-        let store_id = self.get_store_id()?;
-        let peers = region_state.mut_region().take_peers();
-        let peers_len = peers.len() as u64;
-        let peer = match peers.into_iter().find(|p| p.get_store_id() == store_id) {
-            Some(p) => p.clone(),
-            None => {
-                let err_msg = "RegionLocalState doesn't contains the peer itself";
-                return Err(Error::Other(err_msg.into()));
-            }
-        };
-
-        let conf_ver = region_state.get_region().get_region_epoch().get_conf_ver();
-        let mut new_epoch = RegionEpoch::new();
-        new_epoch.set_conf_ver(conf_ver + peers_len - 1);
-
-        region_state.mut_region().mut_peers().clear();
-        region_state.mut_region().mut_peers().push(peer);
-        region_state.mut_region().set_region_epoch(new_epoch);
-
         let wb = WriteBatch::new();
         let handle = box_try!(get_cf_handle(db.as_ref(), CF_RAFT));
-        box_try!(wb.put_msg_cf(handle, &key, &region_state));
+        let mut ret = Vec::with_capacity(region_ids.len());
+
+        {
+            let recover_region = |region_id: u64| -> Result<()> {
+                let key = keys::region_state_key(region_id);
+                let mut region_state =
+                    box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)).unwrap();
+                if region_state.state == PeerState::Tombstone {
+                    return Ok(());
+                }
+
+                let store_id = self.get_store_id()?;
+                let peers = region_state.mut_region().take_peers();
+                let peers_len = peers.len() as u64;
+                let peer = match peers.into_iter().find(|p| p.get_store_id() == store_id) {
+                    Some(p) => p.clone(),
+                    None => {
+                        let err_msg = "RegionLocalState doesn't contains the peer itself";
+                        return Err(Error::Other(err_msg.into()));
+                    }
+                };
+
+                let conf_ver = region_state.get_region().get_region_epoch().get_conf_ver();
+                let mut new_epoch = RegionEpoch::new();
+                new_epoch.set_conf_ver(conf_ver + peers_len - 1);
+
+                region_state.mut_region().mut_peers().clear();
+                region_state.mut_region().mut_peers().push(peer);
+                region_state.mut_region().set_region_epoch(new_epoch);
+                box_try!(wb.put_msg_cf(handle, &key, &region_state));
+                Ok(())
+            };
+
+            for region_id in region_ids {
+                if let Err(e) = recover_region(region_id) {
+                    ret.push((region_id, e));
+                }
+            }
+        }
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
         box_try!(db.write_opt(wb, &write_opts));
-        Ok(())
+        Ok(ret)
     }
 
     fn get_store_id(&self) -> Result<u64> {
