@@ -12,7 +12,6 @@
 // limitations under the License.
 
 
-#![feature(fnbox)]
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
 #![feature(test)]
