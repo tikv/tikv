@@ -14,7 +14,6 @@
 use std::result::Result as StdResult;
 use std::error::Error as StdError;
 
-
 quick_error!{
     #[derive(Debug)]
     pub enum Error {

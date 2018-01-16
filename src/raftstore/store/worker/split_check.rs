@@ -181,15 +181,17 @@ impl<C: Sender<Msg>> Runner<C> {
 
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
         let res = MergedIterator::new(self.engine.as_ref(), LARGE_CFS, &start_key, &end_key, false)
-            .map(|mut iter| while let Some(e) = iter.next() {
-                if let Some(key) = coprocessor.on_split_check(
-                    region,
-                    &mut split_ctx,
-                    e.key.as_ref().unwrap(),
-                    e.value_size as u64,
-                ) {
-                    split_key = Some(key);
-                    break;
+            .map(|mut iter| {
+                while let Some(e) = iter.next() {
+                    if let Some(key) = coprocessor.on_split_check(
+                        region,
+                        &mut split_ctx,
+                        e.key.as_ref().unwrap(),
+                        e.value_size as u64,
+                    ) {
+                        split_key = Some(key);
+                        break;
+                    }
                 }
             });
         timer.observe_duration();

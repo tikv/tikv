@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, RwLock};
 use std::time::Duration;
@@ -164,20 +163,20 @@ impl Simulator for NodeCluster {
             &mut event_loop,
             &cfg.server,
             &cfg.raft_store,
-            self.pd_client.clone(),
+            Arc::clone(&self.pd_client),
         );
 
-        let (snap_mgr, tmp) =
-            if node_id == 0 || !self.trans.rl().snap_paths.contains_key(&node_id) {
-                let tmp = TempDir::new("test_cluster").unwrap();
-                let snap_mgr =
-                    SnapManager::new(tmp.path().to_str().unwrap(), Some(node.get_sendch()), None);
-                (snap_mgr, Some(tmp))
-            } else {
-                let trans = self.trans.rl();
-                let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
-                (snap_mgr.clone(), None)
-            };
+        let (snap_mgr, tmp) = if node_id == 0 || !self.trans.rl().snap_paths.contains_key(&node_id)
+        {
+            let tmp = TempDir::new("test_cluster").unwrap();
+            let snap_mgr =
+                SnapManager::new(tmp.path().to_str().unwrap(), Some(node.get_sendch()), None);
+            (snap_mgr, Some(tmp))
+        } else {
+            let trans = self.trans.rl();
+            let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
+            (snap_mgr.clone(), None)
+        };
 
         // Create coprocessor.
         let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
@@ -192,9 +191,7 @@ impl Simulator for NodeCluster {
             coprocessor_host,
         ).unwrap();
         assert!(
-            engines
-                .kv_engine
-                .clone()
+            Arc::clone(&engines.kv_engine)
                 .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
                 .unwrap()
                 .is_none()
@@ -293,6 +290,6 @@ impl Simulator for NodeCluster {
 
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
     let pd_client = Arc::new(TestPdClient::new(id));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
     Cluster::new(id, count, &[], sim, pd_client)
 }

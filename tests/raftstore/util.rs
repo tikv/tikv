@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use std::thread;
@@ -52,8 +51,8 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     }
     debug!("last try to get {}", escape(key));
     let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
-    if value.is_none() && res.is_none() ||
-        value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
+    if value.is_none() && res.is_none()
+        || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
     {
         return;
     }
@@ -242,7 +241,6 @@ pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     peer
 }
 
-
 pub fn new_store(store_id: u64, addr: String) -> metapb::Store {
     let mut store = metapb::Store::new();
     store.set_id(store_id);
@@ -264,7 +262,7 @@ pub fn new_pd_change_peer(
     peer: metapb::Peer,
 ) -> RegionHeartbeatResponse {
     let mut change_peer = ChangePeer::new();
-    change_peer.set_change_type(change_type.into());
+    change_peer.set_change_type(change_type);
     change_peer.set_peer(peer);
 
     let mut resp = RegionHeartbeatResponse::new();
@@ -338,7 +336,6 @@ where
         }))
     };
     router.send_command(cmd, cb).unwrap();
-    rx.recv_timeout(timeout).map_err(|_| {
-        raftstore::Error::Timeout(format!("request timeout for {:?}", timeout))
-    })
+    rx.recv_timeout(timeout)
+        .map_err(|_| raftstore::Error::Timeout(format!("request timeout for {:?}", timeout)))
 }

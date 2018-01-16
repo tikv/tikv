@@ -114,7 +114,10 @@ pub enum SignificantMsg {
         to_peer_id: u64,
         status: SnapshotStatus,
     },
-    Unreachable { region_id: u64, to_peer_id: u64 },
+    Unreachable {
+        region_id: u64,
+        to_peer_id: u64,
+    },
 }
 
 pub enum Msg {
@@ -155,7 +158,10 @@ pub enum Msg {
     },
 
     // For region size
-    ApproximateRegionSize { region_id: u64, region_size: u64 },
+    ApproximateRegionSize {
+        region_id: u64,
+        region_size: u64,
+    },
 }
 
 impl fmt::Debug for Msg {
@@ -188,8 +194,7 @@ impl fmt::Debug for Msg {
             } => write!(
                 fmt,
                 "Approximate region size [region_id: {}, region_size: {}]",
-                region_id,
-                region_size
+                region_id, region_size
             ),
         }
     }
@@ -241,9 +246,7 @@ mod tests {
                 sendch.try_send(Msg::new_raft_cmd(request, callback))
             },
             timeout
-        ).ok_or_else(|| {
-            Error::Timeout(format!("request timeout for {:?}", timeout))
-        })
+        ).ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 
     struct TestHandler;
@@ -275,7 +278,9 @@ mod tests {
         let mut event_loop = EventLoop::new().unwrap();
         let sendch = &SendCh::new(event_loop.channel(), "test-sender");
 
-        let t = thread::spawn(move || { event_loop.run(&mut TestHandler).unwrap(); });
+        let t = thread::spawn(move || {
+            event_loop.run(&mut TestHandler).unwrap();
+        });
 
         let mut request = RaftCmdRequest::new();
         request.mut_header().set_region_id(u64::max_value());

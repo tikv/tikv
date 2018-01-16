@@ -14,6 +14,10 @@
 #![feature(plugin)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 
+extern crate clap;
+extern crate grpcio as grpc;
+extern crate kvproto;
+extern crate protobuf;
 /// Inject failures to `TikV`.
 ///
 /// TODO: Integrate into tikv-ctl.
@@ -25,12 +29,7 @@
 //      raft_between_save=panic("boom")
 /// ```
 ///
-
 extern crate tikv;
-extern crate clap;
-extern crate grpcio as grpc;
-extern crate protobuf;
-extern crate kvproto;
 
 use std::fs;
 use std::io::{BufRead, BufReader};

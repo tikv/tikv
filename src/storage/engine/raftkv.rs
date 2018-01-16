@@ -277,8 +277,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
 fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
     Error::InvalidResponse(format!(
         "cmd type not match, want {:?}, got {:?}!",
-        exp,
-        act
+        exp, act
     ))
 }
 
@@ -363,12 +362,12 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 cb((cb_ctx, Err(e)))
             }
         }).map_err(|e| {
-                let tag = get_tag_from_error(&e);
-                ASYNC_REQUESTS_COUNTER_VEC
-                    .with_label_values(&["write", tag])
-                    .inc();
-                e.into()
-            })
+            let tag = get_tag_from_error(&e);
+            ASYNC_REQUESTS_COUNTER_VEC
+                .with_label_values(&["write", tag])
+                .inc();
+            e.into()
+        })
     }
 
     fn async_snapshot(&self, ctx: &Context, cb: Callback<Box<Snapshot>>) -> engine::Result<()> {
@@ -404,12 +403,12 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 cb((cb_ctx, Err(e)))
             }
         }).map_err(|e| {
-                let tag = get_tag_from_error(&e);
-                ASYNC_REQUESTS_COUNTER_VEC
-                    .with_label_values(&["snapshot", tag])
-                    .inc();
-                e.into()
-            })
+            let tag = get_tag_from_error(&e);
+            ASYNC_REQUESTS_COUNTER_VEC
+                .with_label_values(&["snapshot", tag])
+                .inc();
+            e.into()
+        })
     }
 
     fn async_batch_snapshot(
@@ -488,25 +487,25 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
 
 impl Snapshot for RegionSnapshot {
     fn get(&self, key: &Key) -> engine::Result<Option<Value>> {
-        fail_point!("raftkv_snapshot_get", |_| {
-            Err(box_err!("injected error for get"))
-        });
+        fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
+            "injected error for get"
+        )));
         let v = box_try!(self.get_value(key.encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn get_cf(&self, cf: CfName, key: &Key) -> engine::Result<Option<Value>> {
-        fail_point!("raftkv_snapshot_get_cf", |_| {
-            Err(box_err!("injected error for get_cf"))
-        });
+        fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(
+            "injected error for get_cf"
+        )));
         let v = box_try!(self.get_value_cf(cf, key.encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> engine::Result<Cursor> {
-        fail_point!("raftkv_snapshot_iter", |_| {
-            Err(box_err!("injected error for iter"))
-        });
+        fail_point!("raftkv_snapshot_iter", |_| Err(box_err!(
+            "injected error for iter"
+        )));
         Ok(Cursor::new(
             Box::new(RegionSnapshot::iter(self, iter_opt)),
             mode,
@@ -514,9 +513,9 @@ impl Snapshot for RegionSnapshot {
     }
 
     fn iter_cf(&self, cf: CfName, iter_opt: IterOption, mode: ScanMode) -> engine::Result<Cursor> {
-        fail_point!("raftkv_snapshot_iter_cf", |_| {
-            Err(box_err!("injected error for iter_cf"))
-        });
+        fail_point!("raftkv_snapshot_iter_cf", |_| Err(box_err!(
+            "injected error for iter_cf"
+        )));
         Ok(Cursor::new(
             Box::new(RegionSnapshot::iter_cf(self, cf, iter_opt)?),
             mode,
@@ -542,16 +541,16 @@ impl EngineIterator for RegionIterator {
     }
 
     fn seek(&mut self, key: &Key) -> engine::Result<bool> {
-        fail_point!("raftkv_iter_seek", |_| {
-            Err(box_err!("injected error for iter_seek"))
-        });
+        fail_point!("raftkv_iter_seek", |_| Err(box_err!(
+            "injected error for iter_seek"
+        )));
         RegionIterator::seek(self, key.encoded()).map_err(From::from)
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> engine::Result<bool> {
-        fail_point!("raftkv_iter_seek_for_prev", |_| {
-            Err(box_err!("injected error for iter_seek_for_prev"))
-        });
+        fail_point!("raftkv_iter_seek_for_prev", |_| Err(box_err!(
+            "injected error for iter_seek_for_prev"
+        )));
         RegionIterator::seek_for_prev(self, key.encoded()).map_err(From::from)
     }
 

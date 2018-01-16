@@ -230,15 +230,12 @@ where
         let region_id = self.alloc_id()?;
         info!(
             "alloc first region id {} for cluster {}, store {}",
-            region_id,
-            self.cluster_id,
-            store_id
+            region_id, self.cluster_id, store_id
         );
         let peer_id = self.alloc_id()?;
         info!(
             "alloc first peer id {} for first region {}",
-            peer_id,
-            region_id
+            peer_id, region_id
         );
 
         let region = store::prepare_bootstrap(engines, store_id, region_id, peer_id)?;
@@ -332,7 +329,7 @@ where
         }
 
         let cfg = self.store_cfg.clone();
-        let pd_client = self.pd_client.clone();
+        let pd_client = Arc::clone(&self.pd_client);
         let store = self.store.clone();
         let sender = event_loop.channel();
 

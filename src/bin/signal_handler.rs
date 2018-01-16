@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 #[cfg(unix)]
 mod imp {
     use std::{ptr, slice};
@@ -24,8 +23,8 @@ mod imp {
 
     use tikv::raftstore::store::Engines;
 
-    const ROCKSDB_DB_STATS_KEY: &'static str = "rocksdb.dbstats";
-    const ROCKSDB_CF_STATS_KEY: &'static str = "rocksdb.cfstats";
+    const ROCKSDB_DB_STATS_KEY: &str = "rocksdb.dbstats";
+    const ROCKSDB_CF_STATS_KEY: &str = "rocksdb.cfstats";
 
     extern "C" {
         #[cfg_attr(target_os = "macos", link_name = "je_malloc_stats_print")]
