@@ -14,7 +14,6 @@
 use std::io;
 use std::result;
 use std::path::PathBuf;
-use std::num::ParseIntError;
 
 use grpc;
 use uuid::ParseError;
@@ -53,22 +52,17 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        ParseIntError(err: ParseIntError) {
-            from()
-            cause(err)
-            description(err.description())
-        }
         FileExists(path: PathBuf) {
             display("File {:?} exists", path)
-        }
-        FileCorrupted(path: PathBuf) {
-            display("File {:?} corrupted", path)
         }
         FileNotExists(path: PathBuf) {
             display("File {:?} not exists", path)
         }
-        InvalidSSTPath(path: PathBuf) {
-            display("Invalid SST path {:?}", path)
+        FileCorrupted(path: PathBuf, reason: String) {
+            display("File {:?} corrupted: {}", path, reason)
+        }
+        TokenExists(token: usize) {
+            display("Token {} exists", token)
         }
         TokenNotFound(token: usize) {
             display("Token {} not found", token)

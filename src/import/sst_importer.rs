@@ -61,10 +61,15 @@ impl SSTImporter {
     }
 
     pub fn create(&self, token: Token, meta: &SSTMeta) -> Result<()> {
+        let mut files = self.files.lock().unwrap();
+        if files.contains_key(&token) {
+            return Err(Error::TokenExists(token));
+        }
+
         match self.dir.create(meta) {
             Ok(f) => {
                 info!("create {:?}", f);
-                self.insert(token, f);
+                files.insert(token, f);
                 Ok(())
             }
             Err(e) => {
@@ -250,12 +255,19 @@ impl ImportFile {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.digest.sum32() != self.meta.get_crc32() {
-            return Err(Error::FileCorrupted(self.path.temp.clone()));
+        let crc32 = self.digest.sum32();
+        let expect = self.meta.get_crc32();
+        if crc32 != expect {
+            let reason = format!("crc32 {}, expect {}", crc32, expect);
+            return Err(Error::FileCorrupted(self.path.temp.clone(), reason));
         }
+
         let f = self.file.as_ref().unwrap();
-        if f.metadata()?.len() != self.meta.get_length() {
-            return Err(Error::FileCorrupted(self.path.temp.clone()));
+        let length = f.metadata()?.len();
+        let expect = self.meta.get_length();
+        if length != expect {
+            let reason = format!("length {}, expect {}", length, expect);
+            return Err(Error::FileCorrupted(self.path.temp.clone(), reason));
         }
         Ok(())
     }

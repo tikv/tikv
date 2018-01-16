@@ -39,7 +39,7 @@ pub struct ImportSSTService {
 impl ImportSSTService {
     pub fn new(cfg: Config, storage: Storage, importer: Arc<SSTImporter>) -> ImportSSTService {
         let threads = Builder::new()
-            .name_prefix("import-sst")
+            .name_prefix("sst-importer")
             .pool_size(cfg.num_threads)
             .create();
         ImportSSTService {
