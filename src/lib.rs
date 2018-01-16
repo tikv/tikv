@@ -83,8 +83,6 @@ extern crate url;
 #[cfg(test)]
 extern crate utime;
 extern crate zipf;
-#[macro_use]
-extern crate fail;
 extern crate uuid;
 
 #[macro_use]

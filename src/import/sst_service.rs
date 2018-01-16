@@ -17,7 +17,6 @@ use grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use futures::{Future, Stream};
 use futures::sync::mpsc;
 use futures_cpupool::{Builder, CpuPool};
-
 use kvproto::importpb::*;
 use kvproto::importpb_grpc::*;
 
@@ -64,15 +63,15 @@ impl ImportSst for ImportSSTService {
         let token = self.importer.token();
         let thread1 = self.threads.clone();
         let thread2 = self.threads.clone();
-        let import1 = self.importer.clone();
-        let import2 = self.importer.clone();
+        let import1 = Arc::clone(&self.importer);
+        let import2 = Arc::clone(&self.importer);
         let bounded_stream = mpsc::spawn(stream, &self.threads, self.cfg.stream_channel_size);
 
         ctx.spawn(
             bounded_stream
                 .map_err(Error::from)
                 .for_each(move |chunk| {
-                    let import1 = import1.clone();
+                    let import1 = Arc::clone(&import1);
                     thread1.spawn_fn(move || {
                         let start = Instant::now_coarse();
                         if chunk.has_meta() {

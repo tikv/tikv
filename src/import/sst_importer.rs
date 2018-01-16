@@ -21,9 +21,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crc::crc32::{self, Hasher32};
 use uuid::Uuid;
-use rocksdb::{IngestExternalFileOptions, DB};
-
 use kvproto::importpb::*;
+use rocksdb::{IngestExternalFileOptions, DB};
 
 use util::rocksdb::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
 
@@ -290,7 +289,7 @@ impl fmt::Debug for ImportFile {
     }
 }
 
-const SST_SUFFIX: &'static str = ".sst";
+const SST_SUFFIX: &str = ".sst";
 
 fn sst_meta_to_path(meta: &SSTMeta) -> Result<PathBuf> {
     Ok(PathBuf::from(format!(
