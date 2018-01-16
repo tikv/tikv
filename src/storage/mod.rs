@@ -23,7 +23,7 @@ use self::metrics::*;
 use self::mvcc::Lock;
 use self::txn::CMD_BATCH_SIZE;
 use util::collections::HashMap;
-use util::worker::{Builder, Worker};
+use util::worker::{self, Builder, Worker};
 
 pub mod engine;
 pub mod mvcc;
@@ -481,6 +481,7 @@ pub struct Storage {
 
     // to schedule the execution of storage commands
     worker: Arc<Mutex<Worker<Msg>>>,
+    worker_scheduler: worker::Scheduler<Msg>,
 
     // Storage configurations.
     gc_ratio_threshold: f64,
@@ -491,14 +492,17 @@ impl Storage {
     pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage> {
         info!("storage {:?} started.", engine);
 
+        let worker = Arc::new(Mutex::new(
+            Builder::new("storage-scheduler")
+                .batch_size(CMD_BATCH_SIZE)
+                .pending_capacity(config.scheduler_notify_capacity)
+                .create(),
+        ));
+        let worker_scheduler = worker.lock().unwrap().scheduler();
         Ok(Storage {
             engine: engine,
-            worker: Arc::new(Mutex::new(
-                Builder::new("storage-scheduler")
-                    .batch_size(CMD_BATCH_SIZE)
-                    .pending_capacity(config.scheduler_notify_capacity)
-                    .create(),
-            )),
+            worker: worker,
+            worker_scheduler: worker_scheduler,
             gc_ratio_threshold: config.gc_ratio_threshold,
             max_key_size: config.max_key_size,
         })
@@ -547,8 +551,10 @@ impl Storage {
 
     fn schedule(&self, cmd: Command, cb: StorageCb) -> Result<()> {
         fail_point!("storage_drop_message", |_| Ok(()));
-        let worker = self.worker.lock().unwrap();
-        box_try!(worker.schedule(Msg::RawCmd { cmd: cmd, cb: cb }));
+        box_try!(
+            self.worker_scheduler
+                .schedule(Msg::RawCmd { cmd: cmd, cb: cb })
+        );
         Ok(())
     }
 
@@ -892,6 +898,7 @@ impl Clone for Storage {
         Storage {
             engine: self.engine.clone(),
             worker: Arc::clone(&self.worker),
+            worker_scheduler: self.worker_scheduler.clone(),
             gc_ratio_threshold: self.gc_ratio_threshold,
             max_key_size: self.max_key_size,
         }
