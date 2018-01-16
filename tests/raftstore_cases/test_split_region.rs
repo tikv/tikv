@@ -13,6 +13,7 @@
 
 use std::time::Duration;
 use std::{fs, thread};
+use std::sync::Arc;
 use std::sync::mpsc::channel;
 use rand::{self, Rng};
 
@@ -42,7 +43,7 @@ where
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
     cluster.run();
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
 
     let tbls = vec![
         (b"k22", b"k11", b"k33"),
@@ -100,7 +101,6 @@ where
             "{:?}",
             resp
         );
-
     }
 }
 
@@ -137,7 +137,7 @@ fn test_server_split_region_twice() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
     cluster.run();
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
 
     let (split_key, left_key, right_key) = (b"k22", b"k11", b"k33");
     cluster.must_put(left_key, b"v1");
@@ -224,7 +224,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.run();
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
 
     let region = pd_client.get_region(b"").unwrap();
 
@@ -305,7 +305,7 @@ fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // We use three nodes for this test.
     cluster.run();
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
 
     let region = pd_client.get_region(b"").unwrap();
 
@@ -370,7 +370,7 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k0", b"v0");
     assert_eq!(cluster.leader_of_region(1), Some(util::new_peer(1, 1)));
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
 
     // isolate node 3 for region 1.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 3)));
@@ -435,7 +435,7 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k0", b"v0");
     assert_eq!(cluster.leader_of_region(1), Some(util::new_peer(1, 1)));
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
 
     // isolate node 3 for region 1.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 3)));
@@ -489,7 +489,7 @@ fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     // disable raft log gc.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
 
@@ -577,7 +577,7 @@ fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.run();
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
 
     // The default size index distance is too large for small data,
     // we flush multiple times to generate more size index handles.
@@ -602,8 +602,7 @@ fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
         if try_cnt == 500 {
             panic!(
                 "expect split cnt {}, but got {}",
-                min_region_cnt,
-                region_cnt
+                min_region_cnt, region_cnt
             );
         }
     }
@@ -626,7 +625,7 @@ fn test_node_split_region_diff_check() {
 fn test_split_stale_epoch<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
     cluster.run();
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     let old = pd_client.get_region(b"k1").unwrap();
     // Construct a get command using old region meta.
     let get = util::new_request(
@@ -687,15 +686,13 @@ fn test_node_split_stale_epoch_right_derive() {
     test_split_stale_epoch(&mut cluster, true);
 }
 
-
 // For the peer which is the leader of the region before split,
 // it should campaigns immediately. and then this peer may take the leadership earlier.
 // `test_quick_election_after_split` is a helper function for testing this feature.
 fn test_quick_election_after_split<T: Simulator>(cluster: &mut Cluster<T>) {
     // Calculate the reserved time before a new campaign after split.
-    let reserved_time = Duration::from_millis(
-        cluster.cfg.raft_store.raft_base_tick_interval.as_millis() * 2,
-    );
+    let reserved_time =
+        Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval.as_millis() * 2);
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");

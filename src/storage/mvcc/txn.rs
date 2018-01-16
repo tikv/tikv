@@ -195,9 +195,7 @@ impl MvccTxn {
                         // Rollbacked by concurrent transaction.
                         info!(
                             "txn conflict (lock not found), key:{}, start_ts:{}, commit_ts:{}",
-                            key,
-                            self.start_ts,
-                            commit_ts
+                            key, self.start_ts, commit_ts
                         );
                         Err(Error::TxnLockNotFound {
                             start_ts: self.start_ts,
@@ -206,9 +204,9 @@ impl MvccTxn {
                         })
                     }
                     // Committed by concurrent transaction.
-                    Some((_, WriteType::Put)) |
-                    Some((_, WriteType::Delete)) |
-                    Some((_, WriteType::Lock)) => {
+                    Some((_, WriteType::Put))
+                    | Some((_, WriteType::Delete))
+                    | Some((_, WriteType::Lock)) => {
                         MVCC_DUPLICATE_CMD_COUNTER_VEC
                             .with_label_values(&["commit"])
                             .inc();
@@ -250,9 +248,7 @@ impl MvccTxn {
                                 .inc();
                             info!(
                                 "txn conflict (committed), key:{}, start_ts:{}, commit_ts:{}",
-                                key,
-                                self.start_ts,
-                                ts
+                                key, self.start_ts, ts
                             );
                             Err(Error::Committed { commit_ts: ts })
                         }
@@ -328,9 +324,9 @@ impl MvccTxn {
             self.delete_write(key, commit);
             delete_versions += 1;
         }
-        MVCC_VERSIONS_HISTOGRAM.observe(versions as f64);
+        MVCC_VERSIONS_HISTOGRAM.observe(f64::from(versions));
         if delete_versions > 0 {
-            GC_DELETE_VERSIONS_HISTOGRAM.observe(delete_versions as f64);
+            GC_DELETE_VERSIONS_HISTOGRAM.observe(f64::from(delete_versions));
         }
         Ok(())
     }
@@ -794,13 +790,11 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 5, None, IsolationLevel::SI, true);
-        assert!(
-            txn.prewrite(
-                Mutation::Put((make_key(key), value.to_vec())),
-                key,
-                &Options::default()
-            ).is_err()
-        );
+        assert!(txn.prewrite(
+            Mutation::Put((make_key(key), value.to_vec())),
+            key,
+            &Options::default()
+        ).is_err());
 
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();

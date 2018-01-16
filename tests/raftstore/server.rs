@@ -39,10 +39,8 @@ use super::cluster::{Cluster, Simulator};
 use super::util::wait_cb;
 
 type SimulateStoreTransport = SimulateTransport<StoreMsg, ServerRaftStoreRouter>;
-type SimulateServerTransport = SimulateTransport<
-    RaftMessage,
-    ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>,
->;
+type SimulateServerTransport =
+    SimulateTransport<RaftMessage, ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
 
 struct ServerMeta {
     node: Node<TestPdClient>,
@@ -118,7 +116,7 @@ impl Simulator for ServerCluster {
         self.storages.insert(node_id, store.get_engine());
 
         // Create pd client, snapshot manager, server.
-        let (worker, resolver) = resolve::new_resolver(self.pd_client.clone()).unwrap();
+        let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
         let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch), None);
         let pd_worker = FutureWorker::new("test-pd-worker");
         let server_cfg = Arc::new(cfg.server.clone());
@@ -145,7 +143,7 @@ impl Simulator for ServerCluster {
             &mut event_loop,
             &cfg.server,
             &cfg.raft_store,
-            self.pd_client.clone(),
+            Arc::clone(&self.pd_client),
         );
 
         // Create coprocessor.
@@ -268,6 +266,6 @@ pub fn new_server_cluster_with_cfs(
     cfs: &[CfName],
 ) -> Cluster<ServerCluster> {
     let pd_client = Arc::new(TestPdClient::new(id));
-    let sim = Arc::new(RwLock::new(ServerCluster::new(pd_client.clone())));
+    let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
     Cluster::new(id, count, cfs, sim, pd_client)
 }

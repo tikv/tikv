@@ -48,7 +48,7 @@ impl Server {
         C: PdMocker + Send + Sync + 'static,
     {
         let m = PdMock {
-            default_handler: handler.clone(),
+            default_handler: Arc::clone(&handler),
             case: case.clone(),
         };
         let service = pdpb_grpc::create_pd(m);
@@ -135,7 +135,7 @@ struct PdMock<C: PdMocker> {
 impl<C: PdMocker> Clone for PdMock<C> {
     fn clone(&self) -> Self {
         PdMock {
-            default_handler: self.default_handler.clone(),
+            default_handler: Arc::clone(&self.default_handler),
             case: self.case.clone(),
         }
     }
