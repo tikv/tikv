@@ -82,8 +82,8 @@ extern crate toml;
 extern crate url;
 #[cfg(test)]
 extern crate utime;
-extern crate zipf;
 extern crate uuid;
+extern crate zipf;
 
 #[macro_use]
 pub mod util;
