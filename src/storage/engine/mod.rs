@@ -33,19 +33,19 @@ mod metrics;
 use super::super::raftstore::store::engine::IterOption;
 
 // only used for rocksdb without persistent.
-pub const TEMP_DIR: &'static str = "";
+pub const TEMP_DIR: &str = "";
 
 const SEEK_BOUND: usize = 30;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
-const STAT_TOTAL: &'static str = "total";
-const STAT_PROCESSED: &'static str = "processed";
-const STAT_GET: &'static str = "get";
-const STAT_NEXT: &'static str = "next";
-const STAT_PREV: &'static str = "prev";
-const STAT_SEEK: &'static str = "seek";
-const STAT_SEEK_FOR_PREV: &'static str = "seek_for_prev";
-const STAT_OVER_SEEK_BOUND: &'static str = "over_seek_bound";
+const STAT_TOTAL: &str = "total";
+const STAT_PROCESSED: &str = "processed";
+const STAT_GET: &str = "get";
+const STAT_NEXT: &str = "next";
+const STAT_PREV: &str = "prev";
+const STAT_SEEK: &str = "seek";
+const STAT_SEEK_FOR_PREV: &str = "seek_for_prev";
+const STAT_OVER_SEEK_BOUND: &str = "over_seek_bound";
 
 pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
 pub type BatchResults<T> = Vec<Option<(CbContext, Result<T>)>>;
@@ -317,8 +317,8 @@ impl Cursor {
             return Ok(false);
         }
 
-        if self.scan_mode == ScanMode::Forward && self.valid() &&
-            self.iter.key() >= key.encoded().as_slice()
+        if self.scan_mode == ScanMode::Forward && self.valid()
+            && self.iter.key() >= key.encoded().as_slice()
         {
             return Ok(true);
         }
@@ -342,8 +342,8 @@ impl Cursor {
             return self.seek(key, statistics);
         }
         let ord = self.iter.key().cmp(key.encoded());
-        if ord == Ordering::Equal ||
-            (self.scan_mode == ScanMode::Forward && ord == Ordering::Greater)
+        if ord == Ordering::Equal
+            || (self.scan_mode == ScanMode::Forward && ord == Ordering::Greater)
         {
             return Ok(true);
         }
@@ -404,8 +404,8 @@ impl Cursor {
             return Ok(false);
         }
 
-        if self.scan_mode == ScanMode::Backward && self.valid() &&
-            self.iter.key() <= key.encoded().as_slice()
+        if self.scan_mode == ScanMode::Backward && self.valid()
+            && self.iter.key() <= key.encoded().as_slice()
         {
             return Ok(true);
         }
@@ -425,8 +425,7 @@ impl Cursor {
             return self.seek_for_prev(key, statistics);
         }
         let ord = self.iter.key().cmp(key.encoded());
-        if ord == Ordering::Equal ||
-            (self.scan_mode == ScanMode::Backward && ord == Ordering::Less)
+        if ord == Ordering::Equal || (self.scan_mode == ScanMode::Backward && ord == Ordering::Less)
         {
             return Ok(true);
         }
@@ -607,7 +606,7 @@ mod tests {
     use kvproto::kvrpcpb::Context;
     use super::super::super::raftstore::store::engine::IterOption;
 
-    const TEST_ENGINE_CFS: &'static [CfName] = &["cf"];
+    const TEST_ENGINE_CFS: &[CfName] = &["cf"];
 
     #[test]
     fn rocksdb() {
@@ -781,8 +780,7 @@ mod tests {
             .unwrap();
         let mut statistics = CFStatistics::default();
         assert!(!iter.seek(&make_key(b"z\x00"), &mut statistics).unwrap());
-        assert!(!iter.reverse_seek(&make_key(b"x"), &mut statistics)
-            .unwrap());
+        assert!(!iter.reverse_seek(&make_key(b"x"), &mut statistics).unwrap());
         must_delete(engine, b"x");
         must_delete(engine, b"z");
     }

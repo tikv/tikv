@@ -96,9 +96,10 @@ impl Stream for SnapChunk {
                 self.remain_bytes -= buf.len();
                 let mut chunk = SnapshotChunk::new();
                 chunk.set_data(buf);
-                Ok(Async::Ready(
-                    Some((chunk, WriteFlags::default().buffer_hint(true))),
-                ))
+                Ok(Async::Ready(Some((
+                    chunk,
+                    WriteFlags::default().buffer_hint(true),
+                ))))
             }
             Err(e) => Err(box_err!("failed to read snapshot chunk: {}", e)),
         }
@@ -139,7 +140,7 @@ fn send_snap(
 
     let chunks = {
         let snap_chunk = SnapChunk {
-            snap: s.clone(),
+            snap: Arc::clone(&s),
             remain_bytes: total_size as usize,
         };
         let first: Once<(SnapshotChunk, _), Error> = stream::once({
@@ -238,8 +239,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                     Err(e) => {
                         error!(
                             "failed to create snapshot file for token {:?}: {:?}",
-                            token,
-                            e
+                            token, e
                         );
                         return;
                     }
@@ -300,9 +300,9 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
             }
             Task::SendTo { addr, msg, cb } => {
                 SNAP_TASK_COUNTER.with_label_values(&["send"]).inc();
-                let env = self.env.clone();
+                let env = Arc::clone(&self.env);
                 let mgr = self.snap_mgr.clone();
-                let security_mgr = self.security_mgr.clone();
+                let security_mgr = Arc::clone(&self.security_mgr);
                 self.pool.execute(move |_| {
                     let res = send_snap(env, mgr, security_mgr, &addr, msg);
                     if res.is_err() {

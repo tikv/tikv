@@ -23,7 +23,7 @@ use tikv::pd::PdClient;
 use super::pd::TestPdClient;
 
 fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     let engine = cluster.get_engine(1);
     let raft_engine = cluster.get_raft_engine(1);
 
@@ -51,7 +51,7 @@ fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn test_simple_store_stats<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
 
     cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(20);
     cluster.run();
@@ -107,7 +107,7 @@ fn test_server_store_snap_stats() {
     let mut cluster = new_server_cluster(0, 2);
     cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::secs(600);
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
     pd_client.disable_default_rule();
 

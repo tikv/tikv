@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::collections::{HashMap, HashSet};
 use std::sync::{self, Arc, RwLock};
 use std::time::*;
@@ -179,11 +178,11 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
-        self.engines[&node_id].kv_engine.clone()
+        Arc::clone(&self.engines[&node_id].kv_engine)
     }
 
     pub fn get_raft_engine(&self, node_id: u64) -> Arc<DB> {
-        self.engines[&node_id].raft_engine.clone()
+        Arc::clone(&self.engines[&node_id].raft_engine)
     }
 
     pub fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()> {
@@ -408,7 +407,6 @@ impl<T: Simulator> Cluster<T> {
         self.bootstrap_cluster(region);
         rid
     }
-
 
     // This is only for fixed id test.
     fn bootstrap_cluster(&mut self, region: metapb::Region) {
@@ -778,8 +776,8 @@ impl<T: Simulator> Cluster<T> {
                 self.split_region(region, split_key, Callback::Write(check));
             }
 
-            if self.pd_client.check_split(region, split_key) &&
-                self.pd_client.get_split_count() > split_count
+            if self.pd_client.check_split(region, split_key)
+                && self.pd_client.get_split_count() > split_count
             {
                 return;
             }
@@ -812,15 +810,12 @@ impl<T: Simulator> Cluster<T> {
             if try_cnt > 250 {
                 panic!(
                     "region {} doesn't exist on store {} after {} tries",
-                    region_id,
-                    store_id,
-                    try_cnt
+                    region_id, store_id, try_cnt
                 );
             }
             try_cnt += 1;
             sleep_ms(20);
         }
-
     }
 
     pub fn must_remove_region(&mut self, store_id: u64, region_id: u64) {

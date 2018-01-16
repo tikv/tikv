@@ -117,7 +117,9 @@ pub fn make_key(k: &[u8]) -> Key {
 
 fn must_batch_snapshot(batch: Vec<Context>, engine: &Engine) -> BatchResults<Box<Snapshot>> {
     let (tx, rx) = channel();
-    let on_finished = box move |snapshots| { tx.send(snapshots).unwrap(); };
+    let on_finished = box move |snapshots| {
+        tx.send(snapshots).unwrap();
+    };
     engine.async_batch_snapshot(batch, on_finished).unwrap();
     rx.recv().unwrap()
 }

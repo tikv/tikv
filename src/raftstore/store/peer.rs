@@ -290,7 +290,7 @@ impl Peer {
             region,
             sched,
             tag.clone(),
-            store.entry_cache_metries.clone(),
+            Rc::clone(&store.entry_cache_metries),
         )?;
 
         let applied_index = ps.applied_index();
@@ -322,7 +322,7 @@ impl Peer {
             pending_reads: Default::default(),
             peer_cache: RefCell::new(peer_cache),
             peer_heartbeats: FlatMap::default(),
-            coprocessor_host: store.coprocessor_host.clone(),
+            coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
             delete_keys_hint: 0,
             approximate_size: None,
@@ -437,11 +437,11 @@ impl Peer {
     }
 
     pub fn kv_engine(&self) -> Arc<DB> {
-        self.kv_engine.clone()
+        Arc::clone(&self.kv_engine)
     }
 
     pub fn raft_engine(&self) -> Arc<DB> {
-        self.raft_engine.clone()
+        Arc::clone(&self.raft_engine)
     }
 
     pub fn region(&self) -> &metapb::Region {
@@ -641,8 +641,7 @@ impl Peer {
                     self.renew_leader_lease(monotonic_raw_now());
                     debug!(
                         "{} becomes leader and lease expired time is {:?}",
-                        self.tag,
-                        self.leader_lease
+                        self.tag, self.leader_lease
                     );
                     self.heartbeat_pd(worker)
                 }
@@ -754,7 +753,7 @@ impl Peer {
             Err(e) => {
                 // We may have written something to writebatch and it can't be reverted, so has
                 // to panic here.
-                panic!("{} failed to handle raft ready: {:?}", self.tag, e);
+                panic!("{} failed to handle raft ready: {:?}", self.tag, e)
             }
         };
 
@@ -1112,8 +1111,8 @@ impl Peer {
             return Ok(RequestPolicy::ProposeNormal);
         }
 
-        if (req.has_header() && req.get_header().get_read_quorum()) ||
-            !self.raft_group.raft.in_lease()
+        if (req.has_header() && req.get_header().get_read_quorum())
+            || !self.raft_group.raft.in_lease()
         {
             return Ok(RequestPolicy::ReadIndex);
         }
@@ -1132,8 +1131,7 @@ impl Peer {
             LeaseState::Expired => {
                 debug!(
                     "{} leader lease is expired: {:?}",
-                    self.tag,
-                    self.leader_lease
+                    self.tag, self.leader_lease
                 );
                 self.leader_lease.expire();
             }
@@ -1177,13 +1175,12 @@ impl Peer {
         let change_type = change_peer.get_change_type();
         let peer = change_peer.get_peer();
 
-        if change_type == ConfChangeType::RemoveNode && !self.cfg.allow_remove_leader &&
-            peer.get_id() == self.peer_id()
+        if change_type == ConfChangeType::RemoveNode && !self.cfg.allow_remove_leader
+            && peer.get_id() == self.peer_id()
         {
             warn!(
                 "{} rejects remove leader request {:?}",
-                self.tag,
-                change_peer
+                self.tag, change_peer
             );
             return Err(box_err!("ignore remove leader"));
         }
@@ -1220,11 +1217,7 @@ impl Peer {
         info!(
             "{} rejects unsafe conf change request {:?}, total {}, healthy {},  \
              quorum after change {}",
-            self.tag,
-            change_peer,
-            total,
-            healthy,
-            quorum_after_change
+            self.tag, change_peer, total, healthy, quorum_after_change
         );
         Err(box_err!(
             "unsafe to perform conf change {:?}, total {}, healthy {}, quorum after \
@@ -1292,8 +1285,8 @@ impl Peer {
         let pending_read_count = self.raft_group.raft.pending_read_count();
         let ready_read_count = self.raft_group.raft.ready_read_count();
 
-        if pending_read_count == last_pending_read_count &&
-            ready_read_count == last_ready_read_count
+        if pending_read_count == last_pending_read_count
+            && ready_read_count == last_ready_read_count
         {
             // The message gets dropped silently, can't be handled anymore.
             apply::notify_stale_req(self.term(), cb);
@@ -1374,8 +1367,7 @@ impl Peer {
         } else {
             info!(
                 "{} transfer leader message {:?} ignored directly",
-                self.tag,
-                req
+                self.tag, req
             );
             false
         };
@@ -1466,10 +1458,10 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
     let (mut check_ver, mut check_conf_ver) = (false, false);
     if req.has_admin_request() {
         match req.get_admin_request().get_cmd_type() {
-            AdminCmdType::CompactLog |
-            AdminCmdType::InvalidAdmin |
-            AdminCmdType::ComputeHash |
-            AdminCmdType::VerifyHash => {}
+            AdminCmdType::CompactLog
+            | AdminCmdType::InvalidAdmin
+            | AdminCmdType::ComputeHash
+            | AdminCmdType::VerifyHash => {}
             AdminCmdType::Split => check_ver = true,
             AdminCmdType::ChangePeer => check_conf_ver = true,
             AdminCmdType::TransferLeader => {
@@ -1494,8 +1486,8 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
     let latest_epoch = region.get_region_epoch();
 
     // should we use not equal here?
-    if (check_conf_ver && from_epoch.get_conf_ver() < latest_epoch.get_conf_ver()) ||
-        (check_ver && from_epoch.get_version() < latest_epoch.get_version())
+    if (check_conf_ver && from_epoch.get_conf_ver() < latest_epoch.get_conf_ver())
+        || (check_ver && from_epoch.get_version() < latest_epoch.get_version())
     {
         debug!(
             "[region {}] received stale epoch {:?}, mime: {:?}",
@@ -1600,8 +1592,8 @@ impl Peer {
         // Heartbeat message for the store of that peer to check whether to create a new peer
         // when receiving these messages, or just to wait for a pending region split to perform
         // later.
-        if self.get_store().is_initialized() &&
-            (msg_type == MessageType::MsgRequestVote ||
+        if self.get_store().is_initialized()
+            && (msg_type == MessageType::MsgRequestVote ||
             // the peer has not been known to this leader, it may exist or not.
             (msg_type == MessageType::MsgHeartbeat && msg.get_commit() == INVALID_INDEX))
         {
@@ -1615,10 +1607,7 @@ impl Peer {
         if let Err(e) = trans.send(send_msg) {
             warn!(
                 "{} failed to send msg to {} in store {}, err: {:?}",
-                self.tag,
-                to_peer_id,
-                to_store_id,
-                e
+                self.tag, to_peer_id, to_store_id, e
             );
 
             // unreachable store
@@ -1635,7 +1624,7 @@ impl Peer {
     fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<ReadResponse> {
         check_epoch(self.region(), req)?;
         let mut need_snapshot = false;
-        let snapshot = Snapshot::new(self.kv_engine.clone());
+        let snapshot = Snapshot::new(Arc::clone(&self.kv_engine));
         let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
 
@@ -1647,11 +1636,11 @@ impl Peer {
                     need_snapshot = true;
                     raft_cmdpb::Response::new()
                 }
-                CmdType::Prewrite |
-                CmdType::Put |
-                CmdType::Delete |
-                CmdType::DeleteRange |
-                CmdType::Invalid => unreachable!(),
+                CmdType::Prewrite
+                | CmdType::Put
+                | CmdType::Delete
+                | CmdType::DeleteRange
+                | CmdType::Invalid => unreachable!(),
             };
             resp.set_cmd_type(cmd_type);
             responses.push(resp);
@@ -1686,8 +1675,8 @@ fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderReques
 fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
     if msg.has_admin_request() {
         let req = msg.get_admin_request();
-        return req.get_cmd_type() == AdminCmdType::ChangePeer ||
-            req.get_cmd_type() == AdminCmdType::Split;
+        return req.get_cmd_type() == AdminCmdType::ChangePeer
+            || req.get_cmd_type() == AdminCmdType::Split;
     }
 
     msg.get_header().get_sync_log()

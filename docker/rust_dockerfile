@@ -37,9 +37,9 @@ ENV PATH $GOPATH/bin:$GOROOT/bin:$PATH
 RUN go get golang.org/x/tools/go/gcimporter15 \
 	&& go get github.com/golang/lint/golint
 
-RUN curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain nightly-2017-08-09 -y \
-	&& /root/.cargo/bin/rustup default nightly-2017-08-09 \
-	&& cargo install --vers 0.2.1 --force rustfmt-nightly
+RUN curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain nightly-2018-01-12 -y \
+	&& /root/.cargo/bin/rustup default nightly-2018-01-12 \
+	&& /root/.cargo/bin/cargo install --vers 0.3.4 --force rustfmt-nightly
 
 # cache dep package
 RUN curl -L https://github.com/pingcap/tikv/archive/master.tar.gz -o /root/master.tar.gz \

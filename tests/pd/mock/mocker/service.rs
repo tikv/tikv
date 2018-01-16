@@ -151,8 +151,8 @@ impl PdMocker for Service {
         let leaders = self.leaders.lock().unwrap();
 
         for region in regions.values() {
-            if key >= region.get_start_key() &&
-                (region.get_end_key().is_empty() || key < region.get_end_key())
+            if key >= region.get_start_key()
+                && (region.get_end_key().is_empty() || key < region.get_end_key())
             {
                 resp.set_header(Service::header());
                 resp.set_region(region.clone());

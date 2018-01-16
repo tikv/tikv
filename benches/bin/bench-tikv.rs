@@ -23,18 +23,18 @@
 #![allow(needless_pass_by_value)]
 #![allow(unreadable_literal)]
 
+extern crate futures;
+extern crate grpcio as grpc;
+extern crate kvproto;
 #[macro_use]
 extern crate log;
 extern crate protobuf;
-#[macro_use]
-extern crate tikv;
 extern crate rand;
 extern crate rocksdb;
 extern crate tempdir;
 extern crate test;
-extern crate kvproto;
-extern crate futures;
-extern crate grpcio as grpc;
+#[macro_use]
+extern crate tikv;
 
 #[allow(dead_code)]
 #[path = "../../tests/util/mod.rs"]
