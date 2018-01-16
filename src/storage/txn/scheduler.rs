@@ -1591,10 +1591,10 @@ impl Runnable<Msg> for Scheduler {
 
     fn shutdown(&mut self) {
         if let Err(e) = self.worker_pool.stop() {
-            panic!("scheduler run err:{:?}", e);
+            error!("scheduler run err:{:?}", e);
         }
         if let Err(e) = self.high_priority_pool.stop() {
-            panic!("scheduler run err:{:?}", e);
+            error!("scheduler run err:{:?}", e);
         }
         info!("scheduler stopped");
     }
