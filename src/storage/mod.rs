@@ -891,7 +891,7 @@ impl Clone for Storage {
     fn clone(&self) -> Storage {
         Storage {
             engine: self.engine.clone(),
-            worker: self.worker.clone(),
+            worker: Arc::clone(&self.worker),
             gc_ratio_threshold: self.gc_ratio_threshold,
             max_key_size: self.max_key_size,
         }
