@@ -493,10 +493,12 @@ impl Storage {
 
         Ok(Storage {
             engine: engine,
-            worker: Arc::new(Mutex::new(Builder::new("storage-scheduler")
-                .batch_size(CMD_BATCH_SIZE)
-                .pending_capacity(config.scheduler_notify_capacity)
-                .create())),
+            worker: Arc::new(Mutex::new(
+                Builder::new("storage-scheduler")
+                    .batch_size(CMD_BATCH_SIZE)
+                    .pending_capacity(config.scheduler_notify_capacity)
+                    .create(),
+            )),
             gc_ratio_threshold: config.gc_ratio_threshold,
             max_key_size: config.max_key_size,
         })

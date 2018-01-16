@@ -298,8 +298,7 @@ fn make_engine_cb(
             Err(e) => {
                 panic!(
                     "schedule WriteFinished msg failed, cid={}, err:{:?}",
-                    cid,
-                    e
+                    cid, e
                 );
             }
         }
@@ -806,8 +805,7 @@ fn process_write(
             // Todo: if this happens, lock will hold for ever
             panic!(
                 "schedule WritePrepareFailed msg failed. cid={}, err={:?}",
-                cid,
-                err
+                cid, err
             );
         }
     }
