@@ -21,13 +21,11 @@ pub mod dispatcher;
 pub mod split_observer;
 pub mod distsql_cache_observer;
 pub mod config;
-mod region_snapshot;
 mod error;
 mod metrics;
 mod split_check;
 
 pub use self::config::Config;
-pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 pub use self::dispatcher::{CoprocessorHost, Registry};
 pub use self::error::{Error, Result};
 pub use self::split_check::{SizeCheckObserver, Status as SplitCheckStatus, TableCheckObserver,

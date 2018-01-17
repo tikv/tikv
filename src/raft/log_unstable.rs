@@ -25,7 +25,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use kvproto::eraftpb::{Entry, Snapshot};
 
 // unstable.entries[i] has raft log position i+unstable.offset.
@@ -42,7 +41,6 @@ pub struct Unstable {
 
     pub tag: String,
 }
-
 
 impl Unstable {
     pub fn new(offset: u64, tag: String) -> Unstable {
@@ -159,16 +157,11 @@ impl Unstable {
         if lo < self.offset || hi > upper {
             panic!(
                 "{} unstable.slice[{}, {}] out of bound[{}, {}]",
-                self.tag,
-                lo,
-                hi,
-                self.offset,
-                upper
+                self.tag, lo, hi, self.offset, upper
             )
         }
     }
 }
-
 
 #[cfg(test)]
 mod test {
@@ -307,7 +300,6 @@ mod test {
         }
     }
 
-
     #[test]
     fn test_restore() {
         let mut u = Unstable {
@@ -417,7 +409,6 @@ mod test {
                 5,
                 vec![new_entry(5, 1), new_entry(6, 1), new_entry(7, 1)],
             ),
-
             // replace to unstable entries
             (
                 vec![new_entry(5, 1)],
@@ -427,7 +418,6 @@ mod test {
                 5,
                 vec![new_entry(5, 2), new_entry(6, 2)],
             ),
-
             (
                 vec![new_entry(5, 1)],
                 5,
@@ -436,7 +426,6 @@ mod test {
                 4,
                 vec![new_entry(4, 2), new_entry(5, 2), new_entry(6, 2)],
             ),
-
             // truncate existing entries and append
             (
                 vec![new_entry(5, 1), new_entry(6, 1), new_entry(7, 1)],
@@ -446,7 +435,6 @@ mod test {
                 5,
                 vec![new_entry(5, 1), new_entry(6, 2)],
             ),
-
             (
                 vec![new_entry(5, 1), new_entry(6, 1), new_entry(7, 1)],
                 5,
@@ -461,7 +449,6 @@ mod test {
                 ],
             ),
         ];
-
 
         for (entries, offset, snapshot, to_append, woffset, wentries) in tests {
             let mut u = Unstable {

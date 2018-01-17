@@ -137,10 +137,12 @@ impl FnCall {
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
         let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
         let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
-        let u64_mul_i64 = |u, s| if s >= 0 {
-            (u as u64).checked_mul(s as u64).map(|t| t as i64)
-        } else {
-            None
+        let u64_mul_i64 = |u, s| {
+            if s >= 0 {
+                (u as u64).checked_mul(s as u64).map(|t| t as i64)
+            } else {
+                None
+            }
         };
         let res = match (lus, rus) {
             (true, true) => (lhs as u64).checked_mul(rhs as u64).map(|t| t as i64),
