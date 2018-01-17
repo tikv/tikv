@@ -295,6 +295,7 @@ impl Debugger {
                 let conf_ver = region_state.get_region().get_region_epoch().get_conf_ver();
                 let mut new_epoch = RegionEpoch::new();
                 new_epoch.set_conf_ver(conf_ver + peers_len - 1);
+                new_epoch.set_version(50000u64);
 
                 region_state.mut_region().mut_peers().clear();
                 region_state.mut_region().mut_peers().push(peer);
