@@ -112,11 +112,11 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let future = self.read_pool
             .future_execute(
                 readpool::Priority::ReadCritical,
-                box readpool::KvGetTask {
-                    request_context: req.take_context(),
-                    key: req.get_key().to_vec(),
-                    start_ts: req.get_version(),
-                },
+                box readpool::KvGetTask::new(
+                    req.take_context(),
+                    req.get_key().to_vec(),
+                    req.get_version(),
+                ),
             )
             .then(|r| {
                 let mut res = GetResponse::new();
