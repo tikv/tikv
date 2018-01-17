@@ -13,7 +13,6 @@
 
 mod task;
 
-use std::sync;
 use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 
 use storage::Engine;
@@ -39,7 +38,7 @@ pub struct ReadPool {
     pool_read_high: CpuPool,
     pool_read_normal: CpuPool,
     pool_read_low: CpuPool,
-    context: sync::Arc<WorkerThreadContext>,
+    context: WorkerThreadContext,
 }
 
 impl Clone for ReadPool {
@@ -49,7 +48,7 @@ impl Clone for ReadPool {
             pool_read_high: self.pool_read_high.clone(),
             pool_read_normal: self.pool_read_normal.clone(),
             pool_read_low: self.pool_read_low.clone(),
-            context: sync::Arc::clone(&self.context),
+            context: self.context.clone(),
         }
     }
 }
@@ -77,7 +76,7 @@ impl ReadPool {
                 .pool_size(config.readpool_read_low_concurrency)
                 // .stack_size(config.readpool_stack_size.0 as usize)
                 .create(),
-            context: sync::Arc::new(WorkerThreadContext { engine }),
+            context: WorkerThreadContext { engine },
         }
     }
 

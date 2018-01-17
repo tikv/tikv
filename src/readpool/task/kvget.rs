@@ -19,9 +19,9 @@ use kvproto::kvrpcpb;
 use super::*;
 
 pub struct KvGetTask {
-    request_context: kvrpcpb::Context,
-    key: Vec<u8>,
-    start_ts: u64,
+    pub request_context: kvrpcpb::Context,
+    pub key: Vec<u8>,
+    pub start_ts: u64,
 }
 
 impl Task for KvGetTask {
