@@ -13,6 +13,7 @@
 
 pub mod kvget;
 pub mod kvbatchget;
+pub mod coprocessor;
 
 use std::result;
 use std::error;
