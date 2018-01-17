@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use tikv::util::config::*;
 
 use super::cluster::{Cluster, Simulator};

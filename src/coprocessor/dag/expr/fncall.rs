@@ -24,214 +24,214 @@ use super::compare::CmpOp;
 impl FnCall {
     pub fn check_args(sig: ScalarFuncSig, args: usize) -> Result<()> {
         let (min_args, max_args) = match sig {
-            ScalarFuncSig::LTInt |
-            ScalarFuncSig::LEInt |
-            ScalarFuncSig::GTInt |
-            ScalarFuncSig::GEInt |
-            ScalarFuncSig::EQInt |
-            ScalarFuncSig::NEInt |
-            ScalarFuncSig::NullEQInt |
-            ScalarFuncSig::LTReal |
-            ScalarFuncSig::LEReal |
-            ScalarFuncSig::GTReal |
-            ScalarFuncSig::GEReal |
-            ScalarFuncSig::EQReal |
-            ScalarFuncSig::NEReal |
-            ScalarFuncSig::NullEQReal |
-            ScalarFuncSig::LTDecimal |
-            ScalarFuncSig::LEDecimal |
-            ScalarFuncSig::GTDecimal |
-            ScalarFuncSig::GEDecimal |
-            ScalarFuncSig::EQDecimal |
-            ScalarFuncSig::NEDecimal |
-            ScalarFuncSig::NullEQDecimal |
-            ScalarFuncSig::LTString |
-            ScalarFuncSig::LEString |
-            ScalarFuncSig::GTString |
-            ScalarFuncSig::GEString |
-            ScalarFuncSig::EQString |
-            ScalarFuncSig::NEString |
-            ScalarFuncSig::NullEQString |
-            ScalarFuncSig::LTTime |
-            ScalarFuncSig::LETime |
-            ScalarFuncSig::GTTime |
-            ScalarFuncSig::GETime |
-            ScalarFuncSig::EQTime |
-            ScalarFuncSig::NETime |
-            ScalarFuncSig::NullEQTime |
-            ScalarFuncSig::LTDuration |
-            ScalarFuncSig::LEDuration |
-            ScalarFuncSig::GTDuration |
-            ScalarFuncSig::GEDuration |
-            ScalarFuncSig::EQDuration |
-            ScalarFuncSig::NEDuration |
-            ScalarFuncSig::NullEQDuration |
-            ScalarFuncSig::LTJson |
-            ScalarFuncSig::LEJson |
-            ScalarFuncSig::GTJson |
-            ScalarFuncSig::GEJson |
-            ScalarFuncSig::EQJson |
-            ScalarFuncSig::NEJson |
-            ScalarFuncSig::NullEQJson |
-            ScalarFuncSig::PlusReal |
-            ScalarFuncSig::PlusDecimal |
-            ScalarFuncSig::PlusInt |
-            ScalarFuncSig::MinusReal |
-            ScalarFuncSig::MinusDecimal |
-            ScalarFuncSig::MinusInt |
-            ScalarFuncSig::MultiplyReal |
-            ScalarFuncSig::MultiplyDecimal |
-            ScalarFuncSig::MultiplyInt |
-            ScalarFuncSig::IfNullInt |
-            ScalarFuncSig::IfNullReal |
-            ScalarFuncSig::IfNullString |
-            ScalarFuncSig::IfNullDecimal |
-            ScalarFuncSig::IfNullTime |
-            ScalarFuncSig::IfNullDuration |
-            ScalarFuncSig::IfNullJson |
-            ScalarFuncSig::LogicalAnd |
-            ScalarFuncSig::LogicalOr |
-            ScalarFuncSig::LogicalXor |
-            ScalarFuncSig::DivideDecimal |
-            ScalarFuncSig::DivideReal |
-            ScalarFuncSig::BitAndSig |
-            ScalarFuncSig::BitOrSig |
-            ScalarFuncSig::BitXorSig |
-            ScalarFuncSig::DateFormatSig => (2, 2),
+            ScalarFuncSig::LTInt
+            | ScalarFuncSig::LEInt
+            | ScalarFuncSig::GTInt
+            | ScalarFuncSig::GEInt
+            | ScalarFuncSig::EQInt
+            | ScalarFuncSig::NEInt
+            | ScalarFuncSig::NullEQInt
+            | ScalarFuncSig::LTReal
+            | ScalarFuncSig::LEReal
+            | ScalarFuncSig::GTReal
+            | ScalarFuncSig::GEReal
+            | ScalarFuncSig::EQReal
+            | ScalarFuncSig::NEReal
+            | ScalarFuncSig::NullEQReal
+            | ScalarFuncSig::LTDecimal
+            | ScalarFuncSig::LEDecimal
+            | ScalarFuncSig::GTDecimal
+            | ScalarFuncSig::GEDecimal
+            | ScalarFuncSig::EQDecimal
+            | ScalarFuncSig::NEDecimal
+            | ScalarFuncSig::NullEQDecimal
+            | ScalarFuncSig::LTString
+            | ScalarFuncSig::LEString
+            | ScalarFuncSig::GTString
+            | ScalarFuncSig::GEString
+            | ScalarFuncSig::EQString
+            | ScalarFuncSig::NEString
+            | ScalarFuncSig::NullEQString
+            | ScalarFuncSig::LTTime
+            | ScalarFuncSig::LETime
+            | ScalarFuncSig::GTTime
+            | ScalarFuncSig::GETime
+            | ScalarFuncSig::EQTime
+            | ScalarFuncSig::NETime
+            | ScalarFuncSig::NullEQTime
+            | ScalarFuncSig::LTDuration
+            | ScalarFuncSig::LEDuration
+            | ScalarFuncSig::GTDuration
+            | ScalarFuncSig::GEDuration
+            | ScalarFuncSig::EQDuration
+            | ScalarFuncSig::NEDuration
+            | ScalarFuncSig::NullEQDuration
+            | ScalarFuncSig::LTJson
+            | ScalarFuncSig::LEJson
+            | ScalarFuncSig::GTJson
+            | ScalarFuncSig::GEJson
+            | ScalarFuncSig::EQJson
+            | ScalarFuncSig::NEJson
+            | ScalarFuncSig::NullEQJson
+            | ScalarFuncSig::PlusReal
+            | ScalarFuncSig::PlusDecimal
+            | ScalarFuncSig::PlusInt
+            | ScalarFuncSig::MinusReal
+            | ScalarFuncSig::MinusDecimal
+            | ScalarFuncSig::MinusInt
+            | ScalarFuncSig::MultiplyReal
+            | ScalarFuncSig::MultiplyDecimal
+            | ScalarFuncSig::MultiplyInt
+            | ScalarFuncSig::IfNullInt
+            | ScalarFuncSig::IfNullReal
+            | ScalarFuncSig::IfNullString
+            | ScalarFuncSig::IfNullDecimal
+            | ScalarFuncSig::IfNullTime
+            | ScalarFuncSig::IfNullDuration
+            | ScalarFuncSig::IfNullJson
+            | ScalarFuncSig::LogicalAnd
+            | ScalarFuncSig::LogicalOr
+            | ScalarFuncSig::LogicalXor
+            | ScalarFuncSig::DivideDecimal
+            | ScalarFuncSig::DivideReal
+            | ScalarFuncSig::BitAndSig
+            | ScalarFuncSig::BitOrSig
+            | ScalarFuncSig::BitXorSig
+            | ScalarFuncSig::DateFormatSig => (2, 2),
 
-            ScalarFuncSig::CastIntAsInt |
-            ScalarFuncSig::CastIntAsReal |
-            ScalarFuncSig::CastIntAsString |
-            ScalarFuncSig::CastIntAsDecimal |
-            ScalarFuncSig::CastIntAsTime |
-            ScalarFuncSig::CastIntAsDuration |
-            ScalarFuncSig::CastIntAsJson |
-            ScalarFuncSig::CastRealAsInt |
-            ScalarFuncSig::CastRealAsReal |
-            ScalarFuncSig::CastRealAsString |
-            ScalarFuncSig::CastRealAsDecimal |
-            ScalarFuncSig::CastRealAsTime |
-            ScalarFuncSig::CastRealAsDuration |
-            ScalarFuncSig::CastRealAsJson |
-            ScalarFuncSig::CastDecimalAsInt |
-            ScalarFuncSig::CastDecimalAsReal |
-            ScalarFuncSig::CastDecimalAsString |
-            ScalarFuncSig::CastDecimalAsDecimal |
-            ScalarFuncSig::CastDecimalAsTime |
-            ScalarFuncSig::CastDecimalAsDuration |
-            ScalarFuncSig::CastDecimalAsJson |
-            ScalarFuncSig::CastStringAsInt |
-            ScalarFuncSig::CastStringAsReal |
-            ScalarFuncSig::CastStringAsString |
-            ScalarFuncSig::CastStringAsDecimal |
-            ScalarFuncSig::CastStringAsTime |
-            ScalarFuncSig::CastStringAsDuration |
-            ScalarFuncSig::CastStringAsJson |
-            ScalarFuncSig::CastTimeAsInt |
-            ScalarFuncSig::CastTimeAsReal |
-            ScalarFuncSig::CastTimeAsString |
-            ScalarFuncSig::CastTimeAsDecimal |
-            ScalarFuncSig::CastTimeAsTime |
-            ScalarFuncSig::CastTimeAsDuration |
-            ScalarFuncSig::CastTimeAsJson |
-            ScalarFuncSig::CastDurationAsInt |
-            ScalarFuncSig::CastDurationAsReal |
-            ScalarFuncSig::CastDurationAsString |
-            ScalarFuncSig::CastDurationAsDecimal |
-            ScalarFuncSig::CastDurationAsTime |
-            ScalarFuncSig::CastDurationAsDuration |
-            ScalarFuncSig::CastDurationAsJson |
-            ScalarFuncSig::CastJsonAsInt |
-            ScalarFuncSig::CastJsonAsReal |
-            ScalarFuncSig::CastJsonAsString |
-            ScalarFuncSig::CastJsonAsDecimal |
-            ScalarFuncSig::CastJsonAsTime |
-            ScalarFuncSig::CastJsonAsDuration |
-            ScalarFuncSig::CastJsonAsJson |
-            ScalarFuncSig::UnaryNot |
-            ScalarFuncSig::UnaryMinusInt |
-            ScalarFuncSig::UnaryMinusReal |
-            ScalarFuncSig::UnaryMinusDecimal |
-            ScalarFuncSig::IntIsTrue |
-            ScalarFuncSig::IntIsFalse |
-            ScalarFuncSig::IntIsNull |
-            ScalarFuncSig::RealIsTrue |
-            ScalarFuncSig::RealIsFalse |
-            ScalarFuncSig::RealIsNull |
-            ScalarFuncSig::DecimalIsTrue |
-            ScalarFuncSig::DecimalIsFalse |
-            ScalarFuncSig::DecimalIsNull |
-            ScalarFuncSig::StringIsNull |
-            ScalarFuncSig::TimeIsNull |
-            ScalarFuncSig::DurationIsNull |
-            ScalarFuncSig::JsonIsNull |
-            ScalarFuncSig::AbsInt |
-            ScalarFuncSig::AbsUInt |
-            ScalarFuncSig::AbsReal |
-            ScalarFuncSig::AbsDecimal |
-            ScalarFuncSig::CeilReal |
-            ScalarFuncSig::CeilIntToInt |
-            ScalarFuncSig::CeilIntToDec |
-            ScalarFuncSig::CeilDecToDec |
-            ScalarFuncSig::CeilDecToInt |
-            ScalarFuncSig::FloorReal |
-            ScalarFuncSig::FloorIntToInt |
-            ScalarFuncSig::FloorIntToDec |
-            ScalarFuncSig::FloorDecToDec |
-            ScalarFuncSig::FloorDecToInt |
-            ScalarFuncSig::JsonTypeSig |
-            ScalarFuncSig::JsonUnquoteSig |
-            ScalarFuncSig::BitNegSig => (1, 1),
+            ScalarFuncSig::CastIntAsInt
+            | ScalarFuncSig::CastIntAsReal
+            | ScalarFuncSig::CastIntAsString
+            | ScalarFuncSig::CastIntAsDecimal
+            | ScalarFuncSig::CastIntAsTime
+            | ScalarFuncSig::CastIntAsDuration
+            | ScalarFuncSig::CastIntAsJson
+            | ScalarFuncSig::CastRealAsInt
+            | ScalarFuncSig::CastRealAsReal
+            | ScalarFuncSig::CastRealAsString
+            | ScalarFuncSig::CastRealAsDecimal
+            | ScalarFuncSig::CastRealAsTime
+            | ScalarFuncSig::CastRealAsDuration
+            | ScalarFuncSig::CastRealAsJson
+            | ScalarFuncSig::CastDecimalAsInt
+            | ScalarFuncSig::CastDecimalAsReal
+            | ScalarFuncSig::CastDecimalAsString
+            | ScalarFuncSig::CastDecimalAsDecimal
+            | ScalarFuncSig::CastDecimalAsTime
+            | ScalarFuncSig::CastDecimalAsDuration
+            | ScalarFuncSig::CastDecimalAsJson
+            | ScalarFuncSig::CastStringAsInt
+            | ScalarFuncSig::CastStringAsReal
+            | ScalarFuncSig::CastStringAsString
+            | ScalarFuncSig::CastStringAsDecimal
+            | ScalarFuncSig::CastStringAsTime
+            | ScalarFuncSig::CastStringAsDuration
+            | ScalarFuncSig::CastStringAsJson
+            | ScalarFuncSig::CastTimeAsInt
+            | ScalarFuncSig::CastTimeAsReal
+            | ScalarFuncSig::CastTimeAsString
+            | ScalarFuncSig::CastTimeAsDecimal
+            | ScalarFuncSig::CastTimeAsTime
+            | ScalarFuncSig::CastTimeAsDuration
+            | ScalarFuncSig::CastTimeAsJson
+            | ScalarFuncSig::CastDurationAsInt
+            | ScalarFuncSig::CastDurationAsReal
+            | ScalarFuncSig::CastDurationAsString
+            | ScalarFuncSig::CastDurationAsDecimal
+            | ScalarFuncSig::CastDurationAsTime
+            | ScalarFuncSig::CastDurationAsDuration
+            | ScalarFuncSig::CastDurationAsJson
+            | ScalarFuncSig::CastJsonAsInt
+            | ScalarFuncSig::CastJsonAsReal
+            | ScalarFuncSig::CastJsonAsString
+            | ScalarFuncSig::CastJsonAsDecimal
+            | ScalarFuncSig::CastJsonAsTime
+            | ScalarFuncSig::CastJsonAsDuration
+            | ScalarFuncSig::CastJsonAsJson
+            | ScalarFuncSig::UnaryNot
+            | ScalarFuncSig::UnaryMinusInt
+            | ScalarFuncSig::UnaryMinusReal
+            | ScalarFuncSig::UnaryMinusDecimal
+            | ScalarFuncSig::IntIsTrue
+            | ScalarFuncSig::IntIsFalse
+            | ScalarFuncSig::IntIsNull
+            | ScalarFuncSig::RealIsTrue
+            | ScalarFuncSig::RealIsFalse
+            | ScalarFuncSig::RealIsNull
+            | ScalarFuncSig::DecimalIsTrue
+            | ScalarFuncSig::DecimalIsFalse
+            | ScalarFuncSig::DecimalIsNull
+            | ScalarFuncSig::StringIsNull
+            | ScalarFuncSig::TimeIsNull
+            | ScalarFuncSig::DurationIsNull
+            | ScalarFuncSig::JsonIsNull
+            | ScalarFuncSig::AbsInt
+            | ScalarFuncSig::AbsUInt
+            | ScalarFuncSig::AbsReal
+            | ScalarFuncSig::AbsDecimal
+            | ScalarFuncSig::CeilReal
+            | ScalarFuncSig::CeilIntToInt
+            | ScalarFuncSig::CeilIntToDec
+            | ScalarFuncSig::CeilDecToDec
+            | ScalarFuncSig::CeilDecToInt
+            | ScalarFuncSig::FloorReal
+            | ScalarFuncSig::FloorIntToInt
+            | ScalarFuncSig::FloorIntToDec
+            | ScalarFuncSig::FloorDecToDec
+            | ScalarFuncSig::FloorDecToInt
+            | ScalarFuncSig::JsonTypeSig
+            | ScalarFuncSig::JsonUnquoteSig
+            | ScalarFuncSig::BitNegSig => (1, 1),
 
-            ScalarFuncSig::IfInt |
-            ScalarFuncSig::IfReal |
-            ScalarFuncSig::IfString |
-            ScalarFuncSig::IfDecimal |
-            ScalarFuncSig::IfTime |
-            ScalarFuncSig::IfDuration |
-            ScalarFuncSig::IfJson |
-            ScalarFuncSig::LikeSig => (3, 3),
+            ScalarFuncSig::IfInt
+            | ScalarFuncSig::IfReal
+            | ScalarFuncSig::IfString
+            | ScalarFuncSig::IfDecimal
+            | ScalarFuncSig::IfTime
+            | ScalarFuncSig::IfDuration
+            | ScalarFuncSig::IfJson
+            | ScalarFuncSig::LikeSig => (3, 3),
 
             ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
 
-            ScalarFuncSig::CoalesceDecimal |
-            ScalarFuncSig::CoalesceDuration |
-            ScalarFuncSig::CoalesceInt |
-            ScalarFuncSig::CoalesceJson |
-            ScalarFuncSig::CoalesceReal |
-            ScalarFuncSig::CoalesceString |
-            ScalarFuncSig::CoalesceTime |
-            ScalarFuncSig::CaseWhenDecimal |
-            ScalarFuncSig::CaseWhenDuration |
-            ScalarFuncSig::CaseWhenInt |
-            ScalarFuncSig::CaseWhenJson |
-            ScalarFuncSig::CaseWhenReal |
-            ScalarFuncSig::CaseWhenString |
-            ScalarFuncSig::CaseWhenTime => (1, usize::MAX),
+            ScalarFuncSig::CoalesceDecimal
+            | ScalarFuncSig::CoalesceDuration
+            | ScalarFuncSig::CoalesceInt
+            | ScalarFuncSig::CoalesceJson
+            | ScalarFuncSig::CoalesceReal
+            | ScalarFuncSig::CoalesceString
+            | ScalarFuncSig::CoalesceTime
+            | ScalarFuncSig::CaseWhenDecimal
+            | ScalarFuncSig::CaseWhenDuration
+            | ScalarFuncSig::CaseWhenInt
+            | ScalarFuncSig::CaseWhenJson
+            | ScalarFuncSig::CaseWhenReal
+            | ScalarFuncSig::CaseWhenString
+            | ScalarFuncSig::CaseWhenTime => (1, usize::MAX),
 
-            ScalarFuncSig::JsonExtractSig |
-            ScalarFuncSig::JsonRemoveSig |
-            ScalarFuncSig::JsonMergeSig |
-            ScalarFuncSig::InInt |
-            ScalarFuncSig::InReal |
-            ScalarFuncSig::InString |
-            ScalarFuncSig::InDecimal |
-            ScalarFuncSig::InTime |
-            ScalarFuncSig::InDuration |
-            ScalarFuncSig::InJson => (2, usize::MAX),
+            ScalarFuncSig::JsonExtractSig
+            | ScalarFuncSig::JsonRemoveSig
+            | ScalarFuncSig::JsonMergeSig
+            | ScalarFuncSig::InInt
+            | ScalarFuncSig::InReal
+            | ScalarFuncSig::InString
+            | ScalarFuncSig::InDecimal
+            | ScalarFuncSig::InTime
+            | ScalarFuncSig::InDuration
+            | ScalarFuncSig::InJson => (2, usize::MAX),
 
-            ScalarFuncSig::JsonSetSig |
-            ScalarFuncSig::JsonInsertSig |
-            ScalarFuncSig::JsonReplaceSig => (3, usize::MAX),
+            ScalarFuncSig::JsonSetSig
+            | ScalarFuncSig::JsonInsertSig
+            | ScalarFuncSig::JsonReplaceSig => (3, usize::MAX),
         };
         if args < min_args || args > max_args {
             return Err(box_err!("unexpected arguments"));
         }
         let other_checks = match sig {
             ScalarFuncSig::JsonObjectSig => args & 1 == 0,
-            ScalarFuncSig::JsonSetSig |
-            ScalarFuncSig::JsonInsertSig |
-            ScalarFuncSig::JsonReplaceSig => args & 1 == 1,
+            ScalarFuncSig::JsonSetSig
+            | ScalarFuncSig::JsonInsertSig
+            | ScalarFuncSig::JsonReplaceSig => args & 1 == 1,
             _ => true,
         };
         if !other_checks {
@@ -325,7 +325,7 @@ macro_rules! dispatch_call {
                     $(ScalarFuncSig::$i_sig => {
                         match self.$i_func(ctx, row, $($i_arg)*) {
                             Ok(Some(i)) => {
-                                if mysql::has_unsigned_flag(self.tp.get_flag() as u64) {
+                                if mysql::has_unsigned_flag(u64::from(self.tp.get_flag())) {
                                     Ok(Datum::U64(i as u64))
                                 } else {
                                     Ok(Datum::I64(i))

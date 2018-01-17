@@ -334,8 +334,7 @@ impl RaftCfConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
-    #[serde(with = "config::recovery_mode_serde")]
-    pub wal_recovery_mode: DBRecoveryMode,
+    #[serde(with = "config::recovery_mode_serde")] pub wal_recovery_mode: DBRecoveryMode,
     pub wal_dir: String,
     pub wal_ttl_seconds: u64,
     pub wal_size_limit: ReadableSize,
@@ -418,15 +417,13 @@ impl DbConfig {
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         if !self.info_log_dir.is_empty() {
-            opts.create_info_log(&self.info_log_dir).unwrap_or_else(
-                |e| {
+            opts.create_info_log(&self.info_log_dir)
+                .unwrap_or_else(|e| {
                     panic!(
                         "create RocksDB info log {} error: {:?}",
-                        self.info_log_dir,
-                        e
+                        self.info_log_dir, e
                     );
-                },
-            )
+                })
         }
         if self.rate_bytes_per_sec.0 > 0 {
             opts.set_ratelimiter(self.rate_bytes_per_sec.0 as i64);
@@ -520,8 +517,7 @@ impl RaftDefaultCfConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct RaftDbConfig {
-    #[serde(with = "config::recovery_mode_serde")]
-    pub wal_recovery_mode: DBRecoveryMode,
+    #[serde(with = "config::recovery_mode_serde")] pub wal_recovery_mode: DBRecoveryMode,
     pub wal_dir: String,
     pub wal_ttl_seconds: u64,
     pub wal_size_limit: ReadableSize,
@@ -593,15 +589,13 @@ impl RaftDbConfig {
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         if !self.info_log_dir.is_empty() {
-            opts.create_info_log(&self.info_log_dir).unwrap_or_else(
-                |e| {
+            opts.create_info_log(&self.info_log_dir)
+                .unwrap_or_else(|e| {
                     panic!(
                         "create RocksDB info log {} error: {:?}",
-                        self.info_log_dir,
-                        e
+                        self.info_log_dir, e
                     );
-                },
-            )
+                })
         }
         opts.set_max_subcompactions(self.max_sub_compactions);
         opts.set_writable_file_max_buffer_size(self.writable_file_max_buffer_size.0 as i32);
@@ -657,15 +651,13 @@ pub enum LogLevel {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
-    #[serde(with = "LogLevel")]
-    pub log_level: LogLevelFilter,
+    #[serde(with = "LogLevel")] pub log_level: LogLevelFilter,
     pub log_file: String,
     pub server: ServerConfig,
     pub storage: StorageConfig,
     pub pd: PdConfig,
     pub metric: MetricConfig,
-    #[serde(rename = "raftstore")]
-    pub raft_store: RaftstoreConfig,
+    #[serde(rename = "raftstore")] pub raft_store: RaftstoreConfig,
     pub coprocessor: CopConfig,
     pub rocksdb: DbConfig,
     pub raftdb: RaftDbConfig,
@@ -711,9 +703,7 @@ impl TiKvConfig {
             config::canonicalize_sub_path(&self.storage.data_dir, DEFAULT_ROCKSDB_SUB_DIR)?;
 
         if kv_db_path == self.raft_store.raftdb_path {
-            return Err(
-                "raft_store.raftdb_path can not same with storage.data_dir/db".into(),
-            );
+            return Err("raft_store.raftdb_path can not same with storage.data_dir/db".into());
         }
         if db_exist(&kv_db_path) && !db_exist(&self.raft_store.raftdb_path) {
             return Err("default rocksdb exist, buf raftdb not exist".into());

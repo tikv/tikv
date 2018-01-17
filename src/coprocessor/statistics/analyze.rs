@@ -61,7 +61,7 @@ impl AnalyzeContext {
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();
                 let mut scanner = IndexScanExecutor::new_with_cols_len(
-                    req.get_num_columns() as i64,
+                    i64::from(req.get_num_columns()),
                     mem::replace(&mut self.ranges, Vec::new()),
                     self.snap.take().unwrap(),
                 );
@@ -138,7 +138,6 @@ impl AnalyzeContext {
         Ok(dt)
     }
 }
-
 
 struct SampleBuilder {
     data: TableScanExecutor,

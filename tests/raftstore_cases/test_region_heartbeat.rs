@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::thread::sleep;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -23,9 +24,7 @@ fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<
     }
     panic!(
         "got {:?}, want {} peers which should include {:?}",
-        peers,
-        count,
-        peer
+        peers, count, peer
     );
 }
 
@@ -91,7 +90,7 @@ fn test_server_down_peers() {
 }
 
 fn test_pending_peers<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
 
@@ -137,8 +136,7 @@ fn test_pending_peers<T: Simulator>(cluster: &mut Cluster<T>) {
         if tried_times > 100 {
             panic!(
                 "pending peer {:?} still exists after {} tries.",
-                pending_peers,
-                tried_times
+                pending_peers, tried_times
             );
         }
     }

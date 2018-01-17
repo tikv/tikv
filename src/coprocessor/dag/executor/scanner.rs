@@ -159,7 +159,7 @@ pub mod test {
 
     pub fn new_col_info(cid: i64, tp: u8) -> ColumnInfo {
         let mut col_info = ColumnInfo::new();
-        col_info.set_tp(tp as i32);
+        col_info.set_tp(i32::from(tp));
         col_info.set_column_id(cid);
         col_info
     }
