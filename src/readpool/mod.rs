@@ -93,7 +93,7 @@ impl ReadPool {
 
     // TODO: Support pool busy
 
-    pub fn async_execute(&self, mut task: Box<Task>, priority: Priority) -> BoxedFuture {
+    pub fn future_execute(&self, mut task: Box<Task>, priority: Priority) -> BoxedFuture {
         let pool = self.get_pool_by_priority(priority);
         box pool.spawn(task.build(&self.context))
     }
@@ -169,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn test_async_execute() {
+    fn test_future_execute() {
         struct FooTask {
             val: Option<Result>,
         }
@@ -196,7 +196,7 @@ mod tests {
 
         let (tx, rx) = channel();
         read_pool
-            .async_execute(
+            .future_execute(
                 box FooTask::from_value(vec![1, 2, 4]),
                 Priority::ReadCritical,
             )
@@ -206,7 +206,7 @@ mod tests {
         assert_eq!(rx.recv().unwrap(), 0);
 
         read_pool
-            .async_execute(box FooTask::from_err("foobar"), Priority::ReadCritical)
+            .future_execute(box FooTask::from_err("foobar"), Priority::ReadCritical)
             .then(expect_err(tx.clone(), "foobar", 1))
             .wait()
             .unwrap();
