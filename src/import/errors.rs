@@ -11,30 +11,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io;
-use std::result;
+use std::io::Error as IoError;
 use std::path::PathBuf;
+use std::result;
 
-use grpc;
+use grpc::Error as GrpcError;
 use uuid::ParseError;
 use futures::sync::oneshot::Canceled;
 
-use util::codec;
+use util::codec::Error as CodecError;
 
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Io(err: io::Error) {
+        Io(err: IoError) {
             from()
             cause(err)
             description(err.description())
         }
-        Grpc(err: grpc::Error) {
+        Grpc(err: GrpcError) {
             from()
             cause(err)
             description(err.description())
         }
         Uuid(err: ParseError) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        Codec(err: CodecError) {
             from()
             cause(err)
             description(err.description())
@@ -46,11 +51,6 @@ quick_error! {
         RocksDB(msg: String) {
             from()
             display("RocksDB {}", msg)
-        }
-        Codec(err: codec::Error) {
-            from()
-            cause(err)
-            description(err.description())
         }
         FileExists(path: PathBuf) {
             display("File {:?} exists", path)
