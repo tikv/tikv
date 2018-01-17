@@ -126,6 +126,26 @@ mod tests {
         }
     }
 
+    pub fn expect_get_vals(
+        done: Sender<i32>,
+        v: Vec<Option<storage::KvPair>>,
+        id: i32,
+    ) -> Box<boxed::FnBox(Result) -> future::FutureResult<(), ()>> {
+        box move |x: Result| {
+            assert!(x.is_ok());
+            match x.unwrap() {
+                Value::StorageMultiKvpairs(val) => {
+                    let val: Vec<Option<storage::KvPair>> =
+                        val.into_iter().map(storage::Result::ok).collect();
+                    assert_eq!(val, v);
+                }
+                _ => unreachable!(),
+            }
+            done.send(id).unwrap();
+            future::ok(())
+        }
+    }
+
     pub fn expect_get_none(
         done: Sender<i32>,
         id: i32,

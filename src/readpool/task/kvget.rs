@@ -76,6 +76,7 @@ mod tests {
             engine: storage.get_engine(),
         };
 
+        // key not found
         KvGetTask {
             request_context: kvrpcpb::Context::new(),
             key: b"x".to_vec(),
@@ -86,6 +87,7 @@ mod tests {
             .unwrap();
         assert_eq!(rx.recv().unwrap(), 0);
 
+        // write
         storage
             .async_prewrite(
                 kvrpcpb::Context::new(),
@@ -117,6 +119,7 @@ mod tests {
             .unwrap();
         assert_eq!(rx.recv().unwrap(), 2);
 
+        // key not found (start_ts)
         KvGetTask {
             request_context: kvrpcpb::Context::new(),
             key: b"x".to_vec(),
@@ -127,6 +130,7 @@ mod tests {
             .unwrap();
         assert_eq!(rx.recv().unwrap(), 3);
 
+        // found
         KvGetTask {
             request_context: kvrpcpb::Context::new(),
             key: b"x".to_vec(),

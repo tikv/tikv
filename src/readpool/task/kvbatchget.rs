@@ -53,7 +53,7 @@ impl Task for KvBatchGetTask {
                         .into_iter()
                         .zip(keys)
                         .filter(|&(ref v, ref _k)|
-                            v.is_ok() && v.as_ref().unwrap().is_none()
+                            !(v.is_ok() && v.as_ref().unwrap().is_none())
                         )
                         .map(|(v, k)| match v {
                             Ok(Some(x)) => Ok((k.raw().unwrap(), x)),
@@ -69,4 +69,86 @@ impl Task for KvBatchGetTask {
             .map_err(Error::from)
             .map(Value::StorageMultiKvpairs)
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc::channel;
+    use futures::Future;
+
+    use storage;
+    use kvproto::kvrpcpb;
+
+    use super::super::tests::*;
+
+    #[test]
+    fn test_batch_get() {
+        let storage_config = storage::Config::default();
+        let mut storage = storage::Storage::new(&storage_config).unwrap();
+        storage.start(&storage_config).unwrap();
+
+        let (tx, rx) = channel();
+
+        let task_context = WorkerThreadContext {
+            engine: storage.get_engine(),
+        };
+
+        // write
+        storage
+            .async_prewrite(
+                kvrpcpb::Context::new(),
+                vec![
+                    storage::Mutation::Put((storage::make_key(b"a"), b"aa".to_vec())),
+                    storage::Mutation::Put((storage::make_key(b"b"), b"bb".to_vec())),
+                    storage::Mutation::Put((storage::make_key(b"c"), b"cc".to_vec())),
+                ],
+                b"a".to_vec(),
+                1,
+                storage::Options::default(),
+                {
+                    let tx = tx.clone();
+                    box move |_| tx.send(0).unwrap()
+                },
+            )
+            .unwrap();
+        assert_eq!(rx.recv().unwrap(), 0);
+
+        storage
+            .async_commit(
+                kvrpcpb::Context::new(),
+                vec![
+                    storage::make_key(b"a"),
+                    storage::make_key(b"b"),
+                    storage::make_key(b"c"),
+                ],
+                1,
+                2,
+                {
+                    let tx = tx.clone();
+                    box move |_| tx.send(1).unwrap()
+                },
+            )
+            .unwrap();
+        assert_eq!(rx.recv().unwrap(), 1);
+
+        // found
+        KvBatchGetTask {
+            request_context: kvrpcpb::Context::new(),
+            keys: vec![b"c".to_vec(), b"x".to_vec(), b"a".to_vec(), b"b".to_vec()],
+            start_ts: 5,
+        }.build(&task_context)
+            .then(expect_get_vals(
+                tx.clone(),
+                vec![
+                    Some((b"c".to_vec(), b"cc".to_vec())),
+                    Some((b"a".to_vec(), b"aa".to_vec())),
+                    Some((b"b".to_vec(), b"bb".to_vec())),
+                ],
+                2,
+            ))
+            .wait()
+            .unwrap();
+        assert_eq!(rx.recv().unwrap(), 2);
+    }
+
 }

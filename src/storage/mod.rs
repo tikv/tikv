@@ -1225,14 +1225,19 @@ mod tests {
         storage
             .async_batch_get(
                 Context::new(),
-                vec![make_key(b"a"), make_key(b"b"), make_key(b"c")],
+                vec![
+                    make_key(b"c"),
+                    make_key(b"x"),
+                    make_key(b"a"),
+                    make_key(b"b"),
+                ],
                 5,
                 expect_batch_get_vals(
                     tx.clone(),
                     vec![
+                        Some((b"c".to_vec(), b"cc".to_vec())),
                         Some((b"a".to_vec(), b"aa".to_vec())),
                         Some((b"b".to_vec(), b"bb".to_vec())),
-                        Some((b"c".to_vec(), b"cc".to_vec())),
                     ],
                     2,
                 ),
