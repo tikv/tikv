@@ -93,7 +93,7 @@ impl ReadPool {
 
     // TODO: Support pool busy
 
-    pub fn future_execute(&self, mut task: Box<Task>, priority: Priority) -> BoxedFuture {
+    pub fn future_execute(&self, priority: Priority, mut task: Box<Task>) -> BoxedFuture {
         let pool = self.get_pool_by_priority(priority);
         box pool.spawn(task.build(&self.context))
     }
@@ -197,8 +197,8 @@ mod tests {
         let (tx, rx) = channel();
         read_pool
             .future_execute(
-                box FooTask::from_value(vec![1, 2, 4]),
                 Priority::ReadCritical,
+                box FooTask::from_value(vec![1, 2, 4]),
             )
             .then(expect_get_val(tx.clone(), vec![1, 2, 4], 0))
             .wait()
@@ -206,7 +206,7 @@ mod tests {
         assert_eq!(rx.recv().unwrap(), 0);
 
         read_pool
-            .future_execute(box FooTask::from_err("foobar"), Priority::ReadCritical)
+            .future_execute(Priority::ReadCritical, box FooTask::from_err("foobar"))
             .then(expect_err(tx.clone(), "foobar", 1))
             .wait()
             .unwrap();
