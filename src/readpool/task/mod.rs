@@ -12,6 +12,7 @@
 // limitations under the License.
 
 pub mod kvget;
+pub mod kvbatchget;
 
 use std::result;
 use std::error;
