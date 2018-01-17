@@ -37,6 +37,7 @@ use pd::PdTask;
 
 use super::codec::mysql;
 use super::codec::datum::Datum;
+use super::codec::table::check_table_ranges;
 use super::dag::DAGContext;
 use super::statistics::analyze::AnalyzeContext;
 use super::metrics::*;
@@ -327,7 +328,9 @@ impl RequestTask {
                 let mut is = CodedInputStream::from_bytes(req.get_data());
                 is.set_recursion_limit(recursion_limit);
                 let mut dag = DAGRequest::new();
-                if let Err(e) = dag.merge_from(&mut is) {
+                if let Err(e) = check_table_ranges(req.get_ranges()) {
+                    Err(box_err!(e))
+                } else if let Err(e) = dag.merge_from(&mut is) {
                     Err(box_err!(e))
                 } else {
                     start_ts = Some(dag.get_start_ts());
@@ -343,7 +346,9 @@ impl RequestTask {
                 let mut is = CodedInputStream::from_bytes(req.get_data());
                 is.set_recursion_limit(recursion_limit);
                 let mut analyze = AnalyzeReq::new();
-                if let Err(e) = analyze.merge_from(&mut is) {
+                if let Err(e) = check_table_ranges(req.get_ranges()) {
+                    Err(box_err!(e))
+                } else if let Err(e) = analyze.merge_from(&mut is) {
                     Err(box_err!(e))
                 } else {
                     start_ts = Some(analyze.get_start_ts());
@@ -667,6 +672,7 @@ impl TiDbEndPoint {
         if let Err(e) = t.check_outdated() {
             return on_error(e, t);
         }
+
         let resp = match t.cop_req.take().unwrap() {
             Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t, batch_row_limit),
             Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t),
