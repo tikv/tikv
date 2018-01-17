@@ -26,6 +26,7 @@ use raftstore::store::{Engines, SnapManager};
 
 use super::{Config, Result};
 use coprocessor::{EndPointHost, EndPointTask};
+use readpool::ReadPool;
 use super::service::*;
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::resolve::StoreAddrResolver;
@@ -83,8 +84,11 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             .create();
         let snap_worker = Worker::new("snap-handler");
 
+        let read_pool = ReadPool::new(cfg, storage.get_engine());
+
         let kv_service = KvService::new(
             storage.clone(),
+            read_pool,
             end_point_worker.scheduler(),
             raft_router.clone(),
             snap_worker.scheduler(),

@@ -42,6 +42,7 @@ use server::metrics::*;
 use server::Error;
 use raftstore::store::{Callback, Msg as StoreMessage};
 use coprocessor::{EndPointTask, RequestTask};
+use readpool::{self, ReadPool};
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 
@@ -49,6 +50,8 @@ const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 pub struct Service<T: RaftStoreRouter + 'static> {
     // For handling KV requests.
     storage: Storage,
+    // Pools for executing reads
+    read_pool: ReadPool,
     // For handling coprocessor requests.
     end_point_scheduler: Scheduler<EndPointTask>,
     // For handling raft messages.
@@ -62,6 +65,7 @@ pub struct Service<T: RaftStoreRouter + 'static> {
 impl<T: RaftStoreRouter + 'static> Service<T> {
     pub fn new(
         storage: Storage,
+        read_pool: ReadPool,
         end_point_scheduler: Scheduler<EndPointTask>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
@@ -69,6 +73,7 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
     ) -> Service<T> {
         Service {
             storage: storage,
+            read_pool,
             end_point_scheduler: end_point_scheduler,
             ch: ch,
             snap_scheduler: snap_scheduler,
@@ -104,34 +109,33 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        let (cb, future) = make_callback();
-        let res = self.storage.async_get(
-            req.take_context(),
-            Key::from_raw(req.get_key()),
-            req.get_version(),
-            cb,
-        );
-        if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
-            return;
-        }
-
-        let future = future
-            .map_err(Error::from)
-            .map(|v| {
+        let future = self.read_pool
+            .future_execute(
+                readpool::Priority::ReadCritical,
+                box readpool::KvGetTask {
+                    request_context: req.take_context(),
+                    key: req.get_key().to_vec(),
+                    start_ts: req.get_version(),
+                },
+            )
+            .then(|r| {
                 let mut res = GetResponse::new();
-                if let Some(err) = extract_region_error(&v) {
-                    res.set_region_error(err);
-                } else {
-                    match v {
-                        Ok(Some(val)) => res.set_value(val),
-                        Ok(None) => res.set_value(vec![]),
-                        Err(e) => res.set_error(extract_key_error(&e)),
+                match r {
+                    Ok(readpool::Value::StorageValue(v)) => match v {
+                        Some(val) => res.set_value(val),
+                        None => res.set_value(vec![]),
+                    },
+                    Err(readpool::Error::Storage(e)) => {
+                        if let Some(err) = extract_region_error_from_err(&e) {
+                            res.set_region_error(err);
+                        } else {
+                            res.set_error(extract_key_error(&e));
+                        }
                     }
+                    _ => unreachable!(),
                 }
-                res
+                sink.success(res).map_err(Error::from)
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", label, e);
@@ -1004,22 +1008,28 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
     }
 }
 
-fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
-    use storage::Error;
-    match *res {
+fn extract_region_error_from_err(err: &storage::Error) -> Option<RegionError> {
+    match *err {
         // TODO: use `Error::cause` instead.
-        Err(Error::Engine(EngineError::Request(ref e)))
-        | Err(Error::Txn(TxnError::Engine(EngineError::Request(ref e))))
-        | Err(Error::Txn(TxnError::Mvcc(MvccError::Engine(EngineError::Request(ref e))))) => {
+        storage::Error::Engine(EngineError::Request(ref e))
+        | storage::Error::Txn(TxnError::Engine(EngineError::Request(ref e)))
+        | storage::Error::Txn(TxnError::Mvcc(MvccError::Engine(EngineError::Request(ref e)))) => {
             Some(e.to_owned())
         }
-        Err(Error::SchedTooBusy) => {
+        storage::Error::SchedTooBusy => {
             let mut err = RegionError::new();
             let mut server_is_busy_err = ServerIsBusy::new();
             server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
             err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }
+        _ => None,
+    }
+}
+
+fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
+    match *res {
+        Err(ref err) => extract_region_error_from_err(err),
         _ => None,
     }
 }
