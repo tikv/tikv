@@ -60,22 +60,22 @@ impl ReadPool {
             pool_read_critical: CpuPoolBuilder::new()
                 .name_prefix("readpool-c")
                 .pool_size(config.readpool_read_critical_concurrency)
-                // .stack_size(config.readpool_stack_size.0 as usize)
+                .stack_size(config.readpool_stack_size.0 as usize)
                 .create(),
             pool_read_high: CpuPoolBuilder::new()
                 .name_prefix("readpool-h")
                 .pool_size(config.readpool_read_high_concurrency)
-                // .stack_size(config.readpool_stack_size.0 as usize)
+                .stack_size(config.readpool_stack_size.0 as usize)
                 .create(),
             pool_read_normal: CpuPoolBuilder::new()
                 .name_prefix("readpool-n")
                 .pool_size(config.readpool_read_normal_concurrency)
-                // .stack_size(config.readpool_stack_size.0 as usize)
+                .stack_size(config.readpool_stack_size.0 as usize)
                 .create(),
             pool_read_low: CpuPoolBuilder::new()
                 .name_prefix("readpool-l")
                 .pool_size(config.readpool_read_low_concurrency)
-                // .stack_size(config.readpool_stack_size.0 as usize)
+                .stack_size(config.readpool_stack_size.0 as usize)
                 .create(),
             context: WorkerThreadContext { engine },
         }
