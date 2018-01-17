@@ -21,6 +21,7 @@ use server::Config;
 pub use self::task::{BoxedFuture, Error, Priority, Result, Task, Value};
 pub use self::task::kvget::*;
 pub use self::task::kvbatchget::*;
+pub use self::task::coprocessor::*;
 
 pub struct WorkerThreadContext {
     engine: Box<Engine>,

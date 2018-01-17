@@ -19,9 +19,23 @@ use kvproto::kvrpcpb;
 use super::*;
 
 pub struct KvBatchGetTask {
-    pub request_context: kvrpcpb::Context,
-    pub keys: Vec<Vec<u8>>,
-    pub start_ts: u64,
+    request_context: kvrpcpb::Context,
+    keys: Vec<Vec<u8>>,
+    start_ts: u64,
+}
+
+impl KvBatchGetTask {
+    pub fn new(
+        request_context: kvrpcpb::Context,
+        keys: Vec<Vec<u8>>,
+        start_ts: u64,
+    ) -> KvBatchGetTask {
+        KvBatchGetTask {
+            request_context,
+            keys,
+            start_ts,
+        }
+    }
 }
 
 impl Task for KvBatchGetTask {
@@ -132,11 +146,11 @@ mod tests {
         assert_eq!(rx.recv().unwrap(), 1);
 
         // found
-        KvBatchGetTask {
-            request_context: kvrpcpb::Context::new(),
-            keys: vec![b"c".to_vec(), b"x".to_vec(), b"a".to_vec(), b"b".to_vec()],
-            start_ts: 5,
-        }.build(&task_context)
+        KvBatchGetTask::new(
+            kvrpcpb::Context::new(),
+            vec![b"c".to_vec(), b"x".to_vec(), b"a".to_vec(), b"b".to_vec()],
+            5,
+        ).build(&task_context)
             .then(expect_get_vals(
                 tx.clone(),
                 vec![

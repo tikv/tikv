@@ -19,9 +19,19 @@ use kvproto::kvrpcpb;
 use super::*;
 
 pub struct KvGetTask {
-    pub request_context: kvrpcpb::Context,
-    pub key: Vec<u8>,
-    pub start_ts: u64,
+    request_context: kvrpcpb::Context,
+    key: Vec<u8>,
+    start_ts: u64,
+}
+
+impl KvGetTask {
+    pub fn new(request_context: kvrpcpb::Context, key: Vec<u8>, start_ts: u64) -> KvGetTask {
+        KvGetTask {
+            request_context,
+            key,
+            start_ts,
+        }
+    }
 }
 
 impl Task for KvGetTask {
@@ -77,11 +87,8 @@ mod tests {
         };
 
         // key not found
-        KvGetTask {
-            request_context: kvrpcpb::Context::new(),
-            key: b"x".to_vec(),
-            start_ts: 100,
-        }.build(&task_context)
+        KvGetTask::new(kvrpcpb::Context::new(), b"x".to_vec(), 100)
+            .build(&task_context)
             .then(expect_get_none(tx.clone(), 0))
             .wait()
             .unwrap();
@@ -120,22 +127,16 @@ mod tests {
         assert_eq!(rx.recv().unwrap(), 2);
 
         // key not found (start_ts)
-        KvGetTask {
-            request_context: kvrpcpb::Context::new(),
-            key: b"x".to_vec(),
-            start_ts: 100,
-        }.build(&task_context)
+        KvGetTask::new(kvrpcpb::Context::new(), b"x".to_vec(), 100)
+            .build(&task_context)
             .then(expect_get_none(tx.clone(), 3))
             .wait()
             .unwrap();
         assert_eq!(rx.recv().unwrap(), 3);
 
         // found
-        KvGetTask {
-            request_context: kvrpcpb::Context::new(),
-            key: b"x".to_vec(),
-            start_ts: 101,
-        }.build(&task_context)
+        KvGetTask::new(kvrpcpb::Context::new(), b"x".to_vec(), 101)
+            .build(&task_context)
             .then(expect_get_val(tx.clone(), b"100".to_vec(), 4))
             .wait()
             .unwrap();
