@@ -128,10 +128,12 @@ impl DAGContext {
                     // it cannot be cached.
                     if self.can_cache_with_size(&data) {
                         debug!("Cache It: {}, region_id: {}", &self.cache_key, region_id);
-                        DISTSQL_CACHE
-                            .lock()
-                            .unwrap()
-                            .put(region_id, self.cache_key.clone(), version, data.clone());
+                        DISTSQL_CACHE.lock().unwrap().put(
+                            region_id,
+                            self.cache_key.clone(),
+                            version,
+                            data.clone(),
+                        );
                         CORP_DISTSQL_CACHE_COUNT.with_label_values(&["miss"]).inc();
                     }
                     resp.set_data(data);

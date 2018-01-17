@@ -112,7 +112,7 @@ impl DistSQLCache {
 
         let key_size = k.len();
         if self.map.contains_key(&k) {
-            let mut entry = self.map.get_mut(&k).unwrap();
+            let entry = self.map.get_mut(&k).unwrap();
             let size_diff = entry.update(region_id, version, key_size, res);
             self.size += size_diff;
         } else {
@@ -270,7 +270,7 @@ impl DistSQLCache {
     }
 
     pub fn disable_region_cache(&mut self, region_id: u64) {
-        let mut entry = self.regions
+        let entry = self.regions
             .entry(region_id)
             .or_insert_with(Default::default);
         entry.enable = false;
@@ -285,7 +285,7 @@ impl DistSQLCache {
     }
 
     fn update_regions(&mut self, region_id: u64, k: DistSQLCacheKey) {
-        let mut opt = self.regions
+        let opt = self.regions
             .entry(region_id)
             .or_insert_with(Default::default);
         opt.cached_items.insert(k, 1);
