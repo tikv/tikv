@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -24,6 +23,7 @@ use uuid::Uuid;
 use kvproto::importpb::*;
 use rocksdb::{IngestExternalFileOptions, DB};
 
+use util::collections::HashMap;
 use util::rocksdb::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
 
 use super::{Error, Result};
@@ -41,7 +41,7 @@ impl SSTImporter {
         Ok(SSTImporter {
             dir: ImportDir::new(root)?,
             token: AtomicUsize::new(1),
-            files: Mutex::new(HashMap::new()),
+            files: Mutex::new(HashMap::default()),
         })
     }
 
