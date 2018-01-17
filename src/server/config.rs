@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ascii::AsciiExt;
-
 use sys_info;
 
 use util::collections::HashMap;
@@ -24,8 +22,8 @@ pub use raftstore::store::Config as RaftStoreConfig;
 pub use storage::Config as StorageConfig;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
-pub const DEFAULT_LISTENING_ADDR: &'static str = "127.0.0.1:20160";
-const DEFAULT_ADVERTISE_LISTENING_ADDR: &'static str = "";
+pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
+const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_NOTIFY_CAPACITY: usize = 40960;
 const DEFAULT_GRPC_CONCURRENCY: usize = 4;
 const DEFAULT_GRPC_CONCURRENT_STREAM: usize = 1024;
@@ -49,8 +47,7 @@ pub const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    #[serde(skip)]
-    pub cluster_id: u64,
+    #[serde(skip)] pub cluster_id: u64,
 
     // Server listening address.
     pub addr: String,
@@ -72,15 +69,14 @@ pub struct Config {
     pub snap_max_write_bytes_per_sec: ReadableSize,
 
     // Server labels to specify some attributes about this server.
-    #[serde(with = "config::order_map_serde")]
-    pub labels: HashMap<String, String>,
+    #[serde(with = "config::order_map_serde")] pub labels: HashMap<String, String>,
 }
 
 impl Default for Config {
     fn default() -> Config {
         let cpu_num = sys_info::cpu_num().unwrap();
         let concurrency = if cpu_num > 8 {
-            (cpu_num as f64 * 0.8) as usize
+            (f64::from(cpu_num) * 0.8) as usize
         } else {
             4
         };
@@ -229,14 +225,7 @@ mod tests {
         }
 
         let valid_cases = vec![
-            "a",
-            "0",
-            "a.1-2",
-            "Cab",
-            "abC",
-            "b_1.2",
-            "cab-012",
-            "3ac.8b2",
+            "a", "0", "a.1-2", "Cab", "abC", "b_1.2", "cab-012", "3ac.8b2"
         ];
 
         for case in valid_cases {

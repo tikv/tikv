@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::fs;
 use std::time::{Duration, Instant};
 use std::sync::{Arc, Mutex, RwLock};
@@ -35,7 +34,7 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(500);
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
 
@@ -63,10 +62,10 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let value = format!("{:01024}", 0);
     must_get_equal(&engine_2, key.as_bytes(), value.as_bytes());
     let stale = Arc::new(AtomicBool::new(false));
-    cluster
-        .sim
-        .wl()
-        .add_recv_filter(3, box LeadingDuplicatedSnapshotFilter::new(stale.clone()));
+    cluster.sim.wl().add_recv_filter(
+        3,
+        box LeadingDuplicatedSnapshotFilter::new(Arc::clone(&stale)),
+    );
     pd_client.must_add_peer(r1, new_peer(3, 3));
     let mut i = 2 * 1024;
     loop {
@@ -109,7 +108,7 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(2);
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
     let r1 = cluster.run_conf_change();
@@ -210,7 +209,7 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     // Disable raft log gc in this test case.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
 
@@ -322,8 +321,8 @@ impl Filter<RaftMessage> for Arc<StaleSnap> {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         let mut res = Vec::with_capacity(msgs.len());
         for mut m in msgs.drain(..) {
-            if m.get_message().get_msg_type() == MessageType::MsgSnapshot &&
-                m.get_to_peer().get_store_id() == 3
+            if m.get_message().get_msg_type() == MessageType::MsgSnapshot
+                && m.get_to_peer().get_store_id() == 3
             {
                 if self.first_snap.rl().is_none() {
                     *self.first_snap.wl() = Some(m.take_message());
@@ -351,7 +350,7 @@ fn test_node_stale_snap() {
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
 
@@ -413,8 +412,8 @@ impl Filter<Msg> for SnapshotAppendFilter {
             if let Msg::RaftMessage(ref msg) = m {
                 should_collect =
                     !stale && msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
-                stale = !pending_msg.is_empty() &&
-                    msg.get_message().get_msg_type() == MessageType::MsgAppend;
+                stale = !pending_msg.is_empty()
+                    && msg.get_message().get_msg_type() == MessageType::MsgAppend;
             }
             if should_collect {
                 pending_msg.push(m);
@@ -438,7 +437,7 @@ fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
     cluster.run();

@@ -85,7 +85,7 @@ impl Duration {
     }
 
     pub fn to_secs(&self) -> f64 {
-        let res = self.dur.as_secs() as f64 + self.dur.subsec_nanos() as f64 * 10e-9;
+        let res = self.dur.as_secs() as f64 + f64::from(self.dur.subsec_nanos()) * 10e-9;
         if self.neg {
             -res
         } else {
@@ -98,7 +98,7 @@ impl Duration {
     }
 
     pub fn to_nanos(&self) -> i64 {
-        let nanos = self.dur.as_secs() as i64 * NANOS_PER_SEC + self.dur.subsec_nanos() as i64;
+        let nanos = self.dur.as_secs() as i64 * NANOS_PER_SEC + i64::from(self.dur.subsec_nanos());
         if self.neg {
             -nanos
         } else {
@@ -153,7 +153,7 @@ impl Duration {
         s = parts.next().unwrap();
         if let Some(frac_part) = parts.next() {
             frac = parse_frac(frac_part, fsp)?;
-            frac *= 10u32.pow(NANO_WIDTH - fsp as u32);
+            frac *= 10u32.pow(NANO_WIDTH - u32::from(fsp));
         }
 
         let mut parts = s.splitn(2, |c| *c == b':');
@@ -207,7 +207,7 @@ impl Duration {
         )?;
         if self.fsp > 0 {
             write!(buf, ".")?;
-            let nanos = self.micro_secs() / (10u32.pow(NANO_WIDTH - self.fsp as u32));
+            let nanos = self.micro_secs() / (10u32.pow(NANO_WIDTH - u32::from(self.fsp)));
             write!(buf, "{:01$}", nanos, self.fsp as usize)?;
         }
         let d = unsafe { str::from_utf8_unchecked(&buf).parse()? };
@@ -221,9 +221,9 @@ impl Duration {
             return Ok(());
         }
         self.fsp = fsp;
-        let nanos =
-            self.dur.subsec_nanos() as f64 / (10u32.pow(NANO_WIDTH - self.fsp as u32) as f64);
-        let nanos = (nanos.round() as u32) * (10u32.pow(NANO_WIDTH - self.fsp as u32));
+        let nanos = f64::from(self.dur.subsec_nanos())
+            / f64::from(10u32.pow(NANO_WIDTH - u32::from(self.fsp)));
+        let nanos = (nanos.round() as u32) * (10u32.pow(NANO_WIDTH - u32::from(self.fsp)));
         self.dur = StdDuration::new(self.dur.as_secs(), nanos);
         Ok(())
     }
@@ -243,7 +243,7 @@ impl Display for Duration {
         )?;
         if self.fsp > 0 {
             write!(formatter, ".")?;
-            let nanos = self.micro_secs() / (10u32.pow(NANO_WIDTH - self.fsp as u32));
+            let nanos = self.micro_secs() / (10u32.pow(NANO_WIDTH - u32::from(self.fsp)));
             write!(formatter, "{:01$}", nanos, self.fsp as usize)?;
         }
         Ok(())
