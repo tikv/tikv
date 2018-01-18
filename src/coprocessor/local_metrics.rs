@@ -118,7 +118,7 @@ pub struct ScanDetails {
 
 impl ScanDetails {
     pub fn add(&mut self, type_str: &'static str, other: &Statistics) {
-        let mut statics = self.data.entry(type_str).or_insert_with(Default::default);
+        let statics = self.data.entry(type_str).or_insert_with(Default::default);
         statics.add_statistics(other);
     }
 
@@ -267,10 +267,10 @@ impl BasicLocalMetrics {
     }
 
     pub fn add_pending_reqs(&mut self, type_str: &'static str, pri: &'static str, count: i64) {
-        let mut v = self.pending_cnt
+        let v = self.pending_cnt
             .entry(type_str)
             .or_insert_with(Default::default);
-        let mut data = v.entry(pri).or_insert(0);
+        let data = v.entry(pri).or_insert(0);
         *data += count
     }
 }

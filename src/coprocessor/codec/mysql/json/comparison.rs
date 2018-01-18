@@ -49,7 +49,7 @@ impl Json {
             Json::U64(d) => Ok(d as f64),
             Json::Boolean(_) => {
                 let v = self.as_literal()?;
-                Ok(v as f64)
+                Ok(v.into())
             }
             _ => Err(invalid_type!(
                 "{:?} from {} to f64",

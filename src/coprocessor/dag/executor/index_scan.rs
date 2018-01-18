@@ -27,7 +27,6 @@ use storage::{Key, SnapshotStore};
 use super::{Executor, Row};
 use super::scanner::{ScanOn, Scanner};
 
-
 pub struct IndexScanExecutor {
     store: SnapshotStore,
     desc: bool,

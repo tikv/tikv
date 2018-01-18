@@ -104,8 +104,8 @@ impl TopNExecutor {
                 row.handle,
                 row.data,
                 ob_values,
-                self.order_by.items.clone(),
-                self.ctx.clone(),
+                Arc::clone(&self.order_by.items),
+                Arc::clone(&self.ctx),
             )?;
         }
         Ok(())
@@ -145,7 +145,6 @@ impl Executor for TopNExecutor {
         }
     }
 }
-
 
 #[cfg(test)]
 pub mod test {
@@ -278,11 +277,11 @@ pub mod test {
             let row_data = RowColsDict::new(HashMap::default(), data.into_bytes());
             topn_heap
                 .try_add_row(
-                    handle as i64,
+                    i64::from(handle),
                     row_data,
                     ob_values,
-                    order_cols.clone(),
-                    ctx.clone(),
+                    Arc::clone(&order_cols),
+                    Arc::clone(&ctx),
                 )
                 .unwrap();
         }
@@ -311,8 +310,8 @@ pub mod test {
                 0 as i64,
                 row_data,
                 ob_values1,
-                order_cols.clone(),
-                ctx.clone(),
+                Arc::clone(&order_cols),
+                Arc::clone(&ctx),
             )
             .unwrap();
 
@@ -323,8 +322,8 @@ pub mod test {
                 0 as i64,
                 row_data2,
                 ob_values2,
-                order_cols.clone(),
-                ctx.clone(),
+                Arc::clone(&order_cols),
+                Arc::clone(&ctx),
             )
             .unwrap();
 
@@ -337,8 +336,8 @@ pub mod test {
                     0 as i64,
                     row_data3,
                     bad_key1,
-                    order_cols.clone(),
-                    ctx.clone()
+                    Arc::clone(&order_cols),
+                    Arc::clone(&ctx)
                 )
                 .is_err()
         );

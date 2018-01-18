@@ -53,21 +53,19 @@ fn test_node_bootstrap_with_prepared_data() {
     let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp_path = TempDir::new("test_cluster").unwrap();
-    let engine = Arc::new(
-        rocksdb::new_engine(tmp_path.path().to_str().unwrap(), ALL_CFS, None).unwrap(),
-    );
+    let engine =
+        Arc::new(rocksdb::new_engine(tmp_path.path().to_str().unwrap(), ALL_CFS, None).unwrap());
     let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
-    let raft_engine = Arc::new(
-        rocksdb::new_engine(tmp_path_raft.to_str().unwrap(), &[], None).unwrap(),
-    );
-    let engines = Engines::new(engine.clone(), raft_engine.clone());
+    let raft_engine =
+        Arc::new(rocksdb::new_engine(tmp_path_raft.to_str().unwrap(), &[], None).unwrap());
+    let engines = Engines::new(Arc::clone(&engine), Arc::clone(&raft_engine));
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
 
     let mut node = Node::new(
         &mut event_loop,
         &cfg.server,
         &cfg.raft_store,
-        pd_client.clone(),
+        Arc::clone(&pd_client),
     );
     let snap_mgr = SnapManager::new(
         tmp_mgr.path().to_str().unwrap(),
@@ -77,9 +75,8 @@ fn test_node_bootstrap_with_prepared_data() {
     let (_, snapshot_status_receiver) = mpsc::channel();
     let pd_worker = FutureWorker::new("test-pd-worker");
 
-
     // assume there is a node has bootstrapped the cluster and add region in pd successfully
-    bootstrap_with_first_region(pd_client.clone()).unwrap();
+    bootstrap_with_first_region(Arc::clone(&pd_client)).unwrap();
 
     // now anthoer node at same time begin bootstrap node, but panic after prepared bootstrap
     // now rocksDB must have some prepare data
@@ -113,8 +110,7 @@ fn test_node_bootstrap_with_prepared_data() {
         coprocessor_host,
     ).unwrap();
     assert!(
-        engine
-            .clone()
+        Arc::clone(&engine)
             .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
             .is_none()

@@ -145,7 +145,6 @@ fn test_analyze_column() {
     end_point.stop().unwrap().join().unwrap();
 }
 
-
 #[test]
 fn test_analyze_index_with_lock() {
     let data = vec![
