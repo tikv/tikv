@@ -29,6 +29,8 @@ use coprocessor::endpoint::{get_pk, to_pb_error, ReqContext};
 use storage::{Snapshot, SnapshotStore, Statistics};
 
 use super::executor::{build_exec, Executor, Row};
+use crypto::sha1::Sha1;
+use crypto::digest::Digest;
 
 pub struct DAGContext {
     columns: Arc<Vec<ColumnInfo>>,
@@ -63,7 +65,9 @@ impl DAGContext {
             req_ctx.isolation_level,
             req_ctx.fill_cache,
         );
-        let cache_key = format!("{:?}, {:?}", ranges, req.get_executors());
+        let mut hasher = Sha1::new();
+        hasher.input_str(&format!("{:?}, {:?}", ranges, req.get_executors()));
+        let cache_key = hasher.result_str();
 
         let dag_executor = build_exec(req.take_executors().into_vec(), store, ranges, eval_ctx)?;
         Ok(DAGContext {
