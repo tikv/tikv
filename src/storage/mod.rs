@@ -600,7 +600,8 @@ impl Storage {
             .future_execute(readpool::Priority::ReadCritical, move |_ctx| {
                 engine
                     .future_snapshot(&ctx)
-                    // map storage::engine::Error -> storage::Error
+                    // map storage::engine::Error -> storage::txn::Error -> storage::Error
+                    .map_err(txn::Error::from)
                     .map_err(Error::from)
                     .and_then(move |snapshot: Box<Snapshot>| {
                         // TODO: Collect statistics
