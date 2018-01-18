@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::error::Error;
-use std::path::Path;
 use std::usize;
 
 use log::LogLevelFilter;
@@ -26,7 +25,7 @@ use pd::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::keys::region_raft_prefix_len;
-use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_DATA_DIR,
+use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
               DEFAULT_ROCKSDB_SUB_DIR};
 use util::config::{self, compression_type_level_serde, ReadableDuration, ReadableSize, GB, KB, MB};
 use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
@@ -357,7 +356,6 @@ pub struct DbConfig {
     pub writable_file_max_buffer_size: ReadableSize,
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
-    pub backup_dir: String,
     pub defaultcf: DefaultCfConfig,
     pub writecf: WriteCfConfig,
     pub lockcf: LockCfConfig,
@@ -389,7 +387,6 @@ impl Default for DbConfig {
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
-            backup_dir: "".to_owned(),
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
@@ -451,9 +448,6 @@ impl DbConfig {
     }
 
     fn validate(&mut self) -> Result<(), Box<Error>> {
-        if !self.backup_dir.is_empty() {
-            self.backup_dir = config::canonicalize_path(&self.backup_dir)?;
-        }
         Ok(())
     }
 }
@@ -688,12 +682,6 @@ impl Default for TiKvConfig {
 impl TiKvConfig {
     pub fn validate(&mut self) -> Result<(), Box<Error>> {
         self.storage.validate()?;
-        if self.rocksdb.backup_dir.is_empty() && self.storage.data_dir != DEFAULT_DATA_DIR {
-            self.rocksdb.backup_dir = format!(
-                "{}",
-                Path::new(&self.storage.data_dir).join("backup").display()
-            );
-        }
 
         self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
         self.raft_store.raftdb_path = if self.raft_store.raftdb_path.is_empty() {
