@@ -784,7 +784,7 @@ impl Storage {
         let cmd = Command::ScanLock {
             ctx: ctx,
             max_ts: max_ts,
-            start_key: if start_key.eq(&b"".to_vec()) {
+            start_key: if start_key.is_empty() {
                 None
             } else {
                 Some(Key::from_encoded(start_key))

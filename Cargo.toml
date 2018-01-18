@@ -77,8 +77,7 @@ signal = "0.4"
 git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
-git = "https://github.com/wentaoxu/kvproto.git"
-branch = "limit_data_size_for_scan_lock"
+git = "https://github.com/pingcap/kvproto.git"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
