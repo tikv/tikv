@@ -34,13 +34,6 @@ const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
 // so enlarge their stack size to 10 MB.
 const DEFAULT_ENDPOINT_STACK_SIZE_MB: u64 = 10;
 
-const DEFAULT_READPOOL_READ_CRITICAL_CONCURRENCY: usize = 1;
-const DEFAULT_READPOOL_READ_HIGH_CONCURRENCY: usize = 1;
-const DEFAULT_READPOOL_READ_NORMAL_CONCURRENCY: usize = 1;
-const DEFAULT_READPOOL_READ_LOW_CONCURRENCY: usize = 1;
-const DEFAULT_READPOOL_MAX_READ_TASKS: usize = 20480;
-const DEFAULT_READPOOL_STACK_SIZE_MB: u64 = 10;
-
 // Assume a request can be finished in 1ms, a request at position x will wait about
 // 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
 // backoff. So when it needs to wait for more than 2 seconds, return error won't causse
@@ -75,13 +68,6 @@ pub struct Config {
     pub end_point_batch_row_limit: usize,
     pub snap_max_write_bytes_per_sec: ReadableSize,
 
-    pub readpool_read_critical_concurrency: usize,
-    pub readpool_read_high_concurrency: usize,
-    pub readpool_read_normal_concurrency: usize,
-    pub readpool_read_low_concurrency: usize,
-    pub readpool_max_read_tasks: usize,
-    pub readpool_stack_size: ReadableSize,
-
     // Server labels to specify some attributes about this server.
     #[serde(with = "config::order_map_serde")] pub labels: HashMap<String, String>,
 }
@@ -111,12 +97,6 @@ impl Default for Config {
             end_point_recursion_limit: 1000,
             end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
-            readpool_read_critical_concurrency: DEFAULT_READPOOL_READ_CRITICAL_CONCURRENCY,
-            readpool_read_high_concurrency: DEFAULT_READPOOL_READ_HIGH_CONCURRENCY,
-            readpool_read_normal_concurrency: DEFAULT_READPOOL_READ_NORMAL_CONCURRENCY,
-            readpool_read_low_concurrency: DEFAULT_READPOOL_READ_LOW_CONCURRENCY,
-            readpool_max_read_tasks: DEFAULT_READPOOL_MAX_READ_TASKS,
-            readpool_stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
         }
     }
 }

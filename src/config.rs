@@ -20,6 +20,7 @@ use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBComp
               DBOptions, DBRecoveryMode};
 use sys_info;
 
+use readpool::Config as ReadPoolConfig;
 use server::Config as ServerConfig;
 use pd::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
@@ -653,6 +654,7 @@ pub enum LogLevel {
 pub struct TiKvConfig {
     #[serde(with = "LogLevel")] pub log_level: LogLevelFilter,
     pub log_file: String,
+    pub readpool: ReadPoolConfig,
     pub server: ServerConfig,
     pub storage: StorageConfig,
     pub pd: PdConfig,
@@ -669,6 +671,7 @@ impl Default for TiKvConfig {
         TiKvConfig {
             log_level: LogLevelFilter::Info,
             log_file: "".to_owned(),
+            readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
             raft_store: RaftstoreConfig::default(),

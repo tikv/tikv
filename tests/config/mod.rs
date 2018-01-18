@@ -25,6 +25,7 @@ use tikv::config::*;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
 use tikv::util::security::SecurityConfig;
+use tikv::readpool::Config as ReadPoolConfig;
 
 use toml;
 
@@ -70,12 +71,14 @@ fn test_serde_custom_tikv_config() {
         end_point_recursion_limit: 100,
         end_point_batch_row_limit: 64,
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
-        readpool_read_critical_concurrency: 2,
-        readpool_read_high_concurrency: 2,
-        readpool_read_normal_concurrency: 2,
-        readpool_read_low_concurrency: 2,
-        readpool_max_read_tasks: 10240,
-        readpool_stack_size: ReadableSize::mb(10),
+    };
+    value.readpool = ReadPoolConfig {
+        read_critical_concurrency: 2,
+        read_high_concurrency: 2,
+        read_normal_concurrency: 2,
+        read_low_concurrency: 2,
+        max_read_tasks: 10240,
+        stack_size: ReadableSize::mb(10),
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),

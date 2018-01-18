@@ -22,6 +22,8 @@ use std::u64;
 use kvproto::kvrpcpb::{CommandPri, LockInfo};
 use kvproto::errorpb;
 use util::collections::HashMap;
+use futures::Future;
+use readpool;
 use self::metrics::*;
 
 pub mod engine;
@@ -490,18 +492,25 @@ pub struct Storage {
     sendch: SyncSendCh<Msg>,
     handle: Arc<Mutex<StorageHandle>>,
 
+    read_pool: readpool::ReadPool,
+
     // Storage configurations.
     gc_ratio_threshold: f64,
     max_key_size: usize,
 }
 
 impl Storage {
-    pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage> {
+    pub fn from_engine(
+        engine: Box<Engine>,
+        config: &Config,
+        read_pool: readpool::ReadPool,
+    ) -> Result<Storage> {
         let (tx, rx) = mpsc::sync_channel(config.scheduler_notify_capacity);
         let sendch = SyncSendCh::new(tx, "kv-storage");
 
         info!("storage {:?} started.", engine);
         Ok(Storage {
+            read_pool,
             engine: engine,
             sendch: sendch,
             handle: Arc::new(Mutex::new(StorageHandle {
@@ -513,9 +522,9 @@ impl Storage {
         })
     }
 
-    pub fn new(config: &Config) -> Result<Storage> {
+    pub fn new(config: &Config, read_pool: readpool::ReadPool) -> Result<Storage> {
         let engine = engine::new_local_engine(&config.data_dir, ALL_CFS)?;
-        Storage::from_engine(engine, config)
+        Storage::from_engine(engine, config, read_pool)
     }
 
     pub fn start(&mut self, config: &Config) -> Result<()> {
@@ -584,17 +593,30 @@ impl Storage {
         ctx: Context,
         key: Key,
         start_ts: u64,
-        callback: Callback<Option<Value>>,
-    ) -> Result<()> {
-        let cmd = Command::Get {
-            ctx: ctx,
-            key: key,
-            start_ts: start_ts,
-        };
-        let tag = cmd.tag();
-        self.send(cmd, StorageCb::SingleValue(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
-        Ok(())
+    ) -> impl Future<Item = Option<Value>, Error = Error> {
+        KV_COMMAND_COUNTER_VEC.with_label_values(&["get"]).inc();
+        let engine = self.get_engine();
+        self.read_pool
+            .future_execute(readpool::Priority::ReadCritical, move |_ctx| {
+                engine
+                    .future_snapshot(&ctx)
+                    // map storage::engine::Error -> storage::Error
+                    .map_err(Error::from)
+                    .and_then(move |snapshot: Box<Snapshot>| {
+                        // TODO: Collect statistics
+                        let mut statistics = Statistics::default();
+                        let snap_store = SnapshotStore::new(
+                            snapshot,
+                            start_ts,
+                            ctx.get_isolation_level(),
+                            ctx.get_not_fill_cache(),
+                        );
+                        snap_store
+                            .get(&key, &mut statistics)
+                            // map storage::txn::Error -> storage::Error
+                            .map_err(Error::from)
+                    })
+            })
     }
 
     pub fn async_batch_get(
@@ -917,6 +939,7 @@ impl Storage {
 impl Clone for Storage {
     fn clone(&self) -> Storage {
         Storage {
+            read_pool: self.read_pool.clone(),
             engine: self.engine.clone(),
             sendch: self.sendch.clone(),
             handle: Arc::clone(&self.handle),
@@ -992,18 +1015,12 @@ mod tests {
     use kvproto::kvrpcpb::Context;
     use util::config::ReadableSize;
 
-    fn expect_get_none(done: Sender<i32>, id: i32) -> Callback<Option<Value>> {
-        Box::new(move |x: Result<Option<Value>>| {
-            assert_eq!(x.unwrap(), None);
-            done.send(id).unwrap();
-        })
+    fn expect_get_none(x: Result<Option<Value>>) {
+        assert_eq!(x.unwrap(), None);
     }
 
-    fn expect_get_val(done: Sender<i32>, v: Vec<u8>, id: i32) -> Callback<Option<Value>> {
-        Box::new(move |x: Result<Option<Value>>| {
-            assert_eq!(x.unwrap().unwrap(), v);
-            done.send(id).unwrap();
-        })
+    fn expect_get_val(v: Vec<u8>, x: Result<Option<Value>>) {
+        assert_eq!(x.unwrap().unwrap(), v);
     }
 
     fn expect_ok<T>(done: Sender<i32>, id: i32) -> Callback<T> {
@@ -1057,19 +1074,16 @@ mod tests {
 
     #[test]
     fn test_get_put() {
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
         let config = Config::default();
-        let mut storage = Storage::new(&config).unwrap();
+        let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
-        storage
-            .async_get(
-                Context::new(),
-                make_key(b"x"),
-                100,
-                expect_get_none(tx.clone(), 0),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        expect_get_none(
+            storage
+                .async_get(Context::new(), make_key(b"x"), 100)
+                .wait(),
+        );
         storage
             .async_prewrite(
                 Context::new(),
@@ -1091,33 +1105,27 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        storage
-            .async_get(
-                Context::new(),
-                make_key(b"x"),
-                100,
-                expect_get_none(tx.clone(), 3),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .async_get(
-                Context::new(),
-                make_key(b"x"),
-                101,
-                expect_get_val(tx.clone(), b"100".to_vec(), 4),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        expect_get_none(
+            storage
+                .async_get(Context::new(), make_key(b"x"), 100)
+                .wait(),
+        );
+        expect_get_val(
+            b"100".to_vec(),
+            storage
+                .async_get(Context::new(), make_key(b"x"), 101)
+                .wait(),
+        );
         storage.stop().unwrap();
     }
 
     #[test]
     fn test_put_with_err() {
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
         let config = Config::default();
         // New engine lack of some column families.
         let engine = engine::new_local_engine(&config.data_dir, &["default"]).unwrap();
-        let mut storage = Storage::from_engine(engine, &config).unwrap();
+        let mut storage = Storage::from_engine(engine, &config, read_pool).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage
@@ -1140,8 +1148,9 @@ mod tests {
 
     #[test]
     fn test_scan() {
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
         let config = Config::default();
-        let mut storage = Storage::new(&config).unwrap();
+        let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage
@@ -1193,8 +1202,9 @@ mod tests {
 
     #[test]
     fn test_batch_get() {
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
         let config = Config::default();
-        let mut storage = Storage::new(&config).unwrap();
+        let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage
@@ -1249,8 +1259,9 @@ mod tests {
 
     #[test]
     fn test_txn() {
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
         let config = Config::default();
-        let mut storage = Storage::new(&config).unwrap();
+        let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage
@@ -1295,24 +1306,18 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
-        storage
-            .async_get(
-                Context::new(),
-                make_key(b"x"),
-                120,
-                expect_get_val(tx.clone(), b"100".to_vec(), 4),
-            )
-            .unwrap();
-        storage
-            .async_get(
-                Context::new(),
-                make_key(b"y"),
-                120,
-                expect_get_val(tx.clone(), b"101".to_vec(), 5),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        rx.recv().unwrap();
+        expect_get_val(
+            b"100".to_vec(),
+            storage
+                .async_get(Context::new(), make_key(b"x"), 120)
+                .wait(),
+        );
+        expect_get_val(
+            b"101".to_vec(),
+            storage
+                .async_get(Context::new(), make_key(b"y"), 120)
+                .wait(),
+        );
         storage
             .async_prewrite(
                 Context::new(),
@@ -1329,19 +1334,17 @@ mod tests {
 
     #[test]
     fn test_sched_too_busy() {
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
         let mut config = Config::default();
         config.scheduler_pending_write_threshold = ReadableSize(1);
-        let mut storage = Storage::new(&config).unwrap();
+        let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
-        storage
-            .async_get(
-                Context::new(),
-                make_key(b"x"),
-                100,
-                expect_get_none(tx.clone(), 0),
-            )
-            .unwrap();
+        expect_get_none(
+            storage
+                .async_get(Context::new(), make_key(b"x"), 100)
+                .wait(),
+        );
         storage
             .async_prewrite(
                 Context::new(),
@@ -1364,7 +1367,6 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
-        rx.recv().unwrap();
         storage
             .async_prewrite(
                 Context::new(),
@@ -1381,8 +1383,9 @@ mod tests {
 
     #[test]
     fn test_cleanup() {
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
         let config = Config::default();
-        let mut storage = Storage::new(&config).unwrap();
+        let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage
@@ -1405,30 +1408,24 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        storage
-            .async_get(
-                Context::new(),
-                make_key(b"x"),
-                105,
-                expect_get_none(tx.clone(), 2),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        expect_get_none(
+            storage
+                .async_get(Context::new(), make_key(b"x"), 105)
+                .wait(),
+        );
         storage.stop().unwrap();
     }
 
     #[test]
     fn test_high_priority_get_put() {
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
         let config = Config::default();
-        let mut storage = Storage::new(&config).unwrap();
+        let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         let mut ctx = Context::new();
         ctx.set_priority(CommandPri::High);
-        storage
-            .async_get(ctx, make_key(b"x"), 100, expect_get_none(tx.clone(), 0))
-            .unwrap();
-        rx.recv().unwrap();
+        expect_get_none(storage.async_get(ctx, make_key(b"x"), 100).wait());
         let mut ctx = Context::new();
         ctx.set_priority(CommandPri::High);
         storage
@@ -1456,86 +1453,83 @@ mod tests {
         rx.recv().unwrap();
         let mut ctx = Context::new();
         ctx.set_priority(CommandPri::High);
-        storage
-            .async_get(ctx, make_key(b"x"), 100, expect_get_none(tx.clone(), 3))
-            .unwrap();
-        rx.recv().unwrap();
+        expect_get_none(storage.async_get(ctx, make_key(b"x"), 100).wait());
         let mut ctx = Context::new();
         ctx.set_priority(CommandPri::High);
+        expect_get_val(
+            b"100".to_vec(),
+            storage.async_get(ctx, make_key(b"x"), 101).wait(),
+        );
+        storage.stop().unwrap();
+    }
+
+    /*
+#[test]
+fn test_high_priority_no_block() {
+    let read_pool = readpool::ReadPool::new(&readpool::Config::default());
+    let mut config = Config::default();
+    config.scheduler_worker_pool_size = 1;
+    let mut storage = Storage::new(&config, read_pool).unwrap();
+    storage.start(&config).unwrap();
+    let (tx, rx) = channel();
+    expect_get_none(
+        storage
+            .async_get(
+                Context::new(),
+                make_key(b"x"),
+                100,
+            )
+            .wait()
+    );
+    storage
+        .async_prewrite(
+            Context::new(),
+            vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
+            b"x".to_vec(),
+            100,
+            Options::default(),
+            expect_ok(tx.clone(), 1),
+        )
+        .unwrap();
+    rx.recv().unwrap();
+    storage
+        .async_commit(
+            Context::new(),
+            vec![make_key(b"x")],
+            100,
+            101,
+            expect_ok(tx.clone(), 2),
+        )
+        .unwrap();
+    rx.recv().unwrap();
+
+    storage
+        .async_pause(Context::new(), 1000, expect_ok(tx.clone(), 3))
+        .unwrap();
+    let mut ctx = Context::new();
+    ctx.set_priority(CommandPri::High);
+    expect_get_val(
+        b"100".to_vec(),
         storage
             .async_get(
                 ctx,
                 make_key(b"x"),
                 101,
-                expect_get_val(tx.clone(), b"100".to_vec(), 4),
             )
-            .unwrap();
-        rx.recv().unwrap();
-        storage.stop().unwrap();
-    }
+            .wait()
+    );
+    // Command Get with high priority not block by command Pause.
+    assert_eq!(rx.recv().unwrap(), 3);
 
-    #[test]
-    fn test_high_priority_no_block() {
-        let mut config = Config::default();
-        config.scheduler_worker_pool_size = 1;
-        let mut storage = Storage::new(&config).unwrap();
-        storage.start(&config).unwrap();
-        let (tx, rx) = channel();
-        storage
-            .async_get(
-                Context::new(),
-                make_key(b"x"),
-                100,
-                expect_get_none(tx.clone(), 0),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .async_prewrite(
-                Context::new(),
-                vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
-                b"x".to_vec(),
-                100,
-                Options::default(),
-                expect_ok(tx.clone(), 1),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .async_commit(
-                Context::new(),
-                vec![make_key(b"x")],
-                100,
-                101,
-                expect_ok(tx.clone(), 2),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-
-        storage
-            .async_pause(Context::new(), 1000, expect_ok(tx.clone(), 3))
-            .unwrap();
-        let mut ctx = Context::new();
-        ctx.set_priority(CommandPri::High);
-        storage
-            .async_get(
-                ctx,
-                make_key(b"x"),
-                101,
-                expect_get_val(tx.clone(), b"100".to_vec(), 4),
-            )
-            .unwrap();
-        // Command Get with high priority not block by command Pause.
-        assert_eq!(rx.recv().unwrap(), 4);
-        assert_eq!(rx.recv().unwrap(), 3);
-
-        storage.stop().unwrap();
-    }
+    storage.stop().unwrap();
+}
+*/
 
     #[test]
     fn test_delete_range() {
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
         let config = Config::default();
-        let mut storage = Storage::new(&config).unwrap();
+        let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         // Write x and y.
@@ -1564,33 +1558,24 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        storage
-            .async_get(
-                Context::new(),
-                make_key(b"x"),
-                101,
-                expect_get_val(tx.clone(), b"100".to_vec(), 2),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .async_get(
-                Context::new(),
-                make_key(b"y"),
-                101,
-                expect_get_val(tx.clone(), b"100".to_vec(), 3),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .async_get(
-                Context::new(),
-                make_key(b"z"),
-                101,
-                expect_get_val(tx.clone(), b"100".to_vec(), 4),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        expect_get_val(
+            b"100".to_vec(),
+            storage
+                .async_get(Context::new(), make_key(b"x"), 101)
+                .wait(),
+        );
+        expect_get_val(
+            b"100".to_vec(),
+            storage
+                .async_get(Context::new(), make_key(b"y"), 101)
+                .wait(),
+        );
+        expect_get_val(
+            b"100".to_vec(),
+            storage
+                .async_get(Context::new(), make_key(b"z"), 101)
+                .wait(),
+        );
 
         // Delete range [x, z)
         storage
@@ -1602,33 +1587,22 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        storage
-            .async_get(
-                Context::new(),
-                make_key(b"x"),
-                101,
-                expect_get_none(tx.clone(), 6),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .async_get(
-                Context::new(),
-                make_key(b"y"),
-                101,
-                expect_get_none(tx.clone(), 7),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .async_get(
-                Context::new(),
-                make_key(b"z"),
-                101,
-                expect_get_val(tx.clone(), b"100".to_vec(), 8),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        expect_get_none(
+            storage
+                .async_get(Context::new(), make_key(b"x"), 101)
+                .wait(),
+        );
+        expect_get_none(
+            storage
+                .async_get(Context::new(), make_key(b"y"), 101)
+                .wait(),
+        );
+        expect_get_val(
+            b"100".to_vec(),
+            storage
+                .async_get(Context::new(), make_key(b"z"), 101)
+                .wait(),
+        );
 
         // Delete range ["", ""), it means delete all
         storage
@@ -1640,15 +1614,11 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        storage
-            .async_get(
-                Context::new(),
-                make_key(b"z"),
-                101,
-                expect_get_none(tx.clone(), 10),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        expect_get_none(
+            storage
+                .async_get(Context::new(), make_key(b"z"), 101)
+                .wait(),
+        );
         storage.stop().unwrap();
     }
 }

@@ -13,10 +13,12 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use futures::Future;
 
 use tikv::util::collections::HashMap;
 use tikv::storage::{Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
 use tikv::storage::config::Config;
+use tikv::readpool;
 use kvproto::kvrpcpb::{Context, LockInfo};
 
 /// `SyncStorage` wraps `Storage` with sync API, usually used for testing.
@@ -26,8 +28,8 @@ pub struct SyncStorage {
 }
 
 impl SyncStorage {
-    pub fn new(config: &Config) -> SyncStorage {
-        let storage = Storage::new(config).unwrap();
+    pub fn new(config: &Config, read_pool: readpool::ReadPool) -> SyncStorage {
+        let storage = Storage::new(config, read_pool).unwrap();
         let mut s = SyncStorage {
             store: storage,
             cnt: Arc::new(AtomicUsize::new(0)),
@@ -36,14 +38,22 @@ impl SyncStorage {
         s
     }
 
-    pub fn from_engine(engine: Box<Engine>, config: &Config) -> SyncStorage {
-        let mut s = SyncStorage::prepare(engine, config);
+    pub fn from_engine(
+        engine: Box<Engine>,
+        config: &Config,
+        read_pool: readpool::ReadPool,
+    ) -> SyncStorage {
+        let mut s = SyncStorage::prepare(engine, config, read_pool);
         s.start(config);
         s
     }
 
-    pub fn prepare(engine: Box<Engine>, config: &Config) -> SyncStorage {
-        let storage = Storage::from_engine(engine, config).unwrap();
+    pub fn prepare(
+        engine: Box<Engine>,
+        config: &Config,
+        read_pool: readpool::ReadPool,
+    ) -> SyncStorage {
+        let storage = Storage::from_engine(engine, config, read_pool).unwrap();
         SyncStorage {
             store: storage,
             cnt: Arc::new(AtomicUsize::new(0)),
@@ -63,7 +73,7 @@ impl SyncStorage {
     }
 
     pub fn get(&self, ctx: Context, key: &Key, start_ts: u64) -> Result<Option<Value>> {
-        wait_op!(|cb| self.store.async_get(ctx, key.to_owned(), start_ts, cb)).unwrap()
+        self.store.async_get(ctx, key.to_owned(), start_ts).wait()
     }
 
     #[allow(dead_code)]

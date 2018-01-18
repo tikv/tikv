@@ -1,6 +1,14 @@
 log-level = "debug"
 log-file = "foo"
 
+[readpool]
+read-critical-concurrency = 2
+read-high-concurrency = 2
+read-normal-concurrency = 2
+read-low-concurrency = 2
+max-read-tasks = 10240
+stack-size = "10MB"
+
 [server]
 addr = "example.com:443"
 advertise-addr = "example.com:443"
@@ -16,12 +24,6 @@ end-point-stack-size = "12MB"
 end-point-recursion-limit = 100
 end-point-batch-row-limit = 64
 snap-max-write-bytes-per-sec = "10MB"
-readpool-read-critical-concurrency = 2
-readpool-read-high-concurrency = 2
-readpool-read-normal-concurrency = 2
-readpool-read-low-concurrency = 2
-readpool-max-read-tasks = 10240
-readpool-stack-size = "10MB"
 
 [server.labels]
 a = "b"

@@ -30,6 +30,7 @@ use tikv::util::transport::SendCh;
 use tikv::util::security::SecurityManager;
 use tikv::util::worker::{FutureWorker, Worker};
 use tikv::storage::{CfName, Engine};
+use tikv::readpool;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
 
@@ -111,7 +112,8 @@ impl Simulator for ServerCluster {
         let sim_router = SimulateTransport::new(raft_router);
 
         // Create storage.
-        let mut store = create_raft_storage(sim_router.clone(), &cfg.storage).unwrap();
+        let read_pool = readpool::ReadPool::new(&cfg.readpool);
+        let mut store = create_raft_storage(sim_router.clone(), &cfg.storage, read_pool).unwrap();
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 

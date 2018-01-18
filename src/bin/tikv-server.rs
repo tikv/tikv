@@ -74,6 +74,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
+use tikv::readpool;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -170,13 +171,14 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), significant_msg_sender);
 
     // Create kv engine, storage.
+    let read_pool = readpool::ReadPool::new(&cfg.readpool);
     let kv_db_opts = cfg.rocksdb.build_opt();
     let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
     let kv_engine = Arc::new(
         rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {:?}", s)),
     );
-    let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage)
+    let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage, read_pool)
         .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 
     // Create raft engine.

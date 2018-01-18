@@ -33,6 +33,7 @@ use tipb::select::{Chunk, DAGRequest, SelectResponse};
 use tipb::executor::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
 use tipb::schema::{self, ColumnInfo};
 use tipb::expression::{ByItem, Expr, ExprType, ScalarFuncSig};
+use tikv::readpool;
 use protobuf::{Message, RepeatedField};
 
 use raftstore::util::MAX_LEADER_LEASE;
@@ -374,8 +375,9 @@ pub struct Store {
 
 impl Store {
     fn new(engine: Box<Engine>) -> Store {
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
         Store {
-            store: SyncStorage::from_engine(engine, &Default::default()),
+            store: SyncStorage::from_engine(engine, &Default::default(), read_pool),
             current_ts: 1,
             handles: vec![],
         }

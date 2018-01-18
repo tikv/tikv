@@ -42,7 +42,6 @@ use server::metrics::*;
 use server::Error;
 use raftstore::store::{Callback, Msg as StoreMessage};
 use coprocessor::{EndPointTask, RequestTask};
-use readpool::{self, ReadPool};
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 
@@ -51,7 +50,6 @@ pub struct Service<T: RaftStoreRouter + 'static> {
     // For handling KV requests.
     storage: Storage,
     // Pools for executing reads
-    read_pool: ReadPool,
     // For handling coprocessor requests.
     end_point_scheduler: Scheduler<EndPointTask>,
     // For handling raft messages.
@@ -65,7 +63,6 @@ pub struct Service<T: RaftStoreRouter + 'static> {
 impl<T: RaftStoreRouter + 'static> Service<T> {
     pub fn new(
         storage: Storage,
-        read_pool: ReadPool,
         end_point_scheduler: Scheduler<EndPointTask>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
@@ -73,7 +70,6 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
     ) -> Service<T> {
         Service {
             storage: storage,
-            read_pool,
             end_point_scheduler: end_point_scheduler,
             ch: ch,
             snap_scheduler: snap_scheduler,
@@ -109,33 +105,26 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        let future = self.read_pool
-            .future_execute(
-                readpool::Priority::ReadCritical,
-                box readpool::KvGetTask::new(
-                    req.take_context(),
-                    req.get_key().to_vec(),
-                    req.get_version(),
-                ),
+        let future = self.storage
+            .async_get(
+                req.take_context(),
+                Key::from_raw(req.get_key()),
+                req.get_version(),
             )
-            .then(|r| {
+            .then(|v| {
                 let mut res = GetResponse::new();
-                match r {
-                    Ok(readpool::Value::StorageValue(v)) => match v {
-                        Some(val) => res.set_value(val),
-                        None => res.set_value(vec![]),
-                    },
-                    Err(readpool::Error::Storage(e)) => {
-                        if let Some(err) = extract_region_error_from_err(&e) {
-                            res.set_region_error(err);
-                        } else {
-                            res.set_error(extract_key_error(&e));
-                        }
+                if let Some(err) = extract_region_error(&v) {
+                    res.set_region_error(err);
+                } else {
+                    match v {
+                        Ok(Some(val)) => res.set_value(val),
+                        Ok(None) => res.set_value(vec![]),
+                        Err(e) => res.set_error(extract_key_error(&e)),
                     }
-                    _ => unreachable!(),
                 }
-                sink.success(res).map_err(Error::from)
+                Ok(res)
             })
+            .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", label, e);

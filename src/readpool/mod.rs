@@ -11,35 +11,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod task;
+mod config;
 
-use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
+use futures::Future;
+use futures_cpupool as cpupool;
 
-use storage::Engine;
-use server::Config;
-
-pub use self::task::{BoxedFuture, Error, Priority, Result, Task, Value};
-pub use self::task::kvget::*;
-pub use self::task::kvbatchget::*;
-pub use self::task::coprocessor::*;
+pub use self::config::Config;
 
 pub struct WorkerThreadContext {
-    engine: Box<Engine>,
+    // Metrics collector to be added here
 }
 
 impl Clone for WorkerThreadContext {
     fn clone(&self) -> WorkerThreadContext {
-        WorkerThreadContext {
-            engine: self.engine.clone(),
-        }
+        WorkerThreadContext {}
     }
 }
 
 pub struct ReadPool {
-    pool_read_critical: CpuPool,
-    pool_read_high: CpuPool,
-    pool_read_normal: CpuPool,
-    pool_read_low: CpuPool,
+    pool_read_critical: cpupool::CpuPool,
+    pool_read_high: cpupool::CpuPool,
+    pool_read_normal: cpupool::CpuPool,
+    pool_read_low: cpupool::CpuPool,
     context: WorkerThreadContext,
 }
 
@@ -56,34 +49,34 @@ impl Clone for ReadPool {
 }
 
 impl ReadPool {
-    pub fn new(config: &Config, engine: Box<Engine>) -> ReadPool {
+    pub fn new(config: &Config) -> ReadPool {
         ReadPool {
-            pool_read_critical: CpuPoolBuilder::new()
+            pool_read_critical: cpupool::Builder::new()
                 .name_prefix("readpool-c")
-                .pool_size(config.readpool_read_critical_concurrency)
-                .stack_size(config.readpool_stack_size.0 as usize)
+                .pool_size(config.read_critical_concurrency)
+                .stack_size(config.stack_size.0 as usize)
                 .create(),
-            pool_read_high: CpuPoolBuilder::new()
+            pool_read_high: cpupool::Builder::new()
                 .name_prefix("readpool-h")
-                .pool_size(config.readpool_read_high_concurrency)
-                .stack_size(config.readpool_stack_size.0 as usize)
+                .pool_size(config.read_high_concurrency)
+                .stack_size(config.stack_size.0 as usize)
                 .create(),
-            pool_read_normal: CpuPoolBuilder::new()
+            pool_read_normal: cpupool::Builder::new()
                 .name_prefix("readpool-n")
-                .pool_size(config.readpool_read_normal_concurrency)
-                .stack_size(config.readpool_stack_size.0 as usize)
+                .pool_size(config.read_normal_concurrency)
+                .stack_size(config.stack_size.0 as usize)
                 .create(),
-            pool_read_low: CpuPoolBuilder::new()
+            pool_read_low: cpupool::Builder::new()
                 .name_prefix("readpool-l")
-                .pool_size(config.readpool_read_low_concurrency)
-                .stack_size(config.readpool_stack_size.0 as usize)
+                .pool_size(config.read_low_concurrency)
+                .stack_size(config.stack_size.0 as usize)
                 .create(),
-            context: WorkerThreadContext { engine },
+            context: WorkerThreadContext {},
         }
     }
 
     #[inline]
-    fn get_pool_by_priority(&self, priority: Priority) -> &CpuPool {
+    fn get_pool_by_priority(&self, priority: Priority) -> &cpupool::CpuPool {
         match priority {
             Priority::ReadCritical => &self.pool_read_critical,
             Priority::ReadHigh => &self.pool_read_high,
@@ -92,147 +85,92 @@ impl ReadPool {
         }
     }
 
-    // TODO: Support pool busy
-
-    pub fn future_execute(&self, priority: Priority, mut task: Box<Task>) -> BoxedFuture {
+    pub fn future_execute<F, R>(
+        &self,
+        priority: Priority,
+        feature_factory: F,
+    ) -> cpupool::CpuFuture<R::Item, R::Error>
+    where
+        F: FnOnce(&WorkerThreadContext) -> R + Send + 'static,
+        R: Future + Send + 'static,
+        R::Item: Send + 'static,
+        R::Error: Send + 'static,
+    {
+        // TODO: handle busy?
         let pool = self.get_pool_by_priority(priority);
-        box pool.spawn(task.build(&self.context))
+        pool.spawn(feature_factory(&self.context))
     }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum Priority {
+    ReadNormal,
+    ReadLow,
+    ReadHigh,
+    ReadCritical,
 }
 
 #[cfg(test)]
 mod tests {
     use std::error;
     use std::boxed;
+    use std::result;
+    use std::fmt;
     use std::sync::mpsc::{channel, Sender};
     use futures::{future, Future};
 
-    use storage;
-
     pub use super::*;
 
-    pub fn expect_get_val(
-        done: Sender<i32>,
-        v: Vec<u8>,
-        id: i32,
-    ) -> Box<boxed::FnBox(Result) -> future::FutureResult<(), ()>> {
-        box move |x: Result| {
+    type BoxError = Box<error::Error + Send + Sync>;
+    type FutureBoxedFn<T> =
+        Box<boxed::FnBox(result::Result<T, BoxError>) -> future::FutureResult<(), ()>>;
+
+    pub fn expect_val<T>(done: Sender<i32>, v: T, id: i32) -> FutureBoxedFn<T>
+    where
+        T: PartialEq + fmt::Debug + 'static,
+    {
+        box move |x: result::Result<T, BoxError>| {
             assert!(x.is_ok());
-            match x.unwrap() {
-                Value::StorageValue(val) => assert_eq!(val, Some(v)),
-                _ => unreachable!(),
-            }
+            assert_eq!(x.unwrap(), v);
             done.send(id).unwrap();
             future::ok(())
         }
     }
 
-    pub fn expect_get_vals(
-        done: Sender<i32>,
-        v: Vec<Option<storage::KvPair>>,
-        id: i32,
-    ) -> Box<boxed::FnBox(Result) -> future::FutureResult<(), ()>> {
-        box move |x: Result| {
-            assert!(x.is_ok());
-            match x.unwrap() {
-                Value::StorageMultiKvpairs(val) => {
-                    let val: Vec<Option<storage::KvPair>> =
-                        val.into_iter().map(storage::Result::ok).collect();
-                    assert_eq!(val, v);
-                }
-                _ => unreachable!(),
-            }
-            done.send(id).unwrap();
-            future::ok(())
-        }
-    }
-
-    pub fn expect_get_none(
-        done: Sender<i32>,
-        id: i32,
-    ) -> Box<boxed::FnBox(Result) -> future::FutureResult<(), ()>> {
-        box move |x: Result| {
-            assert!(x.is_ok());
-            match x.unwrap() {
-                Value::StorageValue(val) => assert!(val.is_none()),
-                _ => unreachable!(),
-            }
-            done.send(id).unwrap();
-            future::ok(())
-        }
-    }
-
-    pub fn expect_err(
-        done: Sender<i32>,
-        desc: &str,
-        id: i32,
-    ) -> Box<boxed::FnBox(Result) -> future::FutureResult<(), ()>> {
+    pub fn expect_err<T>(done: Sender<i32>, desc: &str, id: i32) -> FutureBoxedFn<T> {
         let desc = desc.to_string();
-        box move |x: Result| {
+        box move |x: result::Result<T, BoxError>| {
             assert!(x.is_err());
             match x {
-                Err(e) => assert_eq!(error::Error::description(&e), desc),
+                Err(e) => assert_eq!(e.description(), desc),
                 _ => unreachable!(),
             }
             done.send(id).unwrap();
             future::ok(())
         }
-    }
-
-    /// Make a `Value::StorageValue` success result for asserting
-    pub fn make_value_result(v: Vec<u8>) -> Result {
-        Ok(Value::StorageValue(Some(v)))
-    }
-
-    /// Make an `Error::Other` result for asserting
-    pub fn make_err_result(desc: &str) -> Result {
-        Err(Error::Other(box_err!(desc)))
     }
 
     #[test]
     fn test_future_execute() {
-        struct FooTask {
-            val: Option<Result>,
-        }
-        impl FooTask {
-            fn new(val: Result) -> FooTask {
-                FooTask { val: Some(val) }
-            }
-            fn from_value(v: Vec<u8>) -> FooTask {
-                FooTask::new(make_value_result(v))
-            }
-            fn from_err(desc: &str) -> FooTask {
-                FooTask::new(make_err_result(desc))
-            }
-        }
-        impl Task for FooTask {
-            fn build(&mut self, _context: &WorkerThreadContext) -> BoxedFuture {
-                box future::result(self.val.take().unwrap())
-            }
-        }
-
-        let storage_config = storage::Config::default();
-        let storage = storage::Storage::new(&storage_config).unwrap();
-        let read_pool = ReadPool::new(&Config::default(), storage.get_engine());
+        let read_pool = ReadPool::new(&Config::default());
 
         let (tx, rx) = channel();
         read_pool
-            .future_execute(
-                Priority::ReadCritical,
-                box FooTask::from_value(vec![1, 2, 4]),
-            )
-            .then(expect_get_val(tx.clone(), vec![1, 2, 4], 0))
+            .future_execute(Priority::ReadCritical, |_ctx| {
+                box future::ok::<Vec<u8>, BoxError>(vec![1, 2, 4])
+            })
+            .then(expect_val(tx.clone(), vec![1, 2, 4], 0))
             .wait()
             .unwrap();
         assert_eq!(rx.recv().unwrap(), 0);
 
         read_pool
-            .future_execute(Priority::ReadCritical, box FooTask::from_err("foobar"))
+            .future_execute(Priority::ReadCritical, |_ctx| {
+                box future::err::<(), BoxError>(box_err!("foobar"))
+            })
             .then(expect_err(tx.clone(), "foobar", 1))
             .wait()
             .unwrap();
         assert_eq!(rx.recv().unwrap(), 1);
     }
-
-    // TODO: Test priority
 }
