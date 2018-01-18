@@ -726,7 +726,7 @@ impl Runnable<Task> for Host {
             }
 
             for req in &mut reqs {
-                let task_count = self.running_task_count.clone();
+                let task_count = Arc::clone(&self.running_task_count);
                 req.tracker.attach_task_count(task_count);
             }
             self.last_req_id += 1;
@@ -891,6 +891,7 @@ mod tests {
     fn test_get_reg_scan_tag() {
         let mut ctx = ReqContext {
             deadline: Instant::now_coarse(),
+            is_stream_head: true,
             isolation_level: IsolationLevel::RC,
             fill_cache: true,
             table_scan: true,
