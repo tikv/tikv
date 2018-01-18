@@ -56,8 +56,7 @@ mod imp {
         info!("{}", String::from_utf8_lossy(&buf));
     }
 
-    // TODO: remove backup_path from configuration
-    pub fn handle_signal(engines: Engines, _: &str) {
+    pub fn handle_signal(engines: Engines) {
         use signal::trap::Trap;
         use nix::sys::signal::{SIGUSR1, SIGUSR2, SIGHUP, SIGINT, SIGTERM};
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]);
@@ -117,11 +116,9 @@ mod imp {
 
 #[cfg(not(unix))]
 mod imp {
-    use std::sync::Arc;
+    use tikv::raftstore::store::Engines;
 
-    use rocksdb::DB;
-
-    pub fn handle_signal(_: Arc<DB>, _: &str) {}
+    pub fn handle_signal(_: Engines) {}
 }
 
 pub use self::imp::handle_signal;
