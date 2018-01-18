@@ -31,14 +31,6 @@ pub struct RegionSnapshot {
     region: Arc<Region>,
 }
 
-impl fmt::Debug for RegionSnapshot {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.debug_struct("RegionSnapshot")
-            .field("region", &self.region)
-            .finish()
-    }
-}
-
 impl RegionSnapshot {
     pub fn new(ps: &PeerStorage) -> RegionSnapshot {
         RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.get_region().clone())
