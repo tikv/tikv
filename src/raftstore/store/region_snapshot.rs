@@ -13,7 +13,6 @@
 
 use std::sync::Arc;
 use std::cmp;
-use std::fmt::{self, Formatter};
 
 use rocksdb::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use kvproto::metapb::Region;
