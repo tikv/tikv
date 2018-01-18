@@ -829,7 +829,7 @@ mod tests {
         let path = path.path().to_str().unwrap();
         let region = make_region(1, vec![0], vec![10]);
         let db = open_db(path, false);
-        let mut engine = RegionEngine::new(db.clone(), region.clone());
+        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
         let mut start_ts = 1 as u64;
         for i in 0..10 {
             let commit_ts = start_ts + 1;
@@ -839,7 +839,7 @@ mod tests {
 
         {
             // test for 1 version
-            let snap = RegionSnapshot::from_raw(db.clone(), region.clone());
+            let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
             let mut reader = MvccReader::new(
                 Box::new(snap),
                 Some(ScanMode::Forward),
@@ -876,7 +876,7 @@ mod tests {
         }
 
         // get scan for keys with versions more than seek_bound.
-        let snap = RegionSnapshot::from_raw(db.clone(), region.clone());
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let mut reader = MvccReader::new(
             Box::new(snap),
             Some(ScanMode::Forward),
