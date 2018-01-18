@@ -47,9 +47,9 @@ pub const CF_LOCK: CfName = "lock";
 pub const CF_WRITE: CfName = "write";
 pub const CF_RAFT: CfName = "raft";
 // Cfs that should be very large generally.
-pub const LARGE_CFS: &'static [CfName] = &[CF_DEFAULT, CF_WRITE];
-pub const ALL_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
-pub const DATA_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
+pub const LARGE_CFS: &[CfName] = &[CF_DEFAULT, CF_WRITE];
+pub const ALL_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
+pub const DATA_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
@@ -149,7 +149,10 @@ pub enum Command {
         scan_key: Option<Key>,
         keys: Vec<Key>,
     },
-    RawGet { ctx: Context, key: Key },
+    RawGet {
+        ctx: Context,
+        key: Key,
+    },
     RawScan {
         ctx: Context,
         start_key: Key,
@@ -160,9 +163,18 @@ pub enum Command {
         start_key: Key,
         end_key: Key,
     },
-    Pause { ctx: Context, duration: u64 },
-    MvccByKey { ctx: Context, key: Key },
-    MvccByStartTs { ctx: Context, start_ts: u64 },
+    Pause {
+        ctx: Context,
+        duration: u64,
+    },
+    MvccByKey {
+        ctx: Context,
+        key: Key,
+    },
+    MvccByStartTs {
+        ctx: Context,
+        start_ts: u64,
+    },
 }
 
 impl Display for Command {
@@ -195,10 +207,7 @@ impl Display for Command {
             } => write!(
                 f,
                 "kv::command::scan {}({}) @ {} | {:?}",
-                start_key,
-                limit,
-                start_ts,
-                ctx
+                start_key, limit, start_ts, ctx
             ),
             Command::Prewrite {
                 ref ctx,
@@ -267,9 +276,7 @@ impl Display for Command {
             } => write!(
                 f,
                 "kv::command::gc scan {:?} @ {} | {:?}",
-                scan_key,
-                safe_point,
-                ctx
+                scan_key, safe_point, ctx
             ),
             Command::RawGet { ref ctx, ref key } => {
                 write!(f, "kv::command::rawget {:?} | {:?}", key, ctx)
@@ -281,9 +288,7 @@ impl Display for Command {
             } => write!(
                 f,
                 "kv::command::rawscan {:?} {} | {:?}",
-                start_key,
-                limit,
-                ctx
+                start_key, limit, ctx
             ),
             Command::DeleteRange {
                 ref ctx,
@@ -292,9 +297,7 @@ impl Display for Command {
             } => write!(
                 f,
                 "kv::command::delete range [{:?}, {:?}) | {:?}",
-                start_key,
-                end_key,
-                ctx
+                start_key, end_key, ctx
             ),
             Command::Pause { ref ctx, duration } => {
                 write!(f, "kv::command::pause {} ms | {:?}", duration, ctx)
@@ -316,7 +319,7 @@ impl Debug for Command {
     }
 }
 
-pub const CMD_TAG_GC: &'static str = "gc";
+pub const CMD_TAG_GC: &str = "gc";
 
 impl Command {
     pub fn readonly(&self) -> bool {
@@ -379,64 +382,64 @@ impl Command {
 
     pub fn ts(&self) -> u64 {
         match *self {
-            Command::Get { start_ts, .. } |
-            Command::BatchGet { start_ts, .. } |
-            Command::Scan { start_ts, .. } |
-            Command::Prewrite { start_ts, .. } |
-            Command::Cleanup { start_ts, .. } |
-            Command::Rollback { start_ts, .. } |
-            Command::MvccByStartTs { start_ts, .. } => start_ts,
+            Command::Get { start_ts, .. }
+            | Command::BatchGet { start_ts, .. }
+            | Command::Scan { start_ts, .. }
+            | Command::Prewrite { start_ts, .. }
+            | Command::Cleanup { start_ts, .. }
+            | Command::Rollback { start_ts, .. }
+            | Command::MvccByStartTs { start_ts, .. } => start_ts,
             Command::Commit { lock_ts, .. } => lock_ts,
             Command::ScanLock { max_ts, .. } => max_ts,
             Command::Gc { safe_point, .. } => safe_point,
-            Command::ResolveLock { .. } |
-            Command::RawGet { .. } |
-            Command::RawScan { .. } |
-            Command::DeleteRange { .. } |
-            Command::Pause { .. } |
-            Command::MvccByKey { .. } => 0,
+            Command::ResolveLock { .. }
+            | Command::RawGet { .. }
+            | Command::RawScan { .. }
+            | Command::DeleteRange { .. }
+            | Command::Pause { .. }
+            | Command::MvccByKey { .. } => 0,
         }
     }
 
     pub fn get_context(&self) -> &Context {
         match *self {
-            Command::Get { ref ctx, .. } |
-            Command::BatchGet { ref ctx, .. } |
-            Command::Scan { ref ctx, .. } |
-            Command::Prewrite { ref ctx, .. } |
-            Command::Commit { ref ctx, .. } |
-            Command::Cleanup { ref ctx, .. } |
-            Command::Rollback { ref ctx, .. } |
-            Command::ScanLock { ref ctx, .. } |
-            Command::ResolveLock { ref ctx, .. } |
-            Command::Gc { ref ctx, .. } |
-            Command::RawGet { ref ctx, .. } |
-            Command::RawScan { ref ctx, .. } |
-            Command::DeleteRange { ref ctx, .. } |
-            Command::Pause { ref ctx, .. } |
-            Command::MvccByKey { ref ctx, .. } |
-            Command::MvccByStartTs { ref ctx, .. } => ctx,
+            Command::Get { ref ctx, .. }
+            | Command::BatchGet { ref ctx, .. }
+            | Command::Scan { ref ctx, .. }
+            | Command::Prewrite { ref ctx, .. }
+            | Command::Commit { ref ctx, .. }
+            | Command::Cleanup { ref ctx, .. }
+            | Command::Rollback { ref ctx, .. }
+            | Command::ScanLock { ref ctx, .. }
+            | Command::ResolveLock { ref ctx, .. }
+            | Command::Gc { ref ctx, .. }
+            | Command::RawGet { ref ctx, .. }
+            | Command::RawScan { ref ctx, .. }
+            | Command::DeleteRange { ref ctx, .. }
+            | Command::Pause { ref ctx, .. }
+            | Command::MvccByKey { ref ctx, .. }
+            | Command::MvccByStartTs { ref ctx, .. } => ctx,
         }
     }
 
     pub fn mut_context(&mut self) -> &mut Context {
         match *self {
-            Command::Get { ref mut ctx, .. } |
-            Command::BatchGet { ref mut ctx, .. } |
-            Command::Scan { ref mut ctx, .. } |
-            Command::Prewrite { ref mut ctx, .. } |
-            Command::Commit { ref mut ctx, .. } |
-            Command::Cleanup { ref mut ctx, .. } |
-            Command::Rollback { ref mut ctx, .. } |
-            Command::ScanLock { ref mut ctx, .. } |
-            Command::ResolveLock { ref mut ctx, .. } |
-            Command::Gc { ref mut ctx, .. } |
-            Command::RawGet { ref mut ctx, .. } |
-            Command::RawScan { ref mut ctx, .. } |
-            Command::DeleteRange { ref mut ctx, .. } |
-            Command::Pause { ref mut ctx, .. } |
-            Command::MvccByKey { ref mut ctx, .. } |
-            Command::MvccByStartTs { ref mut ctx, .. } => ctx,
+            Command::Get { ref mut ctx, .. }
+            | Command::BatchGet { ref mut ctx, .. }
+            | Command::Scan { ref mut ctx, .. }
+            | Command::Prewrite { ref mut ctx, .. }
+            | Command::Commit { ref mut ctx, .. }
+            | Command::Cleanup { ref mut ctx, .. }
+            | Command::Rollback { ref mut ctx, .. }
+            | Command::ScanLock { ref mut ctx, .. }
+            | Command::ResolveLock { ref mut ctx, .. }
+            | Command::Gc { ref mut ctx, .. }
+            | Command::RawGet { ref mut ctx, .. }
+            | Command::RawScan { ref mut ctx, .. }
+            | Command::DeleteRange { ref mut ctx, .. }
+            | Command::Pause { ref mut ctx, .. }
+            | Command::MvccByKey { ref mut ctx, .. }
+            | Command::MvccByStartTs { ref mut ctx, .. } => ctx,
         }
     }
 
@@ -727,11 +730,10 @@ impl Storage {
             modifies.push(Modify::DeleteRange(cf, s, end_key.clone()));
         }
 
-        self.engine.async_write(
-            &ctx,
-            modifies,
-            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
-        )?;
+        self.engine
+            .async_write(&ctx, modifies, box |(_, res): (_, engine::Result<_>)| {
+                callback(res.map_err(Error::from))
+            })?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["delete_range"])
             .inc();
@@ -852,12 +854,11 @@ impl Storage {
             callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
             return Ok(());
         }
-        try!(self.engine
-            .async_write(&ctx,
-                         vec![Modify::Put(CF_DEFAULT, Key::from_encoded(key), value)],
-                         box |(_, res): (_, engine::Result<_>)| {
-                             callback(res.map_err(Error::from))
-                         }));
+        self.engine.async_write(
+            &ctx,
+            vec![Modify::Put(CF_DEFAULT, Key::from_encoded(key), value)],
+            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+        )?;
         RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["put"]).inc();
         Ok(())
     }
@@ -935,7 +936,7 @@ impl Clone for Storage {
         Storage {
             engine: self.engine.clone(),
             sendch: self.sendch.clone(),
-            handle: self.handle.clone(),
+            handle: Arc::clone(&self.handle),
             gc_ratio_threshold: self.gc_ratio_threshold,
             max_key_size: self.max_key_size,
         }

@@ -181,8 +181,8 @@ where
         let task_count = Arc::new(AtomicUsize::new(0));
         // Threadpool threads
         for _ in 0..num_threads {
-            let state = state.clone();
-            let task_num = task_count.clone();
+            let state = Arc::clone(&state);
+            let task_num = Arc::clone(&task_count);
             let ctx = f.create();
             let mut tb = Builder::new().name(name.clone());
             if let Some(stack_size) = stack_size {
@@ -340,7 +340,7 @@ mod test {
         let group_num = 4;
         let mut task_num = 0;
         for gid in 0..group_num {
-            let rxer = receiver.clone();
+            let rxer = Arc::clone(&receiver);
             let ftx = ftx.clone();
             task_pool.execute(move |_: &mut DefaultContext| {
                 let rx = rxer.lock().unwrap();
@@ -394,7 +394,7 @@ mod test {
         impl ContextFactory<TestContext> for TestContextFactory {
             fn create(&self) -> TestContext {
                 TestContext {
-                    counter: self.counter.clone(),
+                    counter: Arc::clone(&self.counter),
                     tx: self.tx.clone(),
                 }
             }
@@ -446,7 +446,7 @@ mod test {
         impl ContextFactory<TestContext> for TestContextFactory {
             fn create(&self) -> TestContext {
                 TestContext {
-                    counter: self.counter.clone(),
+                    counter: Arc::clone(&self.counter),
                     tx: self.tx.clone(),
                 }
             }

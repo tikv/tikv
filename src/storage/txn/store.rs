@@ -262,7 +262,6 @@ mod test {
         }
     }
 
-
     #[test]
     fn test_snapshot_store_get() {
         let key_num = 100;
@@ -315,7 +314,6 @@ mod test {
             .collect();
         assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
     }
-
 
     #[test]
     fn test_snapshot_store_reverse_scan() {

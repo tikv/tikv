@@ -87,15 +87,23 @@ type SnapshotResult = (Vec<u64>, CbContext, EngineResult<Box<Snapshot>>);
 /// Message types for the scheduler event loop.
 pub enum Msg {
     Quit,
-    RawCmd { cmd: Command, cb: StorageCb },
+    RawCmd {
+        cmd: Command,
+        cb: StorageCb,
+    },
     RetryGetSnapshots(Vec<(Context, Vec<u64>)>),
     SnapshotFinished {
         cids: Vec<u64>,
         cb_ctx: CbContext,
         snapshot: EngineResult<Box<Snapshot>>,
     },
-    BatchSnapshotFinished { batch: Vec<SnapshotResult> },
-    ReadFinished { cid: u64, pr: ProcessResult },
+    BatchSnapshotFinished {
+        batch: Vec<SnapshotResult>,
+    },
+    ReadFinished {
+        cid: u64,
+        pr: ProcessResult,
+    },
     WritePrepareFinished {
         cid: u64,
         cmd: Command,
@@ -103,7 +111,10 @@ pub enum Msg {
         to_be_write: Vec<Modify>,
         rows: usize,
     },
-    WritePrepareFailed { cid: u64, err: Error },
+    WritePrepareFailed {
+        cid: u64,
+        err: Error,
+    },
     WriteFinished {
         cid: u64,
         pr: ProcessResult,
@@ -261,8 +272,7 @@ fn make_engine_cb(
             Err(e) => {
                 panic!(
                     "send write finished to scheduler failed cid={}, err:{:?}",
-                    cid,
-                    e
+                    cid, e
                 );
             }
         }
@@ -275,9 +285,9 @@ struct HashableContext(Context);
 impl PartialEq for HashableContext {
     fn eq(&self, other: &HashableContext) -> bool {
         // k1 == k2 ⇒ hash(k1) == hash(k2)
-        self.0.get_region_id() == other.0.get_region_id() &&
-            self.0.get_region_epoch().get_version() == other.0.get_region_epoch().get_version() &&
-            self.0.get_peer().get_id() == other.0.get_peer().get_id()
+        self.0.get_region_id() == other.0.get_region_id()
+            && self.0.get_region_epoch().get_version() == other.0.get_region_epoch().get_version()
+            && self.0.get_peer().get_id() == other.0.get_peer().get_id()
     }
 }
 
@@ -390,9 +400,9 @@ impl Scheduler {
             worker_pool: ThreadPoolBuilder::with_default_factory(thd_name!("sched-worker-pool"))
                 .thread_count(worker_pool_size)
                 .build(),
-            high_priority_pool: ThreadPoolBuilder::with_default_factory(
-                thd_name!("sched-high-pri-pool"),
-            ).build(),
+            high_priority_pool: ThreadPoolBuilder::with_default_factory(thd_name!(
+                "sched-high-pri-pool"
+            )).build(),
             has_gc_command: false,
             running_write_bytes: 0,
         }
@@ -498,12 +508,10 @@ fn process_read(
                     KV_COMMAND_KEYREAD_HISTOGRAM_VEC
                         .with_label_values(&[tag])
                         .observe(results.len() as f64);
-                    Ok(
-                        results
-                            .drain(..)
-                            .map(|x| x.map_err(StorageError::from))
-                            .collect(),
-                    )
+                    Ok(results
+                        .drain(..)
+                        .map(|x| x.map_err(StorageError::from))
+                        .collect())
                 });
 
             match res {
@@ -543,7 +551,7 @@ fn process_read(
                 ctx.get_isolation_level(),
             );
             let res = match reader.seek_ts(start_ts).map_err(StorageError::from) {
-                Err(e) => ProcessResult::Failed { err: e.into() },
+                Err(e) => ProcessResult::Failed { err: e },
                 Ok(opt) => match opt {
                     Some(key) => match find_mvcc_infos_by_key(&mut reader, &key, u64::MAX) {
                         Ok((lock, writes, values)) => ProcessResult::MvccStartTs {
@@ -774,8 +782,7 @@ fn process_write(
             // Todo: if this happens, lock will hold for ever
             panic!(
                 "send WritePrepareFailed message to channel failed. cid={}, err={:?}",
-                cid,
-                err
+                cid, err
             );
         }
     }
@@ -1102,8 +1109,7 @@ impl Scheduler {
             .inc();
         debug!(
             "process cmd with snapshot, cid={}, cb_ctx={:?}",
-            cid,
-            cb_ctx
+            cid, cb_ctx
         );
         let mut cmd = {
             let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
@@ -1218,7 +1224,6 @@ impl Scheduler {
                 },
             );
             return;
-
         }
         self.schedule_command(cmd, callback);
     }
@@ -1360,8 +1365,7 @@ impl Scheduler {
     ) {
         debug!(
             "receive snapshot finish msg for cids={:?}, cb_ctx={:?}",
-            cids,
-            cb_ctx
+            cids, cb_ctx
         );
 
         match snapshot {

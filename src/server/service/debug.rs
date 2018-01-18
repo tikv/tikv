@@ -76,7 +76,7 @@ impl Service {
 
 impl debugpb_grpc::Debug for Service {
     fn get(&self, ctx: RpcContext, mut req: GetRequest, sink: UnarySink<GetResponse>) {
-        const TAG: &'static str = "debug_get";
+        const TAG: &str = "debug_get";
 
         let db = req.get_db();
         let cf = req.take_cf();
@@ -97,7 +97,7 @@ impl debugpb_grpc::Debug for Service {
     }
 
     fn raft_log(&self, ctx: RpcContext, req: RaftLogRequest, sink: UnarySink<RaftLogResponse>) {
-        const TAG: &'static str = "debug_raft_log";
+        const TAG: &str = "debug_raft_log";
 
         let region_id = req.get_region_id();
         let log_index = req.get_log_index();
@@ -122,7 +122,7 @@ impl debugpb_grpc::Debug for Service {
         req: RegionInfoRequest,
         sink: UnarySink<RegionInfoResponse>,
     ) {
-        const TAG: &'static str = "debug_region_log";
+        const TAG: &str = "debug_region_log";
 
         let region_id = req.get_region_id();
 
@@ -154,7 +154,7 @@ impl debugpb_grpc::Debug for Service {
         mut req: RegionSizeRequest,
         sink: UnarySink<RegionSizeResponse>,
     ) {
-        const TAG: &'static str = "debug_region_size";
+        const TAG: &str = "debug_region_size";
 
         let region_id = req.get_region_id();
         let cfs = req.take_cfs().into_vec();
@@ -233,7 +233,7 @@ impl debugpb_grpc::Debug for Service {
         mut req: InjectFailPointRequest,
         sink: UnarySink<InjectFailPointResponse>,
     ) {
-        const TAG: &'static str = "debug_inject_fail_point";
+        const TAG: &str = "debug_inject_fail_point";
 
         let f = self.pool.spawn_fn(move || {
             let name = req.take_name();
@@ -256,7 +256,7 @@ impl debugpb_grpc::Debug for Service {
         mut req: RecoverFailPointRequest,
         sink: UnarySink<RecoverFailPointResponse>,
     ) {
-        const TAG: &'static str = "debug_recover_fail_point";
+        const TAG: &str = "debug_recover_fail_point";
 
         let f = self.pool.spawn_fn(move || {
             let name = req.take_name();
@@ -276,7 +276,7 @@ impl debugpb_grpc::Debug for Service {
         _: ListFailPointsRequest,
         sink: UnarySink<ListFailPointsResponse>,
     ) {
-        const TAG: &'static str = "debug_list_fail_points";
+        const TAG: &str = "debug_list_fail_points";
 
         let f = self.pool.spawn_fn(move || {
             let list = fail::list().into_iter().map(|(name, actions)| {

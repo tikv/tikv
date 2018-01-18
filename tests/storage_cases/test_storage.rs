@@ -114,7 +114,6 @@ fn test_txn_store_for_point_get_with_pk() {
 
     store.get_err(b"new_key", 6);
     store.get_ok(b"b", 6, b"v2");
-
 }
 
 #[test]
@@ -723,12 +722,15 @@ fn test_isolation_inc() {
 
     let mut threads = vec![];
     for _ in 0..THREAD_NUM {
-        let (punch_card, store, oracle) = (punch_card.clone(), store.clone(), oracle.clone());
-        threads.push(thread::spawn(move || for _ in 0..INC_PER_THREAD {
-            let number = inc(&store.store, &oracle, b"key").unwrap() as usize;
-            let mut punch = punch_card.lock().unwrap();
-            assert_eq!(punch[number], false);
-            punch[number] = true;
+        let (punch_card, store, oracle) =
+            (Arc::clone(&punch_card), store.clone(), Arc::clone(&oracle));
+        threads.push(thread::spawn(move || {
+            for _ in 0..INC_PER_THREAD {
+                let number = inc(&store.store, &oracle, b"key").unwrap() as usize;
+                let mut punch = punch_card.lock().unwrap();
+                assert_eq!(punch[number], false);
+                punch[number] = true;
+            }
         }));
     }
     for t in threads {
@@ -803,9 +805,11 @@ fn test_isolation_multi_inc() {
     let oracle = Arc::new(Oracle::new());
     let mut threads = vec![];
     for _ in 0..THREAD_NUM {
-        let (store, oracle) = (store.clone(), oracle.clone());
-        threads.push(thread::spawn(move || for _ in 0..INC_PER_THREAD {
-            assert!(inc_multi(&store.store, &oracle, KEY_NUM));
+        let (store, oracle) = (store.clone(), Arc::clone(&oracle));
+        threads.push(thread::spawn(move || {
+            for _ in 0..INC_PER_THREAD {
+                assert!(inc_multi(&store.store, &oracle, KEY_NUM));
+            }
         }));
     }
     for t in threads {
@@ -826,7 +830,9 @@ fn bench_txn_store_rocksdb_inc(b: &mut Bencher) {
     let store = AssertionStorage::default();
     let oracle = Oracle::new();
 
-    b.iter(|| { inc(&store.store, &oracle, b"key").unwrap(); });
+    b.iter(|| {
+        inc(&store.store, &oracle, b"key").unwrap();
+    });
 }
 
 #[bench]
@@ -834,7 +840,9 @@ fn bench_txn_store_rocksdb_inc_x100(b: &mut Bencher) {
     let store = AssertionStorage::default();
     let oracle = Oracle::new();
 
-    b.iter(|| { inc_multi(&store.store, &oracle, 100); });
+    b.iter(|| {
+        inc_multi(&store.store, &oracle, 100);
+    });
 }
 
 #[bench]
@@ -842,8 +850,10 @@ fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
     let store = AssertionStorage::default();
     let oracle = Oracle::new();
 
-    b.iter(|| for _ in 0..100 {
-        store.put_ok(b"key", b"value", oracle.get_ts(), oracle.get_ts());
+    b.iter(|| {
+        for _ in 0..100 {
+            store.put_ok(b"key", b"value", oracle.get_ts(), oracle.get_ts());
+        }
     });
 }
 
@@ -864,14 +874,18 @@ fn test_conflict_commands_on_fault_engine() {
     let commit_ts = 20;
 
     let (tx, rx) = channel();
-    async_storage.async_prewrite(
-        storage.ctx.clone(),
-        vec![Mutation::Put((make_key(&k), v.clone()))],
-        k.clone(),
-        start_ts,
-        Default::default(),
-        box move |res| { tx.send(res).unwrap(); },
-    ).unwrap();
+    async_storage
+        .async_prewrite(
+            storage.ctx.clone(),
+            vec![Mutation::Put((make_key(&k), v.clone()))],
+            k.clone(),
+            start_ts,
+            Default::default(),
+            box move |res| {
+                tx.send(res).unwrap();
+            },
+        )
+        .unwrap();
     async_storage
         .async_commit(
             storage.ctx.clone(),
