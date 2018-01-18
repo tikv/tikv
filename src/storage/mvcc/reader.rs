@@ -892,6 +892,5 @@ mod tests {
             let get_cnt = i as usize + 1;
             assert_eq!(data.get, get_cnt);
         }
-
     }
 }
