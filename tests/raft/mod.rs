@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 mod test_raft;
 mod test_raft_snap;
 mod test_raft_paper;

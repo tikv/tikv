@@ -31,7 +31,6 @@ const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: usize = 10 * 1024 * 1024;
 const INITIAL_BUFFER_CAP: usize = 1024;
 
-
 static CONN_ID: AtomicUsize = ATOMIC_USIZE_INIT;
 
 struct Conn {
@@ -55,7 +54,7 @@ impl Conn {
         info!("server: new connection with tikv endpoint: {}", addr);
 
         let alive = Arc::new(AtomicBool::new(true));
-        let alive1 = alive.clone();
+        let alive1 = Arc::clone(&alive);
         let cb = ChannelBuilder::new(env)
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
@@ -76,12 +75,7 @@ impl Conn {
                 .map_err(|_| ())
                 .select(
                     sink.sink_map_err(Error::from)
-                        .send_all(
-                            rx.map(|msgs: Vec<(RaftMessage, WriteFlags)>| {
-                                stream::iter_ok(msgs)
-                            }).flatten()
-                                .map_err(|()| Error::Sink),
-                        )
+                        .send_all(rx.map(stream::iter_ok).flatten().map_err(|()| Error::Sink))
                         .then(move |r| {
                             alive.store(false, Ordering::SeqCst);
                             r
@@ -142,7 +136,7 @@ impl RaftClient {
         // TODO: avoid to_owned
         self.conns
             .entry((addr.to_owned(), index))
-            .or_insert_with(|| Conn::new(env.clone(), addr, cfg, security_mgr, store_id))
+            .or_insert_with(|| Conn::new(Arc::clone(env), addr, cfg, security_mgr, store_id))
     }
 
     pub fn send(&mut self, store_id: u64, addr: &str, msg: RaftMessage) -> Result<()> {
@@ -153,7 +147,6 @@ impl RaftClient {
             .push((msg, WriteFlags::default().buffer_hint(true)));
         Ok(())
     }
-
 
     pub fn flush(&mut self) {
         let addrs = &mut self.addrs;
@@ -177,8 +170,7 @@ impl RaftClient {
             if let Err(e) = conn.stream.unbounded_send(msgs) {
                 error!(
                     "server: drop conn with tikv endpoint {} flush conn error: {:?}",
-                    addr,
-                    e
+                    addr, e
                 );
 
                 if let Some(addr_current) = addrs.remove(&store_id) {
