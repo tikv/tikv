@@ -110,7 +110,6 @@ fn test_raw_node_step() {
     }
 }
 
-
 // test_raw_node_read_index_to_old_leader ensures that MsgReadIndex to old leader gets
 // forward to the new leader and 'send' method does not attach its term
 #[test]
@@ -275,7 +274,7 @@ fn test_raw_node_propose_add_duplicate_node() {
 #[test]
 fn test_raw_node_read_index() {
     let a = Rc::new(RefCell::new(Vec::new()));
-    let b = a.clone();
+    let b = Rc::clone(&a);
     let before_step_state = Box::new(move |m: &Message| {
         b.borrow_mut().push(m.clone());
         true
@@ -324,7 +323,6 @@ fn test_raw_node_read_index() {
     assert_eq!(msgs[0].get_msg_type(), MessageType::MsgReadIndex);
     assert_eq!(wrequest_ctx, msgs[0].get_entries()[0].get_data());
 }
-
 
 // test_raw_node_start ensures that a node can be started correctly. The node should
 // start with correct configuration change entries, and can accept and commit

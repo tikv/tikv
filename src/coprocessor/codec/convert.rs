@@ -33,8 +33,8 @@ pub fn truncate_f64(mut f: f64, flen: u8, decimal: u8) -> Res<f64> {
     if f.is_nan() {
         return Res::Overflow(0f64);
     }
-    let shift = 10u64.pow(decimal as u32) as f64;
-    let maxf = 10u64.pow((flen - decimal) as u32) as f64 - 1.0 / shift;
+    let shift = 10u64.pow(u32::from(decimal)) as f64;
+    let maxf = 10u64.pow(u32::from(flen - decimal)) as f64 - 1.0 / shift;
     if f.is_finite() {
         let tmp = f * shift;
         if tmp.is_finite() {
@@ -106,14 +106,14 @@ pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
         if c == b'-' {
             negative = true;
         } else if c >= b'0' && c <= b'9' {
-            r = c as i64 - b'0' as i64;
+            r = i64::from(c) - i64::from(b'0');
         } else if c != b'+' {
             return Ok(0);
         }
 
         r = trimed
             .take_while(|&&c| c >= b'0' && c <= b'9')
-            .fold(r, |l, &r| l * 10 + (r - b'0') as i64);
+            .fold(r, |l, &r| l * 10 + i64::from(r - b'0'));
         if negative {
             r = -r;
         }
@@ -130,14 +130,14 @@ pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
     let mut r = 0u64;
     if let Some(&c) = trimed.next() {
         if c >= b'0' && c <= b'9' {
-            r = c as u64 - b'0' as u64;
+            r = u64::from(c) - u64::from(b'0');
         } else if c != b'+' {
             return Ok(0);
         }
 
         r = trimed
             .take_while(|&&c| c >= b'0' && c <= b'9')
-            .fold(r, |l, &r| l * 10 + (r - b'0') as u64);
+            .fold(r, |l, &r| l * 10 + u64::from(r - b'0'));
     }
     Ok(r)
 }

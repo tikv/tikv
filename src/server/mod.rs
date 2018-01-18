@@ -24,15 +24,12 @@ pub mod resolve;
 pub mod snap;
 pub mod debug;
 
-use std::fmt;
+use std::fmt::{Debug, Formatter, Result as FormatResult};
 use std::boxed::FnBox;
 
-use grpc::Error as GrpcError;
-use futures::{Async, Future, Poll, Stream};
-use futures::future::{self, Executor};
-use futures::sync::mpsc::{self, Execute, SpawnHandle};
-
-use kvproto::coprocessor::Response;
+use futures::{stream, Stream};
+use futures::sync::mpsc;
+use futures_cpupool::CpuPool;
 
 pub use self::config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Error, Result};
@@ -42,49 +39,14 @@ pub use self::node::{create_raft_storage, Node};
 pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::raft_client::RaftClient;
 
-#[derive(Debug)]
-pub struct ResponseStream {
-    head: Option<Response>,
-    remain: Option<SpawnHandle<Response, GrpcError>>,
+pub type CopStream<T> = Box<Stream<Item = T, Error = mpsc::SendError<T>> + Send>;
+
+pub enum OnResponse<T> {
+    Unary(Box<FnBox(T) + Send>),
+    Streaming(Box<FnBox(CopStream<T>, Option<CpuPool>) + Send>),
 }
 
-impl ResponseStream {
-    pub fn spawn<S, E>(mut s: S, executor: &E) -> Self
-    where
-        S: Stream<Item = Response, Error = GrpcError> + Send + 'static,
-        E: Executor<Execute<S>>,
-    {
-        let head = future::poll_fn(|| s.poll()).wait().unwrap();
-        let remain = head.as_ref().map(|_| mpsc::spawn(s, executor, 8));
-        ResponseStream {
-            head: head,
-            remain: remain,
-        }
-    }
-}
-
-impl Stream for ResponseStream {
-    type Item = Response;
-    type Error = GrpcError;
-
-    fn poll(&mut self) -> Poll<Option<Response>, GrpcError> {
-        if let Some(resp) = self.head.take() {
-            return Ok(Async::Ready(Some(resp)));
-        }
-        if let Some(mut stream) = self.remain.as_mut() {
-            return stream.poll();
-        }
-        self.remain = None;
-        Ok(Async::Ready(None))
-    }
-}
-
-pub enum OnResponse {
-    Unary(Box<FnBox(Response) + Send>),
-    Streaming(Box<FnBox(ResponseStream) + Send>),
-}
-
-impl OnResponse {
+impl<T: Send + Debug + 'static> OnResponse<T> {
     pub fn is_streaming(&self) -> bool {
         match *self {
             OnResponse::Unary(_) => false,
@@ -92,26 +54,23 @@ impl OnResponse {
         }
     }
 
-    pub fn respond(self, resp: Response) {
+    pub fn respond(self, resp: T) {
         match self {
             OnResponse::Unary(cb) => cb(resp),
-            OnResponse::Streaming(cb) => cb(ResponseStream {
-                head: Some(resp),
-                remain: None,
-            }),
+            OnResponse::Streaming(cb) => cb(box stream::once(Ok(resp)), None),
         }
     }
 
-    pub fn respond_stream(self, s: ResponseStream) {
+    pub fn respond_stream(self, s: CopStream<T>, executor: CpuPool) {
         match self {
-            OnResponse::Streaming(cb) => cb(s),
+            OnResponse::Streaming(cb) => cb(s, Some(executor)),
             OnResponse::Unary(_) => unreachable!(),
         }
     }
 }
 
-impl fmt::Debug for OnResponse {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl<T> Debug for OnResponse<T> {
+    fn fmt(&self, f: &mut Formatter) -> FormatResult {
         match *self {
             OnResponse::Unary(_) => write!(f, "Unary"),
             OnResponse::Streaming(_) => write!(f, "Streaming"),

@@ -23,7 +23,6 @@ use tikv::util;
 use tikv::util::logger::{self, LogWriter};
 use tikv::util::security::SecurityConfig;
 
-
 /// A random generator of kv.
 /// Every iter should be taken in µs. See also `benches::bench_kv_iter`.
 pub struct KvGenerator {
@@ -91,8 +90,8 @@ impl Drop for CaseTraceLogger {
 // A help function to initial logger.
 pub fn init_log() {
     let output = env::var("LOG_FILE").ok();
-    let level = logger::get_level_by_string(&env::var("LOG_LEVEL")
-        .unwrap_or_else(|_| "debug".to_owned()));
+    let level =
+        logger::get_level_by_string(&env::var("LOG_LEVEL").unwrap_or_else(|_| "debug".to_owned()));
     let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
     // we don't mind set it multiple times.
     let _ = logger::init_log_for_tikv_only(CaseTraceLogger { f: writer }, level);

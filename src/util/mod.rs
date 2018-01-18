@@ -13,14 +13,13 @@
 
 use std::ops::Deref;
 use std::ops::DerefMut;
-use std::io;
 use std::{slice, thread};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::collections::vec_deque::{Iter, VecDeque};
-use std::u64;
+use std::{io, u64};
 
 use prometheus;
 use rand::{self, ThreadRng};
@@ -62,12 +61,14 @@ pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
     let mut size = 0;
     let limit = entries
         .iter()
-        .take_while(|&e| if size == 0 {
-            size += Message::compute_size(e) as u64;
-            true
-        } else {
-            size += Message::compute_size(e) as u64;
-            size <= max
+        .take_while(|&e| {
+            if size == 0 {
+                size += u64::from(Message::compute_size(e));
+                true
+            } else {
+                size += u64::from(Message::compute_size(e));
+                size <= max
+            }
         })
         .count();
 
@@ -149,7 +150,7 @@ pub fn to_socket_addr<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
 
 /// A function to escape a byte array to a readable ascii string.
 /// escape rules follow golang/protobuf.
-/// https://github.com/golang/protobuf/blob/master/proto/text.go#L578
+/// <https://github.com/golang/protobuf/blob/master/proto/text.go#L578>
 ///
 /// # Examples
 ///
@@ -539,7 +540,7 @@ mod tests {
     #[test]
     fn test_defer() {
         let should_panic = Rc::new(AtomicBool::new(true));
-        let sp = should_panic.clone();
+        let sp = Rc::clone(&should_panic);
         defer!(assert!(!sp.load(Ordering::SeqCst)));
         should_panic.store(false, Ordering::SeqCst);
     }
@@ -574,7 +575,7 @@ mod tests {
     fn test_limit_size() {
         let mut e = Entry::new();
         e.set_data(b"0123456789".to_vec());
-        let size = e.compute_size() as u64;
+        let size = u64::from(e.compute_size());
 
         let tbls = vec![
             (vec![], NO_LIMIT, 0),

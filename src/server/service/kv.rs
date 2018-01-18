@@ -18,10 +18,11 @@ use std::iter::{self, FromIterator};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use mio::Token;
-use grpc::{ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
-           ServerStreamingSink, UnarySink, WriteFlags};
-use futures::{future, Future, Stream};
-use futures::sync::oneshot;
+use grpc::{ClientStreamingSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
+           RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
+use futures::{future, Future, Sink, Stream};
+use futures::sync::{mpsc, oneshot};
+use futures_cpupool::CpuPool;
 use protobuf::RepeatedField;
 use kvproto::tikvpb_grpc;
 use kvproto::raft_serverpb::*;
@@ -39,11 +40,11 @@ use storage::engine::Error as EngineError;
 use server::transport::RaftStoreRouter;
 use server::snap::Task as SnapTask;
 use server::metrics::*;
-use server::{Error, OnResponse};
-use raftstore::store::Msg as StoreMessage;
+use server::{CopStream, Error, OnResponse};
+use raftstore::store::{Callback, Msg as StoreMessage};
 use coprocessor::{EndPointTask, RequestTask};
 
-const SCHEDULER_IS_BUSY: &'static str = "scheduler is busy";
+const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter + 'static> {
@@ -104,6 +105,18 @@ fn make_callback<T: Send + Debug + 'static>() -> (Box<FnBox(T) + Send>, oneshot:
     let (tx, rx) = oneshot::channel();
     let callback = move |resp| tx.send(resp).unwrap();
     (box callback, rx)
+}
+
+fn make_stream_callback<T: Send + Debug + 'static>() -> (OnResponse<T>, mpsc::Receiver<T>) {
+    let (tx, rx) = mpsc::channel(8);
+    let callback = move |s: CopStream<T>, executor: Option<CpuPool>| {
+        let f = s.forward(tx);
+        if let Some(executor) = executor {
+            return executor.spawn(f).forget();
+        }
+        f.wait().unwrap();
+    };
+    (OnResponse::Streaming(box callback), rx)
 }
 
 impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
@@ -410,8 +423,9 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .collect();
 
         let (cb, future) = make_callback();
-        let res = self.storage
-            .async_rollback(req.take_context(), keys, req.get_start_version(), cb);
+        let res =
+            self.storage
+                .async_rollback(req.take_context(), keys, req.get_start_version(), cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -493,9 +507,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .start_coarse_timer();
 
         let txn_status = if req.get_start_version() > 0 {
-            HashMap::from_iter(iter::once(
-                (req.get_start_version(), req.get_commit_version()),
-            ))
+            HashMap::from_iter(iter::once((
+                req.get_start_version(),
+                req.get_commit_version(),
+            )))
         } else {
             HashMap::from_iter(
                 req.take_txn_infos()
@@ -697,8 +712,9 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .start_coarse_timer();
 
         let (cb, future) = make_callback();
-        let res = self.storage
-            .async_raw_put(req.take_context(), req.take_key(), req.take_value(), cb);
+        let res =
+            self.storage
+                .async_raw_put(req.take_context(), req.take_key(), req.take_value(), cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -811,8 +827,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        let (cb, future) = make_callback();
-        let on_resp = OnResponse::Streaming(cb);
+        let (on_resp, future) = make_stream_callback();
         let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
             Ok(req_task) => req_task,
             Err(e) => {
@@ -830,18 +845,21 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         }
 
         let future = future
-            .map_err(Error::from)
-            .and_then(|s| {
-                s.map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
-                    .forward(sink)
-                    .map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", label, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+            .map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
+            .map_err(|e| {
+                let code = RpcStatusCode::Unknown;
+                let msg = Some(format!("{:?}", e));
+                GrpcError::RpcFailure(RpcStatus::new(code, msg))
             });
-        ctx.spawn(future);
+
+        ctx.spawn(
+            sink.send_all(future)
+                .map(|_| timer.observe_duration())
+                .map_err(move |e| {
+                    debug!("{} failed: {:?}", label, e);
+                    GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+                }),
+        );
     }
 
     fn raft(
@@ -1020,7 +1038,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             region_id: req.get_context().get_region_id(),
             region_epoch: req.take_context().take_region_epoch(),
             split_key: Key::from_raw(req.get_split_key()).encoded().clone(),
-            callback: Some(cb),
+            callback: Callback::Write(cb),
         };
 
         if let Err(e) = self.ch.try_send(req) {
@@ -1032,10 +1050,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|mut v| {
                 let mut resp = SplitRegionResponse::new();
-                if v.get_header().has_error() {
-                    resp.set_region_error(v.mut_header().take_error());
+                if v.response.get_header().has_error() {
+                    resp.set_region_error(v.response.mut_header().take_error());
                 } else {
-                    let admin_resp = v.mut_admin_response();
+                    let admin_resp = v.response.mut_admin_response();
                     let split_resp = admin_resp.mut_split();
                     resp.set_left(split_resp.take_left());
                     resp.set_right(split_resp.take_right());
@@ -1057,9 +1075,9 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
     use storage::Error;
     match *res {
         // TODO: use `Error::cause` instead.
-        Err(Error::Engine(EngineError::Request(ref e))) |
-        Err(Error::Txn(TxnError::Engine(EngineError::Request(ref e)))) |
-        Err(Error::Txn(TxnError::Mvcc(MvccError::Engine(EngineError::Request(ref e))))) => {
+        Err(Error::Engine(EngineError::Request(ref e)))
+        | Err(Error::Txn(TxnError::Engine(EngineError::Request(ref e))))
+        | Err(Error::Txn(TxnError::Mvcc(MvccError::Engine(EngineError::Request(ref e))))) => {
             Some(e.to_owned())
         }
         Err(Error::SchedTooBusy) => {
@@ -1083,14 +1101,12 @@ fn extract_committed(err: &storage::Error) -> Option<u64> {
 fn extract_key_error(err: &storage::Error) -> KeyError {
     let mut key_error = KeyError::new();
     match *err {
-        storage::Error::Txn(
-            TxnError::Mvcc(MvccError::KeyIsLocked {
-                ref key,
-                ref primary,
-                ts,
-                ttl,
-            }),
-        ) => {
+        storage::Error::Txn(TxnError::Mvcc(MvccError::KeyIsLocked {
+            ref key,
+            ref primary,
+            ts,
+            ttl,
+        })) => {
             let mut lock_info = LockInfo::new();
             lock_info.set_key(key.to_owned());
             lock_info.set_primary_lock(primary.to_owned());
@@ -1098,8 +1114,8 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             lock_info.set_lock_ttl(ttl);
             key_error.set_locked(lock_info);
         }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict { .. })) |
-        storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
+        storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict { .. }))
+        | storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
             warn!("txn conflicts: {:?}", err);
             key_error.set_retryable(format!("{:?}", err));
         }

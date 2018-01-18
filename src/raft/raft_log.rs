@@ -25,7 +25,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use raft::storage::Storage;
 use raft::log_unstable::Unstable;
 use kvproto::eraftpb::{Entry, Snapshot};
@@ -92,8 +91,7 @@ impl<T: Storage> RaftLog<T> {
             Ok(t) => t,
             Err(e) => panic!(
                 "{} unexpected error when getting the last term: {:?}",
-                self.tag,
-                e
+                self.tag, e
             ),
         }
     }
@@ -119,8 +117,8 @@ impl<T: Storage> RaftLog<T> {
             Some(term) => Ok(term),
             _ => self.store.term(idx).map_err(|e| {
                 match e {
-                    Error::Store(StorageError::Compacted) |
-                    Error::Store(StorageError::Unavailable) => {}
+                    Error::Store(StorageError::Compacted)
+                    | Error::Store(StorageError::Unavailable) => {}
                     _ => panic!("{} unexpected error: {:?}", self.tag, e),
                 }
                 e
@@ -141,7 +139,6 @@ impl<T: Storage> RaftLog<T> {
             None => self.store.last_index().unwrap(),
         }
     }
-
 
     // find_conflict finds the index of the conflict.
     // It returns the first index of conflicting entries between the existing
@@ -192,9 +189,7 @@ impl<T: Storage> RaftLog<T> {
             } else if conflict_idx <= self.committed {
                 panic!(
                     "{} entry {} conflict with committed entry {}",
-                    self.tag,
-                    conflict_idx,
-                    self.committed
+                    self.tag, conflict_idx, self.committed
                 )
             } else {
                 let offset = idx + 1;
@@ -229,10 +224,7 @@ impl<T: Storage> RaftLog<T> {
         if self.committed < idx || idx < self.applied {
             panic!(
                 "{} applied({}) is out of range [prev_applied({}), committed({})",
-                self.tag,
-                idx,
-                self.applied,
-                self.committed
+                self.tag, idx, self.applied, self.committed
             )
         }
         self.applied = idx;
@@ -263,9 +255,7 @@ impl<T: Storage> RaftLog<T> {
         if after < self.committed {
             panic!(
                 "{} after {} is out of range [committed {}]",
-                self.tag,
-                after,
-                self.committed
+                self.tag, after, self.committed
             )
         }
         self.unstable.truncate_and_append(ents);
@@ -384,15 +374,15 @@ impl<T: Storage> RaftLog<T> {
             return Err(err.unwrap());
         }
 
-
         let mut ents = vec![];
         if low == high {
             return Ok(ents);
         }
 
         if low < self.unstable.offset {
-            let stored_entries = self.store
-                .entries(low, cmp::min(high, self.unstable.offset), max_size);
+            let stored_entries =
+                self.store
+                    .entries(low, cmp::min(high, self.unstable.offset), max_size);
             if stored_entries.is_err() {
                 let e = stored_entries.unwrap_err();
                 match e {
@@ -433,7 +423,6 @@ impl<T: Storage> RaftLog<T> {
         self.unstable.restore(snapshot);
     }
 }
-
 
 #[cfg(test)]
 mod test {
@@ -728,11 +717,9 @@ mod test {
             (snap_index + 1, snap_term, vec![], snap_index + 1),
             (snap_index, snap_term, vec![], snap_index + 1),
             (snap_index - 1, snap_term, vec![], snap_index + 1),
-
             (snap_index + 1, snap_term + 1, vec![], snap_index + 1),
             (snap_index, snap_term + 1, vec![], snap_index + 1),
             (snap_index - 1, snap_term + 1, vec![], snap_index + 1),
-
             (
                 snap_index + 1,
                 snap_term,
@@ -751,7 +738,6 @@ mod test {
                 vec![new_entry(snap_index + 1, snap_term)],
                 snap_index + 1,
             ),
-
             (
                 snap_index + 1,
                 snap_term + 1,
@@ -784,9 +770,7 @@ mod test {
             if raft_log.unstable.offset != wunstable {
                 panic!(
                     "#{}: unstable = {}, want {}",
-                    i,
-                    raft_log.unstable.offset,
-                    wunstable
+                    i, raft_log.unstable.offset, wunstable
                 );
             }
         }
@@ -803,9 +787,7 @@ mod test {
             if raft_log.unstable.offset != wunstable {
                 panic!(
                     "#{}: unstable = {}, want {}",
-                    i,
-                    raft_log.unstable.offset,
-                    wunstable
+                    i, raft_log.unstable.offset, wunstable
                 );
             }
         }
@@ -867,9 +849,7 @@ mod test {
             if next_entries != expect_entries.map(|n| n.to_vec()) {
                 panic!(
                     "#{}: next_entries = {:?}, want {:?}",
-                    i,
-                    next_entries,
-                    expect_entries
+                    i, next_entries, expect_entries
                 );
             }
         }
@@ -900,7 +880,7 @@ mod test {
         let (offset, num) = (100u64, 100u64);
         let (last, half) = (offset + num, offset + num / 2);
         let halfe = new_entry(half, half);
-        let halfe_size = protobuf::Message::compute_size(&halfe) as u64;
+        let halfe_size = u64::from(protobuf::Message::compute_size(&halfe));
 
         let store = MemStorage::new();
         store
@@ -944,7 +924,6 @@ mod test {
                 false,
             ),
             (last, last + 1, raft_log::NO_LIMIT, vec![], true),
-
             // test limit
             (
                 half - 1,

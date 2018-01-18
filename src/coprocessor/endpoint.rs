@@ -21,8 +21,8 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::thread::{self, ThreadId};
 
 use protobuf::{CodedInputStream, Message as PbMsg};
-use grpc::Error as GrpcError;
 use futures::{future, stream};
+use futures::sync::mpsc as futures_mpsc;
 use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 
 use tipb::select::{self, DAGRequest};
@@ -36,7 +36,7 @@ use kvproto::kvrpcpb::{CommandPri, HandleTime, IsolationLevel};
 use util::time::{duration_to_sec, Instant};
 use util::worker::{FutureScheduler, Runnable, Scheduler};
 use util::collections::HashMap;
-use server::{Config, OnResponse, ResponseStream};
+use server::{Config, OnResponse};
 use storage::{self, engine, Engine, FlowStatistics, Snapshot, Statistics, StatisticsSummary};
 use storage::engine::Error as EngineError;
 use pd::PdTask;
@@ -60,11 +60,11 @@ const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
 
 const DEFAULT_ERROR_CODE: i32 = 1;
 
-pub const SINGLE_GROUP: &'static [u8] = b"SingleGroup";
+pub const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
-const OUTDATED_ERROR_MSG: &'static str = "request outdated.";
+const OUTDATED_ERROR_MSG: &str = "request outdated.";
 
-const ENDPOINT_IS_BUSY: &'static str = "endpoint is busy";
+const ENDPOINT_IS_BUSY: &str = "endpoint is busy";
 
 struct CopContextInner {
     select_stats: StatisticsSummary,
@@ -158,11 +158,13 @@ struct CopContextPool {
 }
 
 impl CopContextPool {
-    // Must run in CpuPool.
     fn collect(&self, region_id: u64, scan_tag: &str, stats: CopStats) {
         let thread_id = thread::current().id();
-        let cop_ctx = self.cop_ctxs.get(&thread_id).unwrap();
-        cop_ctx.0.borrow_mut().collect(region_id, scan_tag, stats);
+        if let Some(cop_ctx) = self.cop_ctxs.get(&thread_id) {
+            // If the request is failed before enter into CpuPool,
+            // we don't need to collect anything.
+            cop_ctx.0.borrow_mut().collect(region_id, scan_tag, stats);
+        }
     }
 }
 
@@ -303,7 +305,7 @@ impl Host {
             CommandPri::High => &mut self.high_priority_pool,
             CommandPri::Normal => &mut self.pool,
         };
-        let pool = &mut pool_and_ctx_pool.pool;
+        let pool = &pool_and_ctx_pool.pool;
         tracker.attach_ctx_pool(pool_and_ctx_pool.contexts.clone());
 
         match cop_req {
@@ -326,28 +328,23 @@ impl Host {
                     return pool.spawn_fn(do_request).forget();
                 }
                 // For streaming.
-                let pool_1 = pool.clone();
                 let batch_row_limit = self.stream_batch_row_limit;
-                let f = move || {
-                    let s = stream::unfold((ctx, false), move |(mut ctx, finished)| {
-                        if finished {
-                            return None;
-                        }
-                        tracker.record_wait();
-                        let (item, finished) = ctx.handle_streaming_request(batch_row_limit)
-                            .unwrap_or_else(|e| (Some(err_resp(e)), true));
-                        item.map(|mut resp| {
-                            let mut cop_stats = CopStats::default();
-                            ctx.collect_statistics_into(&mut cop_stats.stats);
-                            ctx.collect_metrics_into(&mut cop_stats.scan_counter);
-                            tracker.record_handle(&mut resp, cop_stats);
-                            future::ok::<_, GrpcError>((resp, (ctx, finished)))
-                        })
-                    });
-                    let resp_stream = ResponseStream::spawn(s, &pool_1);
-                    future::ok::<_, ()>(on_resp.respond_stream(resp_stream))
-                };
-                pool.spawn_fn(f).forget()
+                let s = stream::unfold((ctx, false), move |(mut ctx, finished)| {
+                    if finished {
+                        return None;
+                    }
+                    tracker.record_wait();
+                    let (item, finished) = ctx.handle_streaming_request(batch_row_limit)
+                        .unwrap_or_else(|e| (Some(err_resp(e)), true));
+                    item.map(|mut resp| {
+                        let mut cop_stats = CopStats::default();
+                        ctx.collect_statistics_into(&mut cop_stats.stats);
+                        ctx.collect_metrics_into(&mut cop_stats.scan_counter);
+                        tracker.record_handle(&mut resp, cop_stats);
+                        future::ok::<_, futures_mpsc::SendError<_>>((resp, (ctx, finished)))
+                    })
+                });
+                on_resp.respond_stream(box s, pool.clone());
             }
             CopRequest::Analyze(analyze) => {
                 let ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx);
@@ -554,12 +551,16 @@ pub struct RequestTask {
     req: Request,
     cop_req: CopRequest,
     ctx: ReqContext,
-    on_resp: OnResponse,
+    on_resp: OnResponse<Response>,
     tracker: RequestTracker,
 }
 
 impl RequestTask {
-    pub fn new(req: Request, on_resp: OnResponse, recursion_limit: u32) -> Result<RequestTask> {
+    pub fn new(
+        req: Request,
+        on_resp: OnResponse<Response>,
+        recursion_limit: u32,
+    ) -> Result<RequestTask> {
         let mut table_scan = false;
         let (start_ts, cop_req) = match req.get_tp() {
             REQ_TYPE_DAG => {
@@ -843,11 +844,11 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
     }
 }
 
-pub const STR_REQ_TYPE_SELECT: &'static str = "select";
-pub const STR_REQ_TYPE_INDEX: &'static str = "index";
-pub const STR_REQ_PRI_LOW: &'static str = "low";
-pub const STR_REQ_PRI_NORMAL: &'static str = "normal";
-pub const STR_REQ_PRI_HIGH: &'static str = "high";
+pub const STR_REQ_TYPE_SELECT: &str = "select";
+pub const STR_REQ_TYPE_INDEX: &str = "index";
+pub const STR_REQ_PRI_LOW: &str = "low";
+pub const STR_REQ_PRI_NORMAL: &str = "normal";
+pub const STR_REQ_PRI_HIGH: &str = "high";
 
 #[inline]
 pub fn get_req_pri_str(pri: CommandPri) -> &'static str {

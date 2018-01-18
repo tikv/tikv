@@ -431,7 +431,6 @@ impl Store {
     }
 }
 
-
 fn build_row_key(table_id: i64, id: i64) -> Vec<u8> {
     let mut buf = [0; 8];
     (&mut buf as &mut [u8]).encode_i64(id).unwrap();
@@ -798,7 +797,6 @@ fn test_select() {
 
     end_point.stop().unwrap().join().unwrap();
 }
-
 
 #[test]
 fn test_batch_row_limit() {
@@ -1349,7 +1347,8 @@ fn test_order_by_column() {
     for (row, (id, name, cnt)) in spliter.zip(exp) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded =
-            datum::encode_value(&[(id as i64).into(), name_datum, (cnt as i64).into()]).unwrap();
+            datum::encode_value(&[i64::from(id).into(), name_datum, i64::from(cnt).into()])
+                .unwrap();
         let result_encoded = datum::encode_value(&row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
@@ -1477,12 +1476,14 @@ fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectRespon
 
 fn handle_streaming_select(end_point: &Worker<EndPointTask>, req: Request) -> Vec<StreamResponse> {
     let (tx, rx) = mpsc::channel();
-    let on_resp = OnResponse::Streaming(box move |s| for r in Stream::wait(s) {
-        let resp: Response = r.unwrap();
-        assert!(!resp.get_data().is_empty());
-        let mut stream_resp = StreamResponse::new();
-        stream_resp.merge_from_bytes(resp.get_data()).unwrap();
-        tx.send(stream_resp).unwrap();
+    let on_resp = OnResponse::Streaming(box move |s, _| {
+        for r in Stream::wait(s) {
+            let resp: Response = r.unwrap();
+            assert!(!resp.get_data().is_empty());
+            let mut stream_resp = StreamResponse::new();
+            stream_resp.merge_from_bytes(resp.get_data()).unwrap();
+            tx.send(stream_resp).unwrap();
+        }
     });
     let req = RequestTask::new(req, on_resp, 100).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();
@@ -2000,7 +2001,6 @@ fn test_handle_truncate() {
             right.set_sig(ScalarFuncSig::CastStringAsInt);
             right.mut_children().push(value);
 
-
             let mut cond = Expr::new();
             cond.set_tp(ExprType::ScalarFunc);
             cond.set_sig(ScalarFuncSig::LTInt);
@@ -2118,7 +2118,6 @@ fn test_default_val() {
 
     end_point.stop().unwrap().join().unwrap();
 }
-
 
 #[test]
 fn test_output_offsets() {
