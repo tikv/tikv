@@ -330,7 +330,7 @@ mod test {
         let key_ranges = vec![get_range(tid, i64::MIN, i64::MAX)];
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store);
+        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store).unwrap();
 
         // init aggregation meta
         let mut aggregation = Aggregation::default();

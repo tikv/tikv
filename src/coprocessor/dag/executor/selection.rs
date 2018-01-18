@@ -207,7 +207,7 @@ mod tests {
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
-        let inner_table_scan = TableScanExecutor::new(&table_scan, key_ranges, store);
+        let inner_table_scan = TableScanExecutor::new(&table_scan, key_ranges, store).unwrap();
 
         // selection executor
         let mut selection = Selection::new();
@@ -261,7 +261,7 @@ mod tests {
 
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let inner_table_scan = TableScanExecutor::new(&table_scan, key_ranges, store);
+        let inner_table_scan = TableScanExecutor::new(&table_scan, key_ranges, store).unwrap();
 
         // selection executor
         let mut selection = Selection::new();
