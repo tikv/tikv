@@ -55,6 +55,8 @@ pub const REQ_TYPE_ANALYZE: i64 = 104;
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.
 const REQUEST_MAX_HANDLE_SECS: u64 = 60;
+// Like REQUEST_MAX_HANDLE_SECS but for every response in one streaming.
+const REQUEST_MAX_STREAM_HANDLE_SECS: u64 = 10;
 // If handle time is larger than the lower bound, the query is considered as slow query.
 const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
 
@@ -398,12 +400,14 @@ enum CopRequest {
 
 #[derive(Debug)]
 pub struct ReqContext {
-    // The deadline before which the task should be responded.
-    pub deadline: Instant,
+    // The deadline before which the task should be responded. For normal request
+    // it should be 60s. For coprocessor streaming request, the deadline is 60s
+    // for the first response and 10s for rest, if they exceed the first deadline.
+    deadline: Instant,
+    is_stream_head: bool, // A flag for coprocessor streaming.
     pub isolation_level: IsolationLevel,
     pub fill_cache: bool,
-    // whether is a table scan request.
-    pub table_scan: bool,
+    pub table_scan: bool, // Whether is a table scan request.
 }
 
 impl ReqContext {
@@ -422,6 +426,14 @@ impl ReqContext {
             return Err(Error::Outdated(self.deadline, now, self.get_scan_tag()));
         }
         Ok(())
+    }
+
+    pub fn renew_streaming_outdated(&mut self) {
+        let now = Instant::now_coarse();
+        if !self.is_stream_head || self.deadline <= now {
+            self.is_stream_head = false;
+            self.deadline = now + Duration::from_secs(REQUEST_MAX_STREAM_HANDLE_SECS);
+        }
     }
 }
 
@@ -589,6 +601,7 @@ impl RequestTask {
 
         let req_ctx = ReqContext {
             deadline: deadline,
+            is_stream_head: true,
             isolation_level: req.get_context().get_isolation_level(),
             fill_cache: !req.get_context().get_not_fill_cache(),
             table_scan: table_scan,
