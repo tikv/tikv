@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use tikv::util::HandyRwLock;
 use tikv::storage::{self, make_key, Mutation};
-use tikv::storage::{engine, mvcc, txn};
+use tikv::storage::{engine, mvcc, txn, Key};
 use kvproto::kvrpcpb::Context;
 use raftstore::server::new_server_cluster;
 use raftstore::cluster::Cluster;
@@ -176,10 +176,12 @@ fn test_engine_leader_change_twice() {
 
     // Not leader.
     cluster.must_transfer_leader(region.get_id(), peers[1].clone());
-    assert!(engine.write(&ctx, vec![]).is_err());
+    engine
+        .put(&ctx, Key::from_raw(b"a"), b"a".to_vec())
+        .unwrap_err();
     // Term not match.
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
-    let res = engine.write(&ctx, vec![]);
+    let res = engine.put(&ctx, Key::from_raw(b"a"), b"a".to_vec());
     if let engine::Error::Request(ref e) = *res.as_ref().err().unwrap() {
         assert!(e.has_stale_command());
     } else {

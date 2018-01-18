@@ -47,12 +47,12 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     // sleep 200ms in case the commit packet is dropped by simulated transport.
     thread::sleep(Duration::from_millis(200));
 
-    cluster.assert_quorum(|engine| {
-        match engine.get_value(&keys::data_key(key)).unwrap() {
+    cluster.assert_quorum(
+        |engine| match engine.get_value(&keys::data_key(key)).unwrap() {
             None => false,
             Some(v) => &*v == value,
-        }
-    });
+        },
+    );
 
     cluster.must_delete(key);
     assert_eq!(cluster.must_get(key), None);
@@ -60,9 +60,7 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     // sleep 200ms in case the commit packet is dropped by simulated transport.
     thread::sleep(Duration::from_millis(200));
 
-    cluster.assert_quorum(|engine| {
-        engine.get_value(&keys::data_key(key)).unwrap().is_none()
-    });
+    cluster.assert_quorum(|engine| engine.get_value(&keys::data_key(key)).unwrap().is_none());
 
     // TODO add stale epoch test cases.
 }
@@ -114,7 +112,6 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
     );
 }
 
-
 fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
 
@@ -151,7 +148,6 @@ fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize
     sleep_ms(600);
 
     assert!(cluster.leader_of_region(1).is_none());
-
 }
 
 fn test_multi_random_restart<T: Simulator>(
@@ -165,7 +161,6 @@ fn test_multi_random_restart<T: Simulator>(
     let mut value = [0u8; 5];
 
     for i in 1..restart_count {
-
         let id = 1 + rng.gen_range(0, node_count as u64);
         cluster.stop_node(id);
 
@@ -219,12 +214,11 @@ fn test_multi_server_base() {
     test_multi_base(&mut cluster)
 }
 
-
 fn test_multi_latency<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
-    cluster.add_send_filter(CloneFilterFactory(
-        DelayFilter::new(Duration::from_millis(30)),
-    ));
+    cluster.add_send_filter(CloneFilterFactory(DelayFilter::new(
+        Duration::from_millis(30),
+    )));
     test_multi_base_after_bootstrap(cluster);
 }
 
@@ -469,16 +463,19 @@ fn test_node_leader_change_with_log_overlap() {
     );
     put_req.mut_header().set_peer(new_peer(1, 1));
     let called = Arc::new(AtomicBool::new(false));
-    let called_ = called.clone();
+    let called_ = Arc::clone(&called);
     cluster
         .sim
         .rl()
         .get_node_router(1)
-        .send_command(put_req, box move |resp: RaftCmdResponse| {
-            called_.store(true, Ordering::SeqCst);
-            assert!(resp.get_header().has_error());
-            assert!(resp.get_header().get_error().has_stale_command());
-        })
+        .send_command(
+            put_req,
+            Callback::Write(box move |resp: WriteResponse| {
+                called_.store(true, Ordering::SeqCst);
+                assert!(resp.response.get_header().has_error());
+                assert!(resp.response.get_header().get_error().has_stale_command());
+            }),
+        )
         .unwrap();
 
     // Now let peer(1, 1) steps down. Can't use transfer leader here, because
@@ -636,7 +633,7 @@ fn test_remove_leader_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
             .direction(Direction::Send),
     ));
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.remove_peer(1, new_peer(1, 1));
 
     // wait for the leader receive the remove order.
@@ -723,9 +720,12 @@ fn test_node_dropped_proposal() {
         .sim
         .rl()
         .get_node_router(1)
-        .send_command(put_req, box move |resp: RaftCmdResponse| {
-            let _ = tx.send(resp);
-        })
+        .send_command(
+            put_req,
+            Callback::Write(box move |resp: WriteResponse| {
+                let _ = tx.send(resp.response);
+            }),
+        )
         .unwrap();
 
     // Although proposal is dropped, callback should be cleaned up in time.

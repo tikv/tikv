@@ -39,6 +39,7 @@ fn test_raftkv() {
     cf(&ctx, storage.as_ref());
     empty_write(&ctx, storage.as_ref());
     wrong_context(&ctx, storage.as_ref());
+    empty_batch_snapshot(storage.as_ref());
     // TODO: test multiple node
 }
 
@@ -95,7 +96,7 @@ fn test_batch_snapshot() {
 
     let size = 3;
     let batch = vec![ctx.clone(); size];
-    let snapshots = mut_batch_snapshot(batch, storage.as_ref());
+    let snapshots = must_batch_snapshot(batch, storage.as_ref());
     assert_eq!(size, snapshots.len());
     for s in snapshots {
         assert!(s.is_some());
@@ -103,7 +104,7 @@ fn test_batch_snapshot() {
     // sleep util leader lease is expired.
     thread::sleep(Duration::from_millis(MAX_LEADER_LEASE));
     let batch = vec![ctx; size];
-    let snapshots = mut_batch_snapshot(batch, storage.as_ref());
+    let snapshots = must_batch_snapshot(batch, storage.as_ref());
     assert_eq!(size, snapshots.len());
     for s in snapshots {
         assert!(s.is_none());
@@ -114,9 +115,11 @@ pub fn make_key(k: &[u8]) -> Key {
     Key::from_raw(k)
 }
 
-fn mut_batch_snapshot(batch: Vec<Context>, engine: &Engine) -> BatchResults<Box<Snapshot>> {
+fn must_batch_snapshot(batch: Vec<Context>, engine: &Engine) -> BatchResults<Box<Snapshot>> {
     let (tx, rx) = channel();
-    let on_finished = box move |snapshots| { tx.send(snapshots).unwrap(); };
+    let on_finished = box move |snapshots| {
+        tx.send(snapshots).unwrap();
+    };
     engine.async_batch_snapshot(batch, on_finished).unwrap();
     rx.recv().unwrap()
 }
@@ -301,7 +304,7 @@ fn cf(ctx: &Context, engine: &Engine) {
 }
 
 fn empty_write(ctx: &Context, engine: &Engine) {
-    engine.write(ctx, vec![]).unwrap();
+    engine.write(ctx, vec![]).unwrap_err();
 }
 
 fn wrong_context(ctx: &Context, engine: &Engine) {
@@ -309,4 +312,11 @@ fn wrong_context(ctx: &Context, engine: &Engine) {
     let mut ctx = ctx.to_owned();
     ctx.set_region_id(region_id + 1);
     assert!(engine.write(&ctx, vec![]).is_err());
+}
+
+fn empty_batch_snapshot(engine: &Engine) {
+    let on_finished = box move |_| {};
+    engine
+        .async_batch_snapshot(vec![], on_finished)
+        .unwrap_err();
 }

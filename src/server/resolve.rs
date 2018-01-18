@@ -79,7 +79,7 @@ impl<T: PdClient> Runner<T> {
     }
 
     fn get_address(&mut self, store_id: u64) -> Result<String> {
-        let pd_client = self.pd_client.clone();
+        let pd_client = Arc::clone(&self.pd_client);
         let s = box_try!(pd_client.get_store(store_id));
         if s.get_state() == metapb::StoreState::Tombstone {
             RESOLVE_STORE_COUNTER
@@ -247,7 +247,7 @@ mod tests {
         }
     }
 
-    const STORE_ADDR: &'static str = "127.0.0.1:12345";
+    const STORE_ADDR: &str = "127.0.0.1:12345";
 
     #[test]
     fn test_resolve_store_state_up() {

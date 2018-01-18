@@ -92,7 +92,6 @@ impl EvalContext {
     }
 }
 
-
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
@@ -143,12 +142,12 @@ quick_error! {
 
 impl From<FromUtf8Error> for Error {
     fn from(err: FromUtf8Error) -> Error {
-        Error::Codec(CError::Encoding(err.utf8_error().into()))
+        Error::Codec(CError::Encoding(err.utf8_error()))
     }
 }
 impl From<Utf8Error> for Error {
     fn from(err: Utf8Error) -> Error {
-        Error::Codec(CError::Encoding(err.into()))
+        Error::Codec(CError::Encoding(err))
     }
 }
 
@@ -533,8 +532,8 @@ mod test {
             Datum::Time(t) => {
                 expr.set_tp(ExprType::MysqlTime);
                 let mut ft = FieldType::new();
-                ft.set_tp(t.get_tp() as i32);
-                ft.set_decimal(t.get_fsp() as i32);
+                ft.set_tp(i32::from(t.get_tp()));
+                ft.set_decimal(i32::from(t.get_fsp()));
                 expr.set_field_type(ft);
                 let u = t.to_packed_u64();
                 let mut buf = Vec::with_capacity(number::U64_SIZE);
