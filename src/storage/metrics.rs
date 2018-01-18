@@ -137,29 +137,3 @@ lazy_static! {
             exponential_buckets(1.0, 2.0, 21).unwrap()
         ).unwrap();
 }
-
-pub struct LocalCounter {
-    counter: Counter,
-    val: f64,
-}
-
-impl LocalCounter {
-    pub fn new(counter: Counter) -> LocalCounter {
-        LocalCounter {
-            counter: counter,
-            val: 0.0,
-        }
-    }
-
-    /// `inc` increments the local counter by 1.
-    #[inline]
-    pub fn inc(&mut self) {
-        self.val += 1.0;
-    }
-
-    /// `flush` the local counter value to the counter
-    #[inline]
-    pub fn flush(&self) -> Result<()> {
-        self.counter.inc_by(self.val)
-    }
-}

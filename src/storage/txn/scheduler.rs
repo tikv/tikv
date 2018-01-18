@@ -55,6 +55,7 @@ use util::transport::{Error as TransportError, SyncSendCh};
 use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
 use util::time::SlowTimer;
 use util::collections::HashMap;
+use util::local_counter::LocalCounter;
 
 use super::Result;
 use super::Error;
@@ -412,11 +413,11 @@ impl Scheduler {
 /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
 /// event loop.
 fn process_read(
+    sched_ctx: &mut SchedContext,
     cid: u64,
     mut cmd: Command,
     ch: SyncSendCh<Msg>,
     snapshot: Box<Snapshot>,
-    sched_ctx: &mut SchedContext,
 ) -> Statistics {
     fail_point!("txn_before_process_read");
     debug!("process read cmd(cid={}) in worker pool.", cid);
@@ -1064,8 +1065,8 @@ impl ThreadContext for SchedContext {
         self.processing_read_duration.flush();
         self.processing_write_duration.flush();
         self.command_keyread_duration.flush();
-        self.command_gc_skipped_counter.flush().unwrap();
-        self.command_gc_empty_range_counter.flush().unwrap();
+        self.command_gc_skipped_counter.flush();
+        self.command_gc_empty_range_counter.flush();
     }
 }
 
@@ -1144,7 +1145,7 @@ impl Scheduler {
                     .with_label_values(&[tag])
                     .start_coarse_timer();
 
-                let s = process_read(cid, cmd, ch, snapshot, ctx);
+                let s = process_read(ctx, cid, cmd, ch, snapshot);
                 ctx.add_statistics(tag, &s);
             });
         } else {
