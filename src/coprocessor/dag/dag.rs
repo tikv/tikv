@@ -150,6 +150,7 @@ impl DAGContext {
         if record_cnt > 0 {
             start_key = start_key.and_then(|k| if k.is_empty() { None } else { Some(k) });
             let end_key = self.exec.take_last_key();
+            self.req_ctx.renew_streaming_outdated();
             return self.make_stream_response(chunk, start_key, end_key)
                 .map(|r| (Some(r), finished));
         }

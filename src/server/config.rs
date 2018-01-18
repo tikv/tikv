@@ -44,7 +44,7 @@ pub const DEFAULT_MAX_RUNNING_TASK_COUNT: usize = 2 as usize * 1000;
 pub const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
 
 // Number of rows in each chunk for streaming coprocessor.
-pub const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 4096;
+pub const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
