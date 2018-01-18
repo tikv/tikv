@@ -71,7 +71,7 @@ impl Stream for ResponseStream {
         if let Some(resp) = self.head.take() {
             return Ok(Async::Ready(Some(resp)));
         }
-        if let Some(mut stream) = self.remain.as_mut() {
+        if let Some(stream) = self.remain.as_mut() {
             return stream.poll();
         }
         self.remain = None;

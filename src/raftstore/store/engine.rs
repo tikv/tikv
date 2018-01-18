@@ -52,7 +52,7 @@ impl SyncSnapshot {
     }
 
     pub fn clone(&self) -> SyncSnapshot {
-        SyncSnapshot(self.0.clone())
+        SyncSnapshot(Arc::clone(&self.0))
     }
 }
 
@@ -79,7 +79,7 @@ impl Snapshot {
     }
 
     pub fn get_db(&self) -> Arc<DB> {
-        self.db.clone()
+        Arc::clone(&self.db)
     }
 
     pub fn db_iterator(&self, iter_opt: IterOption) -> DBIterator<Arc<DB>> {
@@ -87,7 +87,7 @@ impl Snapshot {
         unsafe {
             opt.set_snapshot(&self.snap);
         }
-        DBIterator::new(self.db.clone(), opt)
+        DBIterator::new(Arc::clone(&self.db), opt)
     }
 
     pub fn db_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<Arc<DB>>> {
@@ -96,7 +96,7 @@ impl Snapshot {
         unsafe {
             opt.set_snapshot(&self.snap);
         }
-        Ok(DBIterator::new_cf(self.db.clone(), handle, opt))
+        Ok(DBIterator::new_cf(Arc::clone(&self.db), handle, opt))
     }
 }
 
@@ -443,9 +443,8 @@ mod tests {
     fn test_base() {
         let path = TempDir::new("var").unwrap();
         let cf = "cf";
-        let engine = Arc::new(
-            rocksdb::new_engine(path.path().to_str().unwrap(), &[cf], None).unwrap(),
-        );
+        let engine =
+            Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), &[cf], None).unwrap());
 
         let mut r = Region::new();
         r.set_id(10);
@@ -455,7 +454,7 @@ mod tests {
         engine.put_msg(key, &r).unwrap();
         engine.put_msg_cf(handle, key, &r).unwrap();
 
-        let snap = Snapshot::new(engine.clone());
+        let snap = Snapshot::new(Arc::clone(&engine));
 
         let mut r1: Region = engine.get_msg(key).unwrap().unwrap();
         assert_eq!(r, r1);
@@ -480,7 +479,7 @@ mod tests {
         assert_eq!(engine.get_i64(key).unwrap(), Some(-1));
         assert!(engine.get_i64(b"missing_key").unwrap().is_none());
 
-        let snap = Snapshot::new(engine.clone());
+        let snap = Snapshot::new(Arc::clone(&engine));
         assert_eq!(snap.get_i64(key).unwrap(), Some(-1));
         assert!(snap.get_i64(b"missing_key").unwrap().is_none());
 
@@ -508,9 +507,8 @@ mod tests {
     fn test_scan() {
         let path = TempDir::new("var").unwrap();
         let cf = "cf";
-        let engine = Arc::new(
-            rocksdb::new_engine(path.path().to_str().unwrap(), &[cf], None).unwrap(),
-        );
+        let engine =
+            Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), &[cf], None).unwrap());
         let handle = engine.cf_handle(cf).unwrap();
 
         engine.put(b"a1", b"v1").unwrap();
@@ -567,7 +565,7 @@ mod tests {
 
         assert_eq!(data.len(), 1);
 
-        let snap = Snapshot::new(engine.clone());
+        let snap = Snapshot::new(Arc::clone(&engine));
 
         engine.put(b"a3", b"v3").unwrap();
         assert!(engine.seek(b"a3").unwrap().is_some());

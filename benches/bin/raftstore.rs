@@ -32,7 +32,6 @@ fn enc_write_kvs(db: &DB, kvs: &[(Vec<u8>, Vec<u8>)]) {
     db.write(wb).expect("");
 }
 
-
 fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>, initial_kvs: &[(Vec<u8>, Vec<u8>)]) {
     cluster.run();
     for engines in cluster.engines.values() {

@@ -28,7 +28,6 @@ use storage::{Key, SnapshotStore, Statistics};
 use super::{Executor, Row};
 use super::scanner::{ScanOn, Scanner};
 
-
 pub struct IndexScanExecutor {
     store: SnapshotStore,
     statistics: Statistics,

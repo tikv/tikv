@@ -57,8 +57,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
             Err(e) => {
                 error!(
                     "[region {}] failed to get approximate size: {}",
-                    region_id,
-                    e
+                    region_id, e
                 );
                 // Need to check size.
                 status.size = Some(size_status);
@@ -73,8 +72,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
         if let Err(e) = self.ch.try_send(res) {
             error!(
                 "[region {}] failed to send approximate region size: {}",
-                region_id,
-                e
+                region_id, e
             );
         }
 
@@ -164,7 +162,7 @@ mod tests {
         cfg.region_split_size = ReadableSize(60);
 
         let mut runnable = SplitCheckRunner::new(
-            engine.clone(),
+            Arc::clone(&engine),
             ch.clone(),
             Arc::new(CoprocessorHost::new(cfg, ch.clone())),
         );

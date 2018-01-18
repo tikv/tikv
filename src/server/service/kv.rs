@@ -40,10 +40,10 @@ use server::transport::RaftStoreRouter;
 use server::snap::Task as SnapTask;
 use server::metrics::*;
 use server::{Error, OnResponse};
-use raftstore::store::Msg as StoreMessage;
+use raftstore::store::{Callback, Msg as StoreMessage};
 use coprocessor::{EndPointTask, RequestTask};
 
-const SCHEDULER_IS_BUSY: &'static str = "scheduler is busy";
+const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter + 'static> {
@@ -410,8 +410,9 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .collect();
 
         let (cb, future) = make_callback();
-        let res = self.storage
-            .async_rollback(req.take_context(), keys, req.get_start_version(), cb);
+        let res =
+            self.storage
+                .async_rollback(req.take_context(), keys, req.get_start_version(), cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -493,9 +494,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .start_coarse_timer();
 
         let txn_status = if req.get_start_version() > 0 {
-            HashMap::from_iter(iter::once(
-                (req.get_start_version(), req.get_commit_version()),
-            ))
+            HashMap::from_iter(iter::once((
+                req.get_start_version(),
+                req.get_commit_version(),
+            )))
         } else {
             HashMap::from_iter(
                 req.take_txn_infos()
@@ -697,8 +699,9 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .start_coarse_timer();
 
         let (cb, future) = make_callback();
-        let res = self.storage
-            .async_raw_put(req.take_context(), req.take_key(), req.take_value(), cb);
+        let res =
+            self.storage
+                .async_raw_put(req.take_context(), req.take_key(), req.take_value(), cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -1020,7 +1023,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             region_id: req.get_context().get_region_id(),
             region_epoch: req.take_context().take_region_epoch(),
             split_key: Key::from_raw(req.get_split_key()).encoded().clone(),
-            callback: Some(cb),
+            callback: Callback::Write(cb),
         };
 
         if let Err(e) = self.ch.try_send(req) {
@@ -1032,10 +1035,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|mut v| {
                 let mut resp = SplitRegionResponse::new();
-                if v.get_header().has_error() {
-                    resp.set_region_error(v.mut_header().take_error());
+                if v.response.get_header().has_error() {
+                    resp.set_region_error(v.response.mut_header().take_error());
                 } else {
-                    let admin_resp = v.mut_admin_response();
+                    let admin_resp = v.response.mut_admin_response();
                     let split_resp = admin_resp.mut_split();
                     resp.set_left(split_resp.take_left());
                     resp.set_right(split_resp.take_right());
@@ -1057,9 +1060,9 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
     use storage::Error;
     match *res {
         // TODO: use `Error::cause` instead.
-        Err(Error::Engine(EngineError::Request(ref e))) |
-        Err(Error::Txn(TxnError::Engine(EngineError::Request(ref e)))) |
-        Err(Error::Txn(TxnError::Mvcc(MvccError::Engine(EngineError::Request(ref e))))) => {
+        Err(Error::Engine(EngineError::Request(ref e)))
+        | Err(Error::Txn(TxnError::Engine(EngineError::Request(ref e))))
+        | Err(Error::Txn(TxnError::Mvcc(MvccError::Engine(EngineError::Request(ref e))))) => {
             Some(e.to_owned())
         }
         Err(Error::SchedTooBusy) => {
@@ -1083,14 +1086,12 @@ fn extract_committed(err: &storage::Error) -> Option<u64> {
 fn extract_key_error(err: &storage::Error) -> KeyError {
     let mut key_error = KeyError::new();
     match *err {
-        storage::Error::Txn(
-            TxnError::Mvcc(MvccError::KeyIsLocked {
-                ref key,
-                ref primary,
-                ts,
-                ttl,
-            }),
-        ) => {
+        storage::Error::Txn(TxnError::Mvcc(MvccError::KeyIsLocked {
+            ref key,
+            ref primary,
+            ts,
+            ttl,
+        })) => {
             let mut lock_info = LockInfo::new();
             lock_info.set_key(key.to_owned());
             lock_info.set_primary_lock(primary.to_owned());
@@ -1098,8 +1099,8 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             lock_info.set_lock_ttl(ttl);
             key_error.set_locked(lock_info);
         }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict { .. })) |
-        storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
+        storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict { .. }))
+        | storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
             warn!("txn conflicts: {:?}", err);
             key_error.set_retryable(format!("{:?}", err));
         }

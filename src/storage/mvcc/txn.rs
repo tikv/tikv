@@ -195,9 +195,7 @@ impl MvccTxn {
                         // Rollbacked by concurrent transaction.
                         info!(
                             "txn conflict (lock not found), key:{}, start_ts:{}, commit_ts:{}",
-                            key,
-                            self.start_ts,
-                            commit_ts
+                            key, self.start_ts, commit_ts
                         );
                         Err(Error::TxnLockNotFound {
                             start_ts: self.start_ts,
@@ -206,9 +204,9 @@ impl MvccTxn {
                         })
                     }
                     // Committed by concurrent transaction.
-                    Some((_, WriteType::Put)) |
-                    Some((_, WriteType::Delete)) |
-                    Some((_, WriteType::Lock)) => {
+                    Some((_, WriteType::Put))
+                    | Some((_, WriteType::Delete))
+                    | Some((_, WriteType::Lock)) => {
                         MVCC_DUPLICATE_CMD_COUNTER_VEC
                             .with_label_values(&["commit"])
                             .inc();
@@ -250,9 +248,7 @@ impl MvccTxn {
                                 .inc();
                             info!(
                                 "txn conflict (committed), key:{}, start_ts:{}, commit_ts:{}",
-                                key,
-                                self.start_ts,
-                                ts
+                                key, self.start_ts, ts
                             );
                             Err(Error::Committed { commit_ts: ts })
                         }
@@ -328,9 +324,9 @@ impl MvccTxn {
             self.delete_write(key, commit);
             delete_versions += 1;
         }
-        MVCC_VERSIONS_HISTOGRAM.observe(versions as f64);
+        MVCC_VERSIONS_HISTOGRAM.observe(f64::from(versions));
         if delete_versions > 0 {
-            GC_DELETE_VERSIONS_HISTOGRAM.observe(delete_versions as f64);
+            GC_DELETE_VERSIONS_HISTOGRAM.observe(f64::from(delete_versions));
         }
         Ok(())
     }
@@ -344,7 +340,7 @@ mod tests {
     use super::super::MvccReader;
     use super::super::write::{Write, WriteType};
     use storage::{make_key, Mutation, Options, ScanMode, ALL_CFS, CF_WRITE, SHORT_VALUE_MAX_LEN};
-    use storage::engine::{self, Engine, TEMP_DIR};
+    use storage::engine::{self, Engine, Modify, TEMP_DIR};
 
     fn gen_value(v: u8, len: usize) -> Vec<u8> {
         let mut value = Vec::with_capacity(len);
@@ -353,6 +349,12 @@ mod tests {
         }
 
         value
+    }
+
+    fn write(engine: &Engine, ctx: &Context, modifies: Vec<Modify>) {
+        if !modifies.is_empty() {
+            engine.write(ctx, modifies).unwrap();
+        }
     }
 
     fn test_mvcc_txn_read_imp(k: &[u8], v: &[u8]) {
@@ -788,13 +790,11 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 5, None, IsolationLevel::SI, true);
-        assert!(
-            txn.prewrite(
-                Mutation::Put((make_key(key), value.to_vec())),
-                key,
-                &Options::default()
-            ).is_err()
-        );
+        assert!(txn.prewrite(
+            Mutation::Put((make_key(key), value.to_vec())),
+            key,
+            &Options::default()
+        ).is_err());
 
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
@@ -857,7 +857,7 @@ mod tests {
             pk,
             &Options::default(),
         ).unwrap();
-        engine.write(&ctx, txn.into_modifies()).unwrap();
+        write(engine, &ctx, txn.into_modifies());
     }
 
     fn must_prewrite_delete(engine: &Engine, key: &[u8], pk: &[u8], ts: u64) {
@@ -893,7 +893,7 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
         txn.commit(&make_key(key), commit_ts).unwrap();
-        engine.write(&ctx, txn.into_modifies()).unwrap();
+        write(engine, &ctx, txn.into_modifies());
     }
 
     fn must_commit_err(engine: &Engine, key: &[u8], start_ts: u64, commit_ts: u64) {
@@ -908,7 +908,7 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
         txn.rollback(&make_key(key)).unwrap();
-        engine.write(&ctx, txn.into_modifies()).unwrap();
+        write(engine, &ctx, txn.into_modifies());
     }
 
     fn must_rollback_err(engine: &Engine, key: &[u8], start_ts: u64) {
@@ -923,7 +923,7 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 0, None, IsolationLevel::SI, true);
         txn.gc(&make_key(key), safe_point).unwrap();
-        engine.write(&ctx, txn.into_modifies()).unwrap();
+        write(engine, &ctx, txn.into_modifies());
     }
 
     fn must_locked(engine: &Engine, key: &[u8], start_ts: u64) {

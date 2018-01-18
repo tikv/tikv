@@ -50,14 +50,14 @@ impl Runnable<Task> for Runner {
             Task::Write(modifies, cb) => cb((CbContext::new(), write_modifies(&self.0, modifies))),
             Task::Snapshot(cb) => cb((
                 CbContext::new(),
-                Ok(box RocksSnapshot::new(self.0.clone())),
+                Ok(box RocksSnapshot::new(Arc::clone(&self.0))),
             )),
             Task::SnapshotBatch(size, on_finished) => {
                 let mut results = Vec::with_capacity(size);
                 for _ in 0..size {
                     let res = Some((
                         CbContext::new(),
-                        Ok(box RocksSnapshot::new(self.0.clone()) as Box<Snapshot>),
+                        Ok(box RocksSnapshot::new(Arc::clone(&self.0)) as Box<Snapshot>),
                     ));
                     results.push(res);
                 }
@@ -173,6 +173,9 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
 
 impl Engine for EngineRocksdb {
     fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {
+        if modifies.is_empty() {
+            return Err(Error::EmptyRequest);
+        }
         box_try!(self.sched.schedule(Task::Write(modifies, cb)));
         Ok(())
     }
@@ -187,6 +190,9 @@ impl Engine for EngineRocksdb {
         batch: Vec<Context>,
         on_finished: BatchCallback<Box<Snapshot>>,
     ) -> Result<()> {
+        if batch.is_empty() {
+            return Err(Error::EmptyRequest);
+        }
         box_try!(
             self.sched
                 .schedule(Task::SnapshotBatch(batch.len(), on_finished))
@@ -196,7 +202,7 @@ impl Engine for EngineRocksdb {
 
     fn clone(&self) -> Box<Engine> {
         box EngineRocksdb {
-            core: self.core.clone(),
+            core: Arc::clone(&self.core),
             sched: self.sched.clone(),
         }
     }
