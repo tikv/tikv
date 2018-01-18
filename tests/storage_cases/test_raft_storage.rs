@@ -62,7 +62,7 @@ fn test_raft_storage() {
     );
     assert!(
         storage
-            .scan_lock(ctx.clone(), 20, make_key(b""), 100)
+            .scan_lock(ctx.clone(), 20, b"".to_vec(), 100)
             .is_err()
     );
 }
@@ -155,7 +155,7 @@ fn test_raft_storage_store_not_match() {
     );
     assert!(
         storage
-            .scan_lock(ctx.clone(), 20, make_key(b""), 100)
+            .scan_lock(ctx.clone(), 20, b"".to_vec(), 100)
             .is_err()
     );
 }
