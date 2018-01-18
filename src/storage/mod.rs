@@ -773,7 +773,7 @@ impl Storage {
         Ok(())
     }
 
-    pub fn async_scan_lock (
+    pub fn async_scan_lock(
         &self,
         ctx: Context,
         max_ts: u64,
