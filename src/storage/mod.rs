@@ -262,10 +262,7 @@ impl Display for Command {
             } => write!(
                 f,
                 "kv::scan_lock {:?} {} @ {} | {:?}",
-                start_key,
-                limit,
-                max_ts,
-                ctx
+                start_key, limit, max_ts, ctx
             ),
             Command::ResolveLock { .. } => write!(f, "kv::resolve_lock"),
             Command::Gc {
@@ -776,7 +773,7 @@ impl Storage {
         Ok(())
     }
 
-    pub fn async_scan_lock(
+    pub fn async_scan_lock (
         &self,
         ctx: Context,
         max_ts: u64,
