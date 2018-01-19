@@ -110,7 +110,6 @@ pub fn new_test_raft_with_config(config: &Config, storage: MemStorage) -> Interf
     Interface::new(Raft::new(config, storage))
 }
 
-
 fn read_messages<T: Storage>(raft: &mut Raft<T>) -> Vec<Message> {
     raft.msgs.drain(..).collect()
 }
@@ -141,7 +140,6 @@ fn voted_with_config(vote: u64, term: u64, pre_vote: bool) -> Interface {
     raft.reset(term);
     raft
 }
-
 
 fn next_ents(r: &mut Raft<MemStorage>, s: &MemStorage) -> Vec<Entry> {
     s.wl()
@@ -657,7 +655,6 @@ fn test_leader_election_with_config(pre_vote: bool) {
             StateRole::Leader,
             1,
         ),
-
         // three logs further along than 0, but in the same term so rejection
         // are returned instead of the votes being ignored.
         (
@@ -725,24 +722,18 @@ fn test_leader_cycle_with_config(pre_vote: bool) {
             if sm.id == campaigner_id && sm.state != StateRole::Leader {
                 panic!(
                     "pre_vote={}: campaigning node {} state = {:?}, want Leader",
-                    pre_vote,
-                    sm.id,
-                    sm.state
+                    pre_vote, sm.id, sm.state
                 );
             } else if sm.id != campaigner_id && sm.state != StateRole::Follower {
                 panic!(
                     "pre_vote={}: after campaign of node {}, node {} had state = {:?}, want \
                      Follower",
-                    pre_vote,
-                    campaigner_id,
-                    sm.id,
-                    sm.state
+                    pre_vote, campaigner_id, sm.id, sm.state
                 );
             }
         }
     }
 }
-
 
 #[test]
 fn test_leader_election_overwrite_newer_logs() {
@@ -823,7 +814,6 @@ fn test_leader_election_overwrite_newer_logs_with_config(pre_vote: bool) {
         );
     }
 }
-
 
 #[test]
 fn test_vote_from_any_state() {
@@ -957,7 +947,6 @@ fn test_log_replicatioin() {
             vec![new_message(1, 1, MessageType::MsgPropose, 1)],
             2,
         ),
-
         (
             Network::new(vec![None, None, None]),
             vec![
@@ -979,10 +968,7 @@ fn test_log_replicatioin() {
             if x.raft_log.committed != wcommitted {
                 panic!(
                     "#{}.{}: committed = {}, want {}",
-                    i,
-                    j,
-                    x.raft_log.committed,
-                    wcommitted
+                    i, j, x.raft_log.committed, wcommitted
                 );
             }
 
@@ -1123,9 +1109,7 @@ fn test_dueling_candidates() {
         if nt.peers[&id].state != state {
             panic!(
                 "#{}: state = {:?}, want {:?}",
-                i,
-                nt.peers[&id].state,
-                state
+                i, nt.peers[&id].state, state
             );
         }
         if nt.peers[&id].term != term {
@@ -1174,9 +1158,7 @@ fn test_dueling_pre_candidates() {
         if nt.peers[&id].state != state {
             panic!(
                 "#{}: state = {:?}, want {:?}",
-                i,
-                nt.peers[&id].state,
-                state
+                i, nt.peers[&id].state, state
             );
         }
         if nt.peers[&id].term != term {
@@ -1357,7 +1339,6 @@ fn test_commit() {
         (vec![1], vec![empty_entry(1, 1)], 2, 0),
         (vec![2], vec![empty_entry(1, 1), empty_entry(2, 2)], 2, 2),
         (vec![1], vec![empty_entry(2, 1)], 2, 1),
-
         // odd
         (
             vec![2, 1, 1],
@@ -1383,7 +1364,6 @@ fn test_commit() {
             2,
             0,
         ),
-
         // even
         (
             vec![2, 1, 1, 1],
@@ -1465,7 +1445,7 @@ fn test_pass_election_timeout() {
                 c += 1;
             }
         }
-        let mut got = c as f64 / 10000.0;
+        let mut got = f64::from(c) / 10000.0;
         if round {
             got = (got * 10.0 + 0.5).floor() / 10.0;
         }
@@ -1480,9 +1460,8 @@ fn test_pass_election_timeout() {
 #[test]
 fn test_step_ignore_old_term_msg() {
     let mut sm = new_test_raft(1, vec![1], 10, 1, new_storage());
-    let panic_before_step_state = Box::new(|_: &Message| {
-        panic!("before step state function hook called unexpectedly")
-    });
+    let panic_before_step_state =
+        Box::new(|_: &Message| panic!("before step state function hook called unexpectedly"));
     sm.before_step_state = Some(panic_before_step_state);
     sm.term = 2;
     let mut m = new_message(0, 0, MessageType::MsgAppend, 0);
@@ -1516,14 +1495,12 @@ fn test_handle_msg_append() {
         // Ensure 1
         (nm(2, 3, 2, 3, None), 2, 0, true), // previous log mismatch
         (nm(2, 3, 3, 3, None), 2, 0, true), // previous log non-exist
-
         // Ensure 2
         (nm(2, 1, 1, 1, None), 2, 1, false),
         (nm(2, 0, 0, 1, Some(vec![(1, 2)])), 1, 1, false),
         (nm(2, 2, 2, 3, Some(vec![(3, 2), (4, 2)])), 4, 3, false),
         (nm(2, 2, 2, 4, Some(vec![(3, 2)])), 3, 3, false),
         (nm(2, 1, 1, 4, Some(vec![(2, 2)])), 2, 2, false),
-
         // Ensure 3
         (nm(1, 1, 1, 3, None), 2, 1, false), // match entry 1, commit up to last new entry 1
         (nm(1, 1, 1, 3, Some(vec![(2, 2)])), 2, 2, false), // match entry 1, commit up to last new
@@ -1553,9 +1530,7 @@ fn test_handle_msg_append() {
         if sm.raft_log.committed != w_commit {
             panic!(
                 "#{}: committed = {}, want {}",
-                j,
-                sm.raft_log.committed,
-                w_commit
+                j, sm.raft_log.committed, w_commit
             );
         }
         let m = sm.read_messages();
@@ -1595,9 +1570,7 @@ fn test_handle_heartbeat() {
         if sm.raft_log.committed != w_commit {
             panic!(
                 "#{}: committed = {}, want = {}",
-                i,
-                sm.raft_log.committed,
-                w_commit
+                i, sm.raft_log.committed, w_commit
             );
         }
         let m = sm.read_messages();
@@ -1755,25 +1728,20 @@ fn test_recv_msg_request_vote_for_type(msg_type: MessageType) {
         (StateRole::Follower, 0, 1, INVALID_ID, true),
         (StateRole::Follower, 0, 2, INVALID_ID, true),
         (StateRole::Follower, 0, 3, INVALID_ID, false),
-
         (StateRole::Follower, 1, 0, INVALID_ID, true),
         (StateRole::Follower, 1, 1, INVALID_ID, true),
         (StateRole::Follower, 1, 2, INVALID_ID, true),
         (StateRole::Follower, 1, 3, INVALID_ID, false),
-
         (StateRole::Follower, 2, 0, INVALID_ID, true),
         (StateRole::Follower, 2, 1, INVALID_ID, true),
         (StateRole::Follower, 2, 2, INVALID_ID, false),
         (StateRole::Follower, 2, 3, INVALID_ID, false),
-
         (StateRole::Follower, 3, 0, INVALID_ID, true),
         (StateRole::Follower, 3, 1, INVALID_ID, true),
         (StateRole::Follower, 3, 2, INVALID_ID, false),
         (StateRole::Follower, 3, 3, INVALID_ID, false),
-
         (StateRole::Follower, 3, 2, 2, false),
         (StateRole::Follower, 3, 2, 1, true),
-
         (StateRole::Leader, 3, 3, 1, true),
         (StateRole::PreCandidate, 3, 3, 1, true),
         (StateRole::Candidate, 3, 3, 1, true),
@@ -1842,7 +1810,6 @@ fn test_state_transition() {
             INVALID_ID,
         ),
         (StateRole::Follower, StateRole::Leader, false, 0, INVALID_ID),
-
         (
             StateRole::PreCandidate,
             StateRole::Follower,
@@ -1865,7 +1832,6 @@ fn test_state_transition() {
             INVALID_ID,
         ),
         (StateRole::PreCandidate, StateRole::Leader, true, 0, 1),
-
         (
             StateRole::Candidate,
             StateRole::Follower,
@@ -1888,7 +1854,6 @@ fn test_state_transition() {
             INVALID_ID,
         ),
         (StateRole::Candidate, StateRole::Leader, true, 0, 1),
-
         (StateRole::Leader, StateRole::Follower, true, 1, INVALID_ID),
         (
             StateRole::Leader,
@@ -1910,13 +1875,11 @@ fn test_state_transition() {
         let sm: &mut Raft<MemStorage> = &mut new_test_raft(1, vec![1], 10, 1, new_storage());
         sm.state = from;
 
-        let res = recover_safe!(|| {
-            match to {
-                StateRole::Follower => sm.become_follower(wterm, wlead),
-                StateRole::PreCandidate => sm.become_pre_candidate(),
-                StateRole::Candidate => sm.become_candidate(),
-                StateRole::Leader => sm.become_leader(),
-            }
+        let res = recover_safe!(|| match to {
+            StateRole::Follower => sm.become_follower(wterm, wlead),
+            StateRole::PreCandidate => sm.become_pre_candidate(),
+            StateRole::Candidate => sm.become_candidate(),
+            StateRole::Leader => sm.become_leader(),
         });
         if res.is_ok() ^ wallow {
             panic!("#{}: allow = {}, want {}", i, res.is_ok(), wallow);
@@ -2277,9 +2240,7 @@ fn test_read_only_option_safe() {
         if rs.request_ctx != vec_wctx {
             panic!(
                 "#{}: request_ctx = {:?}, want {:?}",
-                i,
-                rs.request_ctx,
-                vec_wctx
+                i, rs.request_ctx, vec_wctx
             )
         }
     }
@@ -2351,9 +2312,7 @@ fn test_read_only_option_lease() {
         if rs.request_ctx != vec_wctx {
             panic!(
                 "#{}: request_ctx = {:?}, want {:?}",
-                i,
-                rs.request_ctx,
-                vec_wctx
+                i, rs.request_ctx, vec_wctx
             );
         }
     }
@@ -2984,9 +2943,7 @@ fn test_recover_pending_config() {
         if r.pending_conf != wpending {
             panic!(
                 "#{}: pending_conf = {}, want {}",
-                i,
-                r.pending_conf,
-                wpending
+                i, r.pending_conf, wpending
             );
         }
     }
@@ -3070,7 +3027,6 @@ fn test_campaign_while_leader() {
 fn test_pre_campaign_while_leader() {
     test_campaign_while_leader_with_pre_vote(true);
 }
-
 
 fn test_campaign_while_leader_with_pre_vote(pre_vote: bool) {
     let mut r = new_test_raft_with_prevote(1, vec![1], 5, 1, new_storage(), pre_vote);
@@ -3424,10 +3380,7 @@ fn check_leader_transfer_state(r: &Raft<MemStorage>, state: StateRole, lead: u64
     if r.state != state || r.leader_id != lead {
         panic!(
             "after transferring, node has state {:?} lead {}, want state {:?} lead {}",
-            r.state,
-            r.leader_id,
-            state,
-            lead
+            r.state, r.leader_id, state, lead
         );
     }
     assert_eq!(r.lead_transferee, None);
@@ -3666,7 +3619,6 @@ fn test_learner_receive_snapshot() {
     n1.restore(s);
     let committed = n1.raft_log.committed;
     n1.raft_log.applied_to(committed);
-
 
     let mut network = Network::new(vec![Some(n1), Some(n2)]);
 

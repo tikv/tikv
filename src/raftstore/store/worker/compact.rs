@@ -100,7 +100,7 @@ mod test {
     use storage::CF_DEFAULT;
     use super::*;
 
-    const ROCKSDB_TOTAL_SST_FILES_SIZE: &'static str = "rocksdb.total-sst-files-size";
+    const ROCKSDB_TOTAL_SST_FILES_SIZE: &str = "rocksdb.total-sst-files-size";
 
     #[test]
     fn test_compact_range() {
@@ -108,7 +108,7 @@ mod test {
         let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT], None).unwrap();
         let db = Arc::new(db);
 
-        let mut runner = Runner::new(db.clone());
+        let mut runner = Runner::new(Arc::clone(&db));
 
         let handle = rocksdb::get_cf_handle(&db, CF_DEFAULT).unwrap();
 

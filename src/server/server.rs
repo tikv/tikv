@@ -74,9 +74,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                 .build(),
         );
         let raft_client = Arc::new(RwLock::new(RaftClient::new(
-            env.clone(),
-            cfg.clone(),
-            security_mgr.clone(),
+            Arc::clone(&env),
+            Arc::clone(cfg),
+            Arc::clone(security_mgr),
         )));
         let end_point_worker = WorkerBuilder::new("end-point-worker")
             .batch_size(DEFAULT_COPROCESSOR_BATCH)
@@ -93,14 +93,14 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         let addr = SocketAddr::from_str(&cfg.addr)?;
         info!("listening on {}", addr);
         let ip = format!("{}", addr.ip());
-        let channel_args = ChannelBuilder::new(env.clone())
+        let channel_args = ChannelBuilder::new(Arc::clone(&env))
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
             .max_send_message_len(region_split_size as usize * 4)
             .build_args();
         let grpc_server = {
-            let mut sb = ServerBuilder::new(env.clone())
+            let mut sb = ServerBuilder::new(Arc::clone(&env))
                 .channel_args(channel_args)
                 .register_service(create_tikv(kv_service));
             sb = security_mgr.bind(sb, &ip, addr.port());
@@ -123,7 +123,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         );
 
         let svr = Server {
-            env: env.clone(),
+            env: Arc::clone(&env),
             grpc_server: grpc_server,
             local_addr: addr,
             trans: trans,
@@ -151,7 +151,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         );
         box_try!(self.end_point_worker.start(end_point));
         let snap_runner = SnapHandler::new(
-            self.env.clone(),
+            Arc::clone(&self.env),
             self.snap_mgr.clone(),
             self.raft_router.clone(),
             security_mgr,
@@ -212,11 +212,9 @@ mod tests {
                 return Err(box_err!("quick fail"));
             }
             let addr = self.addr.lock().unwrap();
-            cb(
-                addr.as_ref()
-                    .map(|s| s.to_owned())
-                    .ok_or(box_err!("not set")),
-            );
+            cb(addr.as_ref()
+                .map(|s| s.to_owned())
+                .ok_or(box_err!("not set")));
             Ok(())
         }
     }
@@ -280,8 +278,8 @@ mod tests {
             storage,
             router,
             MockResolver {
-                quick_fail: quick_fail.clone(),
-                addr: addr.clone(),
+                quick_fail: Arc::clone(&quick_fail),
+                addr: Arc::clone(&addr),
             },
             SnapManager::new("", None),
             pd_worker.scheduler(),

@@ -92,8 +92,7 @@ impl Write {
         if b.is_empty() {
             return Err(Error::BadFormatWrite);
         }
-        let write_type = WriteType::from_u8(b.read_u8()?)
-            .ok_or(Error::BadFormatWrite)?;
+        let write_type = WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)?;
         let start_ts = b.decode_var_u64()?;
         if b.is_empty() {
             return Ok(Write::new(write_type, start_ts, None));

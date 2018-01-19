@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
 use std::time::Duration;
 use std::thread;
 
@@ -28,7 +29,7 @@ use tikv::storage::CF_RAFT;
 use tikv::util::rocksdb::get_cf_handle;
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
     pd_client.disable_default_rule();
 
@@ -74,7 +75,7 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     // only tombstone key and store ident key exist.
     assert_eq!(existing_kvs.len(), 2);
     existing_kvs.sort();
-    assert_eq!(existing_kvs[0].0, keys::store_ident_key());
+    assert_eq!(existing_kvs[0].0.as_slice(), keys::STORE_IDENT_KEY);
     assert_eq!(existing_kvs[1].0, keys::region_state_key(r1));
 
     let mut ident = StoreIdent::new();
@@ -131,7 +132,7 @@ fn test_server_tombstone() {
 }
 
 fn test_fast_destroy<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
 
     // Disable default max peer number check.
     pd_client.disable_default_rule();
@@ -183,7 +184,7 @@ fn test_server_fast_destroy() {
 }
 
 fn test_readd_peer<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
     pd_client.disable_default_rule();
 
@@ -255,7 +256,7 @@ fn test_server_readd_peer() {
 fn test_server_stale_meta() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
     pd_client.disable_default_rule();
 

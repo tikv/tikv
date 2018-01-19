@@ -55,12 +55,10 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
         ));
     }
 
-    let ident_key = keys::store_ident_key();
-
     ident.set_cluster_id(cluster_id);
     ident.set_store_id(store_id);
 
-    engines.kv_engine.put_msg(&ident_key, &ident)?;
+    engines.kv_engine.put_msg(keys::STORE_IDENT_KEY, &ident)?;
     engines.kv_engine.sync_wal()?;
     Ok(())
 }
@@ -71,7 +69,7 @@ pub fn write_prepare_bootstrap(engines: &Engines, region: &metapb::Region) -> Re
     state.set_region(region.clone());
 
     let wb = WriteBatch::new();
-    wb.put_msg(&keys::prepare_bootstrap_key(), region)?;
+    wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region)?;
     let handle = rocksdb::get_cf_handle(&engines.kv_engine, CF_RAFT)?;
     wb.put_msg_cf(handle, &keys::region_state_key(region.get_id()), &state)?;
     write_initial_apply_state(&engines.kv_engine, &wb, region.get_id())?;
@@ -93,7 +91,7 @@ pub fn clear_prepare_bootstrap(engines: &Engines, region_id: u64) -> Result<()> 
     engines.raft_engine.sync_wal()?;
 
     let wb = WriteBatch::new();
-    wb.delete(&keys::prepare_bootstrap_key())?;
+    wb.delete(keys::PREPARE_BOOTSTRAP_KEY)?;
     // should clear raft initial state too.
     let handle = rocksdb::get_cf_handle(&engines.kv_engine, CF_RAFT)?;
     wb.delete_cf(handle, &keys::region_state_key(region_id))?;
@@ -105,7 +103,7 @@ pub fn clear_prepare_bootstrap(engines: &Engines, region_id: u64) -> Result<()> 
 
 // Clear prepare state
 pub fn clear_prepare_bootstrap_state(engines: &Engines) -> Result<()> {
-    engines.kv_engine.delete(&keys::prepare_bootstrap_key())?;
+    engines.kv_engine.delete(keys::PREPARE_BOOTSTRAP_KEY)?;
     engines.kv_engine.sync_wal()?;
     Ok(())
 }
@@ -134,7 +132,6 @@ pub fn prepare_bootstrap(
     Ok(region)
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -157,7 +154,7 @@ mod tests {
         let raft_engine = Arc::new(
             rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
         );
-        let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
+        let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
 
         assert!(bootstrap_store(&engines, 1, 1).is_ok());
         assert!(bootstrap_store(&engines, 1, 1).is_err());
@@ -165,7 +162,7 @@ mod tests {
         assert!(prepare_bootstrap(&engines, 1, 1, 1).is_ok());
         assert!(
             kv_engine
-                .get_value(&keys::prepare_bootstrap_key())
+                .get_value(keys::PREPARE_BOOTSTRAP_KEY)
                 .unwrap()
                 .is_some()
         );

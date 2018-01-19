@@ -47,7 +47,7 @@ fn order_decode_f64(u: u64) -> f64 {
     } else {
         !u
     };
-    unsafe { mem::transmute(u) }
+    f64::from_bits(u)
 }
 
 pub trait NumberEncoder: Write {
@@ -173,13 +173,14 @@ pub trait NumberDecoder: Read {
             let b = self.read_u8()?;
             if b < 0x80 {
                 if i > 9 || i == 9 && b > 1 {
-                    return Err(Error::Io(
-                        io::Error::new(ErrorKind::InvalidData, "overflow"),
-                    ));
+                    return Err(Error::Io(io::Error::new(
+                        ErrorKind::InvalidData,
+                        "overflow",
+                    )));
                 }
-                return Ok(x | ((b as u64) << s));
+                return Ok(x | (u64::from(b) << s));
             }
-            x |= ((b & 0x7f) as u64) << s;
+            x |= u64::from(b & 0x7f) << s;
             s += 7;
             i += 1;
         }
@@ -227,7 +228,7 @@ mod test {
     use protobuf::CodedOutputStream;
     use std::io::ErrorKind;
 
-    const U16_TESTS: &'static [u16] = &[
+    const U16_TESTS: &[u16] = &[
         i16::MIN as u16,
         i16::MAX as u16,
         u16::MIN,
@@ -249,7 +250,7 @@ mod test {
         1024,
     ];
 
-    const U32_TESTS: &'static [u32] = &[
+    const U32_TESTS: &[u32] = &[
         i32::MIN as u32,
         i32::MAX as u32,
         u32::MIN,
@@ -271,7 +272,7 @@ mod test {
         1024,
     ];
 
-    const U64_TESTS: &'static [u64] = &[
+    const U64_TESTS: &[u64] = &[
         i64::MIN as u64,
         i64::MAX as u64,
         u64::MIN,
@@ -292,7 +293,7 @@ mod test {
         257,
         1024,
     ];
-    const I64_TESTS: &'static [i64] = &[
+    const I64_TESTS: &[i64] = &[
         i64::MIN,
         i64::MAX,
         u64::MIN as i64,
@@ -316,7 +317,7 @@ mod test {
         -1023,
     ];
 
-    const F64_TESTS: &'static [f64] = &[
+    const F64_TESTS: &[f64] = &[
         -1.0,
         0.0,
         1.0,
