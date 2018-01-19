@@ -117,10 +117,9 @@ impl Debugger {
         let db = self.get_db_from_type(db)?;
         match db.get_value_cf(cf, key) {
             Ok(Some(v)) => Ok(v.to_vec()),
-            Ok(None) => Err(Error::NotFound(format!(
-                "value for key {:?} in db {:?}",
-                key, db
-            ))),
+            Ok(None) => Err(Error::NotFound(
+                format!("value for key {:?} in db {:?}", key, db),
+            )),
             Err(e) => Err(box_err!(e)),
         }
     }
@@ -131,7 +130,8 @@ impl Debugger {
             Ok(Some(entry)) => Ok(entry),
             Ok(None) => Err(Error::NotFound(format!(
                 "raft log for region {} at index {}",
-                region_id, log_index
+                region_id,
+                log_index
             ))),
             Err(e) => Err(box_err!(e)),
         }
@@ -360,10 +360,9 @@ pub struct MvccInfoIterator {
 impl MvccInfoIterator {
     fn new(db: &Arc<DB>, from: &[u8], to: &[u8], limit: u64) -> Result<Self> {
         if !keys::validate_data_key(from) {
-            return Err(Error::InvalidArgument(format!(
-                "from non-mvcc area {:?}",
-                from
-            )));
+            return Err(Error::InvalidArgument(
+                format!("from non-mvcc area {:?}", from),
+            ));
         }
 
         let gen_iter = |cf: &str| -> Result<_> {
@@ -516,15 +515,14 @@ impl Iterator for MvccInfoIterator {
 
 pub fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
     match (db, cf) {
-        (DBType::KV, CF_DEFAULT)
-        | (DBType::KV, CF_WRITE)
-        | (DBType::KV, CF_LOCK)
-        | (DBType::KV, CF_RAFT)
-        | (DBType::RAFT, CF_DEFAULT) => Ok(()),
-        _ => Err(Error::InvalidArgument(format!(
-            "invalid cf {:?} for db {:?}",
-            cf, db
-        ))),
+        (DBType::KV, CF_DEFAULT) |
+        (DBType::KV, CF_WRITE) |
+        (DBType::KV, CF_LOCK) |
+        (DBType::KV, CF_RAFT) |
+        (DBType::RAFT, CF_DEFAULT) => Ok(()),
+        _ => Err(Error::InvalidArgument(
+            format!("invalid cf {:?} for db {:?}", cf, db),
+        )),
     }
 }
 
