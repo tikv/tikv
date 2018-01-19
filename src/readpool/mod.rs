@@ -52,22 +52,22 @@ impl ReadPool {
     pub fn new(config: &Config) -> ReadPool {
         ReadPool {
             pool_read_critical: cpupool::Builder::new()
-                .name_prefix("readpool-c")
+                .name_prefix("readpool-critical")
                 .pool_size(config.read_critical_concurrency)
                 .stack_size(config.stack_size.0 as usize)
                 .create(),
             pool_read_high: cpupool::Builder::new()
-                .name_prefix("readpool-h")
+                .name_prefix("readpool-high")
                 .pool_size(config.read_high_concurrency)
                 .stack_size(config.stack_size.0 as usize)
                 .create(),
             pool_read_normal: cpupool::Builder::new()
-                .name_prefix("readpool-n")
+                .name_prefix("readpool-normal")
                 .pool_size(config.read_normal_concurrency)
                 .stack_size(config.stack_size.0 as usize)
                 .create(),
             pool_read_low: cpupool::Builder::new()
-                .name_prefix("readpool-l")
+                .name_prefix("readpool-low")
                 .pool_size(config.read_low_concurrency)
                 .stack_size(config.stack_size.0 as usize)
                 .create(),
@@ -88,7 +88,7 @@ impl ReadPool {
     pub fn future_execute<F, R>(
         &self,
         priority: Priority,
-        feature_factory: F,
+        future_factory: F,
     ) -> cpupool::CpuFuture<R::Item, R::Error>
     where
         F: FnOnce(&WorkerThreadContext) -> R + Send + 'static,
@@ -98,7 +98,7 @@ impl ReadPool {
     {
         // TODO: handle busy?
         let pool = self.get_pool_by_priority(priority);
-        pool.spawn(feature_factory(&self.context))
+        pool.spawn(future_factory(&self.context))
     }
 }
 
