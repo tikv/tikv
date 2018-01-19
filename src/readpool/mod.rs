@@ -12,18 +12,33 @@
 // limitations under the License.
 
 mod config;
+mod pool;
 
+use std::fmt;
+use std::time;
+use std::thread;
 use futures::Future;
 use futures_cpupool as cpupool;
+
 use util;
 
 pub use self::config::Config;
 
+struct Context {}
+
+impl fmt::Debug for Context {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Context").finish()
+    }
+}
+
+impl pool::Context for Context {}
+
 pub struct ReadPool {
-    pool_read_critical: cpupool::CpuPool,
-    pool_read_high: cpupool::CpuPool,
-    pool_read_normal: cpupool::CpuPool,
-    pool_read_low: cpupool::CpuPool,
+    pool_read_critical: pool::Pool<Context>,
+    pool_read_high: pool::Pool<Context>,
+    pool_read_normal: pool::Pool<Context>,
+    pool_read_low: pool::Pool<Context>,
 }
 
 impl util::AssertSend for ReadPool {}
@@ -42,32 +57,42 @@ impl Clone for ReadPool {
 
 impl ReadPool {
     pub fn new(config: &Config) -> ReadPool {
+        let tick_interval = time::Duration::from_secs(1);
+        let build_context_factory = || |_thread_id: thread::ThreadId| Context {};
         ReadPool {
-            pool_read_critical: cpupool::Builder::new()
-                .name_prefix("readpool-critical")
-                .pool_size(config.read_critical_concurrency)
-                .stack_size(config.stack_size.0 as usize)
-                .create(),
-            pool_read_high: cpupool::Builder::new()
-                .name_prefix("readpool-high")
-                .pool_size(config.read_high_concurrency)
-                .stack_size(config.stack_size.0 as usize)
-                .create(),
-            pool_read_normal: cpupool::Builder::new()
-                .name_prefix("readpool-normal")
-                .pool_size(config.read_normal_concurrency)
-                .stack_size(config.stack_size.0 as usize)
-                .create(),
-            pool_read_low: cpupool::Builder::new()
-                .name_prefix("readpool-low")
-                .pool_size(config.read_low_concurrency)
-                .stack_size(config.stack_size.0 as usize)
-                .create(),
+            pool_read_critical: pool::Pool::new(
+                config.read_critical_concurrency,
+                config.stack_size.0 as usize,
+                "readpool-critical",
+                tick_interval,
+                build_context_factory(),
+            ),
+            pool_read_high: pool::Pool::new(
+                config.read_high_concurrency,
+                config.stack_size.0 as usize,
+                "readpool-high",
+                tick_interval,
+                build_context_factory(),
+            ),
+            pool_read_normal: pool::Pool::new(
+                config.read_normal_concurrency,
+                config.stack_size.0 as usize,
+                "readpool-normal",
+                tick_interval,
+                build_context_factory(),
+            ),
+            pool_read_low: pool::Pool::new(
+                config.read_low_concurrency,
+                config.stack_size.0 as usize,
+                "readpool-low",
+                tick_interval,
+                build_context_factory(),
+            ),
         }
     }
 
     #[inline]
-    fn get_pool_by_priority(&self, priority: Priority) -> &cpupool::CpuPool {
+    fn get_pool_by_priority(&self, priority: Priority) -> &pool::Pool<Context> {
         match priority {
             Priority::ReadCritical => &self.pool_read_critical,
             Priority::ReadHigh => &self.pool_read_high,
@@ -104,40 +129,27 @@ pub enum Priority {
 #[cfg(test)]
 mod tests {
     use std::error;
-    use std::boxed;
     use std::result;
     use std::fmt;
-    use std::sync::mpsc::{channel, Sender};
     use futures::{future, Future};
 
     pub use super::*;
 
     type BoxError = Box<error::Error + Send + Sync>;
-    type FutureBoxedFn<T> =
-        Box<boxed::FnBox(result::Result<T, BoxError>) -> future::FutureResult<(), ()>>;
 
-    pub fn expect_val<T>(done: Sender<i32>, v: T, id: i32) -> FutureBoxedFn<T>
+    pub fn expect_val<T>(v: T, x: result::Result<T, BoxError>)
     where
         T: PartialEq + fmt::Debug + 'static,
     {
-        box move |x: result::Result<T, BoxError>| {
-            assert!(x.is_ok());
-            assert_eq!(x.unwrap(), v);
-            done.send(id).unwrap();
-            future::ok(())
-        }
+        assert!(x.is_ok());
+        assert_eq!(x.unwrap(), v);
     }
 
-    pub fn expect_err<T>(done: Sender<i32>, desc: &str, id: i32) -> FutureBoxedFn<T> {
-        let desc = desc.to_string();
-        box move |x: result::Result<T, BoxError>| {
-            assert!(x.is_err());
-            match x {
-                Err(e) => assert_eq!(e.description(), desc),
-                _ => unreachable!(),
-            }
-            done.send(id).unwrap();
-            future::ok(())
+    pub fn expect_err<T>(desc: &str, x: result::Result<T, BoxError>) {
+        assert!(x.is_err());
+        match x {
+            Err(e) => assert_eq!(e.description(), desc),
+            _ => unreachable!(),
         }
     }
 
@@ -145,23 +157,22 @@ mod tests {
     fn test_future_execute() {
         let read_pool = ReadPool::new(&Config::default());
 
-        let (tx, rx) = channel();
-        read_pool
-            .future_execute(Priority::ReadCritical, || {
-                box future::ok::<Vec<u8>, BoxError>(vec![1, 2, 4])
-            })
-            .then(expect_val(tx.clone(), vec![1, 2, 4], 0))
-            .wait()
-            .unwrap();
-        assert_eq!(rx.recv().unwrap(), 0);
+        expect_val(
+            vec![1, 2, 4],
+            read_pool
+                .future_execute(Priority::ReadCritical, || {
+                    box future::ok::<Vec<u8>, BoxError>(vec![1, 2, 4])
+                })
+                .wait(),
+        );
 
-        read_pool
-            .future_execute(Priority::ReadCritical, || {
-                box future::err::<(), BoxError>(box_err!("foobar"))
-            })
-            .then(expect_err(tx.clone(), "foobar", 1))
-            .wait()
-            .unwrap();
-        assert_eq!(rx.recv().unwrap(), 1);
+        expect_err(
+            "foobar",
+            read_pool
+                .future_execute(Priority::ReadCritical, || {
+                    box future::err::<(), BoxError>(box_err!("foobar"))
+                })
+                .wait(),
+        );
     }
 }
