@@ -39,7 +39,7 @@ use std::u64;
 use std::mem;
 
 use prometheus::HistogramTimer;
-use prometheus::local::LocalHistogramVec;
+use prometheus::local::{LocalCounter, LocalHistogramVec};
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
 use storage::{Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
@@ -439,6 +439,7 @@ impl Scheduler {
 /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
 /// event loop.
 fn process_read(
+    sched_ctx: &mut SchedContext,
     cid: u64,
     mut cmd: Command,
     scheduler: worker::Scheduler<Msg>,
@@ -458,7 +459,8 @@ fn process_read(
             start_ts,
             ..
         } => {
-            KV_COMMAND_KEYREAD_HISTOGRAM_VEC
+            sched_ctx
+                .command_keyread_duration
                 .with_label_values(&[tag])
                 .observe(1f64);
             let snap_store = SnapshotStore::new(
@@ -482,7 +484,8 @@ fn process_read(
             start_ts,
             ..
         } => {
-            KV_COMMAND_KEYREAD_HISTOGRAM_VEC
+            sched_ctx
+                .command_keyread_duration
                 .with_label_values(&[tag])
                 .observe(keys.len() as f64);
             let snap_store = SnapshotStore::new(
@@ -532,7 +535,8 @@ fn process_read(
                     res
                 })
                 .and_then(|mut results| {
-                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC
+                    sched_ctx
+                        .command_keyread_duration
                         .with_label_values(&[tag])
                         .observe(results.len() as f64);
                     Ok(results
@@ -623,7 +627,8 @@ fn process_read(
                         lock_info.set_key(key.raw()?);
                         locks.push(lock_info);
                     }
-                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC
+                    sched_ctx
+                        .command_keyread_duration
                         .with_label_values(&[tag])
                         .observe(locks.len() as f64);
                     Ok(locks)
@@ -657,7 +662,8 @@ fn process_read(
                 .map_err(Error::from)
                 .and_then(|(v, next_scan_key)| {
                     let key_locks: Vec<_> = v.into_iter().map(|x| x).collect();
-                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC
+                    sched_ctx
+                        .command_keyread_duration
                         .with_label_values(&[tag])
                         .observe(key_locks.len() as f64);
                     if key_locks.is_empty() {
@@ -703,20 +709,21 @@ fn process_read(
                 true
             };
             let res = if !need_gc {
-                KV_COMMAND_GC_SKIPPED_COUNTER.inc();
+                sched_ctx.command_gc_skipped_counter.inc();
                 Ok(None)
             } else {
                 reader
                     .scan_keys(scan_key.take(), GC_BATCH_SIZE)
                     .map_err(Error::from)
                     .and_then(|(keys, next_start)| {
-                        KV_COMMAND_KEYREAD_HISTOGRAM_VEC
+                        sched_ctx
+                            .command_keyread_duration
                             .with_label_values(&[tag])
                             .observe(keys.len() as f64);
                         if keys.is_empty() {
                             // empty range
                             if is_range_start_gc {
-                                KV_COMMAND_GC_EMPTY_RANGE_COUNTER.inc();
+                                sched_ctx.command_gc_empty_range_counter.inc();
                             }
                             Ok(None)
                         } else {
@@ -738,7 +745,8 @@ fn process_read(
             }
         }
         Command::RawGet { ref key, .. } => {
-            KV_COMMAND_KEYREAD_HISTOGRAM_VEC
+            sched_ctx
+                .command_keyread_duration
                 .with_label_values(&[tag])
                 .observe(1f64);
             match snapshot.get(key) {
@@ -1041,6 +1049,9 @@ struct SchedContext {
     stats: HashMap<&'static str, StatisticsSummary>,
     processing_read_duration: LocalHistogramVec,
     processing_write_duration: LocalHistogramVec,
+    command_keyread_duration: LocalHistogramVec,
+    command_gc_skipped_counter: LocalCounter,
+    command_gc_empty_range_counter: LocalCounter,
 }
 
 impl Default for SchedContext {
@@ -1049,6 +1060,9 @@ impl Default for SchedContext {
             stats: HashMap::default(),
             processing_read_duration: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
             processing_write_duration: SCHED_PROCESSING_WRITE_HISTOGRAM_VEC.local(),
+            command_keyread_duration: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
+            command_gc_skipped_counter: KV_COMMAND_GC_SKIPPED_COUNTER.local(),
+            command_gc_empty_range_counter: KV_COMMAND_GC_EMPTY_RANGE_COUNTER.local(),
         }
     }
 }
@@ -1074,6 +1088,9 @@ impl ThreadContext for SchedContext {
         }
         self.processing_read_duration.flush();
         self.processing_write_duration.flush();
+        self.command_keyread_duration.flush();
+        self.command_gc_skipped_counter.flush();
+        self.command_gc_empty_range_counter.flush();
     }
 }
 
@@ -1152,7 +1169,7 @@ impl Scheduler {
                     .with_label_values(&[tag])
                     .start_coarse_timer();
 
-                let s = process_read(cid, cmd, scheduler, snapshot);
+                let s = process_read(ctx, cid, cmd, scheduler, snapshot);
                 ctx.add_statistics(tag, &s);
             });
         } else {
