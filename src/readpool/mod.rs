@@ -15,6 +15,7 @@ mod config;
 
 use futures::Future;
 use futures_cpupool as cpupool;
+use util;
 
 pub use self::config::Config;
 
@@ -24,6 +25,9 @@ pub struct ReadPool {
     pool_read_normal: cpupool::CpuPool,
     pool_read_low: cpupool::CpuPool,
 }
+
+impl util::AssertSend for ReadPool {}
+impl util::AssertSync for ReadPool {}
 
 impl Clone for ReadPool {
     fn clone(&self) -> ReadPool {
