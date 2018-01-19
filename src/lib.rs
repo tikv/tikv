@@ -97,3 +97,4 @@ pub mod coprocessor;
 pub use storage::Storage;
 
 extern crate linked_hash_map;
+extern crate spin;

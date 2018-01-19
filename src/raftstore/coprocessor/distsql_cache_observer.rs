@@ -21,18 +21,12 @@ pub struct DistSQLObserver;
 impl DistSQLObserver {
     fn disable_cache(&self, ctx: &mut ObserverContext) {
         let region_id = ctx.region().get_id();
-        DISTSQL_CACHE
-            .lock()
-            .unwrap()
-            .disable_region_cache(region_id);
+        DISTSQL_CACHE.lock().disable_region_cache(region_id);
     }
 
     fn evict_region(&self, ctx: &mut ObserverContext) {
         let region_id = ctx.region().get_id();
-        DISTSQL_CACHE
-            .lock()
-            .unwrap()
-            .evict_region_and_enable(region_id);
+        DISTSQL_CACHE.lock().evict_region_and_enable(region_id);
     }
 }
 

@@ -13,7 +13,8 @@
 
 use std::collections::HashMap;
 use std::option::Option;
-use std::sync::Mutex;
+// use std::sync::Mutex;
+use spin::Mutex;
 use linked_hash_map::LinkedHashMap;
 use super::metrics::*;
 
@@ -399,12 +400,11 @@ mod tests {
     fn test_global_distsql_cache() {
         let key: DistSQLCacheKey = "test1".to_string();
         let result: Vec<u8> = vec![100, 101, 102];
-        let version = DISTSQL_CACHE.lock().unwrap().get_region_version(10);
+        let version = DISTSQL_CACHE.lock().get_region_version(10);
         DISTSQL_CACHE
             .lock()
-            .unwrap()
             .put(10, key.clone(), version, result.clone());
-        match DISTSQL_CACHE.lock().unwrap().get(10, &key) {
+        match DISTSQL_CACHE.lock().get(10, &key) {
             None => (assert!(false)),
             Some(value) => {
                 assert_eq!(&result, value);

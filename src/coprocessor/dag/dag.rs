@@ -85,7 +85,7 @@ impl DAGContext {
         let mut chunks = Vec::new();
         let mut version: u64 = 0;
         if self.can_cache() {
-            let mut cache = DISTSQL_CACHE.lock().unwrap();
+            let mut cache = DISTSQL_CACHE.lock();
             let (rver, entry) =
                 cache.get_region_version_and_cache_entry(region_id, &self.cache_key);
             version = rver;
@@ -128,7 +128,7 @@ impl DAGContext {
                     // it cannot be cached.
                     if self.can_cache_with_size(&data) {
                         debug!("Cache It: {}, region_id: {}", &self.cache_key, region_id);
-                        DISTSQL_CACHE.lock().unwrap().put(
+                        DISTSQL_CACHE.lock().put(
                             region_id,
                             self.cache_key.clone(),
                             version,

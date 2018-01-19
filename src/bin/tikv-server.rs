@@ -497,7 +497,6 @@ fn main() {
         // Update DistSQL Cache Size
         DISTSQL_CACHE
             .lock()
-            .unwrap()
             .update_capacity(config.server.distsql_cache_size.0 as usize);
         info!(
             "Enable DistSQL cache with size: {:?}",
