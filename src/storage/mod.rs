@@ -787,7 +787,7 @@ impl Storage {
             start_key: if start_key.is_empty() {
                 None
             } else {
-                Some(Key::from_encoded(start_key))
+                Some(Key::from_raw(start_key))
             },
             limit: limit,
         };
