@@ -45,7 +45,6 @@ pub mod io_limiter;
 pub mod security;
 pub mod timer;
 pub mod sys;
-pub mod local_counter;
 
 pub use self::rocksdb::properties;
 

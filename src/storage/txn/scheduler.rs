@@ -40,7 +40,7 @@ use std::u64;
 use std::mem;
 
 use prometheus::HistogramTimer;
-use prometheus::local::LocalHistogramVec;
+use prometheus::local::{LocalCounter, LocalHistogramVec};
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
 use storage::{Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
@@ -55,7 +55,6 @@ use util::transport::{Error as TransportError, SyncSendCh};
 use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
 use util::time::SlowTimer;
 use util::collections::HashMap;
-use util::local_counter::LocalCounter;
 
 use super::Result;
 use super::Error;
