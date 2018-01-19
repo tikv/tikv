@@ -24,7 +24,7 @@ use kvproto::debugpb::DB as DBType;
 use kvproto::eraftpb::Entry;
 use kvproto::raft_serverpb::*;
 
-use raftstore::store::{keys, Engines, Iterable, Peekable};
+use raftstore::store::{keys, peer_storage, Engines, Iterable, Peekable};
 use raftstore::store::engine::{IterOption, Mutable};
 use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use storage::types::{truncate_ts, Key};
@@ -117,9 +117,10 @@ impl Debugger {
         let db = self.get_db_from_type(db)?;
         match db.get_value_cf(cf, key) {
             Ok(Some(v)) => Ok(v.to_vec()),
-            Ok(None) => Err(Error::NotFound(
-                format!("value for key {:?} in db {:?}", key, db),
-            )),
+            Ok(None) => Err(Error::NotFound(format!(
+                "value for key {:?} in db {:?}",
+                key, db
+            ))),
             Err(e) => Err(box_err!(e)),
         }
     }
@@ -130,8 +131,7 @@ impl Debugger {
             Ok(Some(entry)) => Ok(entry),
             Ok(None) => Err(Error::NotFound(format!(
                 "raft log for region {} at index {}",
-                region_id,
-                log_index
+                region_id, log_index
             ))),
             Err(e) => Err(box_err!(e)),
         }
@@ -317,6 +317,27 @@ impl Debugger {
         Ok(ret)
     }
 
+    pub fn do_unsafe_remove_regions(&self, region_ids: Vec<u64>) {
+        let db = &self.engines.kv_engine;
+        let raft = &self.engines.raft_engine;
+        let mut kv_wb = WriteBatch::new();
+        let mut raft_wb = WriteBatch::new();
+        for region_id in region_ids {
+            let raft_key = keys::raft_state_key(region_id);
+            let raft_state = match raft.get_msg(&raft_key).expect("must get_msg") {
+                None => continue,
+                Some(s) => s,
+            };
+            peer_storage::clear_meta(&db, &raft, &mut kv_wb, &mut raft_wb, region_id, &raft_state)
+                .expect("must clear_meta");
+        }
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        db.write_opt(kv_wb, &write_opts).expect("must db write");
+        raft.write_opt(raft_wb, &write_opts)
+            .expect("must raft write");
+    }
+
     fn get_store_id(&self) -> Result<u64> {
         let db = &self.engines.kv_engine;
         db.get_msg::<StoreIdent>(&keys::store_ident_key())
@@ -339,9 +360,10 @@ pub struct MvccInfoIterator {
 impl MvccInfoIterator {
     fn new(db: &Arc<DB>, from: &[u8], to: &[u8], limit: u64) -> Result<Self> {
         if !keys::validate_data_key(from) {
-            return Err(Error::InvalidArgument(
-                format!("from non-mvcc area {:?}", from),
-            ));
+            return Err(Error::InvalidArgument(format!(
+                "from non-mvcc area {:?}",
+                from
+            )));
         }
 
         let gen_iter = |cf: &str| -> Result<_> {
@@ -494,14 +516,15 @@ impl Iterator for MvccInfoIterator {
 
 pub fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
     match (db, cf) {
-        (DBType::KV, CF_DEFAULT) |
-        (DBType::KV, CF_WRITE) |
-        (DBType::KV, CF_LOCK) |
-        (DBType::KV, CF_RAFT) |
-        (DBType::RAFT, CF_DEFAULT) => Ok(()),
-        _ => Err(Error::InvalidArgument(
-            format!("invalid cf {:?} for db {:?}", cf, db),
-        )),
+        (DBType::KV, CF_DEFAULT)
+        | (DBType::KV, CF_WRITE)
+        | (DBType::KV, CF_LOCK)
+        | (DBType::KV, CF_RAFT)
+        | (DBType::RAFT, CF_DEFAULT) => Ok(()),
+        _ => Err(Error::InvalidArgument(format!(
+            "invalid cf {:?} for db {:?}",
+            cf, db
+        ))),
     }
 }
 
@@ -663,7 +686,6 @@ mod tests {
             _ => panic!("expect Error::NotFound(_)"),
         }
     }
-
 
     #[test]
     fn test_region_size() {

@@ -16,14 +16,14 @@
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![allow(needless_pass_by_value)]
 
-extern crate tikv;
 extern crate clap;
-extern crate protobuf;
-extern crate kvproto;
-extern crate rocksdb;
-extern crate grpcio;
 extern crate futures;
+extern crate grpcio;
+extern crate kvproto;
+extern crate protobuf;
+extern crate rocksdb;
 extern crate rustc_serialize;
+extern crate tikv;
 extern crate toml;
 
 use std::fs::File;
@@ -94,9 +94,10 @@ fn new_debug_executor(
             let raft_db =
                 rocksdb_util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
 
-            Box::new(Debugger::new(
-                Engines::new(Arc::new(kv_db), Arc::new(raft_db)),
-            )) as Box<DebugExecutor>
+            Box::new(Debugger::new(Engines::new(
+                Arc::new(kv_db),
+                Arc::new(raft_db),
+            ))) as Box<DebugExecutor>
         }
         (Some(remote), None) => {
             let env = Arc::new(Environment::new(1));
@@ -198,8 +199,8 @@ trait DebugExecutor {
             eprintln!("The region's from pos must greater than the to pos.");
             process::exit(-1);
         }
-        let scan_future = self.get_mvcc_infos(from, to, limit).for_each(
-            move |(key, mvcc)| {
+        let scan_future = self.get_mvcc_infos(from, to, limit)
+            .for_each(move |(key, mvcc)| {
                 println!("key: {}", escape(&key));
                 if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
                     let lock_info = mvcc.get_lock();
@@ -217,8 +218,8 @@ trait DebugExecutor {
                 }
                 if cfs.contains(&CF_WRITE) {
                     for write_info in mvcc.get_writes() {
-                        if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts) &&
-                            commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
+                        if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts)
+                            && commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
                         {
                             // FIXME: short_value is lost in kvproto.
                             println!("\t write cf value: {:?}", write_info);
@@ -227,8 +228,7 @@ trait DebugExecutor {
                 }
                 println!("");
                 future::ok::<(), String>(())
-            },
-        );
+            });
         if let Err(e) = scan_future.wait() {
             eprintln!("{}", e);
             process::exit(-1);
@@ -338,8 +338,7 @@ trait DebugExecutor {
                 }
                 println!(
                     "db1 has {} keys, db2 has {} keys",
-                    key_counts[0],
-                    key_counts[1]
+                    key_counts[0], key_counts[1]
                 );
             }
         }
@@ -377,6 +376,8 @@ trait DebugExecutor {
         self.do_unsafe_recover(region_ids);
     }
 
+    fn unsafe_remove_regions(&self, _: Vec<u64>);
+
     fn check_local_mode(&self);
 
     fn get_all_meta_regions(&self) -> Vec<u64>;
@@ -402,7 +403,6 @@ trait DebugExecutor {
 
     fn do_unsafe_recover(&self, Vec<u64>);
 }
-
 
 impl DebugExecutor for DebugClient {
     fn check_local_mode(&self) {
@@ -500,6 +500,11 @@ impl DebugExecutor for DebugClient {
     fn do_unsafe_recover(&self, _: Vec<u64>) {
         unimplemented!();
     }
+
+    fn unsafe_remove_regions(&self, _: Vec<u64>) {
+        self.check_local_mode();
+        unimplemented!();
+    }
 }
 
 impl DebugExecutor for Debugger {
@@ -568,14 +573,16 @@ impl DebugExecutor for Debugger {
         }
         println!("success!")
     }
+
+    fn unsafe_remove_regions(&self, region_ids: Vec<u64>) {
+        self.do_unsafe_remove_regions(region_ids);
+    }
 }
 
 fn main() {
     let mut app = App::new("TiKV Ctl")
         .author("PingCAP")
-        .about(
-            "Distributed transactional key value database powered by Rust and Raft",
-        )
+        .about("Distributed transactional key value database powered by Rust and Raft")
         .arg(
             Arg::with_name("db")
                 .required(true)
@@ -601,13 +608,7 @@ fn main() {
         .arg(
             Arg::with_name("host")
                 .required(true)
-                .conflicts_with_all(&[
-                    "db",
-                    "raftdb",
-                    "hex-to-escaped",
-                    "escaped-to-hex",
-                    "config",
-                ])
+                .conflicts_with_all(&["db", "raftdb", "hex-to-escaped", "escaped-to-hex", "config"])
                 .long("host")
                 .takes_value(true)
                 .help("set remote host"),
@@ -904,6 +905,20 @@ fn main() {
                         .value_delimiter(",")
                         .help("region id"),
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("unsafe-remove-regions")
+                .about("remove regions on the store")
+                .arg(
+                    Arg::with_name("regions")
+                        .required(true)
+                        .short("r")
+                        .takes_value(true)
+                        .multiple(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
+                        .help("region id"),
+                ),
         );
 
     let matches = app.clone().get_matches();
@@ -1004,10 +1019,16 @@ fn main() {
             .map(|r| r.parse().expect("parse region id list fail"))
             .collect();
         debug_executor.unsafe_recover(regions);
+    } else if let Some(matches) = matches.subcommand_matches("unsafe-remove-regions") {
+        let regions = matches
+            .values_of("regions")
+            .unwrap()
+            .map(|r| r.parse().expect("parse region id list fail"))
+            .collect();
+        debug_executor.unsafe_remove_regions(regions);
     } else {
         let _ = app.print_help();
     }
-
 }
 
 fn from_hex(key: &str) -> Vec<u8> {
@@ -1057,7 +1078,5 @@ fn new_security_mgr(matches: &ArgMatches) -> Arc<SecurityManager> {
     cfg.ca_path = ca_path.unwrap().to_owned();
     cfg.cert_path = cert_path.unwrap().to_owned();
     cfg.key_path = key_path.unwrap().to_owned();
-    Arc::new(
-        SecurityManager::new(&cfg).expect("failed to initialize security manager"),
-    )
+    Arc::new(SecurityManager::new(&cfg).expect("failed to initialize security manager"))
 }

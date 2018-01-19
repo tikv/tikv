@@ -22,7 +22,7 @@ pub mod util;
 pub mod store;
 
 mod peer;
-mod peer_storage;
+pub mod peer_storage;
 mod snap;
 mod worker;
 mod metrics;
