@@ -18,22 +18,11 @@ use futures_cpupool as cpupool;
 
 pub use self::config::Config;
 
-pub struct WorkerThreadContext {
-    // Metrics collector to be added here
-}
-
-impl Clone for WorkerThreadContext {
-    fn clone(&self) -> WorkerThreadContext {
-        WorkerThreadContext {}
-    }
-}
-
 pub struct ReadPool {
     pool_read_critical: cpupool::CpuPool,
     pool_read_high: cpupool::CpuPool,
     pool_read_normal: cpupool::CpuPool,
     pool_read_low: cpupool::CpuPool,
-    context: WorkerThreadContext,
 }
 
 impl Clone for ReadPool {
@@ -43,7 +32,6 @@ impl Clone for ReadPool {
             pool_read_high: self.pool_read_high.clone(),
             pool_read_normal: self.pool_read_normal.clone(),
             pool_read_low: self.pool_read_low.clone(),
-            context: self.context.clone(),
         }
     }
 }
@@ -71,7 +59,6 @@ impl ReadPool {
                 .pool_size(config.read_low_concurrency)
                 .stack_size(config.stack_size.0 as usize)
                 .create(),
-            context: WorkerThreadContext {},
         }
     }
 
@@ -91,14 +78,14 @@ impl ReadPool {
         future_factory: F,
     ) -> cpupool::CpuFuture<R::Item, R::Error>
     where
-        F: FnOnce(&WorkerThreadContext) -> R + Send + 'static,
+        F: FnOnce() -> R + Send + 'static,
         R: Future + Send + 'static,
         R::Item: Send + 'static,
         R::Error: Send + 'static,
     {
         // TODO: handle busy?
         let pool = self.get_pool_by_priority(priority);
-        pool.spawn(future_factory(&self.context))
+        pool.spawn(future_factory())
     }
 }
 
@@ -156,7 +143,7 @@ mod tests {
 
         let (tx, rx) = channel();
         read_pool
-            .future_execute(Priority::ReadCritical, |_ctx| {
+            .future_execute(Priority::ReadCritical, || {
                 box future::ok::<Vec<u8>, BoxError>(vec![1, 2, 4])
             })
             .then(expect_val(tx.clone(), vec![1, 2, 4], 0))
@@ -165,7 +152,7 @@ mod tests {
         assert_eq!(rx.recv().unwrap(), 0);
 
         read_pool
-            .future_execute(Priority::ReadCritical, |_ctx| {
+            .future_execute(Priority::ReadCritical, || {
                 box future::err::<(), BoxError>(box_err!("foobar"))
             })
             .then(expect_err(tx.clone(), "foobar", 1))
