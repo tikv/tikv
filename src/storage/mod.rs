@@ -597,7 +597,7 @@ impl Storage {
         KV_COMMAND_COUNTER_VEC.with_label_values(&["get"]).inc();
         let engine = self.get_engine();
         self.read_pool
-            .future_execute(readpool::Priority::ReadCritical, move || {
+            .future_execute(readpool::Priority::ReadHigh, move || {
                 engine
                     .future_snapshot(&ctx)
                     // map storage::engine::Error -> storage::txn::Error -> storage::Error

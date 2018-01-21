@@ -2,7 +2,6 @@ log-level = "debug"
 log-file = "foo"
 
 [readpool]
-read-critical-concurrency = 2
 read-high-concurrency = 2
 read-normal-concurrency = 2
 read-low-concurrency = 2
