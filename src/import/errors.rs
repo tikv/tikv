@@ -15,9 +15,9 @@ use std::io::Error as IoError;
 use std::path::PathBuf;
 use std::result;
 
+use futures::sync::oneshot::Canceled;
 use grpc::Error as GrpcError;
 use uuid::ParseError;
-use futures::sync::oneshot::Canceled;
 
 use util::codec::Error as CodecError;
 
