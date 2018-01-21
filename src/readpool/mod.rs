@@ -35,7 +35,6 @@ impl fmt::Debug for Context {
 impl pool::Context for Context {}
 
 pub struct ReadPool {
-    pool_read_critical: pool::Pool<Context>,
     pool_read_high: pool::Pool<Context>,
     pool_read_normal: pool::Pool<Context>,
     pool_read_low: pool::Pool<Context>,
@@ -47,7 +46,6 @@ impl util::AssertSync for ReadPool {}
 impl Clone for ReadPool {
     fn clone(&self) -> ReadPool {
         ReadPool {
-            pool_read_critical: self.pool_read_critical.clone(),
             pool_read_high: self.pool_read_high.clone(),
             pool_read_normal: self.pool_read_normal.clone(),
             pool_read_low: self.pool_read_low.clone(),
@@ -60,13 +58,6 @@ impl ReadPool {
         let tick_interval = time::Duration::from_secs(1);
         let build_context_factory = || |_thread_id: thread::ThreadId| Context {};
         ReadPool {
-            pool_read_critical: pool::Pool::new(
-                config.read_critical_concurrency,
-                config.stack_size.0 as usize,
-                "readpool-critical",
-                tick_interval,
-                build_context_factory(),
-            ),
             pool_read_high: pool::Pool::new(
                 config.read_high_concurrency,
                 config.stack_size.0 as usize,
@@ -94,7 +85,6 @@ impl ReadPool {
     #[inline]
     fn get_pool_by_priority(&self, priority: Priority) -> &pool::Pool<Context> {
         match priority {
-            Priority::ReadCritical => &self.pool_read_critical,
             Priority::ReadHigh => &self.pool_read_high,
             Priority::ReadNormal => &self.pool_read_normal,
             Priority::ReadLow => &self.pool_read_low,
@@ -123,7 +113,6 @@ pub enum Priority {
     ReadNormal,
     ReadLow,
     ReadHigh,
-    ReadCritical,
 }
 
 #[cfg(test)]
@@ -160,7 +149,7 @@ mod tests {
         expect_val(
             vec![1, 2, 4],
             read_pool
-                .future_execute(Priority::ReadCritical, || {
+                .future_execute(Priority::ReadHigh, || {
                     box future::ok::<Vec<u8>, BoxError>(vec![1, 2, 4])
                 })
                 .wait(),
@@ -169,7 +158,7 @@ mod tests {
         expect_err(
             "foobar",
             read_pool
-                .future_execute(Priority::ReadCritical, || {
+                .future_execute(Priority::ReadHigh, || {
                     box future::err::<(), BoxError>(box_err!("foobar"))
                 })
                 .wait(),
