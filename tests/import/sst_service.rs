@@ -22,7 +22,7 @@ use kvproto::importpb_grpc::*;
 use grpc::{ChannelBuilder, Environment, Result, WriteFlags};
 
 use tikv::util::HandyRwLock;
-use tikv::import::tests::*;
+use tikv::import::test_helpers::*;
 
 use raftstore::server::*;
 use raftstore::cluster::Cluster;
@@ -61,7 +61,7 @@ fn test_upload_sst() {
     let (_cluster, import) = new_cluster_and_import_client();
 
     let data = vec![1; 1024];
-    let crc32 = get_data_crc32(&data);
+    let crc32 = calc_data_crc32(&data);
     let length = data.len() as u64;
 
     let mut upload = UploadRequest::new();

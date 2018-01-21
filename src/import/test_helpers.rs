@@ -22,7 +22,7 @@ use kvproto::importpb::*;
 
 use raftstore::store::keys;
 
-pub fn get_data_crc32(data: &[u8]) -> u32 {
+pub fn calc_data_crc32(data: &[u8]) -> u32 {
     let mut digest = crc32::Digest::new(crc32::IEEE);
     digest.write(data);
     digest.sum32()
@@ -53,7 +53,7 @@ pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SSTMeta, Vec<u
 pub fn read_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SSTMeta, Vec<u8>) {
     let mut data = Vec::new();
     File::open(path).unwrap().read_to_end(&mut data).unwrap();
-    let crc32 = get_data_crc32(&data);
+    let crc32 = calc_data_crc32(&data);
 
     let mut meta = SSTMeta::new();
     meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());

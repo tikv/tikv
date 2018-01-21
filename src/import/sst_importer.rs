@@ -21,10 +21,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crc::crc32::{self, Hasher32};
 use uuid::Uuid;
 use kvproto::importpb::*;
-use rocksdb::{IngestExternalFileOptions, DB};
 
 use util::collections::HashMap;
-use util::rocksdb::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
 
 use super::{Error, Result};
 
@@ -110,14 +108,14 @@ impl SSTImporter {
         }
     }
 
-    pub fn ingest(&self, meta: &SSTMeta, db: &DB) -> Result<()> {
-        match self.dir.ingest(meta, db) {
-            Ok(_) => {
-                info!("ingest {:?}", meta);
+    pub fn delete(&self, meta: &SSTMeta) -> Result<()> {
+        match self.dir.delete(meta) {
+            Ok(path) => {
+                info!("delete {:?}", path);
                 Ok(())
             }
             Err(e) => {
-                error!("ingest {:?}: {:?}", meta, e);
+                error!("delete {:?}: {:?}", meta, e);
                 Err(e)
             }
         }
@@ -174,17 +172,18 @@ impl ImportDir {
         ImportFile::create(meta.clone(), path)
     }
 
-    fn ingest(&self, meta: &SSTMeta, db: &DB) -> Result<()> {
+    fn delete(&self, meta: &SSTMeta) -> Result<ImportPath> {
         let path = self.join(meta)?;
-        let cf = meta.get_cf_name();
-        prepare_sst_for_ingestion(&path.save, &path.clone)?;
-        validate_sst_for_ingestion(db, cf, &path.clone, meta.get_length(), meta.get_crc32())?;
-
-        let handle = get_cf_handle(db, cf)?;
-        let mut opts = IngestExternalFileOptions::new();
-        opts.move_files(true);
-        db.ingest_external_file_cf(handle, &opts, &[path.clone.to_str().unwrap()])?;
-        Ok(())
+        if path.save.exists() {
+            fs::remove_file(&path.save)?;
+        }
+        if path.temp.exists() {
+            fs::remove_file(&path.temp)?;
+        }
+        if path.clone.exists() {
+            fs::remove_file(&path.clone)?;
+        }
+        Ok(path)
     }
 }
 
@@ -305,39 +304,45 @@ fn sst_meta_to_path(meta: &SSTMeta) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use import::tests::*;
+    use import::test_helpers::*;
+
     use tempdir::TempDir;
-    use util::rocksdb::new_engine;
 
     #[test]
     fn test_import_dir() {
-        let temp_dir = TempDir::new("test_import_import_dir").unwrap();
+        let temp_dir = TempDir::new("test_import_dir").unwrap();
         let dir = ImportDir::new(temp_dir.path()).unwrap();
 
-        let db_path = temp_dir.path().join("db");
-        let db = new_engine(db_path.to_str().unwrap(), &["default"], None).unwrap();
+        let mut meta = SSTMeta::new();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
 
-        let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
+        let path = dir.join(&meta).unwrap();
 
-        for (i, &range) in cases.iter().enumerate() {
-            let path = temp_dir.path().join(format!("{}.sst", i));
+        // Test ImportDir::create()
+        {
+            let _file = dir.create(&meta).unwrap();
+            assert!(path.temp.exists());
+            assert!(!path.save.exists());
+            assert!(!path.clone.exists());
+            // Cannot create the same file again.
+            assert!(dir.create(&meta).is_err());
+        }
 
-            // Generate a valid SST file.
-            let (meta, data) = gen_sst_file(&path, range);
-
-            // Write the SST file to the dir.
-            let mut f = dir.create(&meta).unwrap();
-            f.append(&data).unwrap();
-            f.finish().unwrap();
-
-            dir.ingest(&meta, &db).unwrap();
-            check_db_range(&db, range);
+        // Test ImportDir::delete()
+        {
+            File::create(&path.temp).unwrap();
+            File::create(&path.save).unwrap();
+            File::create(&path.clone).unwrap();
+            dir.delete(&meta).unwrap();
+            assert!(!path.temp.exists());
+            assert!(!path.save.exists());
+            assert!(!path.clone.exists());
         }
     }
 
     #[test]
     fn test_import_file() {
-        let temp_dir = TempDir::new("tikv_test_import_file").unwrap();
+        let temp_dir = TempDir::new("test_import_file").unwrap();
 
         let path = ImportPath {
             save: temp_dir.path().join("save"),
@@ -345,17 +350,17 @@ mod tests {
             clone: temp_dir.path().join("clone"),
         };
 
-        let data = b"import_file";
-        let crc32 = get_data_crc32(data);
+        let data = b"test_data";
+        let crc32 = calc_data_crc32(data);
 
         let mut meta = SSTMeta::new();
 
         {
             let mut f = ImportFile::create(meta.clone(), path.clone()).unwrap();
-            // Create the same file again will fail because the file exists.
+            // Cannot create the same again.
             assert!(ImportFile::create(meta.clone(), path.clone()).is_err());
             f.append(data).unwrap();
-            // Validate will fail because the meta crc32 and length are 0.
+            // Invalid crc32 and length.
             assert!(f.finish().is_err());
             assert!(path.temp.exists());
             assert!(!path.save.exists());
@@ -366,7 +371,7 @@ mod tests {
         {
             let mut f = ImportFile::create(meta.clone(), path.clone()).unwrap();
             f.append(data).unwrap();
-            // Validate will fail because the meta length is 0.
+            // Invalid length.
             assert!(f.finish().is_err());
         }
 

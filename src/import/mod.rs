@@ -19,7 +19,7 @@ mod service;
 mod sst_service;
 mod sst_importer;
 
-pub mod tests;
+pub mod test_helpers;
 
 pub use self::errors::{Error, Result};
 pub use self::config::Config;
