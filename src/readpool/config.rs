@@ -13,7 +13,6 @@
 
 use util::config::ReadableSize;
 
-const DEFAULT_READ_CRITICAL_CONCURRENCY: usize = 1;
 const DEFAULT_READ_HIGH_CONCURRENCY: usize = 1;
 const DEFAULT_READ_NORMAL_CONCURRENCY: usize = 1;
 const DEFAULT_READ_LOW_CONCURRENCY: usize = 1;
@@ -24,7 +23,6 @@ const DEFAULT_STACK_SIZE_MB: u64 = 10;
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    pub read_critical_concurrency: usize,
     pub read_high_concurrency: usize,
     pub read_normal_concurrency: usize,
     pub read_low_concurrency: usize,
@@ -35,7 +33,6 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            read_critical_concurrency: DEFAULT_READ_CRITICAL_CONCURRENCY,
             read_high_concurrency: DEFAULT_READ_HIGH_CONCURRENCY,
             read_normal_concurrency: DEFAULT_READ_NORMAL_CONCURRENCY,
             read_low_concurrency: DEFAULT_READ_LOW_CONCURRENCY,
