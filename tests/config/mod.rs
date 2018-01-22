@@ -25,7 +25,7 @@ use tikv::config::*;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
 use tikv::util::security::SecurityConfig;
-use tikv::readpool::Config as ReadPoolConfig;
+use tikv::util::readpool::Config as ReadPoolConfig;
 
 use toml;
 
