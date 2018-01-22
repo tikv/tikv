@@ -110,8 +110,10 @@ impl<T: Context> FuturePool<T> {
                 tx.send(thread_id).unwrap();
             })
             .create();
-        let contexts = rx.into_iter()
-            .map(|thread_id| {
+        let contexts = (0..pool_size)
+            .into_iter()
+            .map(|_| {
+                let thread_id = rx.recv().unwrap();
                 let context = context_factory(thread_id);
                 let context_delegator = ContextDelegator::new(context, tick_interval);
                 (thread_id, context_delegator)
