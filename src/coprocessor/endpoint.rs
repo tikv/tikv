@@ -620,7 +620,7 @@ fn err_resp(e: Error) -> Response {
     resp
 }
 
-pub struct CopStats {
+struct CopStats {
     stats: Statistics,
     scan_counter: ScanCounter,
 }
@@ -661,7 +661,7 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    pub fn handle_request(self, mut t: RequestTask, batch_row_limit: usize) -> CopStats {
+    fn handle_request(self, mut t: RequestTask, batch_row_limit: usize) -> CopStats {
         t.stop_record_waiting();
 
         if let Err(e) = t.check_outdated() {
