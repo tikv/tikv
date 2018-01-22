@@ -11,20 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::thread;
 use std::boxed::FnBox;
-use std::fmt::{self, Debug, Display, Formatter};
-use std::sync::mpsc::{self, Receiver};
-use std::error;
 use std::sync::{Arc, Mutex};
+use std::fmt::{self, Debug, Display, Formatter};
+use std::error;
 use std::io::Error as IoError;
 use std::u64;
-use kvproto::kvrpcpb::{CommandPri, LockInfo};
+use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 use kvproto::errorpb;
 use util::collections::HashMap;
 use futures::Future;
 use util::readpool;
 use self::metrics::*;
+use self::mvcc::Lock;
+use self::txn::CMD_BATCH_SIZE;
+use util::worker::{self, Builder, Worker};
 
 pub mod engine;
 pub mod mvcc;
@@ -38,7 +39,6 @@ pub use self::engine::{new_local_engine, CFStatistics, Cursor, Engine, Error as 
                        FlowStatistics, Iterator, Modify, ScanMode, Snapshot, Statistics,
                        StatisticsSummary, TEMP_DIR};
 pub use self::engine::raftkv::RaftKv;
-use self::mvcc::Lock;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
 pub use self::types::{make_key, Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
@@ -78,8 +78,6 @@ impl Mutation {
         }
     }
 }
-
-use kvproto::kvrpcpb::Context;
 
 pub enum StorageCb {
     Boolean(Callback<()>),
@@ -463,8 +461,6 @@ impl Command {
     }
 }
 
-use util::transport::SyncSendCh;
-
 #[derive(Clone, Default)]
 pub struct Options {
     pub lock_ttl: u64,
@@ -482,15 +478,12 @@ impl Options {
     }
 }
 
-struct StorageHandle {
-    handle: Option<thread::JoinHandle<()>>,
-    receiver: Option<Receiver<Msg>>,
-}
-
 pub struct Storage {
     engine: Box<Engine>,
-    sendch: SyncSendCh<Msg>,
-    handle: Arc<Mutex<StorageHandle>>,
+
+    // to schedule the execution of storage commands
+    worker: Arc<Mutex<Worker<Msg>>>,
+    worker_scheduler: worker::Scheduler<Msg>,
 
     read_pool: readpool::ReadPool,
 
@@ -505,18 +498,20 @@ impl Storage {
         config: &Config,
         read_pool: readpool::ReadPool,
     ) -> Result<Storage> {
-        let (tx, rx) = mpsc::sync_channel(config.scheduler_notify_capacity);
-        let sendch = SyncSendCh::new(tx, "kv-storage");
-
         info!("storage {:?} started.", engine);
+
+        let worker = Arc::new(Mutex::new(
+            Builder::new("storage-scheduler")
+                .batch_size(CMD_BATCH_SIZE)
+                .pending_capacity(config.scheduler_notify_capacity)
+                .create(),
+        ));
+        let worker_scheduler = worker.lock().unwrap().scheduler();
         Ok(Storage {
             read_pool,
             engine: engine,
-            sendch: sendch,
-            handle: Arc::new(Mutex::new(StorageHandle {
-                handle: None,
-                receiver: Some(rx),
-            })),
+            worker: worker,
+            worker_scheduler: worker_scheduler,
             gc_ratio_threshold: config.gc_ratio_threshold,
             max_key_size: config.max_key_size,
         })
@@ -528,48 +523,29 @@ impl Storage {
     }
 
     pub fn start(&mut self, config: &Config) -> Result<()> {
-        let mut handle = self.handle.lock().unwrap();
-        if handle.handle.is_some() {
-            return Err(box_err!("scheduler is already running"));
-        }
-
-        let engine = self.engine.clone();
-        let builder = thread::Builder::new().name(thd_name!("storage-scheduler"));
-        let rx = handle.receiver.take().unwrap();
         let sched_concurrency = config.scheduler_concurrency;
         let sched_worker_pool_size = config.scheduler_worker_pool_size;
         let sched_pending_write_threshold = config.scheduler_pending_write_threshold.0 as usize;
-        let ch = self.sendch.clone();
-        let h = builder.spawn(move || {
-            let mut sched = Scheduler::new(
-                engine,
-                ch,
-                sched_concurrency,
-                sched_worker_pool_size,
-                sched_pending_write_threshold,
-            );
-            if let Err(e) = sched.run(rx) {
-                panic!("scheduler run err:{:?}", e);
-            }
-            info!("scheduler stopped");
-        })?;
-        handle.handle = Some(h);
-
+        let mut worker = self.worker.lock().unwrap();
+        let scheduler = Scheduler::new(
+            self.engine.clone(),
+            worker.scheduler(),
+            sched_concurrency,
+            sched_worker_pool_size,
+            sched_pending_write_threshold,
+        );
+        worker.start(scheduler)?;
         Ok(())
     }
 
     pub fn stop(&mut self) -> Result<()> {
-        let mut handle = self.handle.lock().unwrap();
-        if handle.handle.is_none() {
-            return Ok(());
-        }
-
-        if let Err(e) = self.sendch.send(Msg::Quit) {
+        let mut worker = self.worker.lock().unwrap();
+        if let Err(e) = worker.schedule(Msg::Quit) {
             error!("send quit cmd to scheduler failed, error:{:?}", e);
             return Err(box_err!("failed to ask sched to quit: {:?}", e));
         }
 
-        let h = handle.handle.take().unwrap();
+        let h = worker.stop().unwrap();
         if let Err(e) = h.join() {
             return Err(box_err!("failed to join sched_handle, err:{:?}", e));
         }
@@ -582,9 +558,12 @@ impl Storage {
         self.engine.clone()
     }
 
-    fn send(&self, cmd: Command, cb: StorageCb) -> Result<()> {
+    fn schedule(&self, cmd: Command, cb: StorageCb) -> Result<()> {
         fail_point!("storage_drop_message", |_| Ok(()));
-        box_try!(self.sendch.try_send(Msg::RawCmd { cmd: cmd, cb: cb }));
+        box_try!(
+            self.worker_scheduler
+                .schedule(Msg::RawCmd { cmd: cmd, cb: cb })
+        );
         Ok(())
     }
 
@@ -633,7 +612,7 @@ impl Storage {
             start_ts: start_ts,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::KvPairs(callback))?;
+        self.schedule(cmd, StorageCb::KvPairs(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -655,7 +634,7 @@ impl Storage {
             options: options,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::KvPairs(callback))?;
+        self.schedule(cmd, StorageCb::KvPairs(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -665,7 +644,7 @@ impl Storage {
             ctx: ctx,
             duration: duration,
         };
-        self.send(cmd, StorageCb::Boolean(callback))?;
+        self.schedule(cmd, StorageCb::Boolean(callback))?;
         Ok(())
     }
 
@@ -693,7 +672,7 @@ impl Storage {
             options: options,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::Booleans(callback))?;
+        self.schedule(cmd, StorageCb::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -713,7 +692,7 @@ impl Storage {
             commit_ts: commit_ts,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::Boolean(callback))?;
+        self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -763,7 +742,7 @@ impl Storage {
             start_ts: start_ts,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::Boolean(callback))?;
+        self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -781,7 +760,7 @@ impl Storage {
             start_ts: start_ts,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::Boolean(callback))?;
+        self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -797,7 +776,7 @@ impl Storage {
             max_ts: max_ts,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::Locks(callback))?;
+        self.schedule(cmd, StorageCb::Locks(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -815,7 +794,7 @@ impl Storage {
             key_locks: vec![],
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::Boolean(callback))?;
+        self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -829,7 +808,7 @@ impl Storage {
             keys: vec![],
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::Boolean(callback))?;
+        self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -844,7 +823,7 @@ impl Storage {
             ctx: ctx,
             key: Key::from_encoded(key),
         };
-        self.send(cmd, StorageCb::SingleValue(callback))?;
+        self.schedule(cmd, StorageCb::SingleValue(callback))?;
         RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["get"]).inc();
         Ok(())
     }
@@ -902,7 +881,7 @@ impl Storage {
             start_key: Key::from_encoded(key),
             limit: limit,
         };
-        self.send(cmd, StorageCb::KvPairs(callback))?;
+        self.schedule(cmd, StorageCb::KvPairs(callback))?;
         RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["scan"]).inc();
         Ok(())
     }
@@ -915,7 +894,7 @@ impl Storage {
     ) -> Result<()> {
         let cmd = Command::MvccByKey { ctx: ctx, key: key };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::MvccInfoByKey(callback))?;
+        self.schedule(cmd, StorageCb::MvccInfoByKey(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -931,7 +910,7 @@ impl Storage {
             start_ts: start_ts,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::MvccInfoByStartTs(callback))?;
+        self.schedule(cmd, StorageCb::MvccInfoByStartTs(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -942,8 +921,8 @@ impl Clone for Storage {
         Storage {
             read_pool: self.read_pool.clone(),
             engine: self.engine.clone(),
-            sendch: self.sendch.clone(),
-            handle: Arc::clone(&self.handle),
+            worker: Arc::clone(&self.worker),
+            worker_scheduler: self.worker_scheduler.clone(),
             gc_ratio_threshold: self.gc_ratio_threshold,
             max_key_size: self.max_key_size,
         }
