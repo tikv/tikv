@@ -1759,7 +1759,7 @@ macro_rules! read_word {
                 }
             }
             4 => {
-                ((i32::from(u8::from(buf[0])) << 24) + (i32::from(buf[1]) << 16) +
+                ((i32::from(buf[0] as i8) << 24) + (i32::from(buf[1]) << 16) +
                  (i32::from(buf[2]) << 8) + i32::from(buf[3])) as u32
             }
             _ => unreachable!(),
