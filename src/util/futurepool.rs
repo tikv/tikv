@@ -12,8 +12,7 @@
 // limitations under the License.
 
 /// This mod implemented a wrapped future pool that supports `on_tick()` which is driven by
-/// tasks and is invoked no less than the specific interval. It can be extracted into the
-/// `util` namespace if it is used elsewhere.
+/// tasks and is invoked no less than the specific interval.
 
 use std::fmt;
 use std::cell;
@@ -193,6 +192,10 @@ mod tests {
         );
         assert!(rx.try_recv().is_err());
 
+        // Tick is not emitted since there is no task
+        thread::sleep(Duration::from_millis(100));
+        assert!(rx.try_recv().is_err());
+
         // Tick is not emitted immediately for the first future
         spawn_long_time_future_and_wait(&pool, 10);
         assert!(rx.try_recv().is_err());
@@ -203,7 +206,11 @@ mod tests {
         spawn_long_time_future_and_wait(&pool, 1);
         assert!(rx.try_recv().is_err());
 
-        // Tick is emitted since long enough time has passed
+        // Even if there are tasks, tick is not emitted until next task arrives
+        thread::sleep(Duration::from_millis(100));
+        assert!(rx.try_recv().is_err());
+
+        // Next task arrives && long time passed, tick is emitted
         spawn_long_time_future_and_wait(&pool, 100);
         assert_eq!(rx.try_recv().unwrap(), 0);
         assert!(rx.try_recv().is_err());
