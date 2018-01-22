@@ -70,31 +70,31 @@ unsafe impl<T: Context> Sync for ContextOuter<T> {}
 
 #[derive(Debug)]
 /// A future thread pool that supports `on_tick` for each thread.
-pub struct Pool<T: Context> {
+pub struct FuturePool<T: Context> {
     pool: cpupool::CpuPool,
     contexts: sync::Arc<HashMap<thread::ThreadId, ContextOuter<T>>>,
 }
 
-impl<T: Context> Clone for Pool<T> {
-    fn clone(&self) -> Pool<T> {
-        Pool::<T> {
+impl<T: Context> Clone for FuturePool<T> {
+    fn clone(&self) -> FuturePool<T> {
+        FuturePool::<T> {
             pool: self.pool.clone(),
             contexts: sync::Arc::clone(&self.contexts),
         }
     }
 }
 
-impl<T: Context> util::AssertSend for Pool<T> {}
-impl<T: Context> util::AssertSync for Pool<T> {}
+impl<T: Context> util::AssertSend for FuturePool<T> {}
+impl<T: Context> util::AssertSync for FuturePool<T> {}
 
-impl<T: Context> Pool<T> {
+impl<T: Context> FuturePool<T> {
     pub fn new<F>(
         pool_size: usize,
         stack_size: usize,
         name_prefix: &str,
         tick_interval: time::Duration,
         context_factory: F,
-    ) -> Pool<T>
+    ) -> FuturePool<T>
     where
         F: Send + 'static + Fn(thread::ThreadId) -> T,
     {
@@ -110,15 +110,17 @@ impl<T: Context> Pool<T> {
                 tx.send(thread_id).unwrap();
             })
             .create();
-        let contexts = rx
-            .into_iter()
+        let contexts = rx.into_iter()
             .map(|thread_id| {
                 let context = context_factory(thread_id);
                 let context_outer = ContextOuter::new(context, tick_interval);
                 (thread_id, context_outer)
             })
             .collect();
-        Pool { pool, contexts: sync::Arc::new(contexts) }
+        FuturePool {
+            pool,
+            contexts: sync::Arc::new(contexts),
+        }
     }
 
     pub fn spawn<F>(&self, f: F) -> cpupool::CpuFuture<F::Item, F::Error>
@@ -150,13 +152,11 @@ mod tests {
 
     pub use super::*;
 
-    fn spawn_long_time_future_and_wait<T: Context>(pool: &Pool<T>, future_duration_ms: u64) {
-        pool
-            .spawn(future::lazy(move || {
-                thread::sleep(Duration::from_millis(future_duration_ms));
-                future::ok::<(), ()>(())
-            }))
-            .wait()
+    fn spawn_long_time_future_and_wait<T: Context>(pool: &FuturePool<T>, future_duration_ms: u64) {
+        pool.spawn(future::lazy(move || {
+            thread::sleep(Duration::from_millis(future_duration_ms));
+            future::ok::<(), ()>(())
+        })).wait()
             .unwrap();
     }
 
@@ -174,13 +174,13 @@ mod tests {
         impl Context for MyContext {
             fn on_tick(&mut self) {
                 self.tx.send(self.sn).unwrap();
-                self.sn = self.sn + 1;
+                self.sn += 1;
             }
         }
 
         let (tx, rx) = channel();
 
-        let pool = Pool::new(
+        let pool = FuturePool::new(
             1,
             1024000,
             "test-pool",
