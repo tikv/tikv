@@ -19,7 +19,7 @@ use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBComp
               DBOptions, DBRecoveryMode};
 use sys_info;
 
-use readpool::Config as ReadPoolConfig;
+use util::readpool::Config as ReadPoolConfig;
 use server::Config as ServerConfig;
 use pd::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;

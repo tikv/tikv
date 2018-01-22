@@ -47,6 +47,7 @@ pub mod timer;
 pub mod sys;
 pub mod future;
 pub mod futurepool;
+pub mod readpool;
 
 pub use self::rocksdb::properties;
 
