@@ -69,9 +69,11 @@ mod imp {
                 SIGUSR1 => {
                     // Use SIGUSR1 to log metrics.
                     let mut buffer = vec![];
-                    let metric_familys = prometheus::gather();
                     let encoder = TextEncoder::new();
-                    encoder.encode(&metric_familys, &mut buffer).unwrap();
+                    let metric_familys = prometheus::gather();
+                    for mf in metric_familys {
+                        let _ = encoder.encode(&[mf], &mut buffer);
+                    }
                     info!("{}", String::from_utf8(buffer).unwrap());
 
                     print_rocksdb_stats(&engines.kv_engine);
