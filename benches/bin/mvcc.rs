@@ -19,7 +19,7 @@ mod sync_storage;
 
 use test_util::*;
 use tikv::storage::{Key, Mutation};
-use tikv::readpool;
+use tikv::util::readpool;
 use kvproto::kvrpcpb::Context;
 use self::sync_storage::SyncStorage;
 

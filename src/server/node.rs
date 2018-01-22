@@ -32,7 +32,7 @@ use super::Result;
 use server::Config as ServerConfig;
 use storage::{Config as StorageConfig, RaftKv, Storage};
 use super::transport::RaftStoreRouter;
-use readpool;
+use util::readpool;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;

@@ -199,7 +199,7 @@ mod tests {
     use raftstore::store::transport::Transport;
     use util::worker::FutureWorker;
     use util::security::SecurityConfig;
-    use readpool;
+    use util::readpool;
 
     #[derive(Clone)]
     struct MockResolver {

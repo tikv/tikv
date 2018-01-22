@@ -23,7 +23,7 @@ use kvproto::kvrpcpb::{CommandPri, LockInfo};
 use kvproto::errorpb;
 use util::collections::HashMap;
 use futures::Future;
-use readpool;
+use util::readpool;
 use self::metrics::*;
 
 pub mod engine;

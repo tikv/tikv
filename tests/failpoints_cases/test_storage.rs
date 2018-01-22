@@ -22,7 +22,7 @@ use tikv::storage::config::Config;
 use tikv::util::HandyRwLock;
 use raftstore::server::new_server_cluster;
 use storage::util::new_raft_engine;
-use tikv::readpool;
+use tikv::util::readpool;
 
 #[test]
 fn test_storage_1gc() {

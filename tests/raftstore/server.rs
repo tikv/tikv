@@ -30,7 +30,7 @@ use tikv::util::transport::SendCh;
 use tikv::util::security::SecurityManager;
 use tikv::util::worker::{FutureWorker, Worker};
 use tikv::storage::{CfName, Engine};
-use tikv::readpool;
+use tikv::util::readpool;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
 

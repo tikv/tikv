@@ -33,7 +33,7 @@ use tipb::select::{Chunk, DAGRequest, SelectResponse};
 use tipb::executor::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
 use tipb::schema::{self, ColumnInfo};
 use tipb::expression::{ByItem, Expr, ExprType, ScalarFuncSig};
-use tikv::readpool;
+use tikv::util::readpool;
 use protobuf::{Message, RepeatedField};
 
 use raftstore::util::MAX_LEADER_LEASE;

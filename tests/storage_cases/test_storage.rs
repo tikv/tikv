@@ -23,7 +23,7 @@ use tikv::storage::{make_key, Key, Mutation, ALL_CFS};
 use tikv::storage::engine::{Engine, EngineRocksdb, TEMP_DIR};
 use tikv::storage::txn::{GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
-use tikv::readpool;
+use tikv::util::readpool;
 
 use super::assert_storage::AssertionStorage;
 use std::u64;

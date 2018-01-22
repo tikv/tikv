@@ -18,7 +18,7 @@ use raftstore::cluster::Cluster;
 use raftstore::server::ServerCluster;
 use raftstore::server::new_server_cluster;
 use tikv::util::HandyRwLock;
-use tikv::readpool;
+use tikv::util::readpool;
 use super::sync_storage::SyncStorage;
 
 pub fn new_raft_engine(count: usize, key: &str) -> (Cluster<ServerCluster>, Box<Engine>, Context) {

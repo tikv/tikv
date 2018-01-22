@@ -18,7 +18,7 @@ use futures::Future;
 use tikv::util::collections::HashMap;
 use tikv::storage::{Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
 use tikv::storage::config::Config;
-use tikv::readpool;
+use tikv::util::readpool;
 use kvproto::kvrpcpb::{Context, LockInfo};
 
 /// `SyncStorage` wraps `Storage` with sync API, usually used for testing.

@@ -22,7 +22,7 @@ use tikv::util::HandyRwLock;
 use super::util::new_raft_storage_with_store_count;
 use tikv::storage::config::Config;
 use tikv::storage::engine;
-use tikv::readpool;
+use tikv::util::readpool;
 
 #[derive(Clone)]
 pub struct AssertionStorage {

@@ -74,7 +74,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
-use tikv::readpool;
+use tikv::util::readpool;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
