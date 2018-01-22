@@ -12,7 +12,6 @@
 // limitations under the License.
 
 mod config;
-mod pool;
 
 use std::fmt;
 use std::time;
@@ -21,6 +20,7 @@ use futures::Future;
 use futures_cpupool as cpupool;
 
 use util;
+use util::futurepool;
 
 pub use self::config::Config;
 
@@ -32,12 +32,12 @@ impl fmt::Debug for Context {
     }
 }
 
-impl pool::Context for Context {}
+impl futurepool::Context for Context {}
 
 pub struct ReadPool {
-    pool_read_high: pool::Pool<Context>,
-    pool_read_normal: pool::Pool<Context>,
-    pool_read_low: pool::Pool<Context>,
+    pool_high: futurepool::FuturePool<Context>,
+    pool_normal: futurepool::FuturePool<Context>,
+    pool_low: futurepool::FuturePool<Context>,
 }
 
 impl util::AssertSend for ReadPool {}
@@ -46,9 +46,9 @@ impl util::AssertSync for ReadPool {}
 impl Clone for ReadPool {
     fn clone(&self) -> ReadPool {
         ReadPool {
-            pool_read_high: self.pool_read_high.clone(),
-            pool_read_normal: self.pool_read_normal.clone(),
-            pool_read_low: self.pool_read_low.clone(),
+            pool_high: self.pool_high.clone(),
+            pool_normal: self.pool_normal.clone(),
+            pool_low: self.pool_low.clone(),
         }
     }
 }
@@ -58,22 +58,22 @@ impl ReadPool {
         let tick_interval = time::Duration::from_secs(1);
         let build_context_factory = || |_thread_id: thread::ThreadId| Context {};
         ReadPool {
-            pool_read_high: pool::Pool::new(
-                config.read_high_concurrency,
+            pool_high: futurepool::FuturePool::new(
+                config.high_concurrency,
                 config.stack_size.0 as usize,
                 "readpool-high",
                 tick_interval,
                 build_context_factory(),
             ),
-            pool_read_normal: pool::Pool::new(
-                config.read_normal_concurrency,
+            pool_normal: futurepool::FuturePool::new(
+                config.normal_concurrency,
                 config.stack_size.0 as usize,
                 "readpool-normal",
                 tick_interval,
                 build_context_factory(),
             ),
-            pool_read_low: pool::Pool::new(
-                config.read_low_concurrency,
+            pool_low: futurepool::FuturePool::new(
+                config.low_concurrency,
                 config.stack_size.0 as usize,
                 "readpool-low",
                 tick_interval,
@@ -83,11 +83,11 @@ impl ReadPool {
     }
 
     #[inline]
-    fn get_pool_by_priority(&self, priority: Priority) -> &pool::Pool<Context> {
+    fn get_pool_by_priority(&self, priority: Priority) -> &futurepool::FuturePool<Context> {
         match priority {
-            Priority::ReadHigh => &self.pool_read_high,
-            Priority::ReadNormal => &self.pool_read_normal,
-            Priority::ReadLow => &self.pool_read_low,
+            Priority::High => &self.pool_high,
+            Priority::Normal => &self.pool_normal,
+            Priority::Low => &self.pool_low,
         }
     }
 
@@ -110,9 +110,9 @@ impl ReadPool {
 
 #[derive(Debug, Copy, Clone)]
 pub enum Priority {
-    ReadNormal,
-    ReadLow,
-    ReadHigh,
+    Normal,
+    Low,
+    High,
 }
 
 #[cfg(test)]
@@ -149,7 +149,7 @@ mod tests {
         expect_val(
             vec![1, 2, 4],
             read_pool
-                .future_execute(Priority::ReadHigh, || {
+                .future_execute(Priority::High, || {
                     box future::ok::<Vec<u8>, BoxError>(vec![1, 2, 4])
                 })
                 .wait(),
@@ -158,7 +158,7 @@ mod tests {
         expect_err(
             "foobar",
             read_pool
-                .future_execute(Priority::ReadHigh, || {
+                .future_execute(Priority::High, || {
                     box future::err::<(), BoxError>(box_err!("foobar"))
                 })
                 .wait(),

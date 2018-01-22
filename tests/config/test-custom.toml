@@ -2,9 +2,9 @@ log-level = "debug"
 log-file = "foo"
 
 [readpool]
-read-high-concurrency = 2
-read-normal-concurrency = 2
-read-low-concurrency = 2
+high-concurrency = 2
+normal-concurrency = 2
+low-concurrency = 2
 max-read-tasks = 10240
 stack-size = "10MB"
 
