@@ -31,17 +31,17 @@ pub trait Context: fmt::Debug + Send + 'static {
 }
 
 #[derive(Debug)]
-/// A wrapper to wrap context to provide `on_tick` feature.
-struct ContextOuter<T: Context> {
+/// A delegator to wrap `Context` to provide `on_tick` feature.
+struct ContextDelegator<T: Context> {
     tick_interval: time::Duration,
-    /// TODO: Can be replace by UnsafeCell to eliminate the runtime cost of borrow checking.
+    /// TODO: Can be replace by `UnsafeCell` to eliminate the runtime cost of borrow checking.
     inner: cell::RefCell<T>,
     last_tick: cell::Cell<Option<Instant>>,
 }
 
-impl<T: Context> ContextOuter<T> {
-    fn new(context: T, tick_interval: time::Duration) -> ContextOuter<T> {
-        ContextOuter {
+impl<T: Context> ContextDelegator<T> {
+    fn new(context: T, tick_interval: time::Duration) -> ContextDelegator<T> {
+        ContextDelegator {
             tick_interval,
             inner: cell::RefCell::new(context),
             last_tick: cell::Cell::new(None),
@@ -64,15 +64,15 @@ impl<T: Context> ContextOuter<T> {
     }
 }
 
-/// Each `ContextOuter` instance is invoked individually for each thread
+/// Each `ContextDelegator` instance is invoked individually for each thread
 /// so that we mark it as Sync.
-unsafe impl<T: Context> Sync for ContextOuter<T> {}
+unsafe impl<T: Context> Sync for ContextDelegator<T> {}
 
 #[derive(Debug)]
 /// A future thread pool that supports `on_tick` for each thread.
 pub struct FuturePool<T: Context> {
     pool: cpupool::CpuPool,
-    contexts: sync::Arc<HashMap<thread::ThreadId, ContextOuter<T>>>,
+    contexts: sync::Arc<HashMap<thread::ThreadId, ContextDelegator<T>>>,
 }
 
 impl<T: Context> Clone for FuturePool<T> {
@@ -113,8 +113,8 @@ impl<T: Context> FuturePool<T> {
         let contexts = rx.into_iter()
             .map(|thread_id| {
                 let context = context_factory(thread_id);
-                let context_outer = ContextOuter::new(context, tick_interval);
-                (thread_id, context_outer)
+                let context_delegator = ContextDelegator::new(context, tick_interval);
+                (thread_id, context_delegator)
             })
             .collect();
         FuturePool {
