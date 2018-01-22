@@ -91,20 +91,19 @@ impl ReadPool {
         }
     }
 
-    pub fn future_execute<F, R>(
+    pub fn future_execute<F>(
         &self,
         priority: Priority,
-        future_factory: F,
-    ) -> cpupool::CpuFuture<R::Item, R::Error>
+        future: F,
+    ) -> cpupool::CpuFuture<F::Item, F::Error>
     where
-        F: FnOnce() -> R + Send + 'static,
-        R: Future + Send + 'static,
-        R::Item: Send + 'static,
-        R::Error: Send + 'static,
+        F: Future + Send + 'static,
+        F::Item: Send + 'static,
+        F::Error: Send + 'static,
     {
         // TODO: handle busy?
         let pool = self.get_pool_by_priority(priority);
-        pool.spawn(future_factory())
+        pool.spawn(future)
     }
 }
 
@@ -149,18 +148,20 @@ mod tests {
         expect_val(
             vec![1, 2, 4],
             read_pool
-                .future_execute(Priority::High, || {
-                    future::ok::<Vec<u8>, BoxError>(vec![1, 2, 4])
-                })
+                .future_execute(
+                    Priority::High,
+                    future::ok::<Vec<u8>, BoxError>(vec![1, 2, 4]),
+                )
                 .wait(),
         );
 
         expect_err(
             "foobar",
             read_pool
-                .future_execute(Priority::High, || {
-                    future::err::<(), BoxError>(box_err!("foobar"))
-                })
+                .future_execute(
+                    Priority::High,
+                    future::err::<(), BoxError>(box_err!("foobar")),
+                )
                 .wait(),
         );
     }
