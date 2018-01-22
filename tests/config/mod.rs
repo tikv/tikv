@@ -76,7 +76,6 @@ fn test_serde_custom_tikv_config() {
         high_concurrency: 2,
         normal_concurrency: 2,
         low_concurrency: 2,
-        max_read_tasks: 10240,
         stack_size: ReadableSize::mb(10),
     };
     value.metric = MetricConfig {
