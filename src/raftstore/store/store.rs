@@ -1818,6 +1818,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             last_end_key = end_key.clone();
 
+            // Filter some trival declines for better performance.
             if old_size > new_size && old_size - new_size > self.cfg.region_split_check_diff.0 / 16
             {
                 region_declined_bytes.push((region_id, old_size - new_size));
@@ -2648,12 +2649,8 @@ fn size_change_filter(info: &CompactionJobInfo) -> bool {
 }
 
 pub fn new_compaction_listener(ch: SendCh<Msg>) -> CompactionListener {
-    let ch = Mutex::new(ch);
     let compacted_handler = box move |compacted_event: CompactedEvent| {
-        if let Err(e) = ch.lock()
-            .unwrap()
-            .try_send(Msg::CompactedEvent(compacted_event))
-        {
+        if let Err(e) = ch.try_send(Msg::CompactedEvent(compacted_event)) {
             error!(
                 "Send compaction finished event to raftstore failed: {:?}",
                 e
