@@ -575,9 +575,9 @@ impl Storage {
     ) -> impl Future<Item = Option<Value>, Error = Error> {
         KV_COMMAND_COUNTER_VEC.with_label_values(&["get"]).inc();
         let engine = self.get_engine();
-        self.read_pool
-            .future_execute(readpool::Priority::High, move || {
-                engine
+        self.read_pool.future_execute(
+            readpool::Priority::from(ctx.get_priority()),
+            engine
                     .future_snapshot(&ctx)
                     // map storage::engine::Error -> storage::txn::Error -> storage::Error
                     .map_err(txn::Error::from)
@@ -595,8 +595,8 @@ impl Storage {
                             .get(&key, &mut statistics)
                             // map storage::txn::Error -> storage::Error
                             .map_err(Error::from)
-                    })
-            })
+                    }),
+        )
     }
 
     pub fn async_batch_get(

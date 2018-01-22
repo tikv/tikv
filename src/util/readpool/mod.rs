@@ -21,6 +21,7 @@ use futures_cpupool as cpupool;
 
 use util;
 use util::futurepool;
+use kvproto::kvrpcpb;
 
 pub use self::config::Config;
 
@@ -112,6 +113,16 @@ pub enum Priority {
     Normal,
     Low,
     High,
+}
+
+impl From<kvrpcpb::CommandPri> for Priority {
+    fn from(p: kvrpcpb::CommandPri) -> Priority {
+        match p {
+            kvrpcpb::CommandPri::High => Priority::High,
+            kvrpcpb::CommandPri::Normal => Priority::Normal,
+            kvrpcpb::CommandPri::Low => Priority::Low,
+        }
+    }
 }
 
 #[cfg(test)]
