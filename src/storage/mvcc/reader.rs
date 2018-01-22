@@ -403,9 +403,6 @@ impl MvccReader {
         }
     }
 
-    // for scan lock request, we must return all locks even if they are generated
-    // by the same transaction. because gc worker need to make sure all locks to be
-    // cleaned.
     #[allow(type_complexity)]
     pub fn scan_lock<F>(
         &mut self,
