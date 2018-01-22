@@ -2,10 +2,10 @@ log-level = "debug"
 log-file = "foo"
 
 [readpool]
-high-concurrency = 2
-normal-concurrency = 2
-low-concurrency = 2
-stack-size = "10MB"
+high-concurrency = 1
+normal-concurrency = 3
+low-concurrency = 7
+stack-size = "20MB"
 
 [server]
 addr = "example.com:443"

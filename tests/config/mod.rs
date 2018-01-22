@@ -73,10 +73,10 @@ fn test_serde_custom_tikv_config() {
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
     };
     value.readpool = ReadPoolConfig {
-        high_concurrency: 2,
-        normal_concurrency: 2,
-        low_concurrency: 2,
-        stack_size: ReadableSize::mb(10),
+        high_concurrency: 1,
+        normal_concurrency: 3,
+        low_concurrency: 7,
+        stack_size: ReadableSize::mb(20),
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),

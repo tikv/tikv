@@ -150,7 +150,7 @@ mod tests {
             vec![1, 2, 4],
             read_pool
                 .future_execute(Priority::High, || {
-                    box future::ok::<Vec<u8>, BoxError>(vec![1, 2, 4])
+                    future::ok::<Vec<u8>, BoxError>(vec![1, 2, 4])
                 })
                 .wait(),
         );
@@ -159,7 +159,7 @@ mod tests {
             "foobar",
             read_pool
                 .future_execute(Priority::High, || {
-                    box future::err::<(), BoxError>(box_err!("foobar"))
+                    future::err::<(), BoxError>(box_err!("foobar"))
                 })
                 .wait(),
         );
