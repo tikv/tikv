@@ -16,7 +16,6 @@ use util::config::ReadableSize;
 const DEFAULT_HIGH_CONCURRENCY: usize = 1;
 const DEFAULT_NORMAL_CONCURRENCY: usize = 1;
 const DEFAULT_LOW_CONCURRENCY: usize = 1;
-const DEFAULT_MAX_READ_TASKS: usize = 20480;
 const DEFAULT_STACK_SIZE_MB: u64 = 10;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -26,7 +25,6 @@ pub struct Config {
     pub high_concurrency: usize,
     pub normal_concurrency: usize,
     pub low_concurrency: usize,
-    pub max_read_tasks: usize,
     pub stack_size: ReadableSize,
 }
 
@@ -36,7 +34,6 @@ impl Default for Config {
             high_concurrency: DEFAULT_HIGH_CONCURRENCY,
             normal_concurrency: DEFAULT_NORMAL_CONCURRENCY,
             low_concurrency: DEFAULT_LOW_CONCURRENCY,
-            max_read_tasks: DEFAULT_MAX_READ_TASKS,
             stack_size: ReadableSize::mb(DEFAULT_STACK_SIZE_MB),
         }
     }

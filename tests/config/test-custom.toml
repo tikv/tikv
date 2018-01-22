@@ -5,7 +5,6 @@ log-file = "foo"
 high-concurrency = 2
 normal-concurrency = 2
 low-concurrency = 2
-max-read-tasks = 10240
 stack-size = "10MB"
 
 [server]
