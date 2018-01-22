@@ -51,12 +51,13 @@ impl<T: Context> ContextOuter<T> {
 
     fn on_task_finish(&self) {
         let now = Instant::now_coarse();
-        if self.last_tick.get().is_none() {
+        let last_tick = self.last_tick.get();
+        if last_tick.is_none() {
             // set last_tick when the first future is resolved
             self.last_tick.set(Some(now));
             return;
         }
-        if now.duration_since(self.last_tick.get().unwrap()) < self.tick_interval {
+        if now.duration_since(last_tick.unwrap()) < self.tick_interval {
             return;
         }
         self.last_tick.set(Some(now));
