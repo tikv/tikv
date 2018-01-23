@@ -486,8 +486,9 @@ mod tests {
         assert_eq!(tmp_late_row, late_raw);
 
         // checked_sub Duration.
-        assert_eq!(early_raw.checked_sub(late_raw), None);
-        assert!(late_raw.checked_sub(early_raw).unwrap() > zero);
+        assert!(late_raw.checked_sub(early_raw).unwrap() >= zero);
+        // It's either `None` or `Some(zero)`(if they are equal).
+        assert_eq!(early_raw.checked_sub(late_raw).unwrap_or(zero), zero);
 
         let mut tmp_late_coarse = late_coarse;
         tmp_late_coarse -= zero;
