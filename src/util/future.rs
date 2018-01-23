@@ -22,9 +22,8 @@ where
 {
     let (tx, future) = oneshot::channel::<T>();
     let callback = box move |result| {
-        if tx.send(result).is_err() {
-            panic!("Failed to respond callback");
-        }
+        let _ = tx.send(result);
+        // discard errors
     };
     (callback, future)
 }
