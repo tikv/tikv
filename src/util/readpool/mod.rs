@@ -139,11 +139,6 @@ mod tests {
         }
     }
 
-    #[derive(Debug)]
-    struct Context {}
-
-    impl futurepool::Context for Context {}
-
     #[test]
     fn test_future_execute() {
         let read_pool = ReadPool::new(&Config::default(), None);
