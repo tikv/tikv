@@ -131,8 +131,16 @@ impl SyncStorage {
         wait_op!(|cb| self.store.async_rollback(ctx, keys, start_ts, cb)).unwrap()
     }
 
-    pub fn scan_lock(&self, ctx: Context, max_ts: u64) -> Result<Vec<LockInfo>> {
-        wait_op!(|cb| self.store.async_scan_lock(ctx, max_ts, cb)).unwrap()
+    pub fn scan_lock(
+        &self,
+        ctx: Context,
+        max_ts: u64,
+        start_key: Vec<u8>,
+        limit: usize,
+    ) -> Result<Vec<LockInfo>> {
+        wait_op!(|cb| self.store
+            .async_scan_lock(ctx, max_ts, start_key, limit, cb))
+            .unwrap()
     }
 
     pub fn resolve_lock(&self, ctx: Context, start_ts: u64, commit_ts: Option<u64>) -> Result<()> {
