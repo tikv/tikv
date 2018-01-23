@@ -1,6 +1,6 @@
 ENABLE_FEATURES ?= default
 
-# Disable portable on MacOS
+# Disable portable on MacOS to sidestep the compiler bug in clang 4.9
 ifeq ($(shell uname -s),Darwin)
 ROCKSDB_SYS_PORTABLE=0
 endif
