@@ -72,7 +72,9 @@ mod imp {
                     let encoder = TextEncoder::new();
                     let metric_familys = prometheus::gather();
                     for mf in metric_familys {
-                        let _ = encoder.encode(&[mf], &mut buffer);
+                        if let Err(e) = encoder.encode(&[mf], &mut buffer) {
+                            warn!("ignore prometheus encoding error: {:?}", e);
+                        }
                     }
                     info!("{}", String::from_utf8(buffer).unwrap());
 
