@@ -408,7 +408,7 @@ impl MvccReader {
         &mut self,
         start: Option<Key>,
         filter: F,
-        limit: Option<usize>,
+        limit: usize,
     ) -> Result<(Vec<(Key, Lock)>, Option<Key>)>
     where
         F: Fn(&Lock) -> bool,
@@ -428,10 +428,8 @@ impl MvccReader {
             let lock = Lock::parse(cursor.value())?;
             if filter(&lock) {
                 locks.push((key.clone(), lock));
-                if let Some(limit) = limit {
-                    if locks.len() >= limit {
-                        return Ok((locks, Some(key)));
-                    }
+                if limit > 0 && locks.len() >= limit {
+                    return Ok((locks, Some(key)));
                 }
             }
             cursor.next(&mut self.statistics.lock);
