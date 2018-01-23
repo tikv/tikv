@@ -298,7 +298,7 @@ pub struct Cursor {
     // the data cursor can be seen will be
     min_key: Option<Vec<u8>>,
     max_key: Option<Vec<u8>>,
-    seek_last_time: bool,
+    last_op_is_seek: bool,
 }
 
 impl Cursor {
@@ -308,7 +308,7 @@ impl Cursor {
             scan_mode: mode,
             min_key: None,
             max_key: None,
-            seek_last_time: false,
+            last_op_is_seek: false,
         }
     }
 
@@ -326,7 +326,7 @@ impl Cursor {
         }
 
         statistics.seek += 1;
-        self.seek_last_time = true;
+        self.last_op_is_seek = true;
         if !self.iter.seek(key)? {
             self.max_key = Some(key.encoded().to_owned());
             return Ok(false);
@@ -418,8 +418,8 @@ impl Cursor {
     }
 
     /// Whether it used iter.seek or iter.seek_prev last time.
-    pub fn seek_last_time(&self) -> bool {
-        self.seek_last_time
+    pub fn last_op_is_seek(&self) -> bool {
+        self.last_op_is_seek
     }
 
     fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
@@ -436,7 +436,7 @@ impl Cursor {
         }
 
         statistics.seek_for_prev += 1;
-        self.seek_last_time = true;
+        self.last_op_is_seek = true;
         if !self.iter.seek_for_prev(key)? {
             self.min_key = Some(key.encoded().to_owned());
             return Ok(false);
@@ -533,28 +533,28 @@ impl Cursor {
     #[inline]
     pub fn seek_to_first(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.seek += 1;
-        self.seek_last_time = true;
+        self.last_op_is_seek = true;
         self.iter.seek_to_first()
     }
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.seek += 1;
-        self.seek_last_time = true;
+        self.last_op_is_seek = true;
         self.iter.seek_to_last()
     }
 
     #[inline]
     pub fn next(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.next += 1;
-        self.seek_last_time = false;
+        self.last_op_is_seek = false;
         self.iter.next()
     }
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.prev += 1;
-        self.seek_last_time = false;
+        self.last_op_is_seek = false;
         self.iter.prev()
     }
 

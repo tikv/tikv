@@ -84,13 +84,16 @@ impl MvccReader {
         }
 
         let k = key.append_ts(ts);
+        // we use snap.get directly when data_cusor is none
         let res = if use_seek && self.data_cursor.is_some() {
             let mut cursor = self.data_cursor.as_mut().unwrap();
             if self.seek_data_last_time {
+                // use near_seek when last op is seek/near_seek
                 cursor
                     .get(&k, &mut self.statistics.data)?
                     .map(|v| v.to_vec())
             } else {
+                // use seek when last op is get.
                 cursor
                     .get_with_seek(&k, &mut self.statistics.data)?
                     .map(|v| v.to_vec())
@@ -241,7 +244,7 @@ impl MvccReader {
                             }
                             return Ok(write.short_value.take());
                         }
-                        let seek_write = self.write_cursor.as_ref().unwrap().seek_last_time();
+                        let seek_write = self.write_cursor.as_ref().unwrap().last_op_is_seek();
                         // if we use seek in write cf(there are many history versions),
                         // use get in default cf to make read faster
                         let seek_data = !seek_write;
