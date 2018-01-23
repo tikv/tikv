@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
 use std::rc::Rc;
 use std::cell::RefCell;
@@ -1794,7 +1794,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // Calculate influenced regions.
         let mut influenced_regions = vec![];
         if let Some((end_key, region_id)) = self.region_ranges
-            .range((Included(event.end_key.clone()), Unbounded))
+            .range((Excluded(event.end_key.clone()), Unbounded))
             .next()
         {
             influenced_regions.push((region_id, end_key.clone()));
