@@ -24,10 +24,8 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, R
 use kvproto::pdpb::{ChangePeer, RegionHeartbeatResponse, TransferLeader};
 use kvproto::eraftpb::ConfChangeType;
 
-use tikv::raftstore;
 use tikv::raftstore::store::*;
 use tikv::server::Config as ServerConfig;
-use tikv::server::transport::RaftStoreRouter;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::escape;
 use tikv::util::config::*;
@@ -302,14 +300,7 @@ pub fn new_pd_transfer_leader(peer: metapb::Peer) -> Option<RegionHeartbeatRespo
     Some(resp)
 }
 
-pub fn wait_cb<R>(
-    router: R,
-    cmd: RaftCmdRequest,
-    timeout: Duration,
-) -> raftstore::Result<RaftCmdResponse>
-where
-    R: RaftStoreRouter,
-{
+pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdResponse>) {
     let mut is_read;
     let mut is_write;
     is_read = cmd.has_status_request();
@@ -335,7 +326,5 @@ where
             let _ = tx.send(resp.response);
         }))
     };
-    router.send_command(cmd, cb).unwrap();
-    rx.recv_timeout(timeout)
-        .map_err(|_| raftstore::Error::Timeout(format!("request timeout for {:?}", timeout)))
+    (cb, rx)
 }
