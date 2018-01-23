@@ -575,9 +575,9 @@ impl Storage {
     ) -> impl Future<Item = Option<Value>, Error = Error> {
         KV_COMMAND_COUNTER_VEC.with_label_values(&["get"]).inc();
         let engine = self.get_engine();
-        self.read_pool.future_execute(
-            readpool::Priority::from(ctx.get_priority()),
-            engine
+        self.read_pool
+            .future_execute(readpool::Priority::from(ctx.get_priority()), move |_| {
+                engine
                     .future_snapshot(&ctx)
                     // map storage::engine::Error -> storage::txn::Error -> storage::Error
                     .map_err(txn::Error::from)
@@ -595,8 +595,8 @@ impl Storage {
                             .get(&key, &mut statistics)
                             // map storage::txn::Error -> storage::Error
                             .map_err(Error::from)
-                    }),
-        )
+                    })
+            })
     }
 
     pub fn async_batch_get(
@@ -1054,7 +1054,7 @@ mod tests {
 
     #[test]
     fn test_get_put() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1101,7 +1101,7 @@ mod tests {
 
     #[test]
     fn test_put_with_err() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
         let config = Config::default();
         // New engine lack of some column families.
         let engine = engine::new_local_engine(&config.data_dir, &["default"]).unwrap();
@@ -1128,7 +1128,7 @@ mod tests {
 
     #[test]
     fn test_scan() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1182,7 +1182,7 @@ mod tests {
 
     #[test]
     fn test_batch_get() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1239,7 +1239,7 @@ mod tests {
 
     #[test]
     fn test_txn() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1314,7 +1314,7 @@ mod tests {
 
     #[test]
     fn test_sched_too_busy() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
         let mut config = Config::default();
         config.scheduler_pending_write_threshold = ReadableSize(1);
         let mut storage = Storage::new(&config, read_pool).unwrap();
@@ -1363,7 +1363,7 @@ mod tests {
 
     #[test]
     fn test_cleanup() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1398,7 +1398,7 @@ mod tests {
 
     #[test]
     fn test_high_priority_get_put() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1446,7 +1446,7 @@ mod tests {
     /*
 #[test]
 fn test_high_priority_no_block() {
-    let read_pool = readpool::ReadPool::new(&readpool::Config::default());
+    let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
     let mut config = Config::default();
     config.scheduler_worker_pool_size = 1;
     let mut storage = Storage::new(&config, read_pool).unwrap();
@@ -1507,7 +1507,7 @@ fn test_high_priority_no_block() {
 
     #[test]
     fn test_delete_range() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();

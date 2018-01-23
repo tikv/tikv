@@ -170,8 +170,14 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
     let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), significant_msg_sender);
 
+    // Create pd client and pd work
+    let pd_client = Arc::new(pd_client);
+    let pd_worker = FutureWorker::new("pd worker");
+    let (mut worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
+        .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
+
     // Create kv engine, storage.
-    let read_pool = readpool::ReadPool::new(&cfg.readpool);
+    let read_pool = readpool::ReadPool::new(&cfg.readpool, Some(pd_worker.scheduler()));
     let kv_db_opts = cfg.rocksdb.build_opt();
     let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
     let kv_engine = Arc::new(
@@ -193,11 +199,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     );
     let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
 
-    // Create pd client and pd work, snapshot manager, server.
-    let pd_client = Arc::new(pd_client);
-    let pd_worker = FutureWorker::new("pd worker");
-    let (mut worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
-        .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
+    // Create snapshot manager, server.
     let limiter = if cfg.server.snap_max_write_bytes_per_sec.0 > 0 {
         Some(Arc::new(IOLimiter::new(
             cfg.server.snap_max_write_bytes_per_sec.0,

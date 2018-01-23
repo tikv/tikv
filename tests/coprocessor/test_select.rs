@@ -375,7 +375,7 @@ pub struct Store {
 
 impl Store {
     fn new(engine: Box<Engine>) -> Store {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default());
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
         Store {
             store: SyncStorage::from_engine(engine, &Default::default(), read_pool),
             current_ts: 1,

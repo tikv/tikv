@@ -12,28 +12,23 @@
 // limitations under the License.
 
 mod config;
+mod context;
+mod priority;
 
-use std::fmt;
 use std::time;
-use std::thread;
 use futures::Future;
 use futures_cpupool as cpupool;
 
 use util;
 use util::futurepool;
-use kvproto::kvrpcpb;
+use util::worker;
+use pd;
 
 pub use self::config::Config;
+pub use self::context::Context;
+pub use self::priority::Priority;
 
-struct Context {}
-
-impl fmt::Debug for Context {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Context").finish()
-    }
-}
-
-impl futurepool::Context for Context {}
+const TICK_INTERVAL_SEC: u64 = 1;
 
 pub struct ReadPool {
     pool_high: futurepool::FuturePool<Context>,
@@ -55,9 +50,17 @@ impl Clone for ReadPool {
 }
 
 impl ReadPool {
-    pub fn new(config: &Config) -> ReadPool {
-        let tick_interval = time::Duration::from_secs(1);
-        let build_context_factory = || |_thread_id: thread::ThreadId| Context {};
+    pub fn new(config: &Config, pd_sender: Option<worker::FutureScheduler<pd::PdTask>>) -> Self {
+        let tick_interval = time::Duration::from_secs(TICK_INTERVAL_SEC);
+        let build_context_factory = || {
+            // Take a reference of `pd_sender` instead of ownership
+            // so that `build_context_factory` is `fn()`.
+            let pd_sender = pd_sender.clone();
+            move |_| Context {
+                // Closure take a reference of `pd_sender` so that it is `fn()`.
+                pd_sender: pd_sender.clone(),
+            }
+        };
         ReadPool {
             pool_high: futurepool::FuturePool::new(
                 config.high_concurrency,
@@ -92,36 +95,20 @@ impl ReadPool {
         }
     }
 
-    pub fn future_execute<F>(
+    pub fn future_execute<F, R>(
         &self,
         priority: Priority,
-        future: F,
+        future_factory: R,
     ) -> cpupool::CpuFuture<F::Item, F::Error>
     where
+        R: FnOnce(futurepool::ContextDelegators<Context>) -> F + Send + 'static,
         F: Future + Send + 'static,
         F::Item: Send + 'static,
         F::Error: Send + 'static,
     {
         // TODO: handle busy?
         let pool = self.get_pool_by_priority(priority);
-        pool.spawn(future)
-    }
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum Priority {
-    Normal,
-    Low,
-    High,
-}
-
-impl From<kvrpcpb::CommandPri> for Priority {
-    fn from(p: kvrpcpb::CommandPri) -> Priority {
-        match p {
-            kvrpcpb::CommandPri::High => Priority::High,
-            kvrpcpb::CommandPri::Normal => Priority::Normal,
-            kvrpcpb::CommandPri::Low => Priority::Low,
-        }
+        pool.spawn(future_factory)
     }
 }
 
@@ -152,27 +139,30 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct Context {}
+
+    impl futurepool::Context for Context {}
+
     #[test]
     fn test_future_execute() {
-        let read_pool = ReadPool::new(&Config::default());
+        let read_pool = ReadPool::new(&Config::default(), None);
 
         expect_val(
             vec![1, 2, 4],
             read_pool
-                .future_execute(
-                    Priority::High,
-                    future::ok::<Vec<u8>, BoxError>(vec![1, 2, 4]),
-                )
+                .future_execute(Priority::High, |_| {
+                    future::ok::<Vec<u8>, BoxError>(vec![1, 2, 4])
+                })
                 .wait(),
         );
 
         expect_err(
             "foobar",
             read_pool
-                .future_execute(
-                    Priority::High,
-                    future::err::<(), BoxError>(box_err!("foobar")),
-                )
+                .future_execute(Priority::High, |_| {
+                    future::err::<(), BoxError>(box_err!("foobar"))
+                })
                 .wait(),
         );
     }
