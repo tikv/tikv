@@ -13,9 +13,9 @@
 
 use util::config::ReadableSize;
 
-const DEFAULT_HIGH_CONCURRENCY: usize = 2;
-const DEFAULT_NORMAL_CONCURRENCY: usize = 2;
-const DEFAULT_LOW_CONCURRENCY: usize = 2;
+const DEFAULT_HIGH_CONCURRENCY: usize = 8;
+const DEFAULT_NORMAL_CONCURRENCY: usize = 8;
+const DEFAULT_LOW_CONCURRENCY: usize = 8;
 const DEFAULT_STACK_SIZE_MB: u64 = 10;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
