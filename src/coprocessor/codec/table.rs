@@ -66,8 +66,8 @@ pub fn extract_table_prefix(key: &[u8]) -> Result<&[u8]> {
 }
 
 /// Check if the range is for table record or index.
-pub fn check_table_ranges(range: &[KeyRange]) -> Result<()> {
-    for range in range.iter() {
+pub fn check_table_ranges(ranges: &[KeyRange]) -> Result<()> {
+    for range in ranges {
         extract_table_prefix(range.get_start())?;
         extract_table_prefix(range.get_end())?;
     }

@@ -2201,7 +2201,7 @@ fn test_invalid_range() {
     ];
 
     let product = ProductTable::new();
-    let (_, end_point) = init_with_data(&product, &data);
+    let (_, mut end_point) = init_with_data(&product, &data);
 
     let mut select = DAGSelect::from(&product.table);
     select.key_range.set_start(b"xxx".to_vec());
@@ -2209,4 +2209,6 @@ fn test_invalid_range() {
     let req = select.build();
     let resp = handle_request(&end_point, req);
     assert!(!resp.get_other_error().is_empty());
+
+    end_point.stop().unwrap().join().unwrap();
 }

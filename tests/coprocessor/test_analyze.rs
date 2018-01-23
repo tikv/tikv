@@ -217,7 +217,7 @@ fn test_invalid_range() {
     ];
 
     let product = ProductTable::new();
-    let (_, end_point) = init_data_with_commit(&product, &data, true);
+    let (_, mut end_point) = init_data_with_commit(&product, &data, true);
     let mut req = new_analyze_index_req(&product.table, 3, product.name.index, 4, 32);
     let mut key_range = KeyRange::new();
     key_range.set_start(b"xxx".to_vec());
@@ -225,4 +225,5 @@ fn test_invalid_range() {
     req.set_ranges(RepeatedField::from_vec(vec![key_range]));
     let resp = handle_request(&end_point, req);
     assert!(!resp.get_other_error().is_empty());
+    end_point.stop().unwrap().join().unwrap();
 }
