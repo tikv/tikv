@@ -772,11 +772,13 @@ impl<T: Simulator> Cluster<T> {
                     let mut resp = write_resp.response;
                     if resp.get_header().has_error() {
                         let error = resp.get_header().get_error();
-                        if error.has_stale_epoch() || error.has_not_leader() {
+                        if error.has_stale_epoch() || error.has_not_leader()
+                            || error.has_stale_command()
+                        {
                             warn!("fail to split: {:?}, ignore.", error);
                             return;
                         }
-                        panic!("failed to split: {:?}", error);
+                        panic!("failed to split: {:?}", resp);
                     }
                     let admin_resp = resp.mut_admin_response();
                     let split_resp = admin_resp.mut_split();
