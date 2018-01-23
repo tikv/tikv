@@ -80,7 +80,7 @@ impl ImportSst for ImportSSTService {
                         if !chunk.get_data().is_empty() {
                             let data = chunk.get_data();
                             import1.append(token, data)?;
-                            IMPORT_UPLOAD_CHUNK_SIZE.observe(data.len() as f64);
+                            IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
                         }
                         IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
                         Ok(())

@@ -120,8 +120,7 @@ impl Simulator for ServerCluster {
             let dir = TempDir::new("test-import-sst").unwrap().into_path();
             Arc::new(SSTImporter::new(dir).unwrap())
         };
-        let import_service =
-            ImportSSTService::new(cfg.import.clone(), store.clone(), Arc::clone(&importer));
+        let import_service = ImportSSTService::new(cfg.import.clone(), store.clone(), importer);
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
