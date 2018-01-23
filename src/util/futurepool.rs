@@ -48,6 +48,10 @@ impl<T: Context> ContextDelegator<T> {
         }
     }
 
+    fn get_context(&self) -> cell::RefMut<T> {
+        self.inner.borrow_mut()
+    }
+
     fn on_task_finish(&self) {
         let now = Instant::now_coarse();
         let last_tick = self.last_tick.get();
@@ -60,7 +64,7 @@ impl<T: Context> ContextDelegator<T> {
             return;
         }
         self.last_tick.set(Some(now));
-        self.inner.borrow_mut().on_tick();
+        self.get_context().on_tick();
     }
 }
 
@@ -69,17 +73,47 @@ impl<T: Context> ContextDelegator<T> {
 unsafe impl<T: Context> Sync for ContextDelegator<T> {}
 
 #[derive(Debug)]
+pub struct ContextDelegators<T: Context> {
+    delegators: sync::Arc<HashMap<thread::ThreadId, ContextDelegator<T>>>,
+}
+
+impl<T: Context> Clone for ContextDelegators<T> {
+    fn clone(&self) -> Self {
+        ContextDelegators::<T> {
+            delegators: sync::Arc::clone(&self.delegators),
+        }
+    }
+}
+
+impl<T: Context> ContextDelegators<T> {
+    fn new(delegators: HashMap<thread::ThreadId, ContextDelegator<T>>) -> Self {
+        ContextDelegators::<T> {
+            delegators: sync::Arc::new(delegators),
+        }
+    }
+
+    fn get_current_thread_delegator(&self) -> &ContextDelegator<T> {
+        let thread_id = thread::current().id();
+        if let Some(delegator) = self.delegators.get(&thread_id) {
+            delegator
+        } else {
+            unreachable!();
+        }
+    }
+}
+
+#[derive(Debug)]
 /// A future thread pool that supports `on_tick` for each thread.
 pub struct FuturePool<T: Context> {
     pool: cpupool::CpuPool,
-    contexts: sync::Arc<HashMap<thread::ThreadId, ContextDelegator<T>>>,
+    context_delegators: ContextDelegators<T>,
 }
 
 impl<T: Context> Clone for FuturePool<T> {
     fn clone(&self) -> FuturePool<T> {
         FuturePool::<T> {
             pool: self.pool.clone(),
-            contexts: sync::Arc::clone(&self.contexts),
+            context_delegators: self.context_delegators.clone(),
         }
     }
 }
@@ -111,7 +145,6 @@ impl<T: Context> FuturePool<T> {
             })
             .create();
         let contexts = (0..pool_size)
-            .into_iter()
             .map(|_| {
                 let thread_id = rx.recv().unwrap();
                 let context = context_factory(thread_id);
@@ -121,7 +154,7 @@ impl<T: Context> FuturePool<T> {
             .collect();
         FuturePool {
             pool,
-            contexts: sync::Arc::new(contexts),
+            context_delegators: ContextDelegators::new(contexts),
         }
     }
 
@@ -132,16 +165,13 @@ impl<T: Context> FuturePool<T> {
         F::Error: Send + 'static,
     {
         // TODO: Support busy check
-        let contexts = sync::Arc::clone(&self.contexts);
-        self.pool.spawn(f.then(move |r| {
-            let thread_id = thread::current().id();
-            if let Some(context) = contexts.get(&thread_id) {
-                context.on_task_finish();
-            } else {
-                unreachable!();
-            }
+        let delegators = self.context_delegators.clone();
+        let f = f.then(move |r| {
+            let delegator = delegators.get_current_thread_delegator();
+            delegator.on_task_finish();
             r
-        }))
+        });
+        self.pool.spawn(f)
     }
 }
 

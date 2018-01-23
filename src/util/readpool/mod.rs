@@ -12,10 +12,10 @@
 // limitations under the License.
 
 mod config;
+mod context;
+mod priority;
 
-use std::fmt;
 use std::time;
-use std::thread;
 use futures::Future;
 use futures_cpupool as cpupool;
 
@@ -23,16 +23,10 @@ use util;
 use util::futurepool;
 
 pub use self::config::Config;
+pub use self::context::Context;
+pub use self::priority::Priority;
 
-struct Context {}
-
-impl fmt::Debug for Context {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Context").finish()
-    }
-}
-
-impl futurepool::Context for Context {}
+const TICK_INTERVAL_SEC: u64 = 1;
 
 pub struct ReadPool {
     pool_high: futurepool::FuturePool<Context>,
@@ -55,8 +49,8 @@ impl Clone for ReadPool {
 
 impl ReadPool {
     pub fn new(config: &Config) -> ReadPool {
-        let tick_interval = time::Duration::from_secs(1);
-        let build_context_factory = || |_thread_id: thread::ThreadId| Context {};
+        let tick_interval = time::Duration::from_secs(TICK_INTERVAL_SEC);
+        let build_context_factory = || |_| Context {};
         ReadPool {
             pool_high: futurepool::FuturePool::new(
                 config.high_concurrency,
@@ -105,13 +99,6 @@ impl ReadPool {
         let pool = self.get_pool_by_priority(priority);
         pool.spawn(future)
     }
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum Priority {
-    Normal,
-    Low,
-    High,
 }
 
 #[cfg(test)]
