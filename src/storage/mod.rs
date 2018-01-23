@@ -131,6 +131,8 @@ pub enum Command {
     ScanLock {
         ctx: Context,
         max_ts: u64,
+        start_key: Option<Key>,
+        limit: usize,
     },
     ResolveLock {
         ctx: Context,
@@ -250,8 +252,16 @@ impl Display for Command {
                 ctx
             ),
             Command::ScanLock {
-                ref ctx, max_ts, ..
-            } => write!(f, "kv::scan_lock {} | {:?}", max_ts, ctx),
+                ref ctx,
+                max_ts,
+                ref start_key,
+                limit,
+                ..
+            } => write!(
+                f,
+                "kv::scan_lock {:?} {} @ {} | {:?}",
+                start_key, limit, max_ts, ctx
+            ),
             Command::ResolveLock { .. } => write!(f, "kv::resolve_lock"),
             Command::Gc {
                 ref ctx,
@@ -746,11 +756,19 @@ impl Storage {
         &self,
         ctx: Context,
         max_ts: u64,
+        start_key: Vec<u8>,
+        limit: usize,
         callback: Callback<Vec<LockInfo>>,
     ) -> Result<()> {
         let cmd = Command::ScanLock {
             ctx: ctx,
             max_ts: max_ts,
+            start_key: if start_key.is_empty() {
+                None
+            } else {
+                Some(Key::from_raw(&start_key))
+            },
+            limit: limit,
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Locks(callback))?;
