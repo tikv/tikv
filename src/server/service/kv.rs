@@ -58,6 +58,7 @@ pub struct Service<T: RaftStoreRouter + 'static> {
     snap_scheduler: Scheduler<SnapTask>,
     token: Arc<AtomicUsize>, // TODO: remove it.
     recursion_limit: u32,
+    stream_channel_size: usize,
 }
 
 impl<T: RaftStoreRouter + 'static> Service<T> {
@@ -67,6 +68,7 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         recursion_limit: u32,
+        stream_channel_size: usize,
     ) -> Service<T> {
         Service {
             storage: storage,
@@ -75,6 +77,7 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
             snap_scheduler: snap_scheduler,
             token: Arc::new(AtomicUsize::new(1)),
             recursion_limit: recursion_limit,
+            stream_channel_size: stream_channel_size,
         }
     }
 
@@ -107,8 +110,11 @@ fn make_callback<T: Send + Debug + 'static>() -> (Box<FnBox(T) + Send>, oneshot:
     (box callback, rx)
 }
 
-fn make_stream_callback<T: Send + Debug + 'static>() -> (OnResponse<T>, mpsc::Receiver<T>) {
-    let (tx, rx) = mpsc::channel(8);
+fn make_stream_callback<T>(channel_size: usize) -> (OnResponse<T>, mpsc::Receiver<T>)
+where
+    T: Send + Debug + 'static,
+{
+    let (tx, rx) = mpsc::channel(channel_size);
     let callback = move |s: CopStream<T>, executor: Option<CpuPool>| {
         let f = s.forward(tx);
         if let Some(executor) = executor {
@@ -832,7 +838,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        let (on_resp, future) = make_stream_callback();
+        let (on_resp, future) = make_stream_callback(self.stream_channel_size);
         let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
             Ok(req_task) => req_task,
             Err(e) => {
