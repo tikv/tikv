@@ -359,7 +359,7 @@ fn test_serde_custom_tikv_config() {
     };
     value.import = ImportConfig {
         num_threads: 123,
-        stream_channel_size: 123,
+        stream_channel_window: 123,
     };
 
     let custom = read_file_in_project_dir("tests/config/test-custom.toml");

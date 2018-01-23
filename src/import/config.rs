@@ -19,14 +19,14 @@ use std::result::Result;
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub num_threads: usize,
-    pub stream_channel_size: usize,
+    pub stream_channel_window: usize,
 }
 
 impl Default for Config {
     fn default() -> Config {
         Config {
-            num_threads: 4,
-            stream_channel_size: 128,
+            num_threads: 8,
+            stream_channel_window: 128,
         }
     }
 }
@@ -36,8 +36,8 @@ impl Config {
         if self.num_threads == 0 {
             return Err("import.num_threads can not be 0".into());
         }
-        if self.stream_channel_size == 0 {
-            return Err("import.stream_channel_size can not be 0".into());
+        if self.stream_channel_window == 0 {
+            return Err("import.stream_channel_window can not be 0".into());
         }
         Ok(())
     }

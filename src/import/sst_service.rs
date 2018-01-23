@@ -65,7 +65,7 @@ impl ImportSst for ImportSSTService {
         let thread2 = self.threads.clone();
         let import1 = Arc::clone(&self.importer);
         let import2 = Arc::clone(&self.importer);
-        let bounded_stream = mpsc::spawn(stream, &self.threads, self.cfg.stream_channel_size);
+        let bounded_stream = mpsc::spawn(stream, &self.threads, self.cfg.stream_channel_window);
 
         ctx.spawn(
             bounded_stream

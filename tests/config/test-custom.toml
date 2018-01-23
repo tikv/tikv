@@ -305,4 +305,4 @@ key-path = "invalid path"
 
 [import]
 num-threads = 123
-stream-channel-size = 123
+stream-channel-window = 123
