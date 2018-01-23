@@ -12,13 +12,18 @@
 // limitations under the License.
 
 use std::fmt;
+use prometheus::local::LocalHistogramVec;
 
 use util::futurepool;
 use util::worker;
 use pd;
 
+use super::metrics::*;
+
 pub struct Context {
-    pub pd_sender: Option<worker::FutureScheduler<pd::PdTask>>,
+    pd_sender: Option<worker::FutureScheduler<pd::PdTask>>,
+
+    pub command_duration: LocalHistogramVec,
 }
 
 impl fmt::Debug for Context {
@@ -27,4 +32,17 @@ impl fmt::Debug for Context {
     }
 }
 
-impl futurepool::Context for Context {}
+impl Context {
+    pub fn new(pd_sender: Option<worker::FutureScheduler<pd::PdTask>>) -> Self {
+        Context {
+            pd_sender,
+            command_duration: COMMAND_HISTOGRAM_VEC.local(),
+        }
+    }
+}
+
+impl futurepool::Context for Context {
+    fn on_tick(&mut self) {
+        self.command_duration.flush();
+    }
+}

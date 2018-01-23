@@ -14,6 +14,7 @@
 mod config;
 mod context;
 mod priority;
+mod metrics;
 
 use std::time;
 use futures::Future;
@@ -56,10 +57,9 @@ impl ReadPool {
             // Take a reference of `pd_sender` instead of ownership
             // so that `build_context_factory` is `fn()`.
             let pd_sender = pd_sender.clone();
-            move |_| Context {
-                // Closure take a reference of `pd_sender` so that it is `fn()`.
-                pd_sender: pd_sender.clone(),
-            }
+
+            // Closure take a reference of `pd_sender` so that it is `fn()`.
+            move |_| Context::new(pd_sender.clone())
         };
         ReadPool {
             pool_high: futurepool::FuturePool::new(
