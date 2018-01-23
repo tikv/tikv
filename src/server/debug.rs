@@ -28,9 +28,9 @@ use kvproto::raft_serverpb::*;
 
 use raft::{self, RawNode};
 use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
-use raftstore::store::{init_apply_state, init_raft_state, write_peer_state};
+use raftstore::store::{init_apply_state, init_raft_state};
 use raftstore::store::util as raftstore_util;
-use raftstore::store::engine::IterOption;
+use raftstore::store::engine::{IterOption, Mutable};
 use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use storage::types::{truncate_ts, Key};
 use storage::mvcc::{Lock, Write, WriteType};
@@ -228,48 +228,67 @@ impl Debugger {
         Ok(())
     }
 
-    /// Set a region to tombstone by manual, and apply other status(such as
+    /// Set regions to tombstone by manual, and apply other status(such as
     /// peers, version, and key range) from `region` which comes from PD normally.
-    pub fn set_region_tombstone(&self, id: u64, region: Region) -> Result<()> {
+    pub fn set_region_tombstone(&self, regions: Vec<Region>) -> Result<Vec<(u64, Error)>> {
         let db = &self.engines.kv_engine;
-        let key = keys::region_state_key(id);
+        let wb = WriteBatch::new();
+        let handle = box_try!(get_cf_handle(db.as_ref(), CF_RAFT));
+        let mut ret = Vec::with_capacity(regions.len());
 
-        let old_region = box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key))
-            .ok_or_else(|| Error::Other("Not a valid region".into()))
-            .map(|mut region_local_state| region_local_state.take_region())?;
+        {
+            let fix_one_region = |region: Region| {
+                let id = region.get_id();
+                let key = keys::region_state_key(id);
+                let store_id = self.get_store_id()?;
 
-        let store_id = self.get_store_id()?;
-        let peer_id = old_region
-            .get_peers()
-            .iter()
-            .find(|p| p.get_store_id() == store_id)
-            .map(|p| p.get_id())
-            .ok_or_else(|| {
-                Error::Other("RegionLocalState doesn't contains the peer itself".into())
-            })?;
+                let mut region_state = box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key))
+                    .expect("Can't find RegionLocalState");
 
-        let new_conf_ver = region.get_region_epoch().get_conf_ver();
-        let old_conf_ver = old_region.get_region_epoch().get_conf_ver();
+                let peer_id = region_state
+                    .get_region()
+                    .get_peers()
+                    .iter()
+                    .find(|p| p.get_store_id() == store_id)
+                    .map(|p| p.get_id())
+                    .ok_or_else(|| {
+                        Error::Other("RegionLocalState doesn't contains the peer itself".into())
+                    })?;
 
-        // If the store is not in peers, or it's still in but its peer_id
-        // has changed, we know the peer is marked as tombstone success.
-        let scheduled = region
-            .get_peers()
-            .iter()
-            .find(|p| p.get_store_id() == store_id)
-            .map_or(true, |p| p.get_id() != peer_id);
+                let old_conf_ver = region_state.get_region().get_region_epoch().get_conf_ver();
+                let new_conf_ver = region.get_region_epoch().get_conf_ver();
 
-        if new_conf_ver > old_conf_ver && scheduled {
-            let wb = WriteBatch::new();
-            // Here we can keep the other metas as original.
-            box_try!(write_peer_state(db, &wb, &old_region, PeerState::Tombstone));
+                // If the store is not in peers, or it's still in but its peer_id
+                // has changed, we know the peer is marked as tombstone success.
+                let scheduled = region
+                    .get_peers()
+                    .iter()
+                    .find(|p| p.get_store_id() == store_id)
+                    .map_or(true, |p| p.get_id() != peer_id);
+
+                if new_conf_ver > old_conf_ver && scheduled {
+                    let wb = WriteBatch::new();
+                    region_state.set_state(PeerState::Tombstone);
+                    box_try!(wb.put_msg_cf(handle, &key, &region_state));
+                    return Ok(());
+                }
+                Err(box_err!("The peer is still in target peers"))
+            };
+
+            for region in regions {
+                let id = region.get_id();
+                if let Err(e) = fix_one_region(region) {
+                    ret.push((id, e));
+                }
+            }
+        }
+
+        if ret.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
             box_try!(db.write_opt(wb, &write_opts));
-            Ok(())
-        } else {
-            Err(box_err!("The peer is still in target peers"))
         }
+        Ok(ret)
     }
 
     pub fn bad_regions(&self) -> Result<Vec<(u64, Error)>> {
