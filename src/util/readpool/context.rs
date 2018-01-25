@@ -11,16 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt;
-
 use util::futurepool;
 
-pub struct Context {}
-
-impl fmt::Debug for Context {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Context").finish()
-    }
-}
+#[derive(Debug)]
+pub struct Context;
 
 impl futurepool::Context for Context {}

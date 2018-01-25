@@ -26,7 +26,9 @@ use util;
 use util::time::Instant;
 use util::collections::HashMap;
 
-pub trait Context: fmt::Debug + Send + 'static {
+pub trait Context: fmt::Debug + Send {
+    /// Will be invoked periodically (no less than specified interval).
+    /// When there is no task, it will NOT be invoked.
     fn on_tick(&mut self) {}
 }
 
@@ -67,8 +69,8 @@ impl<T: Context> ContextDelegator<T> {
     }
 }
 
-/// Each `ContextDelegator` instance is invoked individually for each thread
-/// so that we mark it as Sync.
+/// Each `ContextDelegator` instance is invoked individually for each thread.
+/// It is never accessed concurrently so that we mark it as Sync.
 unsafe impl<T: Context> Sync for ContextDelegator<T> {}
 
 #[derive(Debug)]
@@ -101,14 +103,14 @@ impl<T: Context> ContextDelegators<T> {
     }
 }
 
-#[derive(Debug)]
 /// A future thread pool that supports `on_tick` for each thread.
-pub struct FuturePool<T: Context> {
+#[derive(Debug)]
+pub struct FuturePool<T: Context + 'static> {
     pool: cpupool::CpuPool,
     context_delegators: ContextDelegators<T>,
 }
 
-impl<T: Context> Clone for FuturePool<T> {
+impl<T: Context + 'static> Clone for FuturePool<T> {
     fn clone(&self) -> FuturePool<T> {
         FuturePool::<T> {
             pool: self.pool.clone(),
@@ -117,10 +119,10 @@ impl<T: Context> Clone for FuturePool<T> {
     }
 }
 
-impl<T: Context> util::AssertSend for FuturePool<T> {}
-impl<T: Context> util::AssertSync for FuturePool<T> {}
+impl<T: Context + 'static> util::AssertSend for FuturePool<T> {}
+impl<T: Context + 'static> util::AssertSync for FuturePool<T> {}
 
-impl<T: Context> FuturePool<T> {
+impl<T: Context + 'static> FuturePool<T> {
     pub fn new<F>(
         pool_size: usize,
         stack_size: usize,
@@ -129,7 +131,7 @@ impl<T: Context> FuturePool<T> {
         context_factory: F,
     ) -> FuturePool<T>
     where
-        F: Send + 'static + Fn(thread::ThreadId) -> T,
+        F: Send + 'static + Fn() -> T,
     {
         let (tx, rx) = mpsc::sync_channel(pool_size);
         let pool = cpupool::Builder::new()
@@ -146,7 +148,7 @@ impl<T: Context> FuturePool<T> {
         let contexts = (0..pool_size)
             .map(|_| {
                 let thread_id = rx.recv().unwrap();
-                let context = context_factory(thread_id);
+                let context = context_factory();
                 let context_delegator = ContextDelegator::new(context, tick_interval);
                 (thread_id, context_delegator)
             })
@@ -216,7 +218,7 @@ mod tests {
             1024000,
             "test-pool",
             Duration::from_millis(50),
-            move |_| MyContext {
+            move || MyContext {
                 tx: tx.clone(),
                 sn: 0,
             },
