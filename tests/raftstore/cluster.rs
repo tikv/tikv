@@ -51,12 +51,12 @@ pub trait Simulator {
     fn run_node(&mut self, node_id: u64, cfg: TiKvConfig, engines: Engines) -> u64;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
-    fn call_command_on_node(
+    fn async_command_on_node(
         &self,
         node_id: u64,
         request: RaftCmdRequest,
-        timeout: Duration,
-    ) -> Result<RaftCmdResponse>;
+        cb: Callback,
+    ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<Msg>>;
@@ -68,6 +68,18 @@ pub trait Simulator {
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_store_id();
         self.call_command_on_node(node_id, request, timeout)
+    }
+    fn call_command_on_node(
+        &self,
+        node_id: u64,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
+        let (cb, rx) = make_cb(&request);
+
+        self.async_command_on_node(node_id, request, cb)?;
+        rx.recv_timeout(timeout)
+            .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 }
 
@@ -760,11 +772,13 @@ impl<T: Simulator> Cluster<T> {
                     let mut resp = write_resp.response;
                     if resp.get_header().has_error() {
                         let error = resp.get_header().get_error();
-                        if error.has_stale_epoch() || error.has_not_leader() {
+                        if error.has_stale_epoch() || error.has_not_leader()
+                            || error.has_stale_command()
+                        {
                             warn!("fail to split: {:?}, ignore.", error);
                             return;
                         }
-                        panic!("failed to split: {:?}", error);
+                        panic!("failed to split: {:?}", resp);
                     }
                     let admin_resp = resp.mut_admin_response();
                     let split_resp = admin_resp.mut_split();
