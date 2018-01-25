@@ -302,3 +302,7 @@ max-bytes-for-level-multiplier = 8
 ca-path = "invalid path"
 cert-path = "invalid path"
 key-path = "invalid path"
+
+[import]
+num-threads = 123
+stream-channel-window = 123
