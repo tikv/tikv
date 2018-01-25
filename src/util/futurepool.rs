@@ -15,10 +15,10 @@
 /// tasks and is invoked no less than the specific interval.
 
 use std::fmt;
-use std::cell;
-use std::sync::{self, mpsc};
+use std::cell::{Cell, RefCell, RefMut};
+use std::sync::{mpsc, Arc};
 use std::thread;
-use std::time;
+use std::time::Duration;
 use futures::Future;
 use futures_cpupool as cpupool;
 
@@ -33,22 +33,22 @@ pub trait Context: fmt::Debug + Send + 'static {
 #[derive(Debug)]
 /// A delegator to wrap `Context` to provide `on_tick` feature.
 struct ContextDelegator<T: Context> {
-    tick_interval: time::Duration,
+    tick_interval: Duration,
     /// TODO: Can be replace by `UnsafeCell` to eliminate the runtime cost of borrow checking.
-    inner: cell::RefCell<T>,
-    last_tick: cell::Cell<Option<Instant>>,
+    inner: RefCell<T>,
+    last_tick: Cell<Option<Instant>>,
 }
 
 impl<T: Context> ContextDelegator<T> {
-    fn new(context: T, tick_interval: time::Duration) -> ContextDelegator<T> {
+    fn new(context: T, tick_interval: Duration) -> ContextDelegator<T> {
         ContextDelegator {
             tick_interval,
-            inner: cell::RefCell::new(context),
-            last_tick: cell::Cell::new(None),
+            inner: RefCell::new(context),
+            last_tick: Cell::new(None),
         }
     }
 
-    fn get_context(&self) -> cell::RefMut<T> {
+    fn get_context(&self) -> RefMut<T> {
         self.inner.borrow_mut()
     }
 
@@ -74,13 +74,13 @@ unsafe impl<T: Context> Sync for ContextDelegator<T> {}
 
 #[derive(Debug)]
 pub struct ContextDelegators<T: Context> {
-    delegators: sync::Arc<HashMap<thread::ThreadId, ContextDelegator<T>>>,
+    delegators: Arc<HashMap<thread::ThreadId, ContextDelegator<T>>>,
 }
 
 impl<T: Context> Clone for ContextDelegators<T> {
     fn clone(&self) -> Self {
         ContextDelegators::<T> {
-            delegators: sync::Arc::clone(&self.delegators),
+            delegators: Arc::clone(&self.delegators),
         }
     }
 }
@@ -88,11 +88,11 @@ impl<T: Context> Clone for ContextDelegators<T> {
 impl<T: Context> ContextDelegators<T> {
     fn new(delegators: HashMap<thread::ThreadId, ContextDelegator<T>>) -> Self {
         ContextDelegators::<T> {
-            delegators: sync::Arc::new(delegators),
+            delegators: Arc::new(delegators),
         }
     }
 
-    pub fn get_current_thread_context(&self) -> cell::RefMut<T> {
+    pub fn get_current_thread_context(&self) -> RefMut<T> {
         let delegator = self.get_current_thread_delegator();
         delegator.get_context()
     }
@@ -131,7 +131,7 @@ impl<T: Context> FuturePool<T> {
         pool_size: usize,
         stack_size: usize,
         name_prefix: &str,
-        tick_interval: time::Duration,
+        tick_interval: Duration,
         context_factory: F,
     ) -> FuturePool<T>
     where
