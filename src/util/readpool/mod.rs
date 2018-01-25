@@ -15,12 +15,12 @@ mod config;
 mod context;
 mod priority;
 
-use std::time;
+use std::time::Duration;
 use futures::Future;
 use futures_cpupool as cpupool;
 
 use util;
-use util::futurepool;
+use util::futurepool::FuturePool;
 
 pub use self::config::Config;
 pub use self::context::Context;
@@ -29,9 +29,9 @@ pub use self::priority::Priority;
 const TICK_INTERVAL_SEC: u64 = 1;
 
 pub struct ReadPool {
-    pool_high: futurepool::FuturePool<Context>,
-    pool_normal: futurepool::FuturePool<Context>,
-    pool_low: futurepool::FuturePool<Context>,
+    pool_high: FuturePool<Context>,
+    pool_normal: FuturePool<Context>,
+    pool_low: FuturePool<Context>,
 }
 
 impl util::AssertSend for ReadPool {}
@@ -49,24 +49,24 @@ impl Clone for ReadPool {
 
 impl ReadPool {
     pub fn new(config: &Config) -> ReadPool {
-        let tick_interval = time::Duration::from_secs(TICK_INTERVAL_SEC);
+        let tick_interval = Duration::from_secs(TICK_INTERVAL_SEC);
         let build_context_factory = || |_| Context {};
         ReadPool {
-            pool_high: futurepool::FuturePool::new(
+            pool_high: FuturePool::new(
                 config.high_concurrency,
                 config.stack_size.0 as usize,
                 "readpool-high",
                 tick_interval,
                 build_context_factory(),
             ),
-            pool_normal: futurepool::FuturePool::new(
+            pool_normal: FuturePool::new(
                 config.normal_concurrency,
                 config.stack_size.0 as usize,
                 "readpool-normal",
                 tick_interval,
                 build_context_factory(),
             ),
-            pool_low: futurepool::FuturePool::new(
+            pool_low: FuturePool::new(
                 config.low_concurrency,
                 config.stack_size.0 as usize,
                 "readpool-low",
@@ -77,7 +77,7 @@ impl ReadPool {
     }
 
     #[inline]
-    fn get_pool_by_priority(&self, priority: Priority) -> &futurepool::FuturePool<Context> {
+    fn get_pool_by_priority(&self, priority: Priority) -> &FuturePool<Context> {
         match priority {
             Priority::High => &self.pool_high,
             Priority::Normal => &self.pool_normal,
