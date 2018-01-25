@@ -25,7 +25,6 @@ pub fn next_ts() -> u64 {
     CURRENT.fetch_add(1, Ordering::SeqCst)
 }
 
-
 /// Generate `count` row keys that all with the specified `table_id`.
 ///
 /// Row id will start with `start_id` and increment
@@ -39,7 +38,6 @@ pub fn generate_row_keys(table_id: i64, start_id: i64, count: usize) -> Vec<Vec<
     }
     result
 }
-
 
 /// Generate `count` unique index keys that all with the specified `table_id`, `index_id`,
 /// and `value_len`.
@@ -61,7 +59,6 @@ pub fn generate_unique_index_keys(
     }
     result
 }
-
 
 /// Convert duration to nanoseconds
 pub fn to_total_nanos(duration: &Duration) -> u64 {
@@ -87,7 +84,6 @@ where
         .collect()
 }
 
-
 /// Run `job` for `iterations` times, and return the average time cost as nanoseconds.
 /// Attention that if `job` returns no value, it will be optimized out by the compiler.
 pub fn do_bench<F, T>(mut job: F, iterations: u32) -> f64
@@ -101,7 +97,6 @@ where
     }
     to_total_nanos(&t.elapsed()) as f64 / (iterations as f64)
 }
-
 
 pub fn average<'a, T: 'a>(data: &'a [T]) -> <T as Div<u64>>::Output
 where
