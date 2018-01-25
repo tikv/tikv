@@ -14,6 +14,9 @@
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use std::thread;
+use std::path::Path;
+
+use tempdir::TempDir;
 
 use rocksdb::{CompactionJobInfo, DB};
 use protobuf;
@@ -26,10 +29,13 @@ use kvproto::eraftpb::ConfChangeType;
 
 use tikv::raftstore::store::*;
 use tikv::server::Config as ServerConfig;
-use tikv::storage::Config as StorageConfig;
+use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
 use tikv::util::escape;
+use tikv::util::rocksdb::{self, CompactionListener};
 use tikv::util::config::*;
 use tikv::config::TiKvConfig;
+use tikv::util::transport::SendCh;
+use tikv::raftstore::store::Msg as StoreMsg;
 
 pub use tikv::raftstore::store::util::find_peer;
 
@@ -329,6 +335,43 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdRespons
     (cb, rx)
 }
 
-pub fn dummpy_filter(_: &CompactionJobInfo) -> bool {
+fn dummpy_filter(_: &CompactionJobInfo) -> bool {
     true
+}
+
+pub fn create_test_engine(
+    engines: Option<Engines>,
+    tx: SendCh<StoreMsg>,
+    cfg: &TiKvConfig,
+) -> (Engines, Option<TempDir>) {
+    // Create engine
+    let mut path = None;
+    let engines = match engines {
+        Some(e) => e,
+        None => {
+            path = Some(TempDir::new("test_cluster").unwrap());
+            let mut kv_db_opt = cfg.rocksdb.build_opt();
+            let cmpacted_handler = box move |event| {
+                tx.send(StoreMsg::CompactedEvent(event)).unwrap();
+            };
+            kv_db_opt.add_event_listener(CompactionListener::new(
+                cmpacted_handler,
+                Some(dummpy_filter),
+            ));
+            let kv_cfs_opt = cfg.rocksdb.build_cf_opts();
+            let engine = Arc::new(
+                rocksdb::new_engine_opt(
+                    path.as_ref().unwrap().path().to_str().unwrap(),
+                    kv_db_opt,
+                    kv_cfs_opt,
+                ).unwrap(),
+            );
+            let raft_path = path.as_ref().unwrap().path().join(Path::new("raft"));
+            let raft_engine = Arc::new(
+                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
+            );
+            Engines::new(engine, raft_engine)
+        }
+    };
+    (engines, path)
 }

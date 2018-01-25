@@ -12,8 +12,7 @@
 // limitations under the License.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{mpsc, Arc, Mutex, RwLock};
-use std::path::Path;
+use std::sync::{mpsc, Arc, RwLock};
 
 use grpc::EnvBuilder;
 use tempdir::TempDir;
@@ -30,16 +29,15 @@ use tikv::server::transport::RaftStoreRouter;
 use tikv::util::transport::SendCh;
 use tikv::util::security::SecurityManager;
 use tikv::util::worker::{FutureWorker, Worker};
-use tikv::storage::{Engine, CF_DEFAULT};
+use tikv::storage::Engine;
 use tikv::import::{ImportSSTService, SSTImporter};
-use tikv::util::rocksdb::{self, CompactionListener};
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
 
 use super::pd::TestPdClient;
 use super::transport_simulate::*;
 use super::cluster::{Cluster, Simulator};
-use super::util::dummpy_filter;
+use super::util::create_test_engine;
 
 type SimulateStoreTransport = SimulateTransport<StoreMsg, ServerRaftStoreRouter>;
 type SimulateServerTransport =
@@ -119,39 +117,7 @@ impl Simulator for ServerCluster {
         let sim_router = SimulateTransport::new(raft_router);
 
         // Create engine
-        let mut path = None;
-        let engines = match engines {
-            Some(e) => e,
-            None => {
-                path = Some(TempDir::new("test_cluster").unwrap());
-                let mut kv_db_opt = cfg.rocksdb.build_opt();
-                let store_ch = Mutex::new(store_sendch.clone());
-                let cmpacted_handler = box move |event| {
-                    store_ch
-                        .lock()
-                        .unwrap()
-                        .send(StoreMsg::CompactedEvent(event))
-                        .unwrap();
-                };
-                kv_db_opt.add_event_listener(CompactionListener::new(
-                    cmpacted_handler,
-                    Some(dummpy_filter),
-                ));
-                let kv_cfs_opt = cfg.rocksdb.build_cf_opts();
-                let engine = Arc::new(
-                    rocksdb::new_engine_opt(
-                        path.as_ref().unwrap().path().to_str().unwrap(),
-                        kv_db_opt,
-                        kv_cfs_opt,
-                    ).unwrap(),
-                );
-                let raft_path = path.as_ref().unwrap().path().join(Path::new("raft"));
-                let raft_engine = Arc::new(
-                    rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
-                );
-                Engines::new(engine, raft_engine)
-            }
-        };
+        let (engines, path) = create_test_engine(engines, store_sendch.clone(), &cfg);
 
         // Create storage.
         let mut store = create_raft_storage(sim_router.clone(), &cfg.storage).unwrap();

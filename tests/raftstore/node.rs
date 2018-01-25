@@ -12,14 +12,12 @@
 // limitations under the License.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{mpsc, Arc, Mutex, RwLock};
+use std::sync::{mpsc, Arc, RwLock};
 use std::ops::Deref;
-use std::path::Path;
 
 use tempdir::TempDir;
 
 use super::cluster::{Cluster, Simulator};
-use super::util::dummpy_filter;
 use tikv::server::Node;
 use tikv::raftstore::store::*;
 use kvproto::metapb;
@@ -32,12 +30,11 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::HandyRwLock;
 use tikv::util::worker::FutureWorker;
 use tikv::util::transport::SendCh;
-use tikv::util::rocksdb::{self, CompactionListener};
 use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::raft::SnapshotStatus;
-use tikv::storage::CF_DEFAULT;
 use super::pd::TestPdClient;
 use super::transport_simulate::*;
+use super::util::create_test_engine;
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
@@ -174,39 +171,7 @@ impl Simulator for NodeCluster {
         );
 
         // Create engine
-        let mut path = None;
-        let engines = match engines {
-            Some(e) => e,
-            None => {
-                path = Some(TempDir::new("test_cluster").unwrap());
-                let mut kv_db_opt = cfg.rocksdb.build_opt();
-                let store_ch = Mutex::new(node.get_sendch());
-                let cmpacted_handler = box move |event| {
-                    store_ch
-                        .lock()
-                        .unwrap()
-                        .send(Msg::CompactedEvent(event))
-                        .unwrap();
-                };
-                kv_db_opt.add_event_listener(CompactionListener::new(
-                    cmpacted_handler,
-                    Some(dummpy_filter),
-                ));
-                let kv_cfs_opt = cfg.rocksdb.build_cf_opts();
-                let engine = Arc::new(
-                    rocksdb::new_engine_opt(
-                        path.as_ref().unwrap().path().to_str().unwrap(),
-                        kv_db_opt,
-                        kv_cfs_opt,
-                    ).unwrap(),
-                );
-                let raft_path = path.as_ref().unwrap().path().join(Path::new("raft"));
-                let raft_engine = Arc::new(
-                    rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
-                );
-                Engines::new(engine, raft_engine)
-            }
-        };
+        let (engines, path) = create_test_engine(engines, node.get_sendch(), &cfg);
 
         let (snap_mgr, tmp) = if node_id == 0 || !self.trans.rl().snap_paths.contains_key(&node_id)
         {
