@@ -25,6 +25,7 @@ use kvproto::pdpb::{ChangePeer, RegionHeartbeatResponse, TransferLeader};
 use kvproto::eraftpb::ConfChangeType;
 
 use tikv::raftstore::store::*;
+use tikv::raftstore::{Error, Result};
 use tikv::server::Config as ServerConfig;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::escape;
@@ -338,7 +339,7 @@ pub fn read_on_peer<T: Simulator>(
     region: metapb::Region,
     key: &[u8],
     timeout: Duration,
-) -> raftstore::Result<Vec<u8>> {
+) -> Result<Vec<u8>> {
     let mut request = new_request(
         region.get_id(),
         region.get_region_epoch().clone(),
@@ -348,7 +349,7 @@ pub fn read_on_peer<T: Simulator>(
     request.mut_header().set_peer(peer);
     let mut resp = cluster.call_command(request, timeout)?;
     if resp.get_header().has_error() {
-        return Err(raftstore::Error::Other(box_err!(
+        return Err(Error::Other(box_err!(
             resp.mut_header().take_error().take_message()
         )));
     }
