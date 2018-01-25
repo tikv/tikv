@@ -12,10 +12,12 @@
 // limitations under the License.
 
 use std::fmt;
+use std::mem;
 use prometheus::local::{LocalCounterVec, LocalHistogramTimer, LocalHistogramVec};
 
 use util::futurepool;
 use util::worker;
+use util::collections::HashMap;
 use pd;
 use storage;
 
@@ -28,6 +30,8 @@ pub struct Context {
     // keyread_duration: LocalHistogramVec,
     command_counter: LocalCounterVec,
     kvscan_counter: LocalCounterVec,
+
+    read_flow_stats: HashMap<u64, storage::FlowStatistics>,
 }
 
 impl fmt::Debug for Context {
@@ -44,6 +48,7 @@ impl Context {
             // keyread_duration: KEYREAD_HISTOGRAM_VEC.local(),
             command_counter: COMMAND_COUNTER_VEC.local(),
             kvscan_counter: KV_SCAN_COUNTER_VEC.local(),
+            read_flow_stats: HashMap::default(),
         }
     }
 
@@ -72,13 +77,38 @@ impl Context {
             }
         }
     }
+
+    #[inline]
+    pub fn collect_read_flow(&mut self, region_id: u64, statistics: &storage::Statistics) {
+        if self.pd_sender.is_none() {
+            return;
+        }
+        let flow_stats = self.read_flow_stats
+            .entry(region_id)
+            .or_insert_with(storage::FlowStatistics::default);
+        flow_stats.add(&statistics.write.flow_stats);
+        flow_stats.add(&statistics.data.flow_stats);
+    }
 }
 
 impl futurepool::Context for Context {
     fn on_tick(&mut self) {
+        // Flush Prometheus Metrics
         self.command_duration.flush();
         // self.keyread_duration.flush();
         self.command_counter.flush();
         self.kvscan_counter.flush();
+
+        // Report PD related Metrics
+        if !self.read_flow_stats.is_empty() {
+            if let Some(ref sender) = self.pd_sender {
+                let mut read_stats = HashMap::default();
+                mem::swap(&mut read_stats, &mut self.read_flow_stats);
+                let result = sender.schedule(pd::PdTask::ReadStats { read_stats });
+                if let Err(e) = result {
+                    error!("Failed to send readpool read flow statistics: {:?}", e);
+                }
+            }
+        }
     }
 }

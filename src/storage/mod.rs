@@ -611,6 +611,7 @@ impl Storage {
 
                         thread_ctx.collect_command_count(LABEL, priority);
                         thread_ctx.collect_kvscan_count(LABEL, &statistics);
+                        thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
 
                         result
                     })
