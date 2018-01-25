@@ -583,10 +583,11 @@ impl Storage {
         key: Key,
         start_ts: u64,
     ) -> impl Future<Item = Option<Value>, Error = Error> {
+        static LABEL: &'static str = "kv_get";
         let engine = self.get_engine();
-        self.read_pool.future_execute(
-            readpool::Priority::from(ctx.get_priority()),
-            move |ctx_delegators| {
+        let priority = readpool::Priority::from(ctx.get_priority());
+        self.read_pool
+            .future_execute(priority, move |ctx_delegators| {
                 engine
                     .future_snapshot(&ctx)
                     // map storage::engine::Error -> storage::txn::Error -> storage::Error
@@ -594,12 +595,8 @@ impl Storage {
                     .map_err(Error::from)
                     .and_then(move |snapshot: Box<Snapshot>| {
                         let mut thread_ctx = ctx_delegators.get_current_thread_context();
-                        thread_ctx.command_duration
-                            .with_label_values(&["get"])
-                            .start_coarse_timer();
-                        // TODO: sched_ctx.command_keyread_duration
-                        // TODO: ctx.processing_read_duration
-                        // TODO: ctx.add_statistics
+                        let _timer = thread_ctx.collect_command_duration(LABEL);
+
                         let mut statistics = Statistics::default();
                         let snap_store = SnapshotStore::new(
                             snapshot,
@@ -607,13 +604,17 @@ impl Storage {
                             ctx.get_isolation_level(),
                             ctx.get_not_fill_cache(),
                         );
-                        snap_store
+                        let result = snap_store
                             .get(&key, &mut statistics)
                             // map storage::txn::Error -> storage::Error
-                            .map_err(Error::from)
+                            .map_err(Error::from);
+
+                        thread_ctx.collect_command_count(LABEL, priority);
+                        thread_ctx.collect_kvscan_count(LABEL, &statistics);
+
+                        result
                     })
-            },
-        )
+            })
     }
 
     pub fn async_batch_get(
