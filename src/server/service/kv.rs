@@ -442,8 +442,13 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .start_coarse_timer();
 
         let (cb, future) = make_callback();
-        let res = self.storage
-            .async_scan_lock(req.take_context(), req.get_max_version(), cb);
+        let res = self.storage.async_scan_lock(
+            req.take_context(),
+            req.get_max_version(),
+            req.take_start_key(),
+            req.get_limit() as usize,
+            cb,
+        );
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;

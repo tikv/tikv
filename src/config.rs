@@ -19,7 +19,7 @@ use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBComp
               DBOptions, DBRecoveryMode};
 use sys_info;
 
-use util::readpool::Config as ReadPoolConfig;
+use import::Config as ImportConfig;
 use server::Config as ServerConfig;
 use pd::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
@@ -32,6 +32,7 @@ use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFa
 use util::rocksdb::{db_exist, CFOptions, EventListener, FixedPrefixSliceTransform,
                     FixedSuffixSliceTransform, NoopSliceTransform};
 use util::security::SecurityConfig;
+use util::readpool::Config as ReadPoolConfig;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -658,6 +659,7 @@ pub struct TiKvConfig {
     pub rocksdb: DbConfig,
     pub raftdb: RaftDbConfig,
     pub security: SecurityConfig,
+    pub import: ImportConfig,
 }
 
 impl Default for TiKvConfig {
@@ -675,6 +677,7 @@ impl Default for TiKvConfig {
             raftdb: RaftDbConfig::default(),
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
+            import: ImportConfig::default(),
         }
     }
 }
@@ -709,6 +712,7 @@ impl TiKvConfig {
         self.pd.validate()?;
         self.coprocessor.validate()?;
         self.security.validate()?;
+        self.import.validate()?;
         Ok(())
     }
 
