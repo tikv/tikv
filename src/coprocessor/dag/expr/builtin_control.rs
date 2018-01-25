@@ -40,7 +40,7 @@ where
     }
 }
 
-/// See https://dev.mysql.com/doc/refman/5.7/en/case.html
+/// See <https://dev.mysql.com/doc/refman/5.7/en/case.html>
 fn case_when<'a, F, T>(
     expr: &'a FnCall,
     ctx: &EvalContext,

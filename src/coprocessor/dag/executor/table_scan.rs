@@ -27,7 +27,6 @@ use util::collections::HashSet;
 use super::{Executor, Row};
 use super::scanner::{ScanOn, Scanner};
 
-
 pub struct TableScanExecutor {
     store: SnapshotStore,
     statistics: Statistics,

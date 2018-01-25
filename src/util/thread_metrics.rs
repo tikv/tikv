@@ -23,8 +23,7 @@ use libc::{self, pid_t};
 pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
     let pid = unsafe { libc::getpid() };
     let tc = ThreadsColletcor::new(pid, namespace);
-    prometheus::register(Box::new(tc))
-        .map_err(|e| to_err(format!("{:?}", e)))?;
+    prometheus::register(Box::new(tc)).map_err(|e| to_err(format!("{:?}", e)))?;
 
     Ok(())
 }

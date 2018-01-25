@@ -31,7 +31,7 @@ use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, Le
 use super::metrics::*;
 
 const CQ_COUNT: usize = 1;
-const CLIENT_PREFIX: &'static str = "pd";
+const CLIENT_PREFIX: &str = "pd";
 
 pub struct RpcClient {
     cluster_id: u64,
@@ -46,7 +46,7 @@ impl RpcClient {
                 .name_prefix(thd_name!(CLIENT_PREFIX))
                 .build(),
         );
-        let (client, members) = validate_endpoints(env.clone(), cfg, &security_mgr)?;
+        let (client, members) = validate_endpoints(Arc::clone(&env), cfg, &security_mgr)?;
 
         Ok(RpcClient {
             cluster_id: members.get_header().get_cluster_id(),
@@ -305,12 +305,10 @@ impl PdClient for RpcClient {
                     Box::new(
                         sender
                             .sink_map_err(Error::Grpc)
-                            .send_all(
-                                rx.map_err(|e| {
-                                    Error::Other(box_err!("failed to recv heartbeat: {:?}", e))
-                                }).map(|r| (r, WriteFlags::default())),
-                            )
-                            .map(|_| ()),
+                            .send_all(rx.map_err(|e| {
+                                Error::Other(box_err!("failed to recv heartbeat: {:?}", e))
+                            }).map(|r| (r, WriteFlags::default())))
+                            .map(|(mut sender, _)| sender.get_mut().cancel()),
                     ) as PdFuture<_>
                 }
                 None => unreachable!(),

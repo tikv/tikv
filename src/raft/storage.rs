@@ -25,7 +25,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use kvproto::eraftpb::{ConfState, Entry, HardState, Snapshot};
@@ -192,7 +191,6 @@ impl MemStorageCore {
         } else {
             ents
         };
-
 
         let offset = te[0].get_index() - self.entries[0].get_index();
         if self.entries.len() as u64 > offset {
@@ -389,26 +387,26 @@ mod test {
             (
                 4,
                 7,
-                (size_of(&ents[1]) + size_of(&ents[2])) as u64,
+                u64::from(size_of(&ents[1]) + size_of(&ents[2])),
                 Ok(vec![new_entry(4, 4), new_entry(5, 5)]),
             ),
             (
                 4,
                 7,
-                (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) / 2) as u64,
+                u64::from(size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) / 2),
                 Ok(vec![new_entry(4, 4), new_entry(5, 5)]),
             ),
             (
                 4,
                 7,
-                (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) - 1) as u64,
+                u64::from(size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) - 1),
                 Ok(vec![new_entry(4, 4), new_entry(5, 5)]),
             ),
             // all
             (
                 4,
                 7,
-                (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3])) as u64,
+                u64::from(size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3])),
                 Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)]),
             ),
         ];

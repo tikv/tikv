@@ -25,7 +25,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::mem;
 
 use raft::errors::{Error, Result};
@@ -51,22 +50,22 @@ pub enum SnapshotStatus {
 
 fn is_local_msg(t: MessageType) -> bool {
     match t {
-        MessageType::MsgHup |
-        MessageType::MsgBeat |
-        MessageType::MsgUnreachable |
-        MessageType::MsgSnapStatus |
-        MessageType::MsgCheckQuorum => true,
+        MessageType::MsgHup
+        | MessageType::MsgBeat
+        | MessageType::MsgUnreachable
+        | MessageType::MsgSnapStatus
+        | MessageType::MsgCheckQuorum => true,
         _ => false,
     }
 }
 
 fn is_response_msg(t: MessageType) -> bool {
     match t {
-        MessageType::MsgAppendResponse |
-        MessageType::MsgRequestVoteResponse |
-        MessageType::MsgHeartbeatResponse |
-        MessageType::MsgUnreachable |
-        MessageType::MsgRequestPreVoteResponse => true,
+        MessageType::MsgAppendResponse
+        | MessageType::MsgRequestVoteResponse
+        | MessageType::MsgHeartbeatResponse
+        | MessageType::MsgUnreachable
+        | MessageType::MsgRequestPreVoteResponse => true,
         _ => false,
     }
 }

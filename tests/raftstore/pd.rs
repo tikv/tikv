@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::{Arc, RwLock};
@@ -35,12 +34,8 @@ use super::util::*;
 // E.g, for region a, change peers 1,2,3 -> 1,2,4.
 // But unlike real pd, Rule is global, and if you set rule,
 // we won't check the peer count later.
-pub type Rule = Box<
-    Fn(&metapb::Region, &metapb::Peer)
-        -> Option<pdpb::RegionHeartbeatResponse>
-        + Send
-        + Sync,
->;
+pub type Rule =
+    Box<Fn(&metapb::Region, &metapb::Peer) -> Option<pdpb::RegionHeartbeatResponse> + Send + Sync>;
 
 struct Store {
     store: metapb::Store,
@@ -148,11 +143,9 @@ impl Cluster {
     }
 
     fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
-        Ok(
-            self.region_id_keys
-                .get(&region_id)
-                .and_then(|k| self.regions.get(k).cloned()),
-        )
+        Ok(self.region_id_keys
+            .get(&region_id)
+            .and_then(|k| self.regions.get(k).cloned()))
     }
 
     fn get_stores(&self) -> Vec<metapb::Store> {
@@ -288,16 +281,14 @@ impl Cluster {
         resp.set_target_peer(leader.clone());
 
         if let Some(ref rule) = self.rule {
-            return Ok(
-                rule(&region, &leader)
-                    .map(|mut resp| {
-                        resp.set_region_id(region.get_id());
-                        resp.set_region_epoch(region.get_region_epoch().clone());
-                        resp.set_target_peer(leader.clone());
-                        resp
-                    })
-                    .unwrap_or(resp),
-            );
+            return Ok(rule(&region, &leader)
+                .map(|mut resp| {
+                    resp.set_region_id(region.get_id());
+                    resp.set_region_epoch(region.get_region_epoch().clone());
+                    resp.set_target_peer(leader.clone());
+                    resp
+                })
+                .unwrap_or(resp));
         }
 
         // If no rule, use default max_peer_count check.
@@ -315,7 +306,7 @@ impl Cluster {
                     .all(|x| x.get_store_id() != *store_id)
                 {
                     let peer = new_peer(*store_id, self.alloc_id().unwrap());
-                    change_peer.set_change_type(eraftpb::ConfChangeType::AddNode.into());
+                    change_peer.set_change_type(eraftpb::ConfChangeType::AddNode);
                     change_peer.set_peer(peer.clone());
                     resp.set_change_peer(change_peer);
                     break;
@@ -329,10 +320,9 @@ impl Cluster {
                 .position(|x| x.get_store_id() != leader.get_store_id())
                 .unwrap();
 
-            change_peer.set_change_type(eraftpb::ConfChangeType::RemoveNode.into());
+            change_peer.set_change_type(eraftpb::ConfChangeType::RemoveNode);
             change_peer.set_peer(region.get_peers()[pos].clone());
             resp.set_change_peer(change_peer);
-
         }
 
         Ok(resp)
@@ -363,8 +353,8 @@ impl Cluster {
 fn check_stale_region(region: &metapb::Region, check_region: &metapb::Region) -> Result<()> {
     let epoch = region.get_region_epoch();
     let check_epoch = check_region.get_region_epoch();
-    if check_epoch.get_conf_ver() >= epoch.get_conf_ver() &&
-        check_epoch.get_version() >= epoch.get_version()
+    if check_epoch.get_conf_ver() >= epoch.get_conf_ver()
+        && check_epoch.get_version() >= epoch.get_version()
     {
         return Ok(());
     }
@@ -514,9 +504,7 @@ impl TestPdClient {
         self.set_rule(box move |region: &metapb::Region, _: &metapb::Peer| {
             debug!(
                 "[region {}] trying add {:?} to {:?}",
-                region_id,
-                peer,
-                region
+                region_id, peer, region
             );
             if region.get_id() != region_id {
                 return None;
@@ -627,7 +615,6 @@ impl PdClient for TestPdClient {
         self.cluster.rl().get_store(store_id)
     }
 
-
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
         self.check_bootstrap()?;
         if let Some(region) = self.cluster.rl().get_region(data_key(key)) {
@@ -653,7 +640,6 @@ impl PdClient for TestPdClient {
         self.check_bootstrap()?;
         Ok(self.cluster.rl().meta.clone())
     }
-
 
     fn region_heartbeat(
         &self,
@@ -690,9 +676,7 @@ impl PdClient for TestPdClient {
             rx.for_each(move |resp| {
                 f(resp);
                 Ok(())
-            }).map_err(|e| {
-                    box_err!("failed to receive next heartbeat response: {:?}", e)
-                }),
+            }).map_err(|e| box_err!("failed to receive next heartbeat response: {:?}", e)),
         )
     }
 

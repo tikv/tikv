@@ -73,9 +73,9 @@ fn read_on_peer<T: Simulator>(
     request.mut_header().set_peer(peer);
     let mut resp = cluster.call_command(request, timeout)?;
     if resp.get_header().has_error() {
-        return Err(Error::Other(
-            box_err!(resp.mut_header().take_error().take_message()),
-        ));
+        return Err(Error::Other(box_err!(
+            resp.mut_header().take_error().take_message()
+        )));
     }
     assert_eq!(resp.get_responses().len(), 1);
     assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
@@ -223,7 +223,7 @@ fn test_node_renew_lease() {
 // If the leader lease has expired, there may be new leader elected and
 // the old leader will fail to renew its lease.
 fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
     pd_client.disable_default_rule();
 
@@ -232,8 +232,8 @@ fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
     // Increase the Raft tick interval to make this test case running reliably.
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(50);
 
-    let election_timeout = cluster.cfg.raft_store.raft_base_tick_interval.0 *
-        cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+    let election_timeout = cluster.cfg.raft_store.raft_base_tick_interval.0
+        * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
     let node_id = 3u64;
     let store_id = 3u64;
     let peer = new_peer(store_id, node_id);
@@ -386,7 +386,7 @@ fn test_node_callback_when_destroyed() {
         RegionPacketFilter::new(1, leader.get_store_id())
             .msg_type(MessageType::MsgAppendResponse)
             .direction(Direction::Recv)
-            .when(block.clone()),
+            .when(Arc::clone(&block)),
     ));
     let mut filter = LeaseReadFilter::default();
     filter.take = true;

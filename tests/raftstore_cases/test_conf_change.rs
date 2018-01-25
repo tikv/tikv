@@ -33,7 +33,7 @@ use super::util::*;
 use super::pd::TestPdClient;
 
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
 
@@ -154,7 +154,7 @@ fn new_conf_change_peer(store: &metapb::Store, pd_client: &Arc<TestPdClient>) ->
 }
 
 fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
 
@@ -239,7 +239,6 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_3, b"k1");
     must_get_none(&engine_3, b"k4");
 
-
     // TODO: add more tests.
 }
 
@@ -286,22 +285,21 @@ fn wait_till_reach_count(pd_client: Arc<TestPdClient>, region_id: u64, c: usize)
     }
     panic!(
         "replica count {} still not meet {} after 10 secs",
-        replica_count,
-        c
+        replica_count, c
     );
 }
 
 fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.start();
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     let mut region = pd_client.get_region(b"").unwrap();
     let region_id = region.get_id();
 
     let stores = pd_client.get_stores().unwrap();
 
     // default replica is 5.
-    wait_till_reach_count(pd_client.clone(), region_id, 5);
+    wait_till_reach_count(Arc::clone(&pd_client), region_id, 5);
 
     let (key, value) = (b"k1", b"v1");
     cluster.must_put(key, value);
@@ -328,11 +326,11 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
 
     pd_client.must_add_peer(region_id, peer.clone());
 
-    wait_till_reach_count(pd_client.clone(), region_id, 6);
+    wait_till_reach_count(Arc::clone(&pd_client), region_id, 6);
 
     // it should remove extra replica.
     pd_client.reset_rule();
-    wait_till_reach_count(pd_client.clone(), region_id, 5);
+    wait_till_reach_count(Arc::clone(&pd_client), region_id, 5);
 
     region = pd_client
         .get_region_by_id(region_id)
@@ -341,11 +339,11 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
         .unwrap();
     let peer = region.get_peers().get(1).unwrap().clone();
     pd_client.must_remove_peer(region_id, peer);
-    wait_till_reach_count(pd_client.clone(), region_id, 4);
+    wait_till_reach_count(Arc::clone(&pd_client), region_id, 4);
 
     // it should add missing replica.
     pd_client.reset_rule();
-    wait_till_reach_count(pd_client.clone(), region_id, 5);
+    wait_till_reach_count(Arc::clone(&pd_client), region_id, 5);
 }
 
 #[test]
@@ -363,7 +361,7 @@ fn test_server_auto_adjust_replica() {
 }
 
 fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
 
@@ -393,9 +391,7 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.stop_node(3);
 
-    pd_client.set_rule(box move |region, _| {
-        new_pd_remove_change_peer(region, new_peer(1, 1))
-    });
+    pd_client.set_rule(box move |region, _| new_pd_remove_change_peer(region, new_peer(1, 1)));
 
     let epoch = cluster
         .pd_client
@@ -451,7 +447,7 @@ fn test_server_after_remove_itself() {
 }
 
 fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
     pd_client.disable_default_rule();
 
@@ -536,7 +532,7 @@ fn test_node_split_brain() {
 
 /// A helper function for testing the conf change is safe.
 fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
 
@@ -613,7 +609,7 @@ fn test_server_safe_conf_change() {
 fn test_conf_change_remove_leader() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.allow_remove_leader = false;
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_rule();
     let r1 = cluster.run_conf_change();
     pd_client.must_add_peer(r1, new_peer(2, 2));
