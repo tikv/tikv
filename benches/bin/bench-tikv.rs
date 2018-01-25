@@ -116,7 +116,7 @@ fn main() {
     println!("{:?}", benches);
 
     for item in benches {
-        match item.as_ref() {
+        match item {
             "raftstore" => raftstore::bench_raftstore(),
             "mvcc" => mvcc::bench_engine(),
             _ => eprintln!("error: Unknown bench item {}", item),
