@@ -1145,19 +1145,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.raft_metrics.ready.snapshot - previous_ready_metrics.snapshot
         );
 
-        let mut apply_tasks = Vec::with_capacity(ready_results.len());
-        for (region_id, ready, res) in ready_results {
-            self.region_peers
-                .get_mut(&region_id)
-                .unwrap()
-                .handle_raft_ready_apply(ready, &mut apply_tasks);
-            if let Some(apply_result) = res {
-                self.on_ready_apply_snapshot(apply_result);
+        if !ready_results.is_empty() {
+            let mut apply_tasks = Vec::with_capacity(ready_results.len());
+            for (region_id, ready, res) in ready_results {
+                self.region_peers
+                    .get_mut(&region_id)
+                    .unwrap()
+                    .handle_raft_ready_apply(ready, &mut apply_tasks);
+                if let Some(apply_result) = res {
+                    self.on_ready_apply_snapshot(apply_result);
+                }
             }
+            self.apply_worker
+                .schedule(ApplyTask::applies(apply_tasks))
+                .unwrap();
         }
-        self.apply_worker
-            .schedule(ApplyTask::applies(apply_tasks))
-            .unwrap();
 
         let dur = t.elapsed();
         if !self.is_busy {

@@ -13,7 +13,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, RwLock};
-use std::time::Duration;
 use std::ops::Deref;
 
 use tempdir::TempDir;
@@ -35,7 +34,6 @@ use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::raft::SnapshotStatus;
 use super::pd::TestPdClient;
 use super::transport_simulate::*;
-use super::util::wait_cb;
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
@@ -240,18 +238,18 @@ impl Simulator for NodeCluster {
         self.nodes.keys().cloned().collect()
     }
 
-    fn call_command_on_node(
+    fn async_command_on_node(
         &self,
         node_id: u64,
         request: RaftCmdRequest,
-        timeout: Duration,
-    ) -> Result<RaftCmdResponse> {
+        cb: Callback,
+    ) -> Result<()> {
         if !self.trans.rl().routers.contains_key(&node_id) {
             return Err(box_err!("missing sender for store {}", node_id));
         }
 
         let router = self.trans.rl().routers.get(&node_id).cloned().unwrap();
-        wait_cb(router, request, timeout)
+        router.send_command(request, cb)
     }
 
     fn send_raft_msg(&mut self, msg: raft_serverpb::RaftMessage) -> Result<()> {

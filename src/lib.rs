@@ -82,6 +82,7 @@ extern crate toml;
 extern crate url;
 #[cfg(test)]
 extern crate utime;
+extern crate uuid;
 extern crate zipf;
 
 #[macro_use]
@@ -93,5 +94,6 @@ pub mod raftstore;
 pub mod pd;
 pub mod server;
 pub mod coprocessor;
+pub mod import;
 
 pub use storage::Storage;

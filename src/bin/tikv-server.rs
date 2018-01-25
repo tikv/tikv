@@ -73,6 +73,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
+use tikv::import::{ImportSSTService, SSTImporter};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -151,6 +152,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let db_path = store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
     let snap_path = store_path.join(Path::new("snap"));
     let raft_db_path = Path::new(&cfg.raft_store.raftdb_path);
+    let import_path = store_path.join("import");
 
     let f = File::create(lock_path.as_path())
         .unwrap_or_else(|e| fatal!("failed to create lock at {}: {:?}", lock_path.display(), e));
@@ -204,6 +206,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             Some(store_sendch),
         );
 
+    let importer = Arc::new(SSTImporter::new(import_path).unwrap());
+    let import_service = ImportSSTService::new(cfg.import.clone(), storage.clone(), importer);
+
     let server_cfg = Arc::new(cfg.server.clone());
     // Create server
     let mut server = Server::new(
@@ -216,6 +221,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         snap_mgr.clone(),
         pd_worker.scheduler(),
         Some(engines.clone()),
+        Some(import_service),
     ).unwrap_or_else(|e| fatal!("failed to create server: {:?}", e));
     let trans = server.transport();
 
