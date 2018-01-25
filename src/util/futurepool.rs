@@ -92,6 +92,7 @@ impl<T: Context> ContextDelegators<T> {
         }
     }
 
+    /// This function should be called in the future pool thread. Otherwise it will panic.
     pub fn get_current_thread_context(&self) -> RefMut<T> {
         let delegator = self.get_current_thread_delegator();
         delegator.get_context()
@@ -102,7 +103,7 @@ impl<T: Context> ContextDelegators<T> {
         if let Some(delegator) = self.delegators.get(&thread_id) {
             delegator
         } else {
-            unreachable!();
+            panic!("Called from threads out of the future thread pool");
         }
     }
 }
