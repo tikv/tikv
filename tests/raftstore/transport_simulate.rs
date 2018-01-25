@@ -20,7 +20,7 @@ use tikv::server::StoreAddrResolver;
 use tikv::util::{transport, Either, HandyRwLock};
 
 use rand;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::mpsc::Sender;
 use std::marker::PhantomData;
@@ -635,5 +635,27 @@ impl Clone for RandomLatencyFilter {
             delay_rate: self.delay_rate,
             delayed_msgs: Mutex::new(delayed_msgs.clone()),
         }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct LeaseReadFilter {
+    pub ctx: Arc<RwLock<HashSet<Vec<u8>>>>,
+    pub take: bool,
+}
+
+impl Filter<RaftMessage> for LeaseReadFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        let mut ctx = self.ctx.wl();
+        for m in msgs {
+            let msg = m.mut_message();
+            if msg.get_msg_type() == MessageType::MsgHeartbeat && !msg.get_context().is_empty() {
+                ctx.insert(msg.get_context().to_owned());
+            }
+            if self.take {
+                msg.take_context();
+            }
+        }
+        Ok(())
     }
 }
