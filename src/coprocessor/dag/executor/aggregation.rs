@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::cmp::Ordering;
 
 use tipb::schema::ColumnInfo;
 use tipb::executor::Aggregation;
@@ -208,6 +209,199 @@ impl Executor for HashAggExecutor {
     }
 }
 
+impl Executor for StreamAggExecutor {
+    fn next(&mut self) -> Result<Option<Row>> {
+        if self.executed {
+            return Ok(None);
+        }
+
+        loop {
+            match self.src.next() {
+                Err(err) => return Err(err),
+
+                Ok(None) => {
+                    println!("src is none");
+                    self.executed = true;
+                    if self.count == 1 && self.group_by_exprs.len() == 0 {
+                        return Ok(None);
+                    }
+                    return self.get_partial_result();
+                }
+
+                Ok(Some(row)) => {
+                    let cols = inflate_with_col_for_dag(
+                        &self.ctx,
+                        &row.data,
+                        &self.cols,
+                        &self.related_cols_offset,
+                        row.handle,
+                    )?;
+                    println!("src vals {:?}, count {}", cols, self.count);
+                    let new_group = self.meet_new_group(&cols)?;
+                    let mut ret = None;
+                    if new_group {
+                        ret = self.get_partial_result()?;
+                    }
+                    for i in 0..self.agg_exprs.len() {
+                        self.agg_funcs[i].update_with_expr(&self.ctx, &self.agg_exprs[i], &cols)?;
+                    }
+                    if new_group {
+                        return Ok(ret);
+                    }
+                }
+            }
+        }
+    }
+
+    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
+        self.src.collect_output_counts(counts);
+        counts.push(self.count);
+        self.count = 0;
+    }
+
+    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
+        self.src.collect_statistics_into(statistics)
+    }
+
+    fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
+        self.src.collect_metrics_into(metrics);
+    }
+}
+
+pub struct StreamAggExecutor {
+    ctx: Arc<EvalContext>,
+    src: Box<Executor>,
+
+    executed: bool,
+    group_by_exprs: Vec<Expression>,
+    agg_exprs: Vec<AggFuncExpr>,
+    agg_funcs: Vec<Box<AggrFunc>>,
+    cols: Arc<Vec<ColumnInfo>>,
+    related_cols_offset: Vec<usize>,
+    curr_group_row: Vec<Datum>,
+    next_group_row: Vec<Datum>,
+    tmp_group_row: Vec<Datum>,
+    is_first_group: bool,
+    count: i64,
+}
+
+impl StreamAggExecutor {
+    pub fn new(
+        ctx: Arc<EvalContext>,
+        src: Box<Executor>,
+        mut meta: Aggregation,
+        columns: Arc<Vec<ColumnInfo>>,
+    ) -> Result<StreamAggExecutor> {
+        let mut visitor = ExprColumnRefVisitor::new(columns.len());
+        let group_bys = meta.take_group_by().into_vec();
+        visitor.batch_visit(&group_bys)?;
+        let aggs = meta.take_agg_func().into_vec();
+        visitor.batch_visit(&aggs)?;
+        let group_len = group_bys.len();
+        let exprs = AggFuncExpr::batch_build(&ctx, aggs)?;
+        // get aggregation functions
+        let mut funcs = Vec::with_capacity(exprs.len());
+        for expr in &exprs {
+            let agg = aggregate::build_aggr_func(expr.tp)?;
+            funcs.push(agg);
+        }
+
+        Ok(StreamAggExecutor {
+            src: src,
+            executed: false,
+            agg_exprs: exprs,
+            agg_funcs: funcs,
+            group_by_exprs: box_try!(Expression::batch_build(&ctx, group_bys)),
+            ctx: ctx,
+            related_cols_offset: visitor.column_offsets(),
+            cols: columns,
+            curr_group_row: vec![Datum::Null; group_len],
+            next_group_row: vec![Datum::Null; group_len],
+            tmp_group_row: vec![Datum::Null; group_len],
+            is_first_group: true,
+            count: 0,
+        })
+    }
+
+    // row: &[Datum]
+    fn meet_new_group(&mut self, row: &[Datum]) -> Result<bool> {
+        if self.group_by_exprs.is_empty() {
+            return Ok(false);
+        }
+
+        let mut matched = true;
+        if self.is_first_group {
+            matched = false;
+        }
+        let mut cnt = 0;
+        for expr in &self.group_by_exprs {
+            let v = box_try!(expr.eval(&self.ctx, row));
+            // println!(
+            //     "---------------- self val {:?}, cmp val {:?}, is first group {}",
+            //     v, self.next_group_row[cnt], self.is_first_group
+            // );
+            if matched {
+                if box_try!(v.cmp(&self.ctx, &self.next_group_row[cnt])) != Ordering::Equal {
+                    matched = false;
+                }
+            }
+            self.tmp_group_row[cnt] = v;
+            cnt += 1;
+        }
+        let ret = !self.is_first_group;
+        if self.is_first_group {
+            self.curr_group_row = self.tmp_group_row.clone();
+            self.is_first_group = false
+        }
+        if matched {
+            return Ok(false);
+        }
+        self.next_group_row = self.tmp_group_row.clone();
+        Ok(ret)
+    }
+
+    fn get_partial_result(&mut self) -> Result<Option<Row>> {
+        let mut agg_cols = Vec::with_capacity(2 * self.agg_funcs.len());
+        // calc all agg func
+        let mut cnt = 0;
+        for agg_func in self.agg_funcs.iter_mut() {
+            agg_func.calc(&mut agg_cols)?;
+            let agg = aggregate::build_aggr_func(self.agg_exprs[cnt].tp)?;
+            *agg_func = agg;
+            cnt += 1;
+        }
+
+        println!(
+            "count {}, agg cols {:?}, group byt {:?}",
+            self.count, agg_cols, self.curr_group_row
+        );
+        // group by
+        let mut group_key = Vec::with_capacity(0);
+        if !self.group_by_exprs.is_empty() {
+            let mut vals = Vec::with_capacity(self.group_by_exprs.len());
+            for d in &self.curr_group_row {
+                vals.push(d.clone());
+            }
+            group_key = box_try!(datum::encode_value(vals.as_slice()));
+            self.curr_group_row = self.next_group_row.clone();
+        }
+        // construct row data
+        let value_size = group_key.len() + approximate_size(&agg_cols, false);
+        let mut value = Vec::with_capacity(value_size);
+        box_try!(value.encode(agg_cols.as_slice(), false));
+        if !self.group_by_exprs.is_empty() {
+            value.extend_from_slice(&group_key);
+        }
+
+        self.count += 1;
+
+        Ok(Some(Row {
+            handle: 0,
+            data: RowColsDict::new(map![], value),
+        }))
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::i64;
@@ -220,12 +414,16 @@ mod test {
     use coprocessor::codec::datum::{Datum, DatumDecoder};
     use coprocessor::codec::mysql::decimal::Decimal;
     use coprocessor::codec::mysql::types;
+    use coprocessor::codec::table;
     use storage::SnapshotStore;
     use util::codec::number::NumberEncoder;
+    use util::collections::HashMap;
 
     use super::*;
     use super::super::table_scan::TableScanExecutor;
-    use super::super::scanner::test::{get_range, new_col_info, TestStore};
+    use super::super::index_scan::IndexScanExecutor;
+    use super::super::index_scan::test::IndexTestWrapper;
+    use super::super::scanner::test::{get_range, new_col_info, Data, TestStore};
     use super::super::topn::test::gen_table_data;
 
     #[inline]
@@ -258,8 +456,149 @@ mod test {
         aggr_func
     }
 
+    pub fn generate_index_data(
+        table_id: i64,
+        index_id: i64,
+        handle: i64,
+        idx_vals: Vec<(i64, Datum)>,
+    ) -> (HashMap<i64, Vec<u8>>, Vec<u8>) {
+        let mut expect_row = HashMap::default();
+        let mut v: Vec<_> = idx_vals
+            .iter()
+            .map(|&(ref cid, ref value)| {
+                expect_row.insert(*cid, datum::encode_key(&[value.clone()]).unwrap());
+                value.clone()
+            })
+            .collect();
+        v.push(Datum::I64(handle));
+        let encoded = datum::encode_key(&v).unwrap();
+        let idx_key = table::encode_index_seek_key(table_id, index_id, &encoded);
+        (expect_row, idx_key)
+    }
+
+    pub fn prepare_index_data(table_id: i64, index_id: i64, cols: Vec<ColumnInfo>) -> Data {
+        let mut kv_data = Vec::new();
+        let mut expect_rows = Vec::new();
+
+        let idx_vals = vec![
+            vec![(2, Datum::Bytes(b"a".to_vec())), (3, Datum::Dec(12.into()))],
+            vec![(2, Datum::Bytes(b"c".to_vec())), (3, Datum::Dec(12.into()))],
+            vec![(2, Datum::Bytes(b"c".to_vec())), (3, Datum::Dec(2.into()))],
+            vec![(2, Datum::Bytes(b"b".to_vec())), (3, Datum::Dec(2.into()))],
+            vec![(2, Datum::Bytes(b"a".to_vec())), (3, Datum::Dec(12.into()))],
+            vec![(2, Datum::Bytes(b"b".to_vec())), (3, Datum::Dec(2.into()))],
+            vec![(2, Datum::Bytes(b"a".to_vec())), (3, Datum::Dec(12.into()))],
+        ];
+        let mut handle = 1;
+        for val in idx_vals {
+            println!("val {:?}", val);
+            let (expect_row, idx_key) = generate_index_data(table_id, index_id, handle as i64, val);
+            expect_rows.push(expect_row);
+            let value = vec![1; 0];
+            kv_data.push((idx_key, value));
+            handle += 1;
+        }
+        Data {
+            kv_data: kv_data,
+            expect_rows: expect_rows,
+            cols: cols,
+        }
+    }
+
     #[test]
-    fn test_aggregation() {
+    fn test_stream_agg() {
+        // prepare data and store
+        let tid = 1;
+        let idx_id = 1;
+        let col_infos = vec![
+            new_col_info(1, types::LONG_LONG),
+            new_col_info(2, types::VARCHAR),
+            new_col_info(3, types::NEW_DECIMAL),
+        ];
+        let idx_data = prepare_index_data(tid, idx_id, col_infos.clone());
+        let idx_row_cnt = idx_data.kv_data.len() as i64;
+        let unique = false;
+        let mut wrapper = IndexTestWrapper::new(unique, idx_data);
+        let (snapshot, start_ts) = wrapper.store.get_snapshot();
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let is_executor = IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique);
+
+        // init aggregation meta
+        let mut aggregation = Aggregation::default();
+        let group_by_cols = vec![1, 2];
+        let group_by = build_group_by(&group_by_cols);
+        aggregation.set_group_by(RepeatedField::from_vec(group_by));
+        let funcs = vec![(ExprType::Count, 1), (ExprType::Sum, 2), (ExprType::Avg, 2)];
+        let agg_funcs = build_aggr_func(&funcs);
+        aggregation.set_agg_func(RepeatedField::from_vec(agg_funcs));
+        // init the stream aggregation executor
+        let mut agg_ect = StreamAggExecutor::new(
+            Arc::new(EvalContext::default()),
+            Box::new(is_executor),
+            aggregation,
+            Arc::new(col_infos),
+        ).unwrap();
+        let expect_row_cnt = 4;
+        let mut row_data = Vec::with_capacity(expect_row_cnt);
+        while let Some(row) = agg_ect.next().unwrap() {
+            println!(
+                "data ....  {:?}",
+                row.data.value.as_slice().decode().unwrap()
+            );
+            row_data.push(row.data);
+        }
+        assert_eq!(row_data.len(), expect_row_cnt);
+        let expect_row_data = vec![
+            (
+                3 as u64,
+                Decimal::from(36),
+                3 as u64,
+                Decimal::from(36),
+                b"a".as_ref(),
+                Decimal::from(12),
+            ),
+            (
+                2 as u64,
+                Decimal::from(4),
+                2 as u64,
+                Decimal::from(4),
+                b"b".as_ref(),
+                Decimal::from(2),
+            ),
+            (
+                1 as u64,
+                Decimal::from(2),
+                1 as u64,
+                Decimal::from(2),
+                b"c".as_ref(),
+                Decimal::from(2),
+            ),
+            (
+                1 as u64,
+                Decimal::from(12),
+                1 as u64,
+                Decimal::from(12),
+                b"c".as_ref(),
+                Decimal::from(12),
+            ),
+        ];
+        let expect_col_cnt = 6;
+        for (row, expect_cols) in row_data.into_iter().zip(expect_row_data) {
+            let ds = row.value.as_slice().decode().unwrap();
+            assert_eq!(ds.len(), expect_col_cnt);
+            assert_eq!(ds[0], Datum::from(expect_cols.0));
+            assert_eq!(ds[1], Datum::from(expect_cols.1));
+            assert_eq!(ds[2], Datum::from(expect_cols.2));
+            assert_eq!(ds[3], Datum::from(expect_cols.3));
+        }
+        let expected_counts = vec![idx_row_cnt, expect_row_cnt as i64];
+        let mut counts = Vec::with_capacity(2);
+        agg_ect.collect_output_counts(&mut counts);
+        assert_eq!(expected_counts, counts);
+    }
+
+    #[test]
+    fn test_hash_agg() {
         // prepare data and store
         let tid = 1;
         let cis = vec![
@@ -345,7 +684,7 @@ mod test {
         ];
         let aggr_funcs = build_aggr_func(&aggr_funcs);
         aggregation.set_agg_func(RepeatedField::from_vec(aggr_funcs));
-        // init Aggregation Executor
+        // init the hash aggregation executor
         let mut aggr_ect = HashAggExecutor::new(
             aggregation,
             Arc::new(EvalContext::default()),

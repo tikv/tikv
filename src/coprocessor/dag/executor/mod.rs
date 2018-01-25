@@ -44,7 +44,7 @@ pub use self::index_scan::IndexScanExecutor;
 pub use self::selection::SelectionExecutor;
 pub use self::topn::TopNExecutor;
 pub use self::limit::LimitExecutor;
-pub use self::aggregation::HashAggExecutor;
+pub use self::aggregation::{HashAggExecutor, StreamAggExecutor};
 pub use self::scanner::{ScanOn, Scanner};
 
 pub struct ExprColumnRefVisitor {
@@ -175,6 +175,15 @@ pub fn build_exec(
                     src,
                 )?)
             }
+            ExecType::TypeStreamAgg => {
+                has_aggr = true;
+                Box::new(StreamAggExecutor::new(
+                    ctx.clone(),
+                    src,
+                    exec.take_aggregation(),
+                    columns.clone(),
+                )?)
+            }
             ExecType::TypeTopN => Box::new(TopNExecutor::new(
                 exec.take_topN(),
                 ctx.clone(),
@@ -182,7 +191,6 @@ pub fn build_exec(
                 src,
             )?),
             ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
-            ExecType::TypeStreamAgg => unimplemented!(),
         };
         src = curr;
     }
