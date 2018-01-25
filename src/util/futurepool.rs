@@ -34,7 +34,6 @@ pub trait Context: fmt::Debug + Send + 'static {
 /// A delegator to wrap `Context` to provide `on_tick` feature.
 struct ContextDelegator<T: Context> {
     tick_interval: Duration,
-    /// TODO: Can be replace by `UnsafeCell` to eliminate the runtime cost of borrow checking.
     inner: RefCell<T>,
     last_tick: Cell<Option<Instant>>,
 }
