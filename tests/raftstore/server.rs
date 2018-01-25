@@ -13,7 +13,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, RwLock};
-use std::time::Duration;
 
 use grpc::EnvBuilder;
 use tempdir::TempDir;
@@ -24,20 +23,21 @@ use tikv::server::{create_raft_storage, Config, Node, PdStoreAddrResolver, RaftC
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::raftstore::{store, Result};
-use tikv::raftstore::store::{Engines, Msg as StoreMsg, SnapManager};
+use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager};
 use tikv::raftstore::coprocessor::CoprocessorHost;
+use tikv::server::transport::RaftStoreRouter;
 use tikv::util::transport::SendCh;
 use tikv::util::security::SecurityManager;
 use tikv::util::worker::{FutureWorker, Worker};
 use tikv::storage::{CfName, Engine};
 use tikv::util::readpool;
+use tikv::import::{ImportSSTService, SSTImporter};
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
 
 use super::pd::TestPdClient;
 use super::transport_simulate::*;
 use super::cluster::{Cluster, Simulator};
-use super::util::wait_cb;
 
 type SimulateStoreTransport = SimulateTransport<StoreMsg, ServerRaftStoreRouter>;
 type SimulateServerTransport =
@@ -117,6 +117,13 @@ impl Simulator for ServerCluster {
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
+        // Create import service.
+        let importer = {
+            let dir = TempDir::new("test-import-sst").unwrap().into_path();
+            Arc::new(SSTImporter::new(dir).unwrap())
+        };
+        let import_service = ImportSSTService::new(cfg.import.clone(), store.clone(), importer);
+
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
         let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch), None);
@@ -133,6 +140,7 @@ impl Simulator for ServerCluster {
             snap_mgr.clone(),
             pd_worker.scheduler(),
             Some(engines.clone()),
+            Some(import_service),
         ).unwrap();
         let addr = server.listening_addr();
         cfg.server.addr = format!("{}", addr);
@@ -204,17 +212,17 @@ impl Simulator for ServerCluster {
         self.metas.keys().cloned().collect()
     }
 
-    fn call_command_on_node(
+    fn async_command_on_node(
         &self,
         node_id: u64,
         request: RaftCmdRequest,
-        timeout: Duration,
-    ) -> Result<RaftCmdResponse> {
+        cb: Callback,
+    ) -> Result<()> {
         let router = match self.metas.get(&node_id) {
             None => return Err(box_err!("missing sender for store {}", node_id)),
             Some(meta) => meta.router.clone(),
         };
-        wait_cb(router, request, timeout)
+        router.send_command(request, cb)
     }
 
     fn send_raft_msg(&mut self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
