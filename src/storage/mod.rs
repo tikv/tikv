@@ -610,7 +610,8 @@ impl Storage {
                             .map_err(Error::from);
 
                         thread_ctx.collect_command_count(LABEL, priority);
-                        thread_ctx.collect_kvscan_count(LABEL, &statistics);
+                        thread_ctx.collect_key_read_count(LABEL, 1);
+                        thread_ctx.collect_kv_scan_count(LABEL, &statistics);
                         thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
 
                         result

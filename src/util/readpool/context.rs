@@ -27,9 +27,9 @@ pub struct Context {
     pd_sender: Option<worker::FutureScheduler<pd::PdTask>>,
 
     command_duration: LocalHistogramVec,
-    // keyread_duration: LocalHistogramVec,
     command_counter: LocalCounterVec,
-    kvscan_counter: LocalCounterVec,
+    key_read_counter: LocalCounterVec,
+    kv_scan_counter: LocalCounterVec,
 
     read_flow_stats: HashMap<u64, storage::FlowStatistics>,
 }
@@ -45,9 +45,9 @@ impl Context {
         Context {
             pd_sender,
             command_duration: COMMAND_HISTOGRAM_VEC.local(),
-            // keyread_duration: KEYREAD_HISTOGRAM_VEC.local(),
             command_counter: COMMAND_COUNTER_VEC.local(),
-            kvscan_counter: KV_SCAN_COUNTER_VEC.local(),
+            key_read_counter: KEY_READ_COUNTER_VEC.local(),
+            kv_scan_counter: KV_SCAN_COUNTER_VEC.local(),
             read_flow_stats: HashMap::default(),
         }
     }
@@ -67,10 +67,18 @@ impl Context {
     }
 
     #[inline]
-    pub fn collect_kvscan_count(&mut self, cmd: &str, statistics: &storage::Statistics) {
+    pub fn collect_key_read_count(&mut self, cmd: &str, count: u64) {
+        self.key_read_counter
+            .with_label_values(&[cmd])
+            .inc_by(count as f64)
+            .unwrap();
+    }
+
+    #[inline]
+    pub fn collect_kv_scan_count(&mut self, cmd: &str, statistics: &storage::Statistics) {
         for (cf, details) in statistics.details() {
             for (tag, count) in details {
-                self.kvscan_counter
+                self.kv_scan_counter
                     .with_label_values(&[cmd, cf, tag])
                     .inc_by(count as f64)
                     .unwrap();
@@ -95,9 +103,9 @@ impl futurepool::Context for Context {
     fn on_tick(&mut self) {
         // Flush Prometheus Metrics
         self.command_duration.flush();
-        // self.keyread_duration.flush();
         self.command_counter.flush();
-        self.kvscan_counter.flush();
+        self.key_read_counter.flush();
+        self.kv_scan_counter.flush();
 
         // Report PD related Metrics
         if !self.read_flow_stats.is_empty() {
