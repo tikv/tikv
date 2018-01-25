@@ -605,7 +605,11 @@ fn process_read(
         }
         // Scans locks with timestamp <= `max_ts`
         Command::ScanLock {
-            ref ctx, max_ts, ..
+            ref ctx,
+            max_ts,
+            ref mut start_key,
+            limit,
+            ..
         } => {
             let mut reader = MvccReader::new(
                 snapshot,
@@ -616,7 +620,7 @@ fn process_read(
                 ctx.get_isolation_level(),
             );
             let res = reader
-                .scan_lock(None, |lock| lock.ts <= max_ts, None)
+                .scan_lock(start_key.take(), |lock| lock.ts <= max_ts, limit)
                 .map_err(Error::from)
                 .and_then(|(v, _)| {
                     let mut locks = vec![];
@@ -657,7 +661,7 @@ fn process_read(
                 .scan_lock(
                     scan_key.take(),
                     |lock| txn_status.contains_key(&lock.ts),
-                    Some(RESOLVE_LOCK_BATCH_SIZE),
+                    RESOLVE_LOCK_BATCH_SIZE,
                 )
                 .map_err(Error::from)
                 .and_then(|(v, next_scan_key)| {
@@ -1671,6 +1675,8 @@ mod tests {
             Command::ScanLock {
                 ctx: Context::new(),
                 max_ts: 5,
+                start_key: None,
+                limit: 0,
             },
             Command::ResolveLock {
                 ctx: Context::new(),
