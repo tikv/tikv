@@ -13,7 +13,7 @@
 
 pub use util::codec::{Error, Result};
 
-const TEN_POW: &'static [u32] = &[
+const TEN_POW: &[u32] = &[
     1,
     10,
     100,

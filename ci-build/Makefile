@@ -28,7 +28,7 @@ ${LOCAL_DIR}/bin/kcov:
 	fi
 
 prepare-rustfmt:
-	 @[[ "`cargo fmt -- --version`" = "0.2.1-nightly ( )" ]] || cargo install --vers 0.2.1 --force rustfmt-nightly || exit 0
+	 @[[ "`cargo fmt -- --version`" = "0.3.4-nightly ( )" ]] || cargo install --force rustfmt-nightly --vers 0.3.4 || exit 0
 
 prepare_linux: ${LOCAL_DIR}/bin/kcov  prepare-rustfmt
 

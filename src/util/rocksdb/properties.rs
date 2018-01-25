@@ -26,17 +26,17 @@ use rocksdb::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFac
 use util::codec::{Error, Result};
 use util::codec::number::{NumberDecoder, NumberEncoder};
 
-const PROP_NUM_ERRORS: &'static str = "tikv.num_errors";
-const PROP_MIN_TS: &'static str = "tikv.min_ts";
-const PROP_MAX_TS: &'static str = "tikv.max_ts";
-const PROP_NUM_ROWS: &'static str = "tikv.num_rows";
-const PROP_NUM_PUTS: &'static str = "tikv.num_puts";
-const PROP_NUM_VERSIONS: &'static str = "tikv.num_versions";
-const PROP_MAX_ROW_VERSIONS: &'static str = "tikv.max_row_versions";
-const PROP_ROWS_INDEX: &'static str = "tikv.rows_index";
+const PROP_NUM_ERRORS: &str = "tikv.num_errors";
+const PROP_MIN_TS: &str = "tikv.min_ts";
+const PROP_MAX_TS: &str = "tikv.max_ts";
+const PROP_NUM_ROWS: &str = "tikv.num_rows";
+const PROP_NUM_PUTS: &str = "tikv.num_puts";
+const PROP_NUM_VERSIONS: &str = "tikv.num_versions";
+const PROP_MAX_ROW_VERSIONS: &str = "tikv.max_row_versions";
+const PROP_ROWS_INDEX: &str = "tikv.rows_index";
 const PROP_ROWS_INDEX_DISTANCE: u64 = 10000;
-const PROP_TOTAL_SIZE: &'static str = "tikv.total_size";
-const PROP_SIZE_INDEX: &'static str = "tikv.size_index";
+const PROP_TOTAL_SIZE: &str = "tikv.total_size";
+const PROP_SIZE_INDEX: &str = "tikv.size_index";
 const PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
 
 #[derive(Clone, Debug, Default)]
@@ -166,8 +166,8 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
         if self.row_versions == 1 {
             self.cur_index_handle.size += 1;
             self.cur_index_handle.offset += 1;
-            if self.cur_index_handle.offset == 1 ||
-                self.cur_index_handle.size >= PROP_ROWS_INDEX_DISTANCE
+            if self.cur_index_handle.offset == 1
+                || self.cur_index_handle.size >= PROP_ROWS_INDEX_DISTANCE
             {
                 self.row_index_handles
                     .insert(self.last_row.clone(), self.cur_index_handle.clone());
@@ -270,10 +270,7 @@ impl IndexHandles {
         if end_offset < start_offset {
             panic!(
                 "start {:?} end {:?} start_offset {} end_offset {}",
-                start,
-                end,
-                start_offset,
-                end_offset
+                start, end, start_offset, end_offset
             );
         }
         end_offset - start_offset
@@ -503,8 +500,10 @@ mod tests {
         }
 
         let mut collector = MvccPropertiesCollector::new();
-        b.iter(|| for &(ref k, ref v) in &entries {
-            collector.add(k, v, DBEntryType::Put, 0, 0);
+        b.iter(|| {
+            for &(ref k, ref v) in &entries {
+                collector.add(k, v, DBEntryType::Put, 0, 0);
+            }
         });
     }
 

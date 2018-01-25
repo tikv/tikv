@@ -32,7 +32,6 @@ fn testing_snap() -> Snapshot {
     new_snapshot(11, 11, vec![1, 2])
 }
 
-
 #[test]
 fn test_sending_snapshot_set_pending_snapshot() {
     let mut sm = new_test_raft(1, vec![1], 10, 1, new_storage());

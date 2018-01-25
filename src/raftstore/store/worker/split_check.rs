@@ -21,7 +21,7 @@ use kvproto::metapb::RegionEpoch;
 use kvproto::metapb::Region;
 
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::{keys, Msg};
+use raftstore::store::{keys, Callback, Msg};
 use raftstore::store::engine::{IterOption, Iterable};
 use raftstore::Result;
 use util::escape;
@@ -181,15 +181,17 @@ impl<C: Sender<Msg>> Runner<C> {
 
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
         let res = MergedIterator::new(self.engine.as_ref(), LARGE_CFS, &start_key, &end_key, false)
-            .map(|mut iter| while let Some(e) = iter.next() {
-                if let Some(key) = coprocessor.on_split_check(
-                    region,
-                    &mut split_ctx,
-                    e.key.as_ref().unwrap(),
-                    e.value_size as u64,
-                ) {
-                    split_key = Some(key);
-                    break;
+            .map(|mut iter| {
+                while let Some(e) = iter.next() {
+                    if let Some(key) = coprocessor.on_split_check(
+                        region,
+                        &mut split_ctx,
+                        e.key.as_ref().unwrap(),
+                        e.value_size as u64,
+                    ) {
+                        split_key = Some(key);
+                        break;
+                    }
                 }
             });
         timer.observe_duration();
@@ -234,6 +236,6 @@ fn new_split_region(region_id: u64, epoch: RegionEpoch, split_key: Vec<u8>) -> M
         region_id: region_id,
         region_epoch: epoch,
         split_key: key,
-        callback: None,
+        callback: Callback::None,
     }
 }

@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use raftstore::store::msg::Msg;
 use raftstore;
 use util::transport::SendCh;

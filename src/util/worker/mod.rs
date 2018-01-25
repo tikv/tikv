@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 /// Worker contains all workers that do the expensive job in background.
 
 mod metrics;
@@ -187,8 +186,8 @@ impl<T: Display> Scheduler<T> {
 impl<T> Clone for Scheduler<T> {
     fn clone(&self) -> Scheduler<T> {
         Scheduler {
-            name: self.name.clone(),
-            counter: self.counter.clone(),
+            name: Arc::clone(&self.name),
+            counter: Arc::clone(&self.counter),
             sender: self.sender.clone(),
         }
     }
@@ -359,7 +358,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         }
 
         let rx = receiver.take().unwrap();
-        let counter = self.scheduler.counter.clone();
+        let counter = Arc::clone(&self.scheduler.counter);
         let batch_size = self.batch_size;
         let h = ThreadBuilder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))

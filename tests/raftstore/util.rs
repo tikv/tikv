@@ -11,8 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use std::thread;
 
@@ -20,8 +19,8 @@ use rocksdb::DB;
 use protobuf;
 
 use kvproto::metapb::{self, RegionEpoch};
-use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
-use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse,
+                          Request, StatusCmdType, StatusRequest};
 use kvproto::pdpb::{ChangePeer, RegionHeartbeatResponse, TransferLeader};
 use kvproto::eraftpb::ConfChangeType;
 
@@ -50,8 +49,8 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     }
     debug!("last try to get {}", escape(key));
     let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
-    if value.is_none() && res.is_none() ||
-        value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
+    if value.is_none() && res.is_none()
+        || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
     {
         return;
     }
@@ -240,7 +239,6 @@ pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     peer
 }
 
-
 pub fn new_store(store_id: u64, addr: String) -> metapb::Store {
     let mut store = metapb::Store::new();
     store.set_id(store_id);
@@ -262,7 +260,7 @@ pub fn new_pd_change_peer(
     peer: metapb::Peer,
 ) -> RegionHeartbeatResponse {
     let mut change_peer = ChangePeer::new();
-    change_peer.set_change_type(change_type.into());
+    change_peer.set_change_type(change_type);
     change_peer.set_peer(peer);
 
     let mut resp = RegionHeartbeatResponse::new();
@@ -300,4 +298,33 @@ pub fn new_pd_transfer_leader(peer: metapb::Peer) -> Option<RegionHeartbeatRespo
     let mut resp = RegionHeartbeatResponse::new();
     resp.set_transfer_leader(transfer_leader);
     Some(resp)
+}
+
+pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdResponse>) {
+    let mut is_read;
+    let mut is_write;
+    is_read = cmd.has_status_request();
+    is_write = cmd.has_admin_request();
+    for req in cmd.get_requests() {
+        match req.get_cmd_type() {
+            CmdType::Get | CmdType::Snap => is_read = true,
+            CmdType::Put | CmdType::Delete | CmdType::DeleteRange => is_write = true,
+            CmdType::Invalid | CmdType::Prewrite => panic!("Invalid RaftCmdRequest: {:?}", cmd),
+        }
+    }
+    assert!(is_read ^ is_write, "Invalid RaftCmdRequest: {:?}", cmd);
+
+    let (tx, rx) = mpsc::channel();
+    let cb = if is_read {
+        Callback::Read(Box::new(move |resp: ReadResponse| {
+            // we don't care error actually.
+            let _ = tx.send(resp.response);
+        }))
+    } else {
+        Callback::Write(Box::new(move |resp: WriteResponse| {
+            // we don't care error actually.
+            let _ = tx.send(resp.response);
+        }))
+    };
+    (cb, rx)
 }

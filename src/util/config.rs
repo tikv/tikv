@@ -16,7 +16,6 @@ use std::fmt::{self, Write};
 use std::fs;
 use std::path::Path;
 use std::str::{self, FromStr};
-use std::ascii::AsciiExt;
 use std::time::Duration;
 use std::net::{SocketAddrV4, SocketAddrV6};
 use std::ops::{Div, Mul};
@@ -644,8 +643,7 @@ pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
         Err(ConfigError::Limit(format!(
             "the maximum number of open file descriptors is too \
              small, got {}, expect greater or equal to {}",
-            prev_limit,
-            expect
+            prev_limit, expect
         )))
     }
 }
@@ -674,16 +672,12 @@ mod check_kernel {
         let mut buffer = String::new();
         fs::File::open(param_path)
             .and_then(|mut f| f.read_to_string(&mut buffer))
-            .map_err(|e| {
-                ConfigError::Limit(format!("check_kernel_params failed {}", e))
-            })?;
+            .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e)))?;
 
         let got = buffer
             .trim_matches('\n')
             .parse::<i64>()
-            .map_err(|e| {
-                ConfigError::Limit(format!("check_kernel_params failed {}", e))
-            })?;
+            .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e)))?;
 
         let mut param = String::new();
         // skip 3, ["", "proc", "sys", ...]
@@ -696,9 +690,7 @@ mod check_kernel {
         if !checker(got, expect) {
             return Err(ConfigError::Limit(format!(
                 "kernel parameters {} got {}, expect {}",
-                param,
-                got,
-                expect
+                param, got, expect
             )));
         }
 
@@ -723,11 +715,9 @@ mod check_kernel {
                 got == expect
             }),
             // Check vm.swappiness.
-            (
-                "/proc/sys/vm/swappiness",
-                0,
-                box |got, expect| got == expect,
-            ),
+            ("/proc/sys/vm/swappiness", 0, box |got, expect| {
+                got == expect
+            }),
         ];
 
         let mut errors = Vec::with_capacity(params.len());
@@ -772,14 +762,13 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
     // Check Port.
     let port: u16 = parts[1]
         .parse()
-        .map_err(|_| {
-            ConfigError::Address(format!("invalid addr, parse port failed: {:?}", addr))
-        })?;
+        .map_err(|_| ConfigError::Address(format!("invalid addr, parse port failed: {:?}", addr)))?;
     // Port = 0 is invalid.
     if port == 0 {
-        return Err(ConfigError::Address(
-            format!("invalid addr, port can not be 0: {:?}", addr),
-        ));
+        return Err(ConfigError::Address(format!(
+            "invalid addr, port can not be 0: {:?}",
+            addr
+        )));
     }
 
     // Check Host.
@@ -876,15 +865,7 @@ mod test {
         }
 
         let illegal_cases = vec![
-            "0.5kb",
-            "0.5kB",
-            "0.5Kb",
-            "0.5k",
-            "0.5g",
-            "b",
-            "gb",
-            "1b",
-            "B",
+            "0.5kb", "0.5kB", "0.5Kb", "0.5k", "0.5g", "b", "gb", "1b", "B"
         ];
         for src in illegal_cases {
             let src_str = format!("s = {:?}", src);
@@ -896,8 +877,7 @@ mod test {
     fn test_parse_hash_map() {
         #[derive(Serialize, Deserialize)]
         struct MapHolder {
-            #[serde(with = "super::order_map_serde")]
-            m: HashMap<String, String>,
+            #[serde(with = "super::order_map_serde")] m: HashMap<String, String>,
         }
 
         let legal_cases = vec![
@@ -984,8 +964,7 @@ mod test {
     fn test_parse_compression_type() {
         #[derive(Serialize, Deserialize)]
         struct CompressionTypeHolder {
-            #[serde(with = "compression_type_level_serde")]
-            tp: [DBCompressionType; 7],
+            #[serde(with = "compression_type_level_serde")] tp: [DBCompressionType; 7],
         }
 
         let all_tp = vec![
@@ -1072,7 +1051,6 @@ mod test {
                 Box::new(|got, expect| got == expect),
                 false,
             ),
-
             (
                 "/proc/sys/vm/swappiness",
                 i64::MAX,
@@ -1094,21 +1072,18 @@ mod test {
             ("localhost:8080", true),
             ("pingcap.com:8080", true),
             ("funnydomain:8080", true),
-
             ("127.0.0.1", false),
             ("[::1]", false),
             ("localhost", false),
             ("pingcap.com", false),
             ("funnydomain", false),
             ("funnydomain:", false),
-
             ("root@google.com:8080", false),
             ("http://google.com:8080", false),
             ("google.com:8080/path", false),
             ("http://google.com:8080/path", false),
             ("http://google.com:8080/path?lang=en", false),
             ("http://google.com:8080/path?lang=en#top", false),
-
             ("ftp://ftp.is.co.za/rfc/rfc1808.txt", false),
             ("http://www.ietf.org/rfc/rfc2396.txt", false),
             ("ldap://[2001:db8::7]/c=GB?objectClass?one", false),
@@ -1117,7 +1092,6 @@ mod test {
             ("tel:+1-816-555-1212", false),
             ("telnet://192.0.2.16:80/", false),
             ("urn:oasis:names:specification:docbook:dtd:xml:4.1.2", false),
-
             (":8080", false),
             ("8080", false),
             ("8080:", false),
