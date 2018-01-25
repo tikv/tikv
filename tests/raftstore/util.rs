@@ -25,11 +25,14 @@ use kvproto::pdpb::{ChangePeer, RegionHeartbeatResponse, TransferLeader};
 use kvproto::eraftpb::ConfChangeType;
 
 use tikv::raftstore::store::*;
+use tikv::raftstore::{Error, Result};
 use tikv::server::Config as ServerConfig;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::escape;
 use tikv::util::config::*;
 use tikv::config::TiKvConfig;
+
+use super::cluster::{Cluster, Simulator};
 
 pub use tikv::raftstore::store::util::find_peer;
 
@@ -327,4 +330,68 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdRespons
         }))
     };
     (cb, rx)
+}
+
+// Issue a read request on the specified peer.
+pub fn read_on_peer<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    timeout: Duration,
+) -> Result<Vec<u8>> {
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cmd(key)],
+        false,
+    );
+    request.mut_header().set_peer(peer);
+    let mut resp = cluster.call_command(request, timeout)?;
+    if resp.get_header().has_error() {
+        return Err(Error::Other(box_err!(
+            resp.mut_header().take_error().take_message()
+        )));
+    }
+    assert_eq!(resp.get_responses().len(), 1);
+    assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
+    assert!(resp.get_responses()[0].has_get());
+    Ok(resp.mut_responses()[0].mut_get().take_value())
+}
+
+pub fn must_read_on_peer<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    value: &[u8],
+) {
+    let timeout = Duration::from_secs(1);
+    match read_on_peer(cluster, peer, region, key, timeout) {
+        Ok(v) => if v != value {
+            panic!(
+                "read key {}, expect value {}, got {}",
+                escape(key),
+                escape(value),
+                escape(&v)
+            )
+        },
+        Err(e) => panic!("failed to read for key {}, err {:?}", escape(key), e),
+    }
+}
+
+pub fn must_error_read_on_peer<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    timeout: Duration,
+) {
+    if let Ok(value) = read_on_peer(cluster, peer, region, key, timeout) {
+        panic!(
+            "key {}, expect error but got {}",
+            escape(key),
+            escape(&value)
+        );
+    }
 }
