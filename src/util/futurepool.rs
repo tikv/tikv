@@ -32,8 +32,8 @@ pub trait Context: fmt::Debug + Send {
     fn on_tick(&mut self) {}
 }
 
-#[derive(Debug)]
 /// A delegator to wrap `Context` to provide `on_tick` feature.
+#[derive(Debug)]
 struct ContextDelegator<T: Context> {
     tick_interval: Duration,
     inner: RefCell<T>,
