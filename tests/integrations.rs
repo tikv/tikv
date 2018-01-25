@@ -41,6 +41,7 @@ extern crate test;
 extern crate tikv;
 extern crate tipb;
 extern crate toml;
+extern crate uuid;
 
 mod raft;
 mod raftstore;
@@ -51,6 +52,7 @@ mod storage_cases;
 mod util;
 mod pd;
 mod config;
+mod import;
 
 use std::env;
 
