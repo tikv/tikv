@@ -31,6 +31,7 @@ pub use self::priority::Priority;
 
 const TICK_INTERVAL_SEC: u64 = 1;
 
+#[derive(Clone)]
 pub struct ReadPool {
     pool_high: FuturePool<Context>,
     pool_normal: FuturePool<Context>,
@@ -39,16 +40,6 @@ pub struct ReadPool {
 
 impl util::AssertSend for ReadPool {}
 impl util::AssertSync for ReadPool {}
-
-impl Clone for ReadPool {
-    fn clone(&self) -> ReadPool {
-        ReadPool {
-            pool_high: self.pool_high.clone(),
-            pool_normal: self.pool_normal.clone(),
-            pool_low: self.pool_low.clone(),
-        }
-    }
-}
 
 impl ReadPool {
     pub fn new(config: &Config, pd_sender: Option<worker::FutureScheduler<pd::PdTask>>) -> Self {
@@ -59,7 +50,7 @@ impl ReadPool {
             let pd_sender = pd_sender.clone();
 
             // Closure take a reference of `pd_sender` so that it is `fn()`.
-            move |_| Context::new(pd_sender.clone())
+            move || Context::new(pd_sender.clone())
         };
         ReadPool {
             pool_high: FuturePool::new(
