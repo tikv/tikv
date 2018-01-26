@@ -586,37 +586,47 @@ impl Storage {
         static LABEL: &'static str = "kv_get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
-        self.read_pool
-            .future_execute(priority, move |ctx_delegators| {
-                engine
-                    .future_snapshot(&ctx)
-                    // map storage::engine::Error -> storage::txn::Error -> storage::Error
-                    .map_err(txn::Error::from)
-                    .map_err(Error::from)
-                    .and_then(move |snapshot: Box<Snapshot>| {
-                        let mut thread_ctx = ctx_delegators.get_current_thread_context();
-                        let _timer = thread_ctx.collect_command_duration(LABEL);
 
-                        let mut statistics = Statistics::default();
-                        let snap_store = SnapshotStore::new(
-                            snapshot,
-                            start_ts,
-                            ctx.get_isolation_level(),
-                            ctx.get_not_fill_cache(),
-                        );
-                        let result = snap_store
-                            .get(&key, &mut statistics)
-                            // map storage::txn::Error -> storage::Error
-                            .map_err(Error::from);
+        self.read_pool.future_execute(priority, move |ctxd| {
+            let _t_snapshot = {
+                let ctxd = ctxd.clone();
+                let mut thread_ctx = ctxd.get_current_thread_context();
+                thread_ctx.collect_command_duration(LABEL, "snapshot")
+            };
 
-                        thread_ctx.collect_command_count(LABEL, priority);
-                        thread_ctx.collect_key_read_count(LABEL, 1);
-                        thread_ctx.collect_kv_scan_count(LABEL, &statistics);
-                        thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
+            engine
+                .future_snapshot(&ctx)
+                .then(move |r| {
+                    _t_snapshot.observe_duration();
+                    r
+                })
+                // map storage::engine::Error -> storage::txn::Error -> storage::Error
+                .map_err(txn::Error::from)
+                .map_err(Error::from)
+                .and_then(move |snapshot: Box<Snapshot>| {
+                    let mut thread_ctx = ctxd.get_current_thread_context();
+                    let _t_process = thread_ctx.collect_command_duration(LABEL, "process");
 
-                        result
-                    })
-            })
+                    let mut statistics = Statistics::default();
+                    let snap_store = SnapshotStore::new(
+                        snapshot,
+                        start_ts,
+                        ctx.get_isolation_level(),
+                        ctx.get_not_fill_cache(),
+                    );
+                    let result = snap_store
+                        .get(&key, &mut statistics)
+                        // map storage::txn::Error -> storage::Error
+                        .map_err(Error::from);
+
+                    thread_ctx.collect_command_count(LABEL, priority);
+                    thread_ctx.collect_key_reads(LABEL, 1);
+                    thread_ctx.collect_kv_scan_count(LABEL, &statistics);
+                    thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
+
+                    result
+                })
+        })
     }
 
     pub fn async_batch_get(

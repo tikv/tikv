@@ -28,7 +28,7 @@ pub struct Context {
 
     command_duration: LocalHistogramVec,
     command_counter: LocalCounterVec,
-    key_read_counter: LocalCounterVec,
+    key_reads: LocalHistogramVec,
     kv_scan_counter: LocalCounterVec,
 
     read_flow_stats: HashMap<u64, storage::FlowStatistics>,
@@ -46,16 +46,16 @@ impl Context {
             pd_sender,
             command_duration: COMMAND_HISTOGRAM_VEC.local(),
             command_counter: COMMAND_COUNTER_VEC.local(),
-            key_read_counter: KEY_READ_COUNTER_VEC.local(),
+            key_reads: KEY_READ_HISTOGRAM_VEC.local(),
             kv_scan_counter: KV_SCAN_COUNTER_VEC.local(),
             read_flow_stats: HashMap::default(),
         }
     }
 
     #[inline]
-    pub fn collect_command_duration(&mut self, cmd: &str) -> LocalHistogramTimer {
+    pub fn collect_command_duration(&mut self, cmd: &str, stage: &str) -> LocalHistogramTimer {
         self.command_duration
-            .with_label_values(&[cmd])
+            .with_label_values(&[cmd, stage])
             .start_coarse_timer()
     }
 
@@ -67,11 +67,10 @@ impl Context {
     }
 
     #[inline]
-    pub fn collect_key_read_count(&mut self, cmd: &str, count: u64) {
-        self.key_read_counter
+    pub fn collect_key_reads(&mut self, cmd: &str, count: u64) {
+        self.key_reads
             .with_label_values(&[cmd])
-            .inc_by(count as f64)
-            .unwrap();
+            .observe(count as f64);
     }
 
     #[inline]
@@ -101,13 +100,13 @@ impl Context {
 
 impl futurepool::Context for Context {
     fn on_tick(&mut self) {
-        // Flush Prometheus Metrics
+        // Flush Prometheus metrics
         self.command_duration.flush();
         self.command_counter.flush();
-        self.key_read_counter.flush();
+        self.key_reads.flush();
         self.kv_scan_counter.flush();
 
-        // Report PD related Metrics
+        // Report PD metrics
         if !self.read_flow_stats.is_empty() {
             if let Some(ref sender) = self.pd_sender {
                 let mut read_stats = HashMap::default();
