@@ -21,6 +21,7 @@ use kvproto::metapb::RegionEpoch;
 
 use raft::SnapshotStatus;
 use util::escape;
+use util::rocksdb::CompactedEvent;
 
 use super::RegionSnapshot;
 
@@ -162,6 +163,9 @@ pub enum Msg {
         region_id: u64,
         region_size: u64,
     },
+
+    // Compaction finished event
+    CompactedEvent(CompactedEvent),
 }
 
 impl fmt::Debug for Msg {
@@ -196,6 +200,7 @@ impl fmt::Debug for Msg {
                 "Approximate region size [region_id: {}, region_size: {}]",
                 region_id, region_size
             ),
+            Msg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),
         }
     }
 }
