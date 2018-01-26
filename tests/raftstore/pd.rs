@@ -61,6 +61,7 @@ struct Cluster {
     stores: HashMap<u64, Store>,
     regions: BTreeMap<Key, metapb::Region>,
     region_id_keys: HashMap<u64, Key>,
+    region_sizes: HashMap<u64, u64>,
     base_id: AtomicUsize,
     rule: Option<Rule>,
 
@@ -83,6 +84,7 @@ impl Cluster {
             stores: HashMap::new(),
             regions: BTreeMap::new(),
             region_id_keys: HashMap::new(),
+            region_sizes: HashMap::new(),
             base_id: AtomicUsize::new(1000),
             rule: None,
             store_stats: HashMap::new(),
@@ -146,6 +148,10 @@ impl Cluster {
         Ok(self.region_id_keys
             .get(&region_id)
             .and_then(|k| self.regions.get(k).cloned()))
+    }
+
+    fn get_region_size(&self, region_id: u64) -> Option<u64> {
+        self.region_sizes.get(&region_id).cloned()
     }
 
     fn get_stores(&self) -> Vec<metapb::Store> {
@@ -344,6 +350,9 @@ impl Cluster {
         for p in region_stat.pending_peers {
             self.pending_peers.insert(p.get_id(), p);
         }
+
+        self.region_sizes
+            .insert(region.get_id(), region_stat.approximate_size);
 
         self.handle_heartbeat_version(region.clone())?;
         self.handle_heartbeat_conf_ver(region, leader)
@@ -578,6 +587,10 @@ impl TestPdClient {
 
     pub fn set_bootstrap(&self, is_bootstraped: bool) {
         self.cluster.wl().set_bootstrap(is_bootstraped);
+    }
+
+    pub fn get_region_size(&self, region_id: u64) -> Option<u64> {
+        self.cluster.rl().get_region_size(region_id)
     }
 }
 
