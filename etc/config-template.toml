@@ -12,11 +12,11 @@
 
 [readpool]
 # size of thread pool for high-priority read operations
-# high-concurrency = 4
+# high-concurrency = 8
 # size of thread pool for normal-priority read operations
-# normal-concurrency = 4
+# normal-concurrency = 8
 # size of thread pool for low-priority read operations
-# low-concurrency = 4
+# low-concurrency = 8
 # size of stack size for each thread pool
 # stack-size = "10MB"
 
