@@ -63,7 +63,13 @@ impl DAGContext {
             req_ctx.isolation_level,
             req_ctx.fill_cache,
         );
-        let cache_key = format!("{:?}, {:?}", ranges, req.get_executors());
+        let cache_key = format!(
+            "{:?} {:?} {:?} {:?}",
+            ranges,
+            req.get_flags(),
+            req.get_output_offsets(),
+            req.get_executors()
+        );
 
         let dag_executor = build_exec(req.take_executors().into_vec(), store, ranges, eval_ctx)?;
         Ok(DAGContext {
