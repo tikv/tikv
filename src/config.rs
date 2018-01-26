@@ -19,6 +19,7 @@ use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBComp
               DBOptions, DBRecoveryMode};
 use sys_info;
 
+use import::Config as ImportConfig;
 use server::Config as ServerConfig;
 use pd::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
@@ -656,6 +657,7 @@ pub struct TiKvConfig {
     pub rocksdb: DbConfig,
     pub raftdb: RaftDbConfig,
     pub security: SecurityConfig,
+    pub import: ImportConfig,
 }
 
 impl Default for TiKvConfig {
@@ -672,6 +674,7 @@ impl Default for TiKvConfig {
             raftdb: RaftDbConfig::default(),
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
+            import: ImportConfig::default(),
         }
     }
 }
@@ -706,6 +709,7 @@ impl TiKvConfig {
         self.pd.validate()?;
         self.coprocessor.validate()?;
         self.security.validate()?;
+        self.import.validate()?;
         Ok(())
     }
 
