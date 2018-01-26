@@ -206,6 +206,7 @@ pub struct Peer {
     pub delete_keys_hint: u64,
     /// approximate region size.
     pub approximate_size: Option<u64>,
+    pub compaction_declined_bytes: u64,
 
     pub consistency_state: ConsistencyState,
 
@@ -326,6 +327,7 @@ impl Peer {
             size_diff_hint: 0,
             delete_keys_hint: 0,
             approximate_size: None,
+            compaction_declined_bytes: 0,
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
             marked_to_be_checked: false,
