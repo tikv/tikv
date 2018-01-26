@@ -347,24 +347,16 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map(|x| Key::from_raw(x))
             .collect();
 
-        let (cb, future) = make_callback();
-        let res = self.storage
-            .async_batch_get(req.take_context(), keys, req.get_version(), cb);
-        if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
-            return;
-        }
-
-        let future = future
-            .map_err(Error::from)
-            .map(|v| {
-                let mut resp = BatchGetResponse::new();
+        let future = self.storage
+            .async_batch_get(req.take_context(), keys, req.get_version())
+            .then(|v| {
+                let mut res = BatchGetResponse::new();
                 if let Some(err) = extract_region_error(&v) {
-                    resp.set_region_error(err);
+                    res.set_region_error(err);
                 } else {
-                    resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)))
+                    res.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
                 }
-                resp
+                Ok(res)
             })
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())

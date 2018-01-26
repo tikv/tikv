@@ -83,9 +83,9 @@ impl SyncStorage {
         keys: &[Key],
         start_ts: u64,
     ) -> Result<Vec<Result<KvPair>>> {
-        wait_op!(|cb| self.store
-            .async_batch_get(ctx, keys.to_owned(), start_ts, cb))
-            .unwrap()
+        self.store
+            .async_batch_get(ctx, keys.to_owned(), start_ts)
+            .wait()
     }
 
     pub fn scan(
