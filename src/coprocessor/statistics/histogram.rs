@@ -163,7 +163,6 @@ impl Histogram {
     }
 }
 
-
 #[cfg(test)]
 mod test {
     use std::iter::repeat;

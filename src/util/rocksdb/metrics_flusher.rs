@@ -17,6 +17,7 @@ use util::rocksdb::engine_metrics::*;
 use std::thread::{Builder, JoinHandle};
 use std::io;
 use std::sync::mpsc::{self, Sender};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub const DEFAULT_FLUSHER_INTERVAL: u64 = 10000;
@@ -40,8 +41,8 @@ impl MetricsFlusher {
     }
 
     pub fn start(&mut self) -> Result<(), io::Error> {
-        let db = self.engines.kv_engine.clone();
-        let raft_db = self.engines.raft_engine.clone();
+        let db = Arc::clone(&self.engines.kv_engine);
+        let raft_db = Arc::clone(&self.engines.raft_engine);
         let (tx, rx) = mpsc::channel();
         let interval = self.interval;
         self.sender = Some(tx);

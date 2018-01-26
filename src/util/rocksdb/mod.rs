@@ -16,7 +16,7 @@ pub mod event_listener;
 pub mod engine_metrics;
 pub mod metrics_flusher;
 
-pub use self::event_listener::EventListener;
+pub use self::event_listener::{CompactedEvent, CompactionListener, EventListener};
 pub use self::metrics_flusher::MetricsFlusher;
 
 use std::fs::{self, File};
@@ -210,8 +210,7 @@ pub fn get_engine_used_size(engine: Arc<DB>) -> u64 {
         used_size += cf_used_size;
 
         // For memtable
-        if let Some(mem_table) =
-            engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES)
+        if let Some(mem_table) = engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES)
         {
             used_size += mem_table;
         }
@@ -310,8 +309,7 @@ pub fn roughly_cleanup_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Resul
     if start_key > end_key {
         return Err(format!(
             "[roughly_cleanup_in_range] start_key({:?}) should't larger than end_key({:?}).",
-            start_key,
-            end_key
+            start_key, end_key
         ));
     }
 
@@ -380,12 +378,10 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
     let clone = clone.as_ref().to_str().unwrap();
 
     if Path::new(clone).exists() {
-        fs::remove_file(clone)
-            .map_err(|e| format!("remove {}: {:?}", clone, e))?;
+        fs::remove_file(clone).map_err(|e| format!("remove {}: {:?}", clone, e))?;
     }
 
-    let meta = fs::metadata(path)
-        .map_err(|e| format!("read metadata from {}: {:?}", path, e))?;
+    let meta = fs::metadata(path).map_err(|e| format!("read metadata from {}: {:?}", path, e))?;
 
     if meta.st_nlink() == 1 {
         // RocksDB must not have this file, we can make a hard link.
@@ -422,8 +418,7 @@ pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
     expected_checksum: u32,
 ) -> Result<(), String> {
     let path = path.as_ref().to_str().unwrap();
-    let f = File::open(path)
-        .map_err(|e| format!("open {}: {:?}", path, e))?;
+    let f = File::open(path).map_err(|e| format!("open {}: {:?}", path, e))?;
 
     let meta = f.metadata()
         .map_err(|e| format!("read metadata from {}: {:?}", path, e))?;
@@ -436,8 +431,7 @@ pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
         ));
     }
 
-    let checksum = calc_crc32(path)
-        .map_err(|e| format!("calc crc32 for {}: {:?}", path, e))?;
+    let checksum = calc_crc32(path).map_err(|e| format!("calc crc32 for {}: {:?}", path, e))?;
     if checksum == expected_checksum {
         return Ok(());
     }
@@ -447,14 +441,11 @@ pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
     set_external_sst_file_global_seq_no(db, cf_handle, path, 0)?;
     f.sync_all().map_err(|e| format!("sync {}: {:?}", path, e))?;
 
-    let checksum = calc_crc32(path)
-        .map_err(|e| format!("calc crc32 for {}: {:?}", path, e))?;
+    let checksum = calc_crc32(path).map_err(|e| format!("calc crc32 for {}: {:?}", path, e))?;
     if checksum != expected_checksum {
         return Err(format!(
             "invalid checksum {} for {}, expected {}",
-            checksum,
-            path,
-            expected_checksum
+            checksum, path, expected_checksum
         ));
     }
 

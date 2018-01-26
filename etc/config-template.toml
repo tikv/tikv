@@ -246,9 +246,6 @@
 # Enable or disable the pipelined write
 # enable-pipelined-write = true
 
-# set backup path, if not set, use "backup" under store path.
-# backup-dir = "/tmp/tikv/store/backup"
-
 # Allows OS to incrementally sync files to disk while they are being
 # written, asynchronously, in the background.
 # bytes-per-sync = "0MB"
@@ -424,3 +421,9 @@
 # ca-path = ""
 # cert-path = ""
 # key-path = ""
+
+[import]
+# number of threads to handle RPC requests.
+# num-threads = 8
+# stream channel window size, stream will be blocked on channel full.
+# stream-channel-window = 128

@@ -11,18 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::thread;
 use std::boxed::FnBox;
-use std::fmt::{self, Debug, Display, Formatter};
-use std::sync::mpsc::{self, Receiver};
-use std::error;
 use std::sync::{Arc, Mutex};
+use std::fmt::{self, Debug, Display, Formatter};
+use std::error;
 use std::io::Error as IoError;
 use std::u64;
-use kvproto::kvrpcpb::{CommandPri, LockInfo};
+use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 use kvproto::errorpb;
-use util::collections::HashMap;
 use self::metrics::*;
+use self::mvcc::Lock;
+use self::txn::CMD_BATCH_SIZE;
+use util::collections::HashMap;
+use util::worker::{self, Builder, Worker};
 
 pub mod engine;
 pub mod mvcc;
@@ -36,7 +37,6 @@ pub use self::engine::{new_local_engine, CFStatistics, Cursor, Engine, Error as 
                        FlowStatistics, Iterator, Modify, ScanMode, Snapshot, Statistics,
                        StatisticsSummary, TEMP_DIR};
 pub use self::engine::raftkv::RaftKv;
-use self::mvcc::Lock;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
 pub use self::types::{make_key, Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
@@ -47,9 +47,9 @@ pub const CF_LOCK: CfName = "lock";
 pub const CF_WRITE: CfName = "write";
 pub const CF_RAFT: CfName = "raft";
 // Cfs that should be very large generally.
-pub const LARGE_CFS: &'static [CfName] = &[CF_DEFAULT, CF_WRITE];
-pub const ALL_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
-pub const DATA_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
+pub const LARGE_CFS: &[CfName] = &[CF_DEFAULT, CF_WRITE];
+pub const ALL_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
+pub const DATA_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
@@ -76,8 +76,6 @@ impl Mutation {
         }
     }
 }
-
-use kvproto::kvrpcpb::Context;
 
 pub enum StorageCb {
     Boolean(Callback<()>),
@@ -130,7 +128,12 @@ pub enum Command {
         keys: Vec<Key>,
         start_ts: u64,
     },
-    ScanLock { ctx: Context, max_ts: u64 },
+    ScanLock {
+        ctx: Context,
+        max_ts: u64,
+        start_key: Option<Key>,
+        limit: usize,
+    },
     ResolveLock {
         ctx: Context,
         txn_status: HashMap<u64, u64>,
@@ -144,7 +147,10 @@ pub enum Command {
         scan_key: Option<Key>,
         keys: Vec<Key>,
     },
-    RawGet { ctx: Context, key: Key },
+    RawGet {
+        ctx: Context,
+        key: Key,
+    },
     RawScan {
         ctx: Context,
         start_key: Key,
@@ -155,9 +161,18 @@ pub enum Command {
         start_key: Key,
         end_key: Key,
     },
-    Pause { ctx: Context, duration: u64 },
-    MvccByKey { ctx: Context, key: Key },
-    MvccByStartTs { ctx: Context, start_ts: u64 },
+    Pause {
+        ctx: Context,
+        duration: u64,
+    },
+    MvccByKey {
+        ctx: Context,
+        key: Key,
+    },
+    MvccByStartTs {
+        ctx: Context,
+        start_ts: u64,
+    },
 }
 
 impl Display for Command {
@@ -190,10 +205,7 @@ impl Display for Command {
             } => write!(
                 f,
                 "kv::command::scan {}({}) @ {} | {:?}",
-                start_key,
-                limit,
-                start_ts,
-                ctx
+                start_key, limit, start_ts, ctx
             ),
             Command::Prewrite {
                 ref ctx,
@@ -240,8 +252,16 @@ impl Display for Command {
                 ctx
             ),
             Command::ScanLock {
-                ref ctx, max_ts, ..
-            } => write!(f, "kv::scan_lock {} | {:?}", max_ts, ctx),
+                ref ctx,
+                max_ts,
+                ref start_key,
+                limit,
+                ..
+            } => write!(
+                f,
+                "kv::scan_lock {:?} {} @ {} | {:?}",
+                start_key, limit, max_ts, ctx
+            ),
             Command::ResolveLock { .. } => write!(f, "kv::resolve_lock"),
             Command::Gc {
                 ref ctx,
@@ -251,9 +271,7 @@ impl Display for Command {
             } => write!(
                 f,
                 "kv::command::gc scan {:?} @ {} | {:?}",
-                scan_key,
-                safe_point,
-                ctx
+                scan_key, safe_point, ctx
             ),
             Command::RawGet { ref ctx, ref key } => {
                 write!(f, "kv::command::rawget {:?} | {:?}", key, ctx)
@@ -265,9 +283,7 @@ impl Display for Command {
             } => write!(
                 f,
                 "kv::command::rawscan {:?} {} | {:?}",
-                start_key,
-                limit,
-                ctx
+                start_key, limit, ctx
             ),
             Command::DeleteRange {
                 ref ctx,
@@ -276,9 +292,7 @@ impl Display for Command {
             } => write!(
                 f,
                 "kv::command::delete range [{:?}, {:?}) | {:?}",
-                start_key,
-                end_key,
-                ctx
+                start_key, end_key, ctx
             ),
             Command::Pause { ref ctx, duration } => {
                 write!(f, "kv::command::pause {} ms | {:?}", duration, ctx)
@@ -300,7 +314,7 @@ impl Debug for Command {
     }
 }
 
-pub const CMD_TAG_GC: &'static str = "gc";
+pub const CMD_TAG_GC: &str = "gc";
 
 impl Command {
     pub fn readonly(&self) -> bool {
@@ -363,64 +377,64 @@ impl Command {
 
     pub fn ts(&self) -> u64 {
         match *self {
-            Command::Get { start_ts, .. } |
-            Command::BatchGet { start_ts, .. } |
-            Command::Scan { start_ts, .. } |
-            Command::Prewrite { start_ts, .. } |
-            Command::Cleanup { start_ts, .. } |
-            Command::Rollback { start_ts, .. } |
-            Command::MvccByStartTs { start_ts, .. } => start_ts,
+            Command::Get { start_ts, .. }
+            | Command::BatchGet { start_ts, .. }
+            | Command::Scan { start_ts, .. }
+            | Command::Prewrite { start_ts, .. }
+            | Command::Cleanup { start_ts, .. }
+            | Command::Rollback { start_ts, .. }
+            | Command::MvccByStartTs { start_ts, .. } => start_ts,
             Command::Commit { lock_ts, .. } => lock_ts,
             Command::ScanLock { max_ts, .. } => max_ts,
             Command::Gc { safe_point, .. } => safe_point,
-            Command::ResolveLock { .. } |
-            Command::RawGet { .. } |
-            Command::RawScan { .. } |
-            Command::DeleteRange { .. } |
-            Command::Pause { .. } |
-            Command::MvccByKey { .. } => 0,
+            Command::ResolveLock { .. }
+            | Command::RawGet { .. }
+            | Command::RawScan { .. }
+            | Command::DeleteRange { .. }
+            | Command::Pause { .. }
+            | Command::MvccByKey { .. } => 0,
         }
     }
 
     pub fn get_context(&self) -> &Context {
         match *self {
-            Command::Get { ref ctx, .. } |
-            Command::BatchGet { ref ctx, .. } |
-            Command::Scan { ref ctx, .. } |
-            Command::Prewrite { ref ctx, .. } |
-            Command::Commit { ref ctx, .. } |
-            Command::Cleanup { ref ctx, .. } |
-            Command::Rollback { ref ctx, .. } |
-            Command::ScanLock { ref ctx, .. } |
-            Command::ResolveLock { ref ctx, .. } |
-            Command::Gc { ref ctx, .. } |
-            Command::RawGet { ref ctx, .. } |
-            Command::RawScan { ref ctx, .. } |
-            Command::DeleteRange { ref ctx, .. } |
-            Command::Pause { ref ctx, .. } |
-            Command::MvccByKey { ref ctx, .. } |
-            Command::MvccByStartTs { ref ctx, .. } => ctx,
+            Command::Get { ref ctx, .. }
+            | Command::BatchGet { ref ctx, .. }
+            | Command::Scan { ref ctx, .. }
+            | Command::Prewrite { ref ctx, .. }
+            | Command::Commit { ref ctx, .. }
+            | Command::Cleanup { ref ctx, .. }
+            | Command::Rollback { ref ctx, .. }
+            | Command::ScanLock { ref ctx, .. }
+            | Command::ResolveLock { ref ctx, .. }
+            | Command::Gc { ref ctx, .. }
+            | Command::RawGet { ref ctx, .. }
+            | Command::RawScan { ref ctx, .. }
+            | Command::DeleteRange { ref ctx, .. }
+            | Command::Pause { ref ctx, .. }
+            | Command::MvccByKey { ref ctx, .. }
+            | Command::MvccByStartTs { ref ctx, .. } => ctx,
         }
     }
 
     pub fn mut_context(&mut self) -> &mut Context {
         match *self {
-            Command::Get { ref mut ctx, .. } |
-            Command::BatchGet { ref mut ctx, .. } |
-            Command::Scan { ref mut ctx, .. } |
-            Command::Prewrite { ref mut ctx, .. } |
-            Command::Commit { ref mut ctx, .. } |
-            Command::Cleanup { ref mut ctx, .. } |
-            Command::Rollback { ref mut ctx, .. } |
-            Command::ScanLock { ref mut ctx, .. } |
-            Command::ResolveLock { ref mut ctx, .. } |
-            Command::Gc { ref mut ctx, .. } |
-            Command::RawGet { ref mut ctx, .. } |
-            Command::RawScan { ref mut ctx, .. } |
-            Command::DeleteRange { ref mut ctx, .. } |
-            Command::Pause { ref mut ctx, .. } |
-            Command::MvccByKey { ref mut ctx, .. } |
-            Command::MvccByStartTs { ref mut ctx, .. } => ctx,
+            Command::Get { ref mut ctx, .. }
+            | Command::BatchGet { ref mut ctx, .. }
+            | Command::Scan { ref mut ctx, .. }
+            | Command::Prewrite { ref mut ctx, .. }
+            | Command::Commit { ref mut ctx, .. }
+            | Command::Cleanup { ref mut ctx, .. }
+            | Command::Rollback { ref mut ctx, .. }
+            | Command::ScanLock { ref mut ctx, .. }
+            | Command::ResolveLock { ref mut ctx, .. }
+            | Command::Gc { ref mut ctx, .. }
+            | Command::RawGet { ref mut ctx, .. }
+            | Command::RawScan { ref mut ctx, .. }
+            | Command::DeleteRange { ref mut ctx, .. }
+            | Command::Pause { ref mut ctx, .. }
+            | Command::MvccByKey { ref mut ctx, .. }
+            | Command::MvccByStartTs { ref mut ctx, .. } => ctx,
         }
     }
 
@@ -455,8 +469,6 @@ impl Command {
     }
 }
 
-use util::transport::SyncSendCh;
-
 #[derive(Clone, Default)]
 pub struct Options {
     pub lock_ttl: u64,
@@ -474,15 +486,12 @@ impl Options {
     }
 }
 
-struct StorageHandle {
-    handle: Option<thread::JoinHandle<()>>,
-    receiver: Option<Receiver<Msg>>,
-}
-
 pub struct Storage {
     engine: Box<Engine>,
-    sendch: SyncSendCh<Msg>,
-    handle: Arc<Mutex<StorageHandle>>,
+
+    // to schedule the execution of storage commands
+    worker: Arc<Mutex<Worker<Msg>>>,
+    worker_scheduler: worker::Scheduler<Msg>,
 
     // Storage configurations.
     gc_ratio_threshold: f64,
@@ -491,17 +500,19 @@ pub struct Storage {
 
 impl Storage {
     pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage> {
-        let (tx, rx) = mpsc::sync_channel(config.scheduler_notify_capacity);
-        let sendch = SyncSendCh::new(tx, "kv-storage");
-
         info!("storage {:?} started.", engine);
+
+        let worker = Arc::new(Mutex::new(
+            Builder::new("storage-scheduler")
+                .batch_size(CMD_BATCH_SIZE)
+                .pending_capacity(config.scheduler_notify_capacity)
+                .create(),
+        ));
+        let worker_scheduler = worker.lock().unwrap().scheduler();
         Ok(Storage {
             engine: engine,
-            sendch: sendch,
-            handle: Arc::new(Mutex::new(StorageHandle {
-                handle: None,
-                receiver: Some(rx),
-            })),
+            worker: worker,
+            worker_scheduler: worker_scheduler,
             gc_ratio_threshold: config.gc_ratio_threshold,
             max_key_size: config.max_key_size,
         })
@@ -513,48 +524,29 @@ impl Storage {
     }
 
     pub fn start(&mut self, config: &Config) -> Result<()> {
-        let mut handle = self.handle.lock().unwrap();
-        if handle.handle.is_some() {
-            return Err(box_err!("scheduler is already running"));
-        }
-
-        let engine = self.engine.clone();
-        let builder = thread::Builder::new().name(thd_name!("storage-scheduler"));
-        let rx = handle.receiver.take().unwrap();
         let sched_concurrency = config.scheduler_concurrency;
         let sched_worker_pool_size = config.scheduler_worker_pool_size;
         let sched_pending_write_threshold = config.scheduler_pending_write_threshold.0 as usize;
-        let ch = self.sendch.clone();
-        let h = builder.spawn(move || {
-            let mut sched = Scheduler::new(
-                engine,
-                ch,
-                sched_concurrency,
-                sched_worker_pool_size,
-                sched_pending_write_threshold,
-            );
-            if let Err(e) = sched.run(rx) {
-                panic!("scheduler run err:{:?}", e);
-            }
-            info!("scheduler stopped");
-        })?;
-        handle.handle = Some(h);
-
+        let mut worker = self.worker.lock().unwrap();
+        let scheduler = Scheduler::new(
+            self.engine.clone(),
+            worker.scheduler(),
+            sched_concurrency,
+            sched_worker_pool_size,
+            sched_pending_write_threshold,
+        );
+        worker.start(scheduler)?;
         Ok(())
     }
 
     pub fn stop(&mut self) -> Result<()> {
-        let mut handle = self.handle.lock().unwrap();
-        if handle.handle.is_none() {
-            return Ok(());
-        }
-
-        if let Err(e) = self.sendch.send(Msg::Quit) {
+        let mut worker = self.worker.lock().unwrap();
+        if let Err(e) = worker.schedule(Msg::Quit) {
             error!("send quit cmd to scheduler failed, error:{:?}", e);
             return Err(box_err!("failed to ask sched to quit: {:?}", e));
         }
 
-        let h = handle.handle.take().unwrap();
+        let h = worker.stop().unwrap();
         if let Err(e) = h.join() {
             return Err(box_err!("failed to join sched_handle, err:{:?}", e));
         }
@@ -567,9 +559,12 @@ impl Storage {
         self.engine.clone()
     }
 
-    fn send(&self, cmd: Command, cb: StorageCb) -> Result<()> {
+    fn schedule(&self, cmd: Command, cb: StorageCb) -> Result<()> {
         fail_point!("storage_drop_message", |_| Ok(()));
-        box_try!(self.sendch.try_send(Msg::RawCmd { cmd: cmd, cb: cb }));
+        box_try!(
+            self.worker_scheduler
+                .schedule(Msg::RawCmd { cmd: cmd, cb: cb })
+        );
         Ok(())
     }
 
@@ -586,7 +581,7 @@ impl Storage {
             start_ts: start_ts,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::SingleValue(callback))?;
+        self.schedule(cmd, StorageCb::SingleValue(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -604,7 +599,7 @@ impl Storage {
             start_ts: start_ts,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::KvPairs(callback))?;
+        self.schedule(cmd, StorageCb::KvPairs(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -626,7 +621,7 @@ impl Storage {
             options: options,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::KvPairs(callback))?;
+        self.schedule(cmd, StorageCb::KvPairs(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -636,7 +631,7 @@ impl Storage {
             ctx: ctx,
             duration: duration,
         };
-        self.send(cmd, StorageCb::Boolean(callback))?;
+        self.schedule(cmd, StorageCb::Boolean(callback))?;
         Ok(())
     }
 
@@ -664,7 +659,7 @@ impl Storage {
             options: options,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::Booleans(callback))?;
+        self.schedule(cmd, StorageCb::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -684,7 +679,7 @@ impl Storage {
             commit_ts: commit_ts,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::Boolean(callback))?;
+        self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -711,11 +706,10 @@ impl Storage {
             modifies.push(Modify::DeleteRange(cf, s, end_key.clone()));
         }
 
-        self.engine.async_write(
-            &ctx,
-            modifies,
-            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
-        )?;
+        self.engine
+            .async_write(&ctx, modifies, box |(_, res): (_, engine::Result<_>)| {
+                callback(res.map_err(Error::from))
+            })?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["delete_range"])
             .inc();
@@ -735,7 +729,7 @@ impl Storage {
             start_ts: start_ts,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::Boolean(callback))?;
+        self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -753,7 +747,7 @@ impl Storage {
             start_ts: start_ts,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::Boolean(callback))?;
+        self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -762,14 +756,22 @@ impl Storage {
         &self,
         ctx: Context,
         max_ts: u64,
+        start_key: Vec<u8>,
+        limit: usize,
         callback: Callback<Vec<LockInfo>>,
     ) -> Result<()> {
         let cmd = Command::ScanLock {
             ctx: ctx,
             max_ts: max_ts,
+            start_key: if start_key.is_empty() {
+                None
+            } else {
+                Some(Key::from_raw(&start_key))
+            },
+            limit: limit,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::Locks(callback))?;
+        self.schedule(cmd, StorageCb::Locks(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -787,7 +789,7 @@ impl Storage {
             key_locks: vec![],
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::Boolean(callback))?;
+        self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -801,7 +803,7 @@ impl Storage {
             keys: vec![],
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::Boolean(callback))?;
+        self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -816,7 +818,7 @@ impl Storage {
             ctx: ctx,
             key: Key::from_encoded(key),
         };
-        self.send(cmd, StorageCb::SingleValue(callback))?;
+        self.schedule(cmd, StorageCb::SingleValue(callback))?;
         RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["get"]).inc();
         Ok(())
     }
@@ -832,12 +834,11 @@ impl Storage {
             callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
             return Ok(());
         }
-        try!(self.engine
-            .async_write(&ctx,
-                         vec![Modify::Put(CF_DEFAULT, Key::from_encoded(key), value)],
-                         box |(_, res): (_, engine::Result<_>)| {
-                             callback(res.map_err(Error::from))
-                         }));
+        self.engine.async_write(
+            &ctx,
+            vec![Modify::Put(CF_DEFAULT, Key::from_encoded(key), value)],
+            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+        )?;
         RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["put"]).inc();
         Ok(())
     }
@@ -875,7 +876,7 @@ impl Storage {
             start_key: Key::from_encoded(key),
             limit: limit,
         };
-        self.send(cmd, StorageCb::KvPairs(callback))?;
+        self.schedule(cmd, StorageCb::KvPairs(callback))?;
         RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["scan"]).inc();
         Ok(())
     }
@@ -888,7 +889,7 @@ impl Storage {
     ) -> Result<()> {
         let cmd = Command::MvccByKey { ctx: ctx, key: key };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::MvccInfoByKey(callback))?;
+        self.schedule(cmd, StorageCb::MvccInfoByKey(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -904,7 +905,7 @@ impl Storage {
             start_ts: start_ts,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::MvccInfoByStartTs(callback))?;
+        self.schedule(cmd, StorageCb::MvccInfoByStartTs(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -914,8 +915,8 @@ impl Clone for Storage {
     fn clone(&self) -> Storage {
         Storage {
             engine: self.engine.clone(),
-            sendch: self.sendch.clone(),
-            handle: self.handle.clone(),
+            worker: Arc::clone(&self.worker),
+            worker_scheduler: self.worker_scheduler.clone(),
             gc_ratio_threshold: self.gc_ratio_threshold,
             max_key_size: self.max_key_size,
         }

@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::io::Write;
 use std::{cmp, u8};
 use tipb::schema::ColumnInfo;
@@ -30,13 +29,12 @@ use super::mysql::{types, Duration, Time};
 pub const ID_LEN: usize = 8;
 pub const PREFIX_LEN: usize = TABLE_PREFIX_LEN + ID_LEN /*table_id*/ + SEP_LEN;
 pub const RECORD_ROW_KEY_LEN: usize = PREFIX_LEN + ID_LEN;
-pub const TABLE_PREFIX: &'static [u8] = b"t";
-pub const RECORD_PREFIX_SEP: &'static [u8] = b"_r";
-pub const INDEX_PREFIX_SEP: &'static [u8] = b"_i";
+pub const TABLE_PREFIX: &[u8] = b"t";
+pub const RECORD_PREFIX_SEP: &[u8] = b"_r";
+pub const INDEX_PREFIX_SEP: &[u8] = b"_i";
 pub const SEP_LEN: usize = 2;
 pub const TABLE_PREFIX_LEN: usize = 1;
 pub const TABLE_PREFIX_KEY_LEN: usize = TABLE_PREFIX_LEN + ID_LEN;
-
 
 trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {
@@ -179,11 +177,11 @@ fn unflatten(ctx: &EvalContext, datum: Datum, col: &ColumnInfo) -> Result<Datum>
     if let Datum::Null = datum {
         return Ok(datum);
     }
-    if col.get_tp() > u8::MAX as i32 || col.get_tp() < 0 {
+    if col.get_tp() > i32::from(u8::MAX) || col.get_tp() < 0 {
         error!("unknown type {} {:?}", col.get_tp(), datum);
     }
     match col.get_tp() as u8 {
-        types::FLOAT => Ok(Datum::F64(datum.f64() as f32 as f64)),
+        types::FLOAT => Ok(Datum::F64(f64::from(datum.f64() as f32))),
         types::DATE | types::DATETIME | types::TIMESTAMP => {
             let fsp = col.get_decimal() as i8;
             let t = Time::from_packed_u64(datum.u64(), col.get_tp() as u8, fsp, &ctx.tz)?;
@@ -420,7 +418,7 @@ mod test {
 
     fn new_col_info(tp: u8) -> ColumnInfo {
         let mut col_info = ColumnInfo::new();
-        col_info.set_tp(tp as i32);
+        col_info.set_tp(i32::from(tp));
         col_info
     }
 

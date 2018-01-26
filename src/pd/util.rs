@@ -121,14 +121,12 @@ impl LeaderClient {
     {
         let recv = HeartbeatReceiver {
             receiver: None,
-            inner: self.inner.clone(),
+            inner: Arc::clone(&self.inner),
         };
-        Box::new(
-            recv.for_each(move |resp| {
-                f(resp);
-                Ok(())
-            }).map_err(|e| panic!("unexpected error: {:?}", e)),
-        )
+        Box::new(recv.for_each(move |resp| {
+            f(resp);
+            Ok(())
+        }).map_err(|e| panic!("unexpected error: {:?}", e)))
     }
 
     pub fn request<Req, Resp, F>(&self, req: Req, f: F, retry: usize) -> Request<Req, Resp, F>
@@ -141,7 +139,7 @@ impl LeaderClient {
             request_sent: 0,
             client: LeaderClient {
                 timer: self.timer.clone(),
-                inner: self.inner.clone(),
+                inner: Arc::clone(&self.inner),
             },
             req: req,
             resp: None,
@@ -164,7 +162,7 @@ impl LeaderClient {
 
             let start = Instant::now();
             (
-                try_connect_leader(inner.env.clone(), &inner.security_mgr, &inner.members)?,
+                try_connect_leader(Arc::clone(&inner.env), &inner.security_mgr, &inner.members)?,
                 start,
             )
         };
@@ -324,7 +322,7 @@ pub fn validate_endpoints(
             return Err(box_err!("duplicate PD endpoint {}", ep));
         }
 
-        let (_, resp) = match connect(env.clone(), security_mgr, ep) {
+        let (_, resp) = match connect(Arc::clone(&env), security_mgr, ep) {
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
@@ -355,7 +353,7 @@ pub fn validate_endpoints(
 
     match members {
         Some(members) => {
-            let (client, members) = try_connect_leader(env.clone(), security_mgr, &members)?;
+            let (client, members) = try_connect_leader(Arc::clone(&env), security_mgr, &members)?;
             info!("All PD endpoints are consistent: {:?}", cfg.endpoints);
             Ok((client, members))
         }
@@ -397,7 +395,7 @@ pub fn try_connect_leader(
         .chain(&[previous_leader.clone()])
     {
         for ep in m.get_client_urls() {
-            match connect(env.clone(), security_mgr, ep.as_str()) {
+            match connect(Arc::clone(&env), security_mgr, ep.as_str()) {
                 Ok((_, r)) => {
                     let new_cluster_id = r.get_header().get_cluster_id();
                     if new_cluster_id == cluster_id {
@@ -406,9 +404,7 @@ pub fn try_connect_leader(
                     } else {
                         panic!(
                             "{} no longer belongs to cluster {}, it is in {}",
-                            ep,
-                            cluster_id,
-                            new_cluster_id
+                            ep, cluster_id, new_cluster_id
                         );
                     }
                 }
@@ -424,7 +420,7 @@ pub fn try_connect_leader(
     if let Some(resp) = resp {
         let leader = resp.get_leader().clone();
         for ep in leader.get_client_urls() {
-            if let Ok((client, _)) = connect(env.clone(), security_mgr, ep.as_str()) {
+            if let Ok((client, _)) = connect(Arc::clone(&env), security_mgr, ep.as_str()) {
                 info!("connect to PD leader {:?}", ep);
                 return Ok((client, resp));
             }

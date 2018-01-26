@@ -23,6 +23,7 @@ use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::config::*;
 use tikv::storage::Config as StorageConfig;
+use tikv::import::Config as ImportConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
 use tikv::util::security::SecurityConfig;
 
@@ -140,7 +141,6 @@ fn test_serde_custom_tikv_config() {
         writable_file_max_buffer_size: ReadableSize::mb(12),
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
-        backup_dir: "/var".to_owned(),
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
@@ -356,6 +356,10 @@ fn test_serde_custom_tikv_config() {
         cert_path: "invalid path".to_owned(),
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
+    };
+    value.import = ImportConfig {
+        num_threads: 123,
+        stream_channel_window: 123,
     };
 
     let custom = read_file_in_project_dir("tests/config/test-custom.toml");

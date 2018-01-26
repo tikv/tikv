@@ -162,16 +162,16 @@ pub fn build_exec(
             }
             ExecType::TypeSelection => Box::new(SelectionExecutor::new(
                 exec.take_selection(),
-                ctx.clone(),
-                columns.clone(),
+                Arc::clone(&ctx),
+                Arc::clone(&columns),
                 src,
             )?),
             ExecType::TypeAggregation => {
                 has_aggr = true;
                 Box::new(HashAggExecutor::new(
                     exec.take_aggregation(),
-                    ctx.clone(),
-                    columns.clone(),
+                    Arc::clone(&ctx),
+                    Arc::clone(&columns),
                     src,
                 )?)
             }
@@ -186,8 +186,8 @@ pub fn build_exec(
             }
             ExecType::TypeTopN => Box::new(TopNExecutor::new(
                 exec.take_topN(),
-                ctx.clone(),
-                columns.clone(),
+                Arc::clone(&ctx),
+                Arc::clone(&columns),
                 src,
             )?),
             ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),

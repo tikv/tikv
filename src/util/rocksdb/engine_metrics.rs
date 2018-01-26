@@ -17,17 +17,17 @@ use rocksdb::{DBStatisticsHistogramType as HistType, DBStatisticsTickerType as T
 use util::rocksdb;
 use time;
 
-pub const ROCKSDB_TOTAL_SST_FILES_SIZE: &'static str = "rocksdb.total-sst-files-size";
-pub const ROCKSDB_TABLE_READERS_MEM: &'static str = "rocksdb.estimate-table-readers-mem";
-pub const ROCKSDB_CUR_SIZE_ALL_MEM_TABLES: &'static str = "rocksdb.cur-size-all-mem-tables";
-pub const ROCKSDB_ESTIMATE_NUM_KEYS: &'static str = "rocksdb.estimate-num-keys";
-pub const ROCKSDB_PENDING_COMPACTION_BYTES: &'static str = "rocksdb.\
-                                                            estimate-pending-compaction-bytes";
-pub const ROCKSDB_COMPRESSION_RATIO_AT_LEVEL: &'static str = "rocksdb.compression-ratio-at-level";
-pub const ROCKSDB_NUM_SNAPSHOTS: &'static str = "rocksdb.num-snapshots";
-pub const ROCKSDB_OLDEST_SNAPSHOT_TIME: &'static str = "rocksdb.oldest-snapshot-time";
+pub const ROCKSDB_TOTAL_SST_FILES_SIZE: &str = "rocksdb.total-sst-files-size";
+pub const ROCKSDB_TABLE_READERS_MEM: &str = "rocksdb.estimate-table-readers-mem";
+pub const ROCKSDB_CUR_SIZE_ALL_MEM_TABLES: &str = "rocksdb.cur-size-all-mem-tables";
+pub const ROCKSDB_ESTIMATE_NUM_KEYS: &str = "rocksdb.estimate-num-keys";
+pub const ROCKSDB_PENDING_COMPACTION_BYTES: &str = "rocksdb.\
+                                                    estimate-pending-compaction-bytes";
+pub const ROCKSDB_COMPRESSION_RATIO_AT_LEVEL: &str = "rocksdb.compression-ratio-at-level";
+pub const ROCKSDB_NUM_SNAPSHOTS: &str = "rocksdb.num-snapshots";
+pub const ROCKSDB_OLDEST_SNAPSHOT_TIME: &str = "rocksdb.oldest-snapshot-time";
 
-pub const ENGINE_TICKER_TYPES: &'static [TickerType] = &[
+pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::BlockCacheMiss,
     TickerType::BlockCacheHit,
     TickerType::BlockCacheAdd,
@@ -88,7 +88,7 @@ pub const ENGINE_TICKER_TYPES: &'static [TickerType] = &[
     TickerType::ReadAmpEstimateUsefulBytes,
     TickerType::ReadAmpTotalReadBytes,
 ];
-pub const ENGINE_HIST_TYPES: &'static [HistType] = &[
+pub const ENGINE_HIST_TYPES: &[HistType] = &[
     HistType::GetMicros,
     HistType::WriteMicros,
     HistType::CompactionTime,
@@ -661,10 +661,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 .with_label_values(&[name, "stall_memtable_compaction_count_average"])
                 .set(value.average);
             STORE_ENGINE_STALL_MEMTABLE_COMPACTION_COUNT_VEC
-                .with_label_values(&[
-                    name,
-                    "stall_memtable_compaction_count_standard_deviation",
-                ])
+                .with_label_values(&[name, "stall_memtable_compaction_count_standard_deviation"])
                 .set(value.standard_deviation);
             STORE_ENGINE_STALL_MEMTABLE_COMPACTION_COUNT_VEC
                 .with_label_values(&[name, "stall_memtable_compaction_count_max"])
@@ -982,8 +979,7 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
         }
 
         // For memtable
-        if let Some(mem_table) =
-            engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES)
+        if let Some(mem_table) = engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES)
         {
             STORE_ENGINE_MEMORY_GAUGE_VEC
                 .with_label_values(&[name, cf, "mem-tables"])

@@ -85,7 +85,6 @@ mod test {
             (r#"{"a": [3, 4]}"#, "$.b[1]", r#"{"a": [3, 4]}"#, true),
             // Nothing changed because the path without last leg doesn't exist.
             (r#"{"a": [3, 4]}"#, "$.a[0].b", r#"{"a": [3, 4]}"#, true),
-
             // Bad path expression.
             (r#"null"#, "$.*", r#"null"#, false),
             (r#"null"#, "$[*]", r#"null"#, false),

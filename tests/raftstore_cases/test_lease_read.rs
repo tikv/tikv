@@ -14,111 +14,21 @@
 //! A module contains test cases for lease read on Raft leader.
 
 use std::thread;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::sync::atomic::*;
 use std::time::*;
-use std::collections::HashSet;
 
 use kvproto::eraftpb::{ConfChangeType, MessageType};
-use kvproto::metapb::{Peer, Region};
-use kvproto::raft_cmdpb::CmdType;
-use kvproto::raft_serverpb::{RaftLocalState, RaftMessage};
-use tikv::raftstore::{Error, Result};
+use kvproto::raft_serverpb::RaftLocalState;
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::engine::Peekable;
-use tikv::util::{escape, HandyRwLock};
+use tikv::util::HandyRwLock;
 use tikv::util::config::*;
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::transport_simulate::*;
 use super::util::*;
-
-#[derive(Clone, Default)]
-struct LeaseReadFilter {
-    ctx: Arc<RwLock<HashSet<Vec<u8>>>>,
-    take: bool,
-}
-
-impl Filter<RaftMessage> for LeaseReadFilter {
-    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
-        let mut ctx = self.ctx.wl();
-        for m in msgs {
-            let msg = m.mut_message();
-            if msg.get_msg_type() == MessageType::MsgHeartbeat && !msg.get_context().is_empty() {
-                ctx.insert(msg.get_context().to_owned());
-            }
-            if self.take {
-                msg.take_context();
-            }
-        }
-        Ok(())
-    }
-}
-
-// Issue a read request on the specified peer.
-fn read_on_peer<T: Simulator>(
-    cluster: &mut Cluster<T>,
-    peer: Peer,
-    region: Region,
-    key: &[u8],
-    timeout: Duration,
-) -> Result<Vec<u8>> {
-    let mut request = new_request(
-        region.get_id(),
-        region.get_region_epoch().clone(),
-        vec![new_get_cmd(key)],
-        false,
-    );
-    request.mut_header().set_peer(peer);
-    let mut resp = cluster.call_command(request, timeout)?;
-    if resp.get_header().has_error() {
-        return Err(Error::Other(
-            box_err!(resp.mut_header().take_error().take_message()),
-        ));
-    }
-    assert_eq!(resp.get_responses().len(), 1);
-    assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
-    assert!(resp.get_responses()[0].has_get());
-    Ok(resp.mut_responses()[0].mut_get().take_value())
-}
-
-fn must_read_on_peer<T: Simulator>(
-    cluster: &mut Cluster<T>,
-    peer: Peer,
-    region: Region,
-    key: &[u8],
-    value: &[u8],
-) {
-    let timeout = Duration::from_secs(1);
-    match read_on_peer(cluster, peer, region, key, timeout) {
-        Ok(v) => if v != value {
-            panic!(
-                "read key {}, expect value {}, got {}",
-                escape(key),
-                escape(value),
-                escape(&v)
-            )
-        },
-        Err(e) => panic!("failed to read for key {}, err {:?}", escape(key), e),
-    }
-}
-
-fn must_error_read_on_peer<T: Simulator>(
-    cluster: &mut Cluster<T>,
-    peer: Peer,
-    region: Region,
-    key: &[u8],
-    timeout: Duration,
-) {
-    if let Ok(value) = read_on_peer(cluster, peer, region, key, timeout) {
-        panic!(
-            "key {}, expect error but got {}",
-            escape(key),
-            escape(&value)
-        );
-    }
-}
 
 // A helper function for testing the lease reads and lease renewing.
 // The leader keeps a record of its leader lease, and uses the system's
@@ -223,7 +133,7 @@ fn test_node_renew_lease() {
 // If the leader lease has expired, there may be new leader elected and
 // the old leader will fail to renew its lease.
 fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
     pd_client.disable_default_rule();
 
@@ -232,8 +142,8 @@ fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
     // Increase the Raft tick interval to make this test case running reliably.
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(50);
 
-    let election_timeout = cluster.cfg.raft_store.raft_base_tick_interval.0 *
-        cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+    let election_timeout = cluster.cfg.raft_store.raft_base_tick_interval.0
+        * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
     let node_id = 3u64;
     let store_id = 3u64;
     let peer = new_peer(store_id, node_id);
@@ -386,7 +296,7 @@ fn test_node_callback_when_destroyed() {
         RegionPacketFilter::new(1, leader.get_store_id())
             .msg_type(MessageType::MsgAppendResponse)
             .direction(Direction::Recv)
-            .when(block.clone()),
+            .when(Arc::clone(&block)),
     ));
     let mut filter = LeaseReadFilter::default();
     filter.take = true;

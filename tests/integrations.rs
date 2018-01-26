@@ -19,29 +19,29 @@
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![feature(btree_range, collections_bound)]
 #![feature(box_syntax)]
-#![feature(fnbox)]
 #![allow(new_without_default)]
 #![feature(const_fn)]
 #![allow(needless_pass_by_value)]
 #![allow(unreadable_literal)]
 
+extern crate futures;
+extern crate futures_cpupool;
+extern crate grpcio as grpc;
 #[cfg(feature = "mem-profiling")]
 extern crate jemallocator;
+extern crate kvproto;
 #[macro_use]
 extern crate log;
 extern crate protobuf;
-#[macro_use]
-extern crate tikv;
 extern crate rand;
 extern crate rocksdb;
 extern crate tempdir;
-extern crate kvproto;
-extern crate tipb;
 extern crate test;
-extern crate grpcio as grpc;
-extern crate futures;
-extern crate futures_cpupool;
+#[macro_use]
+extern crate tikv;
+extern crate tipb;
 extern crate toml;
+extern crate uuid;
 
 mod raft;
 mod raftstore;
@@ -52,6 +52,7 @@ mod storage_cases;
 mod util;
 mod pd;
 mod config;
+mod import;
 
 use std::env;
 

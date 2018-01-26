@@ -20,7 +20,7 @@ use tikv::server::StoreAddrResolver;
 use tikv::util::{transport, Either, HandyRwLock};
 
 use rand;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::mpsc::Sender;
 use std::marker::PhantomData;
@@ -172,8 +172,8 @@ impl<M, C: Channel<M>> Channel<M> for SimulateTransport<M, C> {
 impl<M, C: Channel<M>> Clone for SimulateTransport<M, C> {
     fn clone(&self) -> SimulateTransport<M, C> {
         SimulateTransport {
-            filters: self.filters.clone(),
-            ch: self.ch.clone(),
+            filters: Arc::clone(&self.filters),
+            ch: Arc::clone(&self.ch),
         }
     }
 }
@@ -327,10 +327,10 @@ impl Filter<RaftMessage> for RegionPacketFilter {
             let from_store_id = m.get_from_peer().get_store_id();
             let to_store_id = m.get_to_peer().get_store_id();
 
-            if self.region_id == region_id &&
-                (self.direction.is_send() && self.store_id == from_store_id ||
-                    self.direction.is_recv() && self.store_id == to_store_id) &&
-                self.msg_type
+            if self.region_id == region_id
+                && (self.direction.is_send() && self.store_id == from_store_id
+                    || self.direction.is_recv() && self.store_id == to_store_id)
+                && self.msg_type
                     .as_ref()
                     .map_or(true, |t| t == &m.get_message().get_msg_type())
             {
@@ -392,9 +392,7 @@ pub struct SnapshotFilter {
 
 impl Filter<RaftMessage> for SnapshotFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
-        msgs.retain(|m| {
-            m.get_message().get_msg_type() != MessageType::MsgSnapshot
-        });
+        msgs.retain(|m| m.get_message().get_msg_type() != MessageType::MsgSnapshot);
         self.drop.store(msgs.is_empty(), Ordering::Relaxed);
         check_messages(msgs)
     }
@@ -637,5 +635,27 @@ impl Clone for RandomLatencyFilter {
             delay_rate: self.delay_rate,
             delayed_msgs: Mutex::new(delayed_msgs.clone()),
         }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct LeaseReadFilter {
+    pub ctx: Arc<RwLock<HashSet<Vec<u8>>>>,
+    pub take: bool,
+}
+
+impl Filter<RaftMessage> for LeaseReadFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        let mut ctx = self.ctx.wl();
+        for m in msgs {
+            let msg = m.mut_message();
+            if msg.get_msg_type() == MessageType::MsgHeartbeat && !msg.get_context().is_empty() {
+                ctx.insert(msg.get_context().to_owned());
+            }
+            if self.take {
+                msg.take_context();
+            }
+        }
+        Ok(())
     }
 }

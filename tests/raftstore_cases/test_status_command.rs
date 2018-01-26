@@ -31,7 +31,6 @@ fn test_region_detail() {
     assert_eq!(epoch.get_conf_ver(), 1);
     assert_eq!(epoch.get_version(), 1);
 
-
     assert!(region_detail.has_leader());
     assert_eq!(region_detail.get_leader(), &leader);
 }

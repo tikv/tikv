@@ -132,7 +132,6 @@ pub fn prepare_bootstrap(
     Ok(region)
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -155,7 +154,7 @@ mod tests {
         let raft_engine = Arc::new(
             rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
         );
-        let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
+        let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
 
         assert!(bootstrap_store(&engines, 1, 1).is_ok());
         assert!(bootstrap_store(&engines, 1, 1).is_err());

@@ -84,8 +84,8 @@ fn before_check(status: &mut TableStatus, engine: &DB, region: &Region) -> bool 
     let encoded_start_key = region.get_start_key();
     let encoded_end_key = keys::origin_key(&end_key);
 
-    if encoded_start_key.len() < table_codec::TABLE_PREFIX_KEY_LEN ||
-        encoded_end_key.len() < table_codec::TABLE_PREFIX_KEY_LEN
+    if encoded_start_key.len() < table_codec::TABLE_PREFIX_KEY_LEN
+        || encoded_end_key.len() < table_codec::TABLE_PREFIX_KEY_LEN
     {
         // For now, let us scan region if encoded_start_key or encoded_end_key
         // is less than TABLE_PREFIX_KEY_LEN.
@@ -208,13 +208,13 @@ fn to_encoded_table_prefix(encoded_key: &[u8]) -> Option<Vec<u8>> {
 const ENCODED_TABLE_TABLE_PREFIX: usize = table_codec::TABLE_PREFIX_KEY_LEN + 1;
 
 fn is_table_key(encoded_key: &[u8]) -> bool {
-    encoded_key.starts_with(table_codec::TABLE_PREFIX) &&
-        encoded_key.len() >= ENCODED_TABLE_TABLE_PREFIX
+    encoded_key.starts_with(table_codec::TABLE_PREFIX)
+        && encoded_key.len() >= ENCODED_TABLE_TABLE_PREFIX
 }
 
 fn is_same_table(left_key: &[u8], right_key: &[u8]) -> bool {
-    is_table_key(left_key) && is_table_key(right_key) &&
-        left_key[..ENCODED_TABLE_TABLE_PREFIX] == right_key[..ENCODED_TABLE_TABLE_PREFIX]
+    is_table_key(left_key) && is_table_key(right_key)
+        && left_key[..ENCODED_TABLE_TABLE_PREFIX] == right_key[..ENCODED_TABLE_TABLE_PREFIX]
 }
 
 #[cfg(test)]
@@ -252,9 +252,7 @@ mod test {
     #[test]
     fn test_last_key_of_region() {
         let path = TempDir::new("test_last_key_of_region").unwrap();
-        let engine = Arc::new(
-            new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap(),
-        );
+        let engine = Arc::new(new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap());
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();
 
         let mut region = Region::new();
@@ -274,18 +272,20 @@ mod test {
         }
 
         type Case = (Option<i64>, Option<i64>, Option<Vec<u8>>);
-        let mut check_cases = |cases: Vec<Case>| for (start_id, end_id, want) in cases {
-            region.set_start_key(
-                start_id
-                    .map(|id| Key::from_raw(&gen_table_prefix(id)).encoded().to_vec())
-                    .unwrap_or_else(Vec::new),
-            );
-            region.set_end_key(
-                end_id
-                    .map(|id| Key::from_raw(&gen_table_prefix(id)).encoded().to_vec())
-                    .unwrap_or_else(Vec::new),
-            );
-            assert_eq!(last_key_of_region(&engine, &region).unwrap(), want);
+        let mut check_cases = |cases: Vec<Case>| {
+            for (start_id, end_id, want) in cases {
+                region.set_start_key(
+                    start_id
+                        .map(|id| Key::from_raw(&gen_table_prefix(id)).encoded().to_vec())
+                        .unwrap_or_else(Vec::new),
+                );
+                region.set_end_key(
+                    end_id
+                        .map(|id| Key::from_raw(&gen_table_prefix(id)).encoded().to_vec())
+                        .unwrap_or_else(Vec::new),
+                );
+                assert_eq!(last_key_of_region(&engine, &region).unwrap(), want);
+            }
         };
 
         check_cases(vec![
@@ -303,9 +303,7 @@ mod test {
     #[test]
     fn test_table_check_observer() {
         let path = TempDir::new("test_table_check_observer").unwrap();
-        let engine = Arc::new(
-            new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap(),
-        );
+        let engine = Arc::new(new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap());
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();
 
         let mut region = Region::new();
@@ -329,11 +327,12 @@ mod test {
 
         // Try to ignore the ApproximateRegionSize
         let coprocessor = CoprocessorHost::new(cfg, sch);
-        let mut runnable = SplitCheckRunner::new(engine.clone(), ch.clone(), Arc::new(coprocessor));
+        let mut runnable =
+            SplitCheckRunner::new(Arc::clone(&engine), ch.clone(), Arc::new(coprocessor));
 
         type Case = (Option<Vec<u8>>, Option<Vec<u8>>, Option<i64>);
-        let mut check_cases =
-            |cases: Vec<Case>| for (encoded_start_key, encoded_end_key, table_id) in cases {
+        let mut check_cases = |cases: Vec<Case>| {
+            for (encoded_start_key, encoded_end_key, table_id) in cases {
                 region.set_start_key(encoded_start_key.unwrap_or_else(Vec::new));
                 region.set_end_key(encoded_end_key.unwrap_or_else(Vec::new));
                 runnable.run(SplitCheckTask::new(&region));
@@ -352,7 +351,8 @@ mod test {
                         others => panic!("expect empty, but got {:?}", others),
                     }
                 }
-            };
+            }
+        };
 
         let gen_encoded_table_prefix = |table_id| {
             let key = Key::from_raw(&gen_table_prefix(table_id));

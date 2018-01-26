@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use prometheus::local::LocalHistogram;
 
 use super::metrics::*;
@@ -308,7 +307,6 @@ impl RaftProposeMetrics {
         self.request_wait_time.flush();
     }
 }
-
 
 /// The buffered metrics counters for raft.
 #[derive(Clone)]

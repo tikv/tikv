@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{str, i64};
+use std::i64;
 use std::slice::Iter;
 use std::cmp::Ordering;
 use std::borrow::Cow;
@@ -299,7 +299,7 @@ fn partial_like(tcs: &mut Iter<u8>, pcs: &mut Iter<u8>, escape: u32) -> Option<b
             None => return Some(tcs.next().is_none()),
             Some(b'%') => return None,
             Some(c) => {
-                let (npc, escape) = if c as u32 == escape {
+                let (npc, escape) = if u32::from(c) == escape {
                     pcs.next().map_or((c, false), |&c| (c, true))
                 } else {
                     (c, false)
@@ -332,10 +332,10 @@ fn like(target: &[u8], pattern: &[u8], escape: u32, recurse_level: usize) -> Res
                 // So the pattern should be some thing like 'xxx%'
                 None => return Ok(true),
                 Some(c) => {
-                    break if c as u32 == escape {
-                        pcs.next().map_or(escape, |&c| c as u32)
+                    break if u32::from(c) == escape {
+                        pcs.next().map_or(escape, |&c| u32::from(c))
                     } else {
-                        c as u32
+                        u32::from(c)
                     };
                 }
             }
@@ -351,7 +351,7 @@ fn like(target: &[u8], pattern: &[u8], escape: u32, recurse_level: usize) -> Res
         loop {
             let s = match tcs.next() {
                 None => return Ok(false),
-                Some(&s) => s as u32,
+                Some(&s) => u32::from(s),
             };
             if s == next_char && like(tcs.as_slice(), pcs.as_slice(), escape, recurse_level + 1)? {
                 return Ok(true);
