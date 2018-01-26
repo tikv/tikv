@@ -206,7 +206,7 @@ mod tests {
     fn test_context() {
         #[derive(Debug)]
         struct MyContext {
-            ctx_thread_id: thread::ThreadId,
+            foo: u64,
         }
         impl Context for MyContext {}
 
@@ -215,18 +215,15 @@ mod tests {
             1024000,
             "test-pool",
             Duration::from_millis(50),
-            move || MyContext {
-                ctx_thread_id: thread::current().id(),
-            },
+            move || MyContext { foo: 123 },
         );
 
         let main_thread_id = thread::current().id();
 
         pool.spawn(move |ctxd| {
-            let current_thread_id = thread::current().id();
-            assert_ne!(main_thread_id, current_thread_id);
+            assert_ne!(main_thread_id, thread::current().id());
             let ctx = ctxd.get_current_thread_context();
-            assert_eq!(ctx.ctx_thread_id, current_thread_id);
+            assert_eq!(ctx.foo, 123);
             future::ok::<(), ()>(())
         }).wait()
             .unwrap();
