@@ -221,7 +221,7 @@ impl Executor for StreamAggExecutor {
 
                 Ok(None) => {
                     self.executed = true;
-                    if self.count == 1 && self.group_by_exprs.len() == 0 {
+                    if self.count == 1 && self.group_by_exprs.is_empty() {
                         return Ok(None);
                     }
                     return self.get_partial_result();
@@ -236,10 +236,11 @@ impl Executor for StreamAggExecutor {
                         row.handle,
                     )?;
                     let new_group = self.meet_new_group(&cols)?;
-                    let mut ret = None;
-                    if new_group {
-                        ret = self.get_partial_result()?;
-                    }
+                    let mut ret = if new_group {
+                        self.get_partial_result()?
+                    } else {
+                        None
+                    };
                     for i in 0..self.agg_exprs.len() {
                         self.agg_funcs[i].update_with_expr(&self.ctx, &self.agg_exprs[i], &cols)?;
                     }
@@ -327,20 +328,13 @@ impl StreamAggExecutor {
             return Ok(false);
         }
 
-        let mut matched = true;
-        if self.is_first_group {
-            matched = false;
-        }
-        let mut cnt = 0;
-        for expr in &self.group_by_exprs {
+        let mut matched = !self.is_first_group;
+        for (cnt, expr) in self.group_by_exprs.iter().enumerate() {
             let v = box_try!(expr.eval(&self.ctx, row));
-            if matched {
-                if box_try!(v.cmp(&self.ctx, &self.next_group_row[cnt])) != Ordering::Equal {
-                    matched = false;
-                }
+            if matched && box_try!(v.cmp(&self.ctx, &self.next_group_row[cnt])) != Ordering::Equal {
+                matched = false;
             }
             self.tmp_group_row[cnt] = v;
-            cnt += 1;
         }
         let ret = !self.is_first_group;
         if self.is_first_group {
@@ -357,12 +351,10 @@ impl StreamAggExecutor {
     fn get_partial_result(&mut self) -> Result<Option<Row>> {
         let mut agg_cols = Vec::with_capacity(2 * self.agg_funcs.len());
         // calc all agg func
-        let mut cnt = 0;
-        for agg_func in self.agg_funcs.iter_mut() {
+        for (cnt, agg_func) in self.agg_funcs.iter_mut().enumerate() {
             agg_func.calc(&mut agg_cols)?;
             let agg = aggregate::build_aggr_func(self.agg_exprs[cnt].tp)?;
             *agg_func = agg;
-            cnt += 1;
         }
 
         // group by
@@ -481,7 +473,8 @@ mod test {
         ];
         let mut handle = 1;
         for val in idx_vals {
-            let (expect_row, idx_key) = generate_index_data(table_id, index_id, handle as i64, val);
+            let (expect_row, idx_key) =
+                generate_index_data(table_id, index_id, i64::from(handle), val);
             expect_rows.push(expect_row);
             let value = vec![1; 0];
             kv_data.push((idx_key, value));

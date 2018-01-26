@@ -178,10 +178,10 @@ pub fn build_exec(
             ExecType::TypeStreamAgg => {
                 has_aggr = true;
                 Box::new(StreamAggExecutor::new(
-                    ctx.clone(),
+                    Arc::clone(&ctx),
                     src,
                     exec.take_aggregation(),
-                    columns.clone(),
+                    Arc::clone(&columns),
                 )?)
             }
             ExecType::TypeTopN => Box::new(TopNExecutor::new(

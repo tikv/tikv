@@ -229,8 +229,8 @@ pub mod test {
         val_end: &Datum,
         unique: bool,
     ) -> KeyRange {
-        let (_, start_key) = generate_index_data(table_id, idx_id, start, &val_start, unique);
-        let (_, end_key) = generate_index_data(table_id, idx_id, end, &val_end, unique);
+        let (_, start_key) = generate_index_data(table_id, idx_id, start, val_start, unique);
+        let (_, end_key) = generate_index_data(table_id, idx_id, end, val_end, unique);
         let mut key_range = KeyRange::new();
         key_range.set_start(start_key);
         key_range.set_end(end_key);
@@ -324,7 +324,6 @@ pub mod test {
             let mut scan = IndexScan::new();
             // prepare cols
             let cols = test_data.get_index_cols();
-            println!("cols {:?}", cols);
             let col_req = RepeatedField::from_vec(cols.clone());
             scan.set_columns(col_req);
             // prepare range
