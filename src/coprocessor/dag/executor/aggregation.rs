@@ -220,7 +220,6 @@ impl Executor for StreamAggExecutor {
                 Err(err) => return Err(err),
 
                 Ok(None) => {
-                    println!("src is none");
                     self.executed = true;
                     if self.count == 1 && self.group_by_exprs.len() == 0 {
                         return Ok(None);
@@ -236,7 +235,6 @@ impl Executor for StreamAggExecutor {
                         &self.related_cols_offset,
                         row.handle,
                     )?;
-                    println!("src vals {:?}, count {}", cols, self.count);
                     let new_group = self.meet_new_group(&cols)?;
                     let mut ret = None;
                     if new_group {
@@ -336,10 +334,6 @@ impl StreamAggExecutor {
         let mut cnt = 0;
         for expr in &self.group_by_exprs {
             let v = box_try!(expr.eval(&self.ctx, row));
-            // println!(
-            //     "---------------- self val {:?}, cmp val {:?}, is first group {}",
-            //     v, self.next_group_row[cnt], self.is_first_group
-            // );
             if matched {
                 if box_try!(v.cmp(&self.ctx, &self.next_group_row[cnt])) != Ordering::Equal {
                     matched = false;
@@ -371,10 +365,6 @@ impl StreamAggExecutor {
             cnt += 1;
         }
 
-        println!(
-            "count {}, agg cols {:?}, group byt {:?}",
-            self.count, agg_cols, self.curr_group_row
-        );
         // group by
         let mut group_key = Vec::with_capacity(0);
         if !self.group_by_exprs.is_empty() {
@@ -491,7 +481,6 @@ mod test {
         ];
         let mut handle = 1;
         for val in idx_vals {
-            println!("val {:?}", val);
             let (expect_row, idx_key) = generate_index_data(table_id, index_id, handle as i64, val);
             expect_rows.push(expect_row);
             let value = vec![1; 0];
@@ -541,10 +530,6 @@ mod test {
         let expect_row_cnt = 4;
         let mut row_data = Vec::with_capacity(expect_row_cnt);
         while let Some(row) = agg_ect.next().unwrap() {
-            println!(
-                "data ....  {:?}",
-                row.data.value.as_slice().decode().unwrap()
-            );
             row_data.push(row.data);
         }
         assert_eq!(row_data.len(), expect_row_cnt);
