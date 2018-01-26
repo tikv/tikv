@@ -62,7 +62,7 @@ pub fn generate_unique_index_keys(
 
 /// Convert duration to nanoseconds
 pub fn to_total_nanos(duration: &Duration) -> u64 {
-    duration.as_secs() * 1_000_000_000 + (duration.subsec_nanos() as u64)
+    duration.as_secs() * 1_000_000_000 + u64::from(duration.subsec_nanos())
 }
 
 /// Run `job` for `iterations` times, and return a Vec containing nanoseconds of each turn `job`
@@ -95,7 +95,7 @@ where
         // Avoid being optimized out by compiler
         black_box(job());
     }
-    to_total_nanos(&t.elapsed()) as f64 / (iterations as f64)
+    to_total_nanos(&t.elapsed()) as f64 / f64::from(iterations)
 }
 
 pub fn average<'a, T: 'a>(data: &'a [T]) -> <T as Div<u64>>::Output
