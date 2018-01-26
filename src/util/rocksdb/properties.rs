@@ -322,6 +322,22 @@ impl SizeProperties {
         self.index_handles
             .get_approximate_distance_in_range(start, end)
     }
+
+    pub fn smallest_key(&self) -> Option<Vec<u8>> {
+        self.index_handles
+            .0
+            .iter()
+            .next()
+            .map(|(key, _)| key.clone())
+    }
+
+    pub fn largest_key(&self) -> Option<Vec<u8>> {
+        self.index_handles
+            .0
+            .iter()
+            .last()
+            .map(|(key, _)| key.clone())
+    }
 }
 
 pub struct SizePropertiesCollector {
