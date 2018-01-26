@@ -84,8 +84,6 @@ git = "https://github.com/pingcap/kvproto.git"
 git = "https://github.com/pingcap/tipb.git"
 
 [dependencies.prometheus]
-git = "https://github.com/breeswish/rust-prometheus.git"
-branch = "wenxuan/local-counter-vec"
 version = "0.3"
 default-features = false
 features = ["nightly", "push", "process"]

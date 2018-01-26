@@ -686,7 +686,7 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.3.10"
-source = "git+https://github.com/breeswish/rust-prometheus.git?branch=wenxuan/local-counter-vec#5745e436e07e95c41c10062f7e2a215ab7624971"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "cfg-if 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "fnv 1.0.5 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1019,7 +1019,7 @@ dependencies = [
  "murmur3 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "nix 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "ordermap 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "prometheus 0.3.10 (git+https://github.com/breeswish/rust-prometheus.git?branch=wenxuan/local-counter-vec)",
+ "prometheus 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 1.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1334,7 +1334,7 @@ dependencies = [
 "checksum percent-encoding 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)" = "de154f638187706bde41d9b4738748933d64e6b37bdbffc0b47a97d16a6ae356"
 "checksum pkg-config 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)" = "8cee804ecc7eaf201a4a207241472cc870e825206f6c031e3ee2a72fa425f2fa"
 "checksum procinfo 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)" = "f42e8578852a3306838981aedad8c5642ba794929aa12af0c9eb6c072b77af6c"
-"checksum prometheus 0.3.10 (git+https://github.com/breeswish/rust-prometheus.git?branch=wenxuan/local-counter-vec)" = "<none>"
+"checksum prometheus 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)" = "c601a15017b4fc969845b0b0aa9a44388d3cb1a181c2738b8918b0679dfebf81"
 "checksum protobuf 1.4.1 (git+https://github.com/stepancheg/rust-protobuf.git)" = "<none>"
 "checksum protobuf 1.4.1 (registry+https://github.com/rust-lang/crates.io-index)" = "568a15e4d572d9a5e63ae3a55f84328c984842887db179b40b4cc6a608bac6a4"
 "checksum pulldown-cmark 0.0.15 (registry+https://github.com/rust-lang/crates.io-index)" = "378e941dbd392c101f2cb88097fa4d7167bc421d4b88de3ff7dbee503bc3233b"
