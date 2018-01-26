@@ -174,12 +174,14 @@ impl<T: Context + 'static> FuturePool<T> {
     {
         // TODO: Support busy check
         let delegators = self.context_delegators.clone();
-        let f = future_factory(self.context_delegators.clone()).then(move |r| {
-            let delegator = delegators.get_current_thread_delegator();
-            delegator.on_task_finish();
-            r
-        });
-        self.pool.spawn(f)
+        let func = move || {
+            future_factory(delegators.clone()).then(move |r| {
+                let delegator = delegators.get_current_thread_delegator();
+                delegator.on_task_finish();
+                r
+            })
+        };
+        self.pool.spawn_fn(func)
     }
 }
 
@@ -195,6 +197,36 @@ mod tests {
     fn spawn_long_time_future_and_wait<T: Context>(pool: &FuturePool<T>, future_duration_ms: u64) {
         pool.spawn(move |_| {
             thread::sleep(Duration::from_millis(future_duration_ms));
+            future::ok::<(), ()>(())
+        }).wait()
+            .unwrap();
+    }
+
+    #[test]
+    fn test_context() {
+        #[derive(Debug)]
+        struct MyContext {
+            ctx_thread_id: thread::ThreadId,
+        }
+        impl Context for MyContext {}
+
+        let pool = FuturePool::new(
+            1,
+            1024000,
+            "test-pool",
+            Duration::from_millis(50),
+            move || MyContext {
+                ctx_thread_id: thread::current().id(),
+            },
+        );
+
+        let main_thread_id = thread::current().id();
+
+        pool.spawn(move |ctxd| {
+            let current_thread_id = thread::current().id();
+            assert_ne!(main_thread_id, current_thread_id);
+            let ctx = ctxd.get_current_thread_context();
+            assert_eq!(ctx.ctx_thread_id, current_thread_id);
             future::ok::<(), ()>(())
         }).wait()
             .unwrap();
