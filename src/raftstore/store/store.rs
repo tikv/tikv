@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
 
-use rocksdb::{WriteBatch, DB};
+use rocksdb::{CompactionJobInfo, WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
@@ -44,6 +44,7 @@ use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
 use util::transport::SendCh;
 use util::RingQueue;
 use util::collections::{HashMap, HashSet};
+use util::rocksdb::{CompactedEvent, CompactionListener};
 use util::sys as util_sys;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
@@ -1774,6 +1775,72 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
+    fn on_compaction_finished(&mut self, event: CompactedEvent) {
+        // If size declining is trivial, skip.
+        let total_bytes_declined = if event.total_input_bytes > event.total_output_bytes {
+            event.total_input_bytes - event.total_output_bytes
+        } else {
+            0
+        };
+        if total_bytes_declined < self.cfg.region_split_check_diff.0
+            || total_bytes_declined * 10 < event.total_input_bytes
+        {
+            return;
+        }
+
+        let output_level_str = event.output_level.to_string();
+        COMPACTION_DECLINED_BYTES
+            .with_label_values(&[&output_level_str])
+            .observe(total_bytes_declined as f64);
+
+        // Calculate influenced regions.
+        let mut influenced_regions = vec![];
+        if let Some((end_key, region_id)) = self.region_ranges
+            .range((Excluded(event.end_key.clone()), Unbounded))
+            .next()
+        {
+            influenced_regions.push((region_id, end_key.clone()));
+        }
+        for (end_key, region_id) in self.region_ranges
+            .range((Included(event.start_key), Included(event.end_key)))
+        {
+            influenced_regions.push((region_id, end_key.clone()));
+        }
+
+        let mut region_declined_bytes = vec![];
+        let mut last_end_key: Vec<u8> = vec![];
+        for (region_id, end_key) in influenced_regions.drain(..) {
+            let mut old_size = 0;
+            for prop in &event.input_props {
+                old_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
+            }
+            let mut new_size = 0;
+            for prop in &event.output_props {
+                new_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
+            }
+            last_end_key = end_key.clone();
+
+            // Filter some trival declines for better performance.
+            if old_size > new_size && old_size - new_size > self.cfg.region_split_check_diff.0 / 16
+            {
+                region_declined_bytes.push((region_id, old_size - new_size));
+            }
+        }
+
+        COMPACTION_RELATED_REGION_COUNT
+            .with_label_values(&[&output_level_str])
+            .observe(region_declined_bytes.len() as f64);
+
+        for (region_id, declined_bytes) in region_declined_bytes.drain(..) {
+            if let Some(peer) = self.region_peers.get_mut(region_id) {
+                peer.compaction_declined_bytes += declined_bytes;
+                if peer.compaction_declined_bytes >= self.cfg.region_split_check_diff.0 {
+                    UPDATE_REGION_SIZE_BY_COMPACTION_COUNTER.inc();
+                }
+            }
+        }
+    }
+
     fn on_split_region_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         // To avoid frequent scan, we only add new scan tasks if all previous tasks
         // have finished.
@@ -1790,7 +1857,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // split check will first check the region size, and then
             // check whether the region should split.  This should
             // work even if we change the region max size.
+            // If peer says should update approximate size, update region
+            // size and check whether the region should split.
             if peer.approximate_size.is_some()
+                && peer.compaction_declined_bytes < self.cfg.region_split_check_diff.0
                 && peer.size_diff_hint < self.cfg.region_split_check_diff.0
             {
                 continue;
@@ -1800,6 +1870,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 error!("{} failed to schedule split check: {}", self.tag, e);
             }
             peer.size_diff_hint = 0;
+            peer.compaction_declined_bytes = 0;
         }
 
         self.register_split_region_check_tick(event_loop);
@@ -2465,6 +2536,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 region_id,
                 region_size,
             } => self.on_approximate_region_size(region_id, region_size),
+            Msg::CompactedEvent(event) => self.on_compaction_finished(event),
         }
     }
 
@@ -2561,4 +2633,31 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         Ok(resp)
     }
+}
+
+fn size_change_filter(info: &CompactionJobInfo) -> bool {
+    // When calculating region size, we only consider write and default
+    // column families.
+    let cf = info.cf_name();
+    if cf != CF_WRITE && cf != CF_DEFAULT {
+        return false;
+    }
+    // Compactions in level 0 and level 1 are very frequently.
+    if info.output_level() < 2 {
+        return false;
+    }
+
+    true
+}
+
+pub fn new_compaction_listener(ch: SendCh<Msg>) -> CompactionListener {
+    let compacted_handler = box move |compacted_event: CompactedEvent| {
+        if let Err(e) = ch.try_send(Msg::CompactedEvent(compacted_event)) {
+            error!(
+                "Send compaction finished event to raftstore failed: {:?}",
+                e
+            );
+        }
+    };
+    CompactionListener::new(compacted_handler, Some(size_change_filter))
 }
