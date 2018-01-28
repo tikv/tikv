@@ -1796,13 +1796,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // Calculate influenced regions.
         let mut influenced_regions = vec![];
         if let Some((end_key, region_id)) = self.region_ranges
-            .range((Excluded(event.end_key.clone()), Unbounded))
+            .range((Included(event.end_key.clone()), Unbounded))
             .next()
         {
             influenced_regions.push((region_id, end_key.clone()));
         }
         for (end_key, region_id) in self.region_ranges
-            .range((Included(event.start_key), Included(event.end_key)))
+            .range((Excluded(event.start_key), Included(event.end_key)))
         {
             influenced_regions.push((region_id, end_key.clone()));
         }
@@ -1820,7 +1820,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             last_end_key = end_key.clone();
 
-            // Filter some trival declines for better performance.
+            // Filter some trivial declines for better performance. 16 is an experienced value.
             if old_size > new_size && old_size - new_size > self.cfg.region_split_check_diff.0 / 16
             {
                 region_declined_bytes.push((region_id, old_size - new_size));

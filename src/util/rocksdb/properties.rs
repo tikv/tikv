@@ -620,6 +620,11 @@ mod tests {
         let result = UserProperties(collector.finish());
 
         let props = SizeProperties::decode(&result).unwrap();
+        assert_eq!(props.smallest_key().unwrap(), cases[0].0.as_bytes());
+        assert_eq!(
+            props.largest_key().unwrap(),
+            cases[cases.len() - 1].0.as_bytes()
+        );
         assert_eq!(props.total_size, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11);
         let handles = &props.index_handles;
         assert_eq!(handles.len(), 4);
