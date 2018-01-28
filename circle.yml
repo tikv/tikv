@@ -64,5 +64,4 @@ dependencies:
 
 test:
   override:
-    - cargo test --features "dev" --verbose -- --nocapture
-    - cargo test --features "dev" --bench benches -- --nocapture
+    - make trace_test
