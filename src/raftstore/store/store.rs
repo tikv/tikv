@@ -1809,6 +1809,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let mut region_declined_bytes = vec![];
         let mut last_end_key: Vec<u8> = vec![];
+        // `end_key` in influenced_regions are in incremental order.
         for (region_id, end_key) in influenced_regions.drain(..) {
             let mut old_size = 0;
             for prop in &event.input_props {
