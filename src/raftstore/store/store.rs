@@ -1796,12 +1796,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // Calculate influenced regions.
         let mut influenced_regions = vec![];
         for (end_key, region_id) in self.region_ranges
-        .range((Excluded(event.start_key), Included(event.end_key)))
+            .range((Excluded(event.start_key), Included(event.end_key.clone())))
         {
             influenced_regions.push((region_id, end_key.clone()));
         }
         if let Some((end_key, region_id)) = self.region_ranges
-            .range((Included(event.end_key.clone()), Unbounded))
+            .range((Included(event.end_key), Unbounded))
             .next()
         {
             influenced_regions.push((region_id, end_key.clone()));
