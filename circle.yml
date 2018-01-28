@@ -58,10 +58,11 @@ dependencies:
   post:
     # check format first
     - make format && git diff-index --quiet HEAD -- || (git diff; echo please make format and run tests before creating a PR!; exit 1)
-    - cargo test --features "dev" --no-run:
+    - cargo check --features "dev":
         timeout: 1800
 
 
 test:
   override:
-    - make trace_test
+    - make trace_test:
+        timeout: 1800
