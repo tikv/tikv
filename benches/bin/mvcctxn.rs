@@ -13,15 +13,12 @@
 
 extern crate rand;
 
-use std::time::Instant;
-use std::sync::mpsc::channel;
 use std::sync::Arc;
 
 use tikv::storage::{Key, Modify, Mutation, Options, Snapshot, SnapshotStore, Statistics};
 use tikv::storage::mvcc::MvccTxn;
 use tikv::raftstore::store::engine::SyncSnapshot;
 use tikv::config::DbConfig;
-use tikv::util::threadpool::{DefaultContext, ThreadPoolBuilder};
 use tikv::util::config::ReadableSize;
 use tikv::util::rocksdb::{get_cf_handle, new_engine_opt};
 use kvproto::kvrpcpb::IsolationLevel;
@@ -315,91 +312,6 @@ fn bench_batch_set(
     );
 }
 
-fn bench_concurrent_batch_impl(
-    txn_count: usize,
-    data_len: usize,
-    batch_size: usize,
-    threads: usize,
-    bench_type: &BenchType,
-) {
-    let (value_len, log_name) = match *bench_type {
-        BenchType::Row => (data_len, "row"),
-        BenchType::UniqueIndex => (8, "unique index"),
-    };
-
-    println!(
-        "benching mvcctxn {} concurrent write\tbatch size:{} batch count:{} threads:{}\t...",
-        log_name, batch_size, txn_count, threads
-    );
-    let time_record = record_time(
-        || {
-            let mut keys = match *bench_type {
-                BenchType::Row => generate_row_keys(1, 0, txn_count * batch_size),
-                BenchType::UniqueIndex => {
-                    generate_unique_index_keys(1, 1, data_len, txn_count * batch_size)
-                }
-            };
-
-            let mut rng = rand::thread_rng();
-            rng.shuffle(&mut keys);
-
-            let mut keys = keys.drain(..);
-
-            // Divide keys into many tasks.
-            let mut txns: Vec<Vec<_>> = (0..txn_count)
-                .map(|_| (&mut keys).take(batch_size).collect())
-                .collect();
-
-            let dir = TempDir::new("bench-mvcctxn").unwrap();
-            let db = prepare_test_db(0, 0, &[], dir.path().to_str().unwrap());
-
-            let pool = ThreadPoolBuilder::<DefaultContext, _>::with_default_factory(String::from(
-                "bench-concurrent-mvcctxn",
-            )).thread_count(threads)
-                .build();
-
-            let (tx, rx) = channel::<()>();
-
-            let start_time = Instant::now();
-
-            let actual_count = txns.len();
-
-            for mut txn in txns.drain(..) {
-                let db = db.clone();
-                let tx = tx.clone();
-                pool.execute(move |_| {
-                    let mutations: Vec<_> = txn.iter()
-                        .map(|item| Mutation::Put((Key::from_raw(item), vec![0u8; value_len])))
-                        .collect();
-                    let primary = txn[0].clone();
-                    let keys: Vec<_> = txn.drain(..).map(|item| Key::from_raw(&item)).collect();
-                    let start_ts = next_ts();
-                    prewrite(db.clone(), &mutations, &primary, start_ts);
-                    commit(db.clone(), &keys, start_ts, next_ts());
-                    // Signal that this task has been finished
-                    tx.send(()).unwrap();
-                })
-            }
-
-            // Wait until all tasks are finished
-            for _ in 0..actual_count {
-                rx.recv().unwrap();
-            }
-
-            start_time.elapsed()
-        },
-        5,
-    );
-    let ns = average(&time_record) as f64 / (txn_count as f64);
-    println!(
-        "\t{:>11} ns per op  {:>11} ops  {:>11} ns per key  {:>11} key per sec",
-        ns as u64,
-        (1_000_000_000_f64 / ns) as u64,
-        (ns / (batch_size as f64)) as u64,
-        (1_000_000_000_f64 * (batch_size as f64) / ns) as u64
-    );
-}
-
 pub fn bench_mvcctxn() {
     for bench_type in &[BenchType::Row, BenchType::UniqueIndex] {
         for version_count in &[1, 16, 64] {
@@ -412,21 +324,6 @@ pub fn bench_mvcctxn() {
 
         for batch_size in &[8, 64, 128, 256] {
             bench_batch_set(10_000, *batch_size, 5, 128, bench_type);
-        }
-    }
-}
-
-pub fn bench_concurrent_batch() {
-    let table_size = 100_000;
-    for batch_size in &[1, 8, 64, 128] {
-        for threads in &[1, 2, 4, 8] {
-            bench_concurrent_batch_impl(
-                table_size / *batch_size,
-                128,
-                *batch_size,
-                *threads,
-                &BenchType::Row,
-            );
         }
     }
 }

@@ -135,7 +135,6 @@ fn main() {
                 "raftstore" => raftstore::bench_raftstore(),
                 "tombstone-scan" => mvcc::bench_engine(),
                 "mvcctxn" => mvcctxn::bench_mvcctxn(),
-                "concurrent-batch-mvcctxn" => mvcctxn::bench_concurrent_batch(),
                 _ => eprintln!("*** Unknown bench item {}", item),
             }
         }
