@@ -224,7 +224,7 @@ pub struct Peer {
     apply_scheduler: Scheduler<ApplyTask>,
 
     pub pending_remove: bool,
-    read_only: bool,
+    pub is_merging: bool,
 
     marked_to_be_checked: bool,
 
@@ -333,7 +333,7 @@ impl Peer {
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
             marked_to_be_checked: false,
-            read_only: false,
+            is_merging: false,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
             last_applying_idx: applied_index,
@@ -362,14 +362,6 @@ impl Peer {
     #[inline]
     fn next_proposal_index(&self) -> u64 {
         self.raft_group.raft.raft_log.last_index() + 1
-    }
-
-    pub fn become_readonly(&mut self) {
-        self.read_only = true;
-    }
-
-    pub fn become_writable(&mut self) {
-        self.read_only = false;
     }
 
     pub fn mark_to_be_checked(&mut self, pending_raft_groups: &mut HashSet<u64>) {
@@ -422,7 +414,7 @@ impl Peer {
         self.kv_engine.write_opt(kv_wb, &write_opts)?;
         self.raft_engine.write_opt(raft_wb, &write_opts)?;
 
-        if self.get_store().is_initialized() && !self.read_only {
+        if self.get_store().is_initialized() && !self.is_merging {
             // If we meet panic when deleting data and raft log, the dirty data
             // will be cleared by a newer snapshot applying or restart.
             if let Err(e) = self.get_store().clear_data() {
@@ -1402,10 +1394,10 @@ impl Peer {
         mut req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
     ) -> Result<u64> {
-        if self.read_only
+        if self.is_merging
             && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackPreMerge
         {
-            return Err(box_err!("peer in read only mode, can't do proposal."));
+            return Err(box_err!("peer in merging mode, can't do proposal."));
         }
 
         metrics.normal += 1;
@@ -1472,7 +1464,7 @@ impl Peer {
         req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
     ) -> Result<u64> {
-        if self.read_only {
+        if self.is_merging {
             return Err(box_err!("peer in read only mode, can't do proposal."));
         }
         if self.raft_group.raft.pending_conf {

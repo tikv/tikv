@@ -552,7 +552,7 @@ impl<T: Simulator> Cluster<T> {
             if resp.get_header()
                 .get_error()
                 .get_message()
-                .contains("read only mode")
+                .contains("merging mode")
             {
                 warn!("seems waiting for merge, let's retry");
                 sleep_ms(100);

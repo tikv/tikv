@@ -1142,15 +1142,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut ready_results = Vec::with_capacity(append_res.len());
         for (mut ready, invoke_ctx) in append_res {
             let region_id = invoke_ctx.region_id;
-            let res = self.region_peers
-                .get_mut(&region_id)
-                .unwrap()
-                .post_raft_ready_append(
+            let mut is_merging;
+            let res = {
+                let peer = self.region_peers.get_mut(&region_id).unwrap();
+                is_merging = peer.is_merging;
+                peer.post_raft_ready_append(
                     &mut self.raft_metrics,
                     &self.trans,
                     &mut ready,
                     invoke_ctx,
-                );
+                )
+            };
+            if is_merging && res.is_some() {
+                // After applying a snapshot, PreMerge is rollback implicitly.
+                self.on_ready_rollback_pre_merge(region_id, 0);
+            }
             ready_results.push((region_id, ready, res));
         }
 
@@ -1558,7 +1564,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_ready_pre_merge(&mut self, region: metapb::Region, state: MergeState) {
         {
             let peer = self.region_peers.get_mut(&region.get_id()).unwrap();
-            peer.become_readonly();
+            peer.is_merging = true;
             peer.mut_store().region = region.clone();
         }
 
@@ -1576,7 +1582,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_ready_merge(&mut self, region: metapb::Region, source_region: metapb::Region) {
         let source_peer = {
             let peer = self.region_peers.get_mut(&source_region.get_id()).unwrap();
-            peer.become_readonly();
+            // In some case, PreMerge entry may be carried by the dst region. So
+            // the peer is not in merging mode.
+            peer.is_merging = true;
             peer.peer.clone()
         };
         self.destroy_peer(source_region.get_id(), source_peer);
@@ -1601,18 +1609,22 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         peer.heartbeat_pd(&self.pd_worker);
     }
 
+    /// Handle rollback PreMerge result.
+    ///
+    /// If commit is 0, it means that PreMerge is rollback by a snapshot; otherwise
+    /// it's rollback by a proposal, and its value should be equal to the commit
+    /// index of previous PreMerge.
     fn on_ready_rollback_pre_merge(&mut self, region_id: u64, commit: u64) {
         self.merge_states.retain(|&(ref r, ref c)| {
             if r.get_id() != region_id {
                 return true;
             }
-            assert_eq!(c.get_commit(), commit);
+            if commit != 0 {
+                assert_eq!(c.get_commit(), commit);
+            }
             false
         });
-        self.region_peers
-            .get_mut(&region_id)
-            .unwrap()
-            .become_writable();
+        self.region_peers.get_mut(&region_id).unwrap().is_merging = false;
     }
 
     fn report_split_pd(&self, left: &Peer, right: &Peer) {
