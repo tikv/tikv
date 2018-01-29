@@ -30,25 +30,25 @@ use storage::Statistics;
 use super::aggregate::{self, AggrFunc};
 use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
 
-struct AggrFuncExpr {
+struct AggFuncExpr {
     args: Vec<Expression>,
     tp: ExprType,
 }
 
-impl AggrFuncExpr {
-    fn batch_build(ctx: &EvalContext, expr: Vec<Expr>) -> Result<Vec<AggrFuncExpr>> {
+impl AggFuncExpr {
+    fn batch_build(ctx: &EvalContext, expr: Vec<Expr>) -> Result<Vec<AggFuncExpr>> {
         expr.into_iter()
-            .map(|v| AggrFuncExpr::build(ctx, v))
+            .map(|v| AggFuncExpr::build(ctx, v))
             .collect()
     }
 
-    fn build(ctx: &EvalContext, mut expr: Expr) -> Result<AggrFuncExpr> {
+    fn build(ctx: &EvalContext, mut expr: Expr) -> Result<AggFuncExpr> {
         let args = box_try!(Expression::batch_build(
             ctx,
             expr.take_children().into_vec()
         ));
         let tp = expr.get_tp();
-        Ok(AggrFuncExpr { args: args, tp: tp })
+        Ok(AggFuncExpr { args: args, tp: tp })
     }
 
     fn eval_args(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Vec<Datum>> {
@@ -61,7 +61,7 @@ impl AggrFunc {
     fn update_with_expr(
         &mut self,
         ctx: &EvalContext,
-        expr: &AggrFuncExpr,
+        expr: &AggFuncExpr,
         row: &[Datum],
     ) -> Result<()> {
         let vals = expr.eval_args(ctx, row)?;
@@ -70,9 +70,9 @@ impl AggrFunc {
     }
 }
 
-pub struct AggregationExecutor {
+pub struct HashAggExecutor {
     group_by: Vec<Expression>,
-    aggr_func: Vec<AggrFuncExpr>,
+    aggr_func: Vec<AggFuncExpr>,
     group_key_aggrs: OrderMap<Vec<u8>, Vec<Box<AggrFunc>>>,
     cursor: usize,
     executed: bool,
@@ -83,13 +83,13 @@ pub struct AggregationExecutor {
     count: i64,
 }
 
-impl AggregationExecutor {
+impl HashAggExecutor {
     pub fn new(
         mut meta: Aggregation,
         ctx: Arc<EvalContext>,
         columns: Arc<Vec<ColumnInfo>>,
         src: Box<Executor>,
-    ) -> Result<AggregationExecutor> {
+    ) -> Result<HashAggExecutor> {
         // collect all cols used in aggregation
         let mut visitor = ExprColumnRefVisitor::new(columns.len());
         let group_by = meta.take_group_by().into_vec();
@@ -99,9 +99,9 @@ impl AggregationExecutor {
         COPR_EXECUTOR_COUNT
             .with_label_values(&["aggregation"])
             .inc();
-        Ok(AggregationExecutor {
+        Ok(HashAggExecutor {
             group_by: box_try!(Expression::batch_build(&ctx, group_by)),
-            aggr_func: AggrFuncExpr::batch_build(&ctx, aggr_func)?,
+            aggr_func: AggFuncExpr::batch_build(&ctx, aggr_func)?,
             group_key_aggrs: OrderMap::new(),
             cursor: 0,
             executed: false,
@@ -159,7 +159,7 @@ impl AggregationExecutor {
     }
 }
 
-impl Executor for AggregationExecutor {
+impl Executor for HashAggExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         if !self.executed {
             self.aggregate()?;
@@ -330,7 +330,7 @@ mod test {
         let key_ranges = vec![get_range(tid, i64::MIN, i64::MAX)];
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store);
+        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store).unwrap();
 
         // init aggregation meta
         let mut aggregation = Aggregation::default();
@@ -346,7 +346,7 @@ mod test {
         let aggr_funcs = build_aggr_func(&aggr_funcs);
         aggregation.set_agg_func(RepeatedField::from_vec(aggr_funcs));
         // init Aggregation Executor
-        let mut aggr_ect = AggregationExecutor::new(
+        let mut aggr_ect = HashAggExecutor::new(
             aggregation,
             Arc::new(EvalContext::default()),
             Arc::new(cis),

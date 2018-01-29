@@ -21,7 +21,7 @@ use util::HandyRwLock;
 use util::worker::Scheduler;
 use util::collections::HashSet;
 use raft::SnapshotStatus;
-use raftstore::store::{BatchCallback, Callback, Msg as StoreMsg, SignificantMsg, Transport};
+use raftstore::store::{BatchReadCallback, Callback, Msg as StoreMsg, SignificantMsg, Transport};
 use raftstore::Result as RaftStoreResult;
 use server::raft_client::RaftClient;
 use server::Result;
@@ -50,7 +50,7 @@ pub trait RaftStoreRouter: Send + Clone {
     fn send_batch_commands(
         &self,
         batch: Vec<RaftCmdRequest>,
-        on_finished: BatchCallback,
+        on_finished: BatchReadCallback,
     ) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_batch_raft_snapshot_cmd(batch, on_finished))
     }
@@ -121,7 +121,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     fn send_batch_commands(
         &self,
         batch: Vec<RaftCmdRequest>,
-        on_finished: BatchCallback,
+        on_finished: BatchReadCallback,
     ) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_batch_raft_snapshot_cmd(batch, on_finished))
     }
@@ -154,10 +154,10 @@ where
 {
     fn clone(&self) -> Self {
         ServerTransport {
-            raft_client: self.raft_client.clone(),
+            raft_client: Arc::clone(&self.raft_client),
             snap_scheduler: self.snap_scheduler.clone(),
             raft_router: self.raft_router.clone(),
-            resolving: self.resolving.clone(),
+            resolving: Arc::clone(&self.resolving),
             resolver: self.resolver.clone(),
         }
     }
@@ -196,8 +196,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
             // If we are resolving the address, drop the message here.
             debug!(
                 "store {} address is being resolved, drop msg {:?}",
-                store_id,
-                msg
+                store_id, msg
             );
             self.report_unreachable(msg);
             return;
@@ -252,10 +251,12 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
 
     fn send_snapshot_sock(&self, addr: &str, msg: RaftMessage) {
         let rep = self.new_snapshot_reporter(&msg);
-        let cb = box move |res: Result<()>| if res.is_err() {
-            rep.report(SnapshotStatus::Failure);
-        } else {
-            rep.report(SnapshotStatus::Finish);
+        let cb = box move |res: Result<()>| {
+            if res.is_err() {
+                rep.report(SnapshotStatus::Failure);
+            } else {
+                rep.report(SnapshotStatus::Finish);
+            }
         };
         if let Err(e) = self.snap_scheduler.schedule(SnapTask::SendTo {
             addr: addr.to_owned(),
@@ -293,10 +294,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         if let Err(e) = self.raft_router.report_unreachable(region_id, to_peer_id) {
             error!(
                 "report peer {} on store {} unreachable for region {} failed {:?}",
-                to_peer_id,
-                store_id,
-                region_id,
-                e
+                to_peer_id, store_id, region_id, e
             );
         }
     }
@@ -333,9 +331,7 @@ impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
     pub fn report(&self, status: SnapshotStatus) {
         debug!(
             "send snapshot to {} for {} {:?}",
-            self.to_peer_id,
-            self.region_id,
-            status
+            self.to_peer_id, self.region_id, status
         );
 
         if status == SnapshotStatus::Failure {
@@ -345,15 +341,13 @@ impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
                 .inc();
         };
 
-        if let Err(e) = self.raft_router
-            .report_snapshot_status(self.region_id, self.to_peer_id, status)
+        if let Err(e) =
+            self.raft_router
+                .report_snapshot_status(self.region_id, self.to_peer_id, status)
         {
             error!(
                 "report snapshot to peer {} in store {} with region {} err {:?}",
-                self.to_peer_id,
-                self.to_store_id,
-                self.region_id,
-                e
+                self.to_peer_id, self.to_store_id, self.region_id, e
             );
         }
     }

@@ -27,9 +27,12 @@ mod snap;
 mod worker;
 mod metrics;
 mod local_metrics;
+mod region_snapshot;
 
-pub use self::msg::{BatchCallback, Callback, Msg, SignificantMsg, Tick};
-pub use self::store::{create_event_loop, Engines, Store, StoreChannel, StoreStat};
+pub use self::msg::{BatchReadCallback, Callback, Msg, ReadCallback, ReadResponse, SignificantMsg,
+                    Tick, WriteCallback, WriteResponse};
+pub use self::store::{create_event_loop, new_compaction_listener, Engines, Store, StoreChannel,
+                      StoreStat};
 pub use self::config::Config;
 pub use self::transport::Transport;
 pub use self::peer::{Peer, PeerStat};
@@ -41,6 +44,7 @@ pub use self::peer_storage::{do_snapshot, init_apply_state, init_raft_state, wri
                              RAFT_INIT_LOG_TERM};
 pub use self::snap::{check_abort, copy_snapshot, ApplyOptions, SnapEntry, SnapKey, SnapManager,
                      Snapshot, SnapshotDeleter, SnapshotStatistics};
+pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 
 // Only used in tests
 #[cfg(test)]

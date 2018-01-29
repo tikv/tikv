@@ -16,14 +16,14 @@
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![allow(needless_pass_by_value)]
 
-extern crate tikv;
 extern crate clap;
-extern crate protobuf;
-extern crate kvproto;
-extern crate rocksdb;
-extern crate grpcio;
 extern crate futures;
+extern crate grpcio;
+extern crate kvproto;
+extern crate protobuf;
+extern crate rocksdb;
 extern crate rustc_serialize;
+extern crate tikv;
 extern crate toml;
 
 use std::fs::File;
@@ -44,7 +44,7 @@ use protobuf::RepeatedField;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::PeerState;
 use kvproto::metapb::Region;
-use kvproto::eraftpb::Entry;
+use kvproto::eraftpb::{ConfChange, Entry, EntryType};
 use kvproto::kvrpcpb::MvccInfo;
 use kvproto::debugpb::*;
 use kvproto::debugpb::DB as DBType;
@@ -94,9 +94,10 @@ fn new_debug_executor(
             let raft_db =
                 rocksdb_util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
 
-            Box::new(Debugger::new(
-                Engines::new(Arc::new(kv_db), Arc::new(raft_db)),
-            )) as Box<DebugExecutor>
+            Box::new(Debugger::new(Engines::new(
+                Arc::new(kv_db),
+                Arc::new(raft_db),
+            ))) as Box<DebugExecutor>
         }
         (Some(remote), None) => {
             let env = Arc::new(Environment::new(1));
@@ -174,9 +175,26 @@ trait DebugExecutor {
         println!("entry {:?}", entry);
         println!("msg len: {}", data.len());
 
-        let mut msg = RaftCmdRequest::new();
-        msg.merge_from_bytes(&data).unwrap();
-        println!("{:?}", msg);
+        if data.is_empty() {
+            return;
+        }
+
+        match entry.get_entry_type() {
+            EntryType::EntryNormal => {
+                let mut msg = RaftCmdRequest::new();
+                msg.merge_from_bytes(&data).unwrap();
+                println!("Normal: {:#?}", msg);
+            }
+            EntryType::EntryConfChange => {
+                let mut msg = ConfChange::new();
+                msg.merge_from_bytes(&data).unwrap();
+                let ctx = msg.take_context();
+                println!("ConfChange: {:?}", msg);
+                let mut cmd = RaftCmdRequest::new();
+                cmd.merge_from_bytes(&ctx).unwrap();
+                println!("ConfChange.RaftCmdRequest: {:#?}", cmd);
+            }
+        }
     }
 
     fn dump_mvccs_infos(
@@ -198,8 +216,8 @@ trait DebugExecutor {
             eprintln!("The region's from pos must greater than the to pos.");
             process::exit(-1);
         }
-        let scan_future = self.get_mvcc_infos(from, to, limit).for_each(
-            move |(key, mvcc)| {
+        let scan_future = self.get_mvcc_infos(from, to, limit)
+            .for_each(move |(key, mvcc)| {
                 println!("key: {}", escape(&key));
                 if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
                     let lock_info = mvcc.get_lock();
@@ -217,18 +235,17 @@ trait DebugExecutor {
                 }
                 if cfs.contains(&CF_WRITE) {
                     for write_info in mvcc.get_writes() {
-                        if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts) &&
-                            commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
+                        if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts)
+                            && commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
                         {
                             // FIXME: short_value is lost in kvproto.
                             println!("\t write cf value: {:?}", write_info);
                         }
                     }
                 }
-                println!("");
+                println!();
                 future::ok::<(), String>(())
-            },
-        );
+            });
         if let Err(e) = scan_future.wait() {
             eprintln!("{}", e);
             process::exit(-1);
@@ -338,8 +355,7 @@ trait DebugExecutor {
                 }
                 println!(
                     "db1 has {} keys, db2 has {} keys",
-                    key_counts[0],
-                    key_counts[1]
+                    key_counts[0], key_counts[1]
                 );
             }
         }
@@ -397,7 +413,6 @@ trait DebugExecutor {
 
     fn set_region_tombstone(&self, region_id: u64, region: Region);
 }
-
 
 impl DebugExecutor for DebugClient {
     fn check_local_mode(&self) {
@@ -569,9 +584,7 @@ impl DebugExecutor for Debugger {
 fn main() {
     let mut app = App::new("TiKV Ctl")
         .author("PingCAP")
-        .about(
-            "Distributed transactional key value database powered by Rust and Raft",
-        )
+        .about("Distributed transactional key value database powered by Rust and Raft")
         .arg(
             Arg::with_name("db")
                 .required(true)
@@ -597,13 +610,7 @@ fn main() {
         .arg(
             Arg::with_name("host")
                 .required(true)
-                .conflicts_with_all(&[
-                    "db",
-                    "raftdb",
-                    "hex-to-escaped",
-                    "escaped-to-hex",
-                    "config",
-                ])
+                .conflicts_with_all(&["db", "raftdb", "hex-to-escaped", "escaped-to-hex", "config"])
                 .long("host")
                 .takes_value(true)
                 .help("set remote host"),
@@ -913,7 +920,7 @@ fn main() {
     let cfg_path = matches.value_of("config");
 
     let mgr = new_security_mgr(&matches);
-    let debug_executor = new_debug_executor(db, raft_db, host, cfg_path, mgr.clone());
+    let debug_executor = new_debug_executor(db, raft_db, host, cfg_path, Arc::clone(&mgr));
 
     if let Some(matches) = matches.subcommand_matches("print") {
         let cf = matches.value_of("cf").unwrap();
@@ -986,7 +993,6 @@ fn main() {
     } else {
         let _ = app.print_help();
     }
-
 }
 
 fn from_hex(key: &str) -> Vec<u8> {
@@ -1036,7 +1042,5 @@ fn new_security_mgr(matches: &ArgMatches) -> Arc<SecurityManager> {
     cfg.ca_path = ca_path.unwrap().to_owned();
     cfg.cert_path = cert_path.unwrap().to_owned();
     cfg.key_path = key_path.unwrap().to_owned();
-    Arc::new(
-        SecurityManager::new(&cfg).expect("failed to initialize security manager"),
-    )
+    Arc::new(SecurityManager::new(&cfg).expect("failed to initialize security manager"))
 }

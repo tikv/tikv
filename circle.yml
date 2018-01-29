@@ -1,17 +1,14 @@
 machine:
   environment:
     PATH: "$HOME/.local/cmake/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
-    LD_LIBRARY_PATH: "$LD_LIBRARY_PATH:$HOME/.local/lib"
     LD_RUN_PATH: "$LD_RUN_PATH:$HOME/.local/lib"
     DYLD_LIBRARY_PATH: "$DYLD_LIBRARY_PATH:$HOME/.local/lib"
     LDFLAGS: "-L$HOME/.local/lib"
     CPPFLAGS: "-I$HOME/.local/include"
     CXXFLAGS: "-I$HOME/.local/include"
-    PKG_CONFIG_PATH: "$PKG_CONFIG_PATH:$HOME/.local/lib/pkgconfig"
-    RUSTC_DATE: "2017-08-09"
+    RUSTC_DATE: "2018-01-12"
     LOCAL_PREFIX: "$HOME/.local"
     # used by cargo
-    LIBRARY_PATH: "$LIBRARY_PATH:$HOME/.local/lib"
     RUST_TEST_THREADS: 1
     RUST_BACKTRACE: 1
     RUSTFLAGS: "-Dwarnings"

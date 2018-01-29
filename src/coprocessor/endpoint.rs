@@ -54,11 +54,11 @@ const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
 
 const DEFAULT_ERROR_CODE: i32 = 1;
 
-pub const SINGLE_GROUP: &'static [u8] = b"SingleGroup";
+pub const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
-const OUTDATED_ERROR_MSG: &'static str = "request outdated.";
+const OUTDATED_ERROR_MSG: &str = "request outdated.";
 
-const ENDPOINT_IS_BUSY: &'static str = "endpoint is busy";
+const ENDPOINT_IS_BUSY: &str = "endpoint is busy";
 
 pub struct Host {
     engine: Box<Engine>,
@@ -201,8 +201,8 @@ impl Host {
     }
 
     fn running_task_count(&self) -> usize {
-        self.pool.get_task_count() + self.low_priority_pool.get_task_count() +
-            self.high_priority_pool.get_task_count()
+        self.pool.get_task_count() + self.low_priority_pool.get_task_count()
+            + self.high_priority_pool.get_task_count()
     }
 
     fn handle_snapshot_result(&mut self, id: u64, snapshot: engine::Result<Box<Snapshot>>) {
@@ -500,10 +500,10 @@ impl Runnable<Task> for Host {
                 Task::RetryRequests(retry) => for id in retry {
                     let reqs = self.reqs.remove(&id).unwrap();
                     let sched = self.sched.clone();
-                    if let Err(e) = self.engine.async_snapshot(
-                        reqs[0].req.get_context(),
-                        box move |(_, res)| sched.schedule(Task::SnapRes(id, res)).unwrap(),
-                    ) {
+                    if let Err(e) = self.engine
+                        .async_snapshot(reqs[0].req.get_context(), box move |(_, res)| {
+                            sched.schedule(Task::SnapRes(id, res)).unwrap()
+                        }) {
                         notify_batch_failed(e, reqs);
                     } else {
                         self.reqs.insert(id, reqs);
@@ -667,6 +667,7 @@ impl TiDbEndPoint {
         if let Err(e) = t.check_outdated() {
             return on_error(e, t);
         }
+
         let resp = match t.cop_req.take().unwrap() {
             Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t, batch_row_limit),
             Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t),
@@ -685,7 +686,7 @@ impl TiDbEndPoint {
         batch_row_limit: usize,
     ) -> Result<Response> {
         let ranges = t.req.take_ranges().into_vec();
-        let mut ctx = DAGContext::new(dag, ranges, self.snap, t.ctx.clone(), batch_row_limit)?;
+        let mut ctx = DAGContext::new(dag, ranges, self.snap, Arc::clone(&t.ctx), batch_row_limit)?;
         let res = ctx.handle_request();
         ctx.collect_statistics_into(&mut t.statistics);
         ctx.collect_metrics_into(&mut t.scan_counter);
@@ -744,11 +745,11 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
     }
 }
 
-pub const STR_REQ_TYPE_SELECT: &'static str = "select";
-pub const STR_REQ_TYPE_INDEX: &'static str = "index";
-pub const STR_REQ_PRI_LOW: &'static str = "low";
-pub const STR_REQ_PRI_NORMAL: &'static str = "normal";
-pub const STR_REQ_PRI_HIGH: &'static str = "high";
+pub const STR_REQ_TYPE_SELECT: &str = "select";
+pub const STR_REQ_TYPE_INDEX: &str = "index";
+pub const STR_REQ_PRI_LOW: &str = "low";
+pub const STR_REQ_PRI_NORMAL: &str = "normal";
+pub const STR_REQ_PRI_HIGH: &str = "high";
 
 #[inline]
 pub fn get_req_pri_str(pri: CommandPri) -> &'static str {
@@ -801,7 +802,9 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(
             Request::new(),
-            box move |msg| { tx.send(msg).unwrap(); },
+            box move |msg| {
+                tx.send(msg).unwrap();
+            },
             1000,
         );
         let ctx = ReqContext {
@@ -830,7 +833,9 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(
             Request::new(),
-            box move |msg| { tx.send(msg).unwrap(); },
+            box move |msg| {
+                tx.send(msg).unwrap();
+            },
             1000,
         );
         let ctx = ReqContext {

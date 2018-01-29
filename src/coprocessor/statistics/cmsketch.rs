@@ -98,8 +98,8 @@ mod test {
             vals.sort();
             min(
                 min_counter,
-                vals[(self.depth - 1) / 2] +
-                    (vals[self.depth / 2] - vals[(self.depth - 1) / 2]) / 2,
+                vals[(self.depth - 1) / 2]
+                    + (vals[self.depth / 2] - vals[(self.depth - 1) / 2]) / 2,
             )
         }
 
@@ -130,7 +130,7 @@ mod test {
             } else {
                 estimate - *num
             };
-            total += err as u64
+            total += u64::from(err)
         }
         total / map.len() as u64
     }
