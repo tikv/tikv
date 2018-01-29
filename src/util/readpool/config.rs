@@ -13,19 +13,9 @@
 
 use util::config::ReadableSize;
 
-#[cfg(not(test))]
 const DEFAULT_HIGH_CONCURRENCY: usize = 8;
-#[cfg(not(test))]
 const DEFAULT_NORMAL_CONCURRENCY: usize = 8;
-#[cfg(not(test))]
 const DEFAULT_LOW_CONCURRENCY: usize = 8;
-
-#[cfg(test)]
-const DEFAULT_HIGH_CONCURRENCY: usize = 2;
-#[cfg(test)]
-const DEFAULT_NORMAL_CONCURRENCY: usize = 2;
-#[cfg(test)]
-const DEFAULT_LOW_CONCURRENCY: usize = 2;
 
 const DEFAULT_STACK_SIZE_MB: u64 = 10;
 
@@ -46,6 +36,19 @@ impl Default for Config {
             normal_concurrency: DEFAULT_NORMAL_CONCURRENCY,
             low_concurrency: DEFAULT_LOW_CONCURRENCY,
             stack_size: ReadableSize::mb(DEFAULT_STACK_SIZE_MB),
+        }
+    }
+}
+
+impl Config {
+    /// Tests are run in parallel so that we need a lower concurrency
+    /// to prevent resource exhausting.
+    pub fn default_for_test() -> Config {
+        Config {
+            high_concurrency: 2,
+            normal_concurrency: 2,
+            low_concurrency: 2,
+            ..Config::default()
         }
     }
 }

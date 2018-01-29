@@ -1132,7 +1132,7 @@ mod tests {
 
     #[test]
     fn test_get_put() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1179,7 +1179,7 @@ mod tests {
 
     #[test]
     fn test_put_with_err() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
         let config = Config::default();
         // New engine lack of some column families.
         let engine = engine::new_local_engine(&config.data_dir, &["default"]).unwrap();
@@ -1206,7 +1206,7 @@ mod tests {
 
     #[test]
     fn test_scan() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1260,7 +1260,7 @@ mod tests {
 
     #[test]
     fn test_batch_get() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1314,7 +1314,7 @@ mod tests {
 
     #[test]
     fn test_txn() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1389,7 +1389,7 @@ mod tests {
 
     #[test]
     fn test_sched_too_busy() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
         let mut config = Config::default();
         config.scheduler_pending_write_threshold = ReadableSize(1);
         let mut storage = Storage::new(&config, read_pool).unwrap();
@@ -1438,7 +1438,7 @@ mod tests {
 
     #[test]
     fn test_cleanup() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1473,7 +1473,7 @@ mod tests {
 
     #[test]
     fn test_high_priority_get_put() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1518,71 +1518,59 @@ mod tests {
         storage.stop().unwrap();
     }
 
-    /*
-#[test]
-fn test_high_priority_no_block() {
-    let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
-    let mut config = Config::default();
-    config.scheduler_worker_pool_size = 1;
-    let mut storage = Storage::new(&config, read_pool).unwrap();
-    storage.start(&config).unwrap();
-    let (tx, rx) = channel();
-    expect_get_none(
+    #[test]
+    fn test_high_priority_no_block() {
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
+        let mut config = Config::default();
+        config.scheduler_worker_pool_size = 1;
+        let mut storage = Storage::new(&config, read_pool).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+        expect_get_none(
+            storage
+                .async_get(Context::new(), make_key(b"x"), 100)
+                .wait(),
+        );
         storage
-            .async_get(
+            .async_prewrite(
                 Context::new(),
-                make_key(b"x"),
+                vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
+                b"x".to_vec(),
                 100,
+                Options::default(),
+                expect_ok(tx.clone(), 1),
             )
-            .wait()
-    );
-    storage
-        .async_prewrite(
-            Context::new(),
-            vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
-            b"x".to_vec(),
-            100,
-            Options::default(),
-            expect_ok(tx.clone(), 1),
-        )
-        .unwrap();
-    rx.recv().unwrap();
-    storage
-        .async_commit(
-            Context::new(),
-            vec![make_key(b"x")],
-            100,
-            101,
-            expect_ok(tx.clone(), 2),
-        )
-        .unwrap();
-    rx.recv().unwrap();
-
-    storage
-        .async_pause(Context::new(), 1000, expect_ok(tx.clone(), 3))
-        .unwrap();
-    let mut ctx = Context::new();
-    ctx.set_priority(CommandPri::High);
-    expect_get_val(
-        b"100".to_vec(),
+            .unwrap();
+        rx.recv().unwrap();
         storage
-            .async_get(
-                ctx,
-                make_key(b"x"),
+            .async_commit(
+                Context::new(),
+                vec![make_key(b"x")],
+                100,
                 101,
+                expect_ok(tx.clone(), 2),
             )
-            .wait()
-    );
-    // Command Get with high priority not block by command Pause.
-    assert_eq!(rx.recv().unwrap(), 3);
+            .unwrap();
+        rx.recv().unwrap();
 
-    storage.stop().unwrap();
-}
-*/
+        storage
+            .async_pause(Context::new(), 1000, expect_ok(tx.clone(), 3))
+            .unwrap();
+        let mut ctx = Context::new();
+        ctx.set_priority(CommandPri::High);
+        expect_get_val(
+            b"100".to_vec(),
+            storage.async_get(ctx, make_key(b"x"), 101).wait(),
+        );
+        // Command Get with high priority not block by command Pause.
+        assert_eq!(rx.recv().unwrap(), 3);
+
+        storage.stop().unwrap();
+    }
 
     #[test]
     fn test_delete_range() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();

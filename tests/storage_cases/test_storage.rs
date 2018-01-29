@@ -862,7 +862,7 @@ fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
 fn test_conflict_commands_on_fault_engine() {
     let engine = EngineRocksdb::new(TEMP_DIR, ALL_CFS, None).unwrap();
     let box_engine = engine.clone();
-    let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
+    let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
     let config = Default::default();
     let mut store = SyncStorage::prepare(box_engine, &config, read_pool);
     let async_storage = store.get_storage();

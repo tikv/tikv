@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn test_future_execute() {
-        let read_pool = ReadPool::new(&Config::default(), None);
+        let read_pool = ReadPool::new(&Config::default_for_test(), None);
 
         expect_val(
             vec![1, 2, 4],

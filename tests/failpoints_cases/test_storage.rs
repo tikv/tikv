@@ -30,7 +30,7 @@ fn test_storage_1gc() {
     let snapshot_fp = "raftkv_async_snapshot_finish";
     let batch_snapshot_fp = "raftkv_async_batch_snapshot_finish";
     let (_cluster, engine, ctx) = new_raft_engine(3, "");
-    let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
+    let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
     let config = Config::default();
     let mut storage = Storage::from_engine(engine.clone(), &config, read_pool).unwrap();
     storage.start(&config).unwrap();
@@ -73,7 +73,7 @@ fn test_scheduler_leader_change_twice() {
     let peers = region0.get_peers();
     cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
     let config = Config::default();
-    let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
+    let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
 
     let engine0 = cluster.sim.rl().storages[&peers[0].get_id()].clone();
     let mut storage0 = Storage::from_engine(engine0.clone(), &config, read_pool).unwrap();
@@ -121,7 +121,7 @@ fn test_scheduler_leader_change_twice() {
         cluster.must_transfer_leader(region1.get_id(), peers[1].clone());
 
         let engine1 = cluster.sim.rl().storages[&peers[1].get_id()].clone();
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
         let mut storage1 = Storage::from_engine(engine1, &config, read_pool).unwrap();
         storage1.start(&config).unwrap();
         let mut ctx1 = Context::new();

@@ -263,7 +263,7 @@ mod tests {
         let storage_cfg = StorageConfig::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
+        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
         let mut storage = Storage::new(&storage_cfg, read_pool).unwrap();
         storage.start(&storage_cfg).unwrap();
 

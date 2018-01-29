@@ -27,6 +27,7 @@ use kvproto::eraftpb::ConfChangeType;
 use tikv::raftstore::store::*;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::Config as StorageConfig;
+use tikv::util::readpool::Config as ReadPoolConfig;
 use tikv::util::escape;
 use tikv::util::config::*;
 use tikv::config::TiKvConfig;
@@ -111,6 +112,10 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
     }
 }
 
+pub fn new_readpool_cfg() -> ReadPoolConfig {
+    ReadPoolConfig::default_for_test()
+}
+
 pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
     TiKvConfig {
         storage: StorageConfig {
@@ -119,6 +124,7 @@ pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
         },
         server: new_server_config(cluster_id),
         raft_store: new_store_cfg(),
+        readpool: new_readpool_cfg(),
         ..TiKvConfig::default()
     }
 }

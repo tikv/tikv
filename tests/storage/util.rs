@@ -40,7 +40,7 @@ pub fn new_raft_storage_with_store_count(
     count: usize,
     key: &str,
 ) -> (Cluster<ServerCluster>, SyncStorage, Context) {
-    let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
+    let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
     let (cluster, engine, ctx) = new_raft_engine(count, key);
     (
         cluster,
