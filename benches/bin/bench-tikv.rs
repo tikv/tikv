@@ -16,7 +16,6 @@
 #![feature(plugin)]
 #![feature(test)]
 #![feature(box_syntax)]
-#![feature(integer_atomics)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![feature(btree_range, collections_bound)]
@@ -24,6 +23,7 @@
 #![allow(needless_pass_by_value)]
 #![allow(unreadable_literal)]
 
+extern crate clap;
 extern crate futures;
 extern crate grpcio as grpc;
 extern crate kvproto;
@@ -58,6 +58,7 @@ mod pd;
 mod transport_simulate;
 
 use test::BenchSamples;
+use clap::{App, Arg, ArgGroup};
 
 /// shortcut to bench a function.
 macro_rules! bench {
@@ -80,9 +81,6 @@ macro_rules! printf {
     });
 }
 
-#[allow(dead_code)]
-mod utils;
-
 mod raftstore;
 mod mvcc;
 mod mvcctxn;
@@ -90,8 +88,6 @@ mod mvcctxn;
 fn print_result(smp: BenchSamples) {
     println!("{}", test::fmt_bench_samples(&smp));
 }
-
-use std::env;
 
 fn main() {
     if let Err(e) = tikv::util::config::check_max_open_fds(4096) {
@@ -102,41 +98,34 @@ fn main() {
         );
     }
 
-    let mut args: Vec<_> = env::args().skip(1).collect();
+    let available_benches = ["raftstore", "mvcc", "mvcctxn"];
 
-    let available_options = vec![
-        "raftstore",
-        "tombstone-scan",
-        "mvcctxn",
-        "concurrent-batch-mvcctxn",
-    ];
+    let matches = App::new("TiKV Benchmark")
+        .args(&available_benches
+            .iter()
+            .map(|name| Arg::with_name(name))
+            .collect::<Vec<_>>())
+        .group(
+            ArgGroup::with_name("benches")
+                .args(&available_benches)
+                .multiple(true),
+        )
+        .get_matches();
 
-    if args.is_empty() {
-        args = available_options.iter().map(|&s| String::from(s)).collect();
-    }
-
-    if args[0] == "-h" || args[0] == "--help" {
-        eprintln!(
-            "Usage: bench-tikv [item1] [item2] [item3] ...\n\
-             where item1, item2, item3, ... are bench items.\n\n\
-             Available options are:"
-        );
-        for item in available_options {
-            eprintln!("    {}", item);
-        }
-
-        eprintln!(
-            "\nRun with no args to do all benches.\n\
-             Run with -h or --help to show this help."
-        );
+    let benches: Vec<_> = if let Some(args) = matches.values_of("benches") {
+        args.collect()
     } else {
-        for item in args {
-            match item.as_ref() {
-                "raftstore" => raftstore::bench_raftstore(),
-                "tombstone-scan" => mvcc::bench_engine(),
-                "mvcctxn" => mvcctxn::bench_mvcctxn(),
-                _ => eprintln!("*** Unknown bench item {}", item),
-            }
+        available_benches.to_vec()
+    };
+
+    println!("Begin to run: {}", benches.join(", "));
+
+    for item in benches {
+        match item {
+            "raftstore" => raftstore::bench_raftstore(),
+            "mvcc" => mvcc::bench_engine(),
+            "mvcctxn" => mvcctxn::bench_mvcctxn(),
+            _ => eprintln!("error: Unknown bench item {}", item),
         }
     }
 }
