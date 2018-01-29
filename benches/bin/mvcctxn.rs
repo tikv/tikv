@@ -30,6 +30,11 @@ use tempdir::TempDir;
 
 use utils::*;
 
+enum BenchType {
+    Row,
+    UniqueIndex,
+}
+
 #[inline]
 fn do_write(db: &DB, modifies: Vec<Modify>) {
     let wb = WriteBatch::new();
@@ -172,47 +177,6 @@ fn bench_delete(db: Arc<DB>, keys: &[Vec<u8>]) -> f64 {
     )
 }
 
-fn bench_batch_set_impl(
-    db: Arc<DB>,
-    keys: &mut [Vec<u8>],
-    value_len: usize,
-    batch_size: usize,
-) -> f64 {
-    let mut rng = rand::thread_rng();
-
-    rng.shuffle(keys);
-
-    let all_batch_count = keys.len() / batch_size;
-    let value = vec![0u8; value_len];
-
-    do_bench(
-        || {
-            let start_ts = next_ts();
-            let commit_ts = next_ts();
-
-            let index = rng.gen_range(0, all_batch_count);
-            let keys_to_write: Vec<_> = keys[index..index + batch_size]
-                .iter()
-                .map(|key| Key::from_raw(key))
-                .collect();
-            let mutations: Vec<_> = keys_to_write
-                .iter()
-                .map(|key| Mutation::Put((key.clone(), value.clone())))
-                .collect();
-
-            let primary = &keys[index];
-            prewrite(Arc::clone(&db), &mutations, primary, start_ts);
-            commit(Arc::clone(&db), &keys_to_write, start_ts, commit_ts)
-        },
-        640000 / (batch_size as u32),
-    )
-}
-
-enum BenchType {
-    Row,
-    UniqueIndex,
-}
-
 // Run all bench with specified parameters
 fn bench_single_row(
     table_size: usize,
@@ -271,47 +235,6 @@ fn bench_single_row(
     println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
 }
 
-fn bench_batch_set(
-    table_size: usize,
-    batch_size: usize,
-    version_count: usize,
-    data_len: usize,
-    bench_type: &BenchType,
-) {
-    let (mut keys, value_len, log_name) = match *bench_type {
-        BenchType::Row => (generate_row_keys(1, 0, table_size), data_len, "row"),
-        BenchType::UniqueIndex => (
-            generate_unique_index_keys(1, 1, data_len, table_size),
-            8,
-            "unique index",
-        ),
-    };
-
-    let mut rng = rand::thread_rng();
-    rng.shuffle(&mut keys);
-
-    let dir = TempDir::new("bench-mvcctxn").unwrap();
-    let db = prepare_test_db(
-        version_count,
-        value_len,
-        &keys,
-        dir.path().to_str().unwrap(),
-    );
-
-    println!(
-        "benching mvcctxn {} batch write\trows:{} versions:{} data len:{} batch:{}\t...",
-        log_name, table_size, version_count, data_len, batch_size,
-    );
-    let ns = bench_batch_set_impl(Arc::clone(&db), &mut keys, value_len, batch_size);
-    println!(
-        "\t{:>11} ns per op  {:>11} ops  {:>11} ns per key  {:>11} key per sec",
-        ns as u64,
-        (1_000_000_000_f64 / ns) as u64,
-        (ns / (batch_size as f64)) as u64,
-        (1_000_000_000_f64 * (batch_size as f64) / ns) as u64
-    );
-}
-
 pub fn bench_mvcctxn() {
     for bench_type in &[BenchType::Row, BenchType::UniqueIndex] {
         for version_count in &[1, 16, 64] {
@@ -320,10 +243,6 @@ pub fn bench_mvcctxn() {
 
         for value_len in &[32, 128, 1024] {
             bench_single_row(10_000, 5, *value_len, bench_type);
-        }
-
-        for batch_size in &[8, 64, 128, 256] {
-            bench_batch_set(10_000, *batch_size, 5, 128, bench_type);
         }
     }
 }
