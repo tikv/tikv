@@ -82,15 +82,16 @@ fn test_scheduler_leader_change_twice() {
     ctx0.set_peer(peers[0].clone());
     let (prewrite_tx, prewrite_rx) = channel();
     fail::cfg(snapshot_fp, "pause").unwrap();
-    storage0.async_prewrite(ctx0,
-                        vec![Mutation::Put((make_key(b"k"), b"v".to_vec()))],
-                        b"k".to_vec(),
-                        10,
-                        Options::default(),
-                        box move |res: storage::Result<_>| {
-            match res {
-                Err(storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e)))) |
-                Err(storage::Error::Engine(engine::Error::Request(ref e))) => {
+    storage0
+        .async_prewrite(
+            ctx0,
+            vec![Mutation::Put((make_key(b"k"), b"v".to_vec()))],
+            b"k".to_vec(),
+            10,
+            Options::default(),
+            box move |res: storage::Result<_>| match res {
+                Err(storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))))
+                | Err(storage::Error::Engine(engine::Error::Request(ref e))) => {
                     assert!(e.has_stale_command(), "{:?}", e);
                     prewrite_tx.send(false).unwrap();
                 }
@@ -100,8 +101,8 @@ fn test_scheduler_leader_change_twice() {
                 _ => {
                     panic!("expect stale command, but got {:?}", res);
                 }
-            }
-        })
+            },
+        )
         .unwrap();
     // Sleep to make sure the failpoint is triggered.
     thread::sleep(Duration::from_millis(2000));
@@ -131,7 +132,9 @@ fn test_scheduler_leader_change_twice() {
                 vec![make_key(b"k")],
                 10,
                 11,
-                box move |res: storage::Result<_>| { commit_tx.send(res).unwrap(); },
+                box move |res: storage::Result<_>| {
+                    commit_tx.send(res).unwrap();
+                },
             )
             .unwrap();
         // wait for the commit result.

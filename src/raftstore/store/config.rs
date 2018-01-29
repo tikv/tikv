@@ -96,7 +96,7 @@ pub struct Config {
     pub max_merge_log_gap: u64,
     // Interval to repropose merge.
     pub merge_check_tick_interval: ReadableDuration,
-    
+
     pub use_delete_range: bool,
 
     // Deprecated! These two configuration has been moved to Coprocessor.

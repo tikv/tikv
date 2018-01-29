@@ -44,7 +44,7 @@ pub use self::index_scan::IndexScanExecutor;
 pub use self::selection::SelectionExecutor;
 pub use self::topn::TopNExecutor;
 pub use self::limit::LimitExecutor;
-pub use self::aggregation::AggregationExecutor;
+pub use self::aggregation::HashAggExecutor;
 pub use self::scanner::{ScanOn, Scanner};
 
 pub struct ExprColumnRefVisitor {
@@ -162,23 +162,23 @@ pub fn build_exec(
             }
             ExecType::TypeSelection => Box::new(SelectionExecutor::new(
                 exec.take_selection(),
-                ctx.clone(),
-                columns.clone(),
+                Arc::clone(&ctx),
+                Arc::clone(&columns),
                 src,
             )?),
             ExecType::TypeAggregation => {
                 has_aggr = true;
-                Box::new(AggregationExecutor::new(
+                Box::new(HashAggExecutor::new(
                     exec.take_aggregation(),
-                    ctx.clone(),
-                    columns.clone(),
+                    Arc::clone(&ctx),
+                    Arc::clone(&columns),
                     src,
                 )?)
             }
             ExecType::TypeTopN => Box::new(TopNExecutor::new(
                 exec.take_topN(),
-                ctx.clone(),
-                columns.clone(),
+                Arc::clone(&ctx),
+                Arc::clone(&columns),
                 src,
             )?),
             ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
@@ -203,7 +203,7 @@ fn build_first_executor(
     match first.get_tp() {
         ExecType::TypeTableScan => {
             let cols = Arc::new(first.get_tbl_scan().get_columns().to_vec());
-            let ex = Box::new(TableScanExecutor::new(first.get_tbl_scan(), ranges, store));
+            let ex = Box::new(TableScanExecutor::new(first.get_tbl_scan(), ranges, store)?);
             Ok((ex, cols))
         }
         ExecType::TypeIndexScan => {
@@ -214,7 +214,7 @@ fn build_first_executor(
                 ranges,
                 store,
                 unique,
-            ));
+            )?);
             Ok((ex, cols))
         }
         _ => Err(box_err!(

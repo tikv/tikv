@@ -47,7 +47,7 @@ pub enum Task {
         peer: metapb::Peer,
         // If true, right region derive origin region_id.
         right_derive: bool,
-        callback: Option<Callback>,
+        callback: Callback,
     },
     Heartbeat {
         region: metapb::Region,
@@ -70,8 +70,12 @@ pub enum Task {
         region: metapb::Region,
         peer: metapb::Peer,
     },
-    ReadStats { read_stats: HashMap<u64, FlowStatistics>, },
-    DestroyPeer { region_id: u64 },
+    ReadStats {
+        read_stats: HashMap<u64, FlowStatistics>,
+    },
+    DestroyPeer {
+        region_id: u64,
+    },
 }
 
 pub struct StoreStat {
@@ -184,7 +188,7 @@ impl<T: PdClient> Runner<T> {
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Option<Callback>,
+        callback: Callback,
     ) {
         let ch = self.ch.clone();
         let f = self.pd_client.ask_split(region.clone()).then(move |resp| {
@@ -275,9 +279,9 @@ impl<T: PdClient> Runner<T> {
         };
         stats.set_capacity(capacity);
 
-        let used_size = stats.get_used_size() + get_engine_used_size(store_info.engine.clone());
+        let used_size =
+            stats.get_used_size() + get_engine_used_size(Arc::clone(&store_info.engine));
         stats.set_used_size(used_size);
-
 
         let mut available = if capacity > used_size {
             capacity - used_size
@@ -334,54 +338,69 @@ impl<T: PdClient> Runner<T> {
         peer: metapb::Peer,
     ) {
         let ch = self.ch.clone();
-        let f = self.pd_client.get_region_by_id(local_region.get_id()).then(move |resp| {
-            match resp {
-                Ok(Some(pd_region)) => {
-                    if is_epoch_stale(pd_region.get_region_epoch(),
-                                      local_region.get_region_epoch()) {
-                        // The local region epoch is fresher than region epoch in PD
-                        // This means the region info in PD is not updated to the latest even
-                        // after max_leader_missing_duration. Something is wrong in the system.
-                        // Just add a log here for this situation.
-                        error!("[region {}] {} the local region epoch: {:?} is greater the \
-                                region epoch in PD: {:?}. Something is wrong!",
-                               local_region.get_id(),
-                               peer.get_id(),
-                               local_region.get_region_epoch(),
-                               pd_region.get_region_epoch());
-                        PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["region epoch error"])
-                            .inc();
-                        return Ok(());
-                    }
+        let f = self.pd_client
+            .get_region_by_id(local_region.get_id())
+            .then(move |resp| {
+                match resp {
+                    Ok(Some(pd_region)) => {
+                        if is_epoch_stale(
+                            pd_region.get_region_epoch(),
+                            local_region.get_region_epoch(),
+                        ) {
+                            // The local region epoch is fresher than region epoch in PD
+                            // This means the region info in PD is not updated to the latest even
+                            // after max_leader_missing_duration. Something is wrong in the system.
+                            // Just add a log here for this situation.
+                            error!(
+                                "[region {}] {} the local region epoch: {:?} is greater the \
+                                 region epoch in PD: {:?}. Something is wrong!",
+                                local_region.get_id(),
+                                peer.get_id(),
+                                local_region.get_region_epoch(),
+                                pd_region.get_region_epoch()
+                            );
+                            PD_VALIDATE_PEER_COUNTER_VEC
+                                .with_label_values(&["region epoch error"])
+                                .inc();
+                            return Ok(());
+                        }
 
-                    if pd_region.get_peers().into_iter().all(|p| p != &peer) {
-                        // Peer is not a member of this region anymore. Probably it's removed out.
-                        // Send it a raft massage to destroy it since it's obsolete.
-                        info!("[region {}] {} is not a valid member of region {:?}. To be \
-                               destroyed soon.",
-                              local_region.get_id(),
-                              peer.get_id(),
-                              pd_region);
-                        PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["peer stale"]).inc();
-                        send_destroy_peer_message(ch, local_region, peer, pd_region);
-                        return Ok(());
+                        if pd_region.get_peers().into_iter().all(|p| p != &peer) {
+                            // Peer is not a member of this region anymore. Probably it's removed out.
+                            // Send it a raft massage to destroy it since it's obsolete.
+                            info!(
+                                "[region {}] {} is not a valid member of region {:?}. To be \
+                                 destroyed soon.",
+                                local_region.get_id(),
+                                peer.get_id(),
+                                pd_region
+                            );
+                            PD_VALIDATE_PEER_COUNTER_VEC
+                                .with_label_values(&["peer stale"])
+                                .inc();
+                            send_destroy_peer_message(ch, local_region, peer, pd_region);
+                            return Ok(());
+                        }
+                        info!(
+                            "[region {}] {} is still valid in region {:?}",
+                            local_region.get_id(),
+                            peer.get_id(),
+                            pd_region
+                        );
+                        PD_VALIDATE_PEER_COUNTER_VEC
+                            .with_label_values(&["peer valid"])
+                            .inc();
                     }
-                    info!("[region {}] {} is still valid in region {:?}",
-                          local_region.get_id(),
-                          peer.get_id(),
-                          pd_region);
-                    PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["peer valid"]).inc();
+                    Ok(None) => {
+                        // splitted region has not yet reported to pd.
+                        // TODO: handle merge
+                    }
+                    Err(e) => {
+                        error!("get region failed {:?}", e);
+                    }
                 }
-                Ok(None) => {
-                    // splitted region has not yet reported to pd.
-                    // TODO: handle merge
-                }
-                Err(e) => {
-                    error!("get region failed {:?}", e);
-                }
-            }
-            Ok(())
-        });
+                Ok(())
+            });
         handle.spawn(f);
     }
 
@@ -407,10 +426,10 @@ impl<T: PdClient> Runner<T> {
                         change_peer.get_peer()
                     );
                     let req = new_change_peer_request(
-                        change_peer.get_change_type().into(),
+                        change_peer.get_change_type(),
                         change_peer.take_peer(),
                     );
-                    send_admin_request(&ch, region_id, epoch, peer, req, None);
+                    send_admin_request(&ch, region_id, epoch, peer, req, Callback::None);
                 } else if resp.has_transfer_leader() {
                     PD_HEARTBEAT_COUNTER_VEC
                         .with_label_values(&["transfer leader"])
@@ -424,14 +443,14 @@ impl<T: PdClient> Runner<T> {
                         transfer_leader.get_peer()
                     );
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
-                    send_admin_request(&ch, region_id, epoch, peer, req, None)
+                    send_admin_request(&ch, region_id, epoch, peer, req, Callback::None)
                 } else if resp.has_merge() {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["merge"]).inc();
 
                     let merge = resp.take_merge();
                     info!("[region {}] try to merge {:?}", region_id, merge);
                     let req = new_merge_request(merge);
-                    send_admin_request(&ch, region_id, epoch, peer, req, None)
+                    send_admin_request(&ch, region_id, epoch, peer, req, Callback::None)
                 } else {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                 }
@@ -544,7 +563,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
 fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
     let mut req = AdminRequest::new();
     req.set_cmd_type(AdminCmdType::ChangePeer);
-    req.mut_change_peer().set_change_type(change_type.into());
+    req.mut_change_peer().set_change_type(change_type);
     req.mut_change_peer().set_peer(peer);
     req
 }
@@ -584,7 +603,7 @@ fn send_admin_request(
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
     request: AdminRequest,
-    callback: Option<Callback>,
+    callback: Callback,
 ) {
     let cmd_type = request.get_cmd_type();
 
@@ -595,15 +614,10 @@ fn send_admin_request(
 
     req.set_admin_request(request);
 
-    if let Err(e) = ch.try_send(Msg::new_raft_cmd(
-        req,
-        callback.unwrap_or_else(|| Box::new(|_| {})),
-    )) {
+    if let Err(e) = ch.try_send(Msg::new_raft_cmd(req, callback)) {
         error!(
             "[region {}] send {:?} request err {:?}",
-            region_id,
-            cmd_type,
-            e
+            region_id, cmd_type, e
         );
     }
 }

@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::time::*;
+use std::sync::Arc;
 
 use fail;
 use futures::Future;
@@ -33,7 +33,7 @@ fn test_node_merge_rollback() {
     let _guard = ::setup();
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_rule();
 
     cluster.run_conf_change();
@@ -56,11 +56,11 @@ fn test_node_merge_rollback() {
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
     let pre_merge = util::new_pre_merge(MergeDirection::Forward);
-    let req = util::new_admin_request(region.get_id(), &epoch, pre_merge);
+    let req = util::new_admin_request(region.get_id(), epoch, pre_merge);
     // The callback will be called when pre-merge is applied.
     let res = cluster.call_command_on_leader(req, Duration::from_secs(3));
     assert!(res.is_ok(), "{:?}", res);
-    
+
     // Add a peer to trigger rollback.
     pd_client.must_add_peer(right.get_id(), new_peer(3, 5));
     cluster.must_put(b"k4", b"v4");
@@ -78,10 +78,10 @@ fn test_node_merge_rollback() {
     for i in 1..3 {
         let state_key = keys::region_state_key(region.get_id());
         let state: RegionLocalState = cluster
-                .get_engine(i)
-                .get_msg_cf(CF_RAFT, &state_key)
-                .unwrap()
-                .unwrap();
+            .get_engine(i)
+            .get_msg_cf(CF_RAFT, &state_key)
+            .unwrap()
+            .unwrap();
         assert_eq!(state.get_state(), PeerState::Normal);
         assert_eq!(*state.get_region(), region);
     }
@@ -94,7 +94,7 @@ fn test_node_merge_restart() {
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
     cluster.run();
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
     let left = pd_client.get_region(b"k1").unwrap();
@@ -117,16 +117,10 @@ fn test_node_merge_restart() {
     cluster.shutdown();
     let engine = cluster.get_engine(leader.get_store_id());
     let state_key = keys::region_state_key(left.get_id());
-    let state: RegionLocalState = engine
-            .get_msg_cf(CF_RAFT, &state_key)
-            .unwrap()
-            .unwrap();
+    let state: RegionLocalState = engine.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Merging, "{:?}", state);
     let state_key = keys::region_state_key(right.get_id());
-    let state: RegionLocalState = engine
-            .get_msg_cf(CF_RAFT, &state_key)
-            .unwrap()
-            .unwrap();
+    let state: RegionLocalState = engine.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Normal, "{:?}", state);
     fail::remove(schedule_merge_fp);
     cluster.start();
@@ -134,7 +128,12 @@ fn test_node_merge_restart() {
     // Wait till merge is finished.
     let timer = Instant::now();
     loop {
-        if pd_client.get_region_by_id(left.get_id()).wait().unwrap().is_none() {
+        if pd_client
+            .get_region_by_id(left.get_id())
+            .wait()
+            .unwrap()
+            .is_none()
+        {
             break;
         }
 
@@ -149,23 +148,22 @@ fn test_node_merge_restart() {
     for i in 1..4 {
         let state_key = keys::region_state_key(left.get_id());
         let state: RegionLocalState = cluster
-                .get_engine(i)
-                .get_msg_cf(CF_RAFT, &state_key)
-                .unwrap()
-                .unwrap();
+            .get_engine(i)
+            .get_msg_cf(CF_RAFT, &state_key)
+            .unwrap()
+            .unwrap();
         assert_eq!(state.get_state(), PeerState::Tombstone, "{:?}", state);
         let state_key = keys::region_state_key(right.get_id());
         let state: RegionLocalState = cluster
-                .get_engine(i)
-                .get_msg_cf(CF_RAFT, &state_key)
-                .unwrap()
-                .unwrap();
+            .get_engine(i)
+            .get_msg_cf(CF_RAFT, &state_key)
+            .unwrap()
+            .unwrap();
         assert_eq!(state.get_state(), PeerState::Normal, "{:?}", state);
         assert!(state.get_region().get_start_key().is_empty());
         assert!(state.get_region().get_end_key().is_empty());
     }
 }
-
 
 #[test]
 fn test_node_merge_recover_snapshot() {
@@ -173,7 +171,7 @@ fn test_node_merge_recover_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_rule();
 
     cluster.run();
@@ -192,11 +190,11 @@ fn test_node_merge_recover_snapshot() {
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
     let pre_merge = util::new_pre_merge(MergeDirection::Backward);
-    let req = util::new_admin_request(region.get_id(), &epoch, pre_merge);
+    let req = util::new_admin_request(region.get_id(), epoch, pre_merge);
     // The callback will be called when pre-merge is applied.
     let res = cluster.call_command_on_leader(req, Duration::from_secs(3));
     assert!(res.is_ok(), "{:?}", res);
-    
+
     // Add a peer to trigger rollback.
     pd_client.must_remove_peer(left.get_id(), left.get_peers()[0].to_owned());
     util::must_get_none(&cluster.get_engine(3), b"k4");
@@ -204,7 +202,7 @@ fn test_node_merge_recover_snapshot() {
     let step_store_3_region_1 = "step_message_3_1";
     fail::cfg(step_store_3_region_1, "return()").unwrap();
     fail::remove(schedule_merge_fp);
-    
+
     for i in 0..100 {
         cluster.must_put(format!("k4{}", i).as_bytes(), b"v4");
     }

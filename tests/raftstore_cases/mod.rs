@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 mod test_single;
 mod test_multi;
 mod test_conf_change;
@@ -31,5 +30,6 @@ mod test_lease_read;
 mod test_bootstrap;
 mod test_service;
 mod test_merge;
+mod test_update_region_size;
 
 use raftstore::*;

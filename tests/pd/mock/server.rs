@@ -48,7 +48,7 @@ impl Server {
         C: PdMocker + Send + Sync + 'static,
     {
         let m = PdMock {
-            default_handler: handler.clone(),
+            default_handler: Arc::clone(&handler),
             case: case.clone(),
         };
         let service = pdpb_grpc::create_pd(m);
@@ -135,7 +135,7 @@ struct PdMock<C: PdMocker> {
 impl<C: PdMocker> Clone for PdMock<C> {
     fn clone(&self) -> Self {
         PdMock {
-            default_handler: self.default_handler.clone(),
+            default_handler: Arc::clone(&self.default_handler),
             case: self.case.clone(),
         }
     }
@@ -183,6 +183,15 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
 
     fn put_store(&self, ctx: RpcContext, req: PutStoreRequest, sink: UnarySink<PutStoreResponse>) {
         hijack_unary(self, ctx, sink, |c| c.put_store(&req))
+    }
+
+    fn get_all_stores(
+        &self,
+        ctx: RpcContext,
+        req: GetAllStoresRequest,
+        sink: UnarySink<GetAllStoresResponse>,
+    ) {
+        hijack_unary(self, ctx, sink, |c| c.get_all_stores(&req))
     }
 
     fn store_heartbeat(

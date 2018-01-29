@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 #[cfg(unix)]
 mod imp {
     use std::{ptr, slice};
@@ -24,8 +23,8 @@ mod imp {
 
     use tikv::raftstore::store::Engines;
 
-    const ROCKSDB_DB_STATS_KEY: &'static str = "rocksdb.dbstats";
-    const ROCKSDB_CF_STATS_KEY: &'static str = "rocksdb.cfstats";
+    const ROCKSDB_DB_STATS_KEY: &str = "rocksdb.dbstats";
+    const ROCKSDB_CF_STATS_KEY: &str = "rocksdb.cfstats";
 
     extern "C" {
         #[cfg_attr(target_os = "macos", link_name = "je_malloc_stats_print")]
@@ -57,8 +56,7 @@ mod imp {
         info!("{}", String::from_utf8_lossy(&buf));
     }
 
-    // TODO: remove backup_path from configuration
-    pub fn handle_signal(engines: Engines, _: &str) {
+    pub fn handle_signal(engines: Engines) {
         use signal::trap::Trap;
         use nix::sys::signal::{SIGUSR1, SIGUSR2, SIGHUP, SIGINT, SIGTERM};
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]);
@@ -71,9 +69,13 @@ mod imp {
                 SIGUSR1 => {
                     // Use SIGUSR1 to log metrics.
                     let mut buffer = vec![];
-                    let metric_familys = prometheus::gather();
                     let encoder = TextEncoder::new();
-                    encoder.encode(&metric_familys, &mut buffer).unwrap();
+                    let metric_familys = prometheus::gather();
+                    for mf in metric_familys {
+                        if let Err(e) = encoder.encode(&[mf], &mut buffer) {
+                            warn!("ignore prometheus encoding error: {:?}", e);
+                        }
+                    }
                     info!("{}", String::from_utf8(buffer).unwrap());
 
                     print_rocksdb_stats(&engines.kv_engine);
@@ -118,11 +120,9 @@ mod imp {
 
 #[cfg(not(unix))]
 mod imp {
-    use std::sync::Arc;
+    use tikv::raftstore::store::Engines;
 
-    use rocksdb::DB;
-
-    pub fn handle_signal(_: Arc<DB>, _: &str) {}
+    pub fn handle_signal(_: Engines) {}
 }
 
 pub use self::imp::handle_signal;

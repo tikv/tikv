@@ -80,7 +80,7 @@ impl<T: Display> Scheduler<T> {
 impl<T: Display> Clone for Scheduler<T> {
     fn clone(&self) -> Scheduler<T> {
         Scheduler {
-            name: self.name.clone(),
+            name: Arc::clone(&self.name),
             sender: self.sender.clone(),
         }
     }

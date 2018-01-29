@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::time::Duration;
+use std::sync::Arc;
 use std::thread;
 
 use kvproto::metapb;
@@ -34,7 +35,7 @@ fn test_node_base_merge() {
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
     let left = pd_client.get_region(b"k1").unwrap();
@@ -112,7 +113,7 @@ fn test_node_base_merge() {
 #[test]
 fn test_node_merge_with_admin_entries() {
     let mut cluster = new_node_cluster(0, 3);
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_rule();
 
     cluster.run_conf_change();

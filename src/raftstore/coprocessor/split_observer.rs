@@ -40,8 +40,8 @@ impl SplitObserver {
         // + version or TABLE_PREFIX + table_id + INDEX_PREFIX_SEP + index_id + values + version
         // or meta_key + version
         // The length of TABLE_PREFIX + table_id is TABLE_PREFIX_KEY_LEN.
-        if key.starts_with(table::TABLE_PREFIX) && key.len() > table::TABLE_PREFIX_KEY_LEN &&
-            key[table::TABLE_PREFIX_KEY_LEN..].starts_with(table::RECORD_PREFIX_SEP)
+        if key.starts_with(table::TABLE_PREFIX) && key.len() > table::TABLE_PREFIX_KEY_LEN
+            && key[table::TABLE_PREFIX_KEY_LEN..].starts_with(table::RECORD_PREFIX_SEP)
         {
             // row key, truncate to handle
             key.truncate(table::PREFIX_LEN + table::ID_LEN);
@@ -195,9 +195,8 @@ mod test {
         observer.pre_propose_admin(&mut ctx, &mut req).unwrap();
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
-        expect_key = encode_bytes(
-            b"t\x80\x00\x00\x00\x00\x00\x00\xea_r\x80\x00\x00\x00\x00\x05\x82\x7f",
-        );
+        expect_key =
+            encode_bytes(b"t\x80\x00\x00\x00\x00\x00\x00\xea_r\x80\x00\x00\x00\x00\x05\x82\x7f");
         key = expect_key.clone();
         key.extend_from_slice(b"\x80\x00\x00\x00\x00\x00\x00\xd3");
         req = new_split_request(&key);

@@ -69,6 +69,7 @@ futures-cpupool = "0.1"
 zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
+uuid = { version = "0.4", features = [ "serde", "v4" ] }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.4"
@@ -108,5 +109,6 @@ codegen-units = 2
 
 # The release profile, used for `cargo build --release`
 [profile.release]
+lto = true
 opt-level = 3
 debug = true

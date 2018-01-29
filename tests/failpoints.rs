@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
-#![feature(fnbox)]
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
 #![feature(test)]
@@ -29,24 +27,24 @@
 #![allow(new_without_default_derive)]
 #![allow(verbose_bit_mask)]
 
+extern crate fail;
+extern crate futures;
+extern crate futures_cpupool;
+extern crate grpcio as grpc;
+extern crate kvproto;
+#[macro_use]
+extern crate lazy_static;
 #[macro_use]
 extern crate log;
 extern crate protobuf;
-extern crate test;
-#[macro_use]
-extern crate tikv;
 extern crate rand;
 extern crate rocksdb;
 extern crate tempdir;
-extern crate kvproto;
-extern crate tipb;
-extern crate grpcio as grpc;
-extern crate futures;
-extern crate futures_cpupool;
-extern crate toml;
-extern crate fail;
+extern crate test;
 #[macro_use]
-extern crate lazy_static;
+extern crate tikv;
+extern crate tipb;
+extern crate toml;
 
 #[allow(dead_code)]
 mod raftstore;

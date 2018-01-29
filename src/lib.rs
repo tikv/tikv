@@ -31,57 +31,59 @@
 #![allow(unreadable_literal)]
 #![allow(new_without_default_derive)]
 #![allow(verbose_bit_mask)]
+#![allow(implicit_hasher)]
 
-#[macro_use]
-extern crate log;
-#[macro_use]
-extern crate quick_error;
+extern crate alloc;
+extern crate backtrace;
 #[macro_use]
 extern crate bitflags;
-#[cfg(test)]
-extern crate test;
-extern crate protobuf;
 extern crate byteorder;
-extern crate rand;
-extern crate mio;
-extern crate tempdir;
-extern crate rocksdb;
-extern crate kvproto;
-extern crate time;
-extern crate tipb;
-extern crate libc;
-extern crate crc;
-extern crate alloc;
 extern crate chrono;
-extern crate zipf;
-#[macro_use]
-extern crate prometheus;
-#[macro_use]
-extern crate lazy_static;
-extern crate backtrace;
-extern crate url;
-extern crate fs2;
-extern crate regex;
-extern crate grpcio as grpc;
-extern crate fnv;
-extern crate flat_map;
-extern crate ordermap;
-extern crate futures;
-extern crate futures_cpupool;
-extern crate tokio_core;
-extern crate tokio_timer;
-extern crate serde_json;
-extern crate serde;
-extern crate murmur3;
-#[macro_use]
-extern crate serde_derive;
-#[cfg(test)]
-extern crate toml;
-extern crate sys_info;
-#[cfg(test)]
-extern crate utime;
+extern crate crc;
 #[macro_use]
 extern crate fail;
+extern crate flat_map;
+extern crate fnv;
+extern crate fs2;
+extern crate futures;
+extern crate futures_cpupool;
+extern crate grpcio as grpc;
+extern crate kvproto;
+#[macro_use]
+extern crate lazy_static;
+extern crate libc;
+#[macro_use]
+extern crate log;
+extern crate mio;
+extern crate murmur3;
+extern crate ordermap;
+#[macro_use]
+extern crate prometheus;
+extern crate protobuf;
+#[macro_use]
+extern crate quick_error;
+extern crate rand;
+extern crate regex;
+extern crate rocksdb;
+extern crate serde;
+#[macro_use]
+extern crate serde_derive;
+extern crate serde_json;
+extern crate sys_info;
+extern crate tempdir;
+#[cfg(test)]
+extern crate test;
+extern crate time;
+extern crate tipb;
+extern crate tokio_core;
+extern crate tokio_timer;
+#[cfg(test)]
+extern crate toml;
+extern crate url;
+#[cfg(test)]
+extern crate utime;
+extern crate uuid;
+extern crate zipf;
 
 #[macro_use]
 pub mod util;
@@ -92,5 +94,6 @@ pub mod raftstore;
 pub mod pd;
 pub mod server;
 pub mod coprocessor;
+pub mod import;
 
 pub use storage::Storage;

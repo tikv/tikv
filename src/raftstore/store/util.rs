@@ -80,12 +80,12 @@ pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
 
 #[inline]
 pub fn is_first_vote_msg(msg: &RaftMessage) -> bool {
-    msg.get_message().get_msg_type() == MessageType::MsgRequestVote &&
-        msg.get_message().get_term() == peer_storage::RAFT_INIT_LOG_TERM + 1
+    msg.get_message().get_msg_type() == MessageType::MsgRequestVote
+        && msg.get_message().get_term() == peer_storage::RAFT_INIT_LOG_TERM + 1
 }
 
-const STR_CONF_CHANGE_ADD_NODE: &'static str = "AddNode";
-const STR_CONF_CHANGE_REMOVE_NODE: &'static str = "RemoveNode";
+const STR_CONF_CHANGE_ADD_NODE: &str = "AddNode";
+const STR_CONF_CHANGE_REMOVE_NODE: &str = "RemoveNode";
 
 pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str {
     match *conf_type {
@@ -160,8 +160,8 @@ pub fn delete_all_in_range_cf(
 
 // check whether epoch is staler than check_epoch.
 pub fn is_epoch_stale(epoch: &metapb::RegionEpoch, check_epoch: &metapb::RegionEpoch) -> bool {
-    epoch.get_version() < check_epoch.get_version() ||
-        epoch.get_conf_ver() < check_epoch.get_conf_ver()
+    epoch.get_version() < check_epoch.get_version()
+        || epoch.get_conf_ver() < check_epoch.get_conf_ver()
 }
 
 pub fn get_region_properties_cf(
@@ -446,7 +446,6 @@ mod tests {
         assert!(remove_peer(&mut region, 1).is_some());
         assert!(remove_peer(&mut region, 1).is_none());
         assert!(find_peer(&region, 1).is_none());
-
     }
 
     #[test]
