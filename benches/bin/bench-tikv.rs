@@ -16,6 +16,7 @@
 #![feature(plugin)]
 #![feature(test)]
 #![feature(box_syntax)]
+#![feature(integer_atomics)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![feature(btree_range, collections_bound)]
@@ -80,6 +81,9 @@ macro_rules! printf {
         io::stdout().flush().unwrap();
     });
 }
+
+#[allow(dead_code)]
+mod utils;
 
 mod raftstore;
 mod mvcc;
