@@ -545,7 +545,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         box_try!(self.apply_worker.start(apply_runner));
 
         let (tx, rx) = mpsc::channel();
-        let space_check_runner = SpaceCheckRunner::new(self.kv_engine.clone(), tx);
+        let space_check_runner = SpaceCheckRunner::new(Arc::clone(&self.kv_engine), tx);
         self.space_res_receiver = Some(rx);
         box_try!(self.space_checker.start(space_check_runner));
 
