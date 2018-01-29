@@ -206,3 +206,24 @@ fn test_analyze_index() {
     assert_eq!(sum, 4);
     end_point.stop().unwrap().join().unwrap();
 }
+
+#[test]
+fn test_invalid_range() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_data_with_commit(&product, &data, true);
+    let mut req = new_analyze_index_req(&product.table, 3, product.name.index, 4, 32);
+    let mut key_range = KeyRange::new();
+    key_range.set_start(b"xxx".to_vec());
+    key_range.set_end(b"zzz".to_vec());
+    req.set_ranges(RepeatedField::from_vec(vec![key_range]));
+    let resp = handle_request(&end_point, req);
+    assert!(!resp.get_other_error().is_empty());
+    end_point.stop().unwrap().join().unwrap();
+}
