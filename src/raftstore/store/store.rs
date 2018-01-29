@@ -2689,14 +2689,26 @@ mod tests {
 
     #[test]
     fn test_calc_region_declined_bytes() {
-        let index_handle1 = IndexHandle { size: 4 * 1024, offset: 4 * 1024 };
-        let index_handle2 = IndexHandle { size: 4 * 1024, offset: 8 * 1024 };
-        let index_handle3 = IndexHandle { size: 4 * 1024, offset: 12 * 1024 };
+        let index_handle1 = IndexHandle {
+            size: 4 * 1024,
+            offset: 4 * 1024,
+        };
+        let index_handle2 = IndexHandle {
+            size: 4 * 1024,
+            offset: 8 * 1024,
+        };
+        let index_handle3 = IndexHandle {
+            size: 4 * 1024,
+            offset: 12 * 1024,
+        };
         let mut index_handles = IndexHandles::new();
         index_handles.add(b"a".to_vec(), index_handle1);
         index_handles.add(b"b".to_vec(), index_handle2);
         index_handles.add(b"c".to_vec(), index_handle3);
-        let size_prop = SizeProperties { total_size: 12 * 1024, index_handles: index_handles };
+        let size_prop = SizeProperties {
+            total_size: 12 * 1024,
+            index_handles: index_handles,
+        };
         let event = CompactedEvent {
             cf: "default".to_owned(),
             output_level: 3,
