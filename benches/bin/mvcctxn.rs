@@ -60,7 +60,7 @@ fn get_snapshot(db: Arc<DB>) -> Box<Snapshot> {
 
 #[inline]
 fn prewrite(db: Arc<DB>, mutations: &[Mutation], primary: &[u8], start_ts: u64) {
-    let snapshot = get_snapshot(Arc::clone(db));
+    let snapshot = get_snapshot(Arc::clone(&db));
     let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, false);
     for m in mutations {
         txn.prewrite(m.clone(), primary, &Options::default())
@@ -71,7 +71,7 @@ fn prewrite(db: Arc<DB>, mutations: &[Mutation], primary: &[u8], start_ts: u64) 
 
 #[inline]
 fn commit(db: Arc<DB>, keys: &[Key], start_ts: u64, commit_ts: u64) {
-    let snapshot = get_snapshot(Arc::clone(db));
+    let snapshot = get_snapshot(Arc::clone(&db));
     let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, false);
     for key in keys {
         txn.commit(key, commit_ts).unwrap();
@@ -97,12 +97,12 @@ fn prepare_test_db(versions: usize, value_len: usize, keys: &[Vec<u8>], path: &s
             let commit_ts = next_ts();
 
             prewrite(
-                Arc::clone(db),
+                Arc::clone(&db),
                 &[Mutation::Put((Key::from_raw(key), value))],
                 key,
                 start_ts,
             );
-            commit(Arc::clone(db), &[Key::from_raw(key)], start_ts, commit_ts);
+            commit(Arc::clone(&db), &[Key::from_raw(key)], start_ts, commit_ts);
         }
     }
     db
@@ -110,7 +110,7 @@ fn prepare_test_db(versions: usize, value_len: usize, keys: &[Vec<u8>], path: &s
 
 #[inline]
 fn get(db: Arc<DB>, key: &Key, statistics: &mut Statistics) -> Option<Vec<u8>> {
-    let snapshot = get_snapshot(Arc::clone(db));
+    let snapshot = get_snapshot(Arc::clone(&db));
     let start_ts = next_ts();
     let snapstore = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
     snapstore.get(key, statistics).unwrap()
@@ -124,7 +124,7 @@ fn bench_get(db: Arc<DB>, keys: &[Vec<u8>]) -> f64 {
             let key = rng.choose(keys).unwrap();
             let key = Key::from_raw(key);
 
-            get(Arc::clone(db), &key, &mut fake_statistics).unwrap()
+            get(Arc::clone(&db), &key, &mut fake_statistics).unwrap()
         },
         500000,
     )
@@ -141,12 +141,12 @@ fn bench_set(db: Arc<DB>, keys: &[Vec<u8>], value_len: usize) -> f64 {
             let key = rng.choose(keys).unwrap();
 
             prewrite(
-                Arc::clone(db),
+                Arc::clone(&db),
                 &[Mutation::Put((Key::from_raw(key), value))],
                 key,
                 start_ts,
             );
-            commit(Arc::clone(db), &[Key::from_raw(key)], start_ts, commit_ts)
+            commit(Arc::clone(&db), &[Key::from_raw(key)], start_ts, commit_ts)
         },
         500000,
     )
@@ -161,12 +161,12 @@ fn bench_delete(db: Arc<DB>, keys: &[Vec<u8>]) -> f64 {
 
             let key = rng.choose(keys).unwrap();
             prewrite(
-                Arc::clone(db),
+                Arc::clone(&db),
                 &[Mutation::Delete(Key::from_raw(key))],
                 key,
                 start_ts,
             );
-            commit(Arc::clone(db), &[Key::from_raw(key)], start_ts, commit_ts)
+            commit(Arc::clone(&db), &[Key::from_raw(key)], start_ts, commit_ts)
         },
         500000,
     )
@@ -201,8 +201,8 @@ fn bench_batch_set_impl(
                 .collect();
 
             let primary = &keys[index];
-            prewrite(Arc::clone(db), &mutations, primary, start_ts);
-            commit(Arc::clone(db), &keys_to_write, start_ts, commit_ts)
+            prewrite(Arc::clone(&db), &mutations, primary, start_ts);
+            commit(Arc::clone(&db), &keys_to_write, start_ts, commit_ts)
         },
         640000 / (batch_size as u32),
     )
@@ -244,14 +244,14 @@ fn bench_single_row(
         "benching mvcctxn {} get\trows:{} versions:{} data len:{}\t...",
         log_name, table_size, version_count, data_len
     );
-    let ns = bench_get(Arc::clone(db), &keys) as u64;
+    let ns = bench_get(Arc::clone(&db), &keys) as u64;
     println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
 
     println!(
         "benching mvcctxn {} set\trows:{} versions:{} data len:{}\t...",
         log_name, table_size, version_count, data_len
     );
-    let ns = bench_set(Arc::clone(db), &keys, value_len) as u64;
+    let ns = bench_set(Arc::clone(&db), &keys, value_len) as u64;
     println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
 
     // Generate new db to bench delete, for the size of content was increased when benching set
@@ -267,7 +267,7 @@ fn bench_single_row(
         "benching mvcctxn {} delete\trows:{} versions:{} data len:{}\t...",
         log_name, table_size, version_count, data_len
     );
-    let ns = bench_delete(Arc::clone(db), &keys) as u64;
+    let ns = bench_delete(Arc::clone(&db), &keys) as u64;
     println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
 }
 
@@ -302,7 +302,7 @@ fn bench_batch_set(
         "benching mvcctxn {} batch write\trows:{} versions:{} data len:{} batch:{}\t...",
         log_name, table_size, version_count, data_len, batch_size,
     );
-    let ns = bench_batch_set_impl(Arc::clone(db), &mut keys, value_len, batch_size);
+    let ns = bench_batch_set_impl(Arc::clone(&db), &mut keys, value_len, batch_size);
     println!(
         "\t{:>11} ns per op  {:>11} ops  {:>11} ns per key  {:>11} key per sec",
         ns as u64,
