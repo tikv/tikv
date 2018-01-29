@@ -13,8 +13,6 @@
 
 use std::sync::atomic::{ATOMIC_U64_INIT, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use std::ops::Div;
-use std::iter::Sum;
 use tikv::coprocessor::codec::table::{encode_index_seek_key, encode_row_key};
 use tikv::util::codec::number::NumberEncoder;
 use test::black_box;
@@ -62,26 +60,7 @@ pub fn generate_unique_index_keys(
 
 /// Convert duration to nanoseconds
 pub fn to_total_nanos(duration: &Duration) -> u64 {
-    duration.as_secs() * 1_000_000_000 + (duration.subsec_nanos() as u64)
-}
-
-/// Run `job` for `iterations` times, and return a Vec containing nanoseconds of each turn `job`
-/// returns.
-///
-/// `job` must return a `Duration` type. Please calculate time cost of what you want to bench
-/// manually and return it.
-///
-/// Attention that too short job may cause great inaccuracy. Don't use this on too tiny tasks.
-pub fn record_time<F>(mut job: F, iterations: u32) -> Vec<u64>
-where
-    F: FnMut() -> Duration,
-{
-    (0..iterations)
-        .map(|_| {
-            let time = job();
-            to_total_nanos(&time)
-        })
-        .collect()
+    duration.as_secs() * 1_000_000_000 + u64::from(duration.subsec_nanos())
 }
 
 /// Run `job` for `iterations` times, and return the average time cost as nanoseconds.
@@ -95,12 +74,5 @@ where
         // Avoid being optimized out by compiler
         black_box(job());
     }
-    to_total_nanos(&t.elapsed()) as f64 / (iterations as f64)
-}
-
-pub fn average<'a, T: 'a>(data: &'a [T]) -> <T as Div<u64>>::Output
-where
-    T: Sum<&'a T> + Div<u64>,
-{
-    data.iter().sum::<T>() / (data.len() as u64)
+    to_total_nanos(&t.elapsed()) as f64 / f64::from(iterations)
 }
