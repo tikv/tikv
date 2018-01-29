@@ -9,7 +9,7 @@ use tikv::util::codec::bytes;
 use tikv::util::escape;
 use kvproto::kvrpcpb::Context;
 use raftstore::transport_simulate::IsolationFilterFactory;
-use raftstore::server::new_server_cluster_with_cfs;
+use raftstore::server::new_server_cluster;
 use tikv::raftstore::store::engine::IterOption;
 
 use raftstore::util::MAX_LEADER_LEASE;
@@ -17,7 +17,7 @@ use raftstore::util::MAX_LEADER_LEASE;
 #[test]
 fn test_raftkv() {
     let count = 1;
-    let mut cluster = new_server_cluster_with_cfs(0, count, &["cf"]);
+    let mut cluster = new_server_cluster(0, count);
     cluster.run();
 
     // make sure leader has been elected.
@@ -46,7 +46,7 @@ fn test_raftkv() {
 #[test]
 fn test_read_leader_in_lease() {
     let count = 3;
-    let mut cluster = new_server_cluster_with_cfs(0, count, &["cf"]);
+    let mut cluster = new_server_cluster(0, count);
     cluster.run();
 
     let k1 = b"k1";
@@ -78,7 +78,7 @@ fn test_read_leader_in_lease() {
 #[test]
 fn test_batch_snapshot() {
     let count = 3;
-    let mut cluster = new_server_cluster_with_cfs(0, count, &["cf"]);
+    let mut cluster = new_server_cluster(0, count);
     cluster.run();
 
     let key = b"key";
@@ -295,12 +295,12 @@ fn near_seek(ctx: &Context, engine: &Engine) {
 }
 
 fn cf(ctx: &Context, engine: &Engine) {
-    assert_none_cf(ctx, engine, "cf", b"key");
-    must_put_cf(ctx, engine, "cf", b"key", b"value");
-    assert_has_cf(ctx, engine, "cf", b"key", b"value");
-    assert_seek_cf(ctx, engine, "cf", b"k", (b"key", b"value"));
-    must_delete_cf(ctx, engine, "cf", b"key");
-    assert_none_cf(ctx, engine, "cf", b"key");
+    assert_none_cf(ctx, engine, "default", b"key");
+    must_put_cf(ctx, engine, "default", b"key", b"value");
+    assert_has_cf(ctx, engine, "default", b"key", b"value");
+    assert_seek_cf(ctx, engine, "default", b"k", (b"key", b"value"));
+    must_delete_cf(ctx, engine, "default", b"key");
+    assert_none_cf(ctx, engine, "default", b"key");
 }
 
 fn empty_write(ctx: &Context, engine: &Engine) {

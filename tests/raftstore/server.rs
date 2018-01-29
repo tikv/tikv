@@ -29,7 +29,7 @@ use tikv::server::transport::RaftStoreRouter;
 use tikv::util::transport::SendCh;
 use tikv::util::security::SecurityManager;
 use tikv::util::worker::{FutureWorker, Worker};
-use tikv::storage::{CfName, Engine};
+use tikv::storage::Engine;
 use tikv::import::{ImportSSTService, SSTImporter};
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
@@ -37,6 +37,7 @@ use kvproto::raft_cmdpb::*;
 use super::pd::TestPdClient;
 use super::transport_simulate::*;
 use super::cluster::{Cluster, Simulator};
+use super::util::create_test_engine;
 
 type SimulateStoreTransport = SimulateTransport<StoreMsg, ServerRaftStoreRouter>;
 type SimulateServerTransport =
@@ -86,7 +87,12 @@ impl ServerCluster {
 
 impl Simulator for ServerCluster {
     #[allow(useless_format)]
-    fn run_node(&mut self, node_id: u64, mut cfg: TiKvConfig, engines: Engines) -> u64 {
+    fn run_node(
+        &mut self,
+        node_id: u64,
+        mut cfg: TiKvConfig,
+        engines: Option<Engines>,
+    ) -> (u64, Engines, Option<TempDir>) {
         assert!(node_id == 0 || !self.metas.contains_key(&node_id));
 
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
@@ -109,6 +115,9 @@ impl Simulator for ServerCluster {
         let (snap_status_sender, snap_status_receiver) = mpsc::channel();
         let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), snap_status_sender);
         let sim_router = SimulateTransport::new(raft_router);
+
+        // Create engine
+        let (engines, path) = create_test_engine(engines, store_sendch.clone(), &cfg);
 
         // Create storage.
         let mut store = create_raft_storage(sim_router.clone(), &cfg.storage).unwrap();
@@ -159,7 +168,7 @@ impl Simulator for ServerCluster {
 
         node.start(
             event_loop,
-            engines,
+            engines.clone(),
             simulate_trans.clone(),
             snap_mgr.clone(),
             snap_status_receiver,
@@ -187,7 +196,7 @@ impl Simulator for ServerCluster {
         );
         self.addrs.insert(node_id, format!("{}", addr));
 
-        node_id
+        (node_id, engines, path)
     }
 
     fn get_snap_dir(&self, node_id: u64) -> String {
@@ -265,15 +274,7 @@ impl Simulator for ServerCluster {
 }
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
-    new_server_cluster_with_cfs(id, count, &[])
-}
-
-pub fn new_server_cluster_with_cfs(
-    id: u64,
-    count: usize,
-    cfs: &[CfName],
-) -> Cluster<ServerCluster> {
     let pd_client = Arc::new(TestPdClient::new(id));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, cfs, sim, pd_client)
+    Cluster::new(id, count, sim, pd_client)
 }
