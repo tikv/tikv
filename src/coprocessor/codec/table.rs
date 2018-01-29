@@ -14,6 +14,7 @@
 use std::io::Write;
 use std::{cmp, u8};
 use tipb::schema::ColumnInfo;
+use kvproto::coprocessor::KeyRange;
 
 use coprocessor::dag::expr::EvalContext;
 use util::escape;
@@ -53,7 +54,6 @@ trait TableEncoder: NumberEncoder {
 impl<T: Write> TableEncoder for T {}
 
 /// Extract table prefix from table record or index.
-// It is useful in tests.
 pub fn extract_table_prefix(key: &[u8]) -> Result<&[u8]> {
     if !key.starts_with(TABLE_PREFIX) || key.len() < TABLE_PREFIX_KEY_LEN {
         Err(invalid_type!(
@@ -63,6 +63,15 @@ pub fn extract_table_prefix(key: &[u8]) -> Result<&[u8]> {
     } else {
         Ok(&key[..TABLE_PREFIX_KEY_LEN])
     }
+}
+
+/// Check if the range is for table record or index.
+pub fn check_table_ranges(ranges: &[KeyRange]) -> Result<()> {
+    for range in ranges {
+        extract_table_prefix(range.get_start())?;
+        extract_table_prefix(range.get_end())?;
+    }
+    Ok(())
 }
 
 pub fn flatten(data: Datum) -> Result<Datum> {
