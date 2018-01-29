@@ -90,16 +90,6 @@ pub enum StorageCb {
 }
 
 pub enum Command {
-    Get {
-        ctx: Context,
-        key: Key,
-        start_ts: u64,
-    },
-    BatchGet {
-        ctx: Context,
-        keys: Vec<Key>,
-        start_ts: u64,
-    },
     Scan {
         ctx: Context,
         start_key: Key,
@@ -180,24 +170,6 @@ pub enum Command {
 impl Display for Command {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Command::Get {
-                ref ctx,
-                ref key,
-                start_ts,
-                ..
-            } => write!(f, "kv::command::get {} @ {} | {:?}", key, start_ts, ctx),
-            Command::BatchGet {
-                ref ctx,
-                ref keys,
-                start_ts,
-                ..
-            } => write!(
-                f,
-                "kv::command_batch_get {} @ {} | {:?}",
-                keys.len(),
-                start_ts,
-                ctx
-            ),
             Command::Scan {
                 ref ctx,
                 ref start_key,
@@ -321,8 +293,6 @@ pub const CMD_TAG_GC: &str = "gc";
 impl Command {
     pub fn readonly(&self) -> bool {
         match *self {
-            Command::Get { .. } |
-            Command::BatchGet { .. } |
             Command::Scan { .. } |
             Command::ScanLock { .. } |
             Command::RawGet { .. } |
@@ -358,8 +328,6 @@ impl Command {
 
     pub fn tag(&self) -> &'static str {
         match *self {
-            Command::Get { .. } => "get",
-            Command::BatchGet { .. } => "batch_get",
             Command::Scan { .. } => "scan",
             Command::Prewrite { .. } => "prewrite",
             Command::Commit { .. } => "commit",
@@ -379,9 +347,7 @@ impl Command {
 
     pub fn ts(&self) -> u64 {
         match *self {
-            Command::Get { start_ts, .. }
-            | Command::BatchGet { start_ts, .. }
-            | Command::Scan { start_ts, .. }
+            Command::Scan { start_ts, .. }
             | Command::Prewrite { start_ts, .. }
             | Command::Cleanup { start_ts, .. }
             | Command::Rollback { start_ts, .. }
@@ -400,9 +366,7 @@ impl Command {
 
     pub fn get_context(&self) -> &Context {
         match *self {
-            Command::Get { ref ctx, .. }
-            | Command::BatchGet { ref ctx, .. }
-            | Command::Scan { ref ctx, .. }
+            Command::Scan { ref ctx, .. }
             | Command::Prewrite { ref ctx, .. }
             | Command::Commit { ref ctx, .. }
             | Command::Cleanup { ref ctx, .. }
@@ -421,9 +385,7 @@ impl Command {
 
     pub fn mut_context(&mut self) -> &mut Context {
         match *self {
-            Command::Get { ref mut ctx, .. }
-            | Command::BatchGet { ref mut ctx, .. }
-            | Command::Scan { ref mut ctx, .. }
+            Command::Scan { ref mut ctx, .. }
             | Command::Prewrite { ref mut ctx, .. }
             | Command::Commit { ref mut ctx, .. }
             | Command::Cleanup { ref mut ctx, .. }
@@ -577,6 +539,7 @@ impl Storage {
         Ok(())
     }
 
+    /// Get from snapshot
     pub fn async_get(
         &self,
         ctx: Context,
@@ -629,6 +592,7 @@ impl Storage {
         })
     }
 
+    /// Batch get from snapshot
     pub fn async_batch_get(
         &self,
         ctx: Context,

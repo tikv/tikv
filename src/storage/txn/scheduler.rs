@@ -452,66 +452,6 @@ fn process_read(
     let mut statistics = Statistics::default();
 
     let pr = match cmd {
-        // Gets from the snapshot.
-        Command::Get {
-            ref ctx,
-            ref key,
-            start_ts,
-            ..
-        } => {
-            sched_ctx
-                .command_keyread_duration
-                .with_label_values(&[tag])
-                .observe(1f64);
-            let snap_store = SnapshotStore::new(
-                snapshot,
-                start_ts,
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            );
-            let res = snap_store.get(key, &mut statistics);
-            match res {
-                Ok(val) => ProcessResult::Value { value: val },
-                Err(e) => ProcessResult::Failed {
-                    err: StorageError::from(e),
-                },
-            }
-        }
-        // Batch gets from the snapshot.
-        Command::BatchGet {
-            ref ctx,
-            ref keys,
-            start_ts,
-            ..
-        } => {
-            sched_ctx
-                .command_keyread_duration
-                .with_label_values(&[tag])
-                .observe(keys.len() as f64);
-            let snap_store = SnapshotStore::new(
-                snapshot,
-                start_ts,
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            );
-            let res = snap_store.batch_get(keys, &mut statistics);
-            match res {
-                Ok(results) => {
-                    let mut res = vec![];
-                    for (k, v) in keys.into_iter().zip(results) {
-                        match v {
-                            Ok(Some(x)) => res.push(Ok((k.raw().unwrap(), x))),
-                            Ok(None) => {}
-                            Err(e) => res.push(Err(StorageError::from(e))),
-                        }
-                    }
-                    ProcessResult::MultiKvpairs { pairs: res }
-                }
-                Err(e) => ProcessResult::Failed {
-                    err: StorageError::from(e),
-                },
-            }
-        }
         // Scans a range starting with `start_key` up to `limit` rows from the snapshot.
         Command::Scan {
             ref ctx,
@@ -1655,16 +1595,6 @@ mod tests {
         let mut temp_map = HashMap::default();
         temp_map.insert(10, 20);
         let readonly_cmds = vec![
-            Command::Get {
-                ctx: Context::new(),
-                key: make_key(b"k"),
-                start_ts: 25,
-            },
-            Command::BatchGet {
-                ctx: Context::new(),
-                keys: vec![make_key(b"k")],
-                start_ts: 25,
-            },
             Command::Scan {
                 ctx: Context::new(),
                 start_key: make_key(b"k"),
