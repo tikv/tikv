@@ -102,7 +102,6 @@ fn main() {
         );
     }
 
-
     let mut args: Vec<_> = env::args().skip(1).collect();
 
     let available_options = vec![

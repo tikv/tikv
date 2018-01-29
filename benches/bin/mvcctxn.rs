@@ -33,8 +33,6 @@ use tempdir::TempDir;
 
 use utils::*;
 
-
-
 #[inline]
 fn do_write(db: &DB, modifies: Vec<Modify>) {
     let wb = WriteBatch::new();
@@ -225,7 +223,6 @@ fn bench_single_row(
     data_len: usize,
     bench_type: &BenchType,
 ) {
-
     let (mut keys, value_len, log_name) = match *bench_type {
         BenchType::Row => (generate_row_keys(1, 0, table_size), data_len, "row"),
         BenchType::UniqueIndex => (
@@ -238,7 +235,6 @@ fn bench_single_row(
     let mut rng = rand::thread_rng();
     rng.shuffle(&mut keys);
 
-
     let dir = TempDir::new("bench-mvcctxn").unwrap();
     let db = prepare_test_db(
         version_count,
@@ -249,20 +245,14 @@ fn bench_single_row(
 
     println!(
         "benching mvcctxn {} get\trows:{} versions:{} data len:{}\t...",
-        log_name,
-        table_size,
-        version_count,
-        data_len
+        log_name, table_size, version_count, data_len
     );
     let ns = bench_get(db.clone(), &keys) as u64;
     println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
 
     println!(
         "benching mvcctxn {} set\trows:{} versions:{} data len:{}\t...",
-        log_name,
-        table_size,
-        version_count,
-        data_len
+        log_name, table_size, version_count, data_len
     );
     let ns = bench_set(db.clone(), &keys, value_len) as u64;
     println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
@@ -278,14 +268,10 @@ fn bench_single_row(
 
     println!(
         "benching mvcctxn {} delete\trows:{} versions:{} data len:{}\t...",
-        log_name,
-        table_size,
-        version_count,
-        data_len
+        log_name, table_size, version_count, data_len
     );
     let ns = bench_delete(db.clone(), &keys) as u64;
     println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
-
 }
 
 fn bench_batch_set(
@@ -317,11 +303,7 @@ fn bench_batch_set(
 
     println!(
         "benching mvcctxn {} batch write\trows:{} versions:{} data len:{} batch:{}\t...",
-        log_name,
-        table_size,
-        version_count,
-        data_len,
-        batch_size,
+        log_name, table_size, version_count, data_len, batch_size,
     );
     let ns = bench_batch_set_impl(db.clone(), &mut keys, value_len, batch_size);
     println!(
@@ -332,7 +314,6 @@ fn bench_batch_set(
         (1_000_000_000_f64 * (batch_size as f64) / ns) as u64
     );
 }
-
 
 fn bench_concurrent_batch_impl(
     txn_count: usize,
@@ -348,10 +329,7 @@ fn bench_concurrent_batch_impl(
 
     println!(
         "benching mvcctxn {} concurrent write\tbatch size:{} batch count:{} threads:{}\t...",
-        log_name,
-        batch_size,
-        txn_count,
-        threads
+        log_name, batch_size, txn_count, threads
     );
     let time_record = record_time(
         || {
@@ -375,9 +353,9 @@ fn bench_concurrent_batch_impl(
             let dir = TempDir::new("bench-mvcctxn").unwrap();
             let db = prepare_test_db(0, 0, &[], dir.path().to_str().unwrap());
 
-            let pool = ThreadPoolBuilder::<DefaultContext, _>::with_default_factory(
-                String::from("bench-concurrent-mvcctxn"),
-            ).thread_count(threads)
+            let pool = ThreadPoolBuilder::<DefaultContext, _>::with_default_factory(String::from(
+                "bench-concurrent-mvcctxn",
+            )).thread_count(threads)
                 .build();
 
             let (tx, rx) = channel::<()>();
@@ -391,9 +369,7 @@ fn bench_concurrent_batch_impl(
                 let tx = tx.clone();
                 pool.execute(move |_| {
                     let mutations: Vec<_> = txn.iter()
-                        .map(|item| {
-                            Mutation::Put((Key::from_raw(item), vec![0u8; value_len]))
-                        })
+                        .map(|item| Mutation::Put((Key::from_raw(item), vec![0u8; value_len])))
                         .collect();
                     let primary = txn[0].clone();
                     let keys: Vec<_> = txn.drain(..).map(|item| Key::from_raw(&item)).collect();
@@ -424,8 +400,6 @@ fn bench_concurrent_batch_impl(
     );
 }
 
-
-
 pub fn bench_mvcctxn() {
     for bench_type in &[BenchType::Row, BenchType::UniqueIndex] {
         for version_count in &[1, 16, 64] {
@@ -441,7 +415,6 @@ pub fn bench_mvcctxn() {
         }
     }
 }
-
 
 pub fn bench_concurrent_batch() {
     let table_size = 100_000;
