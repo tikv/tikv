@@ -502,6 +502,7 @@ impl Storage {
             let _t_snapshot = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.get_current_thread_context();
+                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
                 thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
             };
 
@@ -517,7 +518,6 @@ impl Storage {
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.get_current_thread_context();
                     let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
-                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
                     thread_ctx.collect_key_reads(CMD, CMD_TYPE, 1);
 
                     let mut statistics = Statistics::default();
@@ -556,6 +556,7 @@ impl Storage {
             let _t_snapshot = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.get_current_thread_context();
+                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
                 thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
             };
 
@@ -571,8 +572,6 @@ impl Storage {
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.get_current_thread_context();
                     let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
-                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
-
                     // TODO: Should be Keys in result?
                     thread_ctx.collect_key_reads(CMD, CMD_TYPE, keys.len() as u64);
 
@@ -627,6 +626,7 @@ impl Storage {
             let _t_snapshot = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.get_current_thread_context();
+                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
                 thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
             };
 
@@ -642,7 +642,6 @@ impl Storage {
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.get_current_thread_context();
                     let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
-                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
 
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -867,6 +866,7 @@ impl Storage {
             let _t_snapshot = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.get_current_thread_context();
+                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
                 thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
             };
 
@@ -882,7 +882,6 @@ impl Storage {
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.get_current_thread_context();
                     let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
-                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
                     thread_ctx.collect_key_reads(CMD, CMD_TYPE, 1);
                     // no scan_count for this kind of op.
 
@@ -967,6 +966,7 @@ impl Storage {
             let _t_snapshot = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.get_current_thread_context();
+                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
                 thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
             };
 
@@ -982,7 +982,6 @@ impl Storage {
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.get_current_thread_context();
                     let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
-                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
 
                     let mut statistics = Statistics::default();
                     Storage::raw_scan(
