@@ -430,7 +430,6 @@ impl Store {
     }
 }
 
-
 fn build_row_key(table_id: i64, id: i64) -> Vec<u8> {
     let mut buf = [0; 8];
     (&mut buf as &mut [u8]).encode_i64(id).unwrap();
@@ -797,7 +796,6 @@ fn test_select() {
 
     end_point.stop().unwrap().join().unwrap();
 }
-
 
 #[test]
 fn test_batch_row_limit() {
@@ -1302,7 +1300,8 @@ fn test_order_by_column() {
     for (row, (id, name, cnt)) in spliter.zip(exp) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded =
-            datum::encode_value(&[(id as i64).into(), name_datum, (cnt as i64).into()]).unwrap();
+            datum::encode_value(&[i64::from(id).into(), name_datum, i64::from(cnt).into()])
+                .unwrap();
         let result_encoded = datum::encode_value(&row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
@@ -1938,7 +1937,6 @@ fn test_handle_truncate() {
             right.set_sig(ScalarFuncSig::CastStringAsInt);
             right.mut_children().push(value);
 
-
             let mut cond = Expr::new();
             cond.set_tp(ExprType::ScalarFunc);
             cond.set_sig(ScalarFuncSig::LTInt);
@@ -2056,7 +2054,6 @@ fn test_default_val() {
     end_point.stop().unwrap().join().unwrap();
 }
 
-
 #[test]
 fn test_output_offsets() {
     let data = vec![
@@ -2137,6 +2134,59 @@ fn test_output_counts() {
     let req = DAGSelect::from(&product.table).build();
     let resp = handle_select(&end_point, req);
     assert_eq!(resp.get_output_counts(), [data.len() as i64]);
+
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
+fn test_exec_details() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_with_data(&product, &data);
+
+    // get none
+    let req = DAGSelect::from(&product.table).build();
+    let resp = handle_request(&end_point, req);
+    assert!(!resp.has_exec_details());
+
+    let flags = &[0];
+
+    // get handle_time
+    let mut ctx = Context::new();
+    ctx.set_handle_time(true);
+    let req = DAGSelect::from(&product.table).build_with(ctx, flags);
+    let resp = handle_request(&end_point, req);
+    assert!(resp.has_exec_details());
+    let exec_details = resp.get_exec_details();
+    assert!(exec_details.has_handle_time());
+    assert!(!exec_details.has_scan_detail());
+
+    // get scan detail
+    let mut ctx = Context::new();
+    ctx.set_scan_detail(true);
+    let req = DAGSelect::from(&product.table).build_with(ctx, flags);
+    let resp = handle_request(&end_point, req);
+    assert!(resp.has_exec_details());
+    let exec_details = resp.get_exec_details();
+    assert!(!exec_details.has_handle_time());
+    assert!(exec_details.has_scan_detail());
+
+    // get both
+    let mut ctx = Context::new();
+    ctx.set_scan_detail(true);
+    ctx.set_handle_time(true);
+    let req = DAGSelect::from(&product.table).build_with(ctx, flags);
+    let resp = handle_request(&end_point, req);
+    assert!(resp.has_exec_details());
+    let exec_details = resp.get_exec_details();
+    assert!(exec_details.has_handle_time());
+    assert!(exec_details.has_scan_detail());
 
     end_point.stop().unwrap().join().unwrap();
 }

@@ -24,10 +24,10 @@ use tipb::schema::ColumnInfo;
 use protobuf::{CodedInputStream, Message as PbMsg};
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use kvproto::errorpb::{self, ServerIsBusy};
-use kvproto::kvrpcpb::{CommandPri, IsolationLevel};
+use kvproto::kvrpcpb::{CommandPri, ExecDetails, HandleTime, IsolationLevel};
 
 use util::time::{duration_to_sec, Instant};
-use util::worker::{BatchRunnable, FutureScheduler, Scheduler};
+use util::worker::{FutureScheduler, Runnable, Scheduler};
 use util::collections::HashMap;
 use util::threadpool::{Context, ContextFactory, ThreadPool, ThreadPoolBuilder};
 use server::{Config, OnResponse};
@@ -54,11 +54,11 @@ const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
 
 const DEFAULT_ERROR_CODE: i32 = 1;
 
-pub const SINGLE_GROUP: &'static [u8] = b"SingleGroup";
+pub const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
-const OUTDATED_ERROR_MSG: &'static str = "request outdated.";
+const OUTDATED_ERROR_MSG: &str = "request outdated.";
 
-const ENDPOINT_IS_BUSY: &'static str = "endpoint is busy";
+const ENDPOINT_IS_BUSY: &str = "endpoint is busy";
 
 pub struct Host {
     engine: Box<Engine>,
@@ -201,8 +201,8 @@ impl Host {
     }
 
     fn running_task_count(&self) -> usize {
-        self.pool.get_task_count() + self.low_priority_pool.get_task_count() +
-            self.high_priority_pool.get_task_count()
+        self.pool.get_task_count() + self.low_priority_pool.get_task_count()
+            + self.high_priority_pool.get_task_count()
     }
 
     fn handle_snapshot_result(&mut self, id: u64, snapshot: engine::Result<Box<Snapshot>>) {
@@ -391,7 +391,7 @@ impl RequestTask {
         self.wait_time = Some(wait_time);
     }
 
-    fn stop_record_handling(&mut self) {
+    fn stop_record_handling(&mut self) -> Option<ExecDetails> {
         self.stop_record_waiting();
 
         let query_time = duration_to_sec(self.timer.elapsed());
@@ -404,12 +404,15 @@ impl RequestTask {
         COPR_REQ_HANDLE_TIME
             .with_label_values(&[type_str])
             .observe(handle_time);
-
         COPR_SCAN_KEYS
             .with_label_values(&[type_str])
             .observe(self.statistics.total_op_count() as f64);
 
+        let mut handle = HandleTime::new();
+        handle.set_process_ms((handle_time * 1000.0) as i64);
+        handle.set_wait_ms((wait_time * 1000.0) as i64);
 
+        let mut exec_details = ExecDetails::new();
         if handle_time > SLOW_QUERY_LOWER_BOUND {
             info!(
                 "[region {}] handle {:?} [{}] takes {:?} [keys: {}, hit: {}, \
@@ -423,7 +426,24 @@ impl RequestTask {
                 self.req.get_ranges().len(),
                 self.req.get_ranges().get(0)
             );
+            exec_details.set_scan_detail(self.statistics.scan_detail());
+            exec_details.set_handle_time(handle);
+            return Some(exec_details);
         }
+
+        let ctx = self.req.get_context();
+        if !ctx.get_handle_time() && !ctx.get_scan_detail() {
+            return None;
+        }
+
+        if ctx.get_handle_time() {
+            exec_details.set_handle_time(handle);
+        }
+
+        if ctx.get_scan_detail() {
+            exec_details.set_scan_detail(self.statistics.scan_detail());
+        }
+        Some(exec_details)
     }
 
     pub fn priority(&self) -> CommandPri {
@@ -444,8 +464,12 @@ impl Display for RequestTask {
     }
 }
 
-impl BatchRunnable<Task> for Host {
+impl Runnable<Task> for Host {
     // TODO: limit pending reqs
+    fn run(&mut self, _: Task) {
+        panic!("Shouldn't call Host::run directly");
+    }
+
     #[allow(for_kv_map)]
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
         let mut grouped_reqs = map![];
@@ -476,10 +500,10 @@ impl BatchRunnable<Task> for Host {
                 Task::RetryRequests(retry) => for id in retry {
                     let reqs = self.reqs.remove(&id).unwrap();
                     let sched = self.sched.clone();
-                    if let Err(e) = self.engine.async_snapshot(
-                        reqs[0].req.get_context(),
-                        box move |(_, res)| sched.schedule(Task::SnapRes(id, res)).unwrap(),
-                    ) {
+                    if let Err(e) = self.engine
+                        .async_snapshot(reqs[0].req.get_context(), box move |(_, res)| {
+                            sched.schedule(Task::SnapRes(id, res)).unwrap()
+                        }) {
                         notify_batch_failed(e, reqs);
                     } else {
                         self.reqs.insert(id, reqs);
@@ -614,8 +638,11 @@ fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
     }
 }
 
-fn respond(resp: Response, mut t: RequestTask) -> CopStats {
-    t.stop_record_handling();
+fn respond(mut resp: Response, mut t: RequestTask) -> CopStats {
+    if let Some(exec_details) = t.stop_record_handling() {
+        resp.set_exec_details(exec_details);
+    }
+
     (t.on_resp)(resp);
     CopStats {
         stats: t.statistics,
@@ -658,7 +685,7 @@ impl TiDbEndPoint {
         batch_row_limit: usize,
     ) -> Result<Response> {
         let ranges = t.req.take_ranges().into_vec();
-        let mut ctx = DAGContext::new(dag, ranges, self.snap, t.ctx.clone(), batch_row_limit)?;
+        let mut ctx = DAGContext::new(dag, ranges, self.snap, Arc::clone(&t.ctx), batch_row_limit)?;
         let res = ctx.handle_request();
         ctx.collect_statistics_into(&mut t.statistics);
         ctx.collect_metrics_into(&mut t.scan_counter);
@@ -717,11 +744,11 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
     }
 }
 
-pub const STR_REQ_TYPE_SELECT: &'static str = "select";
-pub const STR_REQ_TYPE_INDEX: &'static str = "index";
-pub const STR_REQ_PRI_LOW: &'static str = "low";
-pub const STR_REQ_PRI_NORMAL: &'static str = "normal";
-pub const STR_REQ_PRI_HIGH: &'static str = "high";
+pub const STR_REQ_TYPE_SELECT: &str = "select";
+pub const STR_REQ_TYPE_INDEX: &str = "index";
+pub const STR_REQ_PRI_LOW: &str = "low";
+pub const STR_REQ_PRI_NORMAL: &str = "normal";
+pub const STR_REQ_PRI_HIGH: &str = "high";
 
 #[inline]
 pub fn get_req_pri_str(pri: CommandPri) -> &'static str {
@@ -739,6 +766,7 @@ mod tests {
     use std::sync::*;
     use std::thread;
     use std::time::Duration;
+    use std::ops::Sub;
 
     use kvproto::coprocessor::Request;
     use tipb::select::DAGRequest;
@@ -773,7 +801,9 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(
             Request::new(),
-            box move |msg| { tx.send(msg).unwrap(); },
+            box move |msg| {
+                tx.send(msg).unwrap();
+            },
             1000,
         );
         let ctx = ReqContext {
@@ -787,7 +817,47 @@ mod tests {
         let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_other_error().is_empty());
         assert_eq!(resp.get_other_error(), super::OUTDATED_ERROR_MSG);
+        worker.stop();
     }
+
+    #[test]
+    fn test_exec_details_with_long_query() {
+        let mut worker = WorkerBuilder::new("test-endpoint").batch_size(30).create();
+        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let mut cfg = Config::default();
+        cfg.end_point_concurrency = 1;
+        let pd_worker = FutureWorker::new("test-pd-worker");
+        let end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
+        worker.start(end_point).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let mut task = RequestTask::new(
+            Request::new(),
+            box move |msg| {
+                tx.send(msg).unwrap();
+            },
+            1000,
+        );
+        let ctx = ReqContext {
+            deadline: task.ctx.deadline - Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS),
+            isolation_level: task.ctx.isolation_level,
+            fill_cache: task.ctx.fill_cache,
+            table_scan: task.ctx.table_scan,
+        };
+        task.ctx = Arc::new(ctx);
+        task.stop_record_waiting();
+        task.timer = task.timer.sub(Duration::from_secs(
+            (super::SLOW_QUERY_LOWER_BOUND * 2.0) as u64,
+        ));
+        worker.schedule(Task::Request(task)).unwrap();
+        let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+
+        // check exec details
+        let exec_details = resp.get_exec_details();
+        assert!(exec_details.has_handle_time());
+        assert!(exec_details.has_scan_detail());
+        worker.stop();
+    }
+
     #[test]
     fn test_too_many_reqs() {
         let mut worker = WorkerBuilder::new("test-endpoint").batch_size(30).create();
@@ -825,6 +895,7 @@ mod tests {
                 continue;
             }
             assert!(resp.get_region_error().has_server_is_busy());
+            worker.stop();
             return;
         }
         panic!("suppose to get ServerIsBusy error.");

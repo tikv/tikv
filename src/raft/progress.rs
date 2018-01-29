@@ -341,7 +341,6 @@ impl Inflights {
                 break;
             }
 
-
             // increase index and maybe rotate
             idx += 1;
             if idx >= self.cap() {

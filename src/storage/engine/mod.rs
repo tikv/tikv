@@ -20,7 +20,7 @@ use std::time::Duration;
 pub use self::rocksdb::EngineRocksdb;
 use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
 use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
 use kvproto::errorpb::Error as ErrorHeader;
 
 use config;
@@ -33,19 +33,19 @@ mod metrics;
 use super::super::raftstore::store::engine::IterOption;
 
 // only used for rocksdb without persistent.
-pub const TEMP_DIR: &'static str = "";
+pub const TEMP_DIR: &str = "";
 
 const SEEK_BOUND: usize = 30;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
-const STAT_TOTAL: &'static str = "total";
-const STAT_PROCESSED: &'static str = "processed";
-const STAT_GET: &'static str = "get";
-const STAT_NEXT: &'static str = "next";
-const STAT_PREV: &'static str = "prev";
-const STAT_SEEK: &'static str = "seek";
-const STAT_SEEK_FOR_PREV: &'static str = "seek_for_prev";
-const STAT_OVER_SEEK_BOUND: &'static str = "over_seek_bound";
+const STAT_TOTAL: &str = "total";
+const STAT_PROCESSED: &str = "processed";
+const STAT_GET: &str = "get";
+const STAT_NEXT: &str = "next";
+const STAT_PREV: &str = "prev";
+const STAT_SEEK: &str = "seek";
+const STAT_SEEK_FOR_PREV: &str = "seek_for_prev";
+const STAT_OVER_SEEK_BOUND: &str = "over_seek_bound";
 
 pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
 pub type BatchResults<T> = Vec<Option<(CbContext, Result<T>)>>;
@@ -87,7 +87,7 @@ pub trait Engine: Send + Debug {
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        match wait_op!(|cb| self.async_write(ctx, batch, cb).unwrap(), timeout) {
+        match wait_op!(|cb| self.async_write(ctx, batch, cb), timeout) {
             Some((_, res)) => res,
             None => Err(Error::Timeout(timeout)),
         }
@@ -95,7 +95,7 @@ pub trait Engine: Send + Debug {
 
     fn snapshot(&self, ctx: &Context) -> Result<Box<Snapshot>> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        match wait_op!(|cb| self.async_snapshot(ctx, cb).unwrap(), timeout) {
+        match wait_op!(|cb| self.async_snapshot(ctx, cb), timeout) {
             Some((_, res)) => res,
             None => Err(Error::Timeout(timeout)),
         }
@@ -121,7 +121,7 @@ pub trait Engine: Send + Debug {
     fn clone(&self) -> Box<Engine + 'static>;
 }
 
-pub trait Snapshot: Send {
+pub trait Snapshot: Send + Debug {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
     #[allow(needless_lifetimes)]
@@ -231,6 +231,13 @@ impl CFStatistics {
         self.over_seek_bound = self.over_seek_bound.saturating_add(other.over_seek_bound);
         self.flow_stats.add(&other.flow_stats);
     }
+
+    pub fn scan_info(&self) -> ScanInfo {
+        let mut info = ScanInfo::new();
+        info.set_processed(self.processed as i64);
+        info.set_total(self.total_op_count() as i64);
+        info
+    }
 }
 
 #[derive(Default, Copy, Clone)]
@@ -261,6 +268,14 @@ impl Statistics {
         self.lock.add(&other.lock);
         self.write.add(&other.write);
         self.data.add(&other.data);
+    }
+
+    pub fn scan_detail(&self) -> ScanDetail {
+        let mut detail = ScanDetail::new();
+        detail.set_data(self.data.scan_info());
+        detail.set_lock(self.lock.scan_info());
+        detail.set_write(self.write.scan_info());
+        detail
     }
 }
 
@@ -302,8 +317,8 @@ impl Cursor {
             return Ok(false);
         }
 
-        if self.scan_mode == ScanMode::Forward && self.valid() &&
-            self.iter.key() >= key.encoded().as_slice()
+        if self.scan_mode == ScanMode::Forward && self.valid()
+            && self.iter.key() >= key.encoded().as_slice()
         {
             return Ok(true);
         }
@@ -327,8 +342,8 @@ impl Cursor {
             return self.seek(key, statistics);
         }
         let ord = self.iter.key().cmp(key.encoded());
-        if ord == Ordering::Equal ||
-            (self.scan_mode == ScanMode::Forward && ord == Ordering::Greater)
+        if ord == Ordering::Equal
+            || (self.scan_mode == ScanMode::Forward && ord == Ordering::Greater)
         {
             return Ok(true);
         }
@@ -389,8 +404,8 @@ impl Cursor {
             return Ok(false);
         }
 
-        if self.scan_mode == ScanMode::Backward && self.valid() &&
-            self.iter.key() <= key.encoded().as_slice()
+        if self.scan_mode == ScanMode::Backward && self.valid()
+            && self.iter.key() <= key.encoded().as_slice()
         {
             return Ok(true);
         }
@@ -410,8 +425,7 @@ impl Cursor {
             return self.seek_for_prev(key, statistics);
         }
         let ord = self.iter.key().cmp(key.encoded());
-        if ord == Ordering::Equal ||
-            (self.scan_mode == ScanMode::Backward && ord == Ordering::Less)
+        if ord == Ordering::Equal || (self.scan_mode == ScanMode::Backward && ord == Ordering::Less)
         {
             return Ok(true);
         }
@@ -554,6 +568,10 @@ quick_error! {
             description("request timeout")
             display("timeout after {:?}", d)
         }
+        EmptyRequest {
+            description("an empty request")
+            display("an empty request")
+        }
         Other(err: Box<error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
@@ -569,6 +587,7 @@ impl Error {
             Error::Request(ref e) => Some(Error::Request(e.clone())),
             Error::RocksDb(ref msg) => Some(Error::RocksDb(msg.clone())),
             Error::Timeout(d) => Some(Error::Timeout(d)),
+            Error::EmptyRequest => Some(Error::EmptyRequest),
             Error::Other(_) => None,
         }
     }
@@ -587,7 +606,7 @@ mod tests {
     use kvproto::kvrpcpb::Context;
     use super::super::super::raftstore::store::engine::IterOption;
 
-    const TEST_ENGINE_CFS: &'static [CfName] = &["cf"];
+    const TEST_ENGINE_CFS: &[CfName] = &["cf"];
 
     #[test]
     fn rocksdb() {
@@ -601,6 +620,7 @@ mod tests {
         test_near_seek(e.as_ref());
         test_cf(e.as_ref());
         test_empty_write(e.as_ref());
+        test_empty_batch_snapshot(e.as_ref());
     }
 
     #[test]
@@ -760,8 +780,7 @@ mod tests {
             .unwrap();
         let mut statistics = CFStatistics::default();
         assert!(!iter.seek(&make_key(b"z\x00"), &mut statistics).unwrap());
-        assert!(!iter.reverse_seek(&make_key(b"x"), &mut statistics)
-            .unwrap());
+        assert!(!iter.reverse_seek(&make_key(b"x"), &mut statistics).unwrap());
         must_delete(engine, b"x");
         must_delete(engine, b"z");
     }
@@ -973,6 +992,13 @@ mod tests {
     }
 
     fn test_empty_write(engine: &Engine) {
-        engine.write(&Context::new(), vec![]).unwrap();
+        engine.write(&Context::new(), vec![]).unwrap_err();
+    }
+
+    fn test_empty_batch_snapshot(engine: &Engine) {
+        let on_finished = box move |_| {};
+        engine
+            .async_batch_snapshot(vec![], on_finished)
+            .unwrap_err();
     }
 }

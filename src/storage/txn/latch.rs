@@ -232,6 +232,5 @@ mod tests {
         // finally c acquire lock success
         acquired_c = latches.acquire(&mut lock_c, cid_c);
         assert_eq!(acquired_c, true);
-
     }
 }

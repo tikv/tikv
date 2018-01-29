@@ -23,7 +23,6 @@ use super::util::new_raft_storage_with_store_count;
 use tikv::storage::config::Config;
 use tikv::storage::engine;
 
-
 #[derive(Clone)]
 pub struct AssertionStorage {
     pub store: SyncStorage,
@@ -99,11 +98,11 @@ impl AssertionStorage {
 
     fn expect_not_leader_or_stale_command(&self, err: storage::Error) {
         match err {
-            storage::Error::Txn(
-                txn::Error::Mvcc(mvcc::Error::Engine(engine::Error::Request(ref e))),
-            ) |
-            storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))) |
-            storage::Error::Engine(engine::Error::Request(ref e)) => {
+            storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(
+                engine::Error::Request(ref e),
+            )))
+            | storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e)))
+            | storage::Error::Engine(engine::Error::Request(ref e)) => {
                 assert!(
                     e.has_not_leader() | e.has_stale_command(),
                     "invalid error {:?}",
@@ -318,16 +317,12 @@ impl AssertionStorage {
             .unwrap();
         let locks: Vec<(&[u8], &[u8], u64)> = res.iter()
             .filter_map(|x| {
-                if let Err(
-                    storage::Error::Txn(
-                        txn::Error::Mvcc(mvcc::Error::KeyIsLocked {
-                            ref key,
-                            ref primary,
-                            ts,
-                            ..
-                        }),
-                    ),
-                ) = *x
+                if let Err(storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked {
+                    ref key,
+                    ref primary,
+                    ts,
+                    ..
+                }))) = *x
                 {
                     Some((key.as_ref(), primary.as_ref(), ts))
                 } else {
@@ -382,9 +377,17 @@ impl AssertionStorage {
         );
     }
 
-    pub fn scan_lock_ok(&self, max_ts: u64, expect: Vec<LockInfo>) {
+    pub fn scan_lock_ok(
+        &self,
+        max_ts: u64,
+        start_key: Vec<u8>,
+        limit: usize,
+        expect: Vec<LockInfo>,
+    ) {
         assert_eq!(
-            self.store.scan_lock(self.ctx.clone(), max_ts).unwrap(),
+            self.store
+                .scan_lock(self.ctx.clone(), max_ts, start_key, limit)
+                .unwrap(),
             expect
         );
     }
@@ -415,7 +418,6 @@ impl AssertionStorage {
             .resolve_lock(self.ctx.clone(), start_ts, commit_ts);
         self.expect_invalid_tso_err(resp, start_ts, commit_ts.unwrap())
     }
-
 
     pub fn gc_ok(&self, safe_point: u64) {
         self.store.gc(self.ctx.clone(), safe_point).unwrap();

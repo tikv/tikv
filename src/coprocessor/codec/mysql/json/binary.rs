@@ -135,11 +135,10 @@ pub trait JsonEncoder: NumberEncoder {
         let mut value_entries = Vec::with_capacity(value_entries_len);
         let mut encode_values = vec![];
         for value in data.values() {
-            value_entries
-                .encode_json_item(value, &mut value_offset, &mut encode_values)?;
+            value_entries.encode_json_item(value, &mut value_offset, &mut encode_values)?;
         }
-        let size = ELEMENT_COUNT_LEN + SIZE_LEN + key_entries_len + value_entries_len +
-            encode_keys.len() + encode_values.len();
+        let size = ELEMENT_COUNT_LEN + SIZE_LEN + key_entries_len + value_entries_len
+            + encode_keys.len() + encode_values.len();
         self.encode_u32_le(element_count as u32)?;
         self.encode_u32_le(size as u32)?;
         self.write_all(key_entries.as_mut())?;
@@ -157,8 +156,7 @@ pub trait JsonEncoder: NumberEncoder {
         let mut value_entries = Vec::with_capacity(value_entries_len);
         let mut encode_values = vec![];
         for value in data {
-            value_entries
-                .encode_json_item(value, &mut value_offset, &mut encode_values)?;
+            value_entries.encode_json_item(value, &mut value_offset, &mut encode_values)?;
         }
         let total_size = ELEMENT_COUNT_LEN + SIZE_LEN + value_entries_len + encode_values.len();
         self.encode_u32_le(element_count as u32)?;
@@ -268,8 +266,7 @@ pub trait JsonDecoder: NumberDecoder {
             let key_len = key_entries_data.decode_u16_le()?;
             let key_data = &data[key_offset..(key_offset + key_len as usize)];
             let key = String::from(str::from_utf8(key_data).unwrap());
-            let value = value_entries_data
-                .decode_json_item(&data[key_offset..], key_real_offset)?;
+            let value = value_entries_data.decode_json_item(&data[key_offset..], key_real_offset)?;
             obj.insert(key, value);
             key_offset += key_len as usize;
         }
@@ -290,8 +287,7 @@ pub trait JsonDecoder: NumberDecoder {
         let mut array_data = Vec::with_capacity(element_count);
         let data_start_offset = (U32_LEN + U32_LEN + value_entries_len) as u32;
         for _ in 0..element_count {
-            let value = value_entries_data
-                .decode_json_item(values_data, data_start_offset)?;
+            let value = value_entries_data.decode_json_item(values_data, data_start_offset)?;
             array_data.push(value);
         }
         Ok(Json::Array(array_data))

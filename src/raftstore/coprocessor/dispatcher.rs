@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use rocksdb::DB;
 
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
@@ -225,9 +224,10 @@ impl CoprocessorHost {
     ) -> Option<Vec<u8>> {
         let mut ob_ctx = ObserverContext::new(region);
         for entry in &self.registry.split_check_observers {
-            if let Some(split_key) = entry
-                .observer
-                .on_split_check(&mut ob_ctx, split_status, key, value_size)
+            if let Some(split_key) =
+                entry
+                    .observer
+                    .on_split_check(&mut ob_ctx, split_status, key, value_size)
             {
                 return Some(split_key);
             }

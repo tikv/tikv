@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod test_raftkv;
 pub mod sync_storage;
 pub mod assert_storage;
-mod test_storage;
-mod test_raft_storage;
 pub mod util;

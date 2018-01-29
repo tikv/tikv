@@ -92,8 +92,7 @@ impl Write {
         if b.is_empty() {
             return Err(Error::BadFormatWrite);
         }
-        let write_type = WriteType::from_u8(b.read_u8()?)
-            .ok_or(Error::BadFormatWrite)?;
+        let write_type = WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)?;
         let start_ts = b.decode_var_u64()?;
         if b.is_empty() {
             return Ok(Write::new(write_type, start_ts, None));
@@ -116,6 +115,10 @@ impl Write {
             );
         }
         Ok(Write::new(write_type, start_ts, Some(b.to_vec())))
+    }
+
+    pub fn parse_type(mut b: &[u8]) -> Result<WriteType> {
+        WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)
     }
 }
 
@@ -179,6 +182,7 @@ mod tests {
             let v = write.to_bytes();
             let w = Write::parse(&v[..]).unwrap_or_else(|e| panic!("#{} parse() err: {:?}", i, e));
             assert_eq!(w, write, "#{} expect {:?}, but got {:?}", i, write, w);
+            assert_eq!(Write::parse_type(&v).unwrap(), w.write_type);
         }
 
         // Test `Write::parse()` handles incorrect input.
@@ -187,5 +191,6 @@ mod tests {
         let lock = Write::new(WriteType::Lock, 1, Some(b"short_value".to_vec()));
         let v = lock.to_bytes();
         assert!(Write::parse(&v[..1]).is_err());
+        assert_eq!(Write::parse_type(&v).unwrap(), lock.write_type);
     }
 }

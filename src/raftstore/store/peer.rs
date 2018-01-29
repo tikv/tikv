@@ -24,15 +24,15 @@ use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::{self, Message, MessageStatic};
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
-use kvproto::raft_cmdpb::{AdminCmdType, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse,
-                          TransferLeaderRequest, TransferLeaderResponse};
+use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
+                          RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{PeerState, RaftMessage};
 use kvproto::pdpb::PeerStats;
 
 use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX};
 use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::Config;
+use raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
 use raftstore::store::worker::apply::ExecResult;
 use raftstore::store::worker::{Apply, ApplyRes, ApplyTask};
@@ -47,7 +47,6 @@ use pd::{PdTask, INVALID_ID};
 use super::store::{DestroyPeerJob, Store, StoreStat};
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::util::{self, Lease, LeaseState};
-use super::msg::Callback;
 use super::cmd_resp;
 use super::transport::Transport;
 use super::engine::Snapshot;
@@ -207,6 +206,7 @@ pub struct Peer {
     pub delete_keys_hint: u64,
     /// approximate region size.
     pub approximate_size: Option<u64>,
+    pub compaction_declined_bytes: u64,
 
     pub consistency_state: ConsistencyState,
 
@@ -291,7 +291,7 @@ impl Peer {
             region,
             sched,
             tag.clone(),
-            store.entry_cache_metries.clone(),
+            Rc::clone(&store.entry_cache_metries),
         )?;
 
         let applied_index = ps.applied_index();
@@ -323,10 +323,11 @@ impl Peer {
             pending_reads: Default::default(),
             peer_cache: RefCell::new(peer_cache),
             peer_heartbeats: FlatMap::default(),
-            coprocessor_host: store.coprocessor_host.clone(),
+            coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
             delete_keys_hint: 0,
             approximate_size: None,
+            compaction_declined_bytes: 0,
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
             marked_to_be_checked: false,
@@ -438,11 +439,11 @@ impl Peer {
     }
 
     pub fn kv_engine(&self) -> Arc<DB> {
-        self.kv_engine.clone()
+        Arc::clone(&self.kv_engine)
     }
 
     pub fn raft_engine(&self) -> Arc<DB> {
-        self.raft_engine.clone()
+        Arc::clone(&self.raft_engine)
     }
 
     pub fn region(&self) -> &metapb::Region {
@@ -642,8 +643,7 @@ impl Peer {
                     self.renew_leader_lease(monotonic_raw_now());
                     debug!(
                         "{} becomes leader and lease expired time is {:?}",
-                        self.tag,
-                        self.leader_lease
+                        self.tag, self.leader_lease
                     );
                     self.heartbeat_pd(worker)
                 }
@@ -755,7 +755,7 @@ impl Peer {
             Err(e) => {
                 // We may have written something to writebatch and it can't be reverted, so has
                 // to panic here.
-                panic!("{} failed to handle raft ready: {:?}", self.tag, e);
+                panic!("{} failed to handle raft ready: {:?}", self.tag, e)
             }
         };
 
@@ -850,7 +850,7 @@ impl Peer {
                     // TODO: we should add test case that a split happens before pending
                     // read-index is handled. To do this we need to control async-apply
                     // procedure precisely.
-                    cb(self.handle_read(req));
+                    cb.invoke_read(self.handle_read(req));
                 }
                 propose_time = Some(read.renew_lease_time);
             }
@@ -922,7 +922,7 @@ impl Peer {
             for _ in 0..self.pending_reads.ready_cnt {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 for (req, cb) in read.cmds.drain(..) {
-                    cb(self.handle_read(req));
+                    cb.invoke_read(self.handle_read(req));
                 }
             }
             self.pending_reads.ready_cnt = 0;
@@ -1020,7 +1020,7 @@ impl Peer {
         match res {
             Err(e) => {
                 cmd_resp::bind_error(&mut err_resp, e);
-                cb(err_resp);
+                cb.invoke_with_response(err_resp);
                 false
             }
             Ok(idx) => {
@@ -1042,11 +1042,12 @@ impl Peer {
         &mut self,
         req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
-    ) -> Option<RaftCmdResponse> {
+    ) -> Option<ReadResponse> {
+        let snapshot = None;
         if self.pending_remove {
-            let mut resp = RaftCmdResponse::new();
-            cmd_resp::bind_error(&mut resp, box_err!("peer is pending remove"));
-            return Some(resp);
+            let mut response = RaftCmdResponse::new();
+            cmd_resp::bind_error(&mut response, box_err!("peer is pending remove"));
+            return Some(ReadResponse { response, snapshot });
         }
         metrics.all += 1;
 
@@ -1061,9 +1062,9 @@ impl Peer {
             Ok(RequestPolicy::ReadIndex) => None,
             Ok(_) => unreachable!(),
             Err(e) => {
-                let mut resp = cmd_resp::new_error(e);
-                cmd_resp::bind_term(&mut resp, self.term());
-                Some(resp)
+                let mut response = cmd_resp::new_error(e);
+                cmd_resp::bind_term(&mut response, self.term());
+                Some(ReadResponse { response, snapshot })
             }
         }
     }
@@ -1112,8 +1113,8 @@ impl Peer {
             return Ok(RequestPolicy::ProposeNormal);
         }
 
-        if (req.has_header() && req.get_header().get_read_quorum()) ||
-            !self.raft_group.raft.in_lease()
+        if (req.has_header() && req.get_header().get_read_quorum())
+            || !self.raft_group.raft.in_lease()
         {
             return Ok(RequestPolicy::ReadIndex);
         }
@@ -1132,8 +1133,7 @@ impl Peer {
             LeaseState::Expired => {
                 debug!(
                     "{} leader lease is expired: {:?}",
-                    self.tag,
-                    self.leader_lease
+                    self.tag, self.leader_lease
                 );
                 self.leader_lease.expire();
             }
@@ -1177,13 +1177,12 @@ impl Peer {
         let change_type = change_peer.get_change_type();
         let peer = change_peer.get_peer();
 
-        if change_type == ConfChangeType::RemoveNode && !self.cfg.allow_remove_leader &&
-            peer.get_id() == self.peer_id()
+        if change_type == ConfChangeType::RemoveNode && !self.cfg.allow_remove_leader
+            && peer.get_id() == self.peer_id()
         {
             warn!(
                 "{} rejects remove leader request {:?}",
-                self.tag,
-                change_peer
+                self.tag, change_peer
             );
             return Err(box_err!("ignore remove leader"));
         }
@@ -1220,11 +1219,7 @@ impl Peer {
         info!(
             "{} rejects unsafe conf change request {:?}, total {}, healthy {},  \
              quorum after change {}",
-            self.tag,
-            change_peer,
-            total,
-            healthy,
-            quorum_after_change
+            self.tag, change_peer, total, healthy, quorum_after_change
         );
         Err(box_err!(
             "unsafe to perform conf change {:?}, total {}, healthy {}, quorum after \
@@ -1262,7 +1257,7 @@ impl Peer {
 
     fn read_local(&mut self, req: RaftCmdRequest, cb: Callback, metrics: &mut RaftProposeMetrics) {
         metrics.local_read += 1;
-        cb(self.handle_read(req));
+        cb.invoke_read(self.handle_read(req))
     }
 
     fn read_index(
@@ -1292,8 +1287,8 @@ impl Peer {
         let pending_read_count = self.raft_group.raft.pending_read_count();
         let ready_read_count = self.raft_group.raft.ready_read_count();
 
-        if pending_read_count == last_pending_read_count &&
-            ready_read_count == last_ready_read_count
+        if pending_read_count == last_pending_read_count
+            && ready_read_count == last_ready_read_count
         {
             // The message gets dropped silently, can't be handled anymore.
             apply::notify_stale_req(self.term(), cb);
@@ -1318,7 +1313,7 @@ impl Peer {
                     term: self.term(),
                     renew_lease_time: Some(renew_lease_time),
                 };
-                self.post_propose(meta, false, box |_| {});
+                self.post_propose(meta, false, Callback::None);
             }
         }
 
@@ -1374,15 +1369,14 @@ impl Peer {
         } else {
             info!(
                 "{} transfer leader message {:?} ignored directly",
-                self.tag,
-                req
+                self.tag, req
             );
             false
         };
 
         // transfer leader command doesn't need to replicate log and apply, so we
         // return immediately. Note that this command may fail, we can view it just as an advice
-        cb(make_transfer_leader_response());
+        cb.invoke_with_response(make_transfer_leader_response());
 
         transferred
     }
@@ -1434,16 +1428,19 @@ impl Peer {
         Ok(propose_index)
     }
 
-    fn handle_read(&mut self, req: RaftCmdRequest) -> RaftCmdResponse {
+    fn handle_read(&mut self, req: RaftCmdRequest) -> ReadResponse {
         let mut resp = self.exec_read(&req).unwrap_or_else(|e| {
             match e {
                 Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
                 _ => error!("{} execute raft command err: {:?}", self.tag, e),
             }
-            cmd_resp::new_error(e)
+            ReadResponse {
+                response: cmd_resp::new_error(e),
+                snapshot: None,
+            }
         });
 
-        cmd_resp::bind_term(&mut resp, self.term());
+        cmd_resp::bind_term(&mut resp.response, self.term());
         resp
     }
 
@@ -1463,10 +1460,10 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
     let (mut check_ver, mut check_conf_ver) = (false, false);
     if req.has_admin_request() {
         match req.get_admin_request().get_cmd_type() {
-            AdminCmdType::CompactLog |
-            AdminCmdType::InvalidAdmin |
-            AdminCmdType::ComputeHash |
-            AdminCmdType::VerifyHash => {}
+            AdminCmdType::CompactLog
+            | AdminCmdType::InvalidAdmin
+            | AdminCmdType::ComputeHash
+            | AdminCmdType::VerifyHash => {}
             AdminCmdType::Split => check_ver = true,
             AdminCmdType::ChangePeer => check_conf_ver = true,
             AdminCmdType::TransferLeader => {
@@ -1491,8 +1488,8 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
     let latest_epoch = region.get_region_epoch();
 
     // should we use not equal here?
-    if (check_conf_ver && from_epoch.get_conf_ver() < latest_epoch.get_conf_ver()) ||
-        (check_ver && from_epoch.get_version() < latest_epoch.get_version())
+    if (check_conf_ver && from_epoch.get_conf_ver() < latest_epoch.get_conf_ver())
+        || (check_ver && from_epoch.get_version() < latest_epoch.get_version())
     {
         debug!(
             "[region {}] received stale epoch {:?}, mime: {:?}",
@@ -1597,8 +1594,8 @@ impl Peer {
         // Heartbeat message for the store of that peer to check whether to create a new peer
         // when receiving these messages, or just to wait for a pending region split to perform
         // later.
-        if self.get_store().is_initialized() &&
-            (msg_type == MessageType::MsgRequestVote ||
+        if self.get_store().is_initialized()
+            && (msg_type == MessageType::MsgRequestVote ||
             // the peer has not been known to this leader, it may exist or not.
             (msg_type == MessageType::MsgHeartbeat && msg.get_commit() == INVALID_INDEX))
         {
@@ -1612,10 +1609,7 @@ impl Peer {
         if let Err(e) = trans.send(send_msg) {
             warn!(
                 "{} failed to send msg to {} in store {}, err: {:?}",
-                self.tag,
-                to_peer_id,
-                to_store_id,
-                e
+                self.tag, to_peer_id, to_store_id, e
             );
 
             // unreachable store
@@ -1629,37 +1623,42 @@ impl Peer {
         Ok(())
     }
 
-    fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<RaftCmdResponse> {
+    fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<ReadResponse> {
         check_epoch(self.region(), req)?;
-        let mut snap = None;
+        let mut need_snapshot = false;
+        let snapshot = Snapshot::new(Arc::clone(&self.kv_engine));
         let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
 
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Get => {
-                    if snap.is_none() {
-                        snap = Some(Snapshot::new(self.kv_engine.clone()));
-                    }
-                    apply::do_get(&self.tag, self.region(), snap.as_ref().unwrap(), req)?
+                CmdType::Get => apply::do_get(&self.tag, self.region(), &snapshot, req)?,
+                CmdType::Snap => {
+                    need_snapshot = true;
+                    raft_cmdpb::Response::new()
                 }
-                CmdType::Snap => apply::do_snap(self.region().to_owned())?,
-                CmdType::Prewrite |
-                CmdType::Put |
-                CmdType::Delete |
-                CmdType::DeleteRange |
-                CmdType::Invalid => unreachable!(),
+                CmdType::Prewrite
+                | CmdType::Put
+                | CmdType::Delete
+                | CmdType::DeleteRange
+                | CmdType::Invalid => unreachable!(),
             };
-
             resp.set_cmd_type(cmd_type);
-
             responses.push(resp);
         }
 
-        let mut resp = RaftCmdResponse::new();
-        resp.set_responses(protobuf::RepeatedField::from_vec(responses));
-        Ok(resp)
+        let mut response = RaftCmdResponse::new();
+        response.set_responses(protobuf::RepeatedField::from_vec(responses));
+        let snapshot = if need_snapshot {
+            Some(RegionSnapshot::from_snapshot(
+                snapshot.into_sync(),
+                self.region().to_owned(),
+            ))
+        } else {
+            None
+        };
+        Ok(ReadResponse { response, snapshot })
     }
 }
 
@@ -1678,8 +1677,8 @@ fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderReques
 fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
     if msg.has_admin_request() {
         let req = msg.get_admin_request();
-        return req.get_cmd_type() == AdminCmdType::ChangePeer ||
-            req.get_cmd_type() == AdminCmdType::Split;
+        return req.get_cmd_type() == AdminCmdType::ChangePeer
+            || req.get_cmd_type() == AdminCmdType::Split;
     }
 
     msg.get_header().get_sync_log()
