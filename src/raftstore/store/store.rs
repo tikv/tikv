@@ -2667,7 +2667,7 @@ fn calc_region_declined_bytes(
         for prop in &event.output_props {
             new_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
         }
-        last_end_key = end_key.clone();
+        last_end_key = end_key;
 
         // Filter some trivial declines for better performance.
         if old_size > new_size && old_size - new_size > bytes_threshold {
