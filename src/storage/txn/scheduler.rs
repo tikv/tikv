@@ -649,18 +649,6 @@ fn process_read(
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
-        Command::RawGet { ref key, .. } => {
-            sched_ctx
-                .command_keyread_duration
-                .with_label_values(&[tag])
-                .observe(1f64);
-            match snapshot.get(key) {
-                Ok(val) => ProcessResult::Value { value: val },
-                Err(e) => ProcessResult::Failed {
-                    err: StorageError::from(e),
-                },
-            }
-        }
         Command::RawScan {
             ref start_key,
             limit,

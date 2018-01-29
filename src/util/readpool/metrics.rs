@@ -18,7 +18,7 @@ lazy_static! {
         register_histogram_vec!(
             "tikv_readpool_command_duration_seconds",
             "Bucketed histogram of readpool command execution duration",
-            &["cmd", "stage"],
+            &["cmd", "cmd_type", "stage"],
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
@@ -26,14 +26,14 @@ lazy_static! {
         register_counter_vec!(
             "tikv_readpool_command_total",
             "Total count of readpool commands received",
-            &["cmd", "priority"]
+            &["cmd", "cmd_type", "priority"]
         ).unwrap();
 
     pub static ref KEY_READ_HISTOGRAM_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_readpool_key_reads",
             "Bucketed histogram of readpool key reads",
-            &["cmd"],
+            &["cmd", "cmd_type"],
             exponential_buckets(1.0, 2.0, 21).unwrap()
         ).unwrap();
 

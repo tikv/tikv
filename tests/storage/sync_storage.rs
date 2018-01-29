@@ -164,7 +164,7 @@ impl SyncStorage {
     }
 
     pub fn raw_get(&self, ctx: Context, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
-        wait_op!(|cb| self.store.async_raw_get(ctx, key, cb)).unwrap()
+        self.store.async_raw_get(ctx, key).wait()
     }
 
     pub fn raw_put(&self, ctx: Context, key: Vec<u8>, value: Vec<u8>) -> Result<()> {

@@ -53,23 +53,29 @@ impl Context {
     }
 
     #[inline]
-    pub fn collect_command_duration(&mut self, cmd: &str, stage: &str) -> LocalHistogramTimer {
+    pub fn collect_command_duration(
+        &mut self,
+        cmd: &str,
+        cmd_type: &str,
+        stage: &str,
+    ) -> LocalHistogramTimer {
         self.command_duration
-            .with_label_values(&[cmd, stage])
+            .with_label_values(&[cmd, cmd_type, stage])
             .start_coarse_timer()
     }
 
+    /// `cmd_type` can be `"raw"` or `"kv"`.
     #[inline]
-    pub fn collect_command_count(&mut self, cmd: &str, priority: super::Priority) {
+    pub fn collect_command_count(&mut self, cmd: &str, cmd_type: &str, priority: super::Priority) {
         self.command_counter
-            .with_label_values(&[cmd, &priority.to_string()])
+            .with_label_values(&[cmd, cmd_type, &priority.to_string()])
             .inc();
     }
 
     #[inline]
-    pub fn collect_key_reads(&mut self, cmd: &str, count: u64) {
+    pub fn collect_key_reads(&mut self, cmd: &str, cmd_type: &str, count: u64) {
         self.key_reads
-            .with_label_values(&[cmd])
+            .with_label_values(&[cmd, cmd_type])
             .observe(count as f64);
     }
 

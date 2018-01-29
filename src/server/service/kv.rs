@@ -591,28 +591,20 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        let (cb, future) = make_callback();
-        let res = self.storage
-            .async_raw_get(req.take_context(), req.take_key(), cb);
-        if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
-            return;
-        }
-
-        let future = future
-            .map_err(Error::from)
-            .map(|v| {
-                let mut resp = RawGetResponse::new();
+        let future = self.storage
+            .async_raw_get(req.take_context(), req.take_key())
+            .then(|v| {
+                let mut res = RawGetResponse::new();
                 if let Some(err) = extract_region_error(&v) {
-                    resp.set_region_error(err);
+                    res.set_region_error(err);
                 } else {
                     match v {
-                        Ok(Some(val)) => resp.set_value(val),
+                        Ok(Some(val)) => res.set_value(val),
                         Ok(None) => {}
-                        Err(e) => resp.set_error(format!("{}", e)),
+                        Err(e) => res.set_error(format!("{}", e)),
                     }
                 }
-                resp
+                Ok(res)
             })
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())

@@ -132,10 +132,6 @@ pub enum Command {
         scan_key: Option<Key>,
         keys: Vec<Key>,
     },
-    RawGet {
-        ctx: Context,
-        key: Key,
-    },
     RawScan {
         ctx: Context,
         start_key: Key,
@@ -229,9 +225,6 @@ impl Display for Command {
                 "kv::command::gc scan {:?} @ {} | {:?}",
                 scan_key, safe_point, ctx
             ),
-            Command::RawGet { ref ctx, ref key } => {
-                write!(f, "kv::command::rawget {:?} | {:?}", key, ctx)
-            }
             Command::RawScan {
                 ref ctx,
                 ref start_key,
@@ -276,7 +269,6 @@ impl Command {
     pub fn readonly(&self) -> bool {
         match *self {
             Command::ScanLock { .. } |
-            Command::RawGet { .. } |
             Command::RawScan { .. } |
             // DeleteRange only called by DDL bg thread after table is dropped and
             // must guarantee that there is no other read or write on these keys, so
@@ -316,7 +308,6 @@ impl Command {
             Command::ScanLock { .. } => "scan_lock",
             Command::ResolveLock { .. } => "resolve_lock",
             Command::Gc { .. } => CMD_TAG_GC,
-            Command::RawGet { .. } => "raw_get",
             Command::RawScan { .. } => "raw_scan",
             Command::DeleteRange { .. } => "delete_range",
             Command::Pause { .. } => "pause",
@@ -335,7 +326,6 @@ impl Command {
             Command::ScanLock { max_ts, .. } => max_ts,
             Command::Gc { safe_point, .. } => safe_point,
             Command::ResolveLock { .. }
-            | Command::RawGet { .. }
             | Command::RawScan { .. }
             | Command::DeleteRange { .. }
             | Command::Pause { .. }
@@ -352,7 +342,6 @@ impl Command {
             | Command::ScanLock { ref ctx, .. }
             | Command::ResolveLock { ref ctx, .. }
             | Command::Gc { ref ctx, .. }
-            | Command::RawGet { ref ctx, .. }
             | Command::RawScan { ref ctx, .. }
             | Command::DeleteRange { ref ctx, .. }
             | Command::Pause { ref ctx, .. }
@@ -370,7 +359,6 @@ impl Command {
             | Command::ScanLock { ref mut ctx, .. }
             | Command::ResolveLock { ref mut ctx, .. }
             | Command::Gc { ref mut ctx, .. }
-            | Command::RawGet { ref mut ctx, .. }
             | Command::RawScan { ref mut ctx, .. }
             | Command::DeleteRange { ref mut ctx, .. }
             | Command::Pause { ref mut ctx, .. }
@@ -523,7 +511,8 @@ impl Storage {
         key: Key,
         start_ts: u64,
     ) -> impl Future<Item = Option<Value>, Error = Error> {
-        static LABEL: &'static str = "kv_get";
+        static CMD: &'static str = "kv_get";
+        static CMD_TYPE: &'static str = "kv";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
@@ -531,7 +520,7 @@ impl Storage {
             let _t_snapshot = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.get_current_thread_context();
-                thread_ctx.collect_command_duration(LABEL, "snapshot")
+                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
             };
 
             engine
@@ -545,9 +534,9 @@ impl Storage {
                 .map_err(Error::from)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.get_current_thread_context();
-                    let _t_process = thread_ctx.collect_command_duration(LABEL, "process");
-                    thread_ctx.collect_command_count(LABEL, priority);
-                    thread_ctx.collect_key_reads(LABEL, 1);
+                    let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
+                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
+                    thread_ctx.collect_key_reads(CMD, CMD_TYPE, 1);
 
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
@@ -561,7 +550,7 @@ impl Storage {
                         // map storage::txn::Error -> storage::Error
                         .map_err(Error::from);
 
-                    thread_ctx.collect_kv_scan_count(LABEL, &statistics);
+                    thread_ctx.collect_kv_scan_count(CMD, &statistics);
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
 
                     result
@@ -576,7 +565,8 @@ impl Storage {
         keys: Vec<Key>,
         start_ts: u64,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        static LABEL: &'static str = "kv_batchget";
+        static CMD: &'static str = "kv_batchget";
+        static CMD_TYPE: &'static str = "kv";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
@@ -584,7 +574,7 @@ impl Storage {
             let _t_snapshot = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.get_current_thread_context();
-                thread_ctx.collect_command_duration(LABEL, "snapshot")
+                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
             };
 
             engine
@@ -598,9 +588,9 @@ impl Storage {
                 .map_err(Error::from)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.get_current_thread_context();
-                    let _t_process = thread_ctx.collect_command_duration(LABEL, "process");
-                    thread_ctx.collect_command_count(LABEL, priority);
-                    thread_ctx.collect_key_reads(LABEL, keys.len() as u64);
+                    let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
+                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
+                    thread_ctx.collect_key_reads(CMD, CMD_TYPE, keys.len() as u64);
 
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
@@ -627,7 +617,7 @@ impl Storage {
                             .collect()
                         );
 
-                    thread_ctx.collect_kv_scan_count(LABEL, &statistics);
+                    thread_ctx.collect_kv_scan_count(CMD, &statistics);
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
 
                     result
@@ -644,7 +634,8 @@ impl Storage {
         start_ts: u64,
         options: Options,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        static LABEL: &'static str = "kv_scan";
+        static CMD: &'static str = "kv_scan";
+        static CMD_TYPE: &'static str = "kv";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
@@ -652,7 +643,7 @@ impl Storage {
             let _t_snapshot = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.get_current_thread_context();
-                thread_ctx.collect_command_duration(LABEL, "snapshot")
+                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
             };
 
             engine
@@ -666,8 +657,8 @@ impl Storage {
                 .map_err(Error::from)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.get_current_thread_context();
-                    let _t_process = thread_ctx.collect_command_duration(LABEL, "process");
-                    thread_ctx.collect_command_count(LABEL, priority);
+                    let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
+                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
 
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -680,13 +671,13 @@ impl Storage {
                         .and_then(|mut scanner| {
                             let res = scanner.scan(start_key, limit);
                             let statistics = scanner.get_statistics();
-                            thread_ctx.collect_kv_scan_count(LABEL, statistics);
+                            thread_ctx.collect_kv_scan_count(CMD, statistics);
                             thread_ctx.collect_read_flow(ctx.get_region_id(), statistics);
                             res
                         })
                         .map_err(Error::from)
                         .map(|results| {
-                            thread_ctx.collect_key_reads(LABEL, results.len() as u64);
+                            thread_ctx.collect_key_reads(CMD, CMD_TYPE, results.len() as u64);
                             results
                                 .into_iter()
                                 .map(|x| x.map_err(Error::from))
@@ -882,15 +873,39 @@ impl Storage {
         &self,
         ctx: Context,
         key: Vec<u8>,
-        callback: Callback<Option<Vec<u8>>>,
-    ) -> Result<()> {
-        let cmd = Command::RawGet {
-            ctx: ctx,
-            key: Key::from_encoded(key),
-        };
-        self.schedule(cmd, StorageCb::SingleValue(callback))?;
-        RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["get"]).inc();
-        Ok(())
+    ) -> impl Future<Item = Option<Vec<u8>>, Error = Error> {
+        static CMD: &'static str = "raw_get";
+        static CMD_TYPE: &'static str = "raw";
+        let engine = self.get_engine();
+        let priority = readpool::Priority::from(ctx.get_priority());
+
+        self.read_pool.future_execute(priority, move |ctxd| {
+            let _t_snapshot = {
+                let ctxd = ctxd.clone();
+                let mut thread_ctx = ctxd.get_current_thread_context();
+                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
+            };
+
+            engine
+                .future_snapshot(&ctx)
+                .then(move |r| {
+                    _t_snapshot.observe_duration();
+                    r
+                })
+                // map storage::engine::Error -> storage::txn::Error -> storage::Error
+                .map_err(txn::Error::from)
+                .map_err(Error::from)
+                .and_then(move |snapshot: Box<Snapshot>| {
+                    let mut thread_ctx = ctxd.get_current_thread_context();
+                    let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
+                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
+                    thread_ctx.collect_key_reads(CMD, CMD_TYPE, 1);
+
+                    snapshot.get(&Key::from_encoded(key))
+                        // map storage::engine::Error -> storage::Error
+                        .map_err(Error::from)
+                })
+        })
     }
 
     pub fn async_raw_put(
