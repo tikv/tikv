@@ -121,7 +121,12 @@ mod tests {
 
     #[test]
     fn test_future_execute() {
-        let read_pool = ReadPool::new(&Config::default());
+        let read_pool = ReadPool::new(&Config {
+            high_concurrency: 2,
+            normal_concurrency: 2,
+            low_concurrency: 2,
+            ..Config::default()
+        });
 
         expect_val(
             vec![1, 2, 4],
