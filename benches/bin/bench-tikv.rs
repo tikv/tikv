@@ -104,7 +104,11 @@ fn main() {
             .iter()
             .map(|name| Arg::with_name(name))
             .collect::<Vec<_>>())
-        .group(ArgGroup::with_name("benches").args(&available_benches))
+        .group(
+            ArgGroup::with_name("benches")
+                .args(&available_benches)
+                .multiple(true),
+        )
         .get_matches();
 
     let benches: Vec<_> = if let Some(args) = matches.values_of("benches") {
@@ -113,7 +117,7 @@ fn main() {
         available_benches.to_vec()
     };
 
-    println!("{:?}", benches);
+    println!("Begin to run: {}", benches.join(", "));
 
     for item in benches {
         match item {
