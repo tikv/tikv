@@ -96,14 +96,9 @@ impl SyncStorage {
         key_only: bool,
         start_ts: u64,
     ) -> Result<Vec<Result<KvPair>>> {
-        wait_op!(|cb| self.store.async_scan(
-            ctx,
-            key,
-            limit,
-            start_ts,
-            Options::new(0, false, key_only),
-            cb,
-        )).unwrap()
+        self.store
+            .async_scan(ctx, key, limit, start_ts, Options::new(0, false, key_only))
+            .wait()
     }
 
     pub fn prewrite(

@@ -57,7 +57,6 @@ use util::worker::{self, Runnable, ScheduleError};
 
 use super::Result;
 use super::Error;
-use super::store::SnapshotStore;
 use super::latch::{Latches, Lock};
 use super::super::metrics::*;
 
@@ -452,44 +451,6 @@ fn process_read(
     let mut statistics = Statistics::default();
 
     let pr = match cmd {
-        // Scans a range starting with `start_key` up to `limit` rows from the snapshot.
-        Command::Scan {
-            ref ctx,
-            ref start_key,
-            limit,
-            start_ts,
-            ref options,
-            ..
-        } => {
-            let snap_store = SnapshotStore::new(
-                snapshot,
-                start_ts,
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            );
-            let res = snap_store
-                .scanner(ScanMode::Forward, options.key_only, None, None)
-                .and_then(|mut scanner| {
-                    let res = scanner.scan(start_key.clone(), limit);
-                    statistics.add(scanner.get_statistics());
-                    res
-                })
-                .and_then(|mut results| {
-                    sched_ctx
-                        .command_keyread_duration
-                        .with_label_values(&[tag])
-                        .observe(results.len() as f64);
-                    Ok(results
-                        .drain(..)
-                        .map(|x| x.map_err(StorageError::from))
-                        .collect())
-                });
-
-            match res {
-                Ok(pairs) => ProcessResult::MultiKvpairs { pairs: pairs },
-                Err(e) => ProcessResult::Failed { err: e.into() },
-            }
-        }
         Command::MvccByKey { ref ctx, ref key } => {
             let mut reader = MvccReader::new(
                 snapshot,
@@ -1595,13 +1556,6 @@ mod tests {
         let mut temp_map = HashMap::default();
         temp_map.insert(10, 20);
         let readonly_cmds = vec![
-            Command::Scan {
-                ctx: Context::new(),
-                start_key: make_key(b"k"),
-                limit: 100,
-                start_ts: 25,
-                options: Options::default(),
-            },
             Command::ScanLock {
                 ctx: Context::new(),
                 max_ts: 5,

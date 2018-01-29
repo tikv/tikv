@@ -139,34 +139,25 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        let storage = self.storage.clone();
         let mut options = Options::default();
         options.key_only = req.get_key_only();
 
-        let (cb, future) = make_callback();
-        let res = storage.async_scan(
-            req.take_context(),
-            Key::from_raw(req.get_start_key()),
-            req.get_limit() as usize,
-            req.get_version(),
-            options,
-            cb,
-        );
-        if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
-            return;
-        }
-
-        let future = future
-            .map_err(Error::from)
-            .map(|v| {
-                let mut resp = ScanResponse::new();
+        let future = self.storage
+            .async_scan(
+                req.take_context(),
+                Key::from_raw(req.get_start_key()),
+                req.get_limit() as usize,
+                req.get_version(),
+                options,
+            )
+            .then(|v| {
+                let mut res = ScanResponse::new();
                 if let Some(err) = extract_region_error(&v) {
-                    resp.set_region_error(err);
+                    res.set_region_error(err);
                 } else {
-                    resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                    res.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
                 }
-                resp
+                Ok(res)
             })
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())

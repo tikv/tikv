@@ -90,13 +90,6 @@ pub enum StorageCb {
 }
 
 pub enum Command {
-    Scan {
-        ctx: Context,
-        start_key: Key,
-        limit: usize,
-        start_ts: u64,
-        options: Options,
-    },
     Prewrite {
         ctx: Context,
         mutations: Vec<Mutation>,
@@ -170,17 +163,6 @@ pub enum Command {
 impl Display for Command {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Command::Scan {
-                ref ctx,
-                ref start_key,
-                limit,
-                start_ts,
-                ..
-            } => write!(
-                f,
-                "kv::command::scan {}({}) @ {} | {:?}",
-                start_key, limit, start_ts, ctx
-            ),
             Command::Prewrite {
                 ref ctx,
                 ref mutations,
@@ -293,7 +275,6 @@ pub const CMD_TAG_GC: &str = "gc";
 impl Command {
     pub fn readonly(&self) -> bool {
         match *self {
-            Command::Scan { .. } |
             Command::ScanLock { .. } |
             Command::RawGet { .. } |
             Command::RawScan { .. } |
@@ -328,7 +309,6 @@ impl Command {
 
     pub fn tag(&self) -> &'static str {
         match *self {
-            Command::Scan { .. } => "scan",
             Command::Prewrite { .. } => "prewrite",
             Command::Commit { .. } => "commit",
             Command::Cleanup { .. } => "cleanup",
@@ -347,8 +327,7 @@ impl Command {
 
     pub fn ts(&self) -> u64 {
         match *self {
-            Command::Scan { start_ts, .. }
-            | Command::Prewrite { start_ts, .. }
+            Command::Prewrite { start_ts, .. }
             | Command::Cleanup { start_ts, .. }
             | Command::Rollback { start_ts, .. }
             | Command::MvccByStartTs { start_ts, .. } => start_ts,
@@ -366,8 +345,7 @@ impl Command {
 
     pub fn get_context(&self) -> &Context {
         match *self {
-            Command::Scan { ref ctx, .. }
-            | Command::Prewrite { ref ctx, .. }
+            Command::Prewrite { ref ctx, .. }
             | Command::Commit { ref ctx, .. }
             | Command::Cleanup { ref ctx, .. }
             | Command::Rollback { ref ctx, .. }
@@ -385,8 +363,7 @@ impl Command {
 
     pub fn mut_context(&mut self) -> &mut Context {
         match *self {
-            Command::Scan { ref mut ctx, .. }
-            | Command::Prewrite { ref mut ctx, .. }
+            Command::Prewrite { ref mut ctx, .. }
             | Command::Commit { ref mut ctx, .. }
             | Command::Cleanup { ref mut ctx, .. }
             | Command::Rollback { ref mut ctx, .. }
@@ -539,7 +516,7 @@ impl Storage {
         Ok(())
     }
 
-    /// Get from snapshot
+    /// Get from the snapshot.
     pub fn async_get(
         &self,
         ctx: Context,
@@ -592,7 +569,7 @@ impl Storage {
         })
     }
 
-    /// Batch get from snapshot
+    /// Batch get from the snapshot.
     pub fn async_batch_get(
         &self,
         ctx: Context,
@@ -658,6 +635,7 @@ impl Storage {
         })
     }
 
+    /// Scan a range starting with `start_key` up to `limit` rows from the snapshot.
     pub fn async_scan(
         &self,
         ctx: Context,
@@ -665,19 +643,57 @@ impl Storage {
         limit: usize,
         start_ts: u64,
         options: Options,
-        callback: Callback<Vec<Result<KvPair>>>,
-    ) -> Result<()> {
-        let cmd = Command::Scan {
-            ctx: ctx,
-            start_key: start_key,
-            limit: limit,
-            start_ts: start_ts,
-            options: options,
-        };
-        let tag = cmd.tag();
-        self.schedule(cmd, StorageCb::KvPairs(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
-        Ok(())
+    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
+        static LABEL: &'static str = "kv_scan";
+        let engine = self.get_engine();
+        let priority = readpool::Priority::from(ctx.get_priority());
+
+        self.read_pool.future_execute(priority, move |ctxd| {
+            let _t_snapshot = {
+                let ctxd = ctxd.clone();
+                let mut thread_ctx = ctxd.get_current_thread_context();
+                thread_ctx.collect_command_duration(LABEL, "snapshot")
+            };
+
+            engine
+                .future_snapshot(&ctx)
+                .then(move |r| {
+                    _t_snapshot.observe_duration();
+                    r
+                })
+                // map storage::engine::Error -> storage::txn::Error -> storage::Error
+                .map_err(txn::Error::from)
+                .map_err(Error::from)
+                .and_then(move |snapshot: Box<Snapshot>| {
+                    let mut thread_ctx = ctxd.get_current_thread_context();
+                    let _t_process = thread_ctx.collect_command_duration(LABEL, "process");
+                    thread_ctx.collect_command_count(LABEL, priority);
+
+                    let snap_store = SnapshotStore::new(
+                        snapshot,
+                        start_ts,
+                        ctx.get_isolation_level(),
+                        !ctx.get_not_fill_cache(),
+                    );
+                    snap_store
+                        .scanner(ScanMode::Forward, options.key_only, None, None)
+                        .and_then(|mut scanner| {
+                            let res = scanner.scan(start_key, limit);
+                            let statistics = scanner.get_statistics();
+                            thread_ctx.collect_kv_scan_count(LABEL, statistics);
+                            thread_ctx.collect_read_flow(ctx.get_region_id(), statistics);
+                            res
+                        })
+                        .map_err(Error::from)
+                        .map(|results| {
+                            thread_ctx.collect_key_reads(LABEL, results.len() as u64);
+                            results
+                                .into_iter()
+                                .map(|x| x.map_err(Error::from))
+                                .collect()
+                        })
+                })
+        })
     }
 
     pub fn async_pause(&self, ctx: Context, duration: u64, callback: Callback<()>) -> Result<()> {
@@ -1077,16 +1093,9 @@ mod tests {
         })
     }
 
-    fn expect_scan(
-        done: Sender<i32>,
-        pairs: Vec<Option<KvPair>>,
-        id: i32,
-    ) -> Callback<Vec<Result<KvPair>>> {
-        Box::new(move |rlt: Result<Vec<Result<KvPair>>>| {
-            let rlt: Vec<Option<KvPair>> = rlt.unwrap().into_iter().map(Result::ok).collect();
-            assert_eq!(rlt, pairs);
-            done.send(id).unwrap()
-        })
+    fn expect_scan(v: Vec<Option<KvPair>>, x: Result<Vec<Result<KvPair>>>) {
+        let x: Vec<Option<KvPair>> = x.unwrap().into_iter().map(Result::ok).collect();
+        assert_eq!(x, v);
     }
 
     fn expect_batch_get_vals(v: Vec<Option<KvPair>>, x: Result<Vec<Result<KvPair>>>) {
@@ -1200,25 +1209,22 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        storage
-            .async_scan(
-                Context::new(),
-                make_key(b"\x00"),
-                1000,
-                5,
-                Options::default(),
-                expect_scan(
-                    tx.clone(),
-                    vec![
-                        Some((b"a".to_vec(), b"aa".to_vec())),
-                        Some((b"b".to_vec(), b"bb".to_vec())),
-                        Some((b"c".to_vec(), b"cc".to_vec())),
-                    ],
-                    2,
-                ),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        expect_scan(
+            vec![
+                Some((b"a".to_vec(), b"aa".to_vec())),
+                Some((b"b".to_vec(), b"bb".to_vec())),
+                Some((b"c".to_vec(), b"cc".to_vec())),
+            ],
+            storage
+                .async_scan(
+                    Context::new(),
+                    make_key(b"\x00"),
+                    1000,
+                    5,
+                    Options::default(),
+                )
+                .wait(),
+        );
         storage.stop().unwrap();
     }
 
