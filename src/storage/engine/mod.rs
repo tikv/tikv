@@ -103,6 +103,8 @@ pub trait Engine: Send + Debug {
         }
     }
 
+    // TODO: Change signature to `-> impl Future<...>` syntax once it is supported (currently
+    // it is not supported in traits.
     fn future_snapshot(
         &self,
         ctx: &Context,
@@ -110,14 +112,14 @@ pub trait Engine: Send + Debug {
         let (callback, future) = util::future::gen_paired_future_callback();
         let val = self.async_snapshot(ctx, callback);
         if let Err(e) = val {
-            box future::err::<Box<Snapshot>, Error>(e)
+            box future::err(e)
         } else {
             box future
                 // map future::oneshot::Canceled to Error::Other
                 .map_err(Error::from)
                 .map(|(_ctx, r)| r)
                 // map Err(e) to err future and Ok(snapshot) to success future
-                .and_then(|r| r)
+                .flatten()
         }
     }
 
