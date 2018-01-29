@@ -64,7 +64,6 @@ impl Context {
             .start_coarse_timer()
     }
 
-    /// `cmd_type` can be `"raw"` or `"kv"`.
     #[inline]
     pub fn collect_command_count(&mut self, cmd: &str, cmd_type: &str, priority: super::Priority) {
         self.command_counter

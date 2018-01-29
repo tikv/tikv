@@ -518,7 +518,6 @@ impl Storage {
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.get_current_thread_context();
                     let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
-                    thread_ctx.collect_key_reads(CMD, CMD_TYPE, 1);
 
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
@@ -530,7 +529,11 @@ impl Storage {
                     let result = snap_store
                         .get(&key, &mut statistics)
                         // map storage::txn::Error -> storage::Error
-                        .map_err(Error::from);
+                        .map_err(Error::from)
+                        .map(|r| {
+                            thread_ctx.collect_key_reads(CMD, CMD_TYPE, 1);
+                            r
+                        });
 
                     thread_ctx.collect_scan_count(CMD, CMD_TYPE, &statistics);
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
@@ -572,8 +575,6 @@ impl Storage {
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.get_current_thread_context();
                     let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
-                    // TODO: Should be Keys in result?
-                    thread_ctx.collect_key_reads(CMD, CMD_TYPE, keys.len() as u64);
 
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
@@ -598,7 +599,11 @@ impl Storage {
                                 _ => unreachable!(),
                             })
                             .collect()
-                        );
+                        )
+                        .map(|r: Vec<Result<KvPair>>| {
+                            thread_ctx.collect_key_reads(CMD, CMD_TYPE, r.len() as u64);
+                            r
+                        });
 
                     thread_ctx.collect_scan_count(CMD, CMD_TYPE, &statistics);
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
@@ -882,12 +887,16 @@ impl Storage {
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.get_current_thread_context();
                     let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
-                    thread_ctx.collect_key_reads(CMD, CMD_TYPE, 1);
+
                     // no scan_count for this kind of op.
 
                     snapshot.get(&Key::from_encoded(key))
                         // map storage::engine::Error -> storage::Error
                         .map_err(Error::from)
+                        .map(|r| {
+                            thread_ctx.collect_key_reads(CMD, CMD_TYPE, 1);
+                            r
+                        })
                 })
         })
     }
@@ -984,7 +993,7 @@ impl Storage {
                     let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
 
                     let mut statistics = Statistics::default();
-                    Storage::raw_scan(
+                    let result = Storage::raw_scan(
                         snapshot,
                         &Key::from_encoded(key),
                         limit,
@@ -994,9 +1003,12 @@ impl Storage {
                         .map(|r| {
                             // TODO: Should we collect statistics even when failed?
                             thread_ctx.collect_key_reads(CMD, CMD_TYPE, r.len() as u64);
-                            thread_ctx.collect_scan_count(CMD, CMD_TYPE, &statistics);
                             r
-                        })
+                        });
+
+                    thread_ctx.collect_scan_count(CMD, CMD_TYPE, &statistics);
+
+                    result
                 })
         })
     }
