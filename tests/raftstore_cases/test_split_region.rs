@@ -195,6 +195,7 @@ fn put_cf_till_size<T: Simulator>(
 ) -> Vec<u8> {
     assert!(limit > 0);
     let mut len = 0;
+    let mut last_len = 0;
     let mut rng = rand::thread_rng();
     let mut key = vec![];
     while len < limit {
@@ -207,6 +208,11 @@ fn put_cf_till_size<T: Simulator>(
         // plus 1 for the extra encoding prefix
         len += key.len() as u64 + 1;
         len += value.len() as u64;
+        // Flush memtable to SST periodically, to make approximate size more accurate.
+        if len - last_len >= 1000 {
+            cluster.must_flush(true);
+            last_len = len;
+        }
     }
     // Approximate size of memtable is inaccurate for small data,
     // we flush it to SST so we can use the size properties instead.
