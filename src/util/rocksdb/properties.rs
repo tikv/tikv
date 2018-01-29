@@ -221,8 +221,12 @@ impl DerefMut for IndexHandles {
 }
 
 impl IndexHandles {
-    fn new() -> IndexHandles {
+    pub fn new() -> IndexHandles {
         IndexHandles(BTreeMap::new())
+    }
+
+    pub fn add(&mut self, key: Vec<u8>, index_handle: IndexHandle) {
+        self.0.insert(key, index_handle);
     }
 
     // Format: | klen | k | v.size | v.offset |
