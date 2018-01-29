@@ -26,6 +26,7 @@ use self::metrics::*;
 use self::mvcc::Lock;
 use self::txn::CMD_BATCH_SIZE;
 use util::worker::{self, Builder, Worker};
+use raftstore::store::engine::IterOption;
 
 pub mod engine;
 pub mod mvcc;
@@ -132,11 +133,6 @@ pub enum Command {
         scan_key: Option<Key>,
         keys: Vec<Key>,
     },
-    RawScan {
-        ctx: Context,
-        start_key: Key,
-        limit: usize,
-    },
     DeleteRange {
         ctx: Context,
         start_key: Key,
@@ -225,15 +221,6 @@ impl Display for Command {
                 "kv::command::gc scan {:?} @ {} | {:?}",
                 scan_key, safe_point, ctx
             ),
-            Command::RawScan {
-                ref ctx,
-                ref start_key,
-                limit,
-            } => write!(
-                f,
-                "kv::command::rawscan {:?} {} | {:?}",
-                start_key, limit, ctx
-            ),
             Command::DeleteRange {
                 ref ctx,
                 ref start_key,
@@ -269,7 +256,6 @@ impl Command {
     pub fn readonly(&self) -> bool {
         match *self {
             Command::ScanLock { .. } |
-            Command::RawScan { .. } |
             // DeleteRange only called by DDL bg thread after table is dropped and
             // must guarantee that there is no other read or write on these keys, so
             // we can treat DeleteRange as readonly Command.
@@ -308,7 +294,6 @@ impl Command {
             Command::ScanLock { .. } => "scan_lock",
             Command::ResolveLock { .. } => "resolve_lock",
             Command::Gc { .. } => CMD_TAG_GC,
-            Command::RawScan { .. } => "raw_scan",
             Command::DeleteRange { .. } => "delete_range",
             Command::Pause { .. } => "pause",
             Command::MvccByKey { .. } => "key_mvcc",
@@ -326,7 +311,6 @@ impl Command {
             Command::ScanLock { max_ts, .. } => max_ts,
             Command::Gc { safe_point, .. } => safe_point,
             Command::ResolveLock { .. }
-            | Command::RawScan { .. }
             | Command::DeleteRange { .. }
             | Command::Pause { .. }
             | Command::MvccByKey { .. } => 0,
@@ -342,7 +326,6 @@ impl Command {
             | Command::ScanLock { ref ctx, .. }
             | Command::ResolveLock { ref ctx, .. }
             | Command::Gc { ref ctx, .. }
-            | Command::RawScan { ref ctx, .. }
             | Command::DeleteRange { ref ctx, .. }
             | Command::Pause { ref ctx, .. }
             | Command::MvccByKey { ref ctx, .. }
@@ -359,7 +342,6 @@ impl Command {
             | Command::ScanLock { ref mut ctx, .. }
             | Command::ResolveLock { ref mut ctx, .. }
             | Command::Gc { ref mut ctx, .. }
-            | Command::RawScan { ref mut ctx, .. }
             | Command::DeleteRange { ref mut ctx, .. }
             | Command::Pause { ref mut ctx, .. }
             | Command::MvccByKey { ref mut ctx, .. }
@@ -550,7 +532,7 @@ impl Storage {
                         // map storage::txn::Error -> storage::Error
                         .map_err(Error::from);
 
-                    thread_ctx.collect_kv_scan_count(CMD, &statistics);
+                    thread_ctx.collect_scan_count(CMD, CMD_TYPE, &statistics);
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
 
                     result
@@ -590,6 +572,8 @@ impl Storage {
                     let mut thread_ctx = ctxd.get_current_thread_context();
                     let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
                     thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
+
+                    // TODO: Should be Keys in result?
                     thread_ctx.collect_key_reads(CMD, CMD_TYPE, keys.len() as u64);
 
                     let mut statistics = Statistics::default();
@@ -617,7 +601,7 @@ impl Storage {
                             .collect()
                         );
 
-                    thread_ctx.collect_kv_scan_count(CMD, &statistics);
+                    thread_ctx.collect_scan_count(CMD, CMD_TYPE, &statistics);
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
 
                     result
@@ -671,7 +655,7 @@ impl Storage {
                         .and_then(|mut scanner| {
                             let res = scanner.scan(start_key, limit);
                             let statistics = scanner.get_statistics();
-                            thread_ctx.collect_kv_scan_count(CMD, statistics);
+                            thread_ctx.collect_scan_count(CMD, CMD_TYPE, statistics);
                             thread_ctx.collect_read_flow(ctx.get_region_id(), statistics);
                             res
                         })
@@ -900,6 +884,7 @@ impl Storage {
                     let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
                     thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
                     thread_ctx.collect_key_reads(CMD, CMD_TYPE, 1);
+                    // no scan_count for this kind of op.
 
                     snapshot.get(&Key::from_encoded(key))
                         // map storage::engine::Error -> storage::Error
@@ -949,21 +934,72 @@ impl Storage {
         Ok(())
     }
 
+    fn raw_scan(
+        snapshot: Box<Snapshot>,
+        start_key: &Key,
+        limit: usize,
+        stats: &mut Statistics,
+    ) -> engine::Result<Vec<Result<KvPair>>> {
+        let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Forward)?;
+        if !cursor.seek(start_key, &mut stats.data)? {
+            return Ok(vec![]);
+        }
+        let mut pairs = vec![];
+        while cursor.valid() && pairs.len() < limit {
+            pairs.push(Ok((cursor.key().to_owned(), cursor.value().to_owned())));
+            cursor.next(&mut stats.data);
+        }
+        Ok(pairs)
+    }
+
     pub fn async_raw_scan(
         &self,
         ctx: Context,
         key: Vec<u8>,
         limit: usize,
-        callback: Callback<Vec<Result<KvPair>>>,
-    ) -> Result<()> {
-        let cmd = Command::RawScan {
-            ctx: ctx,
-            start_key: Key::from_encoded(key),
-            limit: limit,
-        };
-        self.schedule(cmd, StorageCb::KvPairs(callback))?;
-        RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["scan"]).inc();
-        Ok(())
+    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
+        static CMD: &'static str = "raw_scan";
+        static CMD_TYPE: &'static str = "raw";
+        let engine = self.get_engine();
+        let priority = readpool::Priority::from(ctx.get_priority());
+
+        self.read_pool.future_execute(priority, move |ctxd| {
+            let _t_snapshot = {
+                let ctxd = ctxd.clone();
+                let mut thread_ctx = ctxd.get_current_thread_context();
+                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
+            };
+
+            engine
+                .future_snapshot(&ctx)
+                .then(move |r| {
+                    _t_snapshot.observe_duration();
+                    r
+                })
+                // map storage::engine::Error -> storage::txn::Error -> storage::Error
+                .map_err(txn::Error::from)
+                .map_err(Error::from)
+                .and_then(move |snapshot: Box<Snapshot>| {
+                    let mut thread_ctx = ctxd.get_current_thread_context();
+                    let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
+                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
+
+                    let mut statistics = Statistics::default();
+                    Storage::raw_scan(
+                        snapshot,
+                        &Key::from_encoded(key),
+                        limit,
+                        &mut statistics
+                    )
+                        .map_err(Error::from)
+                        .map(|r| {
+                            // TODO: Should we collect statistics even when failed?
+                            thread_ctx.collect_key_reads(CMD, CMD_TYPE, r.len() as u64);
+                            thread_ctx.collect_scan_count(CMD, CMD_TYPE, &statistics);
+                            r
+                        })
+                })
+        })
     }
 
     pub fn async_mvcc_by_key(

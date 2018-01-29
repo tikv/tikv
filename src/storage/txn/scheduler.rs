@@ -49,7 +49,6 @@ use storage::mvcc::{Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, W
 use storage::{Key, KvPair, MvccInfo, Value, CMD_TAG_GC};
 use storage::engine::{self, Callback as EngineCallback, CbContext, Error as EngineError, Modify,
                       Result as EngineResult};
-use raftstore::store::engine::IterOption;
 use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
 use util::time::SlowTimer;
 use util::collections::HashMap;
@@ -649,16 +648,6 @@ fn process_read(
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
-        Command::RawScan {
-            ref start_key,
-            limit,
-            ..
-        } => match process_rawscan(snapshot, start_key, limit, &mut statistics) {
-            Ok(val) => ProcessResult::MultiKvpairs { pairs: val },
-            Err(e) => ProcessResult::Failed {
-                err: StorageError::from(e),
-            },
-        },
         Command::Pause { duration, .. } => {
             thread::sleep(Duration::from_millis(duration));
             ProcessResult::Res
@@ -671,24 +660,6 @@ fn process_read(
         panic!("schedule ReadFinished msg failed, cid={}, err={:?}", cid, e);
     }
     statistics
-}
-
-fn process_rawscan(
-    snapshot: Box<Snapshot>,
-    start_key: &Key,
-    limit: usize,
-    stats: &mut Statistics,
-) -> Result<Vec<StorageResult<KvPair>>> {
-    let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Forward)?;
-    if !cursor.seek(start_key, &mut stats.data)? {
-        return Ok(vec![]);
-    }
-    let mut pairs = vec![];
-    while cursor.valid() && pairs.len() < limit {
-        pairs.push(Ok((cursor.key().to_owned(), cursor.value().to_owned())));
-        cursor.next(&mut stats.data);
-    }
-    Ok(pairs)
 }
 
 /// Processes a write command within a worker thread, then posts either a `WritePrepareFinished`

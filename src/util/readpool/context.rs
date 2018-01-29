@@ -29,7 +29,7 @@ pub struct Context {
     command_duration: LocalHistogramVec,
     command_counter: LocalCounterVec,
     key_reads: LocalHistogramVec,
-    kv_scan_counter: LocalCounterVec,
+    scan_counter: LocalCounterVec,
 
     read_flow_stats: HashMap<u64, storage::FlowStatistics>,
 }
@@ -47,7 +47,7 @@ impl Context {
             command_duration: COMMAND_HISTOGRAM_VEC.local(),
             command_counter: COMMAND_COUNTER_VEC.local(),
             key_reads: KEY_READ_HISTOGRAM_VEC.local(),
-            kv_scan_counter: KV_SCAN_COUNTER_VEC.local(),
+            scan_counter: SCAN_COUNTER_VEC.local(),
             read_flow_stats: HashMap::default(),
         }
     }
@@ -80,11 +80,16 @@ impl Context {
     }
 
     #[inline]
-    pub fn collect_kv_scan_count(&mut self, cmd: &str, statistics: &storage::Statistics) {
+    pub fn collect_scan_count(
+        &mut self,
+        cmd: &str,
+        cmd_type: &str,
+        statistics: &storage::Statistics,
+    ) {
         for (cf, details) in statistics.details() {
             for (tag, count) in details {
-                self.kv_scan_counter
-                    .with_label_values(&[cmd, cf, tag])
+                self.scan_counter
+                    .with_label_values(&[cmd, cmd_type, cf, tag])
                     .inc_by(count as f64)
                     .unwrap();
             }
@@ -110,7 +115,7 @@ impl futurepool::Context for Context {
         self.command_duration.flush();
         self.command_counter.flush();
         self.key_reads.flush();
-        self.kv_scan_counter.flush();
+        self.scan_counter.flush();
 
         // Report PD metrics
         if !self.read_flow_stats.is_empty() {

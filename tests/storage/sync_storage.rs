@@ -181,7 +181,7 @@ impl SyncStorage {
         start_key: Vec<u8>,
         limit: usize,
     ) -> Result<Vec<Result<KvPair>>> {
-        wait_op!(|cb| self.store.async_raw_scan(ctx, start_key, limit, cb)).unwrap()
+        self.store.async_raw_scan(ctx, start_key, limit).wait()
     }
 }
 

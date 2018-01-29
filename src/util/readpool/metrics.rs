@@ -37,10 +37,10 @@ lazy_static! {
             exponential_buckets(1.0, 2.0, 21).unwrap()
         ).unwrap();
 
-    pub static ref KV_SCAN_COUNTER_VEC: CounterVec =
+    pub static ref SCAN_COUNTER_VEC: CounterVec =
         register_counter_vec!(
-            "tikv_readpool_kv_scan_total",
-            "Total count of readpool kv key scans for each CF",
-            &["req", "cf", "tag"]
+            "tikv_readpool_scan_total",
+            "Total count of readpool key scans for each CF",
+            &["cmd", "cmd_type", "cf", "tag"]
         ).unwrap();
 }
