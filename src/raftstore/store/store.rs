@@ -1920,8 +1920,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             None => false,
         };
 
-        if self.compact_worker.is_busy() || self.space_checker.is_busy() {
-            debug!("compact worker or space checker is busy, skip check space redundancy");
+        if self.compact_worker.is_busy()  {
+            info!("compact worker is busy, check space redundancy next time");
+        } else if self.space_checker.is_busy() {
+            info!("space checker is busy, check space redundancy next time");
         } else if has_pending_compact_tasks {
             // Schedule compact task
             let (start, end) = self.ranges_need_compact
@@ -1940,6 +1942,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
             }
         } else {
+            // Schedule space check task
             let mut ranges_need_check = BTreeSet::new();
             let last_checked_key = match self.last_checked_key.take() {
                 Some(key) => key,
@@ -1963,9 +1966,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ranges_need_check.insert(keys::DATA_MAX_KEY.to_vec());
             }
 
-            // Schedule check task
             if let Err(e) = self.space_checker.schedule(SpaceCheckTask {
                 ranges: ranges_need_check,
+                min_num_del: self.cfg.region_compact_min_tombstones,
             }) {
                 error!("{} failed to schedule space check task: {}", self.tag, e);
             }

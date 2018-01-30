@@ -57,6 +57,8 @@ pub struct Config {
     pub region_compact_check_interval: ReadableDuration,
     /// Number of regions for each time checking.
     pub region_compact_check_step: u64,
+    /// Minimum number of tombstones to trigger manual compaction.
+    pub region_compact_min_tombstones: u64,
     pub pd_heartbeat_tick_interval: ReadableDuration,
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
     pub snap_mgr_gc_tick_interval: ReadableDuration,
@@ -125,6 +127,7 @@ impl Default for Config {
             region_split_check_diff: split_size / 16,
             region_compact_check_interval: ReadableDuration::minutes(2),
             region_compact_check_step: 100,
+            region_compact_min_tombstones: 10000,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             notify_capacity: 40960,
