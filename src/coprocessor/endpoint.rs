@@ -149,7 +149,6 @@ impl Host {
             Ok(s) => s,
             Err(e) => {
                 notify_batch_failed(e, reqs, &mut local_metrics);
-                //TODO:
                 return;
             }
         };
