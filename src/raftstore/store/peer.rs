@@ -1550,7 +1550,6 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
             | AdminCmdType::VerifyHash => {}
             AdminCmdType::Split => check_ver = true,
             AdminCmdType::ChangePeer => check_conf_ver = true,
-            // TODO: prevent compact log once pre-merge is applied.
             AdminCmdType::PreMerge
             | AdminCmdType::Merge
             | AdminCmdType::RollbackPreMerge
@@ -1762,8 +1761,14 @@ fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderReques
 fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
     if msg.has_admin_request() {
         let req = msg.get_admin_request();
-        return req.get_cmd_type() == AdminCmdType::ChangePeer
-            || req.get_cmd_type() == AdminCmdType::Split;
+        return match req.get_cmd_type() {
+            AdminCmdType::ChangePeer
+            | AdminCmdType::Split
+            | AdminCmdType::PreMerge
+            | AdminCmdType::Merge
+            | AdminCmdType::RollbackPreMerge => true,
+            _ => false,
+        };
     }
 
     msg.get_header().get_sync_log()
@@ -1776,4 +1781,32 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
     let mut resp = RaftCmdResponse::new();
     resp.set_admin_response(response);
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use protobuf::ProtobufEnum;
+
+    use super::*;
+
+    #[test]
+    fn test_sync_log() {
+        let white_list = [
+            AdminCmdType::InvalidAdmin,
+            AdminCmdType::CompactLog,
+            AdminCmdType::TransferLeader,
+            AdminCmdType::ComputeHash,
+            AdminCmdType::VerifyHash,
+        ];
+        for tp in AdminCmdType::values() {
+            let mut msg = RaftCmdRequest::new();
+            msg.mut_admin_request().set_cmd_type(*tp);
+            assert_eq!(
+                get_sync_log_from_request(&msg),
+                !white_list.contains(tp),
+                "{:?}",
+                tp
+            );
+        }
+    }
 }
