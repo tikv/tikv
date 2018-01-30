@@ -335,7 +335,7 @@ pub fn roughly_cleanup_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Resul
 
     // Todo: use end_key directly after delete_files_in_range support [start, end) semantics.
     let end = prev_key(end_key)?;
-    if  start_key >= end.as_slice() {
+    if start_key >= end.as_slice() {
         return Ok(());
     }
     for cf in db.cf_names() {
