@@ -185,6 +185,15 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         hijack_unary(self, ctx, sink, |c| c.put_store(&req))
     }
 
+    fn get_all_stores(
+        &self,
+        ctx: RpcContext,
+        req: GetAllStoresRequest,
+        sink: UnarySink<GetAllStoresResponse>,
+    ) {
+        hijack_unary(self, ctx, sink, |c| c.get_all_stores(&req))
+    }
+
     fn store_heartbeat(
         &self,
         ctx: RpcContext,
