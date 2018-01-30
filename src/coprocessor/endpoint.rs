@@ -615,6 +615,7 @@ impl TiDbEndPoint {
         if let Err(e) = t.check_outdated() {
             return on_error(e, t, metrics);
         }
+
         let resp = match t.cop_req.take().unwrap() {
             Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t, batch_row_limit),
             Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t),

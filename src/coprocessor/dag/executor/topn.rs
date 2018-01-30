@@ -422,7 +422,7 @@ pub mod test {
         // init TableScan
         let (snapshot, start_ts) = test_store.get_snapshot();
         let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, snap);
+        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, snap).unwrap();
 
         // init TopN meta
         let mut ob_vec = Vec::with_capacity(2);

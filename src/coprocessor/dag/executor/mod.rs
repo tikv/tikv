@@ -202,7 +202,7 @@ fn build_first_executor(
     match first.get_tp() {
         ExecType::TypeTableScan => {
             let cols = Arc::new(first.get_tbl_scan().get_columns().to_vec());
-            let ex = Box::new(TableScanExecutor::new(first.get_tbl_scan(), ranges, store));
+            let ex = Box::new(TableScanExecutor::new(first.get_tbl_scan(), ranges, store)?);
             Ok((ex, cols))
         }
         ExecType::TypeIndexScan => {
@@ -213,7 +213,7 @@ fn build_first_executor(
                 ranges,
                 store,
                 unique,
-            ));
+            )?);
             Ok((ex, cols))
         }
         _ => Err(box_err!(

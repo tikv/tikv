@@ -65,7 +65,7 @@ impl AnalyzeContext {
                     i64::from(req.get_num_columns()),
                     mem::replace(&mut self.ranges, Vec::new()),
                     self.snap.take().unwrap(),
-                );
+                )?;
                 let res = AnalyzeContext::handle_index(req, &mut scanner);
                 scanner.collect_metrics_into(stats);
                 res
@@ -174,7 +174,7 @@ impl SampleBuilder {
 
         let mut meta = TableScan::new();
         meta.set_columns(cols_info);
-        let table_scanner = TableScanExecutor::new(&meta, ranges, snap);
+        let table_scanner = TableScanExecutor::new(&meta, ranges, snap)?;
         Ok(SampleBuilder {
             data: table_scanner,
             cols: meta.take_columns().to_vec(),
