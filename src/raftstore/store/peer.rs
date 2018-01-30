@@ -191,6 +191,7 @@ pub struct Peer {
     raft_engine: Arc<DB>,
     cfg: Rc<Config>,
     peer_cache: RefCell<FlatMap<u64, metapb::Peer>>,
+    learner_cache: RefCell<FlatMap<u64, metapb::Peer>>,
     pub peer: metapb::Peer,
     region_id: u64,
     pub raft_group: RawNode<PeerStorage>,
@@ -199,6 +200,7 @@ pub struct Peer {
     pending_reads: ReadIndexQueue,
     // Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: FlatMap<u64, Instant>,
+    pub learner_heartbeats: FlatMap<u64, Instant>,
     coprocessor_host: Arc<CoprocessorHost>,
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
@@ -282,7 +284,6 @@ impl Peer {
 
         let store_id = store.store_id();
         let sched = store.snap_scheduler();
-        let peer_cache = FlatMap::default();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
 
         let ps = PeerStorage::new(
@@ -321,8 +322,10 @@ impl Peer {
             proposals: Default::default(),
             apply_proposals: vec![],
             pending_reads: Default::default(),
-            peer_cache: RefCell::new(peer_cache),
+            peer_cache: RefCell::new(FlatMap::default()),
+            learner_cache: RefCell::new(FlatMap::default()),
             peer_heartbeats: FlatMap::default(),
+            learner_heartbeats: FlatMap::default(),
             coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
             delete_keys_hint: 0,
@@ -1204,7 +1207,16 @@ impl Peer {
                     return Ok(());
                 }
             }
-            ConfChangeType::AddLearnerNode => unimplemented!(),
+            ConfChangeType::AddLearnerNode => {
+                let mut progress = Progress::default();
+                progress.is_learner = true;
+                status.learner_progress.insert(peer.get_id(), progress);
+                return Ok(());
+            }
+            ConfChangeType::PromoteLearnerNode => {
+                status.learner_progress.remove(&peer.get_id());
+                return Ok(());
+            }
         }
         let healthy = self.count_healthy_node(status.progress.values());
         let quorum_after_change = raft::quorum(status.progress.len());
@@ -1535,6 +1547,16 @@ impl Peer {
         }
 
         None
+    }
+
+    pub fn insert_learner_cache(&mut self, learner: metapb::Peer) {
+        self.learner_cache
+            .borrow_mut()
+            .insert(learner.get_id(), learner);
+    }
+
+    pub fn remove_learner_from_cache(&mut self, peer_id: u64) {
+        self.learner_cache.borrow_mut().remove(&peer_id);
     }
 
     pub fn heartbeat_pd(&self, worker: &FutureWorker<PdTask>) {

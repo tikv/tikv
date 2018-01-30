@@ -527,6 +527,9 @@ impl PeerStorage {
         for p in self.region.get_peers() {
             conf_state.mut_nodes().push(p.get_id());
         }
+        for p in self.region.get_learners() {
+            conf_state.mut_learners().push(p.get_id());
+        }
 
         Ok(RaftState {
             hard_state: hard_state,

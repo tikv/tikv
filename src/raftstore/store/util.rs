@@ -31,18 +31,30 @@ use super::engine::{IterOption, Iterable};
 use super::peer_storage;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
-    for peer in region.get_peers() {
-        if peer.get_store_id() == store_id {
-            return Some(peer);
-        }
-    }
+    region
+        .get_peers()
+        .iter()
+        .find(|p| p.get_store_id() == store_id)
+}
 
-    None
+pub fn find_learner(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
+    region
+        .get_learners()
+        .iter()
+        .find(|p| p.get_store_id() == store_id)
 }
 
 pub fn remove_peer(region: &mut metapb::Region, store_id: u64) -> Option<metapb::Peer> {
     region
         .get_peers()
+        .iter()
+        .position(|x| x.get_store_id() == store_id)
+        .map(|i| region.mut_peers().remove(i))
+}
+
+pub fn remove_learner(region: &mut metapb::Region, store_id: u64) -> Option<metapb::Peer> {
+    region
+        .get_learners()
         .iter()
         .position(|x| x.get_store_id() == store_id)
         .map(|i| region.mut_peers().remove(i))
@@ -86,12 +98,15 @@ pub fn is_first_vote_msg(msg: &RaftMessage) -> bool {
 
 const STR_CONF_CHANGE_ADD_NODE: &str = "AddNode";
 const STR_CONF_CHANGE_REMOVE_NODE: &str = "RemoveNode";
+const STR_CONF_CHANGE_ADDLEARNER_NODE: &str = "AddLearner";
+const STR_CONF_CHANGE_PROMOTELEARNER_NODE: &str = "PromoteLearner";
 
 pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str {
     match *conf_type {
         ConfChangeType::AddNode => STR_CONF_CHANGE_ADD_NODE,
         ConfChangeType::RemoveNode => STR_CONF_CHANGE_REMOVE_NODE,
-        ConfChangeType::AddLearnerNode => unimplemented!(),
+        ConfChangeType::AddLearnerNode => STR_CONF_CHANGE_ADDLEARNER_NODE,
+        ConfChangeType::PromoteLearnerNode => STR_CONF_CHANGE_PROMOTELEARNER_NODE,
     }
 }
 

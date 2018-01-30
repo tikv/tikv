@@ -1292,9 +1292,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     p.peer_heartbeats.remove(&cp.peer.get_id());
                     p.remove_peer_from_cache(cp.peer.get_id());
                 }
-                ConfChangeType::AddLearnerNode => unimplemented!(),
-            }
+                ConfChangeType::AddLearnerNode => {
+                    let peer = cp.peer.clone();
+                    p.learner_heartbeats.insert(peer.get_id(), Instant::now());
+                    p.insert_learner_cache(peer);
+                }
+                ConfChangeType::PromoteLearnerNode => {
+                    p.learner_heartbeats.remove(&cp.peer.get_id());
+                    p.remove_learner_from_cache(cp.peer.get_id());
 
+                    let peer = cp.peer.clone();
+                    p.peer_heartbeats.insert(peer.get_id(), Instant::now());
+                    p.insert_peer_cache(peer);
+                }
+            }
             my_peer_id = p.peer_id();
         } else {
             panic!("{} missing region {}", self.tag, region_id);

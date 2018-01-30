@@ -747,9 +747,9 @@ impl ApplyDelegate {
         );
 
         // TODO: we should need more check, like peer validation, duplicated id, etc.
-        let exists = util::find_peer(&region, store_id).is_some();
+        let peer_exists = util::find_peer(&region, store_id).is_some();
+        let learner_exists = util::find_learner(&region, store_id).is_some();
         let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
-
         region.mut_region_epoch().set_conf_ver(conf_ver);
 
         match change_type {
@@ -758,7 +758,7 @@ impl ApplyDelegate {
                     .with_label_values(&["add_peer", "all"])
                     .inc();
 
-                if exists {
+                if peer_exists || learner_exists {
                     error!(
                         "{} can't add duplicated peer {:?} to region {:?}",
                         self.tag, peer, self.region
@@ -769,15 +769,12 @@ impl ApplyDelegate {
                         self.region
                     ));
                 }
-
                 // TODO: Do we allow adding peer in same node?
-
                 region.mut_peers().push(peer.clone());
 
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["add_peer", "success"])
                     .inc();
-
                 info!(
                     "{} add peer {:?} to region {:?}",
                     self.tag, peer, self.region
@@ -788,7 +785,7 @@ impl ApplyDelegate {
                     .with_label_values(&["remove_peer", "all"])
                     .inc();
 
-                if !exists {
+                if !peer_exists {
                     error!(
                         "{} remove missing peer {:?} from region {:?}",
                         self.tag, peer, self.region
@@ -807,7 +804,6 @@ impl ApplyDelegate {
                 }
 
                 util::remove_peer(&mut region, store_id).unwrap();
-
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["remove_peer", "success"])
                     .inc();
@@ -819,7 +815,59 @@ impl ApplyDelegate {
                     self.region
                 );
             }
-            ConfChangeType::AddLearnerNode => unimplemented!(),
+            ConfChangeType::AddLearnerNode => {
+                PEER_ADMIN_CMD_COUNTER_VEC
+                    .with_label_values(&["add_learner", "all"])
+                    .inc();
+
+                if peer_exists || learner_exists {
+                    error!(
+                        "{} can't add duplicated learner {:?} to region {:?}",
+                        self.tag, peer, self.region
+                    );
+                    return Err(box_err!(
+                        "can't add duplicated learner {:?} to region {:?}",
+                        peer,
+                        self.region
+                    ));
+                }
+                region.mut_learners().push(peer.clone());
+
+                PEER_ADMIN_CMD_COUNTER_VEC
+                    .with_label_values(&["add_learner", "success"])
+                    .inc();
+                info!(
+                    "{} add learner {:?} to region {:?}",
+                    self.tag, peer, self.region
+                );
+            }
+            ConfChangeType::PromoteLearnerNode => {
+                PEER_ADMIN_CMD_COUNTER_VEC
+                    .with_label_values(&["promote_learner", "all"])
+                    .inc();
+
+                if peer_exists || !learner_exists {
+                    error!(
+                        "{} can't promote learner {:?} on region {:?}",
+                        self.tag, peer, self.region
+                    );
+                    return Err(box_err!(
+                        "can't promote learner {:?} to region {:?}",
+                        peer,
+                        self.region
+                    ));
+                }
+                region.mut_peers().push(peer.clone());
+                util::remove_learner(&mut region, store_id).unwrap();
+
+                PEER_ADMIN_CMD_COUNTER_VEC
+                    .with_label_values(&["promote_learner", "success"])
+                    .inc();
+                info!(
+                    "{} promote learner {:?} on region {:?}",
+                    self.tag, peer, self.region
+                );
+            }
         }
 
         let state = if self.pending_remove {
