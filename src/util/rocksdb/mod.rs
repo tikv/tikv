@@ -24,9 +24,9 @@ use std::path::Path;
 use std::sync::Arc;
 use std::str::FromStr;
 
-use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK};
-use rocksdb::{ColumnFamilyOptions, CompactOptions, DBCompressionType, DBOptions, ReadOptions,
-              SliceTransform, Writable, WriteBatch, DB};
+use storage::{ALL_CFS, CF_DEFAULT};
+use rocksdb::{ColumnFamilyOptions, CompactOptions, DBCompressionType, DBOptions, SliceTransform,
+              DB};
 use rocksdb::rocksdb::supported_compression;
 use rocksdb::set_external_sst_file_global_seq_no;
 use util::rocksdb::engine_metrics::{ROCKSDB_COMPRESSION_RATIO_AT_LEVEL,
@@ -305,6 +305,22 @@ impl SliceTransform for NoopSliceTransform {
     }
 }
 
+fn prev_key(key: &[u8]) -> Result<Vec<u8>, String> {
+    if key.is_empty() {
+        return Err(String::from("Empty key has no previous key"));
+    }
+
+    let mut prev = key.to_vec();
+    let tail = prev.len() - 1;
+    if prev[tail] > 0 {
+        prev[tail] -= 1;
+    } else {
+        prev.truncate(tail);
+    }
+
+    Ok(prev)
+}
+
 pub fn roughly_cleanup_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<(), String> {
     if start_key > end_key {
         return Err(format!(
@@ -317,26 +333,14 @@ pub fn roughly_cleanup_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Resul
         return Ok(());
     }
 
+    // Todo: use end_key directly after delete_files_in_range support [start, end) semantics.
+    let end = prev_key(end_key).unwrap();
+    if end.as_slice() >= start_key {
+        return Ok(());
+    }
     for cf in db.cf_names() {
         let handle = get_cf_handle(db, cf)?;
-        if cf == CF_LOCK {
-            // Todo: use delete_files_in_range after rocksdb support [start, end) semantics.
-            let mut iter_opt = ReadOptions::new();
-            iter_opt.fill_cache(false);
-            iter_opt.set_iterate_upper_bound(end_key);
-            let mut iter = db.iter_cf_opt(handle, iter_opt);
-            iter.seek(start_key.into());
-            let wb = WriteBatch::new();
-            while iter.valid() {
-                wb.delete_cf(handle, iter.key())?;
-                iter.next();
-            }
-            if wb.count() > 0 {
-                db.write(wb)?;
-            }
-        } else {
-            db.delete_file_in_range_cf(handle, start_key, end_key)?;
-        }
+        db.delete_file_in_range_cf(handle, start_key, &end)?;
     }
 
     Ok(())
@@ -590,5 +594,19 @@ mod tests {
             .unwrap();
         check_db_with_kvs(&db, cf, &kvs);
         assert!(!sst_clone.exists());
+    }
+
+    #[test]
+    fn test_prev_key() {
+        let mut a: Vec<u8> = vec![];
+        assert!(prev_key(&a).is_err());
+
+        a.push(0);
+        assert!(prev_key(&a).unwrap().is_empty());
+
+        let mut b: Vec<u8> = b"123".to_vec();
+        assert_eq!(&prev_key(&b).unwrap(), b"122");
+        b.push(0);
+        assert_eq!(&prev_key(&b).unwrap(), b"123");
     }
 }
