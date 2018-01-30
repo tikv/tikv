@@ -93,12 +93,18 @@ impl<T: Context> ContextDelegators<T> {
         }
     }
 
+    /// This function should be called in the future pool thread. Otherwise it will panic.
+    pub fn get_current_thread_context(&self) -> RefMut<T> {
+        let delegator = self.get_current_thread_delegator();
+        delegator.get_context()
+    }
+
     fn get_current_thread_delegator(&self) -> &ContextDelegator<T> {
         let thread_id = thread::current().id();
         if let Some(delegator) = self.delegators.get(&thread_id) {
             delegator
         } else {
-            unreachable!();
+            panic!("Called from threads out of the future thread pool");
         }
     }
 }
@@ -159,20 +165,23 @@ impl<T: Context + 'static> FuturePool<T> {
         }
     }
 
-    pub fn spawn<F>(&self, f: F) -> CpuFuture<F::Item, F::Error>
+    pub fn spawn<F, R>(&self, future_factory: R) -> CpuFuture<F::Item, F::Error>
     where
+        R: FnOnce(ContextDelegators<T>) -> F + Send + 'static,
         F: Future + Send + 'static,
         F::Item: Send + 'static,
         F::Error: Send + 'static,
     {
         // TODO: Support busy check
         let delegators = self.context_delegators.clone();
-        let f = f.then(move |r| {
-            let delegator = delegators.get_current_thread_delegator();
-            delegator.on_task_finish();
-            r
-        });
-        self.pool.spawn(f)
+        let func = move || {
+            future_factory(delegators.clone()).then(move |r| {
+                let delegator = delegators.get_current_thread_delegator();
+                delegator.on_task_finish();
+                r
+            })
+        };
+        self.pool.spawn_fn(func)
     }
 }
 
@@ -186,10 +195,43 @@ mod tests {
     pub use super::*;
 
     fn spawn_long_time_future_and_wait<T: Context>(pool: &FuturePool<T>, future_duration_ms: u64) {
-        pool.spawn(future::lazy(move || {
+        pool.spawn(move |_| {
             thread::sleep(Duration::from_millis(future_duration_ms));
             future::ok::<(), ()>(())
-        })).wait()
+        }).wait()
+            .unwrap();
+    }
+
+    #[test]
+    fn test_context() {
+        #[derive(Debug)]
+        struct MyContext {
+            ctx_thread_id: thread::ThreadId,
+        }
+        impl Context for MyContext {}
+
+        let pool = FuturePool::new(
+            1,
+            1024000,
+            "test-pool",
+            Duration::from_millis(50),
+            move || MyContext {
+                ctx_thread_id: thread::current().id(),
+            },
+        );
+
+        let main_thread_id = thread::current().id();
+
+        pool.spawn(move |ctxd| {
+            // future_factory is executed in future pool
+            let current_thread_id = thread::current().id();
+            assert_ne!(main_thread_id, current_thread_id);
+
+            // Context is created in main thread
+            let ctx = ctxd.get_current_thread_context();
+            assert_eq!(ctx.ctx_thread_id, main_thread_id);
+            future::ok::<(), ()>(())
+        }).wait()
             .unwrap();
     }
 
