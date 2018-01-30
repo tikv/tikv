@@ -20,7 +20,7 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 use futures::Future;
-use futures_cpupool as cpupool;
+use futures_cpupool::{self as cpupool, CpuFuture, CpuPool};
 
 use util;
 use util::time::Instant;
@@ -106,7 +106,7 @@ impl<T: Context> ContextDelegators<T> {
 /// A future thread pool that supports `on_tick` for each thread.
 #[derive(Debug)]
 pub struct FuturePool<T: Context + 'static> {
-    pool: cpupool::CpuPool,
+    pool: CpuPool,
     context_delegators: ContextDelegators<T>,
 }
 
@@ -159,7 +159,7 @@ impl<T: Context + 'static> FuturePool<T> {
         }
     }
 
-    pub fn spawn<F>(&self, f: F) -> cpupool::CpuFuture<F::Item, F::Error>
+    pub fn spawn<F>(&self, f: F) -> CpuFuture<F::Item, F::Error>
     where
         F: Future + Send + 'static,
         F::Item: Send + 'static,
