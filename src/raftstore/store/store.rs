@@ -2658,7 +2658,7 @@ fn calc_region_declined_bytes(
     // `end_key` in influenced_regions are in incremental order.
     let mut region_declined_bytes = vec![];
     let mut last_end_key: Vec<u8> = vec![];
-    for (region_id, end_key) in influenced_regions.drain(..) {
+    for (region_id, end_key) in influenced_regions {
         let mut old_size = 0;
         for prop in &event.input_props {
             old_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
