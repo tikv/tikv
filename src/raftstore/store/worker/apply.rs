@@ -331,6 +331,7 @@ pub struct ApplyDelegate {
     apply_state: RaftApplyState,
     applied_index_term: u64,
     term: u64,
+    is_merging: bool,
     pending_cmds: PendingCmdQueue,
     metrics: ApplyMetrics,
 }
@@ -352,6 +353,7 @@ impl ApplyDelegate {
             apply_state: reg.apply_state,
             applied_index_term: reg.applied_index_term,
             term: reg.term,
+            is_merging: false,
             pending_cmds: Default::default(),
             metrics: Default::default(),
         }
@@ -616,8 +618,10 @@ impl ApplyDelegate {
                 ExecResult::ComputeHash { .. }
                 | ExecResult::VerifyHash { .. }
                 | ExecResult::CompactLog { .. }
-                | ExecResult::DeleteRange { .. }
-                | ExecResult::RollbackPreMerge { .. } => {}
+                | ExecResult::DeleteRange { .. } => {}
+                ExecResult::RollbackPreMerge { .. } => {
+                    self.is_merging = false;
+                }
                 ExecResult::SplitRegion {
                     ref left,
                     ref right,
@@ -633,6 +637,7 @@ impl ApplyDelegate {
                 }
                 ExecResult::PreMerge { ref region, .. } => {
                     self.region = region.clone();
+                    self.is_merging = true;
                 }
                 ExecResult::Merge {
                     ref region,
@@ -1001,7 +1006,8 @@ impl ApplyDelegate {
         let exec_ctx = ctx.exec_ctx.as_ref().unwrap();
         let first_index = peer_storage::first_index(&exec_ctx.apply_state);
         if index < first_index {
-            warn!(
+            // It's possible that a compact log is invoked before pre-merge.
+            info!(
                 "{} first index {} > min_index {}, skip pre merge.",
                 self.tag, first_index, index
             );
@@ -1212,6 +1218,13 @@ impl ApplyDelegate {
             debug!(
                 "{} compact index {} <= first index {}, no need to compact",
                 self.tag, compact_index, first_index
+            );
+            return Ok((resp, None));
+        }
+        if self.is_merging {
+            info!(
+                "{} is in merging mode, skip compact {}",
+                self.tag, compact_index
             );
             return Ok((resp, None));
         }
