@@ -32,7 +32,6 @@ use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFa
 use util::rocksdb::{db_exist, CFOptions, EventListener, FixedPrefixSliceTransform,
                     FixedSuffixSliceTransform, NoopSliceTransform};
 use util::security::SecurityConfig;
-use util::readpool::Config as ReadPoolConfig;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -649,7 +648,6 @@ pub enum LogLevel {
 pub struct TiKvConfig {
     #[serde(with = "LogLevel")] pub log_level: LogLevelFilter,
     pub log_file: String,
-    pub readpool: ReadPoolConfig,
     pub server: ServerConfig,
     pub storage: StorageConfig,
     pub pd: PdConfig,
@@ -667,7 +665,6 @@ impl Default for TiKvConfig {
         TiKvConfig {
             log_level: LogLevelFilter::Info,
             log_file: "".to_owned(),
-            readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
             raft_store: RaftstoreConfig::default(),
