@@ -39,3 +39,16 @@ impl Default for Config {
         }
     }
 }
+
+impl Config {
+    /// Tests are run in parallel so that we need a lower concurrency
+    /// to prevent resource exhausting.
+    pub fn default_for_test() -> Config {
+        Config {
+            high_concurrency: 2,
+            normal_concurrency: 2,
+            low_concurrency: 2,
+            ..Config::default()
+        }
+    }
+}

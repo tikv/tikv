@@ -20,7 +20,7 @@ use futures::Future;
 use futures_cpupool as cpupool;
 
 use util;
-use util::futurepool::FuturePool;
+use util::futurepool::{self, FuturePool};
 
 pub use self::config::Config;
 pub use self::context::Context;
@@ -39,7 +39,7 @@ impl util::AssertSend for ReadPool {}
 impl util::AssertSync for ReadPool {}
 
 impl ReadPool {
-    pub fn new(config: &Config) -> ReadPool {
+    pub fn new(config: &Config) -> Self {
         let tick_interval = Duration::from_secs(TICK_INTERVAL_SEC);
         let build_context_factory = || || Context {};
         ReadPool {
@@ -76,19 +76,20 @@ impl ReadPool {
         }
     }
 
-    pub fn future_execute<F>(
+    pub fn future_execute<F, R>(
         &self,
         priority: Priority,
-        future: F,
+        future_factory: R,
     ) -> cpupool::CpuFuture<F::Item, F::Error>
     where
+        R: FnOnce(futurepool::ContextDelegators<Context>) -> F + Send + 'static,
         F: Future + Send + 'static,
         F::Item: Send + 'static,
         F::Error: Send + 'static,
     {
         // TODO: handle busy?
         let pool = self.get_pool_by_priority(priority);
-        pool.spawn(future)
+        pool.spawn(future_factory)
     }
 }
 
@@ -121,30 +122,23 @@ mod tests {
 
     #[test]
     fn test_future_execute() {
-        let read_pool = ReadPool::new(&Config {
-            high_concurrency: 2,
-            normal_concurrency: 2,
-            low_concurrency: 2,
-            ..Config::default()
-        });
+        let read_pool = ReadPool::new(&Config::default_for_test());
 
         expect_val(
             vec![1, 2, 4],
             read_pool
-                .future_execute(
-                    Priority::High,
-                    future::ok::<Vec<u8>, BoxError>(vec![1, 2, 4]),
-                )
+                .future_execute(Priority::High, |_| {
+                    future::ok::<Vec<u8>, BoxError>(vec![1, 2, 4])
+                })
                 .wait(),
         );
 
         expect_err(
             "foobar",
             read_pool
-                .future_execute(
-                    Priority::High,
-                    future::err::<(), BoxError>(box_err!("foobar")),
-                )
+                .future_execute(Priority::High, |_| {
+                    future::err::<(), BoxError>(box_err!("foobar"))
+                })
                 .wait(),
         );
     }
