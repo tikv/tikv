@@ -144,6 +144,16 @@ impl PdMocker for Service {
         }
     }
 
+    fn get_all_stores(&self, _: &GetAllStoresRequest) -> Option<Result<GetAllStoresResponse>> {
+        let mut resp = GetAllStoresResponse::new();
+        resp.set_header(Service::header());
+        let stores = self.stores.lock().unwrap();
+        for store in stores.values() {
+            resp.mut_stores().push(store.clone());
+        }
+        Some(Ok(resp))
+    }
+
     fn get_region(&self, req: &GetRegionRequest) -> Option<Result<GetRegionResponse>> {
         let mut resp = GetRegionResponse::new();
         let key = req.get_region_key();

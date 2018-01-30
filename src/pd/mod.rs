@@ -138,6 +138,11 @@ pub trait PdClient: Send + Sync {
     // Get store information.
     fn get_store(&self, store_id: u64) -> Result<metapb::Store>;
 
+    // Get all stores information.
+    fn get_all_stores(&self) -> Result<Vec<metapb::Store>> {
+        unimplemented!();
+    }
+
     // Get cluster meta information.
     fn get_cluster_config(&self) -> Result<metapb::Cluster>;
 
