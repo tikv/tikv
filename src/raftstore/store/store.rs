@@ -40,6 +40,7 @@ use protobuf::Message;
 use raft::{self, SnapshotStatus, INVALID_INDEX};
 use raftstore::{Error, Result};
 use kvproto::metapb;
+use coprocessor::cache::SQLCache;
 use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
 use util::transport::SendCh;
 use util::RingQueue;
@@ -198,7 +199,7 @@ impl<T, C> Store<T, C> {
         mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
         mut coprocessor_host: CoprocessorHost,
-        enable_distsql_cache: bool,
+        distsql_cache: Option<Arc<SQLCache>>,
     ) -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
         cfg.validate()?;
@@ -211,13 +212,13 @@ impl<T, C> Store<T, C> {
             .registry
             .register_admin_observer(100, box SplitObserver);
 
-        if enable_distsql_cache {
+        if let Some(cache) = distsql_cache {
             coprocessor_host
                 .registry
-                .register_admin_observer(100, box DistSQLObserver);
+                .register_admin_observer(100, DistSQLObserver::new(Arc::clone(&cache)));
             coprocessor_host
                 .registry
-                .register_query_observer(100, box DistSQLObserver);
+                .register_query_observer(100, DistSQLObserver::new(cache));
         }
 
         let mut s = Store {

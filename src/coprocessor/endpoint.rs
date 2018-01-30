@@ -35,6 +35,7 @@ use storage::{self, engine, Engine, FlowStatistics, Snapshot, Statistics, Statis
 use storage::engine::Error as EngineError;
 use pd::PdTask;
 
+use super::cache::SQLCache;
 use super::codec::mysql;
 use super::codec::datum::Datum;
 use super::dag::DAGContext;
@@ -69,7 +70,7 @@ pub struct Host {
     low_priority_pool: ThreadPool<CopContext>,
     high_priority_pool: ThreadPool<CopContext>,
     max_running_task_count: usize,
-    enable_distsql_cache: bool,
+    distsql_cache: Option<Arc<SQLCache>>,
     distsql_cache_entry_max_size: usize,
     batch_row_limit: usize,
 }
@@ -173,6 +174,7 @@ impl Host {
         scheduler: Scheduler<Task>,
         cfg: &Config,
         r: FutureScheduler<PdTask>,
+        distsql_cache: Option<Arc<SQLCache>>,
     ) -> Host {
         Host {
             engine: engine,
@@ -180,7 +182,7 @@ impl Host {
             reqs: HashMap::default(),
             last_req_id: 0,
             max_running_task_count: cfg.end_point_max_tasks,
-            enable_distsql_cache: cfg.enable_distsql_cache,
+            distsql_cache: distsql_cache,
             distsql_cache_entry_max_size: cfg.distsql_cache_entry_max_size.0 as usize,
             batch_row_limit: cfg.end_point_batch_row_limit,
             pool: ThreadPoolBuilder::new(
@@ -234,7 +236,7 @@ impl Host {
                 .add(1.0);
             let end_point = TiDbEndPoint::new(
                 snap.clone(),
-                self.enable_distsql_cache,
+                self.distsql_cache.clone(),
                 self.distsql_cache_entry_max_size,
             );
 
@@ -660,19 +662,19 @@ fn respond(mut resp: Response, mut t: RequestTask) -> CopStats {
 
 pub struct TiDbEndPoint {
     snap: Box<Snapshot>,
-    enable_distsql_cache: bool,
+    distsql_cache: Option<Arc<SQLCache>>,
     distsql_cache_entry_max_size: usize,
 }
 
 impl TiDbEndPoint {
     pub fn new(
         snap: Box<Snapshot>,
-        enable_distsql_cache: bool,
+        distsql_cache: Option<Arc<SQLCache>>,
         distsql_cache_entry_max_size: usize,
     ) -> TiDbEndPoint {
         TiDbEndPoint {
             snap: snap,
-            enable_distsql_cache: enable_distsql_cache,
+            distsql_cache: distsql_cache,
             distsql_cache_entry_max_size: distsql_cache_entry_max_size,
         }
     }
@@ -711,7 +713,7 @@ impl TiDbEndPoint {
             self.snap,
             Arc::clone(&t.ctx),
             batch_row_limit,
-            self.enable_distsql_cache,
+            self.distsql_cache,
             self.distsql_cache_entry_max_size,
         )?;
         let res = ctx.handle_request(region_id);
@@ -824,7 +826,13 @@ mod tests {
         let mut cfg = Config::default();
         cfg.end_point_concurrency = 1;
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
+        let end_point = Host::new(
+            engine,
+            worker.scheduler(),
+            &cfg,
+            pd_worker.scheduler(),
+            None,
+        );
         worker.start(end_point).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(
@@ -855,7 +863,13 @@ mod tests {
         let mut cfg = Config::default();
         cfg.end_point_concurrency = 1;
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
+        let end_point = Host::new(
+            engine,
+            worker.scheduler(),
+            &cfg,
+            pd_worker.scheduler(),
+            None,
+        );
         worker.start(end_point).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(
@@ -893,7 +907,13 @@ mod tests {
         let mut cfg = Config::default();
         cfg.end_point_concurrency = 1;
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
+        let mut end_point = Host::new(
+            engine,
+            worker.scheduler(),
+            &cfg,
+            pd_worker.scheduler(),
+            None,
+        );
         end_point.max_running_task_count = 3;
         worker.start(end_point).unwrap();
         let (tx, rx) = mpsc::channel();

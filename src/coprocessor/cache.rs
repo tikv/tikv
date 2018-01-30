@@ -19,6 +19,7 @@ use linked_hash_map::LinkedHashMap;
 use super::metrics::*;
 
 type DistSQLCacheKey = String;
+pub type SQLCache = Mutex<DistSQLCache>;
 
 const DISTSQL_CACHE_ENTRY_ADDITION_SIZE: usize = 40;
 
@@ -305,9 +306,8 @@ pub const DEFAULT_DISTSQL_CACHE_SIZE: usize = 256 * 1024 * 1024;
 // DistSQL cache entry max size unit is byte, default is 5MB
 pub const DEFAULT_DISTSQL_CACHE_ENTRY_MAX_SIZE: usize = 5 * 1204 * 1024;
 
-lazy_static! {
-    pub static ref DISTSQL_CACHE: Mutex<DistSQLCache> =
-        Mutex::new(DistSQLCache::new(DEFAULT_DISTSQL_CACHE_SIZE));
+pub fn new_mutex_cache(capacity: usize) -> SQLCache {
+    Mutex::new(DistSQLCache::new(capacity))
 }
 
 #[cfg(test)]
@@ -397,19 +397,14 @@ mod tests {
     }
 
     #[test]
-    fn test_global_distsql_cache() {
+    fn test_mutex_distsql_cache() {
         let key: DistSQLCacheKey = "test1".to_string();
         let result: Vec<u8> = vec![100, 101, 102];
-        let version = DISTSQL_CACHE.lock().get_region_version(10);
-        DISTSQL_CACHE
-            .lock()
-            .put(10, key.clone(), version, result.clone());
-        match DISTSQL_CACHE.lock().get(10, &key) {
-            None => (assert!(false)),
-            Some(value) => {
-                assert_eq!(&result, value);
-            }
-        }
+        let cache = new_mutex_cache(DEFAULT_DISTSQL_CACHE_SIZE);
+        let version = cache.lock().get_region_version(10);
+        cache.lock().put(10, key.clone(), version, result.clone());
+        let value = cache.lock().get(10, &key).unwrap().clone();
+        assert_eq!(result, value);
     }
 
     #[test]

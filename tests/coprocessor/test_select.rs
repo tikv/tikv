@@ -515,6 +515,7 @@ fn init_data_with_details(
         end_point.scheduler(),
         &cfg,
         pd_worker.scheduler(),
+        None,
     );
     end_point.start(runner).unwrap();
 

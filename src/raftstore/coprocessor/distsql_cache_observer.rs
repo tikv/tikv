@@ -11,22 +11,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{AdminObserver, Coprocessor, ObserverContext, QueryObserver};
-use coprocessor::cache::DISTSQL_CACHE;
+use std::sync::Arc;
 use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
 use protobuf::RepeatedField;
 
-pub struct DistSQLObserver;
+use coprocessor::cache::SQLCache;
+use super::{AdminObserver, Coprocessor, ObserverContext, QueryObserver};
+
+pub struct DistSQLObserver {
+    cache: Arc<SQLCache>,
+}
 
 impl DistSQLObserver {
+    pub fn new(cache: Arc<SQLCache>) -> Box<DistSQLObserver> {
+        box DistSQLObserver { cache: cache }
+    }
     fn disable_cache(&self, ctx: &mut ObserverContext) {
         let region_id = ctx.region().get_id();
-        DISTSQL_CACHE.lock().disable_region_cache(region_id);
+        self.cache.lock().disable_region_cache(region_id);
     }
 
     fn evict_region(&self, ctx: &mut ObserverContext) {
         let region_id = ctx.region().get_id();
-        DISTSQL_CACHE.lock().evict_region_and_enable(region_id);
+        self.cache.lock().evict_region_and_enable(region_id);
     }
 }
 
