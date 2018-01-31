@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::boxed::FnBox;
-use kvproto::coprocessor::Response;
 mod metrics;
 mod service;
 mod raft_client;
@@ -33,5 +31,3 @@ pub use self::transport::{ServerRaftStoreRouter, ServerTransport};
 pub use self::node::{create_raft_storage, Node};
 pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::raft_client::RaftClient;
-
-pub type OnResponse = Box<FnBox(Response) + Send>;

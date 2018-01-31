@@ -38,7 +38,7 @@ quick_error! {
             description("key is locked")
             display("locked {:?}", l)
         }
-        Outdated(deadline: Instant, now: Instant, tag: &'static str) {
+        Outdated(deadline: Instant, now: Instant) {
             description("request is outdated")
         }
         Full(allow: usize) {
@@ -85,5 +85,4 @@ impl From<txn::Error> for Error {
     }
 }
 
-pub use self::endpoint::{CopRequestStatistics, CopSender, Host as EndPointHost, RequestTask,
-                         Task as EndPointTask, REQ_TYPE_DAG, SINGLE_GROUP};
+pub use self::endpoint::{Host as EndPointHost, REQ_TYPE_DAG, SINGLE_GROUP};

@@ -41,7 +41,7 @@ use server::snap::Task as SnapTask;
 use server::metrics::*;
 use server::Error;
 use raftstore::store::{Callback, Msg as StoreMessage};
-use coprocessor::{EndPointTask, RequestTask};
+use coprocessor::EndPointHost;
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 
@@ -50,30 +50,27 @@ pub struct Service<T: RaftStoreRouter + 'static> {
     // For handling KV requests.
     storage: Storage,
     // For handling coprocessor requests.
-    end_point_scheduler: Scheduler<EndPointTask>,
+    cop_end_point: EndPointHost,
     // For handling raft messages.
     ch: T,
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
     token: Arc<AtomicUsize>, // TODO: remove it.
-    recursion_limit: u32,
 }
 
 impl<T: RaftStoreRouter + 'static> Service<T> {
     pub fn new(
         storage: Storage,
-        end_point_scheduler: Scheduler<EndPointTask>,
+        cop_end_point: EndPointHost,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
-        recursion_limit: u32,
     ) -> Service<T> {
         Service {
-            storage: storage,
-            end_point_scheduler: end_point_scheduler,
-            ch: ch,
-            snap_scheduler: snap_scheduler,
+            storage,
+            cop_end_point,
+            ch,
+            snap_scheduler,
             token: Arc::new(AtomicUsize::new(1)),
-            recursion_limit: recursion_limit,
         }
     }
 
@@ -729,21 +726,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        let (cb, future) = make_callback();
-        let res = self.end_point_scheduler
-            .schedule(EndPointTask::Request(RequestTask::new(
-                req,
-                cb,
-                self.recursion_limit,
-            )));
-        if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
-            return;
-        }
-
-        let future = future
-            .map_err(Error::from)
-            .and_then(|res| sink.success(res).map_err(Error::from))
+        let future = self.cop_end_point
+            .handle_request(req)
+            // coprocessor request always success
+            .then(|result| sink.success(result.unwrap()).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", label, e);

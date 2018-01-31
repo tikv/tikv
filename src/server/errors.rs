@@ -27,7 +27,6 @@ use storage::engine::Error as EngineError;
 use storage::Error as StorageError;
 use pd::Error as PdError;
 use super::snap::Task as SnapTask;
-use coprocessor::EndPointTask;
 
 quick_error!{
     #[derive(Debug)]
@@ -93,10 +92,6 @@ quick_error!{
             description(err.description())
         }
         SnapWorkerStopped(err: ScheduleError<SnapTask>) {
-            from()
-            display("{:?}", err)
-        }
-        EndPointStopped(err: ScheduleError<EndPointTask>) {
             from()
             display("{:?}", err)
         }
