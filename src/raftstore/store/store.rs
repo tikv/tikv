@@ -632,6 +632,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 if let Err(e) = self.pd_worker.schedule(task) {
                     error!("{} failed to notify pd: {}", peer.tag, e)
                 }
+                self.raft_metrics.leader_miss.inc();
             }
         }
 
