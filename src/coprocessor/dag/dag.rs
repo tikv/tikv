@@ -39,6 +39,7 @@ pub struct DAGContext {
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
     cache_key: String,
+    start_ts: u64,
     enable_distsql_cache: bool,
     distsql_cache_entry_max_size: usize,
 }
@@ -81,6 +82,7 @@ impl DAGContext {
             output_offsets: req.take_output_offsets(),
             batch_row_limit: batch_row_limit,
             cache_key: cache_key,
+            start_ts: req.get_start_ts(),
             enable_distsql_cache: enable_distsql_cache,
             distsql_cache_entry_max_size: distsql_cache_entry_max_size,
         })
@@ -93,7 +95,7 @@ impl DAGContext {
         if self.can_cache() {
             let mut cache = DISTSQL_CACHE.lock();
             let (rver, entry) =
-                cache.get_region_version_and_cache_entry(region_id, &self.cache_key);
+                cache.get_region_version_and_cache_entry(region_id, &self.cache_key, self.start_ts);
             version = rver;
             if let Some(data) = entry {
                 debug!("Cache Hit: {}, region_id: {}", self.cache_key, region_id);
@@ -133,12 +135,16 @@ impl DAGContext {
                     // If the result set is bigger than distsql_cache_entry_max_size
                     // it cannot be cached.
                     if self.can_cache_with_size(&data) {
-                        debug!("Cache It: {}, region_id: {}", &self.cache_key, region_id);
+                        debug!(
+                            "Cache It: {}, region_id: {}, start_ts: {}",
+                            &self.cache_key, region_id, self.start_ts
+                        );
                         DISTSQL_CACHE.lock().put(
                             region_id,
                             self.cache_key.clone(),
                             version,
                             data.clone(),
+                            self.start_ts,
                         );
                         CORP_DISTSQL_CACHE_COUNT.with_label_values(&["miss"]).inc();
                     }
