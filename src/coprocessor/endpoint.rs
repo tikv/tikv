@@ -95,7 +95,7 @@ impl Host {
     /// Handle a grpc request according to `RequestTask`. Used in tests.
     fn handle_request_task(
         &self,
-        mut task: RequestTask,
+        task: RequestTask,
     ) -> impl Future<Item = copproto::Response, Error = ()> {
         static CMD: &'static str = "coprocessor";
         static CMD_TYPE: &'static str = "cop";
@@ -178,8 +178,6 @@ impl Host {
                         COPR_REQ_ERROR.with_label_values(&["lock"]).inc();
                     }
                     Error::Outdated(deadline, now) => {
-                        let elapsed = now.duration_since(deadline) +
-                            Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
                         COPR_REQ_ERROR.with_label_values(&["outdated"]).inc();
                         resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
                     }
@@ -206,7 +204,7 @@ trait CopRequest: Send {
     fn handle(
         &mut self,
         snap: Box<Snapshot>,
-        mut req: Request,
+        req: Request,
         ctx: Arc<ReqContext>,
         batch_row_limit: usize,
         stats: &mut CopStats,
@@ -409,14 +407,12 @@ mod tests {
     use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
-    use std::ops::Sub;
+    use std::result;
+    use std::sync::mpsc::{channel, Sender};
 
     use kvproto::coprocessor::Request;
-    use tipb::select::DAGRequest;
-    use tipb::expression::Expr;
-    use tipb::executor::Executor;
+    use kvproto::kvrpcpb::CommandPri;
 
-    use util::worker::{Builder as WorkerBuilder, FutureWorker};
     use util::time::Instant;
 
     /// Tests whether an outdated process results in outdated error.
@@ -427,7 +423,7 @@ mod tests {
             fn handle(
                 &mut self,
                 _snap: Box<Snapshot>,
-                mut _req: Request,
+                _req: Request,
                 _ctx: Arc<ReqContext>,
                 _batch_row_limit: usize,
                 _stats: &mut CopStats,
@@ -461,7 +457,7 @@ mod tests {
             fn handle(
                 &mut self,
                 _snap: Box<Snapshot>,
-                mut _req: Request,
+                _req: Request,
                 _ctx: Arc<ReqContext>,
                 _batch_row_limit: usize,
                 _stats: &mut CopStats,
@@ -492,5 +488,81 @@ mod tests {
         let expect_process_ms = (SLOW_QUERY_LOWER_BOUND * 2.0) as i64 * 1000;
         let time_delta: i64 = exec_details.get_handle_time().get_process_ms() - expect_process_ms;
         assert!(time_delta.abs() < 100);
+    }
+
+    fn wait_on_new_thread<F>(sender: Sender<result::Result<F::Item, F::Error>>, future: F)
+    where
+        F: Future + Send + 'static,
+        F::Item: Send + 'static,
+        F::Error: Send + 'static,
+    {
+        thread::spawn(move || {
+            let r = future.wait();
+            sender.send(r).unwrap();
+        });
+    }
+
+    #[test]
+    fn test_too_many_reqs() {
+        struct MyCopRequest {}
+        impl CopRequest for MyCopRequest {
+            fn handle(
+                &mut self,
+                _snap: Box<Snapshot>,
+                _req: Request,
+                _ctx: Arc<ReqContext>,
+                _batch_row_limit: usize,
+                _stats: &mut CopStats,
+            ) -> Result<Response> {
+                thread::sleep(Duration::from_millis(100));
+                Ok(Response::new())
+            }
+        }
+
+        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let read_pool = readpool::ReadPool::new(
+            &readpool::Config {
+                normal_concurrency: 2,
+                max_tasks_normal: 4,
+                ..readpool::Config::default_for_test()
+            },
+            None,
+        );
+        let end_point = Host::new(engine, &Config::default(), read_pool);
+
+        let make_task = || {
+            let mut req = Request::new();
+            req.mut_context().set_priority(CommandPri::Normal);
+
+            let ctx = req.get_context().clone();
+
+            RequestTask {
+                req,
+                cop_req: Ok(box MyCopRequest {}),
+                ctx: Arc::new(ReqContext::new(&ctx, false)),
+            }
+        };
+
+        let (tx, rx) = channel();
+
+        for _ in 0..10 {
+            let task = make_task();
+            let resp_future = end_point.handle_request_task(task);
+            wait_on_new_thread(tx.clone(), resp_future);
+        }
+
+        // Since each valid request needs 100ms to process, while server-busy requests are
+        // returned immediately, we got server-busy requests first.
+        for _ in 0..6 {
+            let resp: Response = rx.recv().unwrap().unwrap();
+            assert!(resp.has_region_error());
+            assert!(resp.get_region_error().has_server_is_busy());
+        }
+        for _ in 0..4 {
+            let resp: Response = rx.recv().unwrap().unwrap();
+            assert!(!resp.has_region_error());
+        }
+        // Wait some time to check that there is no more response remaining in the queue
+        assert!(rx.recv_timeout(Duration::from_secs(1)).is_err());
     }
 }

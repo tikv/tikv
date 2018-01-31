@@ -33,7 +33,6 @@ use super::transport::{RaftStoreRouter, ServerTransport};
 use super::resolve::StoreAddrResolver;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
 use super::raft_client::RaftClient;
-use pd::PdTask;
 
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
 
@@ -185,7 +184,6 @@ mod tests {
     use raftstore::store::Msg as StoreMsg;
     use raftstore::store::*;
     use raftstore::store::transport::Transport;
-    use util::worker::FutureWorker;
     use util::security::SecurityConfig;
     use util::readpool;
     use coprocessor::EndPointHost;
