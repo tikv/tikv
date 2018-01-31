@@ -103,8 +103,6 @@ pub trait Engine: Send + Debug {
         }
     }
 
-    // TODO: Change signature to `-> impl Future<...>` syntax once it is supported (currently
-    // it is not supported in traits.
     fn future_snapshot(
         &self,
         ctx: &Context,
