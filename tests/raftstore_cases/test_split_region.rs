@@ -184,10 +184,14 @@ fn put_till_size<T: Simulator>(
     limit: u64,
     range: &mut Iterator<Item = u64>,
 ) -> Vec<u8> {
-    put_cf_till_size(cluster, CF_DEFAULT, limit, range)
+    put_cf_till_approximate_size(cluster, CF_DEFAULT, limit, range)
 }
 
-fn put_cf_till_size<T: Simulator>(
+fn make_key(i: u64) -> Vec<u8> {
+    format!("{:09}", i).into_bytes()
+}
+
+fn put_cf_till_approximate_size<T: Simulator>(
     cluster: &mut Cluster<T>,
     cf: &'static str,
     limit: u64,
@@ -197,27 +201,35 @@ fn put_cf_till_size<T: Simulator>(
     let mut len = 0;
     let mut last_len = 0;
     let mut rng = rand::thread_rng();
-    let mut key = vec![];
-    while len < limit {
-        let key_id = range.next().unwrap();
-        let key_str = format!("{:09}", key_id);
-        key = key_str.into_bytes();
+    let mut start = None;
+    let nodes: Vec<u64> = cluster.engines.keys().cloned().collect();
+    loop {
+        let key = make_key(range.next().unwrap());
+        if start.is_none() {
+            start = Some(key.clone());
+        }
         let mut value = vec![0; 64];
         rng.fill_bytes(&mut value);
         cluster.must_put_cf(cf, &key, &value);
         // plus 1 for the extra encoding prefix
         len += key.len() as u64 + 1;
         len += value.len() as u64;
+        // Approximate size of memtable is inaccurate for small data,
+        // we flush it to SST so we can use the size properties instead.
         // Flush memtable to SST periodically, to make approximate size more accurate.
-        if len - last_len >= 1000 {
+        let gap = if len >= limit { 200 } else { 1000 };
+        if len - last_len >= gap {
             cluster.must_flush(true);
             last_len = len;
         }
+        if len >= limit {
+            for id in &nodes {
+                if cluster.get_approximate_size(*id, cf, start.as_ref().unwrap(), &key) > limit {
+                    return key;
+                }
+            }
+        }
     }
-    // Approximate size of memtable is inaccurate for small data,
-    // we flush it to SST so we can use the size properties instead.
-    cluster.must_flush(true);
-    key
 }
 
 fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -243,7 +255,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     assert_eq!(region, target);
 
-    let max_key = put_cf_till_size(
+    let max_key = put_cf_till_approximate_size(
         cluster,
         CF_WRITE,
         REGION_MAX_SIZE - REGION_SPLIT_SIZE + check_size_diff,
