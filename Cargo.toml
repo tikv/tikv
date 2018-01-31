@@ -87,8 +87,6 @@ git = "https://github.com/pingcap/tipb.git"
 version = "0.3"
 default-features = false
 features = ["nightly", "push", "process"]
-git = "https://github.com/overvenus/rust-prometheus.git"
-branch = "clone-local-counter"
 
 [dependencies.jemallocator]
 git = "https://github.com/busyjay/jemallocator.git"
