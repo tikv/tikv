@@ -17,6 +17,12 @@
 # normal-concurrency = 8
 # size of thread pool for low-priority read operations
 # low-concurrency = 8
+# max running high-priority read operations, reject if exceed
+# max-tasks-high = 16000
+# max running normal-priority read operations, reject if exceed
+# max-tasks-normal = 16000
+# max running low-priority read operations, reject if exceed
+# max-tasks-low = 16000
 # size of stack size for each thread pool
 # stack-size = "10MB"
 
