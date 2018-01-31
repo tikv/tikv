@@ -187,7 +187,6 @@ impl Simulator for NodeCluster {
 
         // Create coprocessor.
         let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
-
         node.start(
             event_loop,
             engines.clone(),
@@ -196,6 +195,7 @@ impl Simulator for NodeCluster {
             snap_status_receiver,
             pd_worker,
             coprocessor_host,
+            None,
         ).unwrap();
         assert!(
             Arc::clone(&engines.kv_engine)

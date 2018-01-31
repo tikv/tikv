@@ -74,7 +74,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
-use tikv::coprocessor::cache::DISTSQL_CACHE;
+use tikv::coprocessor::cache::new_mutex_cache;
 use tikv::import::{ImportSSTService, SSTImporter};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
@@ -173,6 +173,18 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), significant_msg_sender);
     let compaction_listener = new_compaction_listener(store_sendch.clone());
 
+    // Initialize distsql_cache
+    let distsql_cache = if cfg.server.enable_distsql_cache {
+        let cache = new_mutex_cache(cfg.server.distsql_cache_size.0 as usize);
+        info!(
+            "Enable DistSQL cache with size: {:?}",
+            cfg.server.distsql_cache_size
+        );
+        Some(Arc::new(cache))
+    } else {
+        None
+    };
+
     // Create kv engine, storage.
     let mut kv_db_opts = cfg.rocksdb.build_opt();
     kv_db_opts.add_event_listener(compaction_listener);
@@ -247,6 +259,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         significant_msg_receiver,
         pd_worker,
         coprocessor_host,
+        distsql_cache.clone(),
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));
 
@@ -268,7 +281,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Run server.
     server
-        .start(server_cfg, security_mgr)
+        .start(server_cfg, security_mgr, distsql_cache)
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
     signal_handler::handle_signal(engines);
 
@@ -498,19 +511,6 @@ fn main() {
     util::print_tikv_info();
 
     panic_hook::set_exit_hook();
-
-    // Update enable_distsql_cache config
-    let edc = config.server.enable_distsql_cache;
-    if edc {
-        // Update DistSQL Cache Size
-        DISTSQL_CACHE
-            .lock()
-            .update_capacity(config.server.distsql_cache_size.0 as usize);
-        info!(
-            "Enable DistSQL cache with size: {:?}",
-            config.server.distsql_cache_size
-        );
-    }
 
     config.compatible_adjust();
     if let Err(e) = config.validate() {

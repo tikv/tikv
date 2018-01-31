@@ -28,6 +28,7 @@ use raftstore::store::{Engines, SnapManager};
 
 use super::{Config, Result};
 use coprocessor::{EndPointHost, EndPointTask};
+use coprocessor::cache::SQLCache;
 use super::service::*;
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::resolve::StoreAddrResolver;
@@ -148,12 +149,18 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         self.trans.clone()
     }
 
-    pub fn start(&mut self, cfg: Arc<Config>, security_mgr: Arc<SecurityManager>) -> Result<()> {
+    pub fn start(
+        &mut self,
+        cfg: Arc<Config>,
+        security_mgr: Arc<SecurityManager>,
+        distsql_cache: Option<Arc<SQLCache>>,
+    ) -> Result<()> {
         let end_point = EndPointHost::new(
             self.storage.get_engine(),
             self.end_point_worker.scheduler(),
             &cfg,
             self.pd_scheduler.clone(),
+            distsql_cache,
         );
         box_try!(self.end_point_worker.start(end_point));
         let snap_runner = SnapHandler::new(
@@ -293,7 +300,7 @@ mod tests {
             None,
         ).unwrap();
 
-        server.start(cfg, security_mgr).unwrap();
+        server.start(cfg, security_mgr, None).unwrap();
 
         let mut trans = server.transport();
         trans.report_unreachable(RaftMessage::new());

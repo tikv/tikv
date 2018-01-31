@@ -23,6 +23,7 @@ use pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use protobuf::RepeatedField;
+use coprocessor::cache::SQLCache;
 use util::transport::SendCh;
 use util::worker::FutureWorker;
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
@@ -73,8 +74,6 @@ pub struct Node<C: PdClient + 'static> {
     store_cfg: StoreConfig,
     store_handle: Option<thread::JoinHandle<()>>,
     ch: SendCh<Msg>,
-    enable_distsql_cache: bool,
-
     pd_client: Arc<C>,
 }
 
@@ -116,7 +115,6 @@ where
             store_handle: None,
             pd_client: pd_client,
             ch: ch,
-            enable_distsql_cache: cfg.enable_distsql_cache,
         }
     }
 
@@ -130,6 +128,7 @@ where
         significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
         coprocessor_host: CoprocessorHost,
+        distsql_cache: Option<Arc<SQLCache>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -169,6 +168,7 @@ where
             significant_msg_receiver,
             pd_worker,
             coprocessor_host,
+            distsql_cache,
         )?;
         Ok(())
     }
@@ -320,6 +320,7 @@ where
         significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
         coprocessor_host: CoprocessorHost,
+        distsql_cache: Option<Arc<SQLCache>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -337,7 +338,6 @@ where
 
         let (tx, rx) = mpsc::channel();
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
-        let enable_distsql_cache = self.enable_distsql_cache;
         let h = builder.spawn(move || {
             let ch = StoreChannel {
                 sender,
@@ -353,7 +353,7 @@ where
                 snap_mgr,
                 pd_worker,
                 coprocessor_host,
-                enable_distsql_cache,
+                distsql_cache,
             ) {
                 Err(e) => panic!("construct store {} err {:?}", store_id, e),
                 Ok(s) => s,

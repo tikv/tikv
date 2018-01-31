@@ -39,8 +39,8 @@ pub struct DAGContext {
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
     cache_key: String,
+    distsql_cache: Option<Arc<SQLCache>>,
     start_ts: u64,
-    enable_distsql_cache: bool,
     distsql_cache_entry_max_size: usize,
 }
 
@@ -51,7 +51,7 @@ impl DAGContext {
         snap: Box<Snapshot>,
         req_ctx: Arc<ReqContext>,
         batch_row_limit: usize,
-        enable_distsql_cache: bool,
+        distsql_cache: Option<Arc<SQLCache>>,
         distsql_cache_entry_max_size: usize,
     ) -> Result<DAGContext> {
         let eval_ctx = Arc::new(box_try!(EvalContext::new(
@@ -82,8 +82,8 @@ impl DAGContext {
             output_offsets: req.take_output_offsets(),
             batch_row_limit: batch_row_limit,
             cache_key: cache_key,
+            distsql_cache: distsql_cache,
             start_ts: req.get_start_ts(),
-            enable_distsql_cache: enable_distsql_cache,
             distsql_cache_entry_max_size: distsql_cache_entry_max_size,
         })
     }
@@ -93,7 +93,7 @@ impl DAGContext {
         let mut chunks = Vec::new();
         let mut version: u64 = 0;
         if self.can_cache() {
-            let mut cache = DISTSQL_CACHE.lock();
+            let mut cache = self.distsql_cache.as_mut().unwrap().lock();
             let (rver, entry) =
                 cache.get_region_version_and_cache_entry(region_id, &self.cache_key, self.start_ts);
             version = rver;
@@ -139,7 +139,7 @@ impl DAGContext {
                             "Cache It: {}, region_id: {}, start_ts: {}",
                             &self.cache_key, region_id, self.start_ts
                         );
-                        DISTSQL_CACHE.lock().put(
+                        self.distsql_cache.as_mut().unwrap().lock().put(
                             region_id,
                             self.cache_key.clone(),
                             version,
@@ -170,7 +170,7 @@ impl DAGContext {
     }
 
     pub fn can_cache(&mut self) -> bool {
-        self.enable_distsql_cache && (self.has_aggr || self.has_topn)
+        self.distsql_cache.is_some() && (self.has_aggr || self.has_topn)
     }
 
     pub fn can_cache_with_size(&mut self, data: &[u8]) -> bool {
