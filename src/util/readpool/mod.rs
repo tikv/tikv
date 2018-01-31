@@ -222,11 +222,14 @@ mod tests {
     fn test_full() {
         let (tx, rx) = channel();
 
-        let read_pool = ReadPool::new(&Config {
-            high_concurrency: 2,
-            max_tasks_high: 4,
-            ..Config::default()
-        });
+        let read_pool = ReadPool::new(
+            &Config {
+                high_concurrency: 2,
+                max_tasks_high: 4,
+                ..Config::default()
+            },
+            None,
+        );
 
         wait_on_new_thread(tx.clone(), spawn_long_time_future(&read_pool, 0, 5));
         // not full

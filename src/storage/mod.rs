@@ -498,15 +498,16 @@ impl Storage {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        self.read_pool.future_execute(priority, move |ctxd| {
-            let _t_snapshot = {
-                let ctxd = ctxd.clone();
-                let mut thread_ctx = ctxd.get_current_thread_context();
-                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
-                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
-            };
+        self.read_pool
+            .future_execute(priority, move |ctxd| {
+                let _t_snapshot = {
+                    let ctxd = ctxd.clone();
+                    let mut thread_ctx = ctxd.get_current_thread_context();
+                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
+                    thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
+                };
 
-            engine
+                engine
                 .future_snapshot(&ctx)
                 .then(move |r| {
                     _t_snapshot.observe_duration();
@@ -540,7 +541,10 @@ impl Storage {
 
                     result
                 })
-        })
+            })
+            // map readpool::Full -> storage::Error
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
     }
 
     /// Batch get from the snapshot.
@@ -555,15 +559,16 @@ impl Storage {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        self.read_pool.future_execute(priority, move |ctxd| {
-            let _t_snapshot = {
-                let ctxd = ctxd.clone();
-                let mut thread_ctx = ctxd.get_current_thread_context();
-                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
-                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
-            };
+        self.read_pool
+            .future_execute(priority, move |ctxd| {
+                let _t_snapshot = {
+                    let ctxd = ctxd.clone();
+                    let mut thread_ctx = ctxd.get_current_thread_context();
+                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
+                    thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
+                };
 
-            engine
+                engine
                 .future_snapshot(&ctx)
                 .then(move |r| {
                     _t_snapshot.observe_duration();
@@ -610,7 +615,10 @@ impl Storage {
 
                     result
                 })
-        })
+            })
+            // map readpool::Full -> storage::Error
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
     }
 
     /// Scan a range starting with `start_key` up to `limit` rows from the snapshot.
@@ -627,15 +635,16 @@ impl Storage {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        self.read_pool.future_execute(priority, move |ctxd| {
-            let _t_snapshot = {
-                let ctxd = ctxd.clone();
-                let mut thread_ctx = ctxd.get_current_thread_context();
-                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
-                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
-            };
+        self.read_pool
+            .future_execute(priority, move |ctxd| {
+                let _t_snapshot = {
+                    let ctxd = ctxd.clone();
+                    let mut thread_ctx = ctxd.get_current_thread_context();
+                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
+                    thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
+                };
 
-            engine
+                engine
                 .future_snapshot(&ctx)
                 .then(move |r| {
                     _t_snapshot.observe_duration();
@@ -672,7 +681,10 @@ impl Storage {
                                 .collect()
                         })
                 })
-        })
+            })
+            // map readpool::Full -> storage::Error
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
     }
 
     pub fn async_pause(&self, ctx: Context, duration: u64, callback: Callback<()>) -> Result<()> {
@@ -867,15 +879,16 @@ impl Storage {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        self.read_pool.future_execute(priority, move |ctxd| {
-            let _t_snapshot = {
-                let ctxd = ctxd.clone();
-                let mut thread_ctx = ctxd.get_current_thread_context();
-                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
-                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
-            };
+        self.read_pool
+            .future_execute(priority, move |ctxd| {
+                let _t_snapshot = {
+                    let ctxd = ctxd.clone();
+                    let mut thread_ctx = ctxd.get_current_thread_context();
+                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
+                    thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
+                };
 
-            engine
+                engine
                 .future_snapshot(&ctx)
                 .then(move |r| {
                     _t_snapshot.observe_duration();
@@ -898,7 +911,10 @@ impl Storage {
                             r
                         })
                 })
-        })
+            })
+            // map readpool::Full -> storage::Error
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
     }
 
     pub fn async_raw_put(
@@ -971,15 +987,16 @@ impl Storage {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        self.read_pool.future_execute(priority, move |ctxd| {
-            let _t_snapshot = {
-                let ctxd = ctxd.clone();
-                let mut thread_ctx = ctxd.get_current_thread_context();
-                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
-                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
-            };
+        self.read_pool
+            .future_execute(priority, move |ctxd| {
+                let _t_snapshot = {
+                    let ctxd = ctxd.clone();
+                    let mut thread_ctx = ctxd.get_current_thread_context();
+                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
+                    thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
+                };
 
-            engine
+                engine
                 .future_snapshot(&ctx)
                 .then(move |r| {
                     _t_snapshot.observe_duration();
@@ -1010,7 +1027,10 @@ impl Storage {
 
                     result
                 })
-        })
+            })
+            // map readpool::Full -> storage::Error
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
     }
 
     pub fn async_mvcc_by_key(
