@@ -17,6 +17,7 @@
 use std::fmt;
 use std::cell::{Cell, RefCell, RefMut};
 use std::sync::{mpsc, Arc};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 use futures::Future;
@@ -114,6 +115,7 @@ impl<T: Context> ContextDelegators<T> {
 pub struct FuturePool<T: Context + 'static> {
     pool: CpuPool,
     context_delegators: ContextDelegators<T>,
+    running_task_count: Arc<AtomicUsize>,
 }
 
 impl<T: Context + 'static> Clone for FuturePool<T> {
@@ -121,6 +123,7 @@ impl<T: Context + 'static> Clone for FuturePool<T> {
         FuturePool::<T> {
             pool: self.pool.clone(),
             context_delegators: self.context_delegators.clone(),
+            running_task_count: Arc::clone(&self.running_task_count),
         }
     }
 }
@@ -162,7 +165,14 @@ impl<T: Context + 'static> FuturePool<T> {
         FuturePool {
             pool,
             context_delegators: ContextDelegators::new(contexts),
+            running_task_count: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    /// Get current running task count
+    #[inline]
+    pub fn get_running_task_count(&self) -> usize {
+        self.running_task_count.load(Ordering::Acquire)
     }
 
     pub fn spawn<F, R>(&self, future_factory: R) -> CpuFuture<F::Item, F::Error>
@@ -172,15 +182,18 @@ impl<T: Context + 'static> FuturePool<T> {
         F::Item: Send + 'static,
         F::Error: Send + 'static,
     {
-        // TODO: Support busy check
+        let running_task_count = Arc::clone(&self.running_task_count);
         let delegators = self.context_delegators.clone();
         let func = move || {
             future_factory(delegators.clone()).then(move |r| {
                 let delegator = delegators.get_current_thread_delegator();
                 delegator.on_task_finish();
+                running_task_count.fetch_sub(1, Ordering::Release);
                 r
             })
         };
+
+        self.running_task_count.fetch_add(1, Ordering::Release);
         self.pool.spawn_fn(func)
     }
 }
@@ -194,11 +207,19 @@ mod tests {
 
     pub use super::*;
 
-    fn spawn_long_time_future_and_wait<T: Context>(pool: &FuturePool<T>, future_duration_ms: u64) {
+    fn spawn_long_time_future<T: Context>(
+        pool: &FuturePool<T>,
+        future_duration_ms: u64,
+    ) -> CpuFuture<(), ()> {
         pool.spawn(move |_| {
             thread::sleep(Duration::from_millis(future_duration_ms));
             future::ok::<(), ()>(())
-        }).wait()
+        })
+    }
+
+    fn spawn_long_time_future_and_wait<T: Context>(pool: &FuturePool<T>, future_duration_ms: u64) {
+        spawn_long_time_future(pool, future_duration_ms)
+            .wait()
             .unwrap();
     }
 
@@ -298,5 +319,37 @@ mod tests {
         spawn_long_time_future_and_wait(&pool, 1);
         assert_eq!(rx.try_recv().unwrap(), 1);
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_task_count() {
+        #[derive(Debug)]
+        struct MyContext;
+        impl Context for MyContext {}
+
+        let pool = FuturePool::new(
+            2,
+            1024000,
+            "test-pool",
+            Duration::from_millis(50),
+            move || MyContext {},
+        );
+
+        assert_eq!(pool.get_running_task_count(), 0);
+        let f1 = spawn_long_time_future(&pool, 100);
+        assert_eq!(pool.get_running_task_count(), 1);
+        let f2 = spawn_long_time_future(&pool, 200);
+        assert_eq!(pool.get_running_task_count(), 2);
+        let f3 = spawn_long_time_future(&pool, 300);
+        assert_eq!(pool.get_running_task_count(), 3);
+        f1.wait().unwrap();
+        assert_eq!(pool.get_running_task_count(), 2);
+        let f4 = spawn_long_time_future(&pool, 300);
+        let f5 = spawn_long_time_future(&pool, 300);
+        assert_eq!(pool.get_running_task_count(), 4);
+        f2.join(f3).wait().unwrap();
+        assert_eq!(pool.get_running_task_count(), 2);
+        f4.join(f5).wait().unwrap();
+        assert_eq!(pool.get_running_task_count(), 0);
     }
 }
