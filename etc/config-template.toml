@@ -45,14 +45,6 @@
 # Amount to read ahead on individual grpc streams.
 # grpc-stream-initial-window-size = "2MB"
 
-# size of thread pool for endpoint task, should less than total cpu cores.
-# end-point-concurrency = 8
-
-# max count of tasks being handled, new tasks will be rejected.
-# end-point-max-tasks = 2000
-
-# stack size of endpoint, complicated tasks may involve very deep recursion.
-# end-point-stack-size = "10MB"
 # max recursion level allowed when decoding dag expression
 # end-point-recursion-limit = 1000
 

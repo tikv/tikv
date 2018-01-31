@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use sys_info;
-
 use util::collections::HashMap;
 use util::config::{self, ReadableSize};
 use util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
@@ -30,15 +28,6 @@ const DEFAULT_GRPC_CONCURRENT_STREAM: usize = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 10;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
 const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
-// Enpoints may occur very deep recursion,
-// so enlarge their stack size to 10 MB.
-const DEFAULT_ENDPOINT_STACK_SIZE_MB: u64 = 10;
-
-// Assume a request can be finished in 1ms, a request at position x will wait about
-// 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
-// backoff. So when it needs to wait for more than 2 seconds, return error won't causse
-// larger latency.
-pub const DEFAULT_MAX_RUNNING_TASK_COUNT: usize = 2 as usize * 1000;
 
 // Number of rows in each chunk.
 pub const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
@@ -61,9 +50,6 @@ pub struct Config {
     pub grpc_concurrent_stream: usize,
     pub grpc_raft_conn_num: usize,
     pub grpc_stream_initial_window_size: ReadableSize,
-    pub end_point_concurrency: usize,
-    pub end_point_max_tasks: usize,
-    pub end_point_stack_size: ReadableSize,
     pub end_point_recursion_limit: u32,
     pub end_point_batch_row_limit: usize,
     pub snap_max_write_bytes_per_sec: ReadableSize,
@@ -74,12 +60,6 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        let cpu_num = sys_info::cpu_num().unwrap();
-        let concurrency = if cpu_num > 8 {
-            (f64::from(cpu_num) * 0.8) as usize
-        } else {
-            4
-        };
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
@@ -91,9 +71,6 @@ impl Default for Config {
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
             grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
             grpc_stream_initial_window_size: ReadableSize(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE),
-            end_point_concurrency: concurrency,
-            end_point_max_tasks: DEFAULT_MAX_RUNNING_TASK_COUNT,
-            end_point_stack_size: ReadableSize::mb(DEFAULT_ENDPOINT_STACK_SIZE_MB),
             end_point_recursion_limit: 1000,
             end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
@@ -116,23 +93,6 @@ impl Config {
                 self.advertise_addr
             ));
         }
-
-        if self.end_point_concurrency == 0 {
-            return Err(box_err!("server.end-point-concurrency should not be 0."));
-        }
-
-        if self.end_point_max_tasks == 0 {
-            return Err(box_err!("server.end-point-max-tasks should not be 0."));
-        }
-
-        // 2MB is the default stack size for threads in rust, but endpoints may occur
-        // very deep recursion, 2MB considered too small.
-        //
-        // See more: https://doc.rust-lang.org/std/thread/struct.Builder.html#method.stack_size
-        if self.end_point_stack_size.0 < ReadableSize::mb(2).0 {
-            return Err(box_err!("server.end-point-stack-size is too small."));
-        }
-
         if self.end_point_recursion_limit < 100 {
             return Err(box_err!("server.end-point-recursion-limit is too small"));
         }
@@ -187,18 +147,6 @@ mod tests {
         assert!(cfg.advertise_addr.is_empty());
         cfg.validate().unwrap();
         assert_eq!(cfg.addr, cfg.advertise_addr);
-
-        let mut invalid_cfg = cfg.clone();
-        invalid_cfg.end_point_concurrency = 0;
-        assert!(invalid_cfg.validate().is_err());
-
-        let mut invalid_cfg = cfg.clone();
-        invalid_cfg.end_point_stack_size = ReadableSize::mb(1);
-        assert!(invalid_cfg.validate().is_err());
-
-        let mut invalid_cfg = cfg.clone();
-        invalid_cfg.end_point_max_tasks = 0;
-        assert!(invalid_cfg.validate().is_err());
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.end_point_recursion_limit = 0;

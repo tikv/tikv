@@ -67,3 +67,21 @@ impl Config {
         }
     }
 }
+
+// TODO: Validate
+
+//if self.end_point_concurrency == 0 {
+//return Err(box_err!("server.end-point-concurrency should not be 0."));
+//}
+//
+//if self.end_point_max_tasks == 0 {
+//return Err(box_err!("server.end-point-max-tasks should not be 0."));
+//}
+//
+//// 2MB is the default stack size for threads in rust, but endpoints may occur
+//// very deep recursion, 2MB considered too small.
+////
+//// See more: https://doc.rust-lang.org/std/thread/struct.Builder.html#method.stack_size
+//if self.end_point_stack_size.0 < ReadableSize::mb(2).0 {
+//return Err(box_err!("server.end-point-stack-size is too small."));
+//}
