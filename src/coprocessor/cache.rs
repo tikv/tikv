@@ -434,7 +434,9 @@ mod tests {
         let result: Vec<u8> = vec![100, 101, 102];
         let cache = new_mutex_cache(DEFAULT_DISTSQL_CACHE_SIZE);
         let version = cache.lock().get_region_version(10);
-        cache.lock().put(10, key.clone(), version, result.clone(), 0);
+        cache
+            .lock()
+            .put(10, key.clone(), version, result.clone(), 0);
         let value = cache.lock().get(10, &key, 0).unwrap().clone();
         assert_eq!(result, value);
     }
