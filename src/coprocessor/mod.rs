@@ -41,7 +41,7 @@ quick_error! {
         Outdated(deadline: Instant, now: Instant) {
             description("request is outdated")
         }
-        Full(allow: usize) {
+        Full {
             description("running queue is full")
         }
         Other(err: Box<error::Error + Send + Sync>) {

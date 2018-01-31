@@ -54,6 +54,8 @@ pub const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
 const OUTDATED_ERROR_MSG: &str = "request outdated.";
 
+const ENDPOINT_IS_BUSY: &str = "endpoint is busy";
+
 pub struct Host {
     engine: Box<Engine>,
     read_pool: ReadPool,
@@ -96,13 +98,14 @@ impl Host {
 
         let begin_time = Instant::now_coarse();
 
-        self.read_pool.future_execute(priority, move |ctxd| {
-            engine.future_snapshot(request.get_context())
+        self.read_pool
+            .future_execute(priority, move |ctxd| {
+                engine.future_snapshot(request.get_context())
                 .then(move |r| {
                     let elapsed = begin_time.elapsed_secs();
                     r.map(|r| (r, elapsed))
                 })
-                // engine::Error -> coprocessor::Error
+                // map engine::Error -> coprocessor::Error
                 .map_err(Error::from)
                 .and_then(move |(snapshot, wait_elapsed): (Box<Snapshot>, f64)| {
                     let should_respond_handle_time = request.get_context().get_handle_time();
@@ -133,47 +136,50 @@ impl Host {
                         resp
                     })
                 })
-                .or_else(move |err| {
-                    // let ctx = ctxd.clone();
-                    let mut resp = Response::new();
-                    match err {
-                        Error::Region(e) => {
-                            let tag = storage::get_tag_from_header(&e);
-                            // COPR_REQ_ERROR.with_label_values(&[tag]).inc();
-                            resp.set_region_error(e);
-                        }
-                        Error::Locked(info) => {
-                            resp.set_locked(info);
-                            // COPR_REQ_ERROR.with_label_values(&["lock"]).inc();
-                        }
-                        Error::Outdated(deadline, now) => {
-                            //let elapsed =
-                            //    now.duration_since(deadline) +
-                            // Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
-                            // COPR_REQ_ERROR.with_label_values(&["outdated"]).inc();
-                            // OUTDATED_REQ_WAIT_TIME
-                            //    .with_label_values(&[scan_tag])
-                            //    .observe(elapsed.as_secs() as f64);
-
-                            resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
-                        }
-                        Error::Full(allow) => {
-                            // COPR_REQ_ERROR.with_label_values(&["full"]).inc();
-                            let mut errorpb = errorpb::Error::new();
-                            errorpb.set_message(format!("running batches reach limit {}", allow));
-                            // let mut server_is_busy_err = ServerIsBusy::new();
-                            // server_is_busy_err.set_reason(ENDPOINT_IS_BUSY.to_owned());
-                            // errorpb.set_server_is_busy(server_is_busy_err);
-                            resp.set_region_error(errorpb);
-                        }
-                        Error::Other(_) => {
-                            resp.set_other_error(format!("{}", err));
-                            // COPR_REQ_ERROR.with_label_values(&["other"]).inc();
-                        }
+            })
+            // map readpool::Full -> coprocessor::Error
+            .map_err(|_| Error::Full)
+            .flatten()
+            .or_else(move |err| {
+                // let ctx = ctxd.clone();
+                let mut resp = Response::new();
+                match err {
+                    Error::Region(e) => {
+                        let tag = storage::get_tag_from_header(&e);
+                        COPR_REQ_ERROR.with_label_values(&[tag]).inc();
+                        resp.set_region_error(e);
                     }
-                    Ok::<Response, ()>(resp)
-                })
-        })
+                    Error::Locked(info) => {
+                        resp.set_locked(info);
+                        COPR_REQ_ERROR.with_label_values(&["lock"]).inc();
+                    }
+                    Error::Outdated(deadline, now) => {
+                        //let elapsed =
+                        //    now.duration_since(deadline) +
+                        // Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
+                        COPR_REQ_ERROR.with_label_values(&["outdated"]).inc();
+                        // OUTDATED_REQ_WAIT_TIME
+                        //    .with_label_values(&[scan_tag])
+                        //    .observe(elapsed.as_secs() as f64);
+
+                        resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
+                    }
+                    Error::Full => {
+                        COPR_REQ_ERROR.with_label_values(&["full"]).inc();
+                        let mut errorpb = errorpb::Error::new();
+                        errorpb.set_message("running batches reach limit".to_string());
+                        let mut server_is_busy_err = ServerIsBusy::new();
+                        server_is_busy_err.set_reason(ENDPOINT_IS_BUSY.to_owned());
+                        errorpb.set_server_is_busy(server_is_busy_err);
+                        resp.set_region_error(errorpb);
+                    }
+                    Error::Other(_) => {
+                        resp.set_other_error(format!("{}", err));
+                        COPR_REQ_ERROR.with_label_values(&["other"]).inc();
+                    }
+                }
+                Ok::<Response, ()>(resp)
+            })
     }
 }
 
