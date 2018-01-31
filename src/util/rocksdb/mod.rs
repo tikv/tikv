@@ -25,8 +25,8 @@ use std::sync::Arc;
 use std::str::FromStr;
 
 use storage::{ALL_CFS, CF_DEFAULT};
-use rocksdb::{ColumnFamilyOptions, CompactOptions, DBCompressionType, DBOptions, SliceTransform,
-              DB};
+use rocksdb::{ColumnFamilyOptions, CompactOptions, DBCompressionType, DBOptions, Range,
+              SliceTransform, DB};
 use rocksdb::rocksdb::supported_compression;
 use rocksdb::set_external_sst_file_global_seq_no;
 use util::rocksdb::engine_metrics::{ROCKSDB_COMPRESSION_RATIO_AT_LEVEL,
@@ -305,42 +305,15 @@ impl SliceTransform for NoopSliceTransform {
     }
 }
 
-fn prev_key(key: &[u8]) -> Result<Vec<u8>, String> {
-    if key.is_empty() {
-        return Err(String::from("Empty key has no previous key"));
-    }
-
-    let mut prev = key.to_vec();
-    let tail = prev.len() - 1;
-    if prev[tail] > 0 {
-        prev[tail] -= 1;
-    } else {
-        prev.truncate(tail);
-    }
-
-    Ok(prev)
-}
-
-pub fn roughly_cleanup_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<(), String> {
-    if start_key > end_key {
-        return Err(format!(
-            "[roughly_cleanup_in_range] start_key({:?}) should't larger than end_key({:?}).",
-            start_key, end_key
-        ));
-    }
-
-    if start_key == end_key {
-        return Ok(());
-    }
-
-    // Todo: use end_key directly after delete_files_in_range support [start, end) semantics.
-    let end = prev_key(end_key)?;
-    if start_key >= end.as_slice() {
-        return Ok(());
-    }
+pub fn roughly_cleanup_ranges(db: &DB, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<(), String> {
     for cf in db.cf_names() {
+        let mut delete_ranges = Vec::new();
+        for range in ranges {
+            assert!(range.0 <= range.1);
+            delete_ranges.push(Range::new(&range.0, &range.1));
+        }
         let handle = get_cf_handle(db, cf)?;
-        db.delete_file_in_range_cf(handle, start_key, &end)?;
+        db.delete_files_in_ranges_cf(handle, &delete_ranges, /* include_end */ false)?;
     }
 
     Ok(())
@@ -594,19 +567,5 @@ mod tests {
             .unwrap();
         check_db_with_kvs(&db, cf, &kvs);
         assert!(!sst_clone.exists());
-    }
-
-    #[test]
-    fn test_prev_key() {
-        let mut a: Vec<u8> = vec![];
-        assert!(prev_key(&a).is_err());
-
-        a.push(0);
-        assert!(prev_key(&a).unwrap().is_empty());
-
-        let mut b: Vec<u8> = b"123".to_vec();
-        assert_eq!(&prev_key(&b).unwrap(), b"122");
-        b.push(0);
-        assert_eq!(&prev_key(&b).unwrap(), b"123");
     }
 }

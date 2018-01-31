@@ -368,21 +368,26 @@ impl<T, C> Store<T, C> {
     /// `clear_stale_data` clean up all possible garbage data.
     fn clear_stale_data(&mut self) -> Result<()> {
         let t = Instant::now();
+
+        let mut ranges = Vec::new();
         let mut last_start_key = keys::data_key(b"");
         for region_id in self.region_ranges.values() {
             let region = self.region_peers[region_id].region();
             let start_key = keys::enc_start_key(region);
-            rocksdb::roughly_cleanup_range(&self.kv_engine, &last_start_key, &start_key)?;
+            ranges.push((last_start_key, start_key));
             last_start_key = keys::enc_end_key(region);
         }
+        ranges.push((last_start_key, keys::DATA_MAX_KEY.to_vec()));
 
-        rocksdb::roughly_cleanup_range(&self.kv_engine, &last_start_key, keys::DATA_MAX_KEY)?;
+        rocksdb::roughly_cleanup_ranges(&self.kv_engine, &ranges)?;
 
         info!(
-            "{} cleans up garbage data, takes {:?}",
+            "{} cleans up {} ranges garbage data, takes {:?}",
             self.tag,
+            ranges.len(),
             t.elapsed()
         );
+
         Ok(())
     }
 
