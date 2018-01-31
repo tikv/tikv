@@ -1805,46 +1805,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .with_label_values(&[&output_level_str])
             .observe(total_bytes_declined as f64);
 
-        // Calculate influenced regions.
-        let mut influenced_regions = vec![];
-        if let Some((end_key, region_id)) = self.region_ranges
-            .range((Excluded(event.end_key.clone()), Unbounded))
-            .next()
-        {
-            influenced_regions.push((region_id, end_key.clone()));
-        }
-        for (end_key, region_id) in self.region_ranges
-            .range((Included(event.start_key), Included(event.end_key)))
-        {
-            influenced_regions.push((region_id, end_key.clone()));
-        }
-
-        let mut region_declined_bytes = vec![];
-        let mut last_end_key: Vec<u8> = vec![];
-        for (region_id, end_key) in influenced_regions.drain(..) {
-            let mut old_size = 0;
-            for prop in &event.input_props {
-                old_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
-            }
-            let mut new_size = 0;
-            for prop in &event.output_props {
-                new_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
-            }
-            last_end_key = end_key.clone();
-
-            // Filter some trival declines for better performance.
-            if old_size > new_size && old_size - new_size > self.cfg.region_split_check_diff.0 / 16
-            {
-                region_declined_bytes.push((region_id, old_size - new_size));
-            }
-        }
+        // self.cfg.region_split_check_diff.0 / 16 is an experienced value.
+        let mut region_declined_bytes = calc_region_declined_bytes(
+            event,
+            &self.region_ranges,
+            self.cfg.region_split_check_diff.0 / 16,
+        );
 
         COMPACTION_RELATED_REGION_COUNT
             .with_label_values(&[&output_level_str])
             .observe(region_declined_bytes.len() as f64);
 
         for (region_id, declined_bytes) in region_declined_bytes.drain(..) {
-            if let Some(peer) = self.region_peers.get_mut(region_id) {
+            if let Some(peer) = self.region_peers.get_mut(&region_id) {
                 peer.compaction_declined_bytes += declined_bytes;
                 if peer.compaction_declined_bytes >= self.cfg.region_split_check_diff.0 {
                     UPDATE_REGION_SIZE_BY_COMPACTION_COUNTER.inc();
@@ -2672,4 +2645,100 @@ pub fn new_compaction_listener(ch: SendCh<Msg>) -> CompactionListener {
         }
     };
     CompactionListener::new(compacted_handler, Some(size_change_filter))
+}
+
+fn calc_region_declined_bytes(
+    event: CompactedEvent,
+    region_ranges: &BTreeMap<Key, u64>,
+    bytes_threshold: u64,
+) -> Vec<(u64, u64)> {
+    // Calculate influenced regions.
+    let mut influenced_regions = vec![];
+    for (end_key, region_id) in
+        region_ranges.range((Excluded(event.start_key), Included(event.end_key.clone())))
+    {
+        influenced_regions.push((region_id, end_key.clone()));
+    }
+    if let Some((end_key, region_id)) = region_ranges
+        .range((Included(event.end_key), Unbounded))
+        .next()
+    {
+        influenced_regions.push((region_id, end_key.clone()));
+    }
+
+    // Calculate declined bytes for each region.
+    // `end_key` in influenced_regions are in incremental order.
+    let mut region_declined_bytes = vec![];
+    let mut last_end_key: Vec<u8> = vec![];
+    for (region_id, end_key) in influenced_regions {
+        let mut old_size = 0;
+        for prop in &event.input_props {
+            old_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
+        }
+        let mut new_size = 0;
+        for prop in &event.output_props {
+            new_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
+        }
+        last_end_key = end_key;
+
+        // Filter some trivial declines for better performance.
+        if old_size > new_size && old_size - new_size > bytes_threshold {
+            region_declined_bytes.push((*region_id, old_size - new_size));
+        }
+    }
+
+    region_declined_bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use util::rocksdb::CompactedEvent;
+    use util::rocksdb::properties::{IndexHandle, IndexHandles, SizeProperties};
+
+    use super::*;
+
+    #[test]
+    fn test_calc_region_declined_bytes() {
+        let index_handle1 = IndexHandle {
+            size: 4 * 1024,
+            offset: 4 * 1024,
+        };
+        let index_handle2 = IndexHandle {
+            size: 4 * 1024,
+            offset: 8 * 1024,
+        };
+        let index_handle3 = IndexHandle {
+            size: 4 * 1024,
+            offset: 12 * 1024,
+        };
+        let mut index_handles = IndexHandles::new();
+        index_handles.add(b"a".to_vec(), index_handle1);
+        index_handles.add(b"b".to_vec(), index_handle2);
+        index_handles.add(b"c".to_vec(), index_handle3);
+        let size_prop = SizeProperties {
+            total_size: 12 * 1024,
+            index_handles: index_handles,
+        };
+        let event = CompactedEvent {
+            cf: "default".to_owned(),
+            output_level: 3,
+            total_input_bytes: 12 * 1024,
+            total_output_bytes: 0,
+            start_key: size_prop.smallest_key().unwrap(),
+            end_key: size_prop.largest_key().unwrap(),
+            input_props: vec![size_prop],
+            output_props: vec![],
+        };
+
+        let mut region_ranges = BTreeMap::new();
+        region_ranges.insert(b"a".to_vec(), 1);
+        region_ranges.insert(b"b".to_vec(), 2);
+        region_ranges.insert(b"c".to_vec(), 3);
+
+        let declined_bytes = calc_region_declined_bytes(event, &region_ranges, 1024);
+        let expected_declined_bytes = vec![(2, 4096), (3, 4096)];
+        assert_eq!(declined_bytes, expected_declined_bytes);
+    }
 }
