@@ -415,6 +415,20 @@ mod tests {
 
     use util::time::Instant;
 
+    /// makes a `RequestTask` for testing, with a normal priority.
+    fn make_request_task<F: CopRequest + 'static>(cop_req: F) -> RequestTask {
+        let mut req = Request::new();
+        req.mut_context().set_priority(CommandPri::Normal);
+
+        let ctx = req.get_context().clone();
+
+        RequestTask {
+            req,
+            cop_req: Ok(box cop_req),
+            ctx: Arc::new(ReqContext::new(&ctx, false)),
+        }
+    }
+
     /// Tests whether an outdated process results in outdated error.
     #[test]
     fn test_req_outdated() {
@@ -437,15 +451,7 @@ mod tests {
         let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
         let end_point = Host::new(engine, &Config::default(), read_pool);
 
-        let req = Request::new();
-        let ctx = req.get_context().clone();
-
-        let task = RequestTask {
-            req,
-            cop_req: Ok(box MyCopRequest {}),
-            ctx: Arc::new(ReqContext::new(&ctx, false)),
-        };
-
+        let task = make_request_task(MyCopRequest {});
         let resp: Response = end_point.handle_request_task(task).wait().unwrap();
         assert_eq!(resp.get_other_error(), super::OUTDATED_ERROR_MSG);
     }
@@ -471,15 +477,7 @@ mod tests {
         let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
         let end_point = Host::new(engine, &Config::default(), read_pool);
 
-        let req = Request::new();
-        let ctx = req.get_context().clone();
-
-        let task = RequestTask {
-            req,
-            cop_req: Ok(box MyCopRequest {}),
-            ctx: Arc::new(ReqContext::new(&ctx, false)),
-        };
-
+        let task = make_request_task(MyCopRequest {});
         let resp: Response = end_point.handle_request_task(task).wait().unwrap();
         let exec_details = resp.get_exec_details();
         assert!(exec_details.has_handle_time());
@@ -530,23 +528,10 @@ mod tests {
         );
         let end_point = Host::new(engine, &Config::default(), read_pool);
 
-        let make_task = || {
-            let mut req = Request::new();
-            req.mut_context().set_priority(CommandPri::Normal);
-
-            let ctx = req.get_context().clone();
-
-            RequestTask {
-                req,
-                cop_req: Ok(box MyCopRequest {}),
-                ctx: Arc::new(ReqContext::new(&ctx, false)),
-            }
-        };
-
         let (tx, rx) = channel();
 
         for _ in 0..10 {
-            let task = make_task();
+            let task = make_request_task(MyCopRequest {});
             let resp_future = end_point.handle_request_task(task);
             wait_on_new_thread(tx.clone(), resp_future);
         }
