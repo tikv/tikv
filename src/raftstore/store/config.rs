@@ -107,13 +107,23 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
+
+        let raft_base_tick_interval = ReadableDuration::secs(1);
+        let raft_heartbeat_ticks = 2;
+        let raft_election_timeout_ticks = 10;
+
+        let raft_store_max_leader_lease =
+            raft_base_tick_interval * (raft_election_timeout_ticks - 1) as u32;
+        let max_leader_missing_duration =
+            raft_base_tick_interval * (3 * raft_election_timeout_ticks) as u32;
+
         Config {
             sync_log: true,
             raftdb_path: String::new(),
             capacity: ReadableSize(0),
-            raft_base_tick_interval: ReadableDuration::secs(1),
-            raft_heartbeat_ticks: 2,
-            raft_election_timeout_ticks: 10,
+            raft_base_tick_interval: raft_base_tick_interval,
+            raft_heartbeat_ticks: raft_heartbeat_ticks,
+            raft_election_timeout_ticks: raft_election_timeout_ticks,
             raft_max_size_per_msg: ReadableSize::mb(1),
             raft_max_inflight_msgs: 256,
             raft_entry_max_size: ReadableSize::mb(8),
@@ -134,7 +144,7 @@ impl Default for Config {
             snap_gc_timeout: ReadableDuration::hours(4),
             messages_per_tick: 4096,
             max_peer_down_duration: ReadableDuration::minutes(5),
-            max_leader_missing_duration: ReadableDuration::hours(2),
+            max_leader_missing_duration: max_leader_missing_duration,
             snap_apply_batch_size: ReadableSize::mb(10),
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
@@ -142,7 +152,7 @@ impl Default for Config {
             // We should turn on this only in our tests.
             consistency_check_interval: ReadableDuration::secs(0),
             report_region_flow_interval: ReadableDuration::minutes(1),
-            raft_store_max_leader_lease: ReadableDuration::secs(9),
+            raft_store_max_leader_lease: raft_store_max_leader_lease,
             right_derive_when_split: true,
             allow_remove_leader: false,
             use_delete_range: false,
@@ -203,6 +213,15 @@ impl Config {
             ));
         }
 
+        let max_leader_missing = self.max_leader_missing_duration.as_millis() as u64;
+        if max_leader_missing < election_timeout {
+            return Err(box_err!(
+                "max leader missing {} ms is less than election timeout {} ms",
+                max_leader_missing,
+                election_timeout
+            ));
+        }
+
         Ok(())
     }
 }
@@ -241,6 +260,12 @@ mod tests {
         cfg.raft_base_tick_interval = ReadableDuration::secs(1);
         cfg.raft_election_timeout_ticks = 10;
         cfg.raft_store_max_leader_lease = ReadableDuration::secs(20);
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.raft_base_tick_interval = ReadableDuration::secs(1);
+        cfg.raft_election_timeout_ticks = 10;
+        cfg.max_leader_missing_duration = ReadableDuration::secs(5);
         assert!(cfg.validate().is_err());
     }
 }
