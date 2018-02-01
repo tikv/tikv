@@ -335,7 +335,7 @@ pub fn roughly_cleanup_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Resul
                 db.write(wb)?;
             }
         } else {
-            db.delete_file_in_range_cf(handle, start_key, end_key)?;
+            db.delete_files_in_range_cf(handle, start_key, end_key, false)?;
         }
     }
 

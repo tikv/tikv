@@ -506,6 +506,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.snap_mgr.clone(),
             self.cfg.snap_apply_batch_size.0 as usize,
             self.cfg.use_delete_range,
+            self.cfg.region_deletion_delay.as_secs(),
         );
         box_try!(self.region_worker.start(runner));
 

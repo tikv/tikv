@@ -58,6 +58,7 @@ split-region-check-tick-interval = "12s"
 region-split-check-diff = "6MB"
 region-compact-check-interval = "12s"
 region-compact-delete-keys-count = 1234
+region-deletion-delay = "13s"
 pd-heartbeat-tick-interval = "12m"
 pd-store-heartbeat-tick-interval = "12s"
 snap-mgr-gc-tick-interval = "12m"

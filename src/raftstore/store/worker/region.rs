@@ -11,17 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use rocksdb::{Writable, WriteBatch, DB};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
 
 use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
+use util::time;
+use util::timer::Timer;
 use util::worker::Runnable;
 use util::{escape, rocksdb};
 use raftstore::store::engine::{Mutable, Snapshot};
@@ -140,7 +143,12 @@ impl SnapContext {
         timer.observe_duration();
     }
 
-    fn apply_snap(&self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
+    fn apply_snap(
+        &self,
+        regions_to_delete: &mut RegionsToDelete,
+        region_id: u64,
+        abort: Arc<AtomicUsize>,
+    ) -> Result<()> {
         info!("[region {}] begin apply snap data", region_id);
         fail_point!("region_apply_snap");
         check_abort(&abort)?;
@@ -161,6 +169,7 @@ impl SnapContext {
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
+        regions_to_delete.update(start_key.clone(), end_key.clone(), false);
         box_try!(util::delete_all_in_range(
             &self.kv_db,
             &start_key,
@@ -217,13 +226,18 @@ impl SnapContext {
         Ok(())
     }
 
-    fn handle_apply(&self, region_id: u64, status: Arc<AtomicUsize>) {
+    fn handle_apply(
+        &self,
+        regions_to_delete: &mut RegionsToDelete,
+        region_id: u64,
+        status: Arc<AtomicUsize>,
+    ) {
         status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
         SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
         let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
         let timer = apply_histogram.start_coarse_timer();
 
-        match self.apply_snap(region_id, Arc::clone(&status)) {
+        match self.apply_snap(regions_to_delete, region_id, Arc::clone(&status)) {
             Ok(()) => {
                 status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
                 SNAP_COUNTER_VEC
@@ -250,13 +264,16 @@ impl SnapContext {
         timer.observe_duration();
     }
 
-    fn handle_destroy(&mut self, region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) {
-        info!(
-            "[region {}] deleting data in [{}, {})",
-            region_id,
-            escape(&start_key),
-            escape(&end_key)
-        );
+    fn handle_destroy(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) {
+        if let Err(e) = util::delete_all_files_in_range(&self.kv_db, &start_key, &end_key) {
+            error!(
+                "failed to delete files in [{}, {}): {:?}",
+                escape(&start_key),
+                escape(&end_key),
+                e
+            );
+            return;
+        }
         if let Err(e) =
             util::delete_all_in_range(&self.kv_db, &start_key, &end_key, self.use_delete_range)
         {
@@ -266,6 +283,117 @@ impl SnapContext {
                 escape(&end_key),
                 e
             );
+        } else {
+            info!(
+                "succeed in deleting data in [{}, {})",
+                escape(&start_key),
+                escape(&end_key),
+            );
+        }
+    }
+}
+
+struct RegionsToDelete {
+    timeout: Duration,
+    timer: Timer<u64>,
+    region_count: u64,
+    regions: BTreeMap<Vec<u8>, (Vec<u8>, u64)>,
+}
+
+impl RegionsToDelete {
+    fn insert_region(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) {
+        self.timer.add_task(self.timeout, self.region_count);
+        self.regions.insert(start_key, (end_key, self.region_count));
+        self.region_count += 1;
+    }
+
+    // find out the regions that need to be trimed or discarded
+    fn find_overlap(
+        &self,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+        discard: &mut Vec<Vec<u8>>,
+    ) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+        let mut trim_left = None;
+        let mut trim_right = None;
+        let mut iter = self.regions.iter();
+        // find the first region that may overlap with [start_key, end_key)
+        let mut left = iter.find(|ref ptr| (ptr.1).0 > start_key);
+        loop {
+            if left.is_none() {
+                break;
+            }
+            // there might be overlap
+            let cur = left.unwrap();
+            if cur.0 >= &end_key {
+                // the new interval does not reach the left boundary, so stop looping
+                break;
+            } else if (cur.1).0 > end_key {
+                // left part of the old region will be trimed
+                trim_left = Some(cur.0.clone());
+            } else if cur.0 >= &start_key {
+                // the old region will be discarded
+                discard.push(cur.0.clone());
+            } else {
+                // right part of the old region will be trimed
+                trim_right = Some(cur.0.clone());
+            }
+            left = iter.next();
+        }
+        (trim_left, trim_right)
+    }
+
+    // used to filter out the overlap issue in regions,
+    // after this function the intervals in regions will not overlap
+    pub fn update(&mut self, start_key: Vec<u8>, end_key: Vec<u8>, is_destroy: bool) {
+        if start_key >= end_key {
+            return;
+        }
+        let mut discard = Vec::new();
+        let (trim_left, trim_right) =
+            self.find_overlap(start_key.clone(), end_key.clone(), &mut discard);
+        // all the elements that being updated or removed should and must exist
+        if let Some(key) = trim_left {
+            let cur = self.regions.remove(&key).unwrap();
+            self.regions.insert(end_key.clone(), cur);
+        }
+        if let Some(key) = trim_right {
+            let cur = self.regions.get_mut(&key).unwrap();
+            cur.0 = start_key.clone();
+        }
+        for key in &discard {
+            self.regions.remove(&*key).unwrap();
+        }
+        if is_destroy {
+            // no overlap any more, can be safely inserted
+            self.insert_region(start_key, end_key);
+        } // else let apply_snapshot deal with deletion
+    }
+
+    pub fn get_regions_to_delete_before(
+        &mut self,
+        now: time::Instant,
+        intervals: &mut Vec<(Vec<u8>, Vec<u8>)>,
+    ) {
+        let mut set = HashSet::new();
+        while let Some(id) = self.timer.pop_task_before(now) {
+            set.insert(id);
+        }
+        if !set.is_empty() {
+            for (k, v) in &self.regions {
+                if set.contains(&v.1) {
+                    intervals.push((k.clone(), v.0.clone()));
+                }
+            }
+            for e in intervals.iter() {
+                self.regions.remove(&e.0).unwrap();
+            }
+        }
+    }
+
+    pub fn get_rest_regions(&mut self, intervals: &mut Vec<(Vec<u8>, Vec<u8>)>) {
+        while let Some(timeout) = self.timer.next_timeout() {
+            self.get_regions_to_delete_before(timeout, intervals);
         }
     }
 }
@@ -273,6 +401,7 @@ impl SnapContext {
 pub struct Runner {
     pool: ThreadPool<DefaultContext>,
     ctx: SnapContext,
+    regions_to_delete: RegionsToDelete,
 }
 
 impl Runner {
@@ -282,6 +411,7 @@ impl Runner {
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
+        region_deletion_delay: u64,
     ) -> Runner {
         Runner {
             pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap generator"))
@@ -294,6 +424,12 @@ impl Runner {
                 batch_size: batch_size,
                 use_delete_range: use_delete_range,
             },
+            regions_to_delete: RegionsToDelete {
+                timeout: Duration::from_secs(region_deletion_delay),
+                timer: Timer::new(256),
+                region_count: 0,
+                regions: BTreeMap::new(),
+            },
         }
     }
 }
@@ -305,18 +441,39 @@ impl Runnable<Task> for Runner {
                 region_id,
                 notifier,
             } => {
-                // It safe for now to handle generating and applying snapshot concurrently,
+                // It is safe for now to handle generating and applying snapshot concurrently,
                 // but it may not when merge is implemented.
                 let ctx = self.ctx.clone();
                 self.pool
                     .execute(move |_| ctx.handle_gen(region_id, notifier))
             }
-            Task::Apply { region_id, status } => self.ctx.handle_apply(region_id, status),
+            Task::Apply { region_id, status } => {
+                self.ctx
+                    .handle_apply(&mut self.regions_to_delete, region_id, status)
+            }
             Task::Destroy {
                 region_id,
                 start_key,
                 end_key,
-            } => self.ctx.handle_destroy(region_id, start_key, end_key),
+            } => {
+                info!(
+                    "[region {}] register deleting data in [{}, {})",
+                    region_id,
+                    escape(&start_key),
+                    escape(&end_key)
+                );
+                self.regions_to_delete.update(start_key, end_key, true);
+            }
+        }
+    }
+
+    fn on_tick(&mut self) {
+        let now = time::Instant::now();
+        let mut intervals = Vec::new();
+        self.regions_to_delete
+            .get_regions_to_delete_before(now, &mut intervals);
+        for e in intervals.drain(..) {
+            self.ctx.handle_destroy(e.0, e.1);
         }
     }
 
@@ -324,5 +481,129 @@ impl Runnable<Task> for Runner {
         if let Err(e) = self.pool.stop() {
             warn!("Stop threadpool failed with {:?}", e);
         }
+        // handle rest of the regions that need to be destroyed
+        let mut intervals = Vec::new();
+        self.regions_to_delete.get_rest_regions(&mut intervals);
+        for e in intervals.drain(..) {
+            self.ctx.handle_destroy(e.0, e.1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::collections::BTreeMap;
+    use std::thread;
+    use std::time::Duration;
+
+    use util::time;
+    use util::timer::Timer;
+    use super::RegionsToDelete;
+
+    fn new_regions_to_delete(timeout: Duration) -> RegionsToDelete {
+        RegionsToDelete {
+            timeout: timeout,
+            timer: Timer::new(256),
+            region_count: 0,
+            regions: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_regions_to_delete_case1() {
+        let timeout = Duration::from_millis(100);
+        let mut regions_to_delete = new_regions_to_delete(timeout);
+        regions_to_delete.update(b"aa".to_vec(), b"bb".to_vec(), true);
+        regions_to_delete.update(b"bb".to_vec(), b"cc".to_vec(), true);
+
+        // not reaching the timeout, so no regions
+        let now = time::Instant::now();
+        let mut intervals = Vec::new();
+        regions_to_delete.get_regions_to_delete_before(now, &mut intervals);
+        assert!(intervals.is_empty());
+
+        thread::sleep(timeout);
+
+        // reaching the timeout
+        let now = time::Instant::now();
+        regions_to_delete.get_regions_to_delete_before(now, &mut intervals);
+        assert_eq!(
+            intervals,
+            [
+                (b"aa".to_vec(), b"bb".to_vec()),
+                (b"bb".to_vec(), b"cc".to_vec())
+            ]
+        );
+
+        // regions will be deleted from regions_to_delete after popped out
+        let mut intervals = Vec::new();
+        regions_to_delete.get_regions_to_delete_before(now, &mut intervals);
+        assert!(intervals.is_empty());
+    }
+
+    #[test]
+    fn test_regions_to_delete_case2() {
+        let timeout = Duration::from_millis(100);
+        let mut regions_to_delete = new_regions_to_delete(timeout);
+
+        regions_to_delete.update(b"aa".to_vec(), b"bb".to_vec(), true);
+        regions_to_delete.update(b"aa".to_vec(), b"bb".to_vec(), false);
+
+        thread::sleep(timeout);
+
+        // overlapped regions will be handled by apply_snapshot, so no region
+        let now = time::Instant::now();
+        let mut intervals = Vec::new();
+        regions_to_delete.get_regions_to_delete_before(now, &mut intervals);
+        assert!(intervals.is_empty());
+
+        regions_to_delete.update(b"aa".to_vec(), b"bb".to_vec(), true);
+        regions_to_delete.update(b"bb".to_vec(), b"cc".to_vec(), false);
+
+        thread::sleep(timeout);
+
+        // one of the regions will be handled by apply_snapshot
+        let now = time::Instant::now();
+        regions_to_delete.get_regions_to_delete_before(now, &mut intervals);
+        assert_eq!(intervals, [(b"aa".to_vec(), b"bb".to_vec())]);
+    }
+
+    #[test]
+    fn test_regions_to_delete_case3() {
+        let timeout = Duration::from_millis(100);
+        let mut regions_to_delete = new_regions_to_delete(timeout);
+
+        regions_to_delete.update(b"a".to_vec(), b"c".to_vec(), true);
+        regions_to_delete.update(b"f".to_vec(), b"i".to_vec(), true);
+        regions_to_delete.update(b"m".to_vec(), b"n".to_vec(), true);
+        regions_to_delete.update(b"p".to_vec(), b"t".to_vec(), true);
+        regions_to_delete.update(b"x".to_vec(), b"z".to_vec(), true);
+
+        thread::sleep(timeout / 2);
+
+        regions_to_delete.update(b"g".to_vec(), b"q".to_vec(), true);
+
+        thread::sleep(timeout / 2);
+        // the first 4 regions will be updated
+        let now = time::Instant::now();
+        let mut intervals = Vec::new();
+        regions_to_delete.get_regions_to_delete_before(now, &mut intervals);
+        assert_eq!(
+            intervals,
+            [
+                (b"a".to_vec(), b"c".to_vec()),
+                (b"f".to_vec(), b"g".to_vec()),
+                (b"q".to_vec(), b"t".to_vec()),
+                (b"x".to_vec(), b"z".to_vec()),
+            ]
+        );
+
+        thread::sleep(timeout / 2);
+
+        // the last inserted region will be scheduled
+        let now = time::Instant::now();
+        let mut intervals = Vec::new();
+        regions_to_delete.get_regions_to_delete_before(now, &mut intervals);
+        assert_eq!(intervals, [(b"g".to_vec(), b"q".to_vec())]);
     }
 }
