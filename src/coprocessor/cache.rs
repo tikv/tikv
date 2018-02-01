@@ -134,8 +134,11 @@ impl DistSQLCache {
         let key_size = k.len();
         if self.map.contains_key(&k) {
             let entry = self.map.get_mut(&k).unwrap();
-            let size_diff = entry.update(region_id, version, key_size, res, start_ts);
-            self.size += size_diff;
+            // If current transaction before cached transaction, Do not cache it.
+            if entry.start_ts <= start_ts {
+                let size_diff = entry.update(region_id, version, key_size, res, start_ts);
+                self.size += size_diff;
+            }
         } else {
             let entry = DistSQLCacheEntry::new(region_id, version, key_size, res, start_ts);
             self.size += entry.size;
@@ -542,5 +545,19 @@ mod tests {
         let (version2, entry) = cache.get_region_version_and_cache_entry(10, &key, 0);
         assert_eq!(version2, version);
         assert!(entry.is_none());
+    }
+
+    #[test]
+    fn test_put_with_older_start_ts_should_not_cache() {
+        let mut cache: DistSQLCache = DistSQLCache::new(200);
+        let key: DistSQLCacheKey = "test1".to_string();
+        let result: Vec<u8> = vec![100, 101, 102];
+        let version = cache.get_region_version(10);
+        cache.put(10, key.clone(), version, result.clone(), 10);
+        let result2: Vec<u8> = vec![200, 201, 202];
+        cache.put(10, key.clone(), version, result2.clone(), 9);
+        let (_, entry) = cache.get_region_version_and_cache_entry(10, &key, 10);
+        assert!(entry.is_some());
+        assert_eq!(entry.unwrap(), &result);
     }
 }
