@@ -177,28 +177,24 @@ pub fn get_region_properties_cf(
         .map_err(|e| e.into())
 }
 
-pub fn get_region_approximate_size_cf(
-    db: &DB,
-    cfname: &str,
-    region: &metapb::Region,
-) -> Result<u64> {
+pub fn get_approximate_size_cf(db: &DB, cfname: &str, start: &[u8], end: &[u8]) -> Result<u64> {
     let cf = rocksdb_util::get_cf_handle(db, cfname)?;
-    let start = keys::enc_start_key(region);
-    let end = keys::enc_end_key(region);
-    let range = Range::new(&start, &end);
+    let range = Range::new(start, end);
     let (_, mut size) = db.get_approximate_memtable_stats_cf(cf, &range);
     let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
     for (_, v) in &*collection {
         let props = SizeProperties::decode(v.user_collected_properties())?;
-        size += props.get_approximate_size_in_range(&start, &end);
+        size += props.get_approximate_size_in_range(start, end);
     }
     Ok(size)
 }
 
 pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u64> {
     let mut size = 0;
+    let start = keys::enc_start_key(region);
+    let end = keys::enc_end_key(region);
     for cfname in LARGE_CFS {
-        size += get_region_approximate_size_cf(db, cfname, region)?
+        size += get_approximate_size_cf(db, cfname, &start, &end)?
     }
     Ok(size)
 }
@@ -542,8 +538,10 @@ mod tests {
         let region = make_region(1, vec![], vec![]);
         let size = get_region_approximate_size(&db, &region).unwrap();
         assert_eq!(size, cf_size * LARGE_CFS.len() as u64);
+        let start = keys::enc_start_key(&region);
+        let end = keys::enc_end_key(&region);
         for cfname in LARGE_CFS {
-            let size = get_region_approximate_size_cf(&db, cfname, &region).unwrap();
+            let size = get_approximate_size_cf(&db, cfname, &start, &end).unwrap();
             assert_eq!(size, cf_size);
         }
     }

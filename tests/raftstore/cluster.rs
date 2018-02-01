@@ -23,6 +23,7 @@ use futures::Future;
 
 use tikv::raftstore::{Error, Result};
 use tikv::raftstore::store::*;
+use tikv::raftstore::store::util::get_approximate_size_cf;
 use tikv::config::TiKvConfig;
 use tikv::storage::CF_DEFAULT;
 use super::util::*;
@@ -678,6 +679,17 @@ impl<T: Simulator> Cluster<T> {
             engines.kv_engine.flush(sync).unwrap();
             engines.raft_engine.flush(sync).unwrap();
         }
+    }
+
+    pub fn get_approximate_size(
+        &mut self,
+        node_id: u64,
+        cf: &str,
+        start: &[u8],
+        end: &[u8],
+    ) -> u64 {
+        let db = &self.engines[&node_id].kv_engine;
+        get_approximate_size_cf(db, cf, &keys::data_key(start), &keys::data_key(end)).unwrap()
     }
 
     pub fn get_region_epoch(&self, region_id: u64) -> RegionEpoch {
