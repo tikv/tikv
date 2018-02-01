@@ -20,7 +20,6 @@ pub use self::event_listener::{CompactedEvent, CompactionListener, EventListener
 pub use self::metrics_flusher::MetricsFlusher;
 
 use std::fs::{self, File};
-use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::sync::Arc;
 use std::str::FromStr;
@@ -79,20 +78,6 @@ impl<'a> CFOptions<'a> {
             cf: cf,
             options: options,
         }
-    }
-}
-
-impl<'a> Deref for CFOptions<'a> {
-    type Target = ColumnFamilyOptions;
-
-    fn deref(&self) -> &Self::Target {
-        &self.options
-    }
-}
-
-impl<'a> DerefMut for CFOptions<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.options
     }
 }
 
