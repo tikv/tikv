@@ -495,7 +495,8 @@ mod test {
         let mut wrapper = IndexTestWrapper::new(unique, idx_data);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let is_executor = IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique);
+        let is_executor =
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique).unwrap();
 
         // init aggregation meta
         let mut aggregation = Aggregation::default();
