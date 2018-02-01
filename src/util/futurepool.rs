@@ -50,7 +50,7 @@ impl<T: Context> ContextDelegator<T> {
         }
     }
 
-    fn get_context(&self) -> RefMut<T> {
+    fn context_mut(&self) -> RefMut<T> {
         self.inner.borrow_mut()
     }
 
@@ -66,7 +66,7 @@ impl<T: Context> ContextDelegator<T> {
             return;
         }
         self.last_tick.set(Some(now));
-        self.get_context().on_tick();
+        self.context_mut().on_tick();
     }
 }
 
@@ -82,7 +82,7 @@ unsafe impl<T: Context> Sync for ContextDelegators<T> {}
 
 impl<T: Context> Clone for ContextDelegators<T> {
     fn clone(&self) -> Self {
-        ContextDelegators::<T> {
+        ContextDelegators {
             delegators: Arc::clone(&self.delegators),
         }
     }
@@ -90,15 +90,15 @@ impl<T: Context> Clone for ContextDelegators<T> {
 
 impl<T: Context> ContextDelegators<T> {
     fn new(delegators: HashMap<thread::ThreadId, ContextDelegator<T>>) -> Self {
-        ContextDelegators::<T> {
+        ContextDelegators {
             delegators: Arc::new(delegators),
         }
     }
 
     /// This function should be called in the future pool thread. Otherwise it will panic.
-    pub fn get_current_thread_context(&self) -> RefMut<T> {
+    pub fn current_thread_context_mut(&self) -> RefMut<T> {
         let delegator = self.get_current_thread_delegator();
-        delegator.get_context()
+        delegator.context_mut()
     }
 
     fn get_current_thread_delegator(&self) -> &ContextDelegator<T> {
@@ -150,7 +150,7 @@ impl<T: Context + 'static> FuturePool<T> {
             .name_prefix(name_prefix)
             .after_start(move || {
                 // We only need to know each thread's id and we can build context later
-                // by invoking `context_factory` in a !Sync way.
+                // by invoking `context_factory` in a non-concurrent way.
                 let thread_id = thread::current().id();
                 tx.send(thread_id).unwrap();
             })
@@ -250,7 +250,7 @@ mod tests {
             assert_ne!(main_thread_id, current_thread_id);
 
             // Context is created in main thread
-            let ctx = ctxd.get_current_thread_context();
+            let ctx = ctxd.current_thread_context_mut();
             assert_eq!(ctx.ctx_thread_id, main_thread_id);
             future::ok::<(), ()>(())
         }).wait()

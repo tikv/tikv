@@ -502,7 +502,7 @@ impl Storage {
             .future_execute(priority, move |ctxd| {
                 let _t_snapshot = {
                     let ctxd = ctxd.clone();
-                    let mut thread_ctx = ctxd.get_current_thread_context();
+                    let mut thread_ctx = ctxd.current_thread_context_mut();
                     thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
                     thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
                 };
@@ -517,7 +517,7 @@ impl Storage {
                 .map_err(txn::Error::from)
                 .map_err(Error::from)
                 .and_then(move |snapshot: Box<Snapshot>| {
-                    let mut thread_ctx = ctxd.get_current_thread_context();
+                    let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
 
                     let mut statistics = Statistics::default();
@@ -563,7 +563,7 @@ impl Storage {
             .future_execute(priority, move |ctxd| {
                 let _t_snapshot = {
                     let ctxd = ctxd.clone();
-                    let mut thread_ctx = ctxd.get_current_thread_context();
+                    let mut thread_ctx = ctxd.current_thread_context_mut();
                     thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
                     thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
                 };
@@ -578,7 +578,7 @@ impl Storage {
                 .map_err(txn::Error::from)
                 .map_err(Error::from)
                 .and_then(move |snapshot: Box<Snapshot>| {
-                    let mut thread_ctx = ctxd.get_current_thread_context();
+                    let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
 
                     let mut statistics = Statistics::default();
@@ -639,7 +639,7 @@ impl Storage {
             .future_execute(priority, move |ctxd| {
                 let _t_snapshot = {
                     let ctxd = ctxd.clone();
-                    let mut thread_ctx = ctxd.get_current_thread_context();
+                    let mut thread_ctx = ctxd.current_thread_context_mut();
                     thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
                     thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
                 };
@@ -654,7 +654,7 @@ impl Storage {
                 .map_err(txn::Error::from)
                 .map_err(Error::from)
                 .and_then(move |snapshot: Box<Snapshot>| {
-                    let mut thread_ctx = ctxd.get_current_thread_context();
+                    let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
 
                     let snap_store = SnapshotStore::new(
@@ -883,7 +883,7 @@ impl Storage {
             .future_execute(priority, move |ctxd| {
                 let _t_snapshot = {
                     let ctxd = ctxd.clone();
-                    let mut thread_ctx = ctxd.get_current_thread_context();
+                    let mut thread_ctx = ctxd.current_thread_context_mut();
                     thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
                     thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
                 };
@@ -898,7 +898,7 @@ impl Storage {
                 .map_err(txn::Error::from)
                 .map_err(Error::from)
                 .and_then(move |snapshot: Box<Snapshot>| {
-                    let mut thread_ctx = ctxd.get_current_thread_context();
+                    let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
 
                     // no scan_count for this kind of op.
@@ -991,7 +991,7 @@ impl Storage {
             .future_execute(priority, move |ctxd| {
                 let _t_snapshot = {
                     let ctxd = ctxd.clone();
-                    let mut thread_ctx = ctxd.get_current_thread_context();
+                    let mut thread_ctx = ctxd.current_thread_context_mut();
                     thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
                     thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
                 };
@@ -1006,7 +1006,7 @@ impl Storage {
                 .map_err(txn::Error::from)
                 .map_err(Error::from)
                 .and_then(move |snapshot: Box<Snapshot>| {
-                    let mut thread_ctx = ctxd.get_current_thread_context();
+                    let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
 
                     let mut statistics = Statistics::default();
