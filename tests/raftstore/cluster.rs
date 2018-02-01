@@ -313,51 +313,27 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
-        let store_ids = match self.store_ids_of_region(region_id) {
-            None => return None,
-            Some(ids) => ids,
-        };
-        if let Some(l) = self.leaders.get(&region_id) {
-            // leader may be stopped in some tests.
-            if self.valid_leader_id(region_id, l.get_store_id()) {
-                return Some(l.clone());
-            }
-        }
-        self.reset_leader_of_region(region_id);
-        let mut leader = None;
-        let mut retry_cnt = 500;
-
         let node_ids = self.sim.rl().get_node_ids();
-        let mut count = 0;
-        while (leader.is_none() || count < store_ids.len()) && retry_cnt > 0 {
-            count = 0;
-            leader = None;
+        'retry: for _ in 0..500 {
+            let store_ids = match self.store_ids_of_region(region_id) {
+                None => return None,
+                Some(ids) => ids,
+            };
             for store_id in &store_ids {
                 // For some tests, we stop the node but pd still has this information,
                 // and we must skip this.
                 if !node_ids.contains(store_id) {
-                    count += 1;
                     continue;
                 }
-                let l = self.query_leader(*store_id, region_id);
-                if l.is_none() {
-                    continue;
-                }
-                if leader.is_none() {
-                    leader = l;
-                    count += 1;
-                } else if l == leader {
-                    count += 1;
+                let leader = self.query_leader(*store_id, region_id);
+                if let Some(l) = leader {
+                    self.leaders.insert(region_id, l);
+                    break 'retry;
                 }
             }
+            self.reset_leader_of_region(region_id);
             sleep_ms(10);
-            retry_cnt -= 1;
         }
-
-        if let Some(l) = leader {
-            self.leaders.insert(region_id, l);
-        }
-
         self.leaders.get(&region_id).cloned()
     }
 
@@ -731,6 +707,10 @@ impl<T: Simulator> Cluster<T> {
         loop {
             self.reset_leader_of_region(region_id);
             if self.leader_of_region(region_id) == Some(leader.clone()) {
+                debug!(
+                    "[region {}] ignore transfer leader to self {:?}",
+                    region_id, leader
+                );
                 return;
             }
             if try_cnt > 250 {
