@@ -21,7 +21,7 @@ use kvproto::coprocessor::KeyRange;
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{self, Datum};
 use coprocessor::codec::table::{RowColsDict, TableDecoder};
-use coprocessor::endpoint::get_pk;
+use coprocessor::util::get_pk;
 use coprocessor::dag::expr::EvalContext;
 use coprocessor::{Error, Result};
 use coprocessor::local_metrics::*;

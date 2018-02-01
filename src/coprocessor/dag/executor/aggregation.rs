@@ -20,7 +20,7 @@ use tipb::expression::{Expr, ExprType};
 use util::collections::{OrderMap, OrderMapEntry};
 use coprocessor::codec::table::RowColsDict;
 use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
-use coprocessor::endpoint::SINGLE_GROUP;
+use coprocessor::SINGLE_GROUP;
 use coprocessor::dag::expr::{EvalContext, Expression};
 use coprocessor::metrics::*;
 use coprocessor::local_metrics::*;
