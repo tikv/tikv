@@ -31,7 +31,7 @@ pub struct Task {
     pub min_num_del: u64,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, PartialEq)]
 pub struct TaskRes {
     pub ranges_need_compact: VecDeque<(Key, Key)>,
 }
@@ -67,7 +67,11 @@ impl Runner {
         }
     }
 
-    pub fn collect_ranges_need_compact(&self, ranges: BTreeSet<Key>, min_num_del: u64) -> Result<TaskRes, Error> {
+    pub fn collect_ranges_need_compact(
+        &self,
+        ranges: BTreeSet<Key>,
+        min_num_del: u64,
+    ) -> Result<TaskRes, Error> {
         collect_ranges_need_compact(&self.engine, ranges, min_num_del)
     }
 }
@@ -81,11 +85,18 @@ impl Runnable<Task> for Runner {
     }
 }
 
-fn need_compact(num_dels: u64, num_versions: u64, min_num_del: u64) -> bool {
-    num_dels >= min_num_del && num_dels * 2 >= num_versions
+fn need_compact(num_entires: u64, num_versions: u64, min_num_del: u64) -> bool {
+    if num_entires <= num_versions {
+        return false;
+    }
+
+    // When the number of tombstones exceed threshold and at least 50% entries
+    // are tombstones, this range need compacting.
+    let estimate_num_del = num_entires - num_versions;
+    estimate_num_del >= min_num_del && estimate_num_del * 2 >= num_versions
 }
 
-fn gather_range_entries_and_puts(
+fn get_range_entries_and_versions(
     engine: &DB,
     cf: &CFHandle,
     start: &[u8],
@@ -111,56 +122,57 @@ fn gather_range_entries_and_puts(
         };
         num_entries += v.num_entries();
         props.add(&mvcc);
-        println!("mvcc {:?}", mvcc);
     }
+
     Some((num_entries, props.num_versions))
 }
 
-fn collect_ranges_need_compact(engine: &DB, ranges: BTreeSet<Key>, min_num_del: u64) -> Result<TaskRes, Error> {
-    let cf = box_try!(rocksdb::get_cf_handle(engine, CF_WRITE));
+fn collect_ranges_need_compact(
+    engine: &DB,
+    ranges: BTreeSet<Key>,
+    min_num_del: u64,
+) -> Result<TaskRes, Error> {
     let mut task_res = TaskRes::default();
-    let mut last_start_key = vec![];
+
+    let cf = box_try!(rocksdb::get_cf_handle(engine, CF_WRITE));
+    let mut last_start_key = None;
     let mut compact_start = None;
-    for key in &ranges {
-        if last_start_key.is_empty() {
-            last_start_key = key.clone();
+    for key in ranges {
+        if last_start_key.is_none() {
+            last_start_key = Some(key);
             continue;
         }
-        if let Some((num_entries, num_versions)) =
-        gather_range_entries_and_puts(engine, cf, &last_start_key, key)
-        {
-            if num_entries > num_versions {
-                println!("[{:?}, {:?}]", last_start_key, key);
-                println!("num_entries: {}, num_versions: {}", num_entries, num_versions);
-                let estimate_num_del = num_entries - num_versions;
-                if need_compact(estimate_num_del, num_versions, min_num_del) {
-                    if compact_start.is_none() {
-                        compact_start = Some(last_start_key.clone());
-                    }
-                    last_start_key = key.clone();
 
-                    println!("compact_start: {:?}, last_start_key: {:?}", compact_start, last_start_key);
-
-                    continue;
+        if let Some((num_entries, num_versions)) = get_range_entries_and_versions(
+            engine,
+            cf,
+            last_start_key.as_ref().unwrap().as_slice(),
+            &key,
+        ) {
+            if need_compact(num_entries, num_versions, min_num_del) {
+                if compact_start.is_none() {
+                    compact_start = last_start_key.take();
                 }
+                last_start_key = Some(key);
+                continue;
             }
         }
-        // collect ranges need manual compaction
-        if compact_start.is_some() {
+
+        if compact_start.is_some() && last_start_key.is_some() {
             task_res
-            .ranges_need_compact
-            .push_back((compact_start.unwrap().to_vec(), last_start_key));
+                .ranges_need_compact
+                .push_back((compact_start.unwrap(), last_start_key.unwrap()));
             compact_start = None;
         }
-        last_start_key = key.clone();
+        last_start_key = Some(key);
     }
 
-    if compact_start.is_some() {
+    if compact_start.is_some() && last_start_key.is_some() {
         task_res
-        .ranges_need_compact
-        .push_back((compact_start.unwrap().to_vec(), last_start_key.to_vec()));
+            .ranges_need_compact
+            .push_back((compact_start.unwrap(), last_start_key.unwrap()));
     }
-    info!("{:?}", task_res);
+
     Ok(task_res)
 }
 
@@ -170,34 +182,26 @@ mod tests {
 
     use tempdir::TempDir;
 
-    use rocksdb::{self, DB, Writable};
+    use rocksdb::{self, Writable, DB};
     use storage::types::Key as MvccKey;
     use storage::mvcc::{Write, WriteType};
     use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use util::rocksdb::{new_engine_opt, get_cf_handle, CFOptions};
+    use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
     use util::properties::MvccPropertiesCollectorFactory;
     use raftstore::store::keys::data_key;
 
     use super::*;
 
     fn mvcc_put(db: &DB, k: &[u8], v: &[u8], start_ts: u64, commit_ts: u64) {
-        let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+        let cf = get_cf_handle(db, CF_WRITE).unwrap();
         let k = MvccKey::from_encoded(data_key(k));
         let k = k.append_ts(commit_ts);
         let w = Write::new(WriteType::Put, start_ts, Some(v.to_vec()));
         db.put_cf(cf, k.encoded(), &w.to_bytes()).unwrap();
     }
 
-    fn mvcc_delete(db: &DB, k: &[u8], start_ts: u64, commit_ts: u64) {
-        let cf = get_cf_handle(&db, CF_WRITE).unwrap();
-        let k = MvccKey::from_encoded(data_key(k));
-        let k = k.append_ts(commit_ts);
-        let w = Write::new(WriteType::Delete, start_ts, None);
-        db.put_cf(cf, k.encoded(), &w.to_bytes()).unwrap();
-    }
-
     fn delete(db: &DB, k: &[u8], commit_ts: u64) {
-        let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+        let cf = get_cf_handle(db, CF_WRITE).unwrap();
         let k = MvccKey::from_encoded(data_key(k));
         let k = k.append_ts(commit_ts);
         db.delete_cf(cf, k.encoded()).unwrap();
@@ -223,33 +227,50 @@ mod tests {
         let engine = open_db(p.path().to_str().unwrap());
         let cf = get_cf_handle(&engine, CF_WRITE).unwrap();
 
-        // mvcc_put 0..50
-        for i in 0..50 {
+        // mvcc_put 0..5
+        for i in 0..5 {
             let (k, v) = (format!("k{}", i), format!("value{}", i));
             mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1, 2);
         }
         engine.flush_cf(cf, true).unwrap();
 
-        // gc 0..50
-        for i in 0..50 {
+        // gc 0..5
+        for i in 0..5 {
             let k = format!("k{}", i);
             delete(&engine, k.as_bytes(), 2);
         }
         engine.flush_cf(cf, true).unwrap();
 
-        // mvcc_put 51..100
-        for i in 51..100 {
+        let (s, e) = (data_key(b"k0"), data_key(b"k5"));
+        let (entries, version) = get_range_entries_and_versions(&engine, cf, &s, &e).unwrap();
+        assert_eq!(entries, 10);
+        assert_eq!(version, 5);
+
+        // mvcc_put 5..10
+        for i in 5..10 {
             let (k, v) = (format!("k{}", i), format!("value{}", i));
             mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1, 2);
         }
         engine.flush_cf(cf, true).unwrap();
 
+        let (s, e) = (data_key(b"k5"), data_key(b"k9"));
+        let (entries, version) = get_range_entries_and_versions(&engine, cf, &s, &e).unwrap();
+        assert_eq!(entries, 5);
+        assert_eq!(version, 5);
+
         let mut ranges_to_check = BTreeSet::new();
         ranges_to_check.insert(data_key(b"k0"));
-        ranges_to_check.insert(data_key(b"k50"));
-        ranges_to_check.insert(data_key(b"k99"));
+        ranges_to_check.insert(data_key(b"k5"));
+        ranges_to_check.insert(data_key(b"k9"));
 
-        let ranges_need_to_compact = collect_ranges_need_compact(&engine, ranges_to_check, 1).unwrap();
-        println!("ranges_need_to_compact {:?}", ranges_need_to_compact);
+        let ranges_need_to_compact =
+            collect_ranges_need_compact(&engine, ranges_to_check, 1).unwrap();
+        let (s, e) = (data_key(b"k0"), data_key(b"k5"));
+        let mut ranges = VecDeque::new();
+        ranges.push_back((s, e));
+        let expected = TaskRes {
+            ranges_need_compact: ranges,
+        };
+        assert_eq!(ranges_need_to_compact, expected);
     }
 }

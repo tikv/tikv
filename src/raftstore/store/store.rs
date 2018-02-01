@@ -1893,7 +1893,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             None => false,
         };
 
-        if self.compact_worker.is_busy()  {
+        if self.compact_worker.is_busy() {
             info!("compact worker is busy, check space redundancy next time");
         } else if self.space_checker.is_busy() {
             info!("space checker is busy, check space redundancy next time");
