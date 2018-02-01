@@ -686,6 +686,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         match self.space_res_receiver.as_ref().unwrap().try_recv() {
             Ok(res) => {
                 self.ranges_need_compact = Some(res.ranges_need_compact);
+                info!("ranges {:?} need to compact.", self.ranges_need_compact);
             }
             Err(TryRecvError::Empty) => {}
             Err(e) => panic!("unexpected error {:?}", e),

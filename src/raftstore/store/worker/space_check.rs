@@ -79,7 +79,14 @@ impl Runner {
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         match self.collect_ranges_need_compact(task.ranges, task.min_num_del) {
-            Ok(task_res) => self.notifier.send(task_res).unwrap(),
+            Ok(task_res) => {
+                if task_res.ranges_need_compact.is_empty() {
+                    return;
+                }
+                if let Err(e) = self.notifier.send(task_res) {
+                    warn!("send ranges back to raftstore failed {:?}", e);
+                }
+            }
             Err(e) => warn!("check ranges need reclaim failed, err: {:?}", e),
         }
     }
