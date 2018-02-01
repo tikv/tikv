@@ -322,12 +322,12 @@ impl SliceTransform for NoopSliceTransform {
 
 pub fn roughly_cleanup_ranges(db: &DB, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<(), String> {
     let mut delete_ranges = Vec::new();
-    for range in ranges {
-        if range.0 == range.1 {
+    for &(ref start, ref end) in ranges {
+        if start == end {
             continue;
         }
-        assert!(range.0 < range.1);
-        delete_ranges.push(Range::new(&range.0, &range.1));
+        assert!(start < end);
+        delete_ranges.push(Range::new(start, end));
     }
     if delete_ranges.is_empty() {
         return Ok(());
