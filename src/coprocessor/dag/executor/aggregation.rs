@@ -215,41 +215,33 @@ impl Executor for StreamAggExecutor {
             return Ok(None);
         }
 
-        loop {
-            match self.src.next() {
-                Err(err) => return Err(err),
-
-                Ok(None) => {
-                    self.executed = true;
-                    if self.count == 1 && self.group_by_exprs.is_empty() {
-                        return Ok(None);
-                    }
-                    return self.get_partial_result();
-                }
-
-                Ok(Some(row)) => {
-                    let cols = inflate_with_col_for_dag(
-                        &self.ctx,
-                        &row.data,
-                        &self.cols,
-                        &self.related_cols_offset,
-                        row.handle,
-                    )?;
-                    let new_group = self.meet_new_group(&cols)?;
-                    let mut ret = if new_group {
-                        self.get_partial_result()?
-                    } else {
-                        None
-                    };
-                    for i in 0..self.agg_exprs.len() {
-                        self.agg_funcs[i].update_with_expr(&self.ctx, &self.agg_exprs[i], &cols)?;
-                    }
-                    if new_group {
-                        return Ok(ret);
-                    }
-                }
+        while let Some(row) = self.src.next()? {
+            let cols = inflate_with_col_for_dag(
+                &self.ctx,
+                &row.data,
+                &self.cols,
+                &self.related_cols_offset,
+                row.handle,
+            )?;
+            let new_group = self.meet_new_group(&cols)?;
+            let mut ret = if new_group {
+                self.get_partial_result()?
+            } else {
+                None
+            };
+            let funcs = self.agg_funcs.iter_mut();
+            for (expr, func) in self.agg_exprs.iter().zip(funcs) {
+                func.update_with_expr(&self.ctx, expr, &cols)?;
+            }
+            if new_group {
+                return Ok(ret);
             }
         }
+        self.executed = true;
+        if self.count == 1 && self.group_by_exprs.is_empty() {
+            return Ok(None);
+        }
+        self.get_partial_result()
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
@@ -361,8 +353,8 @@ impl StreamAggExecutor {
         let mut group_key = Vec::with_capacity(0);
         if !self.group_by_exprs.is_empty() {
             let mut vals = Vec::with_capacity(self.group_by_exprs.len());
-            for d in &self.curr_group_row {
-                vals.push(d.clone());
+            for d in self.curr_group_row.drain(..) {
+                vals.push(d);
             }
             group_key = box_try!(datum::encode_value(vals.as_slice()));
             self.curr_group_row = self.next_group_row.clone();
