@@ -169,6 +169,23 @@ impl PdClient for RpcClient {
         Ok(resp.take_store())
     }
 
+    fn get_all_stores(&self) -> Result<Vec<metapb::Store>> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["get_all_stores"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::GetAllStoresRequest::new();
+        req.set_header(self.header());
+
+        let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            client.get_all_stores_opt(&req, option)
+        })?;
+        check_resp_header(resp.get_header())?;
+
+        Ok(resp.take_stores().to_vec())
+    }
+
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["get_cluster_config"])
