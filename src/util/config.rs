@@ -670,7 +670,7 @@ pub fn check_fs(data_path: &str) -> Result<(), ConfigError> {
     unsafe {
         let profile = CString::new("/proc/mounts").unwrap();
         let retype = CString::new("r").unwrap();
-        let mut afile = libc::setmntent(profile.as_ptr(), retype.as_ptr());
+        let afile = libc::setmntent(profile.as_ptr(), retype.as_ptr());
         let mut max_len = 0;
         let mut is_ok = false;
         let mut info = String::default();
@@ -704,10 +704,10 @@ pub fn check_fs(data_path: &str) -> Result<(), ConfigError> {
         } else if is_ok {
             Ok(())
         } else {
-            return Err(ConfigError::Limit(format!(
+            Err(ConfigError::Limit(format!(
                 "path:{:?} is ext4 but not nodelalloc",
                 data_path
-            )));
+            )))
         }
     }
 }
