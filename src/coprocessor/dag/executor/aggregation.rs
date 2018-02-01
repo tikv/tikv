@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::mem;
 use std::sync::Arc;
 use std::cmp::Ordering;
 
@@ -238,7 +239,10 @@ impl Executor for StreamAggExecutor {
             }
         }
         self.executed = true;
-        if self.count == 1 && self.group_by_exprs.is_empty() {
+        // If there is no data in the t, then whether there is 'group by' that can affect the result.
+        // e.g. select count(*) from t. Result is 0.
+        // e.g. select count(*) from t group by c. Result is empty.
+        if self.count == 0 && !self.group_by_exprs.is_empty() {
             return Ok(None);
         }
         self.get_partial_result()
@@ -269,7 +273,7 @@ pub struct StreamAggExecutor {
     agg_funcs: Vec<Box<AggrFunc>>,
     cols: Arc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>,
-    curr_group_row: Vec<Datum>,
+    cur_group_row: Vec<Datum>,
     next_group_row: Vec<Datum>,
     tmp_group_row: Vec<Datum>,
     is_first_group: bool,
@@ -306,7 +310,7 @@ impl StreamAggExecutor {
             ctx: ctx,
             related_cols_offset: visitor.column_offsets(),
             cols: columns,
-            curr_group_row: vec![Datum::Null; group_len],
+            cur_group_row: vec![Datum::Null; group_len],
             next_group_row: vec![Datum::Null; group_len],
             tmp_group_row: vec![Datum::Null; group_len],
             is_first_group: true,
@@ -321,31 +325,31 @@ impl StreamAggExecutor {
         }
 
         let mut matched = !self.is_first_group;
-        for (cnt, expr) in self.group_by_exprs.iter().enumerate() {
+        for (i, expr) in self.group_by_exprs.iter().enumerate() {
             let v = box_try!(expr.eval(&self.ctx, row));
-            if matched && box_try!(v.cmp(&self.ctx, &self.next_group_row[cnt])) != Ordering::Equal {
+            if matched && box_try!(v.cmp(&self.ctx, &self.next_group_row[i])) != Ordering::Equal {
                 matched = false;
             }
-            self.tmp_group_row[cnt] = v;
+            self.tmp_group_row[i] = v;
         }
         let ret = !self.is_first_group;
         if self.is_first_group {
-            self.curr_group_row = self.tmp_group_row.clone();
+            self.cur_group_row = self.tmp_group_row.clone();
             self.is_first_group = false
         }
         if matched {
             return Ok(false);
         }
-        self.next_group_row = self.tmp_group_row.clone();
+        mem::swap(&mut self.next_group_row, &mut self.tmp_group_row);
         Ok(ret)
     }
 
     fn get_partial_result(&mut self) -> Result<Option<Row>> {
         let mut agg_cols = Vec::with_capacity(2 * self.agg_funcs.len());
         // calc all agg func
-        for (cnt, agg_func) in self.agg_funcs.iter_mut().enumerate() {
+        for (i, agg_func) in self.agg_funcs.iter_mut().enumerate() {
             agg_func.calc(&mut agg_cols)?;
-            let agg = aggregate::build_aggr_func(self.agg_exprs[cnt].tp)?;
+            let agg = aggregate::build_aggr_func(self.agg_exprs[i].tp)?;
             *agg_func = agg;
         }
 
@@ -353,11 +357,11 @@ impl StreamAggExecutor {
         let mut group_key = Vec::with_capacity(0);
         if !self.group_by_exprs.is_empty() {
             let mut vals = Vec::with_capacity(self.group_by_exprs.len());
-            for d in self.curr_group_row.drain(..) {
+            for d in self.cur_group_row.drain(..) {
                 vals.push(d);
             }
             group_key = box_try!(datum::encode_value(vals.as_slice()));
-            self.curr_group_row = self.next_group_row.clone();
+            self.cur_group_row = self.next_group_row.clone();
         }
         // construct row data
         let value_size = group_key.len() + approximate_size(&agg_cols, false);
