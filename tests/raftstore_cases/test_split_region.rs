@@ -187,10 +187,6 @@ fn put_till_size<T: Simulator>(
     put_cf_till_approximate_size(cluster, CF_DEFAULT, limit, range)
 }
 
-fn make_key(i: u64) -> Vec<u8> {
-    format!("{:09}", i).into_bytes()
-}
-
 fn put_cf_till_approximate_size<T: Simulator>(
     cluster: &mut Cluster<T>,
     cf: &'static str,
@@ -204,7 +200,7 @@ fn put_cf_till_approximate_size<T: Simulator>(
     let mut start = None;
     let nodes: Vec<u64> = cluster.engines.keys().cloned().collect();
     loop {
-        let key = make_key(range.next().unwrap());
+        let key = format!("{:09}", range.next().unwrap()).into_bytes();
         if start.is_none() {
             start = Some(key.clone());
         }
@@ -215,8 +211,7 @@ fn put_cf_till_approximate_size<T: Simulator>(
         len += key.len() as u64 + 1;
         len += value.len() as u64;
         // Approximate size of memtable is inaccurate for small data,
-        // we flush it to SST so we can use the size properties instead.
-        // Flush memtable to SST periodically, to make approximate size more accurate.
+        // flush memtable to SST periodically, to make approximate size more accurate.
         let gap = if len >= limit { 200 } else { 1000 };
         if len - last_len >= gap {
             cluster.must_flush(true);
