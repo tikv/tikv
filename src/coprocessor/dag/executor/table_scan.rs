@@ -44,9 +44,9 @@ impl TableScanExecutor {
         meta: &TableScan,
         mut key_ranges: Vec<KeyRange>,
         store: SnapshotStore,
-    ) -> TableScanExecutor {
+    ) -> Result<TableScanExecutor> {
         COPR_EXECUTOR_COUNT.with_label_values(&["tblscan"]).inc();
-
+        box_try!(table::check_table_ranges(&key_ranges));
         let col_ids = meta.get_columns()
             .iter()
             .filter(|c| !c.get_pk_handle())
@@ -58,7 +58,7 @@ impl TableScanExecutor {
             key_ranges.reverse();
         }
 
-        TableScanExecutor {
+        Ok(TableScanExecutor {
             store: store,
             statistics: Statistics::default(),
             desc: desc,
@@ -68,7 +68,7 @@ impl TableScanExecutor {
             last_key: None,
             count: 0,
             scan_counter: ScanCounter::default(),
-        }
+        })
     }
 
     fn get_row_from_range_scanner(&mut self) -> Result<Option<Row>> {
@@ -226,7 +226,8 @@ mod test {
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let mut table_scanner = TableScanExecutor::new(&wrapper.table_scan, wrapper.ranges, store);
+        let mut table_scanner =
+            TableScanExecutor::new(&wrapper.table_scan, wrapper.ranges, store).unwrap();
 
         let row = table_scanner.next().unwrap().unwrap();
         assert_eq!(row.handle, handle as i64);
@@ -261,7 +262,8 @@ mod test {
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let mut table_scanner = TableScanExecutor::new(&wrapper.table_scan, wrapper.ranges, store);
+        let mut table_scanner =
+            TableScanExecutor::new(&wrapper.table_scan, wrapper.ranges, store).unwrap();
 
         for handle in 0..KEY_NUMBER {
             let row = table_scanner.next().unwrap().unwrap();
@@ -295,7 +297,8 @@ mod test {
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let mut table_scanner = TableScanExecutor::new(&wrapper.table_scan, wrapper.ranges, store);
+        let mut table_scanner =
+            TableScanExecutor::new(&wrapper.table_scan, wrapper.ranges, store).unwrap();
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;

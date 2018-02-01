@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use tikv::util::HandyRwLock;
-use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT};
 use tikv::storage::mvcc::{Lock, LockType};
 use tikv::raftstore::store::{keys, Mutable, Peekable};
 use tikv::coprocessor::REQ_TYPE_DAG;
@@ -675,7 +675,7 @@ fn test_debug_region_size() {
         .put_msg_cf(cf_raft, &region_state_key, &state)
         .unwrap();
 
-    let cfs = vec![CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE];
+    let cfs = vec![CF_DEFAULT, CF_LOCK, CF_RAFT];
     let (k, v) = (keys::data_key(b"k"), b"v");
     for cf in &cfs {
         let cf_handle = engine.cf_handle(cf).unwrap();
@@ -686,7 +686,7 @@ fn test_debug_region_size() {
     req.set_region_id(region_id);
     req.set_cfs(cfs.iter().map(|s| s.to_string()).collect());
     let entries = debug_client.region_size(&req).unwrap().take_entries();
-    assert_eq!(entries.len(), 4);
+    assert_eq!(entries.len(), 3);
     for e in entries.into_vec() {
         cfs.iter().find(|&&c| c == e.cf).unwrap();
         assert!(e.size > 0);

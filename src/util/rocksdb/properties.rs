@@ -221,8 +221,12 @@ impl DerefMut for IndexHandles {
 }
 
 impl IndexHandles {
-    fn new() -> IndexHandles {
+    pub fn new() -> IndexHandles {
         IndexHandles(BTreeMap::new())
+    }
+
+    pub fn add(&mut self, key: Vec<u8>, index_handle: IndexHandle) {
+        self.0.insert(key, index_handle);
     }
 
     // Format: | klen | k | v.size | v.offset |
@@ -321,6 +325,22 @@ impl SizeProperties {
     pub fn get_approximate_size_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
         self.index_handles
             .get_approximate_distance_in_range(start, end)
+    }
+
+    pub fn smallest_key(&self) -> Option<Vec<u8>> {
+        self.index_handles
+            .0
+            .iter()
+            .next()
+            .map(|(key, _)| key.clone())
+    }
+
+    pub fn largest_key(&self) -> Option<Vec<u8>> {
+        self.index_handles
+            .0
+            .iter()
+            .last()
+            .map(|(key, _)| key.clone())
     }
 }
 
@@ -604,6 +624,11 @@ mod tests {
         let result = UserProperties(collector.finish());
 
         let props = SizeProperties::decode(&result).unwrap();
+        assert_eq!(props.smallest_key().unwrap(), cases[0].0.as_bytes());
+        assert_eq!(
+            props.largest_key().unwrap(),
+            cases[cases.len() - 1].0.as_bytes()
+        );
         assert_eq!(props.total_size, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11);
         let handles = &props.index_handles;
         assert_eq!(handles.len(), 4);

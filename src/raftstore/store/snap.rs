@@ -804,6 +804,15 @@ fn apply_plain_cf_file<D: CompactBytesDecoder>(
     Ok(())
 }
 
+impl fmt::Debug for Snap {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.debug_struct("Snap")
+            .field("key", &self.key)
+            .field("display_path", &self.display_path)
+            .finish()
+    }
+}
+
 impl Snapshot for Snap {
     fn build(
         &mut self,
@@ -919,7 +928,11 @@ impl Snapshot for Snap {
         // write meta file
         let mut v = vec![];
         self.meta_file.meta.write_to_vec(&mut v)?;
-        self.meta_file.file.take().unwrap().write_all(&v[..])?;
+        {
+            let mut meta_file = self.meta_file.file.take().unwrap();
+            meta_file.write_all(&v[..])?;
+            meta_file.sync_all()?;
+        }
         fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
         Ok(())
     }
