@@ -600,6 +600,21 @@ impl Peer {
         pending_peers
     }
 
+    pub fn collect_pending_learners(&self) -> Vec<metapb::Peer> {
+        let mut pending_learners = Vec::with_capacity(self.region().get_learners().len());
+        let status = self.raft_group.status();
+        let truncated_idx = self.get_store().truncated_index();
+        for (id, progress) in status.learner_progress {
+            assert!(id != self.peer.get_id());
+            if progress.matched < truncated_idx {
+                if let Some(p) = self.get_learner_from_cache(id) {
+                    pending_learners.push(p);
+                }
+            }
+        }
+        pending_learners
+    }
+
     pub fn check_stale_state(&mut self, d: Duration) -> StaleState {
         // Updates the `leader_missing_time` according to the current state.
         if self.leader_id() == raft::INVALID_ID {
@@ -1529,15 +1544,24 @@ impl Peer {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
     }
 
+    pub fn insert_learner_cache(&mut self, learner: metapb::Peer) {
+        self.learner_cache
+            .borrow_mut()
+            .insert(learner.get_id(), learner);
+    }
+
     pub fn remove_peer_from_cache(&mut self, peer_id: u64) {
         self.peer_cache.borrow_mut().remove(&peer_id);
+    }
+
+    pub fn remove_learner_from_cache(&mut self, peer_id: u64) {
+        self.learner_cache.borrow_mut().remove(&peer_id);
     }
 
     pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
         if let Some(peer) = self.peer_cache.borrow().get(&peer_id) {
             return Some(peer.clone());
         }
-
         // Try to find in region, if found, set in cache.
         for peer in self.get_store().get_region().get_peers() {
             if peer.get_id() == peer_id {
@@ -1545,18 +1569,23 @@ impl Peer {
                 return Some(peer.clone());
             }
         }
-
         None
     }
 
-    pub fn insert_learner_cache(&mut self, learner: metapb::Peer) {
-        self.learner_cache
-            .borrow_mut()
-            .insert(learner.get_id(), learner);
-    }
-
-    pub fn remove_learner_from_cache(&mut self, peer_id: u64) {
-        self.learner_cache.borrow_mut().remove(&peer_id);
+    pub fn get_learner_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
+        if let Some(learner) = self.learner_cache.borrow().get(&peer_id) {
+            return Some(learner.clone());
+        }
+        // Try to find in region, if found, set in cache.
+        for learner in self.get_store().get_region().get_learners() {
+            if learner.get_id() == peer_id {
+                self.learner_cache
+                    .borrow_mut()
+                    .insert(peer_id, learner.clone());
+                return Some(learner.clone());
+            }
+        }
+        None
     }
 
     pub fn heartbeat_pd(&self, worker: &FutureWorker<PdTask>) {
@@ -1565,6 +1594,7 @@ impl Peer {
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration.0),
             pending_peers: self.collect_pending_peers(),
+            pending_learners: self.collect_pending_learners(),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
             region_size: self.approximate_size,
