@@ -321,12 +321,19 @@ impl SliceTransform for NoopSliceTransform {
 }
 
 pub fn roughly_cleanup_ranges(db: &DB, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<(), String> {
-    for cf in db.cf_names() {
-        let mut delete_ranges = Vec::new();
-        for range in ranges {
-            assert!(range.0 <= range.1);
-            delete_ranges.push(Range::new(&range.0, &range.1));
+    let mut delete_ranges = Vec::new();
+    for range in ranges {
+        if range.0 == range.1 {
+            continue;
         }
+        assert!(range.0 < range.1);
+        delete_ranges.push(Range::new(&range.0, &range.1));
+    }
+    if delete_ranges.is_empty() {
+        return Ok(());
+    }
+
+    for cf in db.cf_names() {
         let handle = get_cf_handle(db, cf)?;
         db.delete_files_in_ranges_cf(handle, &delete_ranges, /* include_end */ false)?;
     }
