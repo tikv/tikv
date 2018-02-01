@@ -33,7 +33,7 @@ pub struct DistSQLCacheEntry {
     // mutilply 2
     size: usize,
     // Transaction Start TS for this cache entry.
-    // Cache must available after this transaction.
+    // Cache must not available for any transaction before this.
     start_ts: u64,
 }
 
@@ -189,12 +189,15 @@ impl DistSQLCache {
         }
 
         self.check_evict_key(region_id, k);
-        if let Some(entry) = self.map.get_refresh(k) {
+        // Check transaction is after cache entry's transaction.
+        let data = self.map.get_refresh(k).and_then(|entry| {
             if start_ts >= entry.start_ts {
-                return (region_version, Some(&entry.value));
+                Some(&entry.value)
+            } else {
+                None
             }
-        }
-        (region_version, None)
+        });
+        (region_version, data)
     }
 
     pub fn get_region_version(&self, region_id: u64) -> u64 {
@@ -207,13 +210,14 @@ impl DistSQLCache {
         }
 
         self.check_evict_key(region_id, k);
-
-        if let Some(entry) = self.map.get_refresh(k) {
+        // Check transaction is after cache entry's transaction.
+        self.map.get_refresh(k).and_then(|entry| {
             if start_ts >= entry.start_ts {
-                return Some(&entry.value);
+                Some(&entry.value)
+            } else {
+                None
             }
-        }
-        None
+        })
     }
 
     pub fn remove(&mut self, k: &str) {
