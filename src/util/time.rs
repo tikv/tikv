@@ -154,6 +154,8 @@ impl Drop for Monitor {
 pub use self::inner::monotonic_raw_now;
 use self::inner::monotonic_now;
 use self::inner::monotonic_coarse_now;
+pub use self::inner::realtime_coarse_now;
+pub use self::inner::realtime_now;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 const MILLISECOND_PER_SECOND: i64 = 1_000;
@@ -182,6 +184,22 @@ mod inner {
         // TODO Add monotonic coarse clock time impl for macos and windows
         monotonic_raw_now()
     }
+    
+    pub fn realtime_raw_now() -> Timespec {
+        // TODO Add realtime raw clock time impl for macos and windows
+        // Currently use `time::get_time()` instead.
+        time::get_time()
+    }
+
+    pub fn realtime_now() -> Timespec {
+        // TODO Add realtime raw clock time impl for macos and windows
+        realtime_raw_now()
+    }
+
+    pub fn realtime_coarse_now() -> Timespec {
+        // TODO Add realtime raw clock time impl for macos and windows
+        realtime_raw_now()
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -200,6 +218,18 @@ mod inner {
 
     pub fn monotonic_coarse_now() -> Timespec {
         get_time(libc::CLOCK_MONOTONIC_COARSE)
+    }
+
+    pub fn realtime_raw_now() -> Timespec {
+        get_time(libc::CLOCK_REALTIME_RAW)
+    }
+
+    pub fn realtime_now() -> Timespec {
+        get_time(libc::CLOCK_REALTIME)
+    }
+
+    pub fn realtime_coarse_now() -> Timespec {
+        get_time(libc::CLOCK_REALTIME_COARSE)
     }
 
     fn get_time(clock: libc::clockid_t) -> Timespec {
