@@ -184,21 +184,16 @@ mod inner {
         // TODO Add monotonic coarse clock time impl for macos and windows
         monotonic_raw_now()
     }
-    
-    pub fn realtime_raw_now() -> Timespec {
+
+    pub fn realtime_now() -> Timespec {
         // TODO Add realtime raw clock time impl for macos and windows
         // Currently use `time::get_time()` instead.
         time::get_time()
     }
 
-    pub fn realtime_now() -> Timespec {
-        // TODO Add realtime raw clock time impl for macos and windows
-        realtime_raw_now()
-    }
-
     pub fn realtime_coarse_now() -> Timespec {
         // TODO Add realtime raw clock time impl for macos and windows
-        realtime_raw_now()
+        realtime_now()
     }
 }
 
@@ -218,10 +213,6 @@ mod inner {
 
     pub fn monotonic_coarse_now() -> Timespec {
         get_time(libc::CLOCK_MONOTONIC_COARSE)
-    }
-
-    pub fn realtime_raw_now() -> Timespec {
-        get_time(libc::CLOCK_REALTIME_RAW)
     }
 
     pub fn realtime_now() -> Timespec {
