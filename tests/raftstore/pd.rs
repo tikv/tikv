@@ -250,18 +250,20 @@ impl Cluster {
         let cur_region_peer_len = cur_region.get_peers().len();
 
         if conf_ver > cur_conf_ver {
-            // If ConfVer changed, TiKV has added/removed one peer already.
-            // So pd and TiKV can't have same peer count and can only have
-            // only one different peer.
-            // E.g, we can't meet following cases:
-            // 1) pd is (1, 2, 3), TiKV is (1)
-            // 2) pd is (1), TiKV is (1, 2, 3)
-            // 3) pd is (1, 2), TiKV is (3)
-            // 4) pd id (1), TiKV is (2, 3)
-
-            assert_ne!(region_peer_len, cur_region_peer_len);
-
-            if cur_region_peer_len > region_peer_len {
+            if region_peer_len == cur_region_peer_len {
+                // For AddLearner.
+                let region_learner_len = region.get_learners().len();
+                let cur_region_learner_len = cur_region.get_learners().len();
+                assert!(region_learner_len > cur_region_learner_len);
+            } else if cur_region_peer_len > region_peer_len {
+                // If ConfVer changed, TiKV has added/removed one peer already.
+                // So pd and TiKV can't have same peer count and can only have
+                // only one different peer.
+                // E.g, we can't meet following cases:
+                // 1) pd is (1, 2, 3), TiKV is (1)
+                // 2) pd is (1), TiKV is (1, 2, 3)
+                // 3) pd is (1, 2), TiKV is (3)
+                // 4) pd id (1), TiKV is (2, 3)
                 // must pd is (1, 2), TiKV is (1)
                 assert_eq!(cur_region_peer_len - region_peer_len, 1);
                 let peers = setdiff_peers(&cur_region, &region);
@@ -468,43 +470,65 @@ impl TestPdClient {
         self.set_rule(box move |_, _| None);
     }
 
-    pub fn must_have_peer(&self, region_id: u64, peer: metapb::Peer) {
+    fn must_have(&self, region_id: u64, peer: metapb::Peer, is_learner: bool) {
         for _ in 1..500 {
             sleep_ms(10);
-
             let region = match self.get_region_by_id(region_id).wait().unwrap() {
                 Some(region) => region,
                 None => continue,
             };
-
-            if let Some(p) = find_peer(&region, peer.get_store_id()) {
-                if p.get_id() == peer.get_id() {
-                    return;
-                }
+            let have = if is_learner {
+                find_learner(&region, peer.get_store_id())
+            } else {
+                find_peer(&region, peer.get_store_id())
+            };
+            match have {
+                Some(p) if p.get_id() == peer.get_id() => return,
+                _ => {}
             }
         }
-
         let region = self.get_region_by_id(region_id).wait().unwrap();
-        panic!("region {:?} has no peer {:?}", region, peer);
+        let peer_role = if is_learner { "learner" } else { "peer" };
+        panic!("region {:?} has no {} {:?}", region, peer_role, peer);
     }
 
-    pub fn must_none_peer(&self, region_id: u64, peer: metapb::Peer) {
+    fn must_none(&self, region_id: u64, peer: metapb::Peer, is_learner: bool) {
         for _ in 1..500 {
             sleep_ms(10);
-
             let region = match self.get_region_by_id(region_id).wait().unwrap() {
                 Some(region) => region,
                 None => continue,
             };
-
-            if find_peer(&region, peer.get_store_id()).is_none() {
+            let have = if is_learner {
+                find_learner(&region, peer.get_store_id())
+            } else {
+                find_peer(&region, peer.get_store_id())
+            };
+            if have.is_none() {
                 return;
             }
         }
-
         let region = self.get_region_by_id(region_id).wait().unwrap();
-        panic!("region {:?} has peer {:?}", region, peer);
+        let peer_role = if is_learner { "learner" } else { "peer" };
+        panic!("region {:?} has {} {:?}", region, peer_role, peer);
     }
+
+    pub fn must_have_peer(&self, region_id: u64, peer: metapb::Peer) {
+        self.must_have(region_id, peer, false)
+    }
+
+    pub fn must_have_learner(&self, region_id: u64, peer: metapb::Peer) {
+        self.must_have(region_id, peer, true)
+    }
+
+    pub fn must_none_peer(&self, region_id: u64, peer: metapb::Peer) {
+        self.must_none(region_id, peer, false);
+    }
+
+    pub fn must_none_learner(&self, region_id: u64, peer: metapb::Peer) {
+        self.must_none(region_id, peer, true);
+    }
+
     pub fn add_region(&self, region: &metapb::Region) {
         self.cluster.wl().add_region(region)
     }
@@ -512,7 +536,7 @@ impl TestPdClient {
     pub fn add_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.set_rule(box move |region: &metapb::Region, _: &metapb::Peer| {
             debug!(
-                "[region {}] trying add {:?} to {:?}",
+                "[region {}] trying add peer {:?} to {:?}",
                 region_id, peer, region
             );
             if region.get_id() != region_id {
@@ -527,6 +551,24 @@ impl TestPdClient {
         self.must_have_peer(region_id, peer);
     }
 
+    pub fn add_learner(&self, region_id: u64, peer: metapb::Peer) {
+        self.set_rule(box move |region: &metapb::Region, _: &metapb::Peer| {
+            debug!(
+                "[region {}] trying add learner {:?} to {:?}",
+                region_id, peer, region
+            );
+            if region.get_id() != region_id {
+                return None;
+            }
+            new_pd_add_learner_change_peer(region, peer.clone())
+        });
+    }
+
+    pub fn must_add_learner(&self, region_id: u64, peer: metapb::Peer) {
+        self.add_learner(region_id, peer.clone());
+        self.must_have_learner(region_id, peer);
+    }
+
     pub fn remove_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.set_rule(box move |region: &metapb::Region, _: &metapb::Peer| {
             if region.get_id() != region_id {
@@ -539,6 +581,21 @@ impl TestPdClient {
     pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.remove_peer(region_id, peer.clone());
         self.must_none_peer(region_id, peer);
+    }
+
+    pub fn promote_learner(&self, region_id: u64, peer: metapb::Peer) {
+        self.set_rule(box move |region: &metapb::Region, _: &metapb::Peer| {
+            if region.get_id() != region_id {
+                return None;
+            }
+            new_pd_promote_learner_change_peer(region, peer.clone())
+        });
+    }
+
+    pub fn must_promote_learner(&self, region_id: u64, peer: metapb::Peer) {
+        self.promote_learner(region_id, peer.clone());
+        self.must_have_peer(region_id, peer.clone());
+        self.must_none_learner(region_id, peer);
     }
 
     // check whether region is split by split_key or not.

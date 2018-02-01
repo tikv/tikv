@@ -145,6 +145,18 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_3, b"k1");
     must_get_none(&engine_3, b"k4");
 
+    // Add learner (4, 10) to region 1.
+    let engine_4 = cluster.get_engine(4);
+    pd_client.must_add_learner(r1, new_peer(4, 10));
+    must_get_equal(&engine_4, b"k1", b"v1");
+
+    // Promote learner (4, 4) to learner.
+    // pd_client.must_promote_learner(r1, new_peer(4, 4));
+    // pd_client.must_remove_peer(r1, new_peer(1, 1));
+    // cluster.stop_node(2);
+    // cluster.must_put(b"k5", b"v5");
+    // must_get_equal(&engine_4, b"k5", b"v5");
+
     // TODO: add more tests.
 }
 
