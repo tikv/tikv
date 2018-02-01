@@ -116,6 +116,9 @@ where
 {
     let (tx, rx) = mpsc::channel(channel_size);
     let callback = move |s: CopStream<T>, executor: Option<CpuPool>| {
+        // We can run the callback in two place: Endpoint thread and Cpu pool threads.
+        // In the first case the `executor` will be None so that we needs to wait the
+        // future finish, oterwise we can just spawn it in the executor.
         let f = s.forward(tx);
         if let Some(executor) = executor {
             return executor.spawn(f).forget();
@@ -838,7 +841,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        let (on_resp, future) = make_stream_callback(self.stream_channel_size);
+        let (on_resp, stream) = make_stream_callback(self.stream_channel_size);
         let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
             Ok(req_task) => req_task,
             Err(e) => {
@@ -855,7 +858,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             return self.send_fail_status_to_stream(ctx, sink, error, code);
         }
 
-        let future = future
+        let stream = stream
             .map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
             .map_err(|e| {
                 let code = RpcStatusCode::Unknown;
@@ -864,7 +867,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             });
 
         ctx.spawn(
-            sink.send_all(future)
+            sink.send_all(stream)
                 .map(|_| timer.observe_duration())
                 .map_err(move |e| {
                     debug!("{} failed: {:?}", label, e);
