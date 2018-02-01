@@ -24,7 +24,6 @@ use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::endpoint::get_pk;
 use coprocessor::dag::expr::EvalContext;
 use coprocessor::{Error, Result};
-use coprocessor::local_metrics::*;
 use storage::SnapshotStore;
 use util::codec::number::NumberDecoder;
 use util::collections::HashSet;
@@ -39,6 +38,8 @@ mod limit;
 mod aggregation;
 mod aggregate;
 
+mod metrics;
+
 pub use self::table_scan::TableScanExecutor;
 pub use self::index_scan::IndexScanExecutor;
 pub use self::selection::SelectionExecutor;
@@ -46,6 +47,7 @@ pub use self::topn::TopNExecutor;
 pub use self::limit::LimitExecutor;
 pub use self::aggregation::HashAggExecutor;
 pub use self::scanner::{ScanOn, Scanner};
+pub use self::metrics::*;
 
 pub struct ExprColumnRefVisitor {
     cols_offset: HashSet<usize>,

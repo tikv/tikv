@@ -20,7 +20,7 @@ use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, Analyz
 use tipb::schema::ColumnInfo;
 use tipb::executor::TableScan;
 
-use coprocessor::dag::executor::{Executor, IndexScanExecutor, TableScanExecutor};
+use coprocessor::dag::executor::{Executor, ExecutorMetrics, IndexScanExecutor, TableScanExecutor};
 use coprocessor::endpoint::ReqContext;
 use coprocessor::codec::datum;
 use coprocessor::{Error, Result};
@@ -28,7 +28,6 @@ use storage::{Snapshot, SnapshotStore};
 use super::fmsketch::FMSketch;
 use super::cmsketch::CMSketch;
 use super::histogram::Histogram;
-use super::super::local_metrics::ExecutorMetrics;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext {

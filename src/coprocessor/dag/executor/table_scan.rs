@@ -19,11 +19,10 @@ use tipb::executor::TableScan;
 use coprocessor::codec::table;
 use coprocessor::endpoint::is_point;
 use coprocessor::{Error, Result};
-use coprocessor::local_metrics::*;
 use storage::{Key, SnapshotStore};
 use util::collections::HashSet;
 
-use super::{Executor, Row};
+use super::{Executor, ExecutorMetrics, Row};
 use super::scanner::{ScanOn, Scanner};
 
 pub struct TableScanExecutor {

@@ -39,7 +39,8 @@ use super::codec::datum::Datum;
 use super::dag::DAGContext;
 use super::statistics::analyze::AnalyzeContext;
 use super::metrics::*;
-use super::local_metrics::{BasicLocalMetrics, ExecLocalMetrics, ExecutorMetrics};
+use super::local_metrics::{BasicLocalMetrics, ExecLocalMetrics};
+use super::dag::executor::ExecutorMetrics;
 use super::{Error, Result};
 
 pub const REQ_TYPE_DAG: i64 = 103;
@@ -557,9 +558,11 @@ fn err_resp(e: Error, metrics: &mut BasicLocalMetrics) -> Response {
             "other"
         }
     };
-
-    let count = metrics.error_cnt.entry(tag).or_insert(0);
-    *count += 1;
+    metrics
+        .error_cnt
+        .with_label_values(&[tag])
+        .inc_by(1.0)
+        .unwrap();
     resp
 }
 

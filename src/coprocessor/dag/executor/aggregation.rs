@@ -22,11 +22,11 @@ use coprocessor::codec::table::RowColsDict;
 use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
 use coprocessor::endpoint::SINGLE_GROUP;
 use coprocessor::dag::expr::{EvalContext, Expression};
-use coprocessor::local_metrics::ExecutorMetrics;
 use coprocessor::Result;
 
 use super::aggregate::{self, AggrFunc};
 use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
+use super::ExecutorMetrics;
 
 struct AggFuncExpr {
     args: Vec<Expression>,

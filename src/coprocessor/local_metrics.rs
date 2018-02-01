@@ -14,127 +14,12 @@
 use std::mem;
 
 use coprocessor::metrics::*;
-use storage::engine::{FlowStatistics, Statistics, StatisticsSummary};
-use prometheus::local::LocalHistogramVec;
+use coprocessor::dag::executor::ExecutorMetrics;
+use storage::engine::{FlowStatistics, Statistics};
+use prometheus::local::{LocalCounterVec, LocalHistogramVec};
 use util::collections::HashMap;
 use util::worker::FutureScheduler;
 use pd::PdTask;
-
-/// `ExecutorMetrics` is metrics collected from executors group by request.
-#[derive(Default)]
-pub struct ExecutorMetrics {
-    pub cf_stats: Statistics,
-    pub scan_counter: ScanCounter,
-    pub executor_count: ExecCounter,
-}
-
-impl ExecutorMetrics {
-    /// Merge records from `other` into `self`, and clear `other`.
-    #[inline]
-    pub fn merge(&mut self, other: &mut ExecutorMetrics) {
-        self.cf_stats.add(&other.cf_stats);
-        other.cf_stats = Default::default();
-        self.scan_counter.merge(&mut other.scan_counter);
-        self.executor_count.merge(&mut other.executor_count);
-    }
-}
-
-/// `ScanCounter` is for recording range query and point query.
-#[derive(Default, Clone)]
-pub struct ScanCounter {
-    range: usize,
-    point: usize,
-}
-
-impl ScanCounter {
-    #[inline]
-    pub fn inc_range(&mut self) {
-        self.range += 1;
-    }
-
-    #[inline]
-    pub fn inc_point(&mut self) {
-        self.point += 1;
-    }
-
-    /// Merge records from `other` into `self`, and clear `other`.
-    #[inline]
-    pub fn merge(&mut self, other: &mut ScanCounter) {
-        self.range += other.range;
-        self.point += other.point;
-        other.range = 0;
-        other.point = 0;
-    }
-
-    #[inline]
-    pub fn flush(&mut self) {
-        if self.range > 0 {
-            let range_counter = COPR_GET_OR_SCAN_COUNT.with_label_values(&["range"]);
-            range_counter.inc_by(self.range as f64).unwrap();
-            self.range = 0;
-        }
-        if self.point > 0 {
-            let point_counter = COPR_GET_OR_SCAN_COUNT.with_label_values(&["point"]);
-            point_counter.inc_by(self.point as f64).unwrap();
-            self.point = 0;
-        }
-    }
-}
-
-/// `ExecCounter` is for recording number of each executor.
-#[derive(Default)]
-pub struct ExecCounter {
-    data: HashMap<&'static str, i64>,
-}
-
-impl ExecCounter {
-    pub fn increase(&mut self, tag: &'static str) {
-        let count = self.data.entry(tag).or_insert(0);
-        *count += 1;
-    }
-
-    pub fn merge(&mut self, other: &mut ExecCounter) {
-        for (k, v) in other.data.drain() {
-            let mut va = self.data.entry(k).or_insert(0);
-            *va += v;
-        }
-    }
-
-    pub fn flush(&mut self) {
-        for (k, v) in self.data.drain() {
-            COPR_EXECUTOR_COUNT
-                .with_label_values(&[k])
-                .inc_by(v as f64)
-                .unwrap();
-        }
-    }
-}
-
-/// `ScanDetails` is for scan details for each cf.
-#[derive(Default)]
-pub struct ScanDetails {
-    data: HashMap<&'static str, StatisticsSummary>,
-}
-
-impl ScanDetails {
-    pub fn add(&mut self, type_str: &'static str, other: &Statistics) {
-        let statics = self.data.entry(type_str).or_insert_with(Default::default);
-        statics.add_statistics(other);
-    }
-
-    pub fn flush(&mut self) {
-        for (type_str, v) in self.data.drain() {
-            for (cf, details) in v.stat.details() {
-                for (tag, count) in details {
-                    COPR_SCAN_DETAILS
-                        .with_label_values(&[type_str, cf, tag])
-                        .inc_by(count as f64)
-                        .unwrap();
-                }
-            }
-        }
-    }
-}
 
 /// `CopFlowStatistics` is for flow statistics, it would been reported to Pd by flush.
 pub struct CopFlowStatistics {
@@ -175,18 +60,18 @@ impl CopFlowStatistics {
 /// `ExecLocalMetrics` collects metrics from `ExectorMetrics`
 pub struct ExecLocalMetrics {
     flow_stats: CopFlowStatistics,
-    scan_details: ScanDetails,
-    scan_counter: ScanCounter,
-    exec_counter: ExecCounter,
+    scan_details: LocalCounterVec,
+    scan_counter: LocalCounterVec,
+    exec_counter: LocalCounterVec,
 }
 
 impl ExecLocalMetrics {
     pub fn new(sender: FutureScheduler<PdTask>) -> ExecLocalMetrics {
         ExecLocalMetrics {
             flow_stats: CopFlowStatistics::new(sender),
-            scan_details: Default::default(),
-            scan_counter: Default::default(),
-            exec_counter: Default::default(),
+            scan_details: COPR_SCAN_DETAILS.local(),
+            scan_counter: COPR_GET_OR_SCAN_COUNT.local(),
+            exec_counter: COPR_EXECUTOR_COUNT.local(),
         }
     }
 
@@ -194,17 +79,43 @@ impl ExecLocalMetrics {
         &mut self,
         type_str: &'static str,
         region_id: u64,
-        mut metrics: ExecutorMetrics,
+        metrics: ExecutorMetrics,
     ) {
         let stats = &metrics.cf_stats;
         // cf statistics group by type
-        self.scan_details.add(type_str, stats);
+        // self.scan_details.add(type_str, stats);
+        for (cf, details) in stats.details() {
+            for (tag, count) in details {
+                self.scan_details
+                    .with_label_values(&[type_str, cf, tag])
+                    .inc_by(count as f64)
+                    .unwrap();
+            }
+        }
         // flow statistics group by region
         self.flow_stats.add(region_id, stats);
         // scan count
-        self.scan_counter.merge(&mut metrics.scan_counter);
+        // self.scan_counter.merge(&mut metrics.scan_counter);
+        if metrics.scan_counter.point > 0 {
+            self.scan_counter
+                .with_label_values(&["point"])
+                .inc_by(metrics.scan_counter.point as f64)
+                .unwrap();
+        }
+        if metrics.scan_counter.range > 0 {
+            self.scan_counter
+                .with_label_values(&["range"])
+                .inc_by(metrics.scan_counter.range as f64)
+                .unwrap();
+        }
         // executor count
-        self.exec_counter.merge(&mut metrics.executor_count);
+        // self.exec_counter.merge(&mut metrics.executor_count);
+        for (k, v) in metrics.executor_count.data {
+            self.exec_counter
+                .with_label_values(&[k])
+                .inc_by(v as f64)
+                .unwrap();
+        }
     }
 
     pub fn flush(&mut self) {
@@ -221,7 +132,7 @@ pub struct BasicLocalMetrics {
     pub outdate_time: LocalHistogramVec,
     pub handle_time: LocalHistogramVec,
     pub wait_time: LocalHistogramVec,
-    pub error_cnt: HashMap<&'static str, i64>,
+    pub error_cnt: LocalCounterVec,
     pub pending_cnt: HashMap<&'static str, HashMap<&'static str, i64>>,
     pub scan_keys: LocalHistogramVec,
 }
@@ -233,7 +144,7 @@ impl Default for BasicLocalMetrics {
             outdate_time: OUTDATED_REQ_WAIT_TIME.local(),
             handle_time: COPR_REQ_HANDLE_TIME.local(),
             wait_time: COPR_REQ_WAIT_TIME.local(),
-            error_cnt: HashMap::default(),
+            error_cnt: COPR_REQ_ERROR.local(),
             pending_cnt: HashMap::default(),
             scan_keys: COPR_SCAN_KEYS.local(),
         }
@@ -247,13 +158,7 @@ impl BasicLocalMetrics {
         self.handle_time.flush();
         self.wait_time.flush();
         self.scan_keys.flush();
-        // error cnt
-        for (k, v) in self.error_cnt.drain() {
-            COPR_REQ_ERROR
-                .with_label_values(&[k])
-                .inc_by(v as f64)
-                .unwrap();
-        }
+        self.error_cnt.flush();
         // pending cnt
         for (req, v) in self.pending_cnt.drain() {
             for (pri, count) in v {

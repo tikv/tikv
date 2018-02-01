@@ -16,11 +16,10 @@ use std::sync::Arc;
 use tipb::executor::Selection;
 use tipb::schema::ColumnInfo;
 
-use coprocessor::local_metrics::*;
 use coprocessor::dag::expr::{EvalContext, Expression};
 use coprocessor::Result;
 
-use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
+use super::{inflate_with_col_for_dag, Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
 
 pub struct SelectionExecutor {
     conditions: Vec<Expression>,

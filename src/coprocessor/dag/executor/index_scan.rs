@@ -20,12 +20,12 @@ use tipb::schema::ColumnInfo;
 
 use coprocessor::codec::{datum, mysql, table};
 use coprocessor::endpoint::is_point;
-use coprocessor::local_metrics::ExecutorMetrics;
 use coprocessor::{Error, Result};
 use storage::{Key, SnapshotStore};
 
 use super::{Executor, Row};
 use super::scanner::{ScanOn, Scanner};
+use super::ExecutorMetrics;
 
 pub struct IndexScanExecutor {
     store: SnapshotStore,

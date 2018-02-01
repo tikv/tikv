@@ -22,10 +22,9 @@ use tipb::expression::ByItem;
 use coprocessor::codec::datum::Datum;
 use coprocessor::Result;
 use coprocessor::dag::expr::{EvalContext, Expression};
-use coprocessor::local_metrics::*;
 
 use super::topn_heap::{SortRow, TopNHeap};
-use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
+use super::{inflate_with_col_for_dag, Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
 
 struct OrderBy {
     items: Arc<Vec<ByItem>>,
