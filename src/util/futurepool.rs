@@ -121,7 +121,7 @@ pub struct FuturePool<T: Context + 'static> {
 
 impl<T: Context + 'static> Clone for FuturePool<T> {
     fn clone(&self) -> FuturePool<T> {
-        FuturePool::<T> {
+        FuturePool {
             pool: self.pool.clone(),
             context_delegators: self.context_delegators.clone(),
             running_task_count: Arc::clone(&self.running_task_count),
