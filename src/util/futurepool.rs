@@ -70,14 +70,15 @@ impl<T: Context> ContextDelegator<T> {
     }
 }
 
-/// Each `ContextDelegator` instance is invoked individually for each thread.
-/// It is never accessed concurrently so that we mark it as Sync.
-unsafe impl<T: Context> Sync for ContextDelegator<T> {}
-
 #[derive(Debug)]
 pub struct ContextDelegators<T: Context> {
     delegators: Arc<HashMap<thread::ThreadId, ContextDelegator<T>>>,
 }
+
+/// Users can only retrive a Context for the current thread so that `HashMap<..>` is `Sync`.
+/// Thus `ContextDelegators` is `Send` & `Sync`.
+unsafe impl<T: Context> Send for ContextDelegators<T> {}
+unsafe impl<T: Context> Sync for ContextDelegators<T> {}
 
 impl<T: Context> Clone for ContextDelegators<T> {
     fn clone(&self) -> Self {
