@@ -68,12 +68,14 @@ lazy_static! {
             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
 
-     pub static ref COPR_SCAN_DETAILS: CounterVec =
-         register_counter_vec!(
-             "tikv_coprocessor_scan_details",
-             "Bucketed counter of coprocessor scan details for each CF",
-             &["req", "cf", "tag"]
-         ).unwrap();
+    /********************
+    pub static ref COPR_SCAN_DETAILS: CounterVec =
+        register_counter_vec!(
+            "tikv_coprocessor_scan_details",
+            "Bucketed counter of coprocessor scan details for each CF",
+            &["req", "cf", "tag"]
+            ).unwrap();
+    ********************/
 
     pub static ref COPR_EXECUTOR_COUNT: CounterVec =
         register_counter_vec!(

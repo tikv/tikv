@@ -40,6 +40,7 @@ impl ScanCounter {
         other.point = 0;
     }
 
+    #[allow(dead_code)]
     #[inline]
     pub fn flush(&mut self) {
         if self.range > 0 {
