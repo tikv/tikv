@@ -31,6 +31,7 @@ use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Config as ServerConfig;
 use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
+use tikv::util::readpool::Config as ReadPoolConfig;
 use tikv::util::escape;
 use tikv::util::rocksdb::{self, CompactionListener};
 use tikv::util::config::*;
@@ -115,9 +116,12 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
         // Considering connection selection algo is involved, maybe
         // use 2 or larger value here?
         grpc_raft_conn_num: 1,
-        end_point_concurrency: 1,
         ..ServerConfig::default()
     }
+}
+
+pub fn new_readpool_cfg() -> ReadPoolConfig {
+    ReadPoolConfig::default_for_test()
 }
 
 pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
@@ -128,6 +132,7 @@ pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
         },
         server: new_server_config(cluster_id),
         raft_store: new_store_cfg(),
+        readpool: new_readpool_cfg(),
         ..TiKvConfig::default()
     }
 }

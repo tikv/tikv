@@ -15,3 +15,61 @@ pub mod fmsketch;
 pub mod histogram;
 pub mod analyze;
 pub mod cmsketch;
+pub use self::analyze::AnalyzeContext;
+
+use std::sync::Arc;
+
+use protobuf::{CodedInputStream, Message};
+use kvproto::kvrpcpb;
+use kvproto::coprocessor as coppb;
+use tipb::analyze::AnalyzeReq;
+
+use storage::Snapshot;
+
+use super::*;
+
+pub struct CopRequestAnalyze {
+    ctx: Arc<CopContext>,
+    body: Option<AnalyzeReq>,
+    raw_req: coppb::Request,
+}
+
+impl CopRequestAnalyze {
+    pub fn new(raw_req: coppb::Request, recursion_limit: u32) -> Result<CopRequestAnalyze> {
+        let mut body = AnalyzeReq::new();
+        {
+            let mut is = CodedInputStream::from_bytes(raw_req.get_data());
+            is.set_recursion_limit(recursion_limit);
+            if let Err(e) = body.merge_from(&mut is) {
+                return Err(box_err!(e));
+            }
+        }
+        let ctx = Arc::new(CopContext::new(raw_req.get_context(), "analyze"));
+        Ok(CopRequestAnalyze {
+            ctx,
+            body: Some(body),
+            raw_req,
+        })
+    }
+}
+
+impl CopRequest for CopRequestAnalyze {
+    fn handle(&mut self, snapshot: Box<Snapshot>, stats: &mut CopStats) -> Result<coppb::Response> {
+        let ranges = self.raw_req.take_ranges().into_vec();
+        let analyze_ctx = AnalyzeContext::new(
+            self.body.take().unwrap(),
+            ranges,
+            snapshot,
+            self.ctx.as_ref(),
+        );
+        analyze_ctx.handle_request(&mut stats.stats)
+    }
+
+    fn get_context(&self) -> &kvrpcpb::Context {
+        self.raw_req.get_context()
+    }
+
+    fn get_cop_context(&self) -> Arc<CopContext> {
+        Arc::clone(&self.ctx)
+    }
+}

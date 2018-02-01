@@ -21,7 +21,7 @@ use tipb::schema::ColumnInfo;
 use tipb::executor::TableScan;
 
 use coprocessor::dag::executor::{Executor, IndexScanExecutor, TableScanExecutor};
-use coprocessor::endpoint::ReqContext;
+use coprocessor::CopContext;
 use coprocessor::codec::datum;
 use coprocessor::{Error, Result};
 use storage::{Snapshot, SnapshotStore, Statistics};
@@ -41,7 +41,7 @@ impl AnalyzeContext {
         req: AnalyzeReq,
         ranges: Vec<KeyRange>,
         snap: Box<Snapshot>,
-        req_ctx: &ReqContext,
+        req_ctx: &CopContext,
     ) -> AnalyzeContext {
         let snap = SnapshotStore::new(
             snap,

@@ -16,6 +16,7 @@ use std::fmt::Debug;
 use std::cmp::Ordering;
 use std::boxed::FnBox;
 use std::time::Duration;
+use futures::{self, future, Future};
 
 pub use self::rocksdb::EngineRocksdb;
 use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
@@ -25,6 +26,7 @@ use kvproto::errorpb::Error as ErrorHeader;
 
 use config;
 
+use util;
 use util::rocksdb::CFOptions;
 
 mod rocksdb;
@@ -98,6 +100,24 @@ pub trait Engine: Send + Debug {
         match wait_op!(|cb| self.async_snapshot(ctx, cb), timeout) {
             Some((_, res)) => res,
             None => Err(Error::Timeout(timeout)),
+        }
+    }
+
+    fn future_snapshot(
+        &self,
+        ctx: &Context,
+    ) -> Box<Future<Item = Box<Snapshot>, Error = Error> + Send> {
+        let (callback, future) = util::future::gen_paired_future_callback();
+        let val = self.async_snapshot(ctx, callback);
+        if let Err(e) = val {
+            box future::err(e)
+        } else {
+            box future
+                // map future::oneshot::Canceled to Error::Other
+                .map_err(Error::from)
+                .map(|(_ctx, r)| r)
+                // map Err(e) to err future and Ok(snapshot) to success future
+                .flatten()
         }
     }
 
@@ -578,6 +598,12 @@ quick_error! {
             description(err.description())
             display("unknown error {:?}", err)
         }
+    }
+}
+
+impl From<futures::Canceled> for Error {
+    fn from(err: futures::Canceled) -> Self {
+        Error::Other(box err)
     }
 }
 

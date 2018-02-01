@@ -18,6 +18,7 @@ use raftstore::cluster::Cluster;
 use raftstore::server::ServerCluster;
 use raftstore::server::new_server_cluster;
 use tikv::util::HandyRwLock;
+use tikv::util::readpool;
 use super::sync_storage::SyncStorage;
 
 pub fn new_raft_engine(count: usize, key: &str) -> (Cluster<ServerCluster>, Box<Engine>, Context) {
@@ -39,10 +40,11 @@ pub fn new_raft_storage_with_store_count(
     count: usize,
     key: &str,
 ) -> (Cluster<ServerCluster>, SyncStorage, Context) {
+    let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
     let (cluster, engine, ctx) = new_raft_engine(count, key);
     (
         cluster,
-        SyncStorage::from_engine(engine, &Config::default()),
+        SyncStorage::from_engine(engine, &Config::default(), read_pool),
         ctx,
     )
 }

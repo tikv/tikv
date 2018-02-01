@@ -29,8 +29,10 @@ use tikv::server::transport::RaftStoreRouter;
 use tikv::util::transport::SendCh;
 use tikv::util::security::SecurityManager;
 use tikv::util::worker::{FutureWorker, Worker};
+use tikv::util::readpool;
 use tikv::storage::Engine;
 use tikv::import::{ImportSSTService, SSTImporter};
+use tikv::coprocessor::EndPointHost;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
 
@@ -120,7 +122,9 @@ impl Simulator for ServerCluster {
         let (engines, path) = create_test_engine(engines, store_sendch.clone(), &cfg);
 
         // Create storage.
-        let mut store = create_raft_storage(sim_router.clone(), &cfg.storage).unwrap();
+        let read_pool = readpool::ReadPool::new(&cfg.readpool, None);
+        let mut store =
+            create_raft_storage(sim_router.clone(), &cfg.storage, read_pool.clone()).unwrap();
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
@@ -131,21 +135,26 @@ impl Simulator for ServerCluster {
         };
         let import_service = ImportSSTService::new(cfg.import.clone(), store.clone(), importer);
 
-        // Create pd client, snapshot manager, server.
+        // Create pd client, snapshot manager.
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
         let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch), None);
         let pd_worker = FutureWorker::new("test-pd-worker");
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
+
+        // Create Coprocessor EndPoint
+        let cop_end_point = EndPointHost::new(store.get_engine(), &server_cfg, read_pool.clone());
+
+        // Create Server
         let mut server = Server::new(
             &server_cfg,
             &security_mgr,
             cfg.coprocessor.region_split_size.0 as usize,
             store.clone(),
+            cop_end_point,
             sim_router.clone(),
             resolver,
             snap_mgr.clone(),
-            pd_worker.scheduler(),
             Some(engines.clone()),
             Some(import_service),
         ).unwrap();
@@ -153,7 +162,6 @@ impl Simulator for ServerCluster {
         cfg.server.addr = format!("{}", addr);
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans.clone());
-        let server_cfg = Arc::new(cfg.server.clone());
 
         // Create node.
         let mut node = Node::new(
@@ -181,7 +189,7 @@ impl Simulator for ServerCluster {
             self.snap_paths.insert(node_id, tmp);
         }
 
-        server.start(server_cfg, security_mgr).unwrap();
+        server.start(security_mgr).unwrap();
 
         self.metas.insert(
             node_id,

@@ -74,6 +74,8 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
+use tikv::util::readpool;
+use tikv::coprocessor::EndPointHost;
 use tikv::import::{ImportSSTService, SSTImporter};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
@@ -172,6 +174,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), significant_msg_sender);
     let compaction_listener = new_compaction_listener(store_sendch.clone());
 
+    // Create pd client and pd work
+    let pd_client = Arc::new(pd_client);
+    let pd_worker = FutureWorker::new("pd worker");
+    let (mut worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
+        .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
+
     // Create kv engine, storage.
     let mut kv_db_opts = cfg.rocksdb.build_opt();
     kv_db_opts.add_event_listener(compaction_listener);
@@ -180,7 +188,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {:?}", s)),
     );
-    let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage)
+    let read_pool = readpool::ReadPool::new(&cfg.readpool, Some(pd_worker.scheduler()));
+    let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage, read_pool.clone())
         .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 
     // Create raft engine.
@@ -195,11 +204,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     );
     let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
 
-    // Create pd client and pd work, snapshot manager, server.
-    let pd_client = Arc::new(pd_client);
-    let pd_worker = FutureWorker::new("pd worker");
-    let (mut worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
-        .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
+    // Create snapshot manager, server.
     let limiter = if cfg.server.snap_max_write_bytes_per_sec.0 > 0 {
         Some(Arc::new(IOLimiter::new(
             cfg.server.snap_max_write_bytes_per_sec.0,
@@ -213,20 +218,25 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         limiter,
     );
 
+    // Create Import Service
     let importer = Arc::new(SSTImporter::new(import_path).unwrap());
     let import_service = ImportSSTService::new(cfg.import.clone(), storage.clone(), importer);
 
     let server_cfg = Arc::new(cfg.server.clone());
+
+    // Create Coprocessor EndPoint
+    let cop_end_point = EndPointHost::new(storage.get_engine(), &server_cfg, read_pool.clone());
+
     // Create server
     let mut server = Server::new(
         &server_cfg,
         &security_mgr,
         cfg.coprocessor.region_split_size.0 as usize,
         storage.clone(),
+        cop_end_point,
         raft_router,
         resolver,
         snap_mgr.clone(),
-        pd_worker.scheduler(),
         Some(engines.clone()),
         Some(import_service),
     ).unwrap_or_else(|e| fatal!("failed to create server: {:?}", e));
@@ -267,7 +277,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Run server.
     server
-        .start(server_cfg, security_mgr)
+        .start(security_mgr)
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
     signal_handler::handle_signal(engines);
 

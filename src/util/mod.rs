@@ -45,6 +45,9 @@ pub mod io_limiter;
 pub mod security;
 pub mod timer;
 pub mod sys;
+pub mod future;
+pub mod futurepool;
+pub mod readpool;
 
 pub use self::rocksdb::properties;
 
@@ -52,6 +55,10 @@ pub use self::rocksdb::properties;
 mod thread_metrics;
 
 pub const NO_LIMIT: u64 = u64::MAX;
+
+pub trait AssertSend: Send {}
+
+pub trait AssertSync: Sync {}
 
 pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
     if max == NO_LIMIT || entries.len() <= 1 {

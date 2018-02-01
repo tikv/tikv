@@ -16,16 +16,31 @@ mod metrics;
 mod local_metrics;
 mod dag;
 mod statistics;
+mod util;
 pub mod codec;
 
 use std::result;
 use std::error;
+use std::sync::Arc;
+use std::time::Duration;
 
-use kvproto::kvrpcpb::LockInfo;
+use kvproto::kvrpcpb;
 use kvproto::errorpb;
+use kvproto::coprocessor as coppb;
 
-use storage::{engine, mvcc, txn};
+use storage::{engine, mvcc, txn, Snapshot, Statistics};
 use util::time::Instant;
+use self::local_metrics::ScanCounter;
+pub use self::endpoint::Host as EndPointHost;
+
+// If a request has been handled for more than 60 seconds, the client should
+// be timeout already, so it can be safely aborted.
+const REQUEST_MAX_HANDLE_SECS: u64 = 60;
+
+pub const SINGLE_GROUP: &[u8] = b"SingleGroup";
+
+pub const REQ_TYPE_DAG: i64 = 103;
+pub const REQ_TYPE_ANALYZE: i64 = 104;
 
 quick_error! {
     #[derive(Debug)]
@@ -34,14 +49,14 @@ quick_error! {
             description("region related failure")
             display("region {:?}", err)
         }
-        Locked(l: LockInfo) {
+        Locked(l: kvrpcpb::LockInfo) {
             description("key is locked")
             display("locked {:?}", l)
         }
-        Outdated(deadline: Instant, now: Instant, tag: &'static str) {
+        Outdated(deadline: Instant, now: Instant, tag: String) {
             description("request is outdated")
         }
-        Full(allow: usize) {
+        Full {
             description("running queue is full")
         }
         Other(err: Box<error::Error + Send + Sync>) {
@@ -73,7 +88,7 @@ impl From<txn::Error> for Error {
                 key,
                 ttl,
             }) => {
-                let mut info = LockInfo::new();
+                let mut info = kvrpcpb::LockInfo::new();
                 info.set_primary_lock(primary);
                 info.set_lock_version(ts);
                 info.set_key(key);
@@ -85,5 +100,43 @@ impl From<txn::Error> for Error {
     }
 }
 
-pub use self::endpoint::{CopRequestStatistics, CopSender, Host as EndPointHost, RequestTask,
-                         Task as EndPointTask, REQ_TYPE_DAG, SINGLE_GROUP};
+pub struct CopContext {
+    pub tag: String,
+
+    // The deadline before which the task should be responded.
+    pub deadline: Instant,
+    pub isolation_level: kvrpcpb::IsolationLevel,
+    pub fill_cache: bool,
+}
+
+impl CopContext {
+    fn new(ctx: &kvrpcpb::Context, tag: &str) -> CopContext {
+        let deadline = Instant::now_coarse() + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
+        CopContext {
+            tag: tag.to_string(),
+            deadline,
+            isolation_level: ctx.get_isolation_level(),
+            fill_cache: !ctx.get_not_fill_cache(),
+        }
+    }
+
+    pub fn check_if_outdated(&self) -> Result<()> {
+        let now = Instant::now_coarse();
+        if self.deadline <= now {
+            return Err(Error::Outdated(self.deadline, now, self.tag.clone()));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct CopStats {
+    stats: Statistics,
+    scan_counter: ScanCounter,
+}
+
+trait CopRequest: Send {
+    fn handle(&mut self, snapshot: Box<Snapshot>, stats: &mut CopStats) -> Result<coppb::Response>;
+    fn get_context(&self) -> &kvrpcpb::Context;
+    fn get_cop_context(&self) -> Arc<CopContext>;
+}

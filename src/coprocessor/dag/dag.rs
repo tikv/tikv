@@ -23,7 +23,8 @@ use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::dag::expr::EvalContext;
 use coprocessor::local_metrics::*;
 use coprocessor::{Error, Result};
-use coprocessor::endpoint::{get_pk, to_pb_error, ReqContext};
+use coprocessor::util::{get_pk, to_pb_error};
+use coprocessor::CopContext;
 use storage::{Snapshot, SnapshotStore, Statistics};
 
 use super::executor::{build_exec, Executor, Row};
@@ -31,7 +32,7 @@ use super::executor::{build_exec, Executor, Row};
 pub struct DAGContext {
     columns: Arc<Vec<ColumnInfo>>,
     has_aggr: bool,
-    req_ctx: Arc<ReqContext>,
+    req_ctx: Arc<CopContext>,
     exec: Box<Executor>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
@@ -42,7 +43,7 @@ impl DAGContext {
         mut req: DAGRequest,
         ranges: Vec<KeyRange>,
         snap: Box<Snapshot>,
-        req_ctx: Arc<ReqContext>,
+        req_ctx: Arc<CopContext>,
         batch_row_limit: usize,
     ) -> Result<DAGContext> {
         let eval_ctx = Arc::new(box_try!(EvalContext::new(

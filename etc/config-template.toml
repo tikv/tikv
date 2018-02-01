@@ -10,6 +10,22 @@
 # file to store log, write to stderr if it's empty.
 # log-file = ""
 
+[readpool]
+# size of thread pool for high-priority read operations
+# high-concurrency = 8
+# size of thread pool for normal-priority read operations
+# normal-concurrency = 8
+# size of thread pool for low-priority read operations
+# low-concurrency = 8
+# max running high-priority read operations, reject if exceed
+# max-tasks-high = 16000
+# max running normal-priority read operations, reject if exceed
+# max-tasks-normal = 16000
+# max running low-priority read operations, reject if exceed
+# max-tasks-low = 16000
+# size of stack size for each thread pool
+# stack-size = "10MB"
+
 [server]
 # set listening address.
 # addr = "127.0.0.1:20160"
@@ -29,14 +45,6 @@
 # Amount to read ahead on individual grpc streams.
 # grpc-stream-initial-window-size = "2MB"
 
-# size of thread pool for endpoint task, should less than total cpu cores.
-# end-point-concurrency = 8
-
-# max count of tasks being handled, new tasks will be rejected.
-# end-point-max-tasks = 2000
-
-# stack size of endpoint, complicated tasks may involve very deep recursion.
-# end-point-stack-size = "10MB"
 # max recursion level allowed when decoding dag expression
 # end-point-recursion-limit = 1000
 

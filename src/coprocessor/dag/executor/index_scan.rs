@@ -19,7 +19,7 @@ use tipb::executor::IndexScan;
 use tipb::schema::ColumnInfo;
 
 use coprocessor::codec::{datum, mysql, table};
-use coprocessor::endpoint::is_point;
+use coprocessor::util::is_point;
 use coprocessor::metrics::*;
 use coprocessor::local_metrics::*;
 use coprocessor::{Error, Result};

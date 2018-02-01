@@ -17,7 +17,7 @@ use kvproto::coprocessor::KeyRange;
 use tipb::executor::TableScan;
 
 use coprocessor::codec::table;
-use coprocessor::endpoint::is_point;
+use coprocessor::util::is_point;
 use coprocessor::{Error, Result};
 use coprocessor::metrics::*;
 use coprocessor::local_metrics::*;
