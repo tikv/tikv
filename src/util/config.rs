@@ -654,6 +654,70 @@ pub fn check_max_open_fds(_: u64) -> Result<(), ConfigError> {
 }
 
 #[cfg(target_os = "linux")]
+pub fn check_fs(data_path: &str) -> Result<(), ConfigError> {
+    use std::ffi::{CStr, CString};
+    use libc;
+    let real_path = match canonicalize_path(data_path) {
+        Ok(path) => path,
+        Err(e) => {
+            return Err(ConfigError::Limit(format!(
+                "path:{:?} canonicalize failed with error: {:?}",
+                data_path, e
+            )))
+        }
+    };
+
+    unsafe {
+        let profile = CString::new("/proc/mounts").unwrap();
+        let retype = CString::new("r").unwrap();
+        let mut afile = libc::setmntent(profile.as_ptr(), retype.as_ptr());
+        let mut max_len = 0;
+        let mut is_ok = false;
+        let mut info = String::default();
+        loop {
+            let ent = libc::getmntent(afile);
+            if ent.is_null() {
+                break;
+            }
+            let cur_dir = CStr::from_ptr((*ent).mnt_dir).to_str().unwrap();
+            if real_path.as_str().starts_with(&cur_dir) && cur_dir.len() > max_len {
+                max_len = cur_dir.len();
+                let tp = CStr::from_ptr((*ent).mnt_type).to_str().unwrap();
+                if !tp.contains("ext4") {
+                    is_ok = true;
+                    info = format!("tp:{:?},dir:{:?}", tp, cur_dir);
+                    continue;
+                }
+                let opts = CStr::from_ptr((*ent).mnt_opts).to_str().unwrap();
+                is_ok = opts.contains("nodelalloc");
+                info = format!("tp:{:?},dir:{:?},ops:{:?}", tp, cur_dir, opts);
+            }
+        }
+
+        libc::endmntent(afile);
+        info!("path:{:?},mount_info:{}", data_path, info);
+        if info.is_empty() {
+            Err(ConfigError::Limit(format!(
+                "path:{:?} not find in mountable",
+                data_path
+            )))
+        } else if is_ok {
+            Ok(())
+        } else {
+            return Err(ConfigError::Limit(format!(
+                "path:{:?} is ext4 but not nodelalloc",
+                data_path
+            )));
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn check_fs(_data_path: &str) -> Result<(), ConfigError> {
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 mod check_kernel {
     use std::fs;
     use std::io::Read;
