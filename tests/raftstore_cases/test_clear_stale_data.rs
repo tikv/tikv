@@ -38,16 +38,24 @@ fn init_db_with_sst_files(db: &DB, n: u8) {
         }
     }
 
-    // Sleep 1s for compaction.
-    thread::sleep(Duration::from_secs(1));
+    // In case the machine is too slow.
+    for _ in 0..10 {
+        if check_db_files_at_level(db, 1, u64::from(n)) {
+            return;
+        }
+        thread::sleep(Duration::from_secs(1));
+    }
 }
 
-fn check_db_files_at_level(db: &DB, level: u64, num_files: u64) {
+fn check_db_files_at_level(db: &DB, level: u64, num_files: u64) -> bool {
     for cf in db.cf_names() {
         let handle = db.cf_handle(cf).unwrap();
         let name = format!("rocksdb.num-files-at-level{}", level);
-        assert_eq!(db.get_property_int_cf(handle, &name).unwrap(), num_files);
+        if db.get_property_int_cf(handle, &name).unwrap() != num_files {
+            return false;
+        }
     }
+    true
 }
 
 fn check_kv_in_all_cfs(db: &DB, i: u8, found: bool) {
@@ -100,7 +108,7 @@ fn test_clear_stale_data<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Generate `n` files in db at level 1.
     init_db_with_sst_files(&db, n);
-    check_db_files_at_level(&db, 1, u64::from(n));
+    assert!(check_db_files_at_level(&db, 1, u64::from(n)));
 
     // Restart the node.
     cluster.stop_node(node_id);
@@ -129,7 +137,7 @@ fn test_clear_stale_data<T: Simulator>(cluster: &mut Cluster<T>) {
     for i in 0..n {
         check_kv_in_all_cfs(&db, i, i % 2 == 0);
     }
-    check_db_files_at_level(&db, 1, u64::from(n) / 2);
+    assert!(check_db_files_at_level(&db, 1, u64::from(n) / 2));
 }
 
 #[test]
