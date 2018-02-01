@@ -13,11 +13,11 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::mem;
-use std::sync::mpsc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::i64;
 use std::thread;
 use std::time::Duration;
+use futures::Future;
 
 use tikv::coprocessor::*;
 use kvproto::kvrpcpb::Context;
@@ -27,7 +27,6 @@ use tikv::util::codec::number::*;
 use tikv::storage::{Key, Mutation, ALL_CFS};
 use tikv::server::Config;
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
-use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use tipb::select::{Chunk, DAGRequest, SelectResponse};
 use tipb::executor::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
@@ -482,7 +481,7 @@ fn init_data_with_engine_and_commit(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
-) -> (Store, Worker<EndPointTask>) {
+) -> (Store, EndPointHost) {
     init_data_with_details(ctx, engine, tbl, vals, commit, Config::default())
 }
 
@@ -493,7 +492,7 @@ fn init_data_with_details(
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
     cfg: Config,
-) -> (Store, Worker<EndPointTask>) {
+) -> (Store, EndPointHost) {
     let mut store = Store::new(engine);
 
     store.begin();
@@ -508,17 +507,9 @@ fn init_data_with_details(
     if commit {
         store.commit_with_ctx(ctx);
     }
-    let mut end_point = WorkerBuilder::new("test select worker")
-        .batch_size(5)
-        .create();
-    let pd_worker = FutureWorker::new("test pd worker");
-    let runner = EndPointHost::new(
-        store.get_engine(),
-        end_point.scheduler(),
-        &cfg,
-        pd_worker.scheduler(),
-    );
-    end_point.start(runner).unwrap();
+
+    let read_pool = readpool::ReadPool::new(&readpool::Config::default(), None);
+    let end_point = EndPointHost::new(store.get_engine(), &cfg, read_pool);
 
     (store, end_point)
 }
@@ -527,16 +518,13 @@ pub fn init_data_with_commit(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
-) -> (Store, Worker<EndPointTask>) {
+) -> (Store, EndPointHost) {
     let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
     init_data_with_engine_and_commit(Context::new(), engine, tbl, vals, commit)
 }
 
 // This function will create a Product table and initialize with the specified data.
-fn init_with_data(
-    tbl: &ProductTable,
-    vals: &[(i64, Option<&str>, i64)],
-) -> (Store, Worker<EndPointTask>) {
+fn init_with_data(tbl: &ProductTable, vals: &[(i64, Option<&str>, i64)]) -> (Store, EndPointHost) {
     init_data_with_commit(tbl, vals, true)
 }
 
@@ -783,7 +771,7 @@ fn test_select() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
     // for dag selection
     let req = DAGSelect::from(&product.table).build();
     let mut resp = handle_select(&end_point, req);
@@ -795,8 +783,6 @@ fn test_select() {
         let result_encoded = datum::encode_value(&row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
     }
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -810,7 +796,7 @@ fn test_batch_row_limit() {
     let batch_row_limit = 3;
     let chunk_datum_limit = batch_row_limit * 3;
     let product = ProductTable::new();
-    let (_, mut end_point) = {
+    let (_, end_point) = {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
         let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = batch_row_limit;
@@ -829,8 +815,6 @@ fn test_batch_row_limit() {
         let result_encoded = datum::encode_value(&row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
     }
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -844,7 +828,7 @@ fn test_select_after_lease() {
 
     let product = ProductTable::new();
     let (_cluster, raft_engine, ctx) = new_raft_engine(1, "");
-    let (_, mut end_point) =
+    let (_, end_point) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
 
     // Sleep until the leader lease is expired.
@@ -859,8 +843,6 @@ fn test_select_after_lease() {
         let result_encoded = datum::encode_value(&row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
     }
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -873,7 +855,7 @@ fn test_group_by() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
     // for dag
     let req = DAGSelect::from(&product.table)
         .group_by(&[product.name])
@@ -889,8 +871,6 @@ fn test_group_by() {
         row_count += 1;
     }
     assert_eq!(row_count, 3);
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -905,7 +885,7 @@ fn test_aggr_count() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
     let exp = vec![
         (Datum::Bytes(b"name:0".to_vec()), 2),
         (Datum::Bytes(b"name:3".to_vec()), 1),
@@ -957,8 +937,6 @@ fn test_aggr_count() {
         row_count += 1;
     }
     assert_eq!(row_count, exp_len);
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -977,7 +955,7 @@ fn test_aggr_first() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
 
     let exp = vec![
         (Datum::Bytes(b"name:0".to_vec()), 1),
@@ -1030,8 +1008,6 @@ fn test_aggr_first() {
         row_count += 1;
     }
     assert_eq!(row_count, exp_len);
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -1046,7 +1022,7 @@ fn test_aggr_avg() {
     ];
 
     let product = ProductTable::new();
-    let (mut store, mut end_point) = init_with_data(&product, &data);
+    let (mut store, end_point) = init_with_data(&product, &data);
 
     store.begin();
     store
@@ -1081,8 +1057,6 @@ fn test_aggr_avg() {
         row_count += 1;
     }
     assert_eq!(row_count, exp_len);
-
-    end_point.stop().unwrap();
 }
 
 #[test]
@@ -1097,7 +1071,7 @@ fn test_aggr_sum() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
 
     let exp = vec![
         (Datum::Bytes(b"name:0".to_vec()), 3),
@@ -1122,7 +1096,6 @@ fn test_aggr_sum() {
         row_count += 1;
     }
     assert_eq!(row_count, exp_len);
-    end_point.stop().unwrap();
 }
 
 #[test]
@@ -1137,7 +1110,7 @@ fn test_aggr_extre() {
     ];
 
     let product = ProductTable::new();
-    let (mut store, mut end_point) = init_with_data(&product, &data);
+    let (mut store, end_point) = init_with_data(&product, &data);
 
     store.begin();
     for &(id, name) in &[(8, b"name:5"), (9, b"name:6")] {
@@ -1188,8 +1161,6 @@ fn test_aggr_extre() {
         row_count += 1;
     }
     assert_eq!(row_count, exp_len);
-
-    end_point.stop().unwrap();
 }
 
 #[test]
@@ -1204,7 +1175,7 @@ fn test_aggr_bit_ops() {
     ];
 
     let product = ProductTable::new();
-    let (mut store, mut end_point) = init_with_data(&product, &data);
+    let (mut store, end_point) = init_with_data(&product, &data);
 
     store.begin();
     for &(id, name) in &[(8, b"name:5"), (9, b"name:6")] {
@@ -1264,8 +1235,6 @@ fn test_aggr_bit_ops() {
         row_count += 1;
     }
     assert_eq!(row_count, exp_len);
-
-    end_point.stop().unwrap();
 }
 
 #[test]
@@ -1289,7 +1258,7 @@ fn test_order_by_column() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
     // for dag
     let req = DAGSelect::from(&product.table)
         .order_by(product.count, true)
@@ -1309,7 +1278,6 @@ fn test_order_by_column() {
         row_count += 1;
     }
     assert_eq!(row_count, 5);
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -1325,7 +1293,7 @@ fn test_order_by_pk_with_select_from_index() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
     let expect: Vec<_> = data.drain(..5).collect();
     // for dag
     let req = DAGSelect::from_index(&product.table, product.name)
@@ -1344,7 +1312,6 @@ fn test_order_by_pk_with_select_from_index() {
         row_count += 1;
     }
     assert_eq!(row_count, 5);
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -1359,7 +1326,7 @@ fn test_limit() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
     let expect: Vec<_> = data.drain(..5).collect();
     // for dag
     let req = DAGSelect::from(&product.table).limit(5).build();
@@ -1374,8 +1341,6 @@ fn test_limit() {
         row_count += 1;
     }
     assert_eq!(row_count, 5);
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -1390,7 +1355,7 @@ fn test_reverse() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
     data.reverse();
     let expect: Vec<_> = data.drain(..5).collect();
     // for dag
@@ -1409,18 +1374,13 @@ fn test_reverse() {
         row_count += 1;
     }
     assert_eq!(row_count, 5);
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
-pub fn handle_request(end_point: &Worker<EndPointTask>, req: Request) -> Response {
-    let (tx, rx) = mpsc::channel();
-    let req = RequestTask::new(req, box move |r| tx.send(r).unwrap(), 100);
-    end_point.schedule(EndPointTask::Request(req)).unwrap();
-    rx.recv().unwrap()
+pub fn handle_request(end_point: &EndPointHost, req: Request) -> Response {
+    end_point.handle_request(req).wait().unwrap()
 }
 
-fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectResponse {
+fn handle_select(end_point: &EndPointHost, req: Request) -> SelectResponse {
     let resp = handle_request(end_point, req);
     assert!(!resp.get_data().is_empty(), "{:?}", resp);
     let mut sel_resp = SelectResponse::new();
@@ -1440,7 +1400,7 @@ fn test_index() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
     // for dag
     let req = DAGSelect::from_index(&product.table, product.id).build();
     let mut resp = handle_select(&end_point, req);
@@ -1453,8 +1413,6 @@ fn test_index() {
         row_count += 1;
     }
     assert_eq!(row_count, 6);
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -1469,7 +1427,7 @@ fn test_index_reverse_limit() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
     data.reverse();
     let expect: Vec<_> = data.drain(..5).collect();
     // for dag
@@ -1488,8 +1446,6 @@ fn test_index_reverse_limit() {
         row_count += 1;
     }
     assert_eq!(row_count, 5);
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -1504,7 +1460,7 @@ fn test_limit_oom() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
     // for dag
     let req = DAGSelect::from_index(&product.table, product.id)
         .limit(100000000)
@@ -1519,7 +1475,6 @@ fn test_limit_oom() {
         row_count += 1;
     }
     assert_eq!(row_count, 6);
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -1534,7 +1489,7 @@ fn test_del_select() {
     ];
 
     let product = ProductTable::new();
-    let (mut store, mut end_point) = init_with_data(&product, &data);
+    let (mut store, end_point) = init_with_data(&product, &data);
 
     store.begin();
     let (id, name, cnt) = data.remove(3);
@@ -1553,8 +1508,6 @@ fn test_del_select() {
         row_count += 1;
     }
     assert_eq!(row_count, 5);
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -1567,7 +1520,7 @@ fn test_index_group_by() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
     // for dag
     let req = DAGSelect::from_index(&product.table, product.name)
         .group_by(&[product.name])
@@ -1583,8 +1536,6 @@ fn test_index_group_by() {
         row_count += 1;
     }
     assert_eq!(row_count, 3);
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -1599,7 +1550,7 @@ fn test_index_aggr_count() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
     // for dag
     let req = DAGSelect::from_index(&product.table, product.name)
         .count()
@@ -1661,8 +1612,6 @@ fn test_index_aggr_count() {
         row_count += 1;
     }
     assert_eq!(row_count, exp_len);
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -1677,7 +1626,7 @@ fn test_index_aggr_first() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
 
     let exp = vec![
         (Datum::Null, 7),
@@ -1702,8 +1651,6 @@ fn test_index_aggr_first() {
         row_count += 1;
     }
     assert_eq!(row_count, exp_len);
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -1718,7 +1665,7 @@ fn test_index_aggr_avg() {
     ];
 
     let product = ProductTable::new();
-    let (mut store, mut end_point) = init_with_data(&product, &data);
+    let (mut store, end_point) = init_with_data(&product, &data);
 
     store.begin();
     store
@@ -1753,7 +1700,6 @@ fn test_index_aggr_avg() {
         row_count += 1;
     }
     assert_eq!(row_count, exp_len);
-    end_point.stop().unwrap();
 }
 
 #[test]
@@ -1768,7 +1714,7 @@ fn test_index_aggr_sum() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
 
     let exp = vec![
         (Datum::Null, 4),
@@ -1793,7 +1739,6 @@ fn test_index_aggr_sum() {
         row_count += 1;
     }
     assert_eq!(row_count, exp_len);
-    end_point.stop().unwrap();
 }
 
 #[test]
@@ -1808,7 +1753,7 @@ fn test_index_aggr_extre() {
     ];
 
     let product = ProductTable::new();
-    let (mut store, mut end_point) = init_with_data(&product, &data);
+    let (mut store, end_point) = init_with_data(&product, &data);
 
     store.begin();
     for &(id, name) in &[(8, b"name:5"), (9, b"name:6")] {
@@ -1858,7 +1803,6 @@ fn test_index_aggr_extre() {
         row_count += 1;
     }
     assert_eq!(row_count, exp_len);
-    end_point.stop().unwrap();
 }
 
 #[test]
@@ -1871,7 +1815,7 @@ fn test_where() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
     let cols = product.table.get_table_columns();
     let cond = {
         let mut col = Expr::new();
@@ -1905,8 +1849,6 @@ fn test_where() {
     let result_encoded = datum::encode_value(&row).unwrap();
     assert_eq!(&*result_encoded, &*expected_encoded);
     assert_eq!(spliter.next().is_none(), true);
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -1919,7 +1861,7 @@ fn test_handle_truncate() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
     let cols = product.table.get_table_columns();
     let cases = vec![
         {
@@ -2006,14 +1948,9 @@ fn test_handle_truncate() {
         let req = DAGSelect::from(&product.table)
             .where_expr(cond.clone())
             .build();
-        let (tx, rx) = mpsc::channel();
-        let req = RequestTask::new(req, box move |r| tx.send(r).unwrap(), 100);
-        end_point.schedule(EndPointTask::Request(req)).unwrap();
-        let resp = rx.recv().unwrap();
+        let resp = end_point.handle_request(req).wait().unwrap();
         assert!(!resp.get_other_error().is_empty());
     }
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -2037,7 +1974,7 @@ fn test_default_val() {
         .build();
     tbl.id = product.table.id;
 
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
     let expect: Vec<_> = data.drain(..5).collect();
     let req = DAGSelect::from(&tbl).limit(5).build();
     let mut resp = handle_select(&end_point, req);
@@ -2052,8 +1989,6 @@ fn test_default_val() {
         row_count += 1;
     }
     assert_eq!(row_count, 5);
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -2066,7 +2001,7 @@ fn test_output_offsets() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
 
     let req = DAGSelect::from(&product.table)
         .output_offsets(Some(vec![1]))
@@ -2079,8 +2014,6 @@ fn test_output_offsets() {
         let result_encoded = datum::encode_value(&row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
     }
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -2093,13 +2026,12 @@ fn test_key_is_locked_for_primary() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_data_with_commit(&product, &data, false);
+    let (_, end_point) = init_data_with_commit(&product, &data, false);
 
     let req = DAGSelect::from(&product.table).build();
     let resp = handle_request(&end_point, req);
     assert!(resp.get_data().is_empty(), "{:?}", resp);
     assert!(resp.has_locked(), "{:?}", resp);
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -2112,13 +2044,12 @@ fn test_key_is_locked_for_index() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_data_with_commit(&product, &data, false);
+    let (_, end_point) = init_data_with_commit(&product, &data, false);
 
     let req = DAGSelect::from_index(&product.table, product.name).build();
     let resp = handle_request(&end_point, req);
     assert!(resp.get_data().is_empty(), "{:?}", resp);
     assert!(resp.has_locked(), "{:?}", resp);
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -2131,13 +2062,11 @@ fn test_output_counts() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
 
     let req = DAGSelect::from(&product.table).build();
     let resp = handle_select(&end_point, req);
     assert_eq!(resp.get_output_counts(), [data.len() as i64]);
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -2150,7 +2079,7 @@ fn test_exec_details() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
 
     // get none
     let req = DAGSelect::from(&product.table).build();
@@ -2189,8 +2118,6 @@ fn test_exec_details() {
     let exec_details = resp.get_exec_details();
     assert!(exec_details.has_handle_time());
     assert!(exec_details.has_scan_detail());
-
-    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -2203,7 +2130,7 @@ fn test_invalid_range() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let (_, end_point) = init_with_data(&product, &data);
 
     let mut select = DAGSelect::from(&product.table);
     select.key_range.set_start(b"xxx".to_vec());
@@ -2211,6 +2138,4 @@ fn test_invalid_range() {
     let req = select.build();
     let resp = handle_request(&end_point, req);
     assert!(!resp.get_other_error().is_empty());
-
-    end_point.stop().unwrap().join().unwrap();
 }

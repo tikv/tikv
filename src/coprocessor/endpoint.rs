@@ -31,9 +31,6 @@ use super::metrics::*;
 use super::local_metrics::*;
 use super::*;
 
-const REQ_TYPE_DAG: i64 = 103;
-const REQ_TYPE_ANALYZE: i64 = 104;
-
 // If handle time is larger than the lower bound, the query is considered as slow query.
 const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
 
@@ -139,6 +136,7 @@ impl Host {
                     let result = req.handle(snapshot, &mut cop_stats);
 
                     // Attach execution details if requested.
+                    let mut has_exec_details = false;
                     let mut exec_details = kvrpcpb::ExecDetails::new();
                     let process_elapsed = begin_time.elapsed_secs();
                     if process_elapsed > SLOW_QUERY_LOWER_BOUND || should_respond_handle_time {
@@ -146,14 +144,18 @@ impl Host {
                         handle_time.set_process_ms((process_elapsed * 1000.0) as i64);
                         handle_time.set_wait_ms((wait_elapsed * 1000.0) as i64);
                         exec_details.set_handle_time(handle_time);
+                        has_exec_details = true;
                     }
                     if process_elapsed > SLOW_QUERY_LOWER_BOUND || should_respond_scan_detail {
                         exec_details.set_scan_detail(cop_stats.stats.scan_detail());
+                        has_exec_details = true;
                     }
 
                     // TODO: report statistics
                     result.map(move |mut resp| {
-                        resp.set_exec_details(exec_details);
+                        if has_exec_details {
+                            resp.set_exec_details(exec_details);
+                        }
                         resp
                     })
                 })

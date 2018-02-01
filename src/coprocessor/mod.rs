@@ -39,6 +39,9 @@ const REQUEST_MAX_HANDLE_SECS: u64 = 60;
 
 pub const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
+pub const REQ_TYPE_DAG: i64 = 103;
+pub const REQ_TYPE_ANALYZE: i64 = 104;
+
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
