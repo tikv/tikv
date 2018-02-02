@@ -21,7 +21,7 @@ use util::collections::HashMap;
 use util::worker::FutureScheduler;
 use pd::PdTask;
 
-/// `CopFlowStatistics` is for flow statistics, it would been reported to Pd by flush.
+/// `CopFlowStatistics` is for flow statistics, it would be reported to PD by flush.
 pub struct CopFlowStatistics {
     data: HashMap<u64, FlowStatistics>,
     sender: FutureScheduler<PdTask>,
@@ -36,9 +36,7 @@ impl CopFlowStatistics {
     }
 
     pub fn add(&mut self, region_id: u64, stats: &Statistics) {
-        let flow_stats = self.data
-            .entry(region_id)
-            .or_insert_with(FlowStatistics::default);
+        let flow_stats = self.data.entry(region_id).or_default();
         flow_stats.add(&stats.write.flow_stats);
         flow_stats.add(&stats.data.flow_stats);
     }
@@ -75,12 +73,7 @@ impl ExecLocalMetrics {
         }
     }
 
-    pub fn finish_task(
-        &mut self,
-        type_str: &'static str,
-        region_id: u64,
-        metrics: ExecutorMetrics,
-    ) {
+    pub fn collect(&mut self, type_str: &'static str, region_id: u64, metrics: ExecutorMetrics) {
         let stats = &metrics.cf_stats;
         // cf statistics group by type
         for (cf, details) in stats.details() {

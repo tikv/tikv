@@ -183,8 +183,7 @@ impl Host {
                 let region_id = req.req.get_context().get_region_id();
                 let stats =
                     end_point.handle_request(req, batch_row_limit, &mut ctx.basic_local_metrics);
-                ctx.exec_local_metrics
-                    .finish_task(type_str, region_id, stats);
+                ctx.exec_local_metrics.collect(type_str, region_id, stats);
             });
         }
     }
