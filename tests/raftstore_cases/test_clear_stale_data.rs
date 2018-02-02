@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::thread;
-use std::time::Duration;
-
 use rocksdb::{Writable, DB};
 
 use tikv::storage::types::Key;
@@ -62,30 +59,29 @@ fn check_kv_in_all_cfs(db: &DB, i: u8, found: bool) {
 }
 
 fn test_clear_stale_data<T: Simulator>(cluster: &mut Cluster<T>) {
+    // Disable compaction at level 0.
     cluster
         .cfg
         .rocksdb
         .defaultcf
-        .level0_file_num_compaction_trigger = 1;
+        .level0_file_num_compaction_trigger = 100;
     cluster
         .cfg
         .rocksdb
         .writecf
-        .level0_file_num_compaction_trigger = 1;
+        .level0_file_num_compaction_trigger = 100;
     cluster
         .cfg
         .rocksdb
         .lockcf
-        .level0_file_num_compaction_trigger = 1;
+        .level0_file_num_compaction_trigger = 100;
     cluster
         .cfg
         .rocksdb
         .raftcf
-        .level0_file_num_compaction_trigger = 1;
+        .level0_file_num_compaction_trigger = 100;
 
-    cluster.start();
-    // Cluster needs time to add peers.
-    thread::sleep(Duration::from_secs(1));
+    cluster.run();
 
     let n = 10;
     // Choose one node.
