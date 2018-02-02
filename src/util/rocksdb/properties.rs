@@ -204,7 +204,7 @@ pub struct IndexHandle {
     pub offset: u64, // The offset of the block in the file
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct IndexHandles(BTreeMap<Vec<u8>, IndexHandle>);
 
 impl Deref for IndexHandles {
@@ -256,20 +256,19 @@ impl IndexHandles {
     }
 
     fn get_approximate_distance_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
-        assert!(end >= start);
-        let mut range = self.range::<[u8], _>((Included(start), Unbounded));
-        let start_offset = match range.next() {
+        assert!(start <= end);
+        if start == end {
+            return 0;
+        }
+        let range = self.range::<[u8], _>((Unbounded, Included(start)));
+        let start_offset = match range.last() {
             Some((_, v)) => v.offset,
-            None => return 0,
+            None => 0,
         };
         let mut range = self.range::<[u8], _>((Included(end), Unbounded));
         let end_offset = match range.next() {
             Some((_, v)) => v.offset,
-            None => {
-                // Last handle must exists if we have start offset.
-                let (_, v) = self.iter().last().unwrap();
-                v.offset
-            }
+            None => self.iter().last().map_or(0, |(_, v)| v.offset),
         };
         if end_offset < start_offset {
             panic!(
@@ -301,7 +300,7 @@ impl RowsProperties {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct SizeProperties {
     pub total_size: u64,
     pub index_handles: IndexHandles,
@@ -575,15 +574,13 @@ mod tests {
 
         let h: Vec<_> = props.index_handles.values().collect();
         let cases = [
-            ("a", "z", h[4].offset - h[0].offset),
+            ("a", "z", h[4].offset),
             ("a", "a", 0),
             ("z", "z", 0),
-            ("k-0", "k-10000", h[1].offset - h[0].offset),
-            ("k-0", "k-20000", h[2].offset - h[0].offset),
-            ("k-10000", "k-18888", h[2].offset - h[1].offset),
-            ("k-16666", "k-18888", 0),
-            ("k-16666", "k-26666", h[3].offset - h[2].offset),
-            ("k-26666", "k-26666", 0),
+            ("k-1", "k-10000", h[1].offset - h[0].offset),
+            ("k-1", "k-20000", h[2].offset - h[0].offset),
+            ("k-16666", "k-18888", h[2].offset - h[1].offset),
+            ("k-16666", "k-26666", h[3].offset - h[1].offset),
         ];
         for &(start, end, rows) in &cases {
             let start = keys::data_key(start.as_bytes());
@@ -646,13 +643,13 @@ mod tests {
         assert_eq!(k.offset, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11);
 
         let cases = [
-            (" ", "z", k.offset - a.offset),
+            (" ", "z", k.offset),
             (" ", " ", 0),
             ("z", "z", 0),
             ("a", "k", k.offset - a.offset),
             ("a", "i", i.offset - a.offset),
             ("e", "h", i.offset - e.offset),
-            ("g", "h", 0),
+            ("g", "h", i.offset - e.offset),
             ("g", "g", 0),
         ];
         for &(start, end, size) in &cases {
