@@ -145,18 +145,6 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_3, b"k1");
     must_get_none(&engine_3, b"k4");
 
-    // Add learner (4, 10) to region 1.
-    let engine_4 = cluster.get_engine(4);
-    pd_client.must_add_learner(r1, new_peer(4, 10));
-    must_get_equal(&engine_4, b"k1", b"v1");
-
-    // Promote learner (4, 4) to learner.
-    // pd_client.must_promote_learner(r1, new_peer(4, 4));
-    // pd_client.must_remove_peer(r1, new_peer(1, 1));
-    // cluster.stop_node(2);
-    // cluster.must_put(b"k5", b"v5");
-    // must_get_equal(&engine_4, b"k5", b"v5");
-
     // TODO: add more tests.
 }
 
@@ -603,6 +591,28 @@ fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_remove_peer(region_id, new_peer(2, 2));
 }
 
+fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_rule();
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    assert_eq!(cluster.get(b"k1"), Some(b"v1".to_vec()));
+
+    // Add learner (4, 10) to region 1.
+    let engine_4 = cluster.get_engine(4);
+    pd_client.must_add_learner(r1, new_peer(4, 10));
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&engine_4, b"k1", b"v1");
+    must_get_equal(&engine_4, b"k2", b"v2");
+
+    // Promote learner (4, 4) to learner.
+    // pd_client.must_promote_learner(r1, new_peer(4, 4));
+    // pd_client.must_remove_peer(r1, new_peer(1, 1));
+    // cluster.stop_node(2);
+    // cluster.must_put(b"k5", b"v5");
+    // must_get_equal(&engine_4, b"k5", b"v5");
+}
+
 #[test]
 fn test_node_conf_change_safe() {
     let count = 5;
@@ -644,4 +654,11 @@ fn test_conf_change_remove_leader() {
         res.get_header().get_error().get_message(),
         "ignore remove leader"
     );
+}
+
+#[test]
+fn test_node_learner_conf_change() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_learner_conf_change(&mut cluster);
 }

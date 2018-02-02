@@ -1272,6 +1272,9 @@ pub fn do_snapshot(
     for p in state.get_region().get_peers() {
         conf_state.mut_nodes().push(p.get_id());
     }
+    for p in state.get_region().get_learners() {
+        conf_state.mut_learners().push(p.get_id());
+    }
 
     snapshot.mut_metadata().set_conf_state(conf_state);
 

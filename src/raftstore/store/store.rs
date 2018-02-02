@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::{thread, u64};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
 use std::rc::Rc;
@@ -18,37 +19,36 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::time::{Duration, Instant};
-use std::thread;
-use std::u64;
+use time::{self, Timespec};
+use protobuf::{self, Message};
 
 use rocksdb::{CompactionJobInfo, WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
-use protobuf;
-use time::{self, Timespec};
 
+use kvproto::metapb;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState,
                              RegionLocalState};
 use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
-use util::{escape, rocksdb};
-use util::time::{duration_to_sec, SlowTimer};
-use pd::{PdClient, PdRunner, PdTask};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse,
                           StatusCmdType, StatusResponse};
-use protobuf::Message;
-use raft::{self, SnapshotStatus, INVALID_INDEX};
-use raftstore::{Error, Result};
-use kvproto::metapb;
+
+use util::{escape, rocksdb};
+use util::time::{duration_to_sec, SlowTimer};
 use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
 use util::transport::SendCh;
 use util::RingQueue;
 use util::collections::{HashMap, HashSet};
 use util::rocksdb::{CompactedEvent, CompactionListener};
 use util::sys as util_sys;
+use pd::{PdClient, PdRunner, PdTask};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use raft::{self, SnapshotStatus, INVALID_INDEX};
+use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
+
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
                     ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
                     RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
@@ -458,7 +458,7 @@ impl<T, C> Store<T, C> {
 
     fn report_snapshot_status(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
         if let Some(peer) = self.region_peers.get_mut(&region_id) {
-            let to_peer = match peer.get_peer_from_cache(to_peer_id) {
+            let to_peer = match peer.get_peer_or_learner_from_cache(to_peer_id) {
                 Some(peer) => peer,
                 None => {
                     // If to_peer is gone, ignore this snapshot status
@@ -597,7 +597,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 peer.mark_to_be_checked(&mut self.pending_raft_groups);
                 continue;
             }
-
             if peer.raft_group.tick() {
                 peer.mark_to_be_checked(&mut self.pending_raft_groups);
             }
@@ -857,7 +856,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let epoch = region.get_region_epoch();
 
             if util::is_epoch_stale(from_epoch, epoch)
-                && util::find_peer(region, from_store_id).is_none()
+                && util::find_peer_or_learner(region, from_store_id).is_none()
             {
                 // The message is stale and not in current region.
                 Self::handle_stale_msg(trans, msg, epoch, is_vote_msg, raft_metrics);
@@ -899,7 +898,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     region_id, region_epoch, msg_type,
                 );
 
-                let not_exist = util::find_peer(region, from_store_id).is_none();
+                let not_exist = util::find_peer_or_learner(region, from_store_id).is_none();
                 Self::handle_stale_msg(
                     trans,
                     msg,
@@ -1009,10 +1008,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         snap_data.merge_from_bytes(snap.get_data())?;
         let snap_region = snap_data.take_region();
         let peer_id = msg.get_to_peer().get_id();
+
         if snap_region
             .get_peers()
-            .into_iter()
-            .all(|p| p.get_id() != peer_id)
+            .iter()
+            .chain(snap_region.get_learners())
+            .all(|ref p| p.get_id() != peer_id)
         {
             info!(
                 "[region {}] {:?} doesn't contain peer {:?}, skip.",
@@ -1634,7 +1635,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if !peer.is_leader() {
             return Err(Error::NotLeader(
                 region_id,
-                peer.get_peer_from_cache(peer.leader_id()),
+                peer.get_peer_or_learner_from_cache(peer.leader_id()),
             ));
         }
         if peer.peer_id() != peer_id {
@@ -1955,7 +1956,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     );
                     return Err(Error::NotLeader(
                         region_id,
-                        peer.get_peer_from_cache(peer.leader_id()),
+                        peer.get_peer_or_learner_from_cache(peer.leader_id()),
                     ));
                 }
                 peer

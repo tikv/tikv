@@ -44,6 +44,10 @@ pub fn find_learner(region: &metapb::Region, store_id: u64) -> Option<&metapb::P
         .find(|p| p.get_store_id() == store_id)
 }
 
+pub fn find_peer_or_learner(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
+    find_peer(region, store_id).or_else(|| find_learner(region, store_id))
+}
+
 pub fn remove_peer(region: &mut metapb::Region, store_id: u64) -> Option<metapb::Peer> {
     region
         .get_peers()

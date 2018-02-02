@@ -244,7 +244,7 @@ impl Peer {
     // for this store.
     pub fn create<T, C>(store: &mut Store<T, C>, region: &metapb::Region) -> Result<Peer> {
         let store_id = store.store_id();
-        let peer_id = match util::find_peer(region, store_id) {
+        let peer_id = match util::find_peer_or_learner(region, store_id) {
             None => {
                 return Err(box_err!(
                     "find no peer for store {} in region {:?}",
@@ -510,9 +510,7 @@ impl Peer {
     {
         for msg in msgs {
             let msg_type = msg.get_msg_type();
-
             self.send_raft_message(msg, trans)?;
-
             match msg_type {
                 MessageType::MsgAppend => metrics.append += 1,
                 MessageType::MsgAppendResponse => metrics.append_resp += 1,
@@ -1431,7 +1429,6 @@ impl Peer {
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
 
         let change_peer = apply::get_change_peer_cmd(&req).unwrap();
-
         let mut cc = eraftpb::ConfChange::new();
         cc.set_change_type(change_peer.get_change_type());
         cc.set_node_id(change_peer.get_peer().get_id());
@@ -1588,6 +1585,11 @@ impl Peer {
         None
     }
 
+    pub fn get_peer_or_learner_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
+        self.get_peer_from_cache(peer_id)
+            .or_else(|| self.get_learner_from_cache(peer_id))
+    }
+
     pub fn heartbeat_pd(&self, worker: &FutureWorker<PdTask>) {
         let task = PdTask::Heartbeat {
             region: self.region().clone(),
@@ -1611,8 +1613,7 @@ impl Peer {
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
 
         let from_peer = self.peer.clone();
-
-        let to_peer = match self.get_peer_from_cache(msg.get_to()) {
+        let to_peer = match self.get_peer_or_learner_from_cache(msg.get_to()) {
             Some(p) => p,
             None => {
                 return Err(box_err!(
