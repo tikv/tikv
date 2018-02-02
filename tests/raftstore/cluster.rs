@@ -673,10 +673,10 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::DeleteRange);
     }
 
-    pub fn must_flush(&mut self, sync: bool) {
+    pub fn must_flush_cf(&mut self, cf: &str, sync: bool) {
         for engines in &self.dbs {
-            engines.kv_engine.flush(sync).unwrap();
-            engines.raft_engine.flush(sync).unwrap();
+            let handle = engines.kv_engine.cf_handle(cf).unwrap();
+            engines.kv_engine.flush_cf(handle, sync).unwrap();
         }
     }
 
