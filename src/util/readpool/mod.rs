@@ -18,7 +18,8 @@ mod priority;
 use std::fmt;
 use std::error::Error;
 use std::time::Duration;
-use futures::{future, Future};
+use futures::Future;
+use futures_cpupool::CpuFuture;
 
 use util;
 use util::futurepool::{self, FuturePool};
@@ -99,7 +100,7 @@ impl ReadPool {
         &self,
         priority: Priority,
         future_factory: R,
-    ) -> Box<Future<Item = Result<F::Item, F::Error>, Error = Full> + Send>
+    ) -> Result<CpuFuture<F::Item, F::Error>, Full>
     where
         R: FnOnce(futurepool::ContextDelegators<Context>) -> F + Send + 'static,
         F: Future + Send + 'static,
@@ -109,9 +110,9 @@ impl ReadPool {
         let pool = self.get_pool_by_priority(priority);
         let max_tasks = self.get_max_tasks_by_priority(priority);
         if pool.get_running_task_count() >= max_tasks {
-            box future::err(Full {})
+            Err(Full {})
         } else {
-            box pool.spawn(future_factory).then(future::ok)
+            Ok(pool.spawn(future_factory))
         }
     }
 }
@@ -170,8 +171,8 @@ mod tests {
                 .future_execute(Priority::High, |_| {
                     future::ok::<Vec<u8>, BoxError>(vec![1, 2, 4])
                 })
-                .wait()
-                .unwrap(), // unwrap Full error
+                .unwrap() // unwrap Full error
+                .wait(),
         );
 
         expect_err(
@@ -180,8 +181,8 @@ mod tests {
                 .future_execute(Priority::High, |_| {
                     future::err::<(), BoxError>(box_err!("foobar"))
                 })
-                .wait()
-                .unwrap(), // unwrap Full error
+                .unwrap() // unwrap Full error
+                .wait(),
         );
     }
 
@@ -189,7 +190,7 @@ mod tests {
         pool: &ReadPool,
         id: u64,
         future_duration_ms: u64,
-    ) -> Box<Future<Item = Result<u64, ()>, Error = Full> + Send> {
+    ) -> Result<CpuFuture<u64, ()>, Full> {
         pool.future_execute(Priority::High, move |_| {
             thread::sleep(Duration::from_millis(future_duration_ms));
             future::ok::<u64, ()>(id)
@@ -218,37 +219,54 @@ mod tests {
             ..Config::default()
         });
 
-        wait_on_new_thread(tx.clone(), spawn_long_time_future(&read_pool, 0, 5));
+        wait_on_new_thread(
+            tx.clone(),
+            spawn_long_time_future(&read_pool, 0, 5).unwrap(),
+        );
         // not full
-        assert_eq!(rx.recv().unwrap().unwrap(), Ok(0));
+        assert_eq!(rx.recv().unwrap(), Ok(0));
 
-        wait_on_new_thread(tx.clone(), spawn_long_time_future(&read_pool, 1, 100));
-        wait_on_new_thread(tx.clone(), spawn_long_time_future(&read_pool, 2, 200));
-        wait_on_new_thread(tx.clone(), spawn_long_time_future(&read_pool, 3, 300));
-        wait_on_new_thread(tx.clone(), spawn_long_time_future(&read_pool, 4, 400));
+        wait_on_new_thread(
+            tx.clone(),
+            spawn_long_time_future(&read_pool, 1, 100).unwrap(),
+        );
+        wait_on_new_thread(
+            tx.clone(),
+            spawn_long_time_future(&read_pool, 2, 200).unwrap(),
+        );
+        wait_on_new_thread(
+            tx.clone(),
+            spawn_long_time_future(&read_pool, 3, 300).unwrap(),
+        );
+        wait_on_new_thread(
+            tx.clone(),
+            spawn_long_time_future(&read_pool, 4, 400).unwrap(),
+        );
         // no available results (running = 4)
         assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
 
-        wait_on_new_thread(tx.clone(), spawn_long_time_future(&read_pool, 5, 100));
         // full
-        assert!(rx.recv().unwrap().is_err());
+        assert!(spawn_long_time_future(&read_pool, 5, 100).is_err());
 
-        wait_on_new_thread(tx.clone(), spawn_long_time_future(&read_pool, 6, 100));
         // full
-        assert!(rx.recv().unwrap().is_err());
+        assert!(spawn_long_time_future(&read_pool, 6, 100).is_err());
 
         // wait a future completes (running = 3)
-        assert_eq!(rx.recv().unwrap().unwrap(), Ok(1));
+        assert_eq!(rx.recv().unwrap(), Ok(1));
 
-        wait_on_new_thread(tx.clone(), spawn_long_time_future(&read_pool, 7, 5));
-        wait_on_new_thread(tx.clone(), spawn_long_time_future(&read_pool, 8, 100));
+        // add new (running = 4)
+        wait_on_new_thread(
+            tx.clone(),
+            spawn_long_time_future(&read_pool, 7, 5).unwrap(),
+        );
+
         // full
-        assert!(rx.recv().unwrap().is_err());
+        assert!(spawn_long_time_future(&read_pool, 8, 100).is_err());
 
-        assert_eq!(rx.recv().unwrap().unwrap(), Ok(2));
-        assert_eq!(rx.recv().unwrap().unwrap(), Ok(3));
-        assert_eq!(rx.recv().unwrap().unwrap(), Ok(7));
-        assert_eq!(rx.recv().unwrap().unwrap(), Ok(4));
+        assert_eq!(rx.recv().unwrap(), Ok(2));
+        assert_eq!(rx.recv().unwrap(), Ok(3));
+        assert_eq!(rx.recv().unwrap(), Ok(7));
+        assert_eq!(rx.recv().unwrap(), Ok(4));
 
         // no more results
         assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
