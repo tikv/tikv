@@ -545,9 +545,9 @@ impl<T: Simulator> Cluster<T> {
 
             let resp = result.unwrap();
             if resp.get_header().has_error() {
-                let error = resp.get_header().get_error();
-                if error.has_stale_epoch() || error.has_stale_command() {
-                    warn!("seems split or leader change, let's retry");
+                let e = resp.get_header().get_error();
+                if e.has_not_leader() || e.has_stale_epoch() || e.has_stale_command() {
+                    warn!("retry on {:?}", e);
                     sleep_ms(100);
                     continue;
                 }
