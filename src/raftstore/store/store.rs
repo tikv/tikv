@@ -617,22 +617,30 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // In this case, peer B would notice that the leader is missing for a long time,
             // and it would check with pd to confirm whether it's still a member of the cluster.
             // If not, it destroys itself as a stale peer which is removed out already.
-            let max_missing_duration = self.cfg.max_leader_missing_duration.0;
-            if let StaleState::ToValidate = peer.check_stale_state(max_missing_duration) {
-                // for peer B in case 1 above
-                info!(
-                    "{} detects leader missing for a long time. To check with pd \
-                     whether it's still valid",
-                    peer.tag
-                );
-                let task = PdTask::ValidatePeer {
-                    peer: peer.peer.clone(),
-                    region: peer.region().clone(),
-                };
-                if let Err(e) = self.pd_worker.schedule(task) {
-                    error!("{} failed to notify pd: {}", peer.tag, e)
+            match peer.check_stale_state() {
+                StaleState::Valid => (),
+                StaleState::LeaderMissing => {
+                    warn!(
+                        "{} leader missing longer than allowed_leader_missing_duration {:?}",
+                        peer.tag, self.cfg.allowed_leader_missing_duration.0,
+                    );
+                    self.raft_metrics.leader_miss.inc();
                 }
-                self.raft_metrics.leader_miss.inc();
+                StaleState::ToValidate => {
+                    // for peer B in case 1 above
+                    warn!(
+                        "{} leader missing longer than max_leader_missing_duration {:?}. \
+                         To check with pd whether it's still valid",
+                        peer.tag, self.cfg.max_leader_missing_duration.0,
+                    );
+                    let task = PdTask::ValidatePeer {
+                        peer: peer.peer.clone(),
+                        region: peer.region().clone(),
+                    };
+                    if let Err(e) = self.pd_worker.schedule(task) {
+                        error!("{} failed to notify pd: {}", peer.tag, e)
+                    }
+                }
             }
         }
 
