@@ -58,7 +58,7 @@ impl<'a> Executor for LimitExecutor<'a> {
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         self.src.collect_metrics_into(metrics);
         if self.first_collect {
-            metrics.executor_count.increase("limit");
+            metrics.executor_count.limit += 1;
             self.first_collect = false;
         }
     }

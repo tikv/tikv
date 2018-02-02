@@ -83,7 +83,6 @@ impl ExecLocalMetrics {
     ) {
         let stats = &metrics.cf_stats;
         // cf statistics group by type
-        // self.scan_details.add(type_str, stats);
         for (cf, details) in stats.details() {
             for (tag, count) in details {
                 self.scan_details
@@ -95,27 +94,9 @@ impl ExecLocalMetrics {
         // flow statistics group by region
         self.flow_stats.add(region_id, stats);
         // scan count
-        // self.scan_counter.merge(&mut metrics.scan_counter);
-        if metrics.scan_counter.point > 0 {
-            self.scan_counter
-                .with_label_values(&["point"])
-                .inc_by(metrics.scan_counter.point as f64)
-                .unwrap();
-        }
-        if metrics.scan_counter.range > 0 {
-            self.scan_counter
-                .with_label_values(&["range"])
-                .inc_by(metrics.scan_counter.range as f64)
-                .unwrap();
-        }
-        // executor count
-        // self.exec_counter.merge(&mut metrics.executor_count);
-        for (k, v) in metrics.executor_count.data {
-            self.exec_counter
-                .with_label_values(&[k])
-                .inc_by(v as f64)
-                .unwrap();
-        }
+        metrics.scan_counter.consume(&mut self.scan_counter);
+        // exec count
+        metrics.executor_count.consume(&mut self.exec_counter);
     }
 
     pub fn flush(&mut self) {

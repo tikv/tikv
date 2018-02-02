@@ -191,7 +191,7 @@ impl Executor for IndexScanExecutor {
             scanner.collect_statistics_into(&mut metrics.cf_stats);
         }
         if self.first_collect {
-            metrics.executor_count.increase("idxscan");
+            metrics.executor_count.index_scan += 1;
             self.first_collect = false;
         }
     }

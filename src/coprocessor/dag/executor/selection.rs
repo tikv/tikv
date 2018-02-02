@@ -85,7 +85,7 @@ impl Executor for SelectionExecutor {
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         self.src.collect_metrics_into(metrics);
         if self.first_collect {
-            metrics.executor_count.increase("selection");
+            metrics.executor_count.selection += 1;
             self.first_collect = false;
         }
     }

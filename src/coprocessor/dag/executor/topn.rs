@@ -139,7 +139,7 @@ impl Executor for TopNExecutor {
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         self.src.collect_metrics_into(metrics);
         if self.first_collect {
-            metrics.executor_count.increase("topn");
+            metrics.executor_count.topn += 1;
             self.first_collect = false;
         }
     }

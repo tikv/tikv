@@ -199,7 +199,7 @@ impl Executor for HashAggExecutor {
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         self.src.collect_metrics_into(metrics);
         if self.first_collect {
-            metrics.executor_count.increase("aggregation");
+            metrics.executor_count.aggregation += 1;
             self.first_collect = false;
         }
     }

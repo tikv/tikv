@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use prometheus::local::LocalCounterVec;
 use storage::engine::Statistics;
-use util::collections::HashMap;
 
 /// `ExecutorMetrics` is metrics collected from executors group by request.
 #[derive(Default)]
@@ -59,24 +59,75 @@ impl ScanCounter {
         other.range = 0;
         other.point = 0;
     }
+
+    pub fn consume(self, metrics: &mut LocalCounterVec) {
+        if self.point > 0 {
+            metrics
+                .with_label_values(&["point"])
+                .inc_by(self.point as f64)
+                .unwrap();
+        }
+        if self.range > 0 {
+            metrics
+                .with_label_values(&["range"])
+                .inc_by(self.range as f64)
+                .unwrap();
+        }
+    }
 }
 
 /// `ExecCounter` is for recording number of each executor.
 #[derive(Default)]
 pub struct ExecCounter {
-    pub data: HashMap<&'static str, i64>,
+    pub aggregation: i64,
+    pub index_scan: i64,
+    pub limit: i64,
+    pub selection: i64,
+    pub table_scan: i64,
+    pub topn: i64,
+    // pub data: HashMap<&'static str, i64>,
 }
 
 impl ExecCounter {
-    pub fn increase(&mut self, tag: &'static str) {
-        let count = self.data.entry(tag).or_insert(0);
-        *count += 1;
+    pub fn merge(&mut self, other: &mut ExecCounter) {
+        self.aggregation += other.aggregation;
+        self.index_scan += other.index_scan;
+        self.limit += other.limit;
+        self.selection += other.selection;
+        self.table_scan += other.table_scan;
+        self.topn += other.topn;
+        other.aggregation = 0;
+        other.index_scan = 0;
+        other.limit = 0;
+        other.selection = 0;
+        other.table_scan = 0;
+        other.topn = 0;
     }
 
-    pub fn merge(&mut self, other: &mut ExecCounter) {
-        for (k, v) in other.data.drain() {
-            let mut va = self.data.entry(k).or_insert(0);
-            *va += v;
-        }
+    pub fn consume(self, metrics: &mut LocalCounterVec) {
+        metrics
+            .with_label_values(&["tblscan"])
+            .inc_by(self.table_scan as f64)
+            .unwrap();
+        metrics
+            .with_label_values(&["idxscan"])
+            .inc_by(self.index_scan as f64)
+            .unwrap();
+        metrics
+            .with_label_values(&["selection"])
+            .inc_by(self.selection as f64)
+            .unwrap();
+        metrics
+            .with_label_values(&["topn"])
+            .inc_by(self.topn as f64)
+            .unwrap();
+        metrics
+            .with_label_values(&["limit"])
+            .inc_by(self.limit as f64)
+            .unwrap();
+        metrics
+            .with_label_values(&["aggregation"])
+            .inc_by(self.aggregation as f64)
+            .unwrap();
     }
 }

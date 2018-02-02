@@ -145,7 +145,7 @@ impl Executor for TableScanExecutor {
         }
 
         if self.first_collect {
-            metrics.executor_count.increase("tblscan");
+            metrics.executor_count.table_scan += 1;
             self.first_collect = false;
         }
     }
