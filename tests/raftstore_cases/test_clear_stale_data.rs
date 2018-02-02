@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::{Writable, DB};
+use rocksdb::{Writable, DB, CompactOptions};
 
 use tikv::storage::types::Key;
 use tikv::raftstore::store::keys;
@@ -24,7 +24,10 @@ fn new_mvcc_key(i: u8) -> Vec<u8> {
     Key::from_encoded(vec![i]).append_ts(0).encoded().to_owned()
 }
 
-fn init_db_with_sst_files(db: &DB, n: u8) {
+fn init_db_with_sst_files(db: &DB, level: i32, n: u8) {
+    let mut opts = CompactOptions::new();
+    opts.set_change_level(true);
+    opts.set_target_level(level);
     for cf in db.cf_names() {
         let handle = db.cf_handle(cf).unwrap();
         // Each SST file has only one kv.
@@ -32,12 +35,12 @@ fn init_db_with_sst_files(db: &DB, n: u8) {
             let k = keys::data_key(&new_mvcc_key(i));
             db.put_cf(handle, &k, &k).unwrap();
             db.flush_cf(handle, true).unwrap();
+            db.compact_range_cf_opt(handle, &opts, None, None);
         }
-        db.compact_range_cf(handle, None, None);
     }
 }
 
-fn check_db_files_at_level(db: &DB, level: u64, num_files: u64) {
+fn check_db_files_at_level(db: &DB, level: i32, num_files: u64) {
     for cf in db.cf_names() {
         let handle = db.cf_handle(cf).unwrap();
         let name = format!("rocksdb.num-files-at-level{}", level);
@@ -83,7 +86,7 @@ fn test_clear_stale_data<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.run();
 
-    let n = 10;
+    let n = 6;
     // Choose one node.
     let node_id = *cluster.get_node_ids().iter().next().unwrap();
     let db = cluster.get_engine(node_id);
@@ -95,14 +98,10 @@ fn test_clear_stale_data<T: Simulator>(cluster: &mut Cluster<T>) {
         cluster.must_split(&region, &new_mvcc_key(i + 1));
     }
 
-    // Generate `n` files in db at level 1.
-    init_db_with_sst_files(&db, n);
-    check_db_files_at_level(&db, 1, u64::from(n));
-
-    // Restart the node.
-    cluster.stop_node(node_id);
-    cluster.run_node(node_id);
-    // All kvs should still exist.
+    // Generate `n` files in db at level 6.
+    let level = 6;
+    init_db_with_sst_files(&db, level, n);
+    check_db_files_at_level(&db, level, u64::from(n));
     for i in 0..n {
         check_kv_in_all_cfs(&db, i, true);
     }
@@ -122,11 +121,12 @@ fn test_clear_stale_data<T: Simulator>(cluster: &mut Cluster<T>) {
     // Restart the node.
     cluster.stop_node(node_id);
     cluster.run_node(node_id);
+
     // Keys in removed peers should not exist.
     for i in 0..n {
         check_kv_in_all_cfs(&db, i, i % 2 == 0);
     }
-    check_db_files_at_level(&db, 1, u64::from(n) / 2);
+    check_db_files_at_level(&db, level, u64::from(n) / 2);
 }
 
 #[test]
