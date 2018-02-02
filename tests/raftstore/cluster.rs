@@ -544,10 +544,13 @@ impl<T: Simulator> Cluster<T> {
             }
 
             let resp = result.unwrap();
-            if resp.get_header().get_error().has_stale_epoch() {
-                warn!("seems split, let's retry");
-                sleep_ms(100);
-                continue;
+            if resp.get_header().has_error() {
+                let e = resp.get_header().get_error();
+                if e.has_not_leader() || e.has_stale_epoch() || e.has_stale_command() {
+                    warn!("retry on {:?}", e);
+                    sleep_ms(100);
+                    continue;
+                }
             }
             return resp;
         }
