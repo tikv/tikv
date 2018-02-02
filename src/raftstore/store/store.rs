@@ -2738,7 +2738,7 @@ mod tests {
         region_ranges.insert(b"c".to_vec(), 3);
 
         let declined_bytes = calc_region_declined_bytes(event, &region_ranges, 1024);
-        let expected_declined_bytes = vec![(2, 4096), (3, 4096)];
+        let expected_declined_bytes = vec![(2, 8192), (3, 4096)];
         assert_eq!(declined_bytes, expected_declined_bytes);
     }
 }
