@@ -19,6 +19,7 @@ use log::LogLevelFilter;
 use rocksdb::{CompactionPriority, DBCompressionType, DBRecoveryMode};
 use tikv::pd::Config as PdConfig;
 use tikv::server::Config as ServerConfig;
+use tikv::server::readpool::Config as ReadPoolConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::config::*;
@@ -26,7 +27,6 @@ use tikv::storage::Config as StorageConfig;
 use tikv::import::Config as ImportConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
 use tikv::util::security::SecurityConfig;
-use tikv::util::readpool::Config as ReadPoolConfig;
 
 use toml;
 

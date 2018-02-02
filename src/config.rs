@@ -21,6 +21,7 @@ use sys_info;
 
 use import::Config as ImportConfig;
 use server::Config as ServerConfig;
+use server::readpool::Config as ReadPoolConfig;
 use pd::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
@@ -32,7 +33,6 @@ use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFa
 use util::rocksdb::{db_exist, CFOptions, EventListener, FixedPrefixSliceTransform,
                     FixedSuffixSliceTransform, NoopSliceTransform};
 use util::security::SecurityConfig;
-use util::readpool::Config as ReadPoolConfig;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
