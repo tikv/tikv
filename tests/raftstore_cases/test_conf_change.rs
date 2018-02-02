@@ -598,6 +598,9 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k1", b"v1");
     assert_eq!(cluster.get(b"k1"), Some(b"v1".to_vec()));
 
+    // Add voter (2, 2) to region 1.
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
     // Add learner (4, 10) to region 1.
     let engine_4 = cluster.get_engine(4);
     pd_client.must_add_learner(r1, new_peer(4, 10));
@@ -605,12 +608,25 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_4, b"k1", b"v1");
     must_get_equal(&engine_4, b"k2", b"v2");
 
-    // Promote learner (4, 4) to learner.
-    // pd_client.must_promote_learner(r1, new_peer(4, 4));
-    // pd_client.must_remove_peer(r1, new_peer(1, 1));
-    // cluster.stop_node(2);
-    // cluster.must_put(b"k5", b"v5");
-    // must_get_equal(&engine_4, b"k5", b"v5");
+    // Add peer on store which already has learner.
+    pd_client.add_peer(r1, new_peer(4, 10));
+    pd_client.must_none_peer(r1, new_peer(4, 10));
+    pd_client.must_have_learner(r1, new_peer(4, 10));
+    pd_client.add_peer(r1, new_peer(4, 11));
+    pd_client.must_none_peer(r1, new_peer(4, 11));
+    pd_client.must_have_learner(r1, new_peer(4, 10));
+
+    // Promote learner (4 ,10) to voter.
+    pd_client.must_promote_learner(r1, new_peer(4, 10));
+    cluster.stop_node(2);
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&engine_4, b"k3", b"v3");
+
+    // Add learner on store which already has peer.
+    pd_client.add_learner(r1, new_peer(4, 10));
+    pd_client.must_none_learner(r1, new_peer(4, 10));
+    pd_client.add_learner(r1, new_peer(4, 11));
+    pd_client.must_none_learner(r1, new_peer(4, 11));
 }
 
 #[test]
@@ -660,5 +676,12 @@ fn test_conf_change_remove_leader() {
 fn test_node_learner_conf_change() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
+    test_learner_conf_change(&mut cluster);
+}
+
+#[test]
+fn test_server_learner_conf_change() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
     test_learner_conf_change(&mut cluster);
 }

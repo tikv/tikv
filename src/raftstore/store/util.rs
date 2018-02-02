@@ -61,7 +61,7 @@ pub fn remove_learner(region: &mut metapb::Region, store_id: u64) -> Option<meta
         .get_learners()
         .iter()
         .position(|x| x.get_store_id() == store_id)
-        .map(|i| region.mut_peers().remove(i))
+        .map(|i| region.mut_learners().remove(i))
 }
 
 // a helper function to create peer easily.

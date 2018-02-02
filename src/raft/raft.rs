@@ -1838,6 +1838,10 @@ impl<T: Storage> Raft<T> {
         self.add_voter_or_learner(id, true);
     }
 
+    pub fn promote_learner(&mut self, id: u64) {
+        self.add_voter_or_learner(id, false);
+    }
+
     pub fn remove_node(&mut self, id: u64) {
         self.mut_prs().remove(id);
         self.pending_conf = false;

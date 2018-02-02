@@ -1013,7 +1013,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .get_peers()
             .iter()
             .chain(snap_region.get_learners())
-            .all(|ref p| p.get_id() != peer_id)
+            .all(|p| p.get_id() != peer_id)
         {
             info!(
                 "[region {}] {:?} doesn't contain peer {:?}, skip.",
