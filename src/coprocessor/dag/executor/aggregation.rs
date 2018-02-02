@@ -72,6 +72,9 @@ impl AggrFunc {
     }
 }
 
+// HashAggExecutor deals with the aggregate functions.
+// When Next() is called, it reads all the data from src
+// and updates all the values in group_key_aggrs, then returns a result.
 pub struct HashAggExecutor {
     group_by: Vec<Expression>,
     aggr_func: Vec<AggFuncExpr>,
@@ -263,6 +266,9 @@ impl Executor for StreamAggExecutor {
     }
 }
 
+// StreamAggExecutor deals with the aggregation functions.
+// It assumes all the input data is sorted by group by key.
+// When next() is called, it finds a group and returns a result for the same group.
 pub struct StreamAggExecutor {
     ctx: Arc<EvalContext>,
     src: Box<Executor>,
@@ -294,7 +300,7 @@ impl StreamAggExecutor {
         visitor.batch_visit(&aggs)?;
         let group_len = group_bys.len();
         let exprs = AggFuncExpr::batch_build(&ctx, aggs)?;
-        // get aggregation functions
+        // Get aggregation functions.
         let mut funcs = Vec::with_capacity(exprs.len());
         for expr in &exprs {
             let agg = aggregate::build_aggr_func(expr.tp)?;
@@ -318,7 +324,6 @@ impl StreamAggExecutor {
         })
     }
 
-    // row: &[Datum]
     fn meet_new_group(&mut self, row: &[Datum]) -> Result<bool> {
         if self.group_by_exprs.is_empty() {
             return Ok(false);
@@ -344,16 +349,16 @@ impl StreamAggExecutor {
         Ok(ret)
     }
 
+    // get_partial_result gets a result for the same group.
     fn get_partial_result(&mut self) -> Result<Option<Row>> {
         let mut agg_cols = Vec::with_capacity(2 * self.agg_funcs.len());
-        // calc all agg func
+        // Calculate all aggregation funcutions.
         for (i, agg_func) in self.agg_funcs.iter_mut().enumerate() {
             agg_func.calc(&mut agg_cols)?;
             let agg = aggregate::build_aggr_func(self.agg_exprs[i].tp)?;
             *agg_func = agg;
         }
-
-        // group by
+        // Get and decode the values of 'group by'.
         let mut group_key = Vec::with_capacity(0);
         if !self.group_by_exprs.is_empty() {
             let mut vals = Vec::with_capacity(self.group_by_exprs.len());
@@ -363,7 +368,7 @@ impl StreamAggExecutor {
             group_key = box_try!(datum::encode_value(vals.as_slice()));
             self.cur_group_row = self.next_group_row.clone();
         }
-        // construct row data
+        // Construct row data.
         let value_size = group_key.len() + approximate_size(&agg_cols, false);
         let mut value = Vec::with_capacity(value_size);
         box_try!(value.encode(agg_cols.as_slice(), false));
