@@ -50,6 +50,7 @@ mod storage;
 mod util;
 mod pd;
 mod config;
+mod raftstore_cases;
 
 use std::env;
 
