@@ -326,7 +326,12 @@ pub fn roughly_cleanup_ranges(db: &DB, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<
 
     for cf in db.cf_names() {
         let handle = get_cf_handle(db, cf)?;
-        db.delete_files_in_ranges_cf(handle, &delete_ranges, /* include_end */ false)?;
+        db.delete_files_in_ranges_cf(
+            handle,
+            &delete_ranges,
+            /* include_end */
+            false,
+        )?;
     }
 
     Ok(())
