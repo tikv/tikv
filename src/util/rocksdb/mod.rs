@@ -24,9 +24,9 @@ use std::path::Path;
 use std::sync::Arc;
 use std::str::FromStr;
 
-use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK};
-use rocksdb::{ColumnFamilyOptions, CompactOptions, DBCompressionType, DBOptions, ReadOptions,
-              SliceTransform, Writable, WriteBatch, DB};
+use storage::{ALL_CFS, CF_DEFAULT};
+use rocksdb::{ColumnFamilyOptions, CompactOptions, DBCompressionType, DBOptions, Range,
+              SliceTransform, DB};
 use rocksdb::rocksdb::supported_compression;
 use util::rocksdb::engine_metrics::{ROCKSDB_COMPRESSION_RATIO_AT_LEVEL,
                                     ROCKSDB_CUR_SIZE_ALL_MEM_TABLES, ROCKSDB_TOTAL_SST_FILES_SIZE};
@@ -311,39 +311,22 @@ impl SliceTransform for NoopSliceTransform {
     }
 }
 
-pub fn roughly_cleanup_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<(), String> {
-    if start_key > end_key {
-        return Err(format!(
-            "[roughly_cleanup_in_range] start_key({:?}) should't larger than end_key({:?}).",
-            start_key,
-            end_key
-        ));
+pub fn roughly_cleanup_ranges(db: &DB, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<(), String> {
+    let mut delete_ranges = Vec::new();
+    for &(ref start, ref end) in ranges {
+        if start == end {
+            continue;
+        }
+        assert!(start < end);
+        delete_ranges.push(Range::new(start, end));
     }
-
-    if start_key == end_key {
+    if delete_ranges.is_empty() {
         return Ok(());
     }
 
     for cf in db.cf_names() {
         let handle = get_cf_handle(db, cf)?;
-        if cf == CF_LOCK {
-            // Todo: use delete_files_in_range after rocksdb support [start, end) semantics.
-            let mut iter_opt = ReadOptions::new();
-            iter_opt.fill_cache(false);
-            iter_opt.set_iterate_upper_bound(end_key);
-            let mut iter = db.iter_cf_opt(handle, iter_opt);
-            iter.seek(start_key.into());
-            let wb = WriteBatch::new();
-            while iter.valid() {
-                wb.delete_cf(handle, iter.key())?;
-                iter.next();
-            }
-            if wb.count() > 0 {
-                db.write(wb)?;
-            }
-        } else {
-            db.delete_file_in_range_cf(handle, start_key, end_key)?;
-        }
+        db.delete_files_in_ranges_cf(handle, &delete_ranges, /* include_end */ false)?;
     }
 
     Ok(())

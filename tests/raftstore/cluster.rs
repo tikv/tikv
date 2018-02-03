@@ -164,6 +164,10 @@ impl<T: Simulator> Cluster<T> {
         region_id
     }
 
+    pub fn get_node_ids(&self) -> HashSet<u64> {
+        self.sim.rl().get_node_ids()
+    }
+
     pub fn run_node(&mut self, node_id: u64) {
         debug!("starting node {}", node_id);
         self.sim
