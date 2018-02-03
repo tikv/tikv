@@ -230,8 +230,8 @@ impl Config {
         if max_leader_missing < allowed_leader_missing {
             return Err(box_err!(
                 "max leader missing {} ms is less than allowed leader missing {} ms",
-                allowed_leader_missing,
-                election_timeout
+                max_leader_missing,
+                allowed_leader_missing
             ));
         }
 
