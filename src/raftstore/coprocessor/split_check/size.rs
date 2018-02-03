@@ -86,7 +86,15 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
             );
             // Need to check size.
             status.size = Some(size_status);
-        } // else { Does not need to check size. }
+        } else {
+            // Does not need to check size.
+            debug!(
+                "[region {}] approximate size {} < {}, does not need to do split check",
+                region.get_id(),
+                region_size,
+                self.region_max_size
+            );
+        }
     }
 
     fn on_split_check(
