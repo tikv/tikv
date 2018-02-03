@@ -293,8 +293,14 @@ impl SnapContext {
 }
 
 struct PendingDeleteRanges {
-    delay: Duration,
     ranges: BTreeMap<Vec<u8>, (Vec<u8>, time::Instant)>,
+}
+
+enum RangeUpdateType {
+    TrimLeft = 0,
+    TrimRight = 1,
+    TrimMiddle = 2,
+    Discard = 3,
 }
 
 impl PendingDeleteRanges {
@@ -303,10 +309,8 @@ impl PendingDeleteRanges {
         &self,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-        discard: &mut Vec<Vec<u8>>,
-    ) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
-        let mut trim_left = None;
-        let mut trim_right = None;
+        ranges: &mut Vec<(RangeUpdateType, Vec<u8>)>,
+    ) {
         let mut iter = self.ranges.iter();
         // find the first region that may overlap with [start_key, end_key)
         let mut left = iter.find(|ref ptr| (ptr.1).0 > start_key);
@@ -318,58 +322,65 @@ impl PendingDeleteRanges {
             if cur.0 >= &end_key {
                 // the new interval does not reach the left boundary, so stop looping
                 break;
-            } else if (cur.1).0 > end_key {
-                // left part of the old region will be trimed
-                trim_left = Some(cur.0.clone());
-            } else if cur.0 >= &start_key {
-                // the old region will be discarded
-                discard.push(cur.0.clone());
+            }
+            if cur.0 < &start_key {
+                if (cur.1).0 <= end_key {
+                    ranges.push((RangeUpdateType::TrimRight, cur.0.clone()));
+                } else {
+                    ranges.push((RangeUpdateType::TrimMiddle, cur.0.clone()));
+                }
             } else {
-                // right part of the old region will be trimed
-                trim_right = Some(cur.0.clone());
+                if (cur.1).0 <= end_key {
+                    ranges.push((RangeUpdateType::Discard, cur.0.clone()));
+                } else {
+                    ranges.push((RangeUpdateType::TrimLeft, cur.0.clone()));
+                }
             }
             left = iter.next();
         }
-        (trim_left, trim_right)
     }
 
     // filter out the overlap in ranges, after this function the ranges will not overlap
-    fn update(&mut self, start_key: Vec<u8>, end_key: Vec<u8>, is_destroy: bool) {
+    fn update(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) {
         if start_key >= end_key {
             return;
         }
-        let mut discard = Vec::new();
-        let (trim_left, trim_right) =
-            self.find_overlap(start_key.clone(), end_key.clone(), &mut discard);
+        let mut ranges = Vec::new();
+        self.find_overlap(start_key.clone(), end_key.clone(), &mut ranges);
         // all the elements that being updated or removed should and must exist
-        if let Some(key) = trim_left {
-            let cur = self.ranges.remove(&key).unwrap();
-            self.ranges.insert(end_key.clone(), cur);
+        for e in &ranges {
+            match e.0 {
+                RangeUpdateType::TrimLeft => {
+                    let cur = self.ranges.remove(&e.1).unwrap();
+                    self.ranges.insert(end_key.clone(), cur);
+                }
+                RangeUpdateType::TrimRight => {
+                    let cur = self.ranges.get_mut(&e.1).unwrap();
+                    cur.0 = start_key.clone();
+                }
+                RangeUpdateType::TrimMiddle => {
+                    let mut cur = self.ranges.remove(&e.1).unwrap();
+                    self.ranges.insert(end_key.clone(), cur.clone());
+                    cur.0 = start_key.clone();
+                    self.ranges.insert(e.1.clone(), cur);
+                }
+                RangeUpdateType::Discard => {
+                    self.ranges.remove(&e.1).unwrap();
+                }
+            }
         }
-        if let Some(key) = trim_right {
-            let cur = self.ranges.get_mut(&key).unwrap();
-            cur.0 = start_key.clone();
-        }
-        for key in &discard {
-            self.ranges.remove(&*key).unwrap();
-        }
-        if is_destroy {
-            // no overlap any more, can be safely inserted
-            let timeout = time::Instant::now() + self.delay;
-            self.ranges.insert(start_key, (end_key, timeout));
-        } // else let apply_snapshot deal with deletion
     }
 
-    pub fn insert(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) {
-        self.update(start_key, end_key, true);
+    pub fn insert(&mut self, start_key: Vec<u8>, end_key: Vec<u8>, timeout: time::Instant) {
+        self.update(start_key.clone(), end_key.clone());
+        self.ranges.insert(start_key, (end_key, timeout));
     }
 
     pub fn remove(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) {
-        self.update(start_key, end_key, false);
+        self.update(start_key, end_key);
     }
 
-    pub fn get_timeout_ranges(&mut self, ranges: &mut Vec<(Vec<u8>, Vec<u8>)>) {
-        let now = time::Instant::now();
+    pub fn get_timeout_ranges(&mut self, now: time::Instant, ranges: &mut Vec<(Vec<u8>, Vec<u8>)>) {
         for (k, v) in &self.ranges {
             if v.1 <= now {
                 ranges.push((k.clone(), v.0.clone()));
@@ -391,6 +402,7 @@ impl PendingDeleteRanges {
 pub struct Runner {
     pool: ThreadPool<DefaultContext>,
     ctx: SnapContext,
+    range_deletion_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
 }
 
@@ -414,8 +426,8 @@ impl Runner {
                 batch_size: batch_size,
                 use_delete_range: use_delete_range,
             },
+            range_deletion_delay: Duration::from_secs(range_deletion_delay),
             pending_delete_ranges: PendingDeleteRanges {
-                delay: Duration::from_secs(range_deletion_delay),
                 ranges: BTreeMap::new(),
             },
         }
@@ -451,14 +463,18 @@ impl Runnable<Task> for Runner {
                     escape(&end_key)
                 );
                 // delay the range deletion becase there might be a coprocessor request related to this range
-                self.pending_delete_ranges.insert(start_key, end_key);
+                let timeout = time::Instant::now() + self.range_deletion_delay;
+                self.pending_delete_ranges
+                    .insert(start_key, end_key, timeout);
             }
         }
     }
 
     fn on_tick(&mut self) {
+        let now = time::Instant::now();
         let mut ranges = Vec::new();
-        self.pending_delete_ranges.get_timeout_ranges(&mut ranges);
+        self.pending_delete_ranges
+            .get_timeout_ranges(now, &mut ranges);
         for e in ranges.drain(..) {
             self.ctx.handle_destroy(e.0, e.1);
         }
@@ -483,27 +499,32 @@ mod test {
     use std::thread;
     use std::time::Duration;
 
+    use util::time;
+
     use super::PendingDeleteRanges;
 
     #[test]
     fn test_pending_delete_ranges_case1() {
-        let delay = Duration::from_millis(100);
         let mut pending_delete_ranges = PendingDeleteRanges {
-            delay: delay,
             ranges: BTreeMap::new(),
         };
-        pending_delete_ranges.insert(b"aa".to_vec(), b"bb".to_vec());
-        pending_delete_ranges.insert(b"bb".to_vec(), b"cc".to_vec());
+        let delay = Duration::from_millis(100);
+
+        let timeout = time::Instant::now() + delay;
+        pending_delete_ranges.insert(b"aa".to_vec(), b"bb".to_vec(), timeout);
+        pending_delete_ranges.insert(b"bb".to_vec(), b"cc".to_vec(), timeout);
 
         // not reaching the timeout, so no regions
+        let now = time::Instant::now();
         let mut ranges = Vec::new();
-        pending_delete_ranges.get_timeout_ranges(&mut ranges);
+        pending_delete_ranges.get_timeout_ranges(now, &mut ranges);
         assert!(ranges.is_empty());
 
         thread::sleep(delay);
 
         // reaching the timeout
-        pending_delete_ranges.get_timeout_ranges(&mut ranges);
+        let now = time::Instant::now();
+        pending_delete_ranges.get_timeout_ranges(now, &mut ranges);
         assert_eq!(
             ranges,
             [
@@ -514,47 +535,50 @@ mod test {
 
         // ranges will be deleted from pending_delete_ranges after popped out
         let mut ranges = Vec::new();
-        pending_delete_ranges.get_timeout_ranges(&mut ranges);
+        pending_delete_ranges.get_all_ranges(&mut ranges);
         assert!(ranges.is_empty());
     }
 
     #[test]
     fn test_pending_delete_ranges_case2() {
-        let delay = Duration::from_millis(100);
         let mut pending_delete_ranges = PendingDeleteRanges {
-            delay: delay,
             ranges: BTreeMap::new(),
         };
+        let delay = Duration::from_millis(100);
 
-        pending_delete_ranges.insert(b"aa".to_vec(), b"bb".to_vec());
+        let timeout = time::Instant::now() + delay;
+        pending_delete_ranges.insert(b"aa".to_vec(), b"bb".to_vec(), timeout);
 
         thread::sleep(delay / 2);
 
-        pending_delete_ranges.insert(b"aa".to_vec(), b"bb".to_vec());
+        let timeout = time::Instant::now() + delay;
+        pending_delete_ranges.insert(b"aa".to_vec(), b"bb".to_vec(), timeout);
 
         thread::sleep(delay / 2);
 
         // range has been updated, so will not timeout
+        let now = time::Instant::now();
         let mut ranges = Vec::new();
-        pending_delete_ranges.get_timeout_ranges(&mut ranges);
+        pending_delete_ranges.get_timeout_ranges(now, &mut ranges);
         assert!(ranges.is_empty());
 
         thread::sleep(delay / 2);
 
         // now will timeout
-        pending_delete_ranges.get_timeout_ranges(&mut ranges);
+        let now = time::Instant::now();
+        pending_delete_ranges.get_timeout_ranges(now, &mut ranges);
         assert_eq!(ranges, [(b"aa".to_vec(), b"bb".to_vec())]);
     }
 
     #[test]
     fn test_pending_delete_ranges_case3() {
-        let delay = Duration::from_millis(100);
         let mut pending_delete_ranges = PendingDeleteRanges {
-            delay: delay,
             ranges: BTreeMap::new(),
         };
+        let delay = Duration::from_millis(100);
 
-        pending_delete_ranges.insert(b"aa".to_vec(), b"bb".to_vec());
+        let timeout = time::Instant::now() + delay;
+        pending_delete_ranges.insert(b"aa".to_vec(), b"bb".to_vec(), timeout);
 
         thread::sleep(delay / 2);
 
@@ -563,32 +587,36 @@ mod test {
         thread::sleep(delay / 2);
 
         // range has been removed
+        let now = time::Instant::now();
         let mut ranges = Vec::new();
-        pending_delete_ranges.get_timeout_ranges(&mut ranges);
+        pending_delete_ranges.get_timeout_ranges(now, &mut ranges);
         assert!(ranges.is_empty());
     }
 
     #[test]
     fn test_pending_delete_ranges_case4() {
-        let delay = Duration::from_millis(100);
         let mut pending_delete_ranges = PendingDeleteRanges {
-            delay: delay,
             ranges: BTreeMap::new(),
         };
+        let delay = Duration::from_millis(100);
 
-        pending_delete_ranges.insert(b"a".to_vec(), b"c".to_vec());
-        pending_delete_ranges.insert(b"f".to_vec(), b"i".to_vec());
-        pending_delete_ranges.insert(b"m".to_vec(), b"n".to_vec());
-        pending_delete_ranges.insert(b"p".to_vec(), b"t".to_vec());
-        pending_delete_ranges.insert(b"x".to_vec(), b"z".to_vec());
+        let timeout = time::Instant::now() + delay;
+        pending_delete_ranges.insert(b"a".to_vec(), b"c".to_vec(), timeout);
+        pending_delete_ranges.insert(b"f".to_vec(), b"i".to_vec(), timeout);
+        pending_delete_ranges.insert(b"m".to_vec(), b"n".to_vec(), timeout);
+        pending_delete_ranges.insert(b"p".to_vec(), b"t".to_vec(), timeout);
+        pending_delete_ranges.insert(b"x".to_vec(), b"z".to_vec(), timeout);
+
+        thread::sleep(delay / 2);
+
+        let timeout = time::Instant::now() + delay;
+        pending_delete_ranges.insert(b"g".to_vec(), b"q".to_vec(), timeout);
 
         thread::sleep(delay / 2);
 
-        pending_delete_ranges.insert(b"g".to_vec(), b"q".to_vec());
-
-        thread::sleep(delay / 2);
+        let now = time::Instant::now();
         let mut ranges = Vec::new();
-        pending_delete_ranges.get_timeout_ranges(&mut ranges);
+        pending_delete_ranges.get_timeout_ranges(now, &mut ranges);
         assert_eq!(
             ranges,
             [
@@ -601,8 +629,49 @@ mod test {
 
         thread::sleep(delay / 2);
 
+        let now = time::Instant::now();
         let mut ranges = Vec::new();
-        pending_delete_ranges.get_timeout_ranges(&mut ranges);
+        pending_delete_ranges.get_timeout_ranges(now, &mut ranges);
+        assert_eq!(ranges, [(b"g".to_vec(), b"q".to_vec())]);
+    }
+
+    #[test]
+    fn test_pending_delete_ranges_case5() {
+        let mut pending_delete_ranges = PendingDeleteRanges {
+            ranges: BTreeMap::new(),
+        };
+        let delay = Duration::from_millis(100);
+
+        let timeout = time::Instant::now() + delay;
+        pending_delete_ranges.insert(b"a".to_vec(), b"c".to_vec(), timeout);
+        pending_delete_ranges.insert(b"f".to_vec(), b"t".to_vec(), timeout);
+        pending_delete_ranges.insert(b"x".to_vec(), b"z".to_vec(), timeout);
+
+        thread::sleep(delay / 2);
+
+        let timeout = time::Instant::now() + delay;
+        pending_delete_ranges.insert(b"g".to_vec(), b"q".to_vec(), timeout);
+
+        thread::sleep(delay / 2);
+
+        let now = time::Instant::now();
+        let mut ranges = Vec::new();
+        pending_delete_ranges.get_timeout_ranges(now, &mut ranges);
+        assert_eq!(
+            ranges,
+            [
+                (b"a".to_vec(), b"c".to_vec()),
+                (b"f".to_vec(), b"g".to_vec()),
+                (b"q".to_vec(), b"t".to_vec()),
+                (b"x".to_vec(), b"z".to_vec()),
+            ]
+        );
+
+        thread::sleep(delay / 2);
+
+        let now = time::Instant::now();
+        let mut ranges = Vec::new();
+        pending_delete_ranges.get_timeout_ranges(now, &mut ranges);
         assert_eq!(ranges, [(b"g".to_vec(), b"q".to_vec())]);
     }
 }
