@@ -1149,7 +1149,13 @@ impl ApplyDelegate {
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
         self.engine
-            .delete_files_in_range_cf(handle, &start_key, &end_key, /* include_end */ false)
+            .delete_files_in_range_cf(
+                handle,
+                &start_key,
+                &end_key,
+                /* include_end */
+                false,
+            )
             .unwrap_or_else(|e| {
                 panic!(
                     "{} failed to delete files in range [{}, {}): {:?}",
