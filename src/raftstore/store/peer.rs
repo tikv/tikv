@@ -605,34 +605,33 @@ impl Peer {
                 self.leader_missing_time = Some(Instant::now())
             }
         } else if self.is_initialized() {
+            // A peer is considered as in the leader missing state
+            // if it's initialized but is isolated from its leader or
+            // something bad happens that the raft group can not elect a leader.
+            // For an uninitialized peer, even if its leader sends heartbeats to it,
+            // it cannot successfully receive the snapshot from the leader and apply the snapshot.
+            // The raft state machine cannot work in an uninitialized peer to detect
+            // if the leader is working.
             self.leader_missing_time = None
         }
 
         // Checks whether the current peer is stale.
-        match self.leader_missing_time {
-            Some(t) => {
-                let duration = t.elapsed();
-                if duration >= self.cfg.max_leader_missing_duration.0 {
-                    // Resets the `leader_missing_time` to avoid sending the same tasks to
-                    // PD worker continuously during the leader missing timeout.
-                    self.leader_missing_time = None;
-                    StaleState::ToValidate
-                } else if self.is_initialized()
-                    && duration >= self.cfg.allowed_leader_missing_duration.0
-                {
-                    // A peer is considered as in the leader missing state
-                    // if it's initialized but is isolated from its leader or
-                    // something bad happens that the raft group can not elect a leader.
-                    // For an uninitialized peer, even if its leader sends heartbeats to it,
-                    // it cannot successfully receive the snapshot from the leader and apply the snapshot.
-                    // The raft state machine cannot work in an uninitialized peer to detect
-                    // if the leader is working.
-                    StaleState::LeaderMissing
-                } else {
-                    StaleState::Valid
-                }
+        if let Some(t) = self.leader_missing_time {
+            let duration = t.elapsed();
+            if duration >= self.cfg.max_leader_missing_duration.0 {
+                // Resets the `leader_missing_time` to avoid sending the same tasks to
+                // PD worker continuously during the leader missing timeout.
+                self.leader_missing_time = None;
+                StaleState::ToValidate
+            } else if self.is_initialized()
+                && duration >= self.cfg.abnormal_leader_missing_duration.0
+            {
+                StaleState::LeaderMissing
+            } else {
+                StaleState::Valid
             }
-            None => StaleState::Valid,
+        } else {
+            StaleState::Valid
         }
     }
 

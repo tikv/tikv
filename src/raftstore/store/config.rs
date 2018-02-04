@@ -77,8 +77,8 @@ pub struct Config {
     /// If the peer is stale and is not valid in any region, it will destroy itself.
     pub max_leader_missing_duration: ReadableDuration,
     /// Similar to the max_leader_missing_duration, instead it will log warnings and
-    /// try to alerts monitoring systems, if there is any.
-    pub allowed_leader_missing_duration: ReadableDuration,
+    /// try to alert monitoring systems, if there is any.
+    pub abnormal_leader_missing_duration: ReadableDuration,
 
     pub snap_apply_batch_size: ReadableSize,
 
@@ -117,7 +117,7 @@ impl Default for Config {
 
         let raft_store_max_leader_lease =
             raft_base_tick_interval * (raft_election_timeout_ticks - 1) as u32;
-        let allowed_leader_missing_duration =
+        let abnormal_leader_missing_duration =
             raft_base_tick_interval * (raft_election_timeout_ticks * 10) as u32;
 
         Config {
@@ -148,7 +148,7 @@ impl Default for Config {
             messages_per_tick: 4096,
             max_peer_down_duration: ReadableDuration::minutes(5),
             max_leader_missing_duration: ReadableDuration::hours(2),
-            allowed_leader_missing_duration: allowed_leader_missing_duration,
+            abnormal_leader_missing_duration: abnormal_leader_missing_duration,
             snap_apply_batch_size: ReadableSize::mb(10),
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
@@ -217,7 +217,7 @@ impl Config {
             ));
         }
 
-        let allowed_leader_missing = self.allowed_leader_missing_duration.as_millis() as u64;
+        let allowed_leader_missing = self.abnormal_leader_missing_duration.as_millis() as u64;
         if allowed_leader_missing < election_timeout {
             return Err(box_err!(
                 "allowed leader missing {} ms is less than election timeout {} ms",
@@ -278,11 +278,11 @@ mod tests {
         cfg = Config::new();
         cfg.raft_base_tick_interval = ReadableDuration::secs(1);
         cfg.raft_election_timeout_ticks = 10;
-        cfg.allowed_leader_missing_duration = ReadableDuration::secs(5);
+        cfg.abnormal_leader_missing_duration = ReadableDuration::secs(5);
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
-        cfg.allowed_leader_missing_duration = ReadableDuration::minutes(2);
+        cfg.abnormal_leader_missing_duration = ReadableDuration::minutes(2);
         cfg.max_leader_missing_duration = ReadableDuration::minutes(1);
         assert!(cfg.validate().is_err());
     }

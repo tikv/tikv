@@ -50,6 +50,9 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(50);
     // Use large election timeout to make leadership stable.
     cluster.cfg.raft_store.raft_election_timeout_ticks = 10000;
+    // Use large abnormal and max leader missing duration to make a valid config.
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::millis(700000);
+    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::millis(600000);
 
     let max_lease = Duration::from_secs(2);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);

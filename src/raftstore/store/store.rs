@@ -626,8 +626,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 StaleState::Valid => (),
                 StaleState::LeaderMissing => {
                     warn!(
-                        "{} leader missing longer than allowed_leader_missing_duration {:?}",
-                        peer.tag, self.cfg.allowed_leader_missing_duration.0,
+                        "{} leader missing longer than abnormal_leader_missing_duration {:?}",
+                        peer.tag, self.cfg.abnormal_leader_missing_duration.0,
                     );
                     self.raft_metrics.leader_miss.inc();
                 }

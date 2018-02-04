@@ -46,9 +46,6 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // Disable default max peer number check.
     pd_client.disable_default_rule();
 
-    // Use a value of 3 seconds as max_leader_missing_duration just for test.
-    cluster.cfg.max_leader_missing_duration = ReadableDuration::secs(3);
-
     let r1 = cluster.run_conf_change();
     pd_client.must_add_peer(r1, new_peer(2, 2));
     pd_client.must_add_peer(r1, new_peer(3, 3));
