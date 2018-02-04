@@ -667,41 +667,44 @@ pub fn check_fs(data_path: &str) -> Result<(), ConfigError> {
         }
     };
 
+    #[derive(Debug, Default)]
+    struct FsInfo {
+        tp: String,
+        opts: String,
+        mnt_dir: String,
+        fsname: String,
+    }
+
     unsafe {
         let profile = CString::new("/proc/mounts").unwrap();
         let retype = CString::new("r").unwrap();
         let afile = libc::setmntent(profile.as_ptr(), retype.as_ptr());
-        let mut max_len = 0;
-        let mut is_ok = false;
-        let mut info = String::default();
+        let mut fs = FsInfo::default();
         loop {
             let ent = libc::getmntent(afile);
             if ent.is_null() {
                 break;
             }
             let cur_dir = CStr::from_ptr((*ent).mnt_dir).to_str().unwrap();
-            if real_path.as_str().starts_with(&cur_dir) && cur_dir.len() > max_len {
-                max_len = cur_dir.len();
-                let tp = CStr::from_ptr((*ent).mnt_type).to_str().unwrap();
-                if !tp.contains("ext4") {
-                    is_ok = true;
-                    info = format!("tp:{:?},dir:{:?}", tp, cur_dir);
-                    continue;
-                }
-                let opts = CStr::from_ptr((*ent).mnt_opts).to_str().unwrap();
-                is_ok = opts.contains("nodelalloc");
-                info = format!("tp:{:?},dir:{:?},ops:{:?}", tp, cur_dir, opts);
+            if real_path.as_str().starts_with(&cur_dir) && cur_dir.len() > fs.mnt_dir.len() {
+                fs.tp = CStr::from_ptr((*ent).mnt_type).to_str().unwrap().to_owned();
+                fs.opts = CStr::from_ptr((*ent).mnt_opts).to_str().unwrap().to_owned();
+                fs.fsname = CStr::from_ptr((*ent).mnt_fsname)
+                    .to_str()
+                    .unwrap()
+                    .to_owned();
+                fs.mnt_dir = cur_dir.to_owned();
             }
         }
 
         libc::endmntent(afile);
-        info!("path:{:?},mount_info:{}", data_path, info);
-        if info.is_empty() {
+        info!("path:{:?},mount_info:{:?}", data_path, fs);
+        if fs.mnt_dir.is_empty() {
             Err(ConfigError::Limit(format!(
                 "path:{:?} not find in mountable",
                 data_path
             )))
-        } else if is_ok {
+        } else if !fs.tp.contains("ext4") || fs.opts.contains("nodelalloc") {
             Ok(())
         } else {
             Err(ConfigError::Limit(format!(
