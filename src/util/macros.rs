@@ -197,6 +197,9 @@ mod tests {
         let file_name = file!();
         let line_number = line!();
         let e: Box<Error + Send + Sync> = box_err!("{}", "hi");
-        assert_eq!(format!("{}", e), format!("[{}:{}]: hi", file_name, line_number + 1));
+        assert_eq!(
+            format!("{}", e),
+            format!("[{}:{}]: hi", file_name, line_number + 1)
+        );
     }
 }
