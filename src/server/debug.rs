@@ -274,7 +274,7 @@ impl Debugger {
 
                 region_state.set_state(PeerState::Tombstone);
                 box_try!(wb.put_msg_cf(handle, &key, &region_state));
-                return Ok(());
+                Ok(())
             };
 
             for region in regions {
@@ -876,10 +876,28 @@ mod tests {
         let mut target_region_3 = region;
         target_region_3.mut_region_epoch().set_conf_ver(100);
 
-        let target_regions = vec![target_region_1, target_region_2, target_region_3];
+        // Test with bad target region.
+        let target_regions = vec![
+            target_region_1.clone(),
+            target_region_2.clone(),
+            target_region_3,
+        ];
         let errors = debugger.set_region_tombstone(target_regions).unwrap();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].0, 3);
+
+        // After set_region_tombstone success, all region should be adjusted.
+        let target_regions = vec![target_region_1, target_region_2];
+        let errors = debugger.set_region_tombstone(target_regions).unwrap();
+        assert!(errors.is_empty());
+        for &region_id in &[1, 2] {
+            let key = keys::region_state_key(region_id);
+            let region_state = engine
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
+                .unwrap()
+                .unwrap();
+            assert_eq!(region_state.get_state(), PeerState::Tombstone);
+        }
     }
 
     #[test]
