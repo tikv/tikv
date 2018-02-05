@@ -464,7 +464,7 @@ impl<'de> Deserialize<'de> for ReadableSize {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ReadableDuration(pub Duration);
 
 impl ReadableDuration {
@@ -493,17 +493,6 @@ impl ReadableDuration {
 
     pub fn as_millis(&self) -> u64 {
         util::time::duration_to_ms(self.0)
-    }
-}
-
-impl Mul<u32> for ReadableDuration {
-    type Output = ReadableDuration;
-
-    fn mul(self, rhs: u32) -> ReadableDuration {
-        let product = self.0
-            .checked_mul(rhs)
-            .expect("overflow when multiplying duration by scalar");
-        ReadableDuration(product)
     }
 }
 

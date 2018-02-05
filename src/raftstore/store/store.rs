@@ -590,6 +590,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let timer = self.raft_metrics.process_tick.start_coarse_timer();
+        let mut leader_missing = 0;
         for peer in &mut self.region_peers.values_mut() {
             if peer.pending_remove {
                 continue;
@@ -629,7 +630,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         "{} leader missing longer than abnormal_leader_missing_duration {:?}",
                         peer.tag, self.cfg.abnormal_leader_missing_duration.0,
                     );
-                    self.raft_metrics.leader_miss.inc();
+                    leader_missing += 1;
                 }
                 StaleState::ToValidate => {
                     // for peer B in case 1 above
@@ -648,6 +649,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
             }
         }
+        self.raft_metrics.leader_missing = leader_missing;
 
         self.poll_significant_msg();
 

@@ -209,9 +209,9 @@ lazy_static! {
                  20.0, 24.0, 32.0, 64.0, 128.0, 256.0]
         ).unwrap();
 
-    pub static ref LEADER_MISS: Counter =
-        register_counter!(
-            "tikv_raftstore_leader_miss",
+    pub static ref LEADER_MISSING: Gauge =
+        register_gauge!(
+            "tikv_raftstore_leader_missing",
             "Total number of leader missed region"
         ).unwrap();
 }
