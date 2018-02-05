@@ -847,6 +847,58 @@ mod tests {
     }
 
     #[test]
+    fn test_remove_failed_stores() {
+        let debugger = new_debugger();
+        let engine = &debugger.engines.kv_engine;
+        let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
+
+        // region 1 with peers at stores 11, 12, 13.
+        let mut region = Region::new();
+        region.set_id(1);
+        for i in 1..4 {
+            let mut peer = Peer::new();
+            peer.set_id(i);
+            peer.set_store_id(10 + i);
+            region.mut_peers().push(peer);
+        }
+        let mut region_state = RegionLocalState::new();
+        region_state.set_state(PeerState::Normal);
+        region_state.set_region(region.clone());
+        let key1 = keys::region_state_key(1);
+        engine.put_msg_cf(cf_raft, &key1, &region_state).unwrap();
+
+        // region 2 with peers at stores 21, 22, 23.
+        let mut region = Region::new();
+        region.set_id(2);
+        for i in 1..4 {
+            let mut peer = Peer::new();
+            peer.set_id(i);
+            peer.set_store_id(20 + i);
+            region.mut_peers().push(peer);
+        }
+        let mut region_state = RegionLocalState::new();
+        region_state.set_state(PeerState::Normal);
+        region_state.set_region(region.clone());
+        let key2 = keys::region_state_key(2);
+        engine.put_msg_cf(cf_raft, &key2, &region_state).unwrap();
+
+        let errors = debugger.remove_failed_stores(vec![12, 13, 23]).unwrap();
+        assert!(errors.is_empty());
+
+        let region_state = engine
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &key1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(region_state.get_region().get_peers().len(), 1);
+
+        let region_state = engine
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &key2)
+            .unwrap()
+            .unwrap();
+        assert_eq!(region_state.get_region().get_peers().len(), 3);
+    }
+
+    #[test]
     fn test_bad_regions() {
         let debugger = new_debugger();
         let kv_engine = debugger.engines.kv_engine.as_ref();
