@@ -15,7 +15,6 @@ use std::usize;
 use std::time::Duration;
 use std::sync::Arc;
 use std::fmt::{self, Debug, Display, Formatter};
-use std::mem;
 
 use tipb::select::{self, DAGRequest};
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
@@ -153,13 +152,12 @@ impl Context for CopContext {
             *this_statistics = Default::default();
         }
         if !self.request_stats.is_empty() {
-            let mut to_send_stats = HashMap::default();
-            mem::swap(&mut to_send_stats, &mut self.request_stats);
             if let Err(e) = self.sender.schedule(PdTask::ReadStats {
-                read_stats: to_send_stats,
+                read_stats: self.request_stats.clone(),
             }) {
                 error!("send coprocessor statistics: {:?}", e);
             };
+            self.request_stats.clear();
         }
         self.flush_scan_count();
     }
