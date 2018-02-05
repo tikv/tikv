@@ -281,7 +281,7 @@ mod tests {
             1,
             1024000,
             "test-pool",
-            Duration::from_millis(50),
+            Duration::from_millis(200),
             move || MyContext {
                 tx: tx.clone(),
                 sn: 0,
@@ -290,7 +290,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
 
         // Tick is not emitted since there is no task
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(400));
         assert!(rx.try_recv().is_err());
 
         // Tick is not emitted immediately for the first future
@@ -303,17 +303,17 @@ mod tests {
         spawn_long_time_future_and_wait(&pool, 1);
         assert!(rx.try_recv().is_err());
 
-        // Even if there are tasks, tick is not emitted until next task arrives
-        thread::sleep(Duration::from_millis(100));
+        // Even if there are tasks previously, tick is not emitted until next task arrives
+        thread::sleep(Duration::from_millis(400));
         assert!(rx.try_recv().is_err());
 
         // Next task arrives && long time passed, tick is emitted
-        spawn_long_time_future_and_wait(&pool, 100);
+        spawn_long_time_future_and_wait(&pool, 400);
         assert_eq!(rx.try_recv().unwrap(), 0);
         assert!(rx.try_recv().is_err());
 
         // Tick is not emitted if there is no task
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(400));
         assert!(rx.try_recv().is_err());
 
         // Tick is emitted since long enough time has passed
