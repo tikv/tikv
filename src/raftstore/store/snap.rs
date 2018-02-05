@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error;
+use std::{error, result, str, thread, time, u64};
 use std::io::{self, ErrorKind, Read, Write};
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, Metadata};
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::path::Path;
-use std::{result, str, thread, time, u64};
+use std::cmp::Reverse;
 
 use protobuf::Message;
 use rocksdb::{CFHandle, Writable, WriteBatch, DB};
@@ -1196,6 +1196,38 @@ impl SnapManager {
         key: &SnapKey,
         snap: &DbSnapshot,
     ) -> RaftStoreResult<Box<Snapshot>> {
+        let mut old_snaps = None;
+        while self.get_total_snap_size() > self.max_total_snap_size() {
+            if old_snaps.is_none() {
+                let snaps = match self.list_idle_snap() {
+                    Ok(snaps) => snaps,
+                    Err(_) => break,
+                };
+                let mut key_and_snaps = Vec::with_capacity(snaps.len());
+                for (key, is_sending) in snaps {
+                    if !is_sending {
+                        continue;
+                    }
+                    let snap = match self.get_snapshot_for_sending(&key) {
+                        Ok(snap) => snap,
+                        Err(_) => continue,
+                    };
+                    if !snap.meta().and_then(|m| m.modified()).is_ok() {
+                        continue;
+                    }
+                    key_and_snaps.push((key, snap));
+                }
+                // Because we have filtered invalid `meta` and meta.modified`,
+                // we can unwrap safely here.
+                key_and_snaps.sort_by_key(|t| Reverse(t.1.meta().unwrap().modified().unwrap()));
+                old_snaps = Some(key_and_snaps);
+            }
+            match old_snaps.as_mut().unwrap().pop() {
+                Some((key, snap)) => self.delete_snapshot(&key, snap.as_ref(), false),
+                None => return Err(RaftStoreError::Snapshot(Error::TooManySnapshots)),
+            };
+        }
+
         let (dir, snap_size) = {
             let core = self.core.rl();
             (core.base.clone(), Arc::clone(&core.snap_size))
@@ -1402,7 +1434,7 @@ impl SnapManagerBuilder {
 }
 
 #[cfg(test)]
-pub mod tests {
+mod test {
     use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::fs::{self, File, OpenOptions};
     use std::sync::*;
@@ -1411,12 +1443,13 @@ pub mod tests {
     use tempdir::TempDir;
     use protobuf::Message;
 
-    use super::{ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, Snapshot, SnapshotDeleter,
-                SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX};
+    use super::{ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder, Snapshot,
+                SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS,
+                SNAP_GEN_PREFIX};
 
     use std::path::PathBuf;
     use kvproto::metapb::{Peer, Region};
-    use kvproto::raft_serverpb::{RaftSnapshotData, SnapshotMeta};
+    use kvproto::raft_serverpb::{RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta};
     use rocksdb::DB;
 
     use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -1461,6 +1494,37 @@ pub mod tests {
             db.put_msg_cf(handle, &key[..], &p)?;
         }
         Ok(Arc::new(db))
+    }
+
+    fn get_test_db_for_regions(path: &TempDir, regions: &[u64]) -> Result<Arc<DB>> {
+        let p = path.path().to_str().unwrap();
+        let kv = rocksdb::new_engine(p, ALL_CFS, None)?;
+        for &region_id in regions {
+            // Put apply state into kv engine.
+            let mut apply_state = RaftApplyState::new();
+            apply_state.set_applied_index(10);
+            apply_state.mut_truncated_state().set_index(9);
+            let handle = rocksdb::get_cf_handle(&kv, CF_RAFT)?;
+            kv.put_msg_cf(handle, &keys::apply_state_key(region_id), &apply_state)?;
+
+            // Put region info into kv engine.
+            let region = get_test_region(region_id, 1, 1);
+            let mut region_state = RegionLocalState::new();
+            region_state.set_region(region);
+            let handle = rocksdb::get_cf_handle(&kv, CF_RAFT)?;
+            kv.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
+
+            // Put some data into kv engine.
+            for (i, cf) in [CF_LOCK, CF_DEFAULT, CF_WRITE].iter().enumerate() {
+                let handle = rocksdb::get_cf_handle(&kv, cf)?;
+                let mut p = Peer::new();
+                p.set_store_id(1);
+                p.set_id((i + 1) as u64);
+                let key = keys::data_key(b"akey");
+                kv.put_msg_cf(handle, &key[..], &p)?;
+            }
+        }
+        Ok(Arc::new(kv))
     }
 
     pub fn get_kv_count(snap: &DbSnapshot) -> usize {
@@ -2259,5 +2323,40 @@ pub mod tests {
         let s5 = dst_mgr.get_snapshot_for_applying(&key).unwrap();
         dst_mgr.delete_snapshot(&key, s4.as_ref(), false);
         assert!(s5.exists());
+    }
+
+    #[test]
+    fn test_snapshot_max_total_size() {
+        let regions: Vec<u64> = (0..20).collect();
+        let kv_path = TempDir::new("test-snapshot-max-total-size-db").unwrap();
+        let kv = get_test_db_for_regions(&kv_path, &regions).unwrap();
+
+        let snapfiles_path = TempDir::new("test-snapshot-max-total-size-snapshots").unwrap();
+        let snap_mgr = SnapManagerBuilder::default()
+            .max_total_size(10240)
+            .build(snapfiles_path.path().to_str().unwrap(), None);
+
+        let snapshot = DbSnapshot::new(kv);
+        for (i, region_id) in regions.into_iter().enumerate() {
+            let key = SnapKey::new(region_id, 1, 1);
+            let region = get_test_region(region_id, 1, 1);
+            let mut s = snap_mgr.get_snapshot_for_building(&key, &snapshot).unwrap();
+            let mut snap_data = RaftSnapshotData::new();
+            let mut stat = SnapshotStatistics::new();
+            s.build(
+                &snapshot,
+                &region,
+                &mut snap_data,
+                &mut stat,
+                Box::new(snap_mgr.clone()),
+            ).unwrap();
+
+            if i < 6 {
+                // sizeof(snapshot) == 1918 bytes.
+                assert_eq!(snap_mgr.get_total_snap_size() as usize, 1918 * (1 + i));
+            } else {
+                assert_eq!(snap_mgr.get_total_snap_size() as usize, 1918 * 6);
+            }
+        }
     }
 }
