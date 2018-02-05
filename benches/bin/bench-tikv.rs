@@ -102,7 +102,7 @@ fn main() {
         );
     }
 
-    let available_benches = ["raftstore", "mvcc", "mvcctxn"];
+    let available_benches = ["raftstore", "mvcc", "txn"];
 
     let matches = App::new("TiKV Benchmark")
         .args(&available_benches
@@ -128,7 +128,7 @@ fn main() {
         match item {
             "raftstore" => raftstore::bench_raftstore(),
             "mvcc" => mvcc::bench_engine(),
-            "mvcctxn" => mvcctxn::bench_mvcctxn(),
+            "txn" => mvcctxn::bench_mvcctxn(),
             _ => eprintln!("error: Unknown bench item {}", item),
         }
     }
