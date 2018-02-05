@@ -97,22 +97,24 @@ impl TopNExecutor {
 
     fn fetch_all(&mut self) -> Result<()> {
         let mut heap = TopNHeap::new(self.limit)?;
-        while let Some(row) = self.src.next()? {
-            let cols = inflate_with_col_for_dag(
-                &self.ctx,
-                &row.data,
-                self.cols.as_ref(),
-                &self.related_cols_offset,
-                row.handle,
-            )?;
-            let ob_values = self.order_by.eval(&self.ctx, &cols)?;
-            heap.try_add_row(
-                row.handle,
-                row.data,
-                ob_values,
-                Arc::clone(&self.order_by.items),
-                Arc::clone(&self.ctx),
-            )?;
+        if self.limit > 0 {
+            while let Some(row) = self.src.next()? {
+                let cols = inflate_with_col_for_dag(
+                    &self.ctx,
+                    &row.data,
+                    self.cols.as_ref(),
+                    &self.related_cols_offset,
+                    row.handle,
+                )?;
+                let ob_values = self.order_by.eval(&self.ctx, &cols)?;
+                heap.try_add_row(
+                    row.handle,
+                    row.data,
+                    ob_values,
+                    Arc::clone(&self.order_by.items),
+                    Arc::clone(&self.ctx),
+                )?;
+            }
         }
         self.iter = Some(heap.into_sorted_vec()?.into_iter());
         Ok(())
@@ -121,9 +123,6 @@ impl TopNExecutor {
 
 impl Executor for TopNExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
-        if self.limit == 0 {
-            return Ok(None);
-        }
         if self.iter.is_none() {
             self.fetch_all()?;
         }
