@@ -196,7 +196,7 @@ fn bench_single_row(
     let mut rng = rand::thread_rng();
     rng.shuffle(&mut keys);
 
-    let dir = TempDir::new("bench-mvcctxn").unwrap();
+    let dir = TempDir::new("bench-txn").unwrap();
     let db = prepare_test_db(
         version_count,
         value_len,
@@ -205,21 +205,21 @@ fn bench_single_row(
     );
 
     println!(
-        "benching mvcctxn {} get\trows:{} versions:{} data len:{}\t...",
+        "benching txn {} get\trows:{} versions:{} data len:{}\t...",
         log_name, table_size, version_count, data_len
     );
     let ns = bench_get(Arc::clone(&db), &keys) as u64;
     println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
 
     println!(
-        "benching mvcctxn {} set\trows:{} versions:{} data len:{}\t...",
+        "benching txn {} set\trows:{} versions:{} data len:{}\t...",
         log_name, table_size, version_count, data_len
     );
     let ns = bench_set(Arc::clone(&db), &keys, value_len) as u64;
     println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
 
     // Generate new db to bench delete, for the size of content was increased when benching set
-    let dir = TempDir::new("bench-mvcctxn").unwrap();
+    let dir = TempDir::new("bench-txn").unwrap();
     let db = prepare_test_db(
         version_count,
         value_len,
@@ -228,14 +228,14 @@ fn bench_single_row(
     );
 
     println!(
-        "benching mvcctxn {} delete\trows:{} versions:{} data len:{}\t...",
+        "benching txn {} delete\trows:{} versions:{} data len:{}\t...",
         log_name, table_size, version_count, data_len
     );
     let ns = bench_delete(Arc::clone(&db), &keys) as u64;
     println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
 }
 
-pub fn bench_mvcctxn() {
+pub fn bench_txn() {
     for bench_type in &[BenchType::Row, BenchType::UniqueIndex] {
         for version_count in &[1, 16, 64] {
             bench_single_row(10_000, *version_count, 128, bench_type);

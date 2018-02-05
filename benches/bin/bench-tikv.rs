@@ -87,7 +87,7 @@ mod utils;
 
 mod raftstore;
 mod mvcc;
-mod mvcctxn;
+mod txn;
 
 fn print_result(smp: BenchSamples) {
     println!("{}", test::fmt_bench_samples(&smp));
@@ -128,7 +128,7 @@ fn main() {
         match item {
             "raftstore" => raftstore::bench_raftstore(),
             "mvcc" => mvcc::bench_engine(),
-            "txn" => mvcctxn::bench_mvcctxn(),
+            "txn" => txn::bench_txn(),
             _ => eprintln!("error: Unknown bench item {}", item),
         }
     }
