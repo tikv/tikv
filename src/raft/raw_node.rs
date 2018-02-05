@@ -30,8 +30,8 @@ use std::mem;
 use raft::errors::{Error, Result};
 use raft::Storage;
 use protobuf::{self, RepeatedField};
-use kvproto::eraftpb::{ConfChange, ConfChangeType, ConfState, Entry, EntryType, HardState,
-                       Message, MessageType, Snapshot};
+use kvproto::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, HardState, Message,
+                       MessageType, Snapshot};
 use super::raft::{Config, Raft, SoftState, INVALID_ID};
 use super::Status;
 use super::read_only::ReadState;
@@ -281,12 +281,9 @@ impl<T: Storage> RawNode<T> {
         self.raft.step(m)
     }
 
-    pub fn apply_conf_change(&mut self, cc: &ConfChange) -> ConfState {
+    pub fn apply_conf_change(&mut self, cc: &ConfChange) {
         if cc.get_node_id() == INVALID_ID {
             self.raft.reset_pending_conf();
-            let mut cs = ConfState::new();
-            cs.set_nodes(self.raft.prs().nodes());
-            return cs;
         }
         let nid = cc.get_node_id();
         match cc.get_change_type() {
@@ -294,9 +291,6 @@ impl<T: Storage> RawNode<T> {
             ConfChangeType::AddLearnerNode => self.raft.add_learner(nid),
             ConfChangeType::RemoveNode => self.raft.remove_node(nid),
         }
-        let mut cs = ConfState::new();
-        cs.set_nodes(self.raft.prs().nodes());
-        cs
     }
 
     // Step advances the state machine using the given message.
