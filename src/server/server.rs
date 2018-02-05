@@ -205,7 +205,7 @@ mod tests {
     use raftstore::store::transport::Transport;
     use util::worker::FutureWorker;
     use util::security::SecurityConfig;
-    use util::readpool;
+    use server::readpool::{self, ReadPool};
 
     #[derive(Clone)]
     struct MockResolver {
@@ -263,7 +263,7 @@ mod tests {
         let storage_cfg = StorageConfig::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
         let mut storage = Storage::new(&storage_cfg, read_pool).unwrap();
         storage.start(&storage_cfg).unwrap();
 

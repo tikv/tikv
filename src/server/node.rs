@@ -32,7 +32,7 @@ use super::Result;
 use server::Config as ServerConfig;
 use storage::{Config as StorageConfig, RaftKv, Storage};
 use super::transport::RaftStoreRouter;
-use util::readpool;
+use server::readpool::ReadPool;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -40,7 +40,7 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 pub fn create_raft_storage<S>(
     router: S,
     cfg: &StorageConfig,
-    read_pool: readpool::ReadPool,
+    read_pool: ReadPool,
 ) -> Result<Storage>
 where
     S: RaftStoreRouter + 'static,

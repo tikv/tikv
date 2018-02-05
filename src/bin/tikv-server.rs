@@ -69,12 +69,12 @@ use tikv::storage::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::resolve;
+use tikv::server::readpool::ReadPool;
 use tikv::raftstore::store::{self, new_compaction_listener, Engines, SnapManager};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
-use tikv::util::readpool;
 use tikv::import::{ImportSSTService, SSTImporter};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
@@ -187,7 +187,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {:?}", s)),
     );
-    let read_pool = readpool::ReadPool::new(&cfg.readpool, Some(pd_worker.scheduler()));
+    let read_pool = ReadPool::new(&cfg.readpool, Some(pd_worker.scheduler()));
     let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage, read_pool)
         .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 

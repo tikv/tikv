@@ -18,7 +18,7 @@ use futures::Future;
 use tikv::util::collections::HashMap;
 use tikv::storage::{Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
 use tikv::storage::config::Config;
-use tikv::util::readpool;
+use tikv::server::readpool::ReadPool;
 use kvproto::kvrpcpb::{Context, LockInfo};
 
 /// `SyncStorage` wraps `Storage` with sync API, usually used for testing.
@@ -28,7 +28,7 @@ pub struct SyncStorage {
 }
 
 impl SyncStorage {
-    pub fn new(config: &Config, read_pool: readpool::ReadPool) -> SyncStorage {
+    pub fn new(config: &Config, read_pool: ReadPool) -> SyncStorage {
         let storage = Storage::new(config, read_pool).unwrap();
         let mut s = SyncStorage {
             store: storage,
@@ -38,21 +38,13 @@ impl SyncStorage {
         s
     }
 
-    pub fn from_engine(
-        engine: Box<Engine>,
-        config: &Config,
-        read_pool: readpool::ReadPool,
-    ) -> SyncStorage {
+    pub fn from_engine(engine: Box<Engine>, config: &Config, read_pool: ReadPool) -> SyncStorage {
         let mut s = SyncStorage::prepare(engine, config, read_pool);
         s.start(config);
         s
     }
 
-    pub fn prepare(
-        engine: Box<Engine>,
-        config: &Config,
-        read_pool: readpool::ReadPool,
-    ) -> SyncStorage {
+    pub fn prepare(engine: Box<Engine>, config: &Config, read_pool: ReadPool) -> SyncStorage {
         let storage = Storage::from_engine(engine, config, read_pool).unwrap();
         SyncStorage {
             store: storage,

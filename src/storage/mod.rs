@@ -20,8 +20,8 @@ use std::u64;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 use kvproto::errorpb;
 use util::collections::HashMap;
-use futures::Future;
-use util::readpool;
+use futures::{future, Future};
+use server::readpool::{self, ReadPool};
 use self::metrics::*;
 use self::mvcc::Lock;
 use self::txn::CMD_BATCH_SIZE;
@@ -404,7 +404,7 @@ pub struct Storage {
     worker: Arc<Mutex<Worker<Msg>>>,
     worker_scheduler: worker::Scheduler<Msg>,
 
-    read_pool: readpool::ReadPool,
+    read_pool: ReadPool,
 
     // Storage configurations.
     gc_ratio_threshold: f64,
@@ -415,7 +415,7 @@ impl Storage {
     pub fn from_engine(
         engine: Box<Engine>,
         config: &Config,
-        read_pool: readpool::ReadPool,
+        read_pool: ReadPool,
     ) -> Result<Storage> {
         info!("storage {:?} started.", engine);
 
@@ -436,7 +436,7 @@ impl Storage {
         })
     }
 
-    pub fn new(config: &Config, read_pool: readpool::ReadPool) -> Result<Storage> {
+    pub fn new(config: &Config, read_pool: ReadPool) -> Result<Storage> {
         let engine = engine::new_local_engine(&config.data_dir, ALL_CFS)?;
         Storage::from_engine(engine, config, read_pool)
     }
@@ -492,22 +492,21 @@ impl Storage {
         ctx: Context,
         key: Key,
         start_ts: u64,
-    ) -> impl Future<Item = Option<Value>, Error = Error> {
+    ) -> Box<Future<Item = Option<Value>, Error = Error> + Send> {
         static CMD: &'static str = "kv_get";
         static CMD_TYPE: &'static str = "kv";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        self.read_pool
-            .future_execute(priority, move |ctxd| {
-                let _t_snapshot = {
-                    let ctxd = ctxd.clone();
-                    let mut thread_ctx = ctxd.current_thread_context_mut();
-                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
-                    thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
-                };
+        match self.read_pool.future_execute(priority, move |ctxd| {
+            let _t_snapshot = {
+                let ctxd = ctxd.clone();
+                let mut thread_ctx = ctxd.current_thread_context_mut();
+                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
+                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
+            };
 
-                engine
+            engine
                 .future_snapshot(&ctx)
                 .then(move |r| {
                     _t_snapshot.observe_duration();
@@ -541,10 +540,10 @@ impl Storage {
 
                     result
                 })
-            })
-            // map readpool::Full -> storage::Error
-            .map_err(|_| Error::SchedTooBusy)
-            .flatten()
+        }) {
+            Ok(val) => box val,
+            Err(_) => box future::err(Error::SchedTooBusy),
+        }
     }
 
     /// Batch get from the snapshot.
@@ -553,22 +552,21 @@ impl Storage {
         ctx: Context,
         keys: Vec<Key>,
         start_ts: u64,
-    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
+    ) -> Box<Future<Item = Vec<Result<KvPair>>, Error = Error> + Send> {
         static CMD: &'static str = "kv_batchget";
         static CMD_TYPE: &'static str = "kv";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        self.read_pool
-            .future_execute(priority, move |ctxd| {
-                let _t_snapshot = {
-                    let ctxd = ctxd.clone();
-                    let mut thread_ctx = ctxd.current_thread_context_mut();
-                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
-                    thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
-                };
+        match self.read_pool.future_execute(priority, move |ctxd| {
+            let _t_snapshot = {
+                let ctxd = ctxd.clone();
+                let mut thread_ctx = ctxd.current_thread_context_mut();
+                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
+                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
+            };
 
-                engine
+            engine
                 .future_snapshot(&ctx)
                 .then(move |r| {
                     _t_snapshot.observe_duration();
@@ -615,10 +613,10 @@ impl Storage {
 
                     result
                 })
-            })
-            // map readpool::Full -> storage::Error
-            .map_err(|_| Error::SchedTooBusy)
-            .flatten()
+        }) {
+            Ok(val) => box val,
+            Err(_) => box future::err(Error::SchedTooBusy),
+        }
     }
 
     /// Scan a range starting with `start_key` up to `limit` rows from the snapshot.
@@ -629,22 +627,21 @@ impl Storage {
         limit: usize,
         start_ts: u64,
         options: Options,
-    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
+    ) -> Box<Future<Item = Vec<Result<KvPair>>, Error = Error> + Send> {
         static CMD: &'static str = "kv_scan";
         static CMD_TYPE: &'static str = "kv";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        self.read_pool
-            .future_execute(priority, move |ctxd| {
-                let _t_snapshot = {
-                    let ctxd = ctxd.clone();
-                    let mut thread_ctx = ctxd.current_thread_context_mut();
-                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
-                    thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
-                };
+        match self.read_pool.future_execute(priority, move |ctxd| {
+            let _t_snapshot = {
+                let ctxd = ctxd.clone();
+                let mut thread_ctx = ctxd.current_thread_context_mut();
+                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
+                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
+            };
 
-                engine
+            engine
                 .future_snapshot(&ctx)
                 .then(move |r| {
                     _t_snapshot.observe_duration();
@@ -681,10 +678,10 @@ impl Storage {
                                 .collect()
                         })
                 })
-            })
-            // map readpool::Full -> storage::Error
-            .map_err(|_| Error::SchedTooBusy)
-            .flatten()
+        }) {
+            Ok(val) => box val,
+            Err(_) => box future::err(Error::SchedTooBusy),
+        }
     }
 
     pub fn async_pause(&self, ctx: Context, duration: u64, callback: Callback<()>) -> Result<()> {
@@ -873,22 +870,21 @@ impl Storage {
         &self,
         ctx: Context,
         key: Vec<u8>,
-    ) -> impl Future<Item = Option<Vec<u8>>, Error = Error> {
+    ) -> Box<Future<Item = Option<Vec<u8>>, Error = Error> + Send> {
         static CMD: &'static str = "raw_get";
         static CMD_TYPE: &'static str = "raw";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        self.read_pool
-            .future_execute(priority, move |ctxd| {
-                let _t_snapshot = {
-                    let ctxd = ctxd.clone();
-                    let mut thread_ctx = ctxd.current_thread_context_mut();
-                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
-                    thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
-                };
+        match self.read_pool.future_execute(priority, move |ctxd| {
+            let _t_snapshot = {
+                let ctxd = ctxd.clone();
+                let mut thread_ctx = ctxd.current_thread_context_mut();
+                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
+                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
+            };
 
-                engine
+            engine
                 .future_snapshot(&ctx)
                 .then(move |r| {
                     _t_snapshot.observe_duration();
@@ -911,10 +907,10 @@ impl Storage {
                             r
                         })
                 })
-            })
-            // map readpool::Full -> storage::Error
-            .map_err(|_| Error::SchedTooBusy)
-            .flatten()
+        }) {
+            Ok(val) => box val,
+            Err(_) => box future::err(Error::SchedTooBusy),
+        }
     }
 
     pub fn async_raw_put(
@@ -981,22 +977,21 @@ impl Storage {
         ctx: Context,
         key: Vec<u8>,
         limit: usize,
-    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
+    ) -> Box<Future<Item = Vec<Result<KvPair>>, Error = Error> + Send> {
         static CMD: &'static str = "raw_scan";
         static CMD_TYPE: &'static str = "raw";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        self.read_pool
-            .future_execute(priority, move |ctxd| {
-                let _t_snapshot = {
-                    let ctxd = ctxd.clone();
-                    let mut thread_ctx = ctxd.current_thread_context_mut();
-                    thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
-                    thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
-                };
+        match self.read_pool.future_execute(priority, move |ctxd| {
+            let _t_snapshot = {
+                let ctxd = ctxd.clone();
+                let mut thread_ctx = ctxd.current_thread_context_mut();
+                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
+                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
+            };
 
-                engine
+            engine
                 .future_snapshot(&ctx)
                 .then(move |r| {
                     _t_snapshot.observe_duration();
@@ -1027,10 +1022,10 @@ impl Storage {
 
                     result
                 })
-            })
-            // map readpool::Full -> storage::Error
-            .map_err(|_| Error::SchedTooBusy)
-            .flatten()
+        }) {
+            Ok(val) => box val,
+            Err(_) => box future::err(Error::SchedTooBusy),
+        }
     }
 
     pub fn async_mvcc_by_key(
@@ -1187,7 +1182,7 @@ mod tests {
 
     #[test]
     fn test_get_put() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1234,7 +1229,7 @@ mod tests {
 
     #[test]
     fn test_put_with_err() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
         let config = Config::default();
         // New engine lack of some column families.
         let engine = engine::new_local_engine(&config.data_dir, &["default"]).unwrap();
@@ -1261,7 +1256,7 @@ mod tests {
 
     #[test]
     fn test_scan() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1312,7 +1307,7 @@ mod tests {
 
     #[test]
     fn test_batch_get() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1366,7 +1361,7 @@ mod tests {
 
     #[test]
     fn test_txn() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1441,7 +1436,7 @@ mod tests {
 
     #[test]
     fn test_sched_too_busy() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
         let mut config = Config::default();
         config.scheduler_pending_write_threshold = ReadableSize(1);
         let mut storage = Storage::new(&config, read_pool).unwrap();
@@ -1490,7 +1485,7 @@ mod tests {
 
     #[test]
     fn test_cleanup() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1525,7 +1520,7 @@ mod tests {
 
     #[test]
     fn test_high_priority_get_put() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1572,7 +1567,7 @@ mod tests {
 
     #[test]
     fn test_high_priority_no_block() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
         let mut config = Config::default();
         config.scheduler_worker_pool_size = 1;
         let mut storage = Storage::new(&config, read_pool).unwrap();
@@ -1622,7 +1617,7 @@ mod tests {
 
     #[test]
     fn test_delete_range() {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();

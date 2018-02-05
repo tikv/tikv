@@ -26,6 +26,7 @@ use tikv::coprocessor::codec::datum::DatumDecoder;
 use tikv::util::codec::number::*;
 use tikv::storage::{Key, Mutation, ALL_CFS};
 use tikv::server::Config;
+use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
 use kvproto::coprocessor::{KeyRange, Request, Response};
@@ -33,7 +34,6 @@ use tipb::select::{Chunk, DAGRequest, SelectResponse};
 use tipb::executor::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
 use tipb::schema::{self, ColumnInfo};
 use tipb::expression::{ByItem, Expr, ExprType, ScalarFuncSig};
-use tikv::util::readpool;
 use protobuf::{Message, RepeatedField};
 
 use raftstore::util::MAX_LEADER_LEASE;
@@ -375,7 +375,7 @@ pub struct Store {
 
 impl Store {
     fn new(engine: Box<Engine>) -> Store {
-        let read_pool = readpool::ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
         Store {
             store: SyncStorage::from_engine(engine, &Default::default(), read_pool),
             current_ts: 1,

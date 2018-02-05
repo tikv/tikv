@@ -22,6 +22,7 @@ use tikv::server::{Server, ServerTransport};
 use tikv::server::{create_raft_storage, Config, Node, PdStoreAddrResolver, RaftClient};
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::ServerRaftStoreRouter;
+use tikv::server::readpool::ReadPool;
 use tikv::raftstore::{store, Result};
 use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager};
 use tikv::raftstore::coprocessor::CoprocessorHost;
@@ -29,7 +30,6 @@ use tikv::server::transport::RaftStoreRouter;
 use tikv::util::transport::SendCh;
 use tikv::util::security::SecurityManager;
 use tikv::util::worker::{FutureWorker, Worker};
-use tikv::util::readpool;
 use tikv::storage::Engine;
 use tikv::import::{ImportSSTService, SSTImporter};
 use kvproto::raft_serverpb::{self, RaftMessage};
@@ -121,7 +121,7 @@ impl Simulator for ServerCluster {
         let (engines, path) = create_test_engine(engines, store_sendch.clone(), &cfg);
 
         // Create storage.
-        let read_pool = readpool::ReadPool::new(&cfg.readpool, None);
+        let read_pool = ReadPool::new(&cfg.readpool, None);
         let mut store = create_raft_storage(sim_router.clone(), &cfg.storage, read_pool).unwrap();
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
