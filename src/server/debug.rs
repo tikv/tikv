@@ -16,21 +16,23 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::iter::FromIterator;
+use std::collections::HashSet;
 
-use protobuf::{self, RepeatedField};
+use protobuf::{self, Message, RepeatedField};
 
 use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
-use kvproto::metapb::Region;
+use kvproto::metapb::{Peer, Region};
 use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
 use kvproto::debugpb::DB as DBType;
 use kvproto::eraftpb::Entry;
 use kvproto::raft_serverpb::*;
 
-use raft::{self, RawNode};
+use raft::{self, quorum, RawNode};
 use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
 use raftstore::store::{init_apply_state, init_raft_state, write_peer_state};
 use raftstore::store::util as raftstore_util;
-use raftstore::store::engine::IterOption;
+use raftstore::store::engine::{IterOption, Mutable};
 use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use storage::types::{truncate_ts, Key};
 use storage::mvcc::{Lock, Write, WriteType};
@@ -81,6 +83,10 @@ impl RegionInfo {
             region_local_state: region_local,
         }
     }
+}
+
+pub enum UnsafeConfChange {
+    RemoveStores(Vec<u64>),
 }
 
 #[derive(Clone)]
@@ -345,6 +351,66 @@ impl Debugger {
             }
         }
         Ok(res)
+    }
+
+    pub fn unsafe_conf_change(&self, conf_change: UnsafeConfChange) -> Result<Vec<(u64, Error)>> {
+        match conf_change {
+            UnsafeConfChange::RemoveStores(store_ids) => self.remove_failed_stores(store_ids),
+        }
+    }
+
+    fn remove_failed_stores(&self, store_ids: Vec<u64>) -> Result<Vec<(u64, Error)>> {
+        let db = &self.engines.kv_engine;
+        let handle = box_try!(get_cf_handle(db.as_ref(), CF_RAFT));
+        let read_opts = IterOption::new(
+            Some(keys::REGION_META_MIN_KEY.to_owned()),
+            Some(keys::REGION_META_MAX_KEY.to_owned()),
+            false,
+        ).build_read_opts();
+        let mut iter = DBIterator::new_cf(Arc::clone(db), handle, read_opts);
+        iter.seek(SeekKey::from(keys::REGION_META_MIN_KEY));
+
+        let wb = WriteBatch::new();
+        let store_ids = HashSet::<u64>::from_iter(store_ids);
+        let mut errors = Vec::with_capacity(store_ids.len());
+
+        for (key, value) in &mut iter {
+            let (region_id, suffix_type) = box_try!(keys::decode_region_meta_key(&key));
+            if suffix_type != keys::REGION_STATE_SUFFIX {
+                continue;
+            }
+            let mut region_state = RegionLocalState::new();
+            if let Err(e) = region_state.merge_from_bytes(&value) {
+                errors.push((region_id, box_err!(e)));
+                continue;
+            }
+            if region_state.get_state() == PeerState::Tombstone {
+                continue;
+            }
+            let mut new_peers: Vec<Peer> = Vec::with_capacity(5);
+            for peer in region_state.get_region().get_peers() {
+                if !store_ids.contains(&peer.get_store_id()) {
+                    new_peers.push(peer.clone());
+                }
+            }
+            let old_peers_len = region_state.get_region().get_peers().len();
+            if new_peers.len() < quorum(old_peers_len) {
+                {
+                    let region = region_state.mut_region();
+                    region.set_peers(RepeatedField::from_vec(new_peers));
+                    let old_conf_ver = region.get_region_epoch().get_conf_ver();
+                    let new_conf_ver = old_conf_ver + store_ids.len() as u64;
+                    region.mut_region_epoch().set_conf_ver(new_conf_ver);
+                }
+                if let Err(e) = wb.put_msg_cf(handle, &key, &region_state) {
+                    errors.push((region_id, box_err!(e)));
+                }
+            }
+        }
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        box_try!(db.write_opt(wb, &write_opts));
+        Ok(errors)
     }
 
     fn get_store_id(&self) -> Result<u64> {

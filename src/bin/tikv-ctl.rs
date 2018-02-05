@@ -53,7 +53,7 @@ use tikv::util::{escape, unescape};
 use tikv::util::security::{SecurityConfig, SecurityManager};
 use tikv::util::rocksdb as rocksdb_util;
 use tikv::raftstore::store::{keys, Engines};
-use tikv::server::debug::{Debugger, RegionInfo};
+use tikv::server::debug::{Debugger, RegionInfo, UnsafeConfChange};
 use tikv::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::config::TiKvConfig;
@@ -390,6 +390,8 @@ trait DebugExecutor {
         }
     }
 
+    fn unsafe_conf_change(&self, conf_change: UnsafeConfChange);
+
     fn check_local_mode(&self);
 
     fn get_all_meta_regions(&self) -> Vec<u64>;
@@ -511,6 +513,10 @@ impl DebugExecutor for DebugClient {
     fn print_bad_regions(&self) {
         unimplemented!("only avaliable for local mode");
     }
+
+    fn unsafe_conf_change(&self, _: UnsafeConfChange) {
+        self.check_local_mode();
+    }
 }
 
 impl DebugExecutor for Debugger {
@@ -578,6 +584,18 @@ impl DebugExecutor for Debugger {
             return;
         }
         println!("all regions are healthy")
+    }
+
+    fn unsafe_conf_change(&self, conf_change: UnsafeConfChange) {
+        let region_errors = self.unsafe_conf_change(conf_change)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::unsafe_conf_change", e));
+        if !region_errors.is_empty() {
+            for (region_id, error) in region_errors {
+                println!("{}: {}", region_id, error);
+            }
+            return;
+        }
+        println!("success");
     }
 }
 
@@ -895,6 +913,24 @@ fn main() {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("unsafe-conf-change")
+                .about("force conf-change on a store, for majority of peers failed")
+                .subcommand(
+                    SubCommand::with_name("remove-stores")
+                        .about("remove failed stores from all regions")
+                        .arg(
+                            Arg::with_name("stores")
+                                .required(true)
+                                .takes_value(true)
+                                .multiple(true)
+                                .use_delimiter(true)
+                                .require_delimiter(true)
+                                .value_delimiter(",")
+                                .help("failed store id list"),
+                        ),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("bad-regions").about("get all regions with corrupt raft"),
         );
     let matches = app.clone().get_matches();
@@ -988,6 +1024,17 @@ fn main() {
             panic!("invalid pd configuration: {:?}", e);
         }
         debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, region);
+    } else if let Some(matches) = matches.subcommand_matches("unsafe-conf-change") {
+        if let Some(matches) = matches.subcommand_matches("remove-stores") {
+            let stores = matches.values_of("stores").unwrap();
+            match stores.map(|s| s.parse()).collect::<Result<Vec<u64>, _>>() {
+                Ok(store_ids) => {
+                    let conf_change = UnsafeConfChange::RemoveStores(store_ids);
+                    debug_executor.unsafe_conf_change(conf_change);
+                }
+                Err(e) => perror_and_exit("parse store id list", e),
+            }
+        }
     } else if matches.subcommand_matches("bad-regions").is_some() {
         debug_executor.print_bad_regions();
     } else {
