@@ -13,7 +13,7 @@
 
 use std::fmt;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use protobuf::RepeatedField;
 use futures::{future, Future, Sink, Stream};
@@ -24,7 +24,7 @@ use kvproto::pdpb::{self, Member};
 
 use util::{Either, HandyRwLock};
 use util::security::SecurityManager;
-use util::time::{duration_to_sec, realtime_coarse_now};
+use util::time::duration_to_sec;
 use pd::{Config, PdFuture};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
@@ -301,8 +301,9 @@ impl PdClient for RpcClient {
         req.set_keys_read(region_stat.read_bytes);
         req.set_approximate_size(region_stat.approximate_size);
 
-        let now = realtime_coarse_now();
-        req.set_timestamp((now.sec * 1_000) as u64 + (now.nsec / 1_000_000) as u64);
+        let now = SystemTime::now();
+        let ts = now.duration_since(UNIX_EPOCH).unwrap().as_secs();
+        req.set_timestamp(ts);
 
         let executor = |client: &RwLock<Inner>, req: pdpb::RegionHeartbeatRequest| {
             let mut inner = client.wl();
