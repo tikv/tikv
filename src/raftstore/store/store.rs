@@ -51,8 +51,7 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
                     ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
-                    RegionRunner, RegionTask, SpaceCheckRes, SpaceCheckRunner, SpaceCheckTask,
-                    SplitCheckRunner, SplitCheckTask};
+                    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -152,8 +151,6 @@ pub struct Store<T, C: 'static> {
     pub apply_worker: Worker<ApplyTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
 
-    space_checker: Worker<SpaceCheckTask>,
-    space_res_receiver: Option<StdReceiver<SpaceCheckRes>>,
     last_checked_key: Option<Key>,
     ranges_need_compact: Option<VecDeque<(Key, Key)>>,
 
@@ -232,8 +229,6 @@ impl<T, C> Store<T, C> {
             consistency_check_worker: Worker::new("consistency check worker"),
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
-            space_checker: Worker::new("space checker"),
-            space_res_receiver: None,
             last_checked_key: None,
             ranges_need_compact: None,
             region_ranges: BTreeMap::new(),
@@ -527,7 +522,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
         box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
 
-        let compact_runner = CompactRunner::new(Arc::clone(&self.kv_engine));
+        let compact_runner =
+            CompactRunner::new(Arc::clone(&self.kv_engine), Some(self.sendch.clone()));
         box_try!(self.compact_worker.start(compact_runner));
 
         let pd_runner = PdRunner::new(
@@ -548,11 +544,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let apply_runner = ApplyRunner::new(self, tx, self.cfg.sync_log, self.cfg.use_delete_range);
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
-
-        let (tx, rx) = mpsc::channel();
-        let space_check_runner = SpaceCheckRunner::new(Arc::clone(&self.kv_engine), tx);
-        self.space_res_receiver = Some(rx);
-        box_try!(self.space_checker.start(space_check_runner));
 
         if let Err(e) = util_sys::pri::set_priority(util_sys::HIGH_PRI) {
             warn!("set priority for raftstore failed, error: {:?}", e);
@@ -579,7 +570,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         handles.push(self.pd_worker.stop());
         handles.push(self.consistency_check_worker.stop());
         handles.push(self.apply_worker.stop());
-        handles.push(self.space_checker.stop());
 
         for h in handles {
             if let Some(h) = h {
@@ -684,17 +674,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 Err(TryRecvError::Empty) => break,
                 Err(e) => panic!("unexpected error {:?}", e),
             }
-        }
-    }
-
-    fn poll_space_check(&mut self) {
-        match self.space_res_receiver.as_ref().unwrap().try_recv() {
-            Ok(res) => {
-                self.ranges_need_compact = Some(res.ranges_need_compact);
-                info!("ranges {:?} need to compact.", self.ranges_need_compact);
-            }
-            Err(TryRecvError::Empty) => {}
-            Err(e) => panic!("unexpected error {:?}", e),
         }
     }
 
@@ -1891,9 +1870,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn on_compact_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        self.poll_space_check();
+    fn on_space_check_finished(&mut self, ranges_need_compact: VecDeque<(Vec<u8>, Vec<u8>)>) {
+        info!("ranges {:?} need compact", ranges_need_compact);
+        self.ranges_need_compact = Some(ranges_need_compact);
+    }
 
+    fn on_compact_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let has_pending_compact_tasks = match self.ranges_need_compact {
             Some(ref tasks) => !tasks.is_empty(),
             None => false,
@@ -1901,8 +1883,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         if self.compact_worker.is_busy() {
             info!("compact worker is busy, check space redundancy next time");
-        } else if self.space_checker.is_busy() {
-            info!("space checker is busy, check space redundancy next time");
         } else if has_pending_compact_tasks {
             // Schedule compact task
             let (start, end) = self.ranges_need_compact
@@ -1911,7 +1891,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .pop_front()
                 .unwrap();
             for &cf in &[CF_DEFAULT, CF_WRITE] {
-                let task = CompactTask {
+                let task = CompactTask::Compact {
                     cf_name: String::from(cf),
                     start_key: Some(start.clone()),
                     end_key: Some(end.clone()),
@@ -1945,7 +1925,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ranges_need_check.insert(keys::DATA_MAX_KEY.to_vec());
             }
 
-            if let Err(e) = self.space_checker.schedule(SpaceCheckTask {
+            if let Err(e) = self.compact_worker.schedule(CompactTask::Check {
                 ranges: ranges_need_check,
                 min_num_del: self.cfg.region_compact_min_tombstones,
             }) {
@@ -2230,7 +2210,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // Create a compact lock cf task(compact whole range) and schedule directly.
         if self.store_stat.lock_cf_bytes_written > self.cfg.lock_cf_compact_bytes_threshold.0 {
             self.store_stat.lock_cf_bytes_written = 0;
-            let task = CompactTask {
+            let task = CompactTask::Compact {
                 cf_name: String::from(CF_LOCK),
                 start_key: None,
                 end_key: None,
@@ -2585,6 +2565,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 region_size,
             } => self.on_approximate_region_size(region_id, region_size),
             Msg::CompactedEvent(event) => self.on_compaction_finished(event),
+            Msg::SpaceCheckResult {
+                ranges_need_compact,
+            } => self.on_space_check_finished(ranges_need_compact),
         }
     }
 

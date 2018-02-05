@@ -14,6 +14,7 @@
 use std::time::Instant;
 use std::boxed::FnBox;
 use std::fmt;
+use std::collections::VecDeque;
 
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
@@ -166,6 +167,11 @@ pub enum Msg {
 
     // Compaction finished event
     CompactedEvent(CompactedEvent),
+
+    // Space check result
+    SpaceCheckResult {
+        ranges_need_compact: VecDeque<(Vec<u8>, Vec<u8>)>,
+    },
 }
 
 impl fmt::Debug for Msg {
@@ -201,6 +207,9 @@ impl fmt::Debug for Msg {
                 region_id, region_size
             ),
             Msg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),
+            Msg::SpaceCheckResult {
+                ref ranges_need_compact,
+            } => write!(fmt, "SpaceCheckResult ranges {}", ranges_need_compact.len()),
         }
     }
 }
