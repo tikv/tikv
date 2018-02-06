@@ -1303,7 +1303,7 @@ impl Scheduler {
         }) {
             Ok(_) => {}
             e @ Err(ScheduleError::Stopped(_)) => info!("scheduler worker stopped, err {:?}", e),
-            Err(e) => panic!("schedule SnapshotFinish msg failed, ctx {:?}, err {:?}", ctx.clone(), e),
+            Err(e) => panic!("schedule SnapshotFinish msg failed, err {:?}", e),
         };
 
         if let Err(e) = self.engine.async_snapshot(ctx, cb) {
@@ -1430,8 +1430,8 @@ impl Scheduler {
                     SCHED_STAGE_COUNTER_VEC
                         .with_label_values(&[self.get_ctx_tag(cid), "txn_snapshot_err"])
                         .inc();
-                        let e = e.maybe_clone()
-                            .unwrap_or_else(|| EngineError::Other(box_err!("{:?}", e)));
+                    let e = e.maybe_clone()
+                        .unwrap_or_else(|| EngineError::Other(box_err!("{:?}", e)));
 
                     self.finish_with_err(cid, Error::from(e));
                 }
