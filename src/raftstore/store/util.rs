@@ -540,14 +540,11 @@ mod tests {
         let cf_size = 2 + 1024 + 2 + 2048 + 2 + 4096;
         for &(key, vlen) in &cases {
             for cfname in LARGE_CFS {
-                let k1 = keys::data_key(b" ");
-                let v1 = vec![];
-                let k2 = keys::data_key(key.as_bytes());
-                let v2 = vec![0; vlen as usize];
-                assert_eq!(k2.len(), 2);
+                let k1 = keys::data_key(key.as_bytes());
+                let v1 = vec![0; vlen as usize];
+                assert_eq!(k1.len(), 2);
                 let cf = db.cf_handle(cfname).unwrap();
                 db.put_cf(cf, &k1, &v1).unwrap();
-                db.put_cf(cf, &k2, &v2).unwrap();
                 db.flush_cf(cf, true).unwrap();
             }
         }
