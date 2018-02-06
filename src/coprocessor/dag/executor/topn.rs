@@ -72,9 +72,6 @@ impl TopNExecutor {
         columns_info: Arc<Vec<ColumnInfo>>,
         src: Box<Executor>,
     ) -> Result<TopNExecutor> {
-        if !meta.has_limit() {
-            return Err(box_err!("invalid limit"));
-        }
         let order_by = meta.take_order_by().into_vec();
 
         let mut visitor = ExprColumnRefVisitor::new(columns_info.len());
@@ -96,25 +93,28 @@ impl TopNExecutor {
     }
 
     fn fetch_all(&mut self) -> Result<()> {
+        if self.limit == 0 {
+            self.iter = Some(Vec::default().into_iter());
+            return Ok(());
+        }
+
         let mut heap = TopNHeap::new(self.limit)?;
-        if self.limit > 0 {
-            while let Some(row) = self.src.next()? {
-                let cols = inflate_with_col_for_dag(
-                    &self.ctx,
-                    &row.data,
-                    self.cols.as_ref(),
-                    &self.related_cols_offset,
-                    row.handle,
-                )?;
-                let ob_values = self.order_by.eval(&self.ctx, &cols)?;
-                heap.try_add_row(
-                    row.handle,
-                    row.data,
-                    ob_values,
-                    Arc::clone(&self.order_by.items),
-                    Arc::clone(&self.ctx),
-                )?;
-            }
+        while let Some(row) = self.src.next()? {
+            let cols = inflate_with_col_for_dag(
+                &self.ctx,
+                &row.data,
+                self.cols.as_ref(),
+                &self.related_cols_offset,
+                row.handle,
+            )?;
+            let ob_values = self.order_by.eval(&self.ctx, &cols)?;
+            heap.try_add_row(
+                row.handle,
+                row.data,
+                ob_values,
+                Arc::clone(&self.order_by.items),
+                Arc::clone(&self.ctx),
+            )?;
         }
         self.iter = Some(heap.into_sorted_vec()?.into_iter());
         Ok(())
@@ -490,7 +490,7 @@ pub mod test {
         let key_ranges = vec![range1, range2];
         // init TableScan
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let snap = SnapshotStore::new(snapshot.clone(), start_ts, IsolationLevel::SI, true);
+        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
         // init TopN meta
         let mut ob_vec = Vec::with_capacity(2);
@@ -498,18 +498,8 @@ pub mod test {
         ob_vec.push(new_order_by(2, true));
         let mut topn = TopN::default();
         topn.set_order_by(RepeatedField::from_vec(ob_vec));
-        // test without limit
-        let topn_ect = TopNExecutor::new(
-            topn.clone(),
-            Arc::new(EvalContext::default()),
-            Arc::new(cis.clone()),
-            Box::new(TableScanExecutor::new(&table_scan, key_ranges.clone(), snap).unwrap()),
-        );
-        assert!(topn_ect.is_err());
-
         // test with limit=0
         topn.set_limit(0);
-        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut topn_ect = TopNExecutor::new(
             topn,
             Arc::new(EvalContext::default()),
