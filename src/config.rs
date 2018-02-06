@@ -21,6 +21,7 @@ use sys_info;
 
 use import::Config as ImportConfig;
 use server::Config as ServerConfig;
+use server::readpool::Config as ReadPoolConfig;
 use pd::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
@@ -648,6 +649,7 @@ pub enum LogLevel {
 pub struct TiKvConfig {
     #[serde(with = "LogLevel")] pub log_level: LogLevelFilter,
     pub log_file: String,
+    pub readpool: ReadPoolConfig,
     pub server: ServerConfig,
     pub storage: StorageConfig,
     pub pd: PdConfig,
@@ -665,6 +667,7 @@ impl Default for TiKvConfig {
         TiKvConfig {
             log_level: LogLevelFilter::Info,
             log_file: "".to_owned(),
+            readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
             raft_store: RaftstoreConfig::default(),

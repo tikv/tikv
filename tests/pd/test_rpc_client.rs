@@ -77,6 +77,10 @@ fn test_rpc_client() {
         .unwrap();
     assert_eq!(client.is_cluster_bootstrapped().unwrap(), true);
 
+    let tmp_stores = client.get_all_stores().unwrap();
+    assert_eq!(tmp_stores.len(), 1);
+    assert_eq!(tmp_stores[0], store);
+
     let tmp_store = client.get_store(store_id).unwrap();
     assert_eq!(tmp_store.get_id(), store.get_id());
 
