@@ -1303,7 +1303,7 @@ impl Scheduler {
         }) {
             Ok(_) => {}
             e @ Err(ScheduleError::Stopped(_)) => info!("scheduler worker stopped, err {:?}", e),
-            Err(e) => panic!("schedule SnapshotFinish msg failed, ctx {:?}, err {:?}", ctx, e),
+            Err(e) => panic!("schedule SnapshotFinish msg failed, ctx {:?}, err {:?}", ctx.clone(), e),
         };
 
         if let Err(e) = self.engine.async_snapshot(ctx, cb) {
@@ -1313,7 +1313,7 @@ impl Scheduler {
                     .inc();
 
                 let e = e.maybe_clone().unwrap_or_else(|| {
-                    error!("async snapshot failed for cid={}, ctx {:?}, error {:?}", cid, ctx, e);
+                    error!("async snapshot failed for cid={}, error {:?}", cid, e);
                     EngineError::Other(box_err!("{:?}", e))
                 });
                 self.finish_with_err(cid, Error::from(e));
@@ -1336,7 +1336,7 @@ impl Scheduler {
         }
 
         let scheduler = self.scheduler.clone();
-        let batch1 = batch.iter().map(|&(ref q, _)| ctx.clone()).collect();
+        let batch1 = batch.iter().map(|&(ref ctx, _)| ctx.clone()).collect();
         let on_finished: engine::BatchCallback<Box<Snapshot>> = box move |results: Vec<_>| {
             let mut ready = Vec::with_capacity(results.len());
             let mut retry = Vec::new();
