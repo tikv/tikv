@@ -628,8 +628,12 @@ fn test_conf_change_remove_leader() {
     let res = cluster
         .call_command_on_leader(req, Duration::from_secs(5))
         .unwrap();
-    assert_eq!(
-        res.get_header().get_error().get_message(),
-        "ignore remove leader"
+    assert!(
+        res.get_header()
+            .get_error()
+            .get_message()
+            .contains("ignore remove leader"),
+        "{:?}",
+        res
     );
 }
