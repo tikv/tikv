@@ -95,15 +95,16 @@ impl DAGContext {
                     resp.set_data(data);
                     return Ok(resp);
                 }
-                Err(e) => if let Error::Other(_) = e {
-                    let mut resp = Response::new();
-                    let mut sel_resp = SelectResponse::new();
-                    sel_resp.set_error(to_pb_error(&e));
-                    resp.set_data(box_try!(sel_resp.write_to_bytes()));
-                    resp.set_other_error(format!("{}", e));
-                    return Ok(resp);
-                } else {
-                    return Err(e);
+                Err(e) => match e {
+                    Error::Other(_) => {
+                        let mut resp = Response::new();
+                        let mut sel_resp = SelectResponse::new();
+                        sel_resp.set_error(to_pb_error(&e));
+                        resp.set_data(box_try!(sel_resp.write_to_bytes()));
+                        resp.set_other_error(format!("{}", e));
+                        return Ok(resp);
+                    }
+                    _ => return Err(e),
                 },
             }
         }
@@ -115,14 +116,17 @@ impl DAGContext {
     ) -> Result<(Option<Response>, bool)> {
         let (mut record_cnt, mut finished) = (0, false);
         let mut chunk = Chunk::new();
-        let mut start_key = None;
+        let (mut start_key, mut support_partial_retry) = (None, true);
         while record_cnt < batch_row_limit {
             match self.exec.next() {
                 Ok(Some(row)) => {
                     self.req_ctx.check_if_outdated()?;
                     record_cnt += 1;
-                    if start_key.is_none() {
-                        start_key = self.exec.take_last_key().or_else(|| Some(vec![]));
+                    if support_partial_retry && start_key.is_none() {
+                        start_key = self.exec.take_last_key();
+                        if start_key.is_none() {
+                            support_partial_retry = false;
+                        }
                     }
                     if self.has_aggr {
                         chunk.mut_rows_data().extend_from_slice(&row.data.value);
@@ -135,20 +139,20 @@ impl DAGContext {
                     finished = true;
                     break;
                 }
-                Err(e) => if let Error::Other(_) = e {
-                    let mut resp = Response::new();
-                    let mut s_resp = StreamResponse::new();
-                    s_resp.set_error(to_pb_error(&e));
-                    resp.set_data(box_try!(s_resp.write_to_bytes()));
-                    resp.set_other_error(format!("{}", e));
-                    return Ok((Some(resp), true));
-                } else {
-                    return Err(e);
+                Err(e) => match e {
+                    Error::Other(_) => {
+                        let mut resp = Response::new();
+                        let mut s_resp = StreamResponse::new();
+                        s_resp.set_error(to_pb_error(&e));
+                        resp.set_data(box_try!(s_resp.write_to_bytes()));
+                        resp.set_other_error(format!("{}", e));
+                        return Ok((Some(resp), true));
+                    }
+                    _ => return Err(e),
                 },
             }
         }
         if record_cnt > 0 {
-            start_key = start_key.and_then(|k| if k.is_empty() { None } else { Some(k) });
             let end_key = self.exec.take_last_key();
             self.req_ctx.renew_streaming_outdated();
             return self.make_stream_response(chunk, start_key, end_key)
@@ -171,6 +175,10 @@ impl DAGContext {
         let mut resp = Response::new();
         resp.set_data(box_try!(s_resp.write_to_bytes()));
 
+        // `start_key` and `end_key` indicates the key_range which has been scaned
+        // for generating the response. It's for TiDB can retry requests partially,
+        // but some `Executor`s (e.g. TopN and Aggr) don't support that, in which
+        // cases both `start_key` and `end_key` should be None.
         let (start, end) = match (start_key, end_key) {
             (Some(start_key), Some(end_key)) => if start_key > end_key {
                 (end_key, prefix_next(&start_key))

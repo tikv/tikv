@@ -141,6 +141,7 @@ impl IndexScanExecutor {
         let key = range.get_start();
         let value = self.store.get(&Key::from_raw(key), &mut self.statistics)?;
         if let Some(value) = value {
+            self.last_key = Some(key);
             return self.decode_index_key_value(key.to_vec(), value);
         }
         Ok(None)
