@@ -93,7 +93,7 @@ macro_rules! box_try {
 macro_rules! box_err {
     ($e:expr) => ({
         use std::error::Error;
-        let e: Box<Error + Sync + Send> = ($e).into();
+        let e: Box<Error + Sync + Send> = format!("[{}:{}]: {}", file!(), line!(),  $e).into();
         e.into()
     });
     ($f:tt, $($arg:expr),+) => ({
@@ -187,4 +187,19 @@ macro_rules! try_opt {
             Ok(Some(res)) => res,
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    #[test]
+    fn test_box_error() {
+        let file_name = file!();
+        let line_number = line!();
+        let e: Box<Error + Send + Sync> = box_err!("{}", "hi");
+        assert_eq!(
+            format!("{}", e),
+            format!("[{}:{}]: hi", file_name, line_number + 1)
+        );
+    }
 }
