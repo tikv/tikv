@@ -472,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn test_top_empty_limit() {
+    fn test_topn_with_empty_limit() {
         let mut topn_heap = TopNHeap::new(0).unwrap();
         let cur_key: Vec<Datum> = vec![Datum::I64(1), Datum::I64(2)];
         let row_data = RowColsDict::new(HashMap::default(), b"ssss".to_vec());
