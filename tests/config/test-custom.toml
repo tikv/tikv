@@ -15,6 +15,7 @@ end-point-max-tasks = 12
 end-point-stack-size = "12MB"
 end-point-recursion-limit = 100
 end-point-batch-row-limit = 64
+end-point-request-max-handle-secs = 123
 snap-max-write-bytes-per-sec = "10MB"
 
 [server.labels]

@@ -38,6 +38,8 @@ use storage::CF_RAFT;
 use super::metrics::*;
 use super::super::util;
 
+use std::collections::Bound::{Excluded, Included, Unbounded};
+
 const GENERATE_POOL_SIZE: usize = 2;
 
 /// region related task.
@@ -168,7 +170,7 @@ impl SnapContext {
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
-        pending_delete_ranges.remove(start_key.clone(), end_key.clone());
+        pending_delete_ranges.update(start_key.clone(), end_key.clone());
         box_try!(util::delete_all_in_range(
             &self.kv_db,
             &start_key,
@@ -292,15 +294,9 @@ impl SnapContext {
     }
 }
 
+#[derive(Default)]
 struct PendingDeleteRanges {
     ranges: BTreeMap<Vec<u8>, (Vec<u8>, time::Instant)>,
-}
-
-enum RangeUpdateType {
-    TrimLeft = 0,
-    TrimRight = 1,
-    TrimMiddle = 2,
-    Discard = 3,
 }
 
 impl PendingDeleteRanges {
@@ -309,63 +305,52 @@ impl PendingDeleteRanges {
         &self,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-        ranges: &mut Vec<(RangeUpdateType, Vec<u8>)>,
+        ranges: &mut Vec<(Vec<u8>, Vec<u8>)>,
     ) {
-        let mut iter = self.ranges.iter();
-        // find the first region that may overlap with [start_key, end_key)
-        let mut left = iter.find(|ref ptr| (ptr.1).0 > start_key);
-        loop {
-            if left.is_none() {
-                break;
+        // find the first range that may overlap with [start_key, end_key)
+        let mut sub_range = self.ranges.range((Unbounded, Excluded(start_key.clone())));
+        if let Some(kv) = sub_range.next_back() {
+            // make sure that two ranges have overlap
+            if (kv.1).0 > start_key {
+                ranges.push((kv.0.clone(), (kv.1).0.clone()));
             }
-            let cur = left.unwrap();
-            if cur.0 >= &end_key {
-                // the new interval does not reach the left boundary, so stop looping
-                break;
-            }
-            if cur.0 < &start_key {
-                if (cur.1).0 <= end_key {
-                    ranges.push((RangeUpdateType::TrimRight, cur.0.clone()));
-                } else {
-                    ranges.push((RangeUpdateType::TrimMiddle, cur.0.clone()));
-                }
-            } else {
-                if (cur.1).0 <= end_key {
-                    ranges.push((RangeUpdateType::Discard, cur.0.clone()));
-                } else {
-                    ranges.push((RangeUpdateType::TrimLeft, cur.0.clone()));
-                }
-            }
-            left = iter.next();
+        }
+
+        // find the rest ranges that overlap with [start_key, end_key)
+        let mut sub_range = self.ranges.range((Included(start_key), Excluded(end_key)));
+        while let Some(kv) = sub_range.next() {
+            ranges.push((kv.0.clone(), (kv.1).0.clone()));
         }
     }
 
     // filter out the overlap in ranges, after this function the ranges will not overlap
-    fn update(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) {
+    pub fn update(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) {
         if start_key >= end_key {
             return;
         }
         let mut ranges = Vec::new();
         self.find_overlap(start_key.clone(), end_key.clone(), &mut ranges);
-        // all the elements that being updated or removed should and must exist
-        for e in &ranges {
-            match e.0 {
-                RangeUpdateType::TrimLeft => {
-                    let cur = self.ranges.remove(&e.1).unwrap();
-                    self.ranges.insert(end_key.clone(), cur);
-                }
-                RangeUpdateType::TrimRight => {
-                    let cur = self.ranges.get_mut(&e.1).unwrap();
+        for e in ranges.iter() {
+            if e.0 < start_key {
+                if e.1 <= end_key {
+                    // the right part of the range is trimed
+                    let cur = self.ranges.get_mut(&e.0).unwrap();
                     cur.0 = start_key.clone();
-                }
-                RangeUpdateType::TrimMiddle => {
-                    let mut cur = self.ranges.remove(&e.1).unwrap();
+                } else {
+                    // the middle part of the range is trimed
+                    let mut cur = self.ranges.remove(&e.0).unwrap();
                     self.ranges.insert(end_key.clone(), cur.clone());
                     cur.0 = start_key.clone();
-                    self.ranges.insert(e.1.clone(), cur);
+                    self.ranges.insert(e.0.clone(), cur);
                 }
-                RangeUpdateType::Discard => {
-                    self.ranges.remove(&e.1).unwrap();
+            } else {
+                if e.1 <= end_key {
+                    // the whole range is discarded
+                    self.ranges.remove(&e.0).unwrap();
+                } else {
+                    // the left part of the range is trimed
+                    let cur = self.ranges.remove(&e.0).unwrap();
+                    self.ranges.insert(end_key.clone(), cur);
                 }
             }
         }
@@ -374,10 +359,6 @@ impl PendingDeleteRanges {
     pub fn insert(&mut self, start_key: Vec<u8>, end_key: Vec<u8>, timeout: time::Instant) {
         self.update(start_key.clone(), end_key.clone());
         self.ranges.insert(start_key, (end_key, timeout));
-    }
-
-    pub fn remove(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) {
-        self.update(start_key, end_key);
     }
 
     pub fn get_timeout_ranges(&mut self, now: time::Instant, ranges: &mut Vec<(Vec<u8>, Vec<u8>)>) {
@@ -427,9 +408,7 @@ impl Runner {
                 use_delete_range: use_delete_range,
             },
             range_deletion_delay: Duration::from_secs(range_deletion_delay),
-            pending_delete_ranges: PendingDeleteRanges {
-                ranges: BTreeMap::new(),
-            },
+            pending_delete_ranges: PendingDeleteRanges::default(),
         }
     }
 }
@@ -582,7 +561,7 @@ mod test {
 
         thread::sleep(delay / 2);
 
-        pending_delete_ranges.remove(b"aa".to_vec(), b"bb".to_vec());
+        pending_delete_ranges.update(b"aa".to_vec(), b"bb".to_vec());
 
         thread::sleep(delay / 2);
 

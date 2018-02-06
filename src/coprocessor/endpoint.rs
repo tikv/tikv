@@ -48,7 +48,7 @@ pub const REQ_TYPE_ANALYZE: i64 = 104;
 
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.
-const REQUEST_MAX_HANDLE_SECS: u64 = 60;
+pub const DEFAULT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 // If handle time is larger than the lower bound, the query is considered as slow query.
 const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
 
@@ -316,9 +316,14 @@ pub struct RequestTask {
 }
 
 impl RequestTask {
-    pub fn new(req: Request, on_resp: OnResponse, recursion_limit: u32) -> RequestTask {
+    pub fn new(
+        req: Request,
+        on_resp: OnResponse,
+        recursion_limit: u32,
+        request_timeout_secs: u64,
+    ) -> RequestTask {
         let timer = Instant::now_coarse();
-        let deadline = timer + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
+        let deadline = timer + Duration::from_secs(request_timeout_secs);
         let mut start_ts = None;
         let tp = req.get_tp();
         let mut table_scan = false;
@@ -595,7 +600,7 @@ fn err_resp(e: Error) -> Response {
         }
         Error::Outdated(deadline, now, scan_tag) => {
             let elapsed =
-                now.duration_since(deadline) + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
+                now.duration_since(deadline) + Duration::from_secs(DEFAULT_REQUEST_MAX_HANDLE_SECS);
             COPR_REQ_ERROR.with_label_values(&["outdated"]).inc();
             OUTDATED_REQ_WAIT_TIME
                 .with_label_values(&[scan_tag])
@@ -806,9 +811,11 @@ mod tests {
                 tx.send(msg).unwrap();
             },
             1000,
+            super::DEFAULT_REQUEST_MAX_HANDLE_SECS,
         );
         let ctx = ReqContext {
-            deadline: task.ctx.deadline - Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS),
+            deadline: task.ctx.deadline
+                - Duration::from_secs(super::DEFAULT_REQUEST_MAX_HANDLE_SECS),
             isolation_level: task.ctx.isolation_level,
             fill_cache: task.ctx.fill_cache,
             table_scan: task.ctx.table_scan,
@@ -837,9 +844,11 @@ mod tests {
                 tx.send(msg).unwrap();
             },
             1000,
+            super::DEFAULT_REQUEST_MAX_HANDLE_SECS,
         );
         let ctx = ReqContext {
-            deadline: task.ctx.deadline - Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS),
+            deadline: task.ctx.deadline
+                - Duration::from_secs(super::DEFAULT_REQUEST_MAX_HANDLE_SECS),
             isolation_level: task.ctx.isolation_level,
             fill_cache: task.ctx.fill_cache,
             table_scan: task.ctx.table_scan,
@@ -887,6 +896,7 @@ mod tests {
                     let _ = tx.send(msg);
                 },
                 1000,
+                super::DEFAULT_REQUEST_MAX_HANDLE_SECS,
             );
             worker.schedule(Task::Request(task)).unwrap();
         }
@@ -917,7 +927,12 @@ mod tests {
         let mut req = Request::new();
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(dag.write_to_bytes().unwrap());
-        RequestTask::new(req.clone(), box move |_| unreachable!(), 100);
+        RequestTask::new(
+            req.clone(),
+            box move |_| unreachable!(),
+            100,
+            super::DEFAULT_REQUEST_MAX_HANDLE_SECS,
+        );
         RequestTask::new(
             req,
             box move |res| {
@@ -929,6 +944,7 @@ mod tests {
                 );
             },
             5,
+            super::DEFAULT_REQUEST_MAX_HANDLE_SECS,
         );
     }
 }
