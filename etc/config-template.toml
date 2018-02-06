@@ -40,9 +40,12 @@
 # max recursion level allowed when decoding dag expression
 # end-point-recursion-limit = 1000
 
+# max time to handle coprocessor request before timeout
+# end-point-request-max-handle-secs = 60
+
 # the max bytes that snapshot can be written to disk in one second,
 # should be set based on your disk performance
-# snap_max_write_bytes_per_sec = "30MB"
+# snap-max-write-bytes-per-sec = "30MB"
 
 # set attributes about this server, e.g. { zone = "us-west-1", disk = "ssd" }.
 # labels = {}
