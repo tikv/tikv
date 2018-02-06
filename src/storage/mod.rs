@@ -977,6 +977,8 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
         "stale_epoch"
     } else if header.has_server_is_busy() {
         "server_is_busy"
+    } else if header.has_stale_command() {
+        "stale_command"
     } else {
         "other"
     }
