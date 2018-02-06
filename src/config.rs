@@ -703,16 +703,6 @@ impl TiKvConfig {
             return Err("default rocksdb not exist, buf raftdb exist".into());
         }
 
-        if self.raft_store.range_deletion_delay.as_secs()
-            < self.server.end_point_request_max_handle_secs + 60
-        {
-            return Err(
-                "range deleteion delay {} should be at least 60 secs larger than \
-                 end point request max handle secs {}"
-                    .into(),
-            );
-        }
-
         self.rocksdb.validate()?;
         self.server.validate()?;
         self.raft_store.validate()?;

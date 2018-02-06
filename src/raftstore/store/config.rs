@@ -129,7 +129,7 @@ impl Default for Config {
             // Disable manual compaction by default.
             region_compact_check_interval: ReadableDuration::secs(0),
             region_compact_delete_keys_count: 1_000_000,
-            range_deletion_delay: ReadableDuration::secs(120),
+            range_deletion_delay: ReadableDuration::secs(60),
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             notify_capacity: 40960,

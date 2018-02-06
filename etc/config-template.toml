@@ -146,7 +146,7 @@
 # use-delete-range = false
 
 # delay time before deleting a region range
-# range-deletion-delay = "120s"
+# range-deletion-delay = "60s"
 
 [coprocessor]
 # When it is true, it will try to split a region with table prefix if
