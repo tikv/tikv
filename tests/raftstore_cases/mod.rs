@@ -30,5 +30,6 @@ mod test_lease_read;
 mod test_bootstrap;
 mod test_service;
 mod test_update_region_size;
+mod test_clear_stale_data;
 
 use raftstore::*;
