@@ -1,6 +1,15 @@
 log-level = "debug"
 log-file = "foo"
 
+[readpool]
+high-concurrency = 1
+normal-concurrency = 3
+low-concurrency = 7
+max-tasks-high = 10000
+max-tasks-normal = 20000
+max-tasks-low = 30000
+stack-size = "20MB"
+
 [server]
 addr = "example.com:443"
 advertise-addr = "example.com:443"
