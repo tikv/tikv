@@ -32,7 +32,7 @@ pub struct DAGContext {
     columns: Arc<Vec<ColumnInfo>>,
     has_aggr: bool,
     req_ctx: ReqContext,
-    exec: Box<Executor>,
+    exec: Box<Executor + Send>,
     output_offsets: Vec<u32>,
 }
 

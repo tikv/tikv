@@ -137,12 +137,12 @@ impl IndexScanExecutor {
         Ok(Some(Row::new(handle, values)))
     }
 
-    fn get_row_from_point(&mut self, range: KeyRange) -> Result<Option<Row>> {
-        let key = range.get_start();
-        let value = self.store.get(&Key::from_raw(key), &mut self.statistics)?;
+    fn get_row_from_point(&mut self, mut range: KeyRange) -> Result<Option<Row>> {
+        let key = range.take_start();
+        let value = self.store.get(&Key::from_raw(&key), &mut self.statistics)?;
         if let Some(value) = value {
-            self.last_key = Some(key);
-            return self.decode_index_key_value(key.to_vec(), value);
+            self.last_key = Some(key.clone());
+            return self.decode_index_key_value(key, value);
         }
         Ok(None)
     }

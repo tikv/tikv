@@ -25,11 +25,11 @@ use storage::Statistics;
 pub struct LimitExecutor<'a> {
     limit: u64,
     cursor: u64,
-    src: Box<Executor + 'a>,
+    src: Box<Executor + Send + 'a>,
 }
 
 impl<'a> LimitExecutor<'a> {
-    pub fn new(limit: Limit, src: Box<Executor + 'a>) -> LimitExecutor {
+    pub fn new(limit: Limit, src: Box<Executor + Send + 'a>) -> LimitExecutor {
         COPR_EXECUTOR_COUNT.with_label_values(&["limit"]).inc();
         LimitExecutor {
             limit: limit.get_limit(),

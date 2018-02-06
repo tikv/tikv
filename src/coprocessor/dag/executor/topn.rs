@@ -61,7 +61,7 @@ pub struct TopNExecutor {
     heap: Option<TopNHeap>,
     iter: Option<IntoIter<SortRow>>,
     ctx: Arc<EvalContext>,
-    src: Box<Executor>,
+    src: Box<Executor + Send>,
     count: i64,
 }
 
@@ -70,7 +70,7 @@ impl TopNExecutor {
         mut meta: TopN,
         ctx: Arc<EvalContext>,
         columns_info: Arc<Vec<ColumnInfo>>,
-        src: Box<Executor>,
+        src: Box<Executor + Send>,
     ) -> Result<TopNExecutor> {
         let order_by = meta.take_order_by().into_vec();
 

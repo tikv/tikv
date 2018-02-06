@@ -79,7 +79,7 @@ pub struct HashAggExecutor {
     ctx: Arc<EvalContext>,
     cols: Arc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
-    src: Box<Executor>,
+    src: Box<Executor + Send>,
     count: i64,
 }
 
@@ -88,7 +88,7 @@ impl HashAggExecutor {
         mut meta: Aggregation,
         ctx: Arc<EvalContext>,
         columns: Arc<Vec<ColumnInfo>>,
-        src: Box<Executor>,
+        src: Box<Executor + Send>,
     ) -> Result<HashAggExecutor> {
         // collect all cols used in aggregation
         let mut visitor = ExprColumnRefVisitor::new(columns.len());
