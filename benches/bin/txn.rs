@@ -209,14 +209,14 @@ fn bench_single_row(
         log_name, table_size, version_count, data_len
     );
     let ns = bench_get(Arc::clone(&db), &keys) as u64;
-    println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
+    println!("\t{:>11} ns/op,  {:>11} ops/sec", ns, 1_000_000_000 / ns);
 
     println!(
         "benching txn {} set\trows:{} versions:{} data len:{}\t...",
         log_name, table_size, version_count, data_len
     );
     let ns = bench_set(Arc::clone(&db), &keys, value_len) as u64;
-    println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
+    println!("\t{:>11} ns/op,  {:>11} ops/sec", ns, 1_000_000_000 / ns);
 
     // Generate new db to bench delete, for the size of content was increased when benching set
     let dir = TempDir::new("bench-txn").unwrap();
@@ -232,7 +232,7 @@ fn bench_single_row(
         log_name, table_size, version_count, data_len
     );
     let ns = bench_delete(Arc::clone(&db), &keys) as u64;
-    println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
+    println!("\t{:>11} ns/op,  {:>11} ops/sec", ns, 1_000_000_000 / ns);
 }
 
 pub fn bench_txn() {
