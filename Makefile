@@ -73,10 +73,6 @@ test:
 	fi
 	# TODO: remove above target once https://github.com/rust-lang/cargo/issues/2984 is resolved.
 
-check:
-	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
-	cargo check --all-targets --features "${ENABLE_FEATURES}"
-
 bench:
 	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --features "${ENABLE_FEATURES}" -- --nocapture && \
 	RUST_BACKTRACE=1 cargo run --release --bin bench-tikv --features "${ENABLE_FEATURES}"

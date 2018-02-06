@@ -58,10 +58,10 @@ dependencies:
   post:
     # check format first
     - make format && git diff-index --quiet HEAD -- || (git diff; echo please make format and run tests before creating a PR!; exit 1)
-    - make check:
+    - make dev:
         timeout: 1800
         environment:
-          ENABLE_FEATURES: dev
+          EXTRA_CARGO_ARGS: --no-run
 
 
 test:
