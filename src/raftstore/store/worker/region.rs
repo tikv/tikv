@@ -273,6 +273,9 @@ impl SnapContext {
                 escape(&end_key),
                 e
             );
+            RANGE_DELETION_COUNTER_VEC
+                .with_label_values(&["fail"])
+                .inc();
             return;
         }
         if let Err(e) =
@@ -284,12 +287,18 @@ impl SnapContext {
                 escape(&end_key),
                 e
             );
+            RANGE_DELETION_COUNTER_VEC
+                .with_label_values(&["fail"])
+                .inc();
         } else {
             info!(
                 "succeed in deleting data in [{}, {})",
                 escape(&start_key),
                 escape(&end_key),
             );
+            RANGE_DELETION_COUNTER_VEC
+                .with_label_values(&["success"])
+                .inc();
         }
     }
 }
@@ -324,47 +333,59 @@ impl PendingDeleteRanges {
         if start_key >= end_key {
             return;
         }
+        RANGE_DELETION_COUNTER_VEC
+            .with_label_values(&["remove"])
+            .inc();
         let ranges = self.find_overlap_ranges(start_key.clone(), end_key.clone());
         for &(ref s_key, ref e_key) in ranges.iter() {
             if s_key < &start_key {
                 if e_key <= &end_key {
                     // the right part of the range is trimed
-                    // |_ _ _ _ _|        before
-                    //     |_ _ _ _ _|
-                    // |_ _|              after
+                    // s_key              e_key
+                    //   [_ _ _ _ _ _ _ _ _)                 before
+                    //            [_ _ _ _ _ _ _ _ _ _)
+                    //       start_key            end_key
+                    //   [_ _ _ _ )                          after
                     let val = self.ranges.get_mut(s_key).unwrap();
                     val.0 = start_key.clone();
                 } else {
                     // the middle part of the range is trimed
-                    // |_ _ _ _ _ _ _|    before
-                    //    |_ _ _|
-                    // |_ |     |_ _ |    after
+                    // s_key                   e_key
+                    //   [_ _ _ _ _ _ _ _ _ _ _ _)        before
+                    //           [_ _ _ _)
+                    //      start_key   end_key
+                    //   [_ _ _ _)       [_ _ _ _)        after
                     let mut val = self.ranges.remove(s_key).unwrap();
                     self.ranges.insert(end_key.clone(), val.clone());
                     val.0 = start_key.clone();
                     self.ranges.insert(s_key.clone(), val);
                 }
+            } else if e_key <= &end_key {
+                // the whole range is discarded
+                //     s_key    e_key
+                //       [_ _ _ _)             before
+                // start_key     end_key
+                //    [_ _ _ _ _ _ _)
+                //                             after
+                self.ranges.remove(s_key).unwrap();
             } else {
-                if e_key <= &end_key {
-                    // the whole range is discarded
-                    //    |_ _ _|         before
-                    // |_ _ _ _ _ _|
-                    //                    after
-                    self.ranges.remove(s_key).unwrap();
-                } else {
-                    // the left part of the range is trimed
-                    //    |_ _ _ _ _|    before
-                    // |_ _ _ _|
-                    //         |_ _ |    after
-                    let val = self.ranges.remove(s_key).unwrap();
-                    self.ranges.insert(end_key.clone(), val);
-                }
+                // the left part of the range is trimed
+                //         s_key         e_key
+                //           [_ _ _ _ _ _ _)      before
+                // start_key      end_key
+                //    [_ _ _ _ _ _ _)
+                //                  [_ _ _ )      after
+                let val = self.ranges.remove(s_key).unwrap();
+                self.ranges.insert(end_key.clone(), val);
             }
         }
     }
 
     pub fn insert(&mut self, start_key: Vec<u8>, end_key: Vec<u8>, timeout: time::Instant) {
         self.remove(start_key.clone(), end_key.clone());
+        RANGE_DELETION_COUNTER_VEC
+            .with_label_values(&["pending"])
+            .inc();
         self.ranges.insert(start_key, (end_key, timeout));
     }
 
@@ -378,6 +399,10 @@ impl PendingDeleteRanges {
         for &(ref s_key, _) in ranges.iter() {
             self.ranges.remove(s_key).unwrap();
         }
+        RANGE_DELETION_COUNTER_VEC
+            .with_label_values(&["timeout"])
+            .inc_by(ranges.len() as f64)
+            .unwrap();
         ranges
     }
 

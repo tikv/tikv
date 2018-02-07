@@ -62,4 +62,11 @@ lazy_static! {
             "Proposal count of all regions in a mio tick",
             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
+
+    pub static ref RANGE_DELETION_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_range_deletion_total",
+            "Total number of tikv range deletion.",
+            &["type"]
+        ).unwrap();
 }
