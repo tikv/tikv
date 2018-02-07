@@ -748,11 +748,11 @@ struct FsInfo {
 }
 
 #[cfg(target_os = "linux")]
-fn get_path_fsinfo(path: &str) -> Result<FsInfo, ConfigError> {
+fn get_fsinfo(path: &str, mnt_file: &str) -> Result<FsInfo, ConfigError> {
     use std::ffi::{CStr, CString};
     use libc;
     unsafe {
-        let profile = CString::new("/proc/mounts").unwrap();
+        let profile = CString::new(mnt_file).unwrap();
         let retype = CString::new("r").unwrap();
         let afile = libc::setmntent(profile.as_ptr(), retype.as_ptr());
         let mut fs = FsInfo::default();
@@ -843,7 +843,7 @@ pub fn check_data_dir(data_path: &str) -> Result<(), ConfigError> {
         }
     };
 
-    let fs_info = get_path_fsinfo(&real_path)?;
+    let fs_info = get_fsinfo(&real_path, "/proc/mounts")?;
     // TODO check ext4 nodelalloc
     info!("data_path:{}, mount fs info:{:?}", data_path, fs_info);
     let rotational_info = get_rotational_info(&fs_info.fsname)?;
@@ -908,6 +908,7 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod test {
     use std::fs::File;
+    use std::io::Write;
     use std::path::Path;
 
     use super::*;
@@ -1226,5 +1227,55 @@ mod test {
         for (addr, is_ok) in table {
             assert_eq!(check_addr(addr).is_ok(), is_ok);
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_get_fsinfo() {
+        let mninfo = br#"tmpfs /home tmpfs rw,nosuid,noexec,relatime,size=1628744k,mode=755 0 0
+/dev/sda4 /home/shirly ext4 rw,relatime,errors=remount-ro,data=ordered 0 0
+/dev/sdb /data1 ext4 rw,relatime,errors=remount-ro,data=ordered 0 0
+securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
+"#;
+        let mnt_file = "mnt.txt";
+        {
+            let mut file = File::create(mnt_file).unwrap();
+            file.write_all(mninfo).unwrap();
+        }
+        let f = get_fsinfo("/home/shirly/1111", mnt_file).unwrap();
+        assert_eq!(f.fsname, "/dev/sda4");
+        assert_eq!(f.mnt_dir, "/home/shirly");
+
+        // not found
+        let f2 = get_fsinfo("/tmp", mnt_file);
+        assert!(f2.is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_get_rotational_info() {
+        // test device not start with /dev
+        let ret = get_rotational_info("invalid");
+        assert!(ret.is_err());
+        // test device not exist
+        let ret = get_rotational_info("/dev/invalid");
+        assert!(ret.is_err());
+
+        // test normal device
+        let cur = canonicalize_path("./").unwrap();
+        let fs_info = get_fsinfo(&cur, "/proc/mounts").unwrap();
+        let ret = get_rotational_info(&fs_info.fsname);
+        assert!(ret.is_ok());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_check_data_dir() {
+        // test invalid data_path
+        let ret = check_data_dir("/sys/invalid");
+        assert!(ret.is_err());
+        // test normal case
+        let ret = check_data_dir("./check_data_dir");
+        assert!(ret.is_ok());
     }
 }
