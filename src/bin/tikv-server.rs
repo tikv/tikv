@@ -145,6 +145,10 @@ fn check_system_config(config: &TiKvConfig) {
         env::set_var("TZ", ":/etc/localtime");
         warn!("environment variable `TZ` is missing, use `/etc/localtime`");
     }
+
+    if let Err(e) = util::config::check_data_dir(&config.storage.data_dir) {
+        fatal!("{:?}", e);
+    }
 }
 
 fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<SecurityManager>) {

@@ -739,6 +739,132 @@ pub fn check_kernel() -> Vec<ConfigError> {
     Vec::new()
 }
 
+#[derive(Debug, Default)]
+struct FsInfo {
+    tp: String,
+    opts: String,
+    mnt_dir: String,
+    fsname: String,
+}
+
+#[cfg(target_os = "linux")]
+fn get_path_fsinfo(path: &str) -> Result<FsInfo, ConfigError> {
+    use std::ffi::{CStr, CString};
+    use libc;
+    unsafe {
+        let profile = CString::new("/proc/mounts").unwrap();
+        let retype = CString::new("r").unwrap();
+        let afile = libc::setmntent(profile.as_ptr(), retype.as_ptr());
+        let mut fs = FsInfo::default();
+        loop {
+            let ent = libc::getmntent(afile);
+            if ent.is_null() {
+                break;
+            }
+            let cur_dir = CStr::from_ptr((*ent).mnt_dir).to_str().unwrap();
+            if path.starts_with(&cur_dir) && cur_dir.len() >= fs.mnt_dir.len() {
+                fs.tp = CStr::from_ptr((*ent).mnt_type).to_str().unwrap().to_owned();
+                fs.opts = CStr::from_ptr((*ent).mnt_opts).to_str().unwrap().to_owned();
+                fs.fsname = CStr::from_ptr((*ent).mnt_fsname)
+                    .to_str()
+                    .unwrap()
+                    .to_owned();
+                fs.mnt_dir = cur_dir.to_owned();
+            }
+        }
+
+        libc::endmntent(afile);
+        if fs.mnt_dir.is_empty() {
+            return Err(ConfigError::Limit(format!(
+                "path:{:?} not find in mountable",
+                path
+            )));
+        }
+        Ok(fs)
+    }
+}
+
+pub fn get_rotational_info(fsname: &str) -> Result<String, ConfigError> {
+    if !fsname.starts_with("/dev/") {
+        return Err(ConfigError::Limit(format!(
+            "fsname:{:?} is not a normal device",
+            fsname
+        )));
+    }
+    let mut dev = fsname.trim_left_matches("/dev/");
+    use std::path::Path;
+    loop {
+        if dev.is_empty() {
+            return Err(ConfigError::Limit(format!(
+                "fs:{} no device find in block",
+                fsname
+            )));
+        }
+        let cur_path = format!("/sys/block/{}", dev);
+        if Path::new(&cur_path).exists() {
+            break;
+        }
+        dev = &dev[0..dev.len() - 1];
+    }
+
+    let rota_path = format!("/sys/block/{}/queue/rotational", dev);
+    let rpath = Path::new(&rota_path);
+    if !rpath.exists() {
+        return Err(ConfigError::Limit(format!(
+            "block {} has no rotational file",
+            dev
+        )));
+    }
+    use std::fs::File;
+    use std::io::Read;
+
+    let mut buffer = String::new();
+    File::open(rpath)
+        .and_then(|mut f| f.read_to_string(&mut buffer))
+        .map_err(|e| {
+            ConfigError::Limit(format!(
+                "get_rotational_info from {} failed {}",
+                rota_path, e
+            ))
+        })?;
+    Ok(buffer.trim_matches('\n').to_owned())
+}
+
+// check device && fs
+#[cfg(target_os = "linux")]
+pub fn check_data_dir(data_path: &str) -> Result<(), String> {
+    let real_path = match canonicalize_path(data_path) {
+        Ok(path) => path,
+        Err(e) => {
+            return Err(ConfigError::Limit(format!(
+                "path:{:?} canonicalize failed with error: {:?}",
+                data_path, e
+            )))
+        }
+    };
+
+    let fs_info = get_path_fsinfo(real_path)?;
+    // TODO check ext4 nodelalloc
+    info!("data_path:{}, mount fs info:{:?}", data_path, fs_info);
+    let rotational_info = get_rotational_info(&fs_info.fsname)?;
+    let msg = format!(
+        "data_path:{},device rational info {:?}",
+        data_path, rotational_info
+    );
+    if rotational_info == "0" {
+        // ssd
+        info!("{}", msg);
+    } else {
+        warn!("{}", msg);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn check_data_dir(_data_path: &str) -> Result<(), ConfigError> {
+    Ok(())
+}
+
 /// `check_addr` validates an address. Addresses are formed like "Host:Port".
 /// More details about **Host** and **Port** can be found in WHATWG URL Standard.
 pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
