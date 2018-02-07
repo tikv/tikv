@@ -14,28 +14,38 @@
 use grpc::{Error as GrpcError, WriteFlags};
 use grpc::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
 use futures::{future, stream, Future, Stream};
+use futures::sync::oneshot;
 use futures_cpupool::{Builder, CpuPool};
 use kvproto::debugpb_grpc;
 use kvproto::debugpb::*;
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader,
+                          RegionDetailResponse, StatusCmdType, StatusRequest};
 use fail;
 
 use raftstore::store::Engines;
+use raftstore::store::msg::Callback;
 use server::debug::{Debugger, Error};
+use server::transport::RaftStoreRouter;
 
 #[derive(Clone)]
-pub struct Service {
+pub struct Service<T: RaftStoreRouter> {
     pool: CpuPool,
     debugger: Debugger,
+    raft_router: T,
 }
 
-impl Service {
-    pub fn new(engines: Engines) -> Service {
+impl<T: RaftStoreRouter> Service<T> {
+    pub fn new(engines: Engines, raft_router: T) -> Service<T> {
         let pool = Builder::new()
             .name_prefix(thd_name!("debugger"))
             .pool_size(1)
             .create();
         let debugger = Debugger::new(engines);
-        Service { pool, debugger }
+        Service {
+            pool: pool,
+            debugger: debugger,
+            raft_router: raft_router,
+        }
     }
 
     fn handle_response<F, P>(&self, ctx: RpcContext, sink: UnarySink<P>, resp: F, tag: &'static str)
@@ -46,11 +56,11 @@ impl Service {
         let f = resp.then(|v| match v {
             Ok(resp) => sink.success(resp),
             Err(e) => {
-                let status = Service::error_to_status(e);
+                let status = Self::error_to_status(e);
                 sink.fail(status)
             }
         });
-        ctx.spawn(f.map_err(move |e| Service::on_grpc_error(tag, &e)));
+        ctx.spawn(f.map_err(move |e| Self::on_grpc_error(tag, &e)));
     }
 
     fn error_to_status(e: Error) -> RpcStatus {
@@ -67,14 +77,14 @@ impl Service {
     }
 
     fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
-        let status = Service::error_to_status(e);
+        let status = Self::error_to_status(e);
         let e = GrpcError::RpcFailure(status);
-        Service::on_grpc_error(tag, &e);
+        Self::on_grpc_error(tag, &e);
         e
     }
 }
 
-impl debugpb_grpc::Debug for Service {
+impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
     fn get(&self, ctx: RpcContext, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
 
@@ -194,11 +204,11 @@ impl debugpb_grpc::Debug for Service {
         let to = req.take_to_key();
         let limit = req.get_limit();
         let future = future::result(debugger.scan_mvcc(&from, &to, limit))
-            .map_err(|e| Service::error_to_grpc_error("scan_mvcc", e))
+            .map_err(|e| Self::error_to_grpc_error("scan_mvcc", e))
             .and_then(|iter| {
                 #[allow(deprecated)]
                 stream::iter(iter)
-                    .map_err(|e| Service::error_to_grpc_error("scan_mvcc", e))
+                    .map_err(|e| Self::error_to_grpc_error("scan_mvcc", e))
                     .map(|(key, mvcc_info)| {
                         let mut resp = ScanMvccResponse::new();
                         resp.set_key(key);
@@ -208,7 +218,7 @@ impl debugpb_grpc::Debug for Service {
                     .forward(sink)
                     .map(|_| ())
             })
-            .map_err(|e| Service::on_grpc_error("scan_mvcc", &e));
+            .map_err(|e| Self::on_grpc_error("scan_mvcc", &e));
         self.pool.spawn(future).forget();
     }
 
@@ -291,5 +301,64 @@ impl debugpb_grpc::Debug for Service {
         });
 
         self.handle_response(ctx, sink, f, TAG);
+    }
+
+    fn region_consistent_check(
+        &self,
+        ctx: RpcContext,
+        req: RegionConsistentCheckRequest,
+        sink: UnarySink<RegionConsistentCheckResponse>,
+    ) {
+        let region_id = req.get_region_id();
+        let debugger = self.debugger.clone();
+
+        let raft_router = self.raft_router.clone();
+        let get_region_status = move |store_id: u64| {
+            let mut header = RaftRequestHeader::new();
+            header.set_region_id(region_id);
+            header.mut_peer().set_store_id(store_id);
+            let mut status_request = StatusRequest::new();
+            status_request.set_cmd_type(StatusCmdType::RegionDetail);
+            let mut raft_cmd = RaftCmdRequest::new();
+            raft_cmd.set_header(header);
+            raft_cmd.set_status_request(status_request);
+
+            let (tx, rx) = oneshot::channel();
+            let cb = Callback::Read(box |resp| tx.send(resp).unwrap());
+            raft_router
+                .send_command(raft_cmd, cb)
+                .map(|_| rx.map(|mut r| r.response.take_status_response().take_region_detail()))
+                .map(|rx| rx.map_err(|e| Error::Other(box e)))
+                .map_err(|e| Error::Other(box e))
+        };
+
+        let raft_router = self.raft_router.clone();
+        let do_check = move |mut detail: RegionDetailResponse| {
+            let mut header = RaftRequestHeader::new();
+            header.set_region_id(region_id);
+            header.set_peer(detail.take_leader());
+            let mut admin_request = AdminRequest::new();
+            admin_request.set_cmd_type(AdminCmdType::ComputeHash);
+            let mut raft_cmd = RaftCmdRequest::new();
+            raft_cmd.set_header(header);
+            raft_cmd.set_admin_request(admin_request);
+
+            raft_router
+                .send_command(raft_cmd, Callback::None)
+                .map_err(|e| Error::Other(box e))
+        };
+
+        let consistent_check = move || {
+            future::result(debugger.get_store_id())
+                .and_then(get_region_status)
+                .flatten()
+                .and_then(do_check)
+        };
+        let f = self.pool.spawn_fn(consistent_check).map(|_| {
+            let mut resp = RegionConsistentCheckResponse::new();
+            resp.set_success(true);
+            resp
+        });
+        self.handle_response(ctx, sink, f, "region_consistent_check");
     }
 }

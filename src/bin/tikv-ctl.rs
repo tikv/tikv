@@ -390,6 +390,8 @@ trait DebugExecutor {
         }
     }
 
+    fn consistent_check(&self, _: u64);
+
     fn check_local_mode(&self);
 
     fn get_all_meta_regions(&self) -> Vec<u64>;
@@ -511,6 +513,14 @@ impl DebugExecutor for DebugClient {
     fn print_bad_regions(&self) {
         unimplemented!("only avaliable for local mode");
     }
+
+    fn consistent_check(&self, region_id: u64) {
+        let mut req = RegionConsistentCheckRequest::new();
+        req.set_region_id(region_id);
+        self.region_consistent_check(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::region_consistent_check", e));
+        println!("success!");
+    }
 }
 
 impl DebugExecutor for Debugger {
@@ -578,6 +588,11 @@ impl DebugExecutor for Debugger {
             return;
         }
         println!("all regions are healthy")
+    }
+
+    fn consistent_check(&self, _: u64) {
+        eprintln!("only support remote mode");
+        process::exit(-1);
     }
 }
 
@@ -895,6 +910,17 @@ fn main() {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("consistent-check")
+                .about("force consistent-check for a specified region")
+                .arg(
+                    Arg::with_name("region")
+                        .required(true)
+                        .short("r")
+                        .takes_value(true)
+                        .help("the target region"),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("bad-regions").about("get all regions with corrupt raft"),
         );
     let matches = app.clone().get_matches();
@@ -988,6 +1014,9 @@ fn main() {
             panic!("invalid pd configuration: {:?}", e);
         }
         debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, region);
+    } else if let Some(matches) = matches.subcommand_matches("consistent-check") {
+        let region_id = matches.value_of("region").unwrap().parse().unwrap();
+        debug_executor.consistent_check(region_id);
     } else if matches.subcommand_matches("bad-regions").is_some() {
         debug_executor.print_bad_regions();
     } else {
