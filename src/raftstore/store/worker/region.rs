@@ -321,8 +321,7 @@ impl PendingDeleteRanges {
         }
 
         // find the rest ranges that overlap with [start_key, end_key)
-        let mut sub_range = self.ranges.range((Included(start_key), Excluded(end_key)));
-        while let Some((s_key, &(ref e_key, _))) = sub_range.next() {
+        for (s_key, &(ref e_key, _)) in self.ranges.range((Included(start_key), Excluded(end_key))) {
             ranges.push((s_key.clone(), e_key.clone()));
         }
         ranges
@@ -337,7 +336,7 @@ impl PendingDeleteRanges {
             .with_label_values(&["remove"])
             .inc();
         let ranges = self.find_overlap_ranges(start_key.clone(), end_key.clone());
-        for &(ref s_key, ref e_key) in ranges.iter() {
+        for &(ref s_key, ref e_key) in &ranges {
             if s_key < &start_key {
                 if e_key <= &end_key {
                     // the right part of the range is trimed
@@ -396,7 +395,7 @@ impl PendingDeleteRanges {
                 ranges.push((s_key.clone(), e_key.clone()));
             }
         }
-        for &(ref s_key, _) in ranges.iter() {
+        for &(ref s_key, _) in &ranges {
             self.ranges.remove(s_key).unwrap();
         }
         RANGE_DELETION_COUNTER_VEC
@@ -566,7 +565,7 @@ mod test {
 
         thread::sleep(delay / 2);
 
-        // range has been removed, so will not timeout
+        // range has been updated, so will not timeout
         let now = time::Instant::now();
         let ranges = pending_delete_ranges.pick_timeout_ranges(now);
         assert!(ranges.is_empty());
