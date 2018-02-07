@@ -162,6 +162,7 @@ impl<C: Sender<Msg>> Runner<C> {
         let mut split_ctx = self.coprocessor
             .new_split_check_status(region, &self.engine);
         if split_ctx.skip() {
+            debug!("[region {}] skip split check", region.get_id());
             return;
         }
 
