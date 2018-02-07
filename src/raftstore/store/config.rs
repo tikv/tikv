@@ -138,7 +138,7 @@ impl Default for Config {
             messages_per_tick: 4096,
             max_peer_down_duration: ReadableDuration::minutes(5),
             max_leader_missing_duration: ReadableDuration::hours(2),
-            abnormal_leader_missing_duration: ReadableDuration::secs(100),
+            abnormal_leader_missing_duration: ReadableDuration::minutes(2),
             snap_apply_batch_size: ReadableSize::mb(10),
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
