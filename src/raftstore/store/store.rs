@@ -40,6 +40,7 @@ use protobuf::Message;
 use raft::{self, SnapshotStatus, INVALID_INDEX};
 use raftstore::{Error, Result};
 use kvproto::metapb;
+use util::timer::Timer;
 use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
 use util::transport::SendCh;
 use util::RingQueue;
@@ -51,7 +52,8 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
                     ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
-                    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
+                    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask,
+                    PENDING_DELETE_RANGE_CHECK_INTERVAL};
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -517,7 +519,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.cfg.use_delete_range,
             end_point_request_max_handle_secs + self.cfg.range_deletion_delay.as_secs(),
         );
-        box_try!(self.region_worker.start(runner));
+        let mut timer = Timer::new(1);
+        timer.add_task(Duration::from_secs(PENDING_DELETE_RANGE_CHECK_INTERVAL), 0);
+        box_try!(self.region_worker.start_with_timer(runner, timer));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
         box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));

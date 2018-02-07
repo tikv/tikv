@@ -645,8 +645,8 @@ mod tests {
         let keys = vec![b"k1", b"k2", b"k3", b"k4"];
 
         let mut kvs: Vec<(&[u8], &[u8])> = vec![];
-        for (_, key) in keys.iter().enumerate() {
-            kvs.push((key.clone(), b"value"));
+        for key in keys {
+            kvs.push((key, b"value"));
         }
         let kvs_left: Vec<(&[u8], &[u8])> = vec![(kvs[0].0, kvs[0].1), (kvs[3].0, kvs[3].1)];
         for cf in ALL_CFS {
@@ -658,7 +658,6 @@ mod tests {
         }
         check_data(&db, ALL_CFS, kvs.as_slice());
 
-        // Delete all files in ["k2", "k4").
         delete_all_files_in_range(&db, b"k2", b"k4").unwrap();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
