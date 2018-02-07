@@ -321,7 +321,8 @@ impl PendingDeleteRanges {
         }
 
         // find the rest ranges that overlap with [start_key, end_key)
-        for (s_key, &(ref e_key, _)) in self.ranges.range((Included(start_key), Excluded(end_key))) {
+        for (s_key, &(ref e_key, _)) in self.ranges.range((Included(start_key), Excluded(end_key)))
+        {
             ranges.push((s_key.clone(), e_key.clone()));
         }
         ranges
