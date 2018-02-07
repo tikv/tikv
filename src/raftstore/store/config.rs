@@ -138,7 +138,7 @@ impl Default for Config {
             messages_per_tick: 4096,
             max_peer_down_duration: ReadableDuration::minutes(5),
             max_leader_missing_duration: ReadableDuration::hours(2),
-            abnormal_leader_missing_duration: ReadableDuration::secs(10),
+            abnormal_leader_missing_duration: ReadableDuration::secs(100),
             snap_apply_batch_size: ReadableSize::mb(10),
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
@@ -208,11 +208,11 @@ impl Config {
         }
 
         let abnormal_leader_missing = self.abnormal_leader_missing_duration.as_millis() as u64;
-        if abnormal_leader_missing < election_timeout {
+        if abnormal_leader_missing < election_timeout * 2 {
             return Err(box_err!(
-                "abnormal leader missing {} ms is less than election timeout {} ms",
+                "abnormal leader missing {} ms is less than election timeout x2 {} ms",
                 abnormal_leader_missing,
-                election_timeout
+                election_timeout * 2
             ));
         }
 
