@@ -39,7 +39,7 @@ pub enum Task {
 
     Check {
         ranges: BTreeSet<Key>,
-        min_num_del: u64,
+        tombstones_threshold: u64,
     },
 }
 
@@ -59,12 +59,12 @@ impl Display for Task {
             ),
             Task::Check {
                 ref ranges,
-                min_num_del,
+                tombstones_threshold,
             } => write!(
                 f,
                 "Space check ranges count {}, min num del {}",
                 ranges.len(),
-                min_num_del
+                tombstones_threshold
             ),
         }
     }
@@ -115,9 +115,9 @@ impl Runner {
     pub fn collect_ranges_need_compact(
         &self,
         ranges: BTreeSet<Key>,
-        min_num_del: u64,
+        tombstones_threshold: u64,
     ) -> Result<VecDeque<(Key, Key)>, Error> {
-        collect_ranges_need_compact(&self.engine, ranges, min_num_del)
+        collect_ranges_need_compact(&self.engine, ranges, tombstones_threshold)
     }
 }
 
@@ -138,8 +138,8 @@ impl Runnable<Task> for Runner {
             }
             Task::Check {
                 ranges,
-                min_num_del,
-            } => match self.collect_ranges_need_compact(ranges, min_num_del) {
+                tombstones_threshold,
+            } => match self.collect_ranges_need_compact(ranges, tombstones_threshold) {
                 Ok(ranges) => {
                     if ranges.is_empty() {
                         return;
@@ -158,7 +158,7 @@ impl Runnable<Task> for Runner {
     }
 }
 
-fn need_compact(num_entires: u64, num_versions: u64, min_num_del: u64) -> bool {
+fn need_compact(num_entires: u64, num_versions: u64, tombstones_threshold: u64) -> bool {
     if num_entires <= num_versions {
         return false;
     }
@@ -166,7 +166,7 @@ fn need_compact(num_entires: u64, num_versions: u64, min_num_del: u64) -> bool {
     // When the number of tombstones exceed threshold and at least 50% entries
     // are tombstones, this range need compacting.
     let estimate_num_del = num_entires - num_versions;
-    estimate_num_del >= min_num_del && estimate_num_del * 2 >= num_versions
+    estimate_num_del >= tombstones_threshold && estimate_num_del * 2 >= num_versions
 }
 
 fn get_range_entries_and_versions(
@@ -203,7 +203,7 @@ fn get_range_entries_and_versions(
 fn collect_ranges_need_compact(
     engine: &DB,
     ranges: BTreeSet<Key>,
-    min_num_del: u64,
+    tombstones_threshold: u64,
 ) -> Result<VecDeque<(Key, Key)>, Error> {
     let mut ranges_need_compact = VecDeque::new();
 
@@ -222,7 +222,7 @@ fn collect_ranges_need_compact(
             last_start_key.as_ref().unwrap().as_slice(),
             &key,
         ) {
-            if need_compact(num_entries, num_versions, min_num_del) {
+            if need_compact(num_entries, num_versions, tombstones_threshold) {
                 if compact_start.is_none() {
                     compact_start = last_start_key.take();
                 }

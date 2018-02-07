@@ -54,7 +54,7 @@ use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, Compact
                     RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
-use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
+use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key, DATA_MIN_KEY};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
@@ -1871,7 +1871,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_space_check_finished(&mut self, ranges_need_compact: VecDeque<(Vec<u8>, Vec<u8>)>) {
-        info!("ranges {:?} need compact", ranges_need_compact);
+        info!("{} ranges need compact", ranges_need_compact.len());
         self.ranges_need_compact = Some(ranges_need_compact);
     }
 
@@ -1906,9 +1906,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let last_checked_key = match self.last_checked_key.take() {
                 Some(key) => key,
                 None => {
-                    let min_data_key = keys::data_key(b"");
-                    ranges_need_check.insert(min_data_key.clone());
-                    min_data_key
+                    ranges_need_check.insert(DATA_MIN_KEY.to_vec());
+                    DATA_MIN_KEY.to_vec()
                 }
             };
 
@@ -1927,7 +1926,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
             if let Err(e) = self.compact_worker.schedule(CompactTask::Check {
                 ranges: ranges_need_check,
-                min_num_del: self.cfg.region_compact_min_tombstones,
+                tombstones_threshold: self.cfg.region_compact_min_tombstones,
             }) {
                 error!("{} failed to schedule space check task: {}", self.tag, e);
             }
