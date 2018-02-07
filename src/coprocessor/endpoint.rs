@@ -178,8 +178,9 @@ impl Host {
             };
             pool.execute(move |ctx: &mut CopContext| {
                 // decrease pending task
-                ctx.basic_local_metrics
-                    .add_pending_reqs(type_str, pri_str, -1);
+                COPR_PENDING_REQS
+                    .with_label_values(&[type_str, pri_str])
+                    .dec();
                 let region_id = req.req.get_context().get_region_id();
                 let stats =
                     end_point.handle_request(req, batch_row_limit, &mut ctx.basic_local_metrics);

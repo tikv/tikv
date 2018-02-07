@@ -55,7 +55,7 @@ impl CopFlowStatistics {
     }
 }
 
-/// `ExecLocalMetrics` collects metrics from `ExectorMetrics`
+/// `ExecLocalMetrics` collects metrics for request with executors.
 pub struct ExecLocalMetrics {
     flow_stats: CopFlowStatistics,
     scan_details: LocalCounterVec,

@@ -85,7 +85,6 @@ pub struct ExecCounter {
     pub selection: i64,
     pub table_scan: i64,
     pub topn: i64,
-    // pub data: HashMap<&'static str, i64>,
 }
 
 impl ExecCounter {
@@ -96,12 +95,7 @@ impl ExecCounter {
         self.selection += other.selection;
         self.table_scan += other.table_scan;
         self.topn += other.topn;
-        other.aggregation = 0;
-        other.index_scan = 0;
-        other.limit = 0;
-        other.selection = 0;
-        other.table_scan = 0;
-        other.topn = 0;
+        *other = ExecCounter::default();
     }
 
     pub fn consume(self, metrics: &mut LocalCounterVec) {

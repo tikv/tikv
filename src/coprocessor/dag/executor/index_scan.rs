@@ -131,6 +131,7 @@ impl IndexScanExecutor {
     }
 
     fn get_row_from_point(&mut self, range: KeyRange) -> Result<Option<Row>> {
+        self.metrics.scan_counter.inc_point();
         let key = range.get_start();
         let value = self.store
             .get(&Key::from_raw(key), &mut self.metrics.cf_stats)?;
@@ -160,7 +161,6 @@ impl Executor for IndexScanExecutor {
             }
             if let Some(range) = self.key_ranges.next() {
                 if self.is_point(&range) {
-                    self.metrics.scan_counter.inc_point();
                     if let Some(row) = self.get_row_from_point(range)? {
                         self.count += 1;
                         return Ok(Some(row));
