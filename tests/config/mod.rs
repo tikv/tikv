@@ -19,6 +19,7 @@ use log::LogLevelFilter;
 use rocksdb::{CompactionPriority, DBCompressionType, DBRecoveryMode};
 use tikv::pd::Config as PdConfig;
 use tikv::server::Config as ServerConfig;
+use tikv::server::readpool::Config as ReadPoolConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::config::*;
@@ -71,6 +72,15 @@ fn test_serde_custom_tikv_config() {
         end_point_recursion_limit: 100,
         end_point_batch_row_limit: 64,
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
+    };
+    value.readpool = ReadPoolConfig {
+        high_concurrency: 1,
+        normal_concurrency: 3,
+        low_concurrency: 7,
+        max_tasks_high: 10000,
+        max_tasks_normal: 20000,
+        max_tasks_low: 30000,
+        stack_size: ReadableSize::mb(20),
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),
