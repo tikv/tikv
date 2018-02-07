@@ -350,7 +350,7 @@ impl PendingDeleteRanges {
                     let mut val = self.ranges.remove(s_key).unwrap();
                     self.ranges.insert(end_key.to_owned(), val.clone());
                     val.0 = start_key.to_owned();
-                    assert!(self.ranges.insert(end_key.to_owned(), val).is_none());
+                    assert!(self.ranges.insert(s_key.clone(), val).is_none());
                 }
             } else if e_key <= &end_key.to_vec() {
                 // the whole range is discarded
