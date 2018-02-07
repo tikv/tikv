@@ -832,7 +832,7 @@ pub fn get_rotational_info(fsname: &str) -> Result<String, ConfigError> {
 
 // check device && fs
 #[cfg(target_os = "linux")]
-pub fn check_data_dir(data_path: &str) -> Result<(), String> {
+pub fn check_data_dir(data_path: &str) -> Result<(), ConfigError> {
     let real_path = match canonicalize_path(data_path) {
         Ok(path) => path,
         Err(e) => {
@@ -843,7 +843,7 @@ pub fn check_data_dir(data_path: &str) -> Result<(), String> {
         }
     };
 
-    let fs_info = get_path_fsinfo(real_path)?;
+    let fs_info = get_path_fsinfo(&real_path)?;
     // TODO check ext4 nodelalloc
     info!("data_path:{}, mount fs info:{:?}", data_path, fs_info);
     let rotational_info = get_rotational_info(&fs_info.fsname)?;
