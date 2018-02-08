@@ -1199,10 +1199,7 @@ impl SnapManager {
         let mut old_snaps = None;
         while self.get_total_snap_size() > self.max_total_snap_size() {
             if old_snaps.is_none() {
-                let snaps = match self.list_idle_snap() {
-                    Ok(snaps) => snaps,
-                    Err(_) => break,
-                };
+                let snaps = self.list_idle_snap()?;
                 let mut key_and_snaps = Vec::with_capacity(snaps.len());
                 for (key, is_sending) in snaps {
                     if !is_sending {
@@ -1212,18 +1209,15 @@ impl SnapManager {
                         Ok(snap) => snap,
                         Err(_) => continue,
                     };
-                    if !snap.meta().and_then(|m| m.modified()).is_ok() {
-                        continue;
+                    if let Ok(modified) = snap.meta().and_then(|m| m.modified()) {
+                        key_and_snaps.push((key, snap, modified));
                     }
-                    key_and_snaps.push((key, snap));
                 }
-                // Because we have filtered invalid `meta` and meta.modified`,
-                // we can unwrap safely here.
-                key_and_snaps.sort_by_key(|t| Reverse(t.1.meta().unwrap().modified().unwrap()));
+                key_and_snaps.sort_by_key(|t| Reverse(t.2));
                 old_snaps = Some(key_and_snaps);
             }
             match old_snaps.as_mut().unwrap().pop() {
-                Some((key, snap)) => self.delete_snapshot(&key, snap.as_ref(), false),
+                Some((key, snap, _)) => self.delete_snapshot(&key, snap.as_ref(), false),
                 None => return Err(RaftStoreError::Snapshot(Error::TooManySnapshots)),
             };
         }
@@ -1497,8 +1491,7 @@ mod test {
     }
 
     fn get_test_db_for_regions(path: &TempDir, regions: &[u64]) -> Result<Arc<DB>> {
-        let p = path.path().to_str().unwrap();
-        let kv = rocksdb::new_engine(p, ALL_CFS, None)?;
+        let kv = get_test_db(path)?;
         for &region_id in regions {
             // Put apply state into kv engine.
             let mut apply_state = RaftApplyState::new();
@@ -1513,18 +1506,8 @@ mod test {
             region_state.set_region(region);
             let handle = rocksdb::get_cf_handle(&kv, CF_RAFT)?;
             kv.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
-
-            // Put some data into kv engine.
-            for (i, cf) in [CF_LOCK, CF_DEFAULT, CF_WRITE].iter().enumerate() {
-                let handle = rocksdb::get_cf_handle(&kv, cf)?;
-                let mut p = Peer::new();
-                p.set_store_id(1);
-                p.set_id((i + 1) as u64);
-                let key = keys::data_key(b"akey");
-                kv.put_msg_cf(handle, &key[..], &p)?;
-            }
         }
-        Ok(Arc::new(kv))
+        Ok(kv)
     }
 
     pub fn get_kv_count(snap: &DbSnapshot) -> usize {
