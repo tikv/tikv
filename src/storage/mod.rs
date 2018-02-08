@@ -984,7 +984,7 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
     } else if header.has_raft_entry_too_large() {
         "raft_entry_too_large"
     } else {
-        unreachable!();
+        "other"
     }
 }
 
