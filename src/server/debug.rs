@@ -22,7 +22,7 @@ use std::collections::HashSet;
 use protobuf::{self, Message, RepeatedField};
 
 use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
-use kvproto::metapb::{Peer, Region};
+use kvproto::metapb::Region;
 use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
 use kvproto::debugpb::DB as DBType;
 use kvproto::eraftpb::Entry;
@@ -387,14 +387,14 @@ impl Debugger {
             if region_state.get_state() == PeerState::Tombstone {
                 continue;
             }
-            let mut new_peers: Vec<Peer> = Vec::with_capacity(5);
+            let mut new_peers = Vec::with_capacity(region_state.get_region().get_peers().len());
             for peer in region_state.get_region().get_peers() {
                 if !store_ids.contains(&peer.get_store_id()) {
                     new_peers.push(peer.clone());
                 }
             }
             let old_peers_len = region_state.get_region().get_peers().len();
-            if new_peers.len() < quorum(old_peers_len) {
+            if errors.is_empty() && new_peers.len() < quorum(old_peers_len) {
                 {
                     let region = region_state.mut_region();
                     region.set_peers(RepeatedField::from_vec(new_peers));
@@ -609,7 +609,7 @@ mod tests {
     use std::iter::FromIterator;
 
     use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
-    use kvproto::metapb;
+    use kvproto::metapb::{Peer, Region};
     use kvproto::eraftpb::EntryType;
     use tempdir::TempDir;
 
@@ -767,7 +767,7 @@ mod tests {
 
         let region_id = 1;
         let region_state_key = keys::region_state_key(region_id);
-        let mut region = metapb::Region::new();
+        let mut region = Region::new();
         region.set_id(region_id);
         region.set_start_key(b"a".to_vec());
         region.set_end_key(b"zz".to_vec());
@@ -920,7 +920,7 @@ mod tests {
                     let region = region_state.mut_region();
                     region.set_id(region_id);
                     let peers = peers.iter().enumerate().map(|(i, &sid)| {
-                        let mut peer = metapb::Peer::new();
+                        let mut peer = Peer::new();
                         peer.id = i as u64;
                         peer.store_id = sid;
                         peer
