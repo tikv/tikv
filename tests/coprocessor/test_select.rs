@@ -869,8 +869,6 @@ fn test_stream_batch_row_limit() {
     assert_eq!(resps.len(), 2);
 
     for (i, resp) in resps.into_iter().enumerate() {
-        // Responses should have valid range.
-
         // For now, we only support default encode type.
         assert_eq!(resp.get_encode_type(), EncodeType::TypeDefault);
         let mut chunk = Chunk::new();
