@@ -533,16 +533,16 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     handle,
                     region,
                     peer,
-                    RegionStat::new(
-                        down_peers,
-                        pending_peers,
-                        pending_learners,
-                        written_bytes_delta,
-                        written_keys_delta,
-                        read_bytes_delta,
-                        read_keys_delta,
-                        approximate_size,
-                    ),
+                    RegionStat {
+                        down_peers: down_peers,
+                        pending_peers: pending_peers,
+                        pending_learners: pending_learners,
+                        written_bytes: written_bytes_delta,
+                        written_keys: written_keys_delta,
+                        read_bytes: read_bytes_delta,
+                        read_keys: read_keys_delta,
+                        approximate_size: approximate_size,
+                    },
                 )
             }
             Task::StoreHeartbeat { stats, store_info } => {
