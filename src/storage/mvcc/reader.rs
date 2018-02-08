@@ -38,6 +38,7 @@ pub struct MvccReader {
     lower_bound: Option<Vec<u8>>,
     upper_bound: Option<Vec<u8>>,
     isolation_level: IsolationLevel,
+    seek_data_last_time: bool,
 }
 
 impl MvccReader {
@@ -61,6 +62,7 @@ impl MvccReader {
             fill_cache: fill_cache,
             lower_bound: lower_bound,
             upper_bound: upper_bound,
+            seek_data_last_time: false,
         }
     }
 
@@ -72,7 +74,7 @@ impl MvccReader {
         self.key_only = key_only;
     }
 
-    pub fn load_data(&mut self, key: &Key, ts: u64) -> Result<Value> {
+    pub fn load_data(&mut self, key: &Key, ts: u64, use_seek: bool) -> Result<Value> {
         if self.key_only {
             return Ok(vec![]);
         }
@@ -82,23 +84,35 @@ impl MvccReader {
         }
 
         let k = key.append_ts(ts);
-        let res = if let Some(ref mut cursor) = self.data_cursor {
-            match cursor.get(&k, &mut self.statistics.data)? {
-                None => panic!("key {} not found, ts {}", key, ts),
-                Some(v) => v.to_vec(),
+        // we use snap.get directly when data_cusor is none
+        let res = if use_seek && self.data_cursor.is_some() {
+            let mut cursor = self.data_cursor.as_mut().unwrap();
+            if self.seek_data_last_time {
+                // use near_seek when last op is seek/near_seek
+                cursor
+                    .get(&k, &mut self.statistics.data)?
+                    .map(|v| v.to_vec())
+            } else {
+                // use seek when last op is get.
+                cursor
+                    .get_with_seek(&k, &mut self.statistics.data)?
+                    .map(|v| v.to_vec())
             }
         } else {
             self.statistics.data.get += 1;
-            match self.snapshot.get(&k)? {
-                None => panic!("key {} not found, ts: {}", key, ts),
-                Some(v) => v,
-            }
+            self.snapshot.get(&k)?
         };
 
+        let value = match res {
+            None => panic!("key {} not found, ts {}", key, ts),
+            Some(v) => v,
+        };
+        self.seek_data_last_time = use_seek;
         self.statistics.data.processed += 1;
-        self.statistics.data.flow_stats.read_bytes += k.raw().unwrap_or_default().len() + res.len();
+        self.statistics.data.flow_stats.read_bytes +=
+            k.raw().unwrap_or_default().len() + value.len();
         self.statistics.data.flow_stats.read_keys += 1;
-        Ok(res)
+        Ok(value)
     }
 
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
@@ -219,6 +233,7 @@ impl MvccReader {
             },
             IsolationLevel::RC => {}
         }
+
         loop {
             match self.seek_write(key, ts)? {
                 Some((commit_ts, mut write)) => match write.write_type {
@@ -229,7 +244,11 @@ impl MvccReader {
                             }
                             return Ok(write.short_value.take());
                         }
-                        return self.load_data(key, write.start_ts).map(Some);
+                        let seek_write = self.write_cursor.as_ref().unwrap().last_op_is_seek();
+                        // if we use seek in write cf(there are many history versions),
+                        // use get in default cf to make read faster
+                        let seek_data = !seek_write;
+                        return self.load_data(key, write.start_ts, seek_data).map(Some);
                     }
                     WriteType::Delete => {
                         return Ok(None);
@@ -554,8 +573,9 @@ mod tests {
     use kvproto::kvrpcpb::IsolationLevel;
     use rocksdb::{self, Writable, WriteBatch, DB};
     use std::sync::Arc;
-    use storage::{make_key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use storage::engine::Modify;
+    use storage::{make_key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+                  SHORT_VALUE_MAX_LEN};
+    use storage::engine::{Modify, ScanMode, SEEK_BOUND};
     use storage::mvcc::{MvccReader, MvccTxn};
     use tempdir::TempDir;
     use raftstore::store::RegionSnapshot;
@@ -578,6 +598,13 @@ mod tests {
 
         pub fn put(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
             let m = Mutation::Put((make_key(pk), vec![]));
+            self.prewrite(m, pk, start_ts);
+            self.commit(pk, start_ts, commit_ts);
+        }
+
+        pub fn put_with_long_value(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
+            let value: Vec<u8> = vec![5; SHORT_VALUE_MAX_LEN + 5];
+            let m = Mutation::Put((make_key(pk), value));
             self.prewrite(m, pk, start_ts);
             self.commit(pk, start_ts, commit_ts);
         }
@@ -795,5 +822,76 @@ mod tests {
         assert_eq!(props.num_puts, 4);
         assert_eq!(props.num_versions, 5);
         assert_eq!(props.max_row_versions, 1);
+    }
+
+    #[test]
+    fn test_mvcc_scan_with_long_values() {
+        let path = TempDir::new("_test_mvcc_scan").expect("");
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![0], vec![10]);
+        let db = open_db(path, false);
+        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+        let mut start_ts = 1 as u64;
+        for i in 0..10 {
+            let commit_ts = start_ts + 1;
+            engine.put_with_long_value(&[i], start_ts, commit_ts);
+            start_ts += 2;
+        }
+
+        {
+            // test for 1 version
+            let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+            let mut reader = MvccReader::new(
+                Box::new(snap),
+                Some(ScanMode::Forward),
+                false,
+                None,
+                None,
+                IsolationLevel::SI,
+            );
+
+            // first key, use seek in write cf, use get in data
+            reader.seek(make_key(&[0]), u64::MAX).unwrap();
+            assert_eq!(reader.statistics.data.get, 1);
+
+            // second key, use next in write cf, use seek in data
+            reader.seek(make_key(&[1]), u64::MAX).unwrap();
+            assert_eq!(reader.statistics.data.seek, 1);
+            // for later key, use next in write cf, use next in data
+            for (next_cnt, i) in { 2..10 }.enumerate() {
+                reader.seek(make_key(&[i]), u64::MAX).unwrap();
+                let data = reader.statistics.data;
+                assert_eq!(data.next, next_cnt + 1);
+                assert_eq!(reader.statistics.data.seek, 1);
+                assert_eq!(reader.statistics.data.get, 1);
+            }
+        }
+
+        // insert more versions
+        for _ in 0..SEEK_BOUND {
+            for i in 0..10 {
+                let commit_ts = start_ts + 1;
+                engine.put_with_long_value(&[i], start_ts, commit_ts);
+                start_ts += 2;
+            }
+        }
+
+        // get scan for keys with versions more than seek_bound.
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let mut reader = MvccReader::new(
+            Box::new(snap),
+            Some(ScanMode::Forward),
+            false,
+            None,
+            None,
+            IsolationLevel::SI,
+        );
+        for i in { 0..10 } {
+            // all keys use seek in write_cf, use get in default cf.
+            reader.seek(make_key(&[i]), u64::MAX).unwrap();
+            let data = reader.statistics.data;
+            let get_cnt = i as usize + 1;
+            assert_eq!(data.get, get_cnt);
+        }
     }
 }

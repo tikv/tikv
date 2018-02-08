@@ -35,7 +35,7 @@ use super::super::raftstore::store::engine::IterOption;
 // only used for rocksdb without persistent.
 pub const TEMP_DIR: &str = "";
 
-const SEEK_BOUND: usize = 30;
+pub const SEEK_BOUND: usize = 30;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
 const STAT_TOTAL: &str = "total";
@@ -298,6 +298,17 @@ pub struct Cursor {
     // the data cursor can be seen will be
     min_key: Option<Vec<u8>>,
     max_key: Option<Vec<u8>>,
+    last_iter_op: IterOp,
+}
+
+enum IterOp {
+    Null,
+    Seek,
+    SeekForPrev,
+    SeekToFirst,
+    SeekToLast,
+    Next,
+    Prev,
 }
 
 impl Cursor {
@@ -307,6 +318,7 @@ impl Cursor {
             scan_mode: mode,
             min_key: None,
             max_key: None,
+            last_iter_op: IterOp::Null,
         }
     }
 
@@ -324,7 +336,7 @@ impl Cursor {
         }
 
         statistics.seek += 1;
-
+        self.last_iter_op = IterOp::Seek;
         if !self.iter.seek(key)? {
             self.max_key = Some(key.encoded().to_owned());
             return Ok(false);
@@ -397,6 +409,32 @@ impl Cursor {
         Ok(None)
     }
 
+    /// Get the value of specified key with seek.
+    pub fn get_with_seek(
+        &mut self,
+        key: &Key,
+        statistics: &mut CFStatistics,
+    ) -> Result<Option<&[u8]>> {
+        if self.scan_mode != ScanMode::Backward {
+            if self.seek(key, statistics)? && self.iter.key() == &**key.encoded() {
+                return Ok(Some(self.iter.value()));
+            }
+            return Ok(None);
+        }
+        if self.seek_for_prev(key, statistics)? && self.iter.key() == &**key.encoded() {
+            return Ok(Some(self.iter.value()));
+        }
+        Ok(None)
+    }
+
+    /// Whether it used iter.seek or iter.seek_prev last time.
+    pub fn last_op_is_seek(&self) -> bool {
+        match self.last_iter_op {
+            IterOp::Seek | IterOp::SeekForPrev | IterOp::SeekToFirst | IterOp::SeekToLast => true,
+            _ => false,
+        }
+    }
+
     fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Forward);
         if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
@@ -411,6 +449,7 @@ impl Cursor {
         }
 
         statistics.seek_for_prev += 1;
+        self.last_iter_op = IterOp::SeekForPrev;
         if !self.iter.seek_for_prev(key)? {
             self.min_key = Some(key.encoded().to_owned());
             return Ok(false);
@@ -507,24 +546,28 @@ impl Cursor {
     #[inline]
     pub fn seek_to_first(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.seek += 1;
+        self.last_iter_op = IterOp::SeekToFirst;
         self.iter.seek_to_first()
     }
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.seek += 1;
+        self.last_iter_op = IterOp::SeekToLast;
         self.iter.seek_to_last()
     }
 
     #[inline]
     pub fn next(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.next += 1;
+        self.last_iter_op = IterOp::Next;
         self.iter.next()
     }
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.prev += 1;
+        self.last_iter_op = IterOp::Prev;
         self.iter.prev()
     }
 
