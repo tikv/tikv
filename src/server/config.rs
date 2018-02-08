@@ -14,7 +14,7 @@
 use sys_info;
 
 use util::collections::HashMap;
-use util::config::{self, ReadableSize};
+use util::config::{self, ReadableDuration, ReadableSize};
 use util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
 use super::Result;
 
@@ -27,6 +27,7 @@ const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_NOTIFY_CAPACITY: usize = 40960;
 const DEFAULT_GRPC_CONCURRENCY: usize = 4;
 const DEFAULT_GRPC_CONCURRENT_STREAM: usize = 1024;
+const DEFAULT_GRPC_RAFT_TIMEOUT_SECONDS: u64 = 30;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 10;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
 const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
@@ -59,6 +60,7 @@ pub struct Config {
     pub messages_per_tick: usize,
     pub grpc_concurrency: usize,
     pub grpc_concurrent_stream: usize,
+    pub grpc_raft_timeout: ReadableDuration,
     pub grpc_raft_conn_num: usize,
     pub grpc_stream_initial_window_size: ReadableSize,
     pub end_point_concurrency: usize,
@@ -89,6 +91,7 @@ impl Default for Config {
             messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
+            grpc_raft_timeout: ReadableDuration::secs(DEFAULT_GRPC_RAFT_TIMEOUT_SECONDS),
             grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
             grpc_stream_initial_window_size: ReadableSize(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE),
             end_point_concurrency: concurrency,

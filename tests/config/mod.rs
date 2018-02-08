@@ -64,6 +64,7 @@ fn test_serde_custom_tikv_config() {
         messages_per_tick: 123,
         grpc_concurrency: 123,
         grpc_concurrent_stream: 1_234,
+        grpc_raft_timeout: ReadableDuration::secs(12),
         grpc_raft_conn_num: 123,
         grpc_stream_initial_window_size: ReadableSize(12_345),
         end_point_concurrency: 12,

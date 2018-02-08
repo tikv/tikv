@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
 use futures::sync::mpsc::{self, UnboundedSender};
 use futures::sync::oneshot::{self, Sender};
 use futures::{stream, Future, Sink, Stream};
-use grpc::{ChannelBuilder, Environment, WriteFlags};
+use grpc::{CallOption, ChannelBuilder, Environment, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 
@@ -68,7 +68,8 @@ impl Conn {
         let client = TikvClient::new(channel);
         let (tx, rx) = mpsc::unbounded();
         let (tx_close, rx_close) = oneshot::channel();
-        let (sink, _) = client.raft().unwrap();
+        let opt = CallOption::default().timeout(cfg.grpc_raft_timeout.0);
+        let (sink, _) = client.raft_opt(opt).unwrap();
         let addr = addr.to_owned();
         client.spawn(
             rx_close
