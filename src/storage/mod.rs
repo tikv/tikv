@@ -979,8 +979,12 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
         "server_is_busy"
     } else if header.has_stale_command() {
         "stale_command"
+    } else if header.has_store_not_match() {
+        "store_not_match"
+    } else if header.has_raft_entry_too_large() {
+        "raft_entry_too_large"
     } else {
-        "other"
+        unreachable!();
     }
 }
 
