@@ -1225,9 +1225,6 @@ impl Peer {
                 }
             }
             ConfChangeType::AddLearnerNode => {
-                let mut progress = Progress::default();
-                progress.is_learner = true;
-                status.learner_progress.insert(peer.get_id(), progress);
                 return Ok(());
             }
             ConfChangeType::PromoteLearnerNode => {
@@ -1235,7 +1232,6 @@ impl Peer {
                     prog.is_learner = false;
                     status.progress.insert(peer.get_id(), prog);
                 }
-                return Ok(());
             }
         }
         let healthy = self.count_healthy_node(status.progress.values());
