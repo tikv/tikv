@@ -1213,7 +1213,7 @@ impl SnapManager {
                         key_and_snaps.push((key, snap, modified));
                     }
                 }
-                key_and_snaps.sort_by_key(|t| Reverse(t.2));
+                key_and_snaps.sort_by_key(|&(_, _, modified)| Reverse(modified));
                 old_snaps = Some(key_and_snaps);
             }
             match old_snaps.as_mut().unwrap().pop() {
