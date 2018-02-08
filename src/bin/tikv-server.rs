@@ -146,8 +146,13 @@ fn check_system_config(config: &TiKvConfig) {
         warn!("environment variable `TZ` is missing, use `/etc/localtime`");
     }
 
+    // check rocksb data dir
     if let Err(e) = util::config::check_data_dir(&config.storage.data_dir) {
-        fatal!("{:?}", e);
+        warn!("{:?}", e);
+    }
+    // check raft data dir
+    if let Err(e) = util::config::check_data_dir(&config.raft_store.raftdb_path) {
+        warn!("{:?}", e);
     }
 }
 

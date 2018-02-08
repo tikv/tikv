@@ -45,6 +45,10 @@ quick_error! {
             description(msg)
             display("config value error: {}", msg)
         }
+        FileSystem(msg:String) {
+            description(msg)
+            display("{}", msg)
+        }
     }
 }
 
@@ -773,7 +777,7 @@ fn get_fs_info(path: &str, mnt_file: &str) -> Result<FsInfo, ConfigError> {
 
         libc::endmntent(afile);
         if fs.mnt_dir.is_empty() {
-            return Err(ConfigError::Limit(format!(
+            return Err(ConfigError::FileSystem(format!(
                 "path:{:?} not find in mountable",
                 path
             )));
@@ -785,43 +789,54 @@ fn get_fs_info(path: &str, mnt_file: &str) -> Result<FsInfo, ConfigError> {
 #[cfg(target_os = "linux")]
 fn get_rotational_info(fsname: &str) -> Result<String, ConfigError> {
     if !fsname.starts_with("/dev/") {
-        return Err(ConfigError::Limit(format!(
+        return Err(ConfigError::FileSystem(format!(
             "fsname:{:?} is not a normal block device",
             fsname
         )));
     }
-    let mut dev = fsname.trim_left_matches("/dev/");
+    let dev = fsname.trim_left_matches("/dev/");
     use std::path::Path;
-    loop {
-        if dev.is_empty() {
-            return Err(ConfigError::Limit(format!(
+    let block_dir = "/sys/block";
+    let mut device_dir = format!("{}/{}", block_dir, dev);
+    if !Path::new(&device_dir).exists() {
+        let dir = fs::read_dir(&block_dir).map_err(|e| {
+            ConfigError::FileSystem(format!("read block dir {} with error:{:?}", block_dir, e))
+        })?;
+        let mut find = false;
+        for entry in dir {
+            if let Ok(entry) = entry {
+                let mut cur_path = entry.path();
+                cur_path.push(dev);
+                if cur_path.exists() {
+                    device_dir = entry.path().to_str().unwrap().to_owned();
+                    find = true;
+                    break;
+                }
+            }
+        }
+        if !find {
+            return Err(ConfigError::FileSystem(format!(
                 "fs:{} no device find in block",
                 fsname
             )));
         }
-        let cur_path = format!("/sys/block/{}", dev);
-        if Path::new(&cur_path).exists() {
-            break;
-        }
-        dev = &dev[0..dev.len() - 1];
     }
 
-    let rota_path = format!("/sys/block/{}/queue/rotational", dev);
-    let rpath = Path::new(&rota_path);
-    if !rpath.exists() {
-        return Err(ConfigError::Limit(format!(
+    let rota_path = format!("{}/queue/rotational", device_dir);
+    if !Path::new(&rota_path).exists() {
+        return Err(ConfigError::FileSystem(format!(
             "block {} has no rotational file",
-            dev
+            device_dir
         )));
     }
     use std::fs::File;
     use std::io::Read;
 
     let mut buffer = String::new();
-    File::open(rpath)
+    File::open(&rota_path)
         .and_then(|mut f| f.read_to_string(&mut buffer))
         .map_err(|e| {
-            ConfigError::Limit(format!(
+            ConfigError::FileSystem(format!(
                 "get_rotational_info from {} failed {}",
                 rota_path, e
             ))
@@ -835,7 +850,7 @@ pub fn check_data_dir(data_path: &str) -> Result<(), ConfigError> {
     let real_path = match canonicalize_path(data_path) {
         Ok(path) => path,
         Err(e) => {
-            return Err(ConfigError::Limit(format!(
+            return Err(ConfigError::FileSystem(format!(
                 "path:{:?} canonicalize failed with error: {:?}",
                 data_path, e
             )))
