@@ -748,7 +748,7 @@ struct FsInfo {
 }
 
 #[cfg(target_os = "linux")]
-fn get_fsinfo(path: &str, mnt_file: &str) -> Result<FsInfo, ConfigError> {
+fn get_fs_info(path: &str, mnt_file: &str) -> Result<FsInfo, ConfigError> {
     use std::ffi::{CStr, CString};
     use libc;
     unsafe {
@@ -761,14 +761,12 @@ fn get_fsinfo(path: &str, mnt_file: &str) -> Result<FsInfo, ConfigError> {
             if ent.is_null() {
                 break;
             }
-            let cur_dir = CStr::from_ptr((*ent).mnt_dir).to_str().unwrap();
+            let ent = &*ent;
+            let cur_dir = CStr::from_ptr(ent.mnt_dir).to_str().unwrap();
             if path.starts_with(&cur_dir) && cur_dir.len() >= fs.mnt_dir.len() {
-                fs.tp = CStr::from_ptr((*ent).mnt_type).to_str().unwrap().to_owned();
-                fs.opts = CStr::from_ptr((*ent).mnt_opts).to_str().unwrap().to_owned();
-                fs.fsname = CStr::from_ptr((*ent).mnt_fsname)
-                    .to_str()
-                    .unwrap()
-                    .to_owned();
+                fs.tp = CStr::from_ptr(ent.mnt_type).to_str().unwrap().to_owned();
+                fs.opts = CStr::from_ptr(ent.mnt_opts).to_str().unwrap().to_owned();
+                fs.fsname = CStr::from_ptr(ent.mnt_fsname).to_str().unwrap().to_owned();
                 fs.mnt_dir = cur_dir.to_owned();
             }
         }
@@ -784,10 +782,11 @@ fn get_fsinfo(path: &str, mnt_file: &str) -> Result<FsInfo, ConfigError> {
     }
 }
 
-pub fn get_rotational_info(fsname: &str) -> Result<String, ConfigError> {
+#[cfg(target_os = "linux")]
+fn get_rotational_info(fsname: &str) -> Result<String, ConfigError> {
     if !fsname.starts_with("/dev/") {
         return Err(ConfigError::Limit(format!(
-            "fsname:{:?} is not a normal device",
+            "fsname:{:?} is not a normal block device",
             fsname
         )));
     }
@@ -843,7 +842,7 @@ pub fn check_data_dir(data_path: &str) -> Result<(), ConfigError> {
         }
     };
 
-    let fs_info = get_fsinfo(&real_path, "/proc/mounts")?;
+    let fs_info = get_fs_info(&real_path, "/proc/mounts")?;
     // TODO check ext4 nodelalloc
     info!("data_path:{}, mount fs info:{:?}", data_path, fs_info);
     let rotational_info = get_rotational_info(&fs_info.fsname)?;
@@ -1231,7 +1230,7 @@ mod test {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn test_get_fsinfo() {
+    fn test_get_fs_info() {
         let mninfo = br#"tmpfs /home tmpfs rw,nosuid,noexec,relatime,size=1628744k,mode=755 0 0
 /dev/sda4 /home/shirly ext4 rw,relatime,errors=remount-ro,data=ordered 0 0
 /dev/sdb /data1 ext4 rw,relatime,errors=remount-ro,data=ordered 0 0
@@ -1242,12 +1241,12 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             let mut file = File::create(mnt_file).unwrap();
             file.write_all(mninfo).unwrap();
         }
-        let f = get_fsinfo("/home/shirly/1111", mnt_file).unwrap();
+        let f = get_fs_info("/home/shirly/1111", mnt_file).unwrap();
         assert_eq!(f.fsname, "/dev/sda4");
         assert_eq!(f.mnt_dir, "/home/shirly");
 
         // not found
-        let f2 = get_fsinfo("/tmp", mnt_file);
+        let f2 = get_fs_info("/tmp", mnt_file);
         assert!(f2.is_err());
     }
 
@@ -1263,7 +1262,7 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
 
         // test normal device
         let cur = canonicalize_path("./").unwrap();
-        let fs_info = get_fsinfo(&cur, "/proc/mounts").unwrap();
+        let fs_info = get_fs_info(&cur, "/proc/mounts").unwrap();
         let ret = get_rotational_info(&fs_info.fsname);
         assert!(ret.is_ok());
     }
