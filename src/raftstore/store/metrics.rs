@@ -208,4 +208,10 @@ lazy_static! {
             vec![1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0,
                  20.0, 24.0, 32.0, 64.0, 128.0, 256.0]
         ).unwrap();
+
+    pub static ref LEADER_MISSING: Gauge =
+        register_gauge!(
+            "tikv_raftstore_leader_missing",
+            "Total number of leader missed region"
+        ).unwrap();
 }
