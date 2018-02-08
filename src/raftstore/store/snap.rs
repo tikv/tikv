@@ -2318,8 +2318,29 @@ mod test {
         let snap_mgr = SnapManagerBuilder::default()
             .max_total_size(10240)
             .build(snapfiles_path.path().to_str().unwrap(), None);
-
         let snapshot = DbSnapshot::new(kv);
+
+        // Add an oldest snapshot for receiving.
+        let recv_key = SnapKey::new(100, 100, 100);
+        let recv_data = {
+            let mut s = snap_mgr
+                .get_snapshot_for_building(&recv_key, &snapshot)
+                .unwrap();
+            let mut snap_data = RaftSnapshotData::new();
+            let mut stat = SnapshotStatistics::new();
+            s.build(
+                &snapshot,
+                &get_test_region(100, 1, 1),
+                &mut snap_data,
+                &mut stat,
+                Box::new(snap_mgr.clone()),
+            ).unwrap();
+            snap_data.write_to_bytes().unwrap()
+        };
+        snap_mgr
+            .get_snapshot_for_receiving(&recv_key, &recv_data)
+            .unwrap();
+
         for (i, region_id) in regions.into_iter().enumerate() {
             let key = SnapKey::new(region_id, 1, 1);
             let region = get_test_region(region_id, 1, 1);
@@ -2334,9 +2355,10 @@ mod test {
                 Box::new(snap_mgr.clone()),
             ).unwrap();
 
-            if i < 6 {
-                // sizeof(snapshot) == 1918 bytes.
-                assert_eq!(snap_mgr.get_total_snap_size() as usize, 1918 * (1 + i));
+            if i < 5 {
+                // sizeof(snapshot) == 1918 bytes. The first 1918 is for region 100.
+                // That snapshot won't be deleted because it's not for generating.
+                assert_eq!(snap_mgr.get_total_snap_size() as usize, 1918 * (i + 2));
             } else {
                 assert_eq!(snap_mgr.get_total_snap_size() as usize, 1918 * 6);
             }
