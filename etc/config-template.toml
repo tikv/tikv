@@ -40,6 +40,8 @@
 # grpc-concurrency = 4
 # The number of max concurrent streams/requests on a client connection.
 # grpc-concurrent-stream = 1024
+# The timeout of the raft client to send raft message.
+# grpc-raft-timeout = "30s"
 # The number of connections with each tikv server to send raft messages.
 # grpc-raft-conn-num = 10
 # Amount to read ahead on individual grpc streams.
