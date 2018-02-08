@@ -272,8 +272,10 @@ impl Debugger {
                     return Err(box_err!("The peer is still in target peers"));
                 }
 
-                region_state.set_state(PeerState::Tombstone);
-                box_try!(wb.put_msg_cf(handle, &key, &region_state));
+                if ret.is_empty() {
+                    region_state.set_state(PeerState::Tombstone);
+                    box_try!(wb.put_msg_cf(handle, &key, &region_state));
+                }
                 Ok(())
             };
 

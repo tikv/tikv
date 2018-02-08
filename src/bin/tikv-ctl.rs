@@ -572,7 +572,7 @@ impl DebugExecutor for Debugger {
     fn set_region_tombstone(&self, regions: Vec<Region>) {
         let ret = self.set_region_tombstone(regions)
             .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e));
-        if !ret.is_empty() {
+        if ret.is_empty() {
             println!("success!");
             return;
         }
