@@ -2322,12 +2322,12 @@ mod test {
 
         // Add an oldest snapshot for receiving.
         let recv_key = SnapKey::new(100, 100, 100);
-        let recv_data = {
+        let recv_head = {
+            let mut stat = SnapshotStatistics::new();
+            let mut snap_data = RaftSnapshotData::new();
             let mut s = snap_mgr
                 .get_snapshot_for_building(&recv_key, &snapshot)
                 .unwrap();
-            let mut snap_data = RaftSnapshotData::new();
-            let mut stat = SnapshotStatistics::new();
             s.build(
                 &snapshot,
                 &get_test_region(100, 1, 1),
@@ -2337,9 +2337,18 @@ mod test {
             ).unwrap();
             snap_data.write_to_bytes().unwrap()
         };
-        snap_mgr
-            .get_snapshot_for_receiving(&recv_key, &recv_data)
+        let recv_remain = {
+            let mut data = Vec::with_capacity(1024);
+            let mut s = snap_mgr.get_snapshot_for_sending(&recv_key).unwrap();
+            s.read_to_end(&mut data).unwrap();
+            assert!(snap_mgr.delete_snapshot(&recv_key, s.as_ref(), true));
+            data
+        };
+        let mut s = snap_mgr
+            .get_snapshot_for_receiving(&recv_key, &recv_head)
             .unwrap();
+        s.write_all(&recv_remain).unwrap();
+        s.save().unwrap();
 
         for (i, region_id) in regions.into_iter().enumerate() {
             let key = SnapKey::new(region_id, 1, 1);
