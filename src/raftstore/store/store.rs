@@ -463,7 +463,7 @@ impl<T, C> Store<T, C> {
 
     fn report_snapshot_status(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
         if let Some(peer) = self.region_peers.get_mut(&region_id) {
-            let to_peer = match peer.get_peer_or_learner_from_cache(to_peer_id) {
+            let to_peer = match peer.get_peer_from_cache(to_peer_id) {
                 Some(peer) => peer,
                 None => {
                     // If to_peer is gone, ignore this snapshot status
@@ -1312,15 +1312,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ConfChangeType::AddLearnerNode => {
                     let peer = cp.peer.clone();
                     p.learner_heartbeats.insert(peer.get_id(), Instant::now());
-                    p.insert_learner_cache(peer);
+                    p.insert_peer_cache(peer);
                 }
                 ConfChangeType::PromoteLearnerNode => {
                     p.learner_heartbeats.remove(&cp.peer.get_id());
-                    p.remove_learner_from_cache(cp.peer.get_id());
-
                     let peer = cp.peer.clone();
                     p.peer_heartbeats.insert(peer.get_id(), Instant::now());
-                    p.insert_peer_cache(peer);
                 }
             }
             my_peer_id = p.peer_id();
@@ -1651,7 +1648,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if !peer.is_leader() {
             return Err(Error::NotLeader(
                 region_id,
-                peer.get_peer_or_learner_from_cache(peer.leader_id()),
+                peer.get_peer_from_cache(peer.leader_id()),
             ));
         }
         if peer.peer_id() != peer_id {
@@ -1972,7 +1969,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     );
                     return Err(Error::NotLeader(
                         region_id,
-                        peer.get_peer_or_learner_from_cache(peer.leader_id()),
+                        peer.get_peer_from_cache(peer.leader_id()),
                     ));
                 }
                 peer
