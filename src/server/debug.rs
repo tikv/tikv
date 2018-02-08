@@ -28,9 +28,9 @@ use kvproto::raft_serverpb::*;
 
 use raft::{self, RawNode};
 use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
-use raftstore::store::{init_apply_state, init_raft_state};
+use raftstore::store::{init_apply_state, init_raft_state, write_peer_state};
 use raftstore::store::util as raftstore_util;
-use raftstore::store::engine::{IterOption, Mutable};
+use raftstore::store::engine::IterOption;
 use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use storage::types::{truncate_ts, Key};
 use storage::mvcc::{Lock, Write, WriteType};
@@ -233,7 +233,6 @@ impl Debugger {
     pub fn set_region_tombstone(&self, regions: Vec<Region>) -> Result<Vec<(u64, Error)>> {
         let db = &self.engines.kv_engine;
         let wb = WriteBatch::new();
-        let handle = box_try!(get_cf_handle(db.as_ref(), CF_RAFT));
         let mut ret = Vec::with_capacity(regions.len());
 
         {
@@ -242,7 +241,7 @@ impl Debugger {
                 let key = keys::region_state_key(id);
                 let store_id = self.get_store_id()?;
 
-                let mut region_state = box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key))
+                let region_state = box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key))
                     .expect("Can't find RegionLocalState");
 
                 let peer_id = region_state
@@ -272,10 +271,7 @@ impl Debugger {
                     return Err(box_err!("The peer is still in target peers"));
                 }
 
-                if ret.is_empty() {
-                    region_state.set_state(PeerState::Tombstone);
-                    box_try!(wb.put_msg_cf(handle, &key, &region_state));
-                }
+                box_try!(write_peer_state(db, &wb, &region, PeerState::Tombstone));
                 Ok(())
             };
 
