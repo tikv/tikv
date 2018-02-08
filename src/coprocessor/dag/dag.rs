@@ -120,7 +120,6 @@ impl DAGContext {
         while record_cnt < batch_row_limit {
             match self.exec.next() {
                 Ok(Some(row)) => {
-                    self.req_ctx.check_if_outdated()?;
                     record_cnt += 1;
                     if support_partial_retry && start_key.is_none() {
                         start_key = self.exec.take_last_key();
@@ -154,7 +153,6 @@ impl DAGContext {
         }
         if record_cnt > 0 {
             let end_key = self.exec.take_last_key();
-            self.req_ctx.renew_streaming_outdated();
             return self.make_stream_response(chunk, start_key, end_key)
                 .map(|r| (Some(r), finished));
         }
