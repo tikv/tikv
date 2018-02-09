@@ -114,7 +114,6 @@ impl Sum {
             Datum::U64(v) => Datum::Dec(Decimal::from(v)),
             v => v,
         };
-        
         let res = match self.res.take() {
             Some(b) => box_try!(evaluator::eval_arith(ctx, v, b, Datum::checked_add)),
             None => v,
