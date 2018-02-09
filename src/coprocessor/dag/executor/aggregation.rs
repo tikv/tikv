@@ -281,7 +281,6 @@ pub struct StreamAggExecutor {
     related_cols_offset: Vec<usize>,
     cur_group_row: Vec<Datum>,
     next_group_row: Vec<Datum>,
-    tmp_group_row: Vec<Datum>,
     is_first_group: bool,
     count: i64,
 }
@@ -318,7 +317,6 @@ impl StreamAggExecutor {
             cols: columns,
             cur_group_row: vec![Datum::Null; group_len],
             next_group_row: vec![Datum::Null; group_len],
-            tmp_group_row: vec![Datum::Null; group_len],
             is_first_group: true,
             count: 0,
         })
@@ -329,23 +327,24 @@ impl StreamAggExecutor {
             return Ok(false);
         }
 
+        let mut tmp_group_row = vec![Datum::Null; self.group_by_exprs.len()];
         let mut matched = !self.is_first_group;
         for (i, expr) in self.group_by_exprs.iter().enumerate() {
             let v = box_try!(expr.eval(&self.ctx, row));
-            if matched && box_try!(v.cmp(&self.ctx, &self.next_group_row[i])) != Ordering::Equal {
+            if matched && box_try!(v.cmp(&self.ctx, &self.cur_group_row[i])) != Ordering::Equal {
                 matched = false;
             }
-            self.tmp_group_row[i] = v;
+            tmp_group_row[i] = v;
         }
         let ret = !self.is_first_group;
         if self.is_first_group {
-            self.cur_group_row = self.tmp_group_row.clone();
+            self.cur_group_row = tmp_group_row.clone();
             self.is_first_group = false
         }
         if matched {
             return Ok(false);
         }
-        mem::swap(&mut self.next_group_row, &mut self.tmp_group_row);
+        mem::swap(&mut self.next_group_row, &mut tmp_group_row);
         Ok(ret)
     }
 
@@ -366,7 +365,7 @@ impl StreamAggExecutor {
                 vals.push(d);
             }
             group_key = box_try!(datum::encode_value(vals.as_slice()));
-            self.cur_group_row = self.next_group_row.clone();
+            mem::swap(&mut self.cur_group_row, &mut self.next_group_row);
         }
         // Construct row data.
         let value_size = group_key.len() + approximate_size(&agg_cols, false);
