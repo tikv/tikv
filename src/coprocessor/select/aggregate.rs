@@ -204,7 +204,7 @@ impl AggrFunc for Extremum {
 mod test {
     use std::{i64, u64};
     use std::ops::Add;
-    use coprocessor::dag::expr::EvalContext;
+    use coprocessor::select::xeval::EvalContext;
 
     use super::*;
 
