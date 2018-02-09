@@ -107,7 +107,6 @@ pub struct BasicLocalMetrics {
     pub handle_time: LocalHistogramVec,
     pub wait_time: LocalHistogramVec,
     pub error_cnt: LocalCounterVec,
-    pub pending_cnt: HashMap<&'static str, HashMap<&'static str, i64>>,
     pub scan_keys: LocalHistogramVec,
 }
 
@@ -119,7 +118,6 @@ impl Default for BasicLocalMetrics {
             handle_time: COPR_REQ_HANDLE_TIME.local(),
             wait_time: COPR_REQ_WAIT_TIME.local(),
             error_cnt: COPR_REQ_ERROR.local(),
-            pending_cnt: HashMap::default(),
             scan_keys: COPR_SCAN_KEYS.local(),
         }
     }
@@ -133,24 +131,6 @@ impl BasicLocalMetrics {
         self.wait_time.flush();
         self.scan_keys.flush();
         self.error_cnt.flush();
-        // pending cnt
-        for (req, v) in self.pending_cnt.drain() {
-            for (pri, count) in v {
-                if count != 0 {
-                    COPR_PENDING_REQS
-                        .with_label_values(&[req, pri])
-                        .add(count as f64);
-                }
-            }
-        }
-    }
-
-    pub fn add_pending_reqs(&mut self, type_str: &'static str, pri: &'static str, count: i64) {
-        let v = self.pending_cnt
-            .entry(type_str)
-            .or_insert_with(Default::default);
-        let data = v.entry(pri).or_insert(0);
-        *data += count
     }
 }
 

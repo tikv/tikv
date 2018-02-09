@@ -168,7 +168,6 @@ impl Host {
             let pri = req.priority();
             let pri_str = get_req_pri_str(pri);
             let type_str = req.ctx.get_scan_tag();
-            local_metrics.add_pending_reqs(type_str, pri_str, 1);
             let end_point = TiDbEndPoint::new(snap.clone());
 
             let pool = match pri {
@@ -176,6 +175,9 @@ impl Host {
                 CommandPri::High => &mut self.high_priority_pool,
                 CommandPri::Normal => &mut self.pool,
             };
+            COPR_PENDING_REQS
+                .with_label_values(&[type_str, pri_str])
+                .inc();
             pool.execute(move |ctx: &mut CopContext| {
                 // decrease pending task
                 COPR_PENDING_REQS
