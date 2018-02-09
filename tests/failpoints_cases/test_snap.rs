@@ -66,3 +66,48 @@ fn test_overlap_cleanup() {
     }
     fail::remove(gen_snapshot_fp);
 }
+
+#[test]
+fn test_snapshot_between_save() {
+    let _guard = ::setup();
+    let mut cluster = new_node_cluster(0, 3);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_rule();
+
+    let region_id = cluster.run_conf_change();
+
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+
+    fail::cfg("raft_snapshot_between_save", "return").unwrap();
+
+    // Add peer on store 3 so that it will be shutdown.
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+
+    /************************************
+    cluster.must_put(b"k3", b"v3");
+    let region1 = cluster.get_region(b"k1");
+    cluster.must_split(&region1, b"k2");
+    // Wait till the snapshot of split region is applied, whose range is ["", "k2").
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    // Resume the fail point and pause it again. So only the paused snapshot is generated.
+    // And the paused snapshot's range is ["", ""), hence overlap.
+    fail::cfg(gen_snapshot_fp, "pause").unwrap();
+    // Wait a little bit for the message being sent out.
+    thread::sleep(Duration::from_secs(1));
+    // Overlap snapshot should be deleted.
+    let snap_dir = cluster.get_snap_dir(3);
+    for p in fs::read_dir(&snap_dir).unwrap() {
+        let name = p.unwrap().file_name().into_string().unwrap();
+        let mut parts = name.split('_');
+        parts.next();
+        if parts.next().unwrap() == "1" {
+            panic!("snapshot of region 1 should be deleted.");
+        }
+    }
+    ************************************/
+    fail::remove("raft_snapshot_between_save");
+}

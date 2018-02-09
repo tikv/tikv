@@ -1117,7 +1117,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     panic!("{} failed to save append state result: {:?}", self.tag, e);
                 });
         }
+
         fail_point!("raft_between_save");
+        fail_point!(
+            "raft_snapshot_between_save",
+            append_res
+                .iter()
+                .any(|&(_, ref ctx)| ctx.snap_region.is_some()),
+            |_| {
+                println!("invoke_ctx with sanp_region");
+                self.sendch.send(Msg::Quit).unwrap();
+                return;
+            }
+        );
 
         if !raft_wb.is_empty() {
             // RaftLocalState, Raft Log Entry
