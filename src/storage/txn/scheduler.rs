@@ -1291,7 +1291,7 @@ impl Scheduler {
     fn get_snapshot(&mut self, ctx: &Context, cids: Vec<u64>) {
         for cid in &cids {
             SCHED_STAGE_COUNTER_VEC
-                .with_label_values(&[self.get_ctx_tag(*cid), "txn_snapshot"])
+                .with_label_values(&[self.get_ctx_tag(*cid), "snapshot"])
                 .inc();
         }
         let cids1 = cids.clone();
@@ -1309,7 +1309,7 @@ impl Scheduler {
         if let Err(e) = self.engine.async_snapshot(ctx, cb) {
             for cid in cids {
                 SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(cid), "async_txn_snapshot_err"])
+                    .with_label_values(&[self.get_ctx_tag(cid), "async_snapshot_err"])
                     .inc();
 
                 let e = e.maybe_clone().unwrap_or_else(|| {
@@ -1329,7 +1329,7 @@ impl Scheduler {
         for &(_, ref cids) in &batch {
             for cid in cids {
                 SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(*cid), "batch_txn_snapshot"])
+                    .with_label_values(&[self.get_ctx_tag(*cid), "batch_snapshot"])
                     .inc();
             }
             all_cids.extend(cids);
@@ -1380,7 +1380,7 @@ impl Scheduler {
         if let Err(e) = self.engine.async_batch_snapshot(batch1, on_finished) {
             for cid in all_cids {
                 SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(cid), "async_batch_txn_snapshot_err"])
+                    .with_label_values(&[self.get_ctx_tag(cid), "async_batch_snapshot_err"])
                     .inc();
                 let e = e.maybe_clone().unwrap_or_else(|| {
                     error!("async snapshot failed for cid={}, error {:?}", cid, e);
@@ -1396,7 +1396,7 @@ impl Scheduler {
         for (ctx, cids) in batch {
             for cid in &cids {
                 SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(*cid), "txn_snapshot_retry"])
+                    .with_label_values(&[self.get_ctx_tag(*cid), "snapshot_retry"])
                     .inc();
             }
             self.get_snapshot(&ctx, cids);
@@ -1420,7 +1420,7 @@ impl Scheduler {
         match snapshot {
             Ok(snapshot) => for cid in cids {
                 SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(cid), "txn_snapshot_ok"])
+                    .with_label_values(&[self.get_ctx_tag(cid), "snapshot_ok"])
                     .inc();
                 self.process_by_worker(cid, cb_ctx.clone(), snapshot.clone());
             },
@@ -1428,7 +1428,7 @@ impl Scheduler {
                 error!("get snapshot failed for cids={:?}, error {:?}", cids, e);
                 for cid in cids {
                     SCHED_STAGE_COUNTER_VEC
-                        .with_label_values(&[self.get_ctx_tag(cid), "txn_snapshot_err"])
+                        .with_label_values(&[self.get_ctx_tag(cid), "snapshot_err"])
                         .inc();
                     let e = e.maybe_clone()
                         .unwrap_or_else(|| EngineError::Other(box_err!("{:?}", e)));
