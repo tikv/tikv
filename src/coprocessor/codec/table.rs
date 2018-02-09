@@ -70,6 +70,13 @@ pub fn check_table_ranges(ranges: &[KeyRange]) -> Result<()> {
     for range in ranges {
         extract_table_prefix(range.get_start())?;
         extract_table_prefix(range.get_end())?;
+        if range.get_start() >= range.get_end() {
+            return Err(invalid_type!(
+                "invalid range,range.start should be smaller than range.end, but got [{:?},{:?})",
+                range.get_start(),
+                range.get_end()
+            ));
+        }
     }
     Ok(())
 }
@@ -610,5 +617,26 @@ mod test {
         for (input, output) in cases {
             assert_eq!(extract_table_prefix(&input).ok().map(From::from), output);
         }
+    }
+
+    #[test]
+    fn test_check_table_range() {
+        let small_key = b"t\x80\x00\x00\x00\x00\x00\x00\x01a".to_vec();
+        let large_key = b"t\x80\x00\x00\x00\x00\x00\x00\x01b".to_vec();
+        let mut range = KeyRange::new();
+        range.set_start(small_key.clone());
+        range.set_end(large_key.clone());
+        assert!(check_table_ranges(&[range]).is_ok());
+        //test range.start > range.end
+        let mut range = KeyRange::new();
+        range.set_end(small_key.clone());
+        range.set_start(large_key);
+        assert!(check_table_ranges(&[range]).is_err());
+
+        // test invalid end
+        let mut range = KeyRange::new();
+        range.set_start(small_key);
+        range.set_end(b"xx".to_vec());
+        assert!(check_table_ranges(&[range]).is_err());
     }
 }
