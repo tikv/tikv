@@ -466,22 +466,13 @@ pub mod test {
         let r1 = get_idx_range(
             TABLE_ID,
             INDEX_ID,
-            i64::MIN,
-            0,
-            &val_start,
-            &val_end,
-            unique,
-        );
-        let r2 = get_idx_range(
-            TABLE_ID,
-            INDEX_ID,
             0,
             (KEY_NUMBER / 2) as i64,
             &val_start,
             &val_end,
             unique,
         );
-        let r3 = get_idx_range(
+        let r2 = get_idx_range(
             TABLE_ID,
             INDEX_ID,
             (KEY_NUMBER / 2) as i64,
@@ -490,7 +481,7 @@ pub mod test {
             &val_end,
             unique,
         );
-        wrapper.ranges = vec![r1, r2, r3];
+        wrapper.ranges = vec![r1, r2];
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
