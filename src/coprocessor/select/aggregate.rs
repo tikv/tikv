@@ -15,6 +15,7 @@ use std::cmp::Ordering;
 use tipb::expression::ExprType;
 
 use coprocessor::codec::Datum;
+use coprocessor::codec::mysql::Decimal;
 use coprocessor::Result;
 
 use super::xeval::{evaluator, EvalContext};
@@ -107,9 +108,16 @@ impl Sum {
         if a == Datum::Null {
             return Ok(false);
         }
+
+        let v = match a {
+            Datum::I64(v) => Datum::Dec(Decimal::from(v)),
+            Datum::U64(v) => Datum::Dec(Decimal::from(v)),
+            v => v,
+        };
+        
         let res = match self.res.take() {
-            Some(b) => box_try!(evaluator::eval_arith(ctx, a, b, Datum::checked_add)),
-            None => a,
+            Some(b) => box_try!(evaluator::eval_arith(ctx, v, b, Datum::checked_add)),
+            None => v,
         };
         self.res = Some(res);
         Ok(true)
@@ -190,5 +198,40 @@ impl AggrFunc for Extremum {
     fn calc(&mut self, collector: &mut Vec<Datum>) -> Result<()> {
         collector.push(self.datum.take().unwrap_or(Datum::Null));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::{i64, u64};
+    use std::ops::Add;
+    use coprocessor::dag::expr::EvalContext;
+
+    use super::*;
+
+    #[test]
+    fn test_sum_int() {
+        let mut sum = Sum { res: None };
+        let ctx = EvalContext::default();
+        let v1 = Datum::I64(i64::MAX);
+        let v2 = Datum::I64(12);
+        let res = Decimal::from(i64::MAX).add(&Decimal::from(12)).unwrap();
+        sum.update(&ctx, vec![v1]).unwrap();
+        sum.update(&ctx, vec![v2]).unwrap();
+        let v = sum.res.take().unwrap();
+        assert_eq!(v, Datum::Dec(res));
+    }
+
+    #[test]
+    fn test_sum_uint() {
+        let mut sum = Sum { res: None };
+        let ctx = EvalContext::default();
+        let v1 = Datum::U64(u64::MAX);
+        let v2 = Datum::U64(12);
+        let res = Decimal::from(u64::MAX).add(&Decimal::from(12)).unwrap();
+        sum.update(&ctx, vec![v1]).unwrap();
+        sum.update(&ctx, vec![v2]).unwrap();
+        let v = sum.res.take().unwrap();
+        assert_eq!(v, Datum::Dec(res));
     }
 }
