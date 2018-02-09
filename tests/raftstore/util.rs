@@ -94,12 +94,14 @@ pub fn new_store_cfg() -> Config {
         raft_election_timeout_ticks: 25,
         raft_log_gc_tick_interval: ReadableDuration::millis(100),
         raft_log_gc_threshold: 1,
-        pd_heartbeat_tick_interval: ReadableDuration::millis(20),
-        region_split_check_diff: ReadableSize(10000),
         // Use a value of 3 seconds as max_leader_missing_duration just for test.
         // In production environment, the value of max_leader_missing_duration
         // should be configured far beyond the election timeout.
         max_leader_missing_duration: ReadableDuration::secs(3),
+        // Use a value of 2 seconds as abnormal_leader_missing_duration just for a valid config.
+        abnormal_leader_missing_duration: ReadableDuration::secs(2),
+        pd_heartbeat_tick_interval: ReadableDuration::millis(20),
+        region_split_check_diff: ReadableSize(10000),
         report_region_flow_interval: ReadableDuration::millis(100),
         raft_store_max_leader_lease: ReadableDuration::millis(MAX_LEADER_LEASE),
         range_deletion_delay: ReadableDuration::secs(0),
