@@ -231,64 +231,24 @@ impl Debugger {
     /// Set regions to tombstone by manual, and apply other status(such as
     /// peers, version, and key range) from `region` which comes from PD normally.
     pub fn set_region_tombstone(&self, regions: Vec<Region>) -> Result<Vec<(u64, Error)>> {
+        let store_id = self.get_store_id()?;
         let db = &self.engines.kv_engine;
         let wb = WriteBatch::new();
-        let mut ret = Vec::with_capacity(regions.len());
 
-        {
-            let fix_one_region = |region: Region| {
-                let id = region.get_id();
-                let key = keys::region_state_key(id);
-                let store_id = self.get_store_id()?;
-
-                let region_state = box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key))
-                    .expect("Can't find RegionLocalState");
-
-                let peer_id = region_state
-                    .get_region()
-                    .get_peers()
-                    .iter()
-                    .find(|p| p.get_store_id() == store_id)
-                    .map(|p| p.get_id())
-                    .ok_or_else(|| {
-                        Error::Other("RegionLocalState doesn't contains the peer itself".into())
-                    })?;
-
-                let old_conf_ver = region_state.get_region().get_region_epoch().get_conf_ver();
-                let new_conf_ver = region.get_region_epoch().get_conf_ver();
-                if new_conf_ver <= old_conf_ver {
-                    return Err(box_err!("invalid conf_ver"));
-                }
-
-                // If the store is not in peers, or it's still in but its peer_id
-                // has changed, we know the peer is marked as tombstone success.
-                let scheduled = region
-                    .get_peers()
-                    .iter()
-                    .find(|p| p.get_store_id() == store_id)
-                    .map_or(true, |p| p.get_id() != peer_id);
-                if !scheduled {
-                    return Err(box_err!("The peer is still in target peers"));
-                }
-
-                box_try!(write_peer_state(db, &wb, &region, PeerState::Tombstone));
-                Ok(())
-            };
-
-            for region in regions {
-                let id = region.get_id();
-                if let Err(e) = fix_one_region(region) {
-                    ret.push((id, e));
-                }
+        let mut errors = Vec::with_capacity(regions.len());
+        for region in regions {
+            let region_id = region.get_id();
+            if let Err(e) = set_region_tombstone(db.as_ref(), store_id, region, &wb) {
+                errors.push((region_id, e));
             }
         }
 
-        if ret.is_empty() {
+        if errors.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
             box_try!(db.write_opt(wb, &write_opts));
         }
-        Ok(ret)
+        Ok(errors)
     }
 
     pub fn bad_regions(&self) -> Result<Vec<(u64, Error)>> {
@@ -556,6 +516,46 @@ pub fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
     }
 }
 
+fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch) -> Result<()> {
+    let id = region.get_id();
+    let key = keys::region_state_key(id);
+
+    let region_state = db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
+        .map_err(|e| box_err!(e))
+        .and_then(|s| s.ok_or_else(|| Error::Other("Can't find RegionLocalState".into())))?;
+    if region_state.get_state() == PeerState::Tombstone {
+        return Ok(());
+    }
+
+    let peer_id = region_state
+        .get_region()
+        .get_peers()
+        .iter()
+        .find(|p| p.get_store_id() == store_id)
+        .map(|p| p.get_id())
+        .ok_or_else(|| Error::Other("RegionLocalState doesn't contains the peer itself".into()))?;
+
+    let old_conf_ver = region_state.get_region().get_region_epoch().get_conf_ver();
+    let new_conf_ver = region.get_region_epoch().get_conf_ver();
+    if new_conf_ver <= old_conf_ver {
+        return Err(box_err!("invalid conf_ver"));
+    }
+
+    // If the store is not in peers, or it's still in but its peer_id
+    // has changed, we know the peer is marked as tombstone success.
+    let scheduled = region
+        .get_peers()
+        .iter()
+        .find(|p| p.get_store_id() == store_id)
+        .map_or(true, |p| p.get_id() != peer_id);
+    if !scheduled {
+        return Err(box_err!("The peer is still in target peers"));
+    }
+
+    box_try!(write_peer_state(db, wb, &region, PeerState::Tombstone));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -571,6 +571,32 @@ mod tests {
     use storage::mvcc::{Lock, LockType};
     use util::rocksdb::{self as rocksdb_util, CFOptions};
     use super::*;
+
+    fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
+        let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
+        let mut region = Region::new();
+        region.set_id(region_id);
+        for (i, &store_id) in stores.iter().enumerate() {
+            let mut peer = Peer::new();
+            peer.set_id(i as u64);
+            peer.set_store_id(store_id);
+            region.mut_peers().push(peer);
+        }
+        let mut region_state = RegionLocalState::new();
+        region_state.set_state(PeerState::Normal);
+        region_state.set_region(region.clone());
+        let key = keys::region_state_key(region_id);
+        engine.put_msg_cf(cf_raft, &key, &region_state).unwrap();
+        region
+    }
+
+    fn get_region_state(engine: &DB, region_id: u64) -> RegionLocalState {
+        let key = keys::region_state_key(region_id);
+        engine
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
+            .unwrap()
+            .unwrap()
+    }
 
     #[test]
     fn test_validate_db_and_cf() {
@@ -812,69 +838,29 @@ mod tests {
     fn test_tombstone_regions() {
         let debugger = new_debugger();
         debugger.set_store_id(11);
-        let engine = &debugger.engines.kv_engine;
-        let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
+        let engine = debugger.engines.kv_engine.as_ref();
 
         // region 1 with peers at stores 11, 12, 13.
-        let mut region = Region::new();
-        region.set_id(1);
-        for i in 1..4 {
-            let mut peer = Peer::new();
-            peer.set_id(i);
-            peer.set_store_id(10 + i);
-            region.mut_peers().push(peer);
-        }
-        let mut region_state = RegionLocalState::new();
-        region_state.set_state(PeerState::Normal);
-        region_state.set_region(region.clone());
-        let key = keys::region_state_key(1);
-        engine.put_msg_cf(cf_raft, &key, &region_state).unwrap();
-
-        // The store_id is not in new peer list.
-        let mut target_region_1 = region;
+        let region_1 = init_region_state(engine, 1, &[11, 12, 13]);
+        // Got the target region from pd, which doesn't contains the store.
+        let mut target_region_1 = region_1.clone();
         target_region_1.mut_peers().remove(0);
         target_region_1.mut_region_epoch().set_conf_ver(100);
 
         // region 2 with peers at stores 11, 12, 13.
-        let mut region = Region::new();
-        region.set_id(2);
-        for i in 1..4 {
-            let mut peer = Peer::new();
-            peer.set_id(i);
-            peer.set_store_id(10 + i);
-            region.mut_peers().push(peer);
-        }
-        let mut region_state = RegionLocalState::new();
-        region_state.set_state(PeerState::Normal);
-        region_state.set_region(region.clone());
-        let key = keys::region_state_key(2);
-        engine.put_msg_cf(cf_raft, &key, &region_state).unwrap();
-
-        // The store is still in peer list, but peer.id has changed.
-        let mut target_region_2 = region;
+        let region_2 = init_region_state(engine, 2, &[11, 12, 13]);
+        // Got the target region from pd, which has different peer_id.
+        let mut target_region_2 = region_2.clone();
         target_region_2.mut_peers()[0].set_id(100);
         target_region_2.mut_region_epoch().set_conf_ver(100);
 
         // region 3 with peers at stores 21, 22, 23.
-        let mut region = Region::new();
-        region.set_id(3);
-        for i in 1..4 {
-            let mut peer = Peer::new();
-            peer.set_id(i);
-            peer.set_store_id(20 + i);
-            region.mut_peers().push(peer);
-        }
-        let mut region_state = RegionLocalState::new();
-        region_state.set_state(PeerState::Normal);
-        region_state.set_region(region.clone());
-        let key = keys::region_state_key(3);
-        engine.put_msg_cf(cf_raft, &key, &region_state).unwrap();
-
-        // Should fail because the store id is 11.
-        let mut target_region_3 = region;
+        let region_3 = init_region_state(engine, 3, &[21, 22, 23]);
+        // Got the target region from pd but the peers are not changed.
+        let mut target_region_3 = region_3.clone();
         target_region_3.mut_region_epoch().set_conf_ver(100);
 
-        // Test with bad target region.
+        // Test with bad target region. No region state in rocksdb should be changed.
         let target_regions = vec![
             target_region_1.clone(),
             target_region_2.clone(),
@@ -883,18 +869,16 @@ mod tests {
         let errors = debugger.set_region_tombstone(target_regions).unwrap();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].0, 3);
+        assert_eq!(get_region_state(engine, 1).take_region(), region_1);
+        assert_eq!(get_region_state(engine, 2).take_region(), region_2);
 
         // After set_region_tombstone success, all region should be adjusted.
         let target_regions = vec![target_region_1, target_region_2];
         let errors = debugger.set_region_tombstone(target_regions).unwrap();
         assert!(errors.is_empty());
         for &region_id in &[1, 2] {
-            let key = keys::region_state_key(region_id);
-            let region_state = engine
-                .get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
-                .unwrap()
-                .unwrap();
-            assert_eq!(region_state.get_state(), PeerState::Tombstone);
+            let state = get_region_state(engine, region_id).get_state();
+            assert_eq!(state, PeerState::Tombstone);
         }
     }
 
