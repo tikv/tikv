@@ -743,68 +743,76 @@ pub fn check_kernel() -> Vec<ConfigError> {
     Vec::new()
 }
 
-#[derive(Debug, Default)]
-struct FsInfo {
-    tp: String,
-    opts: String,
-    mnt_dir: String,
-    fsname: String,
-}
-
 #[cfg(target_os = "linux")]
-fn get_fs_info(path: &str, mnt_file: &str) -> Result<FsInfo, ConfigError> {
+mod check_data_dir {
+    use std::fs::{self, File};
+    use std::io::Read;
     use std::ffi::{CStr, CString};
     use libc;
-    unsafe {
-        let profile = CString::new(mnt_file).unwrap();
-        let retype = CString::new("r").unwrap();
-        let afile = libc::setmntent(profile.as_ptr(), retype.as_ptr());
-        let mut fs = FsInfo::default();
-        loop {
-            let ent = libc::getmntent(afile);
-            if ent.is_null() {
-                break;
-            }
-            let ent = &*ent;
-            let cur_dir = CStr::from_ptr(ent.mnt_dir).to_str().unwrap();
-            if path.starts_with(&cur_dir) && cur_dir.len() >= fs.mnt_dir.len() {
-                fs.tp = CStr::from_ptr(ent.mnt_type).to_str().unwrap().to_owned();
-                fs.opts = CStr::from_ptr(ent.mnt_opts).to_str().unwrap().to_owned();
-                fs.fsname = CStr::from_ptr(ent.mnt_fsname).to_str().unwrap().to_owned();
-                fs.mnt_dir = cur_dir.to_owned();
-            }
-        }
 
-        libc::endmntent(afile);
-        if fs.mnt_dir.is_empty() {
+    use super::{canonicalize_path, ConfigError};
+
+    #[derive(Debug, Default)]
+    pub struct FsInfo {
+        pub tp: String,
+        pub opts: String,
+        pub mnt_dir: String,
+        pub fsname: String,
+    }
+
+    pub fn get_fs_info(path: &str, mnt_file: &str) -> Result<FsInfo, ConfigError> {
+        unsafe {
+            let profile = CString::new(mnt_file).unwrap();
+            let retype = CString::new("r").unwrap();
+            let afile = libc::setmntent(profile.as_ptr(), retype.as_ptr());
+            let mut fs = FsInfo::default();
+            loop {
+                let ent = libc::getmntent(afile);
+                if ent.is_null() {
+                    break;
+                }
+                let ent = &*ent;
+                let cur_dir = CStr::from_ptr(ent.mnt_dir).to_str().unwrap();
+                if path.starts_with(&cur_dir) && cur_dir.len() >= fs.mnt_dir.len() {
+                    fs.tp = CStr::from_ptr(ent.mnt_type).to_str().unwrap().to_owned();
+                    fs.opts = CStr::from_ptr(ent.mnt_opts).to_str().unwrap().to_owned();
+                    fs.fsname = CStr::from_ptr(ent.mnt_fsname).to_str().unwrap().to_owned();
+                    fs.mnt_dir = cur_dir.to_owned();
+                }
+            }
+
+            libc::endmntent(afile);
+            if fs.mnt_dir.is_empty() {
+                return Err(ConfigError::FileSystem(format!(
+                    "path:{:?} not find in mountable",
+                    path
+                )));
+            }
+            Ok(fs)
+        }
+    }
+
+    pub fn get_rotational_info(fsname: &str) -> Result<String, ConfigError> {
+        if !fsname.starts_with("/dev/") {
             return Err(ConfigError::FileSystem(format!(
-                "path:{:?} not find in mountable",
-                path
+                "fsname:{:?} is not a device",
+                fsname
             )));
         }
-        Ok(fs)
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn get_rotational_info(fsname: &str) -> Result<String, ConfigError> {
-    if !fsname.starts_with("/dev/") {
-        return Err(ConfigError::FileSystem(format!(
-            "fsname:{:?} is not a normal block device",
-            fsname
-        )));
-    }
-    let dev = fsname.trim_left_matches("/dev/");
-    use std::path::Path;
-    let block_dir = "/sys/block";
-    let mut device_dir = format!("{}/{}", block_dir, dev);
-    if !Path::new(&device_dir).exists() {
-        let dir = fs::read_dir(&block_dir).map_err(|e| {
-            ConfigError::FileSystem(format!("read block dir {} with error:{:?}", block_dir, e))
-        })?;
-        let mut find = false;
-        for entry in dir {
-            if let Ok(entry) = entry {
+        let dev = fsname.trim_left_matches("/dev/");
+        use std::path::Path;
+        let block_dir = "/sys/block";
+        let mut device_dir = format!("{}/{}", block_dir, dev);
+        if !Path::new(&device_dir).exists() {
+            let dir = fs::read_dir(&block_dir).map_err(|e| {
+                ConfigError::FileSystem(format!("read block dir {} with error:{:?}", block_dir, e))
+            })?;
+            let mut find = false;
+            for entry in dir {
+                if entry.is_err() {
+                    continue;
+                }
+                let entry = entry.unwrap();
                 let mut cur_path = entry.path();
                 cur_path.push(dev);
                 if cur_path.exists() {
@@ -813,66 +821,66 @@ fn get_rotational_info(fsname: &str) -> Result<String, ConfigError> {
                     break;
                 }
             }
+            if !find {
+                return Err(ConfigError::FileSystem(format!(
+                    "fs:{} no device find in block",
+                    fsname
+                )));
+            }
         }
-        if !find {
+
+        let rota_path = format!("{}/queue/rotational", device_dir);
+        if !Path::new(&rota_path).exists() {
             return Err(ConfigError::FileSystem(format!(
-                "fs:{} no device find in block",
-                fsname
+                "block {} has no rotational file",
+                device_dir
             )));
         }
+
+        let mut buffer = String::new();
+        File::open(&rota_path)
+            .and_then(|mut f| f.read_to_string(&mut buffer))
+            .map_err(|e| {
+                ConfigError::FileSystem(format!(
+                    "get_rotational_info from {} failed {}",
+                    rota_path, e
+                ))
+            })?;
+        Ok(buffer.trim_matches('\n').to_owned())
     }
 
-    let rota_path = format!("{}/queue/rotational", device_dir);
-    if !Path::new(&rota_path).exists() {
-        return Err(ConfigError::FileSystem(format!(
-            "block {} has no rotational file",
-            device_dir
-        )));
-    }
-    use std::fs::File;
-    use std::io::Read;
+    // check device && fs
+    pub fn check_data_dir(data_path: &str) -> Result<(), ConfigError> {
+        let real_path = match canonicalize_path(data_path) {
+            Ok(path) => path,
+            Err(e) => {
+                return Err(ConfigError::FileSystem(format!(
+                    "path:{:?} canonicalize failed with error: {:?}",
+                    data_path, e
+                )))
+            }
+        };
 
-    let mut buffer = String::new();
-    File::open(&rota_path)
-        .and_then(|mut f| f.read_to_string(&mut buffer))
-        .map_err(|e| {
-            ConfigError::FileSystem(format!(
-                "get_rotational_info from {} failed {}",
-                rota_path, e
-            ))
-        })?;
-    Ok(buffer.trim_matches('\n').to_owned())
-}
-
-// check device && fs
-#[cfg(target_os = "linux")]
-pub fn check_data_dir(data_path: &str) -> Result<(), ConfigError> {
-    let real_path = match canonicalize_path(data_path) {
-        Ok(path) => path,
-        Err(e) => {
-            return Err(ConfigError::FileSystem(format!(
-                "path:{:?} canonicalize failed with error: {:?}",
-                data_path, e
-            )))
+        let fs_info = get_fs_info(&real_path, "/proc/mounts")?;
+        // TODO check ext4 nodelalloc
+        info!("data_path: {}, mount fs info:{:?}", data_path, fs_info);
+        let rotational_info = get_rotational_info(&fs_info.fsname)?;
+        let msg = format!(
+            "data_path: {}, device rational info {:?}",
+            data_path, rotational_info
+        );
+        if rotational_info == "0" {
+            // ssd
+            info!("ssd device,{}", msg);
+        } else {
+            warn!("not ssd device,{}", msg);
         }
-    };
-
-    let fs_info = get_fs_info(&real_path, "/proc/mounts")?;
-    // TODO check ext4 nodelalloc
-    info!("data_path:{}, mount fs info:{:?}", data_path, fs_info);
-    let rotational_info = get_rotational_info(&fs_info.fsname)?;
-    let msg = format!(
-        "data_path:{},device rational info {:?}",
-        data_path, rotational_info
-    );
-    if rotational_info == "0" {
-        // ssd
-        info!("{}", msg);
-    } else {
-        warn!("{}", msg);
+        Ok(())
     }
-    Ok(())
 }
+
+#[cfg(target_os = "linux")]
+pub use self::check_data_dir::check_data_dir;
 
 #[cfg(not(target_os = "linux"))]
 pub fn check_data_dir(_data_path: &str) -> Result<(), ConfigError> {
@@ -1256,6 +1264,7 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             let mut file = File::create(mnt_file).unwrap();
             file.write_all(mninfo).unwrap();
         }
+        use super::check_data_dir::get_fs_info;
         let f = get_fs_info("/home/shirly/1111", mnt_file).unwrap();
         assert_eq!(f.fsname, "/dev/sda4");
         assert_eq!(f.mnt_dir, "/home/shirly");
@@ -1268,6 +1277,7 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
     #[cfg(target_os = "linux")]
     #[test]
     fn test_get_rotational_info() {
+        use super::check_data_dir::{get_fs_info, get_rotational_info};
         // test device not start with /dev
         let ret = get_rotational_info("invalid");
         assert!(ret.is_err());
@@ -1285,6 +1295,7 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
     #[cfg(target_os = "linux")]
     #[test]
     fn test_check_data_dir() {
+        use super::check_data_dir::check_data_dir;
         // test invalid data_path
         let ret = check_data_dir("/sys/invalid");
         assert!(ret.is_err());
