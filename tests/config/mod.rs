@@ -73,6 +73,7 @@ fn test_serde_custom_tikv_config() {
         end_point_batch_row_limit: 64,
         end_point_request_max_handle_secs: 123,
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
+        snap_max_total_size: ReadableSize::gb(10),
     };
     value.readpool = ReadPoolConfig {
         high_concurrency: 1,

@@ -14,6 +14,7 @@
 use std::io::{self, Write};
 use std::fmt::Arguments;
 
+use grpc;
 use time;
 use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
 
@@ -27,6 +28,7 @@ pub fn init_log<W: LogWriter + Sync + Send + 'static>(
 ) -> Result<(), SetLoggerError> {
     log::set_logger(|filter| {
         filter.set(level);
+        grpc::redirect_log();
         Box::new(Logger {
             level: level,
             writer: writer,
