@@ -431,16 +431,15 @@ mod test {
         let mut wrapper = IndexTestWrapper::new(unique);
         wrapper.scan.set_desc(true);
 
-        let r1 = get_idx_range(TABLE_ID, INDEX_ID, i64::MIN, 0, unique);
-        let r2 = get_idx_range(TABLE_ID, INDEX_ID, 0, (KEY_NUMBER / 2) as i64, unique);
-        let r3 = get_idx_range(
+        let r1 = get_idx_range(TABLE_ID, INDEX_ID, 0, (KEY_NUMBER / 2) as i64, unique);
+        let r2 = get_idx_range(
             TABLE_ID,
             INDEX_ID,
             (KEY_NUMBER / 2) as i64,
             i64::MAX,
             unique,
         );
-        wrapper.ranges = vec![r1, r2, r3];
+        wrapper.ranges = vec![r1, r2];
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);

@@ -72,6 +72,7 @@ pub struct Config {
     pub end_point_batch_row_limit: usize,
     pub end_point_stream_batch_row_limit: usize,
     pub snap_max_write_bytes_per_sec: ReadableSize,
+    pub snap_max_total_size: ReadableSize,
 
     // Server labels to specify some attributes about this server.
     #[serde(with = "config::order_map_serde")] pub labels: HashMap<String, String>,
@@ -104,6 +105,7 @@ impl Default for Config {
             end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,
             end_point_stream_batch_row_limit: DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT,
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
+            snap_max_total_size: ReadableSize(0),
         }
     }
 }
