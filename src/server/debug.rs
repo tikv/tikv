@@ -619,6 +619,32 @@ mod tests {
     use util::rocksdb::{self as rocksdb_util, CFOptions};
     use super::*;
 
+    fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
+        let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
+        let mut region = Region::new();
+        region.set_id(region_id);
+        for (i, &store_id) in stores.iter().enumerate() {
+            let mut peer = Peer::new();
+            peer.set_id(i as u64);
+            peer.set_store_id(store_id);
+            region.mut_peers().push(peer);
+        }
+        let mut region_state = RegionLocalState::new();
+        region_state.set_state(PeerState::Normal);
+        region_state.set_region(region.clone());
+        let key = keys::region_state_key(region_id);
+        engine.put_msg_cf(cf_raft, &key, &region_state).unwrap();
+        region
+    }
+
+    fn get_region_state(engine: &DB, region_id: u64) -> RegionLocalState {
+        let key = keys::region_state_key(region_id);
+        engine
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
+            .unwrap()
+            .unwrap()
+    }
+
     #[test]
     fn test_validate_db_and_cf() {
         let valid_cases = vec![
@@ -849,52 +875,18 @@ mod tests {
     #[test]
     fn test_remove_failed_stores() {
         let debugger = new_debugger();
-        let engine = &debugger.engines.kv_engine;
-        let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
+        let engine = debugger.engines.kv_engine.as_ref();
 
         // region 1 with peers at stores 11, 12, 13.
-        let mut region = Region::new();
-        region.set_id(1);
-        for i in 1..4 {
-            let mut peer = Peer::new();
-            peer.set_id(i);
-            peer.set_store_id(10 + i);
-            region.mut_peers().push(peer);
-        }
-        let mut region_state = RegionLocalState::new();
-        region_state.set_state(PeerState::Normal);
-        region_state.set_region(region.clone());
-        let key1 = keys::region_state_key(1);
-        engine.put_msg_cf(cf_raft, &key1, &region_state).unwrap();
-
+        init_region_state(engine, 1, &[11, 12, 13, 14]);
         // region 2 with peers at stores 21, 22, 23.
-        let mut region = Region::new();
-        region.set_id(2);
-        for i in 1..4 {
-            let mut peer = Peer::new();
-            peer.set_id(i);
-            peer.set_store_id(20 + i);
-            region.mut_peers().push(peer);
-        }
-        let mut region_state = RegionLocalState::new();
-        region_state.set_state(PeerState::Normal);
-        region_state.set_region(region.clone());
-        let key2 = keys::region_state_key(2);
-        engine.put_msg_cf(cf_raft, &key2, &region_state).unwrap();
+        init_region_state(engine, 2, &[21, 22, 23]);
 
-        let errors = debugger.remove_failed_stores(vec![12, 13, 23]).unwrap();
+        let errors = debugger.remove_failed_stores(vec![13, 14, 23]).unwrap();
         assert!(errors.is_empty());
-
-        let region_state = engine
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &key1)
-            .unwrap()
-            .unwrap();
-        assert_eq!(region_state.get_region().get_peers().len(), 1);
-
-        let region_state = engine
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &key2)
-            .unwrap()
-            .unwrap();
+        let region_state = get_region_state(engine, 1);
+        assert_eq!(region_state.get_region().get_peers().len(), 2);
+        let region_state = get_region_state(engine, 2);
         assert_eq!(region_state.get_region().get_peers().len(), 3);
     }
 
