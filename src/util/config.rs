@@ -795,7 +795,7 @@ mod check_data_dir {
     fn get_rotational_info(fsname: &str) -> Result<String, ConfigError> {
         if !fsname.starts_with("/dev/") {
             return Err(ConfigError::FileSystem(format!(
-                "fsname:{:?} is not a device",
+                "fsname: {:?} is not a block device",
                 fsname
             )));
         }
@@ -805,7 +805,7 @@ mod check_data_dir {
         let mut device_dir = format!("{}/{}", block_dir, dev);
         if !Path::new(&device_dir).exists() {
             let dir = fs::read_dir(&block_dir).map_err(|e| {
-                ConfigError::FileSystem(format!("read block dir {} with error: {:?}", block_dir, e))
+                ConfigError::FileSystem(format!("read block dir {:?} failed: {:?}", block_dir, e))
             })?;
             let mut find = false;
             for entry in dir {
@@ -823,7 +823,7 @@ mod check_data_dir {
             }
             if !find {
                 return Err(ConfigError::FileSystem(format!(
-                    "fs:{} no device find in block",
+                    "fs: {:?} no device find in block",
                     fsname
                 )));
             }
@@ -832,7 +832,7 @@ mod check_data_dir {
         let rota_path = format!("{}/queue/rotational", device_dir);
         if !Path::new(&rota_path).exists() {
             return Err(ConfigError::FileSystem(format!(
-                "block {} has no rotational file",
+                "block {:?} has no rotational file",
                 device_dir
             )));
         }
@@ -842,7 +842,7 @@ mod check_data_dir {
             .and_then(|mut f| f.read_to_string(&mut buffer))
             .map_err(|e| {
                 ConfigError::FileSystem(format!(
-                    "get_rotational_info from {} failed {}",
+                    "get_rotational_info from {:?} failed: {:?}",
                     rota_path, e
                 ))
             })?;
@@ -855,7 +855,7 @@ mod check_data_dir {
             Ok(path) => path,
             Err(e) => {
                 return Err(ConfigError::FileSystem(format!(
-                    "path:{:?} canonicalize failed with error: {:?}",
+                    "path: {:?} canonicalize failed: {:?}",
                     data_path, e
                 )))
             }
@@ -863,10 +863,10 @@ mod check_data_dir {
 
         let fs_info = get_fs_info(&real_path, "/proc/mounts")?;
         // TODO check ext4 nodelalloc
-        info!("data_path: {}, mount fs info:{:?}", data_path, fs_info);
+        info!("data_path: {:?}, mount fs info: {:?}", data_path, fs_info);
         let rotational_info = get_rotational_info(&fs_info.fsname)?;
         if rotational_info != "0" {
-            warn!("{} not on SSD device", data_path);
+            warn!("{:?} not on SSD device", data_path);
         }
         Ok(())
     }
