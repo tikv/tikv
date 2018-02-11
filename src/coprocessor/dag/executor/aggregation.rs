@@ -315,8 +315,8 @@ impl StreamAggExecutor {
             ctx: ctx,
             related_cols_offset: visitor.column_offsets(),
             cols: columns,
-            cur_group_row: vec![Datum::Null; group_len],
-            next_group_row: vec![Datum::Null; group_len],
+            cur_group_row: Vec::with_capacity(group_len),
+            next_group_row: Vec::with_capacity(group_len),
             is_first_group: true,
             count: 0,
         })
@@ -327,25 +327,25 @@ impl StreamAggExecutor {
             return Ok(false);
         }
 
-        let mut tmp_group_row = vec![Datum::Null; self.group_by_exprs.len()];
+        let mut tmp_group_row = Vec::with_capacity(self.group_by_exprs.len());
         let mut matched = !self.is_first_group;
         for (i, expr) in self.group_by_exprs.iter().enumerate() {
             let v = box_try!(expr.eval(&self.ctx, row));
             if matched && box_try!(v.cmp(&self.ctx, &self.cur_group_row[i])) != Ordering::Equal {
                 matched = false;
             }
-            tmp_group_row[i] = v;
+            tmp_group_row.push(v);
         }
-        let ret = !self.is_first_group;
         if self.is_first_group {
-            self.cur_group_row = tmp_group_row.clone();
-            self.is_first_group = false
+            mem::swap(&mut self.cur_group_row, &mut tmp_group_row);
+            self.is_first_group = false;
+            return Ok(false);
         }
         if matched {
             return Ok(false);
         }
         mem::swap(&mut self.next_group_row, &mut tmp_group_row);
-        Ok(ret)
+        Ok(true)
     }
 
     // get_partial_result gets a result for the same group.
@@ -360,11 +360,7 @@ impl StreamAggExecutor {
         // Get and decode the values of 'group by'.
         let mut group_key = Vec::with_capacity(0);
         if !self.group_by_exprs.is_empty() {
-            let mut vals = Vec::with_capacity(self.group_by_exprs.len());
-            for d in self.cur_group_row.drain(..) {
-                vals.push(d);
-            }
-            group_key = box_try!(datum::encode_value(vals.as_slice()));
+            group_key = box_try!(datum::encode_value(self.cur_group_row.as_slice()));
             mem::swap(&mut self.cur_group_row, &mut self.next_group_row);
         }
         // Construct row data.
