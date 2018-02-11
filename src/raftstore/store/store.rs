@@ -1125,7 +1125,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .iter()
                 .any(|&(_, ref ctx)| ctx.snap_region.is_some()),
             |_| {
-                println!("invoke_ctx with sanp_region");
                 self.sendch.send(Msg::Quit).unwrap();
                 return;
             }

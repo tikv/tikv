@@ -91,7 +91,7 @@ pub trait Simulator {
 pub struct Cluster<T: Simulator> {
     pub cfg: TiKvConfig,
     leaders: HashMap<u64, metapb::Peer>,
-    paths: Vec<Arc<TempDir>>,
+    paths: Vec<TempDir>,
     dbs: Vec<Engines>,
     count: usize,
 
@@ -140,12 +140,8 @@ impl<T: Simulator> Cluster<T> {
             );
             let engines = Engines::new(engine, raft_engine);
             self.dbs.push(engines);
-            self.paths.push(Arc::new(path));
+            self.paths.push(path);
         }
-    }
-
-    pub fn paths(&self) -> Vec<Arc<TempDir>> {
-        self.paths.iter().map(|p| Arc::clone(p)).collect()
     }
 
     pub fn start(&mut self) {
@@ -155,7 +151,7 @@ impl<T: Simulator> Cluster<T> {
                 let (node_id, engines, path) = sim.run_node(0, self.cfg.clone(), None);
                 self.dbs.push(engines.clone());
                 self.engines.insert(node_id, engines);
-                self.paths.push(Arc::new(path.unwrap()));
+                self.paths.push(path.unwrap());
             }
         } else {
             // recover from last shutdown.
