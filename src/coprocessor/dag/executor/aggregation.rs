@@ -253,12 +253,12 @@ impl Executor for StreamAggExecutor {
         self.count = 0;
     }
 
-    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
-        self.src.collect_statistics_into(statistics)
-    }
-
-    fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         self.src.collect_metrics_into(metrics);
+        if self.first_collect {
+            metrics.executor_count.aggregation += 1;
+            self.first_collect = false;
+        }
     }
 }
 
@@ -279,6 +279,7 @@ pub struct StreamAggExecutor {
     next_group_row: Vec<Datum>,
     is_first_group: bool,
     count: i64,
+    first_collect: bool,
 }
 
 impl StreamAggExecutor {
@@ -315,6 +316,7 @@ impl StreamAggExecutor {
             next_group_row: Vec::with_capacity(group_len),
             is_first_group: true,
             count: 0,
+            first_collect: true,
         })
     }
 
