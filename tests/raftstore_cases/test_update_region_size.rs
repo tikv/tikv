@@ -11,11 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+use std::{thread, time};
+
 use tikv::util::config::*;
+use tikv::pd::PdClient;
 
 use super::cluster::{Cluster, Simulator};
 use super::server::new_server_cluster;
-use std::{thread, time};
 
 fn flush<T: Simulator>(cluster: &mut Cluster<T>) {
     for engines in cluster.engines.values() {
@@ -51,6 +54,12 @@ fn test_update_regoin_size<T: Simulator>(cluster: &mut Cluster<T>) {
         }
         flush(cluster);
     }
+
+    // Make sure there are multiple regions, so it will cover all cases of
+    // function `raftstore.on_compaction_finished`.
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"").unwrap();
+    cluster.must_split(&region, b"k2000");
 
     thread::sleep(time::Duration::from_millis(300));
     let region_id = cluster.get_region_id(b"");

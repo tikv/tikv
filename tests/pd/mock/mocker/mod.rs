@@ -64,6 +64,10 @@ pub trait PdMocker {
         None
     }
 
+    fn get_all_stores(&self, _: &GetAllStoresRequest) -> Option<Result<GetAllStoresResponse>> {
+        None
+    }
+
     fn store_heartbeat(&self, _: &StoreHeartbeatRequest) -> Option<Result<StoreHeartbeatResponse>> {
         None
     }

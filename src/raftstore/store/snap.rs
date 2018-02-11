@@ -11,17 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error;
+use std::{error, result, str, thread, time, u64};
 use std::io::{self, ErrorKind, Read, Write};
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, Metadata};
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::path::Path;
-use std::result;
-use std::str;
-use std::time;
-use std::thread;
+use std::cmp::Reverse;
 
 use protobuf::Message;
 use rocksdb::{CFHandle, Writable, WriteBatch, DB};
@@ -69,6 +66,9 @@ quick_error! {
         Abort {
             description("abort")
             display("abort")
+        }
+        TooManySnapshots {
+            description("too many snapshots")
         }
         Other(err: Box<error::Error + Sync + Send>) {
             from()
@@ -891,7 +891,6 @@ impl Snapshot for Snap {
             {
                 let mut file = cf_file.file.take().unwrap();
                 file.flush()?;
-                file.sync_all()?;
             }
             if cf_file.written_size != cf_file.size {
                 return Err(io::Error::new(
@@ -1097,23 +1096,12 @@ pub struct SnapManager {
     core: Arc<RwLock<SnapManagerCore>>,
     ch: Option<SendCh<Msg>>,
     limiter: Option<Arc<IOLimiter>>,
+    max_total_size: u64,
 }
 
 impl SnapManager {
-    pub fn new<T: Into<String>>(
-        path: T,
-        ch: Option<SendCh<Msg>>,
-        limiter: Option<Arc<IOLimiter>>,
-    ) -> SnapManager {
-        SnapManager {
-            core: Arc::new(RwLock::new(SnapManagerCore {
-                base: path.into(),
-                registry: map![],
-                snap_size: Arc::new(RwLock::new(0)),
-            })),
-            ch: ch,
-            limiter: limiter,
-        }
+    pub fn new<T: Into<String>>(path: T, ch: Option<SendCh<Msg>>) -> SnapManager {
+        SnapManagerBuilder::default().build(path, ch)
     }
 
     pub fn init(&self) -> io::Result<()> {
@@ -1208,6 +1196,32 @@ impl SnapManager {
         key: &SnapKey,
         snap: &DbSnapshot,
     ) -> RaftStoreResult<Box<Snapshot>> {
+        let mut old_snaps = None;
+        while self.get_total_snap_size() > self.max_total_snap_size() {
+            if old_snaps.is_none() {
+                let snaps = self.list_idle_snap()?;
+                let mut key_and_snaps = Vec::with_capacity(snaps.len());
+                for (key, is_sending) in snaps {
+                    if !is_sending {
+                        continue;
+                    }
+                    let snap = match self.get_snapshot_for_sending(&key) {
+                        Ok(snap) => snap,
+                        Err(_) => continue,
+                    };
+                    if let Ok(modified) = snap.meta().and_then(|m| m.modified()) {
+                        key_and_snaps.push((key, snap, modified));
+                    }
+                }
+                key_and_snaps.sort_by_key(|&(_, _, modified)| Reverse(modified));
+                old_snaps = Some(key_and_snaps);
+            }
+            match old_snaps.as_mut().unwrap().pop() {
+                Some((key, snap, _)) => self.delete_snapshot(&key, snap.as_ref(), false),
+                None => return Err(RaftStoreError::Snapshot(Error::TooManySnapshots)),
+            };
+        }
+
         let (dir, snap_size) = {
             let core = self.core.rl();
             (core.base.clone(), Arc::clone(&core.snap_size))
@@ -1277,6 +1291,10 @@ impl SnapManager {
         let core = self.core.rl();
         let size = *core.snap_size.rl();
         size
+    }
+
+    pub fn max_total_snap_size(&self) -> u64 {
+        self.max_total_size
     }
 
     pub fn register(&self, key: SnapKey, entry: SnapEntry) {
@@ -1370,6 +1388,45 @@ impl SnapshotDeleter for SnapManager {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct SnapManagerBuilder {
+    max_write_bytes_per_sec: u64,
+    max_total_size: u64,
+}
+
+impl SnapManagerBuilder {
+    pub fn max_write_bytes_per_sec(&mut self, bytes: u64) -> &mut SnapManagerBuilder {
+        self.max_write_bytes_per_sec = bytes;
+        self
+    }
+    pub fn max_total_size(&mut self, bytes: u64) -> &mut SnapManagerBuilder {
+        self.max_total_size = bytes;
+        self
+    }
+    pub fn build<T: Into<String>>(&self, path: T, ch: Option<SendCh<Msg>>) -> SnapManager {
+        let limiter = if self.max_write_bytes_per_sec > 0 {
+            Some(Arc::new(IOLimiter::new(self.max_write_bytes_per_sec)))
+        } else {
+            None
+        };
+        let max_total_size = if self.max_total_size > 0 {
+            self.max_total_size
+        } else {
+            u64::MAX
+        };
+        SnapManager {
+            core: Arc::new(RwLock::new(SnapManagerCore {
+                base: path.into(),
+                registry: map![],
+                snap_size: Arc::new(RwLock::new(0)),
+            })),
+            ch: ch,
+            limiter: limiter,
+            max_total_size: max_total_size,
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -1380,12 +1437,13 @@ mod test {
     use tempdir::TempDir;
     use protobuf::Message;
 
-    use super::{ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, Snapshot, SnapshotDeleter,
-                SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX};
+    use super::{ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder, Snapshot,
+                SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS,
+                SNAP_GEN_PREFIX};
 
     use std::path::PathBuf;
     use kvproto::metapb::{Peer, Region};
-    use kvproto::raft_serverpb::{RaftSnapshotData, SnapshotMeta};
+    use kvproto::raft_serverpb::{RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta};
     use rocksdb::DB;
 
     use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -1430,6 +1488,26 @@ mod test {
             db.put_msg_cf(handle, &key[..], &p)?;
         }
         Ok(Arc::new(db))
+    }
+
+    fn get_test_db_for_regions(path: &TempDir, regions: &[u64]) -> Result<Arc<DB>> {
+        let kv = get_test_db(path)?;
+        for &region_id in regions {
+            // Put apply state into kv engine.
+            let mut apply_state = RaftApplyState::new();
+            apply_state.set_applied_index(10);
+            apply_state.mut_truncated_state().set_index(9);
+            let handle = rocksdb::get_cf_handle(&kv, CF_RAFT)?;
+            kv.put_msg_cf(handle, &keys::apply_state_key(region_id), &apply_state)?;
+
+            // Put region info into kv engine.
+            let region = get_test_region(region_id, 1, 1);
+            let mut region_state = RegionLocalState::new();
+            region_state.set_region(region);
+            let handle = rocksdb::get_cf_handle(&kv, CF_RAFT)?;
+            kv.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
+        }
+        Ok(kv)
     }
 
     pub fn get_kv_count(snap: &DbSnapshot) -> usize {
@@ -2054,7 +2132,7 @@ mod test {
         let temp_path = temp_dir.path().join("snap1");
         let path = temp_path.to_str().unwrap().to_owned();
         assert!(!temp_path.exists());
-        let mut mgr = SnapManager::new(path, None, None);
+        let mut mgr = SnapManager::new(path, None);
         mgr.init().unwrap();
         assert!(temp_path.exists());
 
@@ -2062,7 +2140,7 @@ mod test {
         let temp_path2 = temp_dir.path().join("snap2");
         let path2 = temp_path2.to_str().unwrap().to_owned();
         File::create(temp_path2).unwrap();
-        mgr = SnapManager::new(path2, None, None);
+        mgr = SnapManager::new(path2, None);
         assert!(mgr.init().is_err());
     }
 
@@ -2070,7 +2148,7 @@ mod test {
     fn test_snap_mgr_v2() {
         let temp_dir = TempDir::new("test-snap-mgr-v2").unwrap();
         let path = temp_dir.path().to_str().unwrap().to_owned();
-        let mgr = SnapManager::new(path.clone(), None, None);
+        let mgr = SnapManager::new(path.clone(), None);
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), 0);
 
@@ -2138,7 +2216,7 @@ mod test {
         assert!(!s3.exists());
         assert!(!s4.exists());
 
-        let mgr = SnapManager::new(path, None, None);
+        let mgr = SnapManager::new(path, None);
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), expected_size * 2);
 
@@ -2169,7 +2247,7 @@ mod test {
     fn test_snap_deletion_on_registry() {
         let src_temp_dir = TempDir::new("test-snap-deletion-on-registry-src").unwrap();
         let src_path = src_temp_dir.path().to_str().unwrap().to_owned();
-        let src_mgr = SnapManager::new(src_path.clone(), None, None);
+        let src_mgr = SnapManager::new(src_path.clone(), None);
         src_mgr.init().unwrap();
 
         let src_db_dir = TempDir::new("test-snap-deletion-on-registry-src-db").unwrap();
@@ -2204,7 +2282,7 @@ mod test {
 
         let dst_temp_dir = TempDir::new("test-snap-deletion-on-registry-dst").unwrap();
         let dst_path = dst_temp_dir.path().to_str().unwrap().to_owned();
-        let dst_mgr = SnapManager::new(dst_path.clone(), None, None);
+        let dst_mgr = SnapManager::new(dst_path.clone(), None);
         dst_mgr.init().unwrap();
 
         // Ensure the snapshot being received will not be deleted on GC.
@@ -2228,5 +2306,71 @@ mod test {
         let s5 = dst_mgr.get_snapshot_for_applying(&key).unwrap();
         dst_mgr.delete_snapshot(&key, s4.as_ref(), false);
         assert!(s5.exists());
+    }
+
+    #[test]
+    fn test_snapshot_max_total_size() {
+        let regions: Vec<u64> = (0..20).collect();
+        let kv_path = TempDir::new("test-snapshot-max-total-size-db").unwrap();
+        let kv = get_test_db_for_regions(&kv_path, &regions).unwrap();
+
+        let snapfiles_path = TempDir::new("test-snapshot-max-total-size-snapshots").unwrap();
+        let snap_mgr = SnapManagerBuilder::default()
+            .max_total_size(10240)
+            .build(snapfiles_path.path().to_str().unwrap(), None);
+        let snapshot = DbSnapshot::new(kv);
+
+        // Add an oldest snapshot for receiving.
+        let recv_key = SnapKey::new(100, 100, 100);
+        let recv_head = {
+            let mut stat = SnapshotStatistics::new();
+            let mut snap_data = RaftSnapshotData::new();
+            let mut s = snap_mgr
+                .get_snapshot_for_building(&recv_key, &snapshot)
+                .unwrap();
+            s.build(
+                &snapshot,
+                &get_test_region(100, 1, 1),
+                &mut snap_data,
+                &mut stat,
+                Box::new(snap_mgr.clone()),
+            ).unwrap();
+            snap_data.write_to_bytes().unwrap()
+        };
+        let recv_remain = {
+            let mut data = Vec::with_capacity(1024);
+            let mut s = snap_mgr.get_snapshot_for_sending(&recv_key).unwrap();
+            s.read_to_end(&mut data).unwrap();
+            assert!(snap_mgr.delete_snapshot(&recv_key, s.as_ref(), true));
+            data
+        };
+        let mut s = snap_mgr
+            .get_snapshot_for_receiving(&recv_key, &recv_head)
+            .unwrap();
+        s.write_all(&recv_remain).unwrap();
+        s.save().unwrap();
+
+        for (i, region_id) in regions.into_iter().enumerate() {
+            let key = SnapKey::new(region_id, 1, 1);
+            let region = get_test_region(region_id, 1, 1);
+            let mut s = snap_mgr.get_snapshot_for_building(&key, &snapshot).unwrap();
+            let mut snap_data = RaftSnapshotData::new();
+            let mut stat = SnapshotStatistics::new();
+            s.build(
+                &snapshot,
+                &region,
+                &mut snap_data,
+                &mut stat,
+                Box::new(snap_mgr.clone()),
+            ).unwrap();
+
+            if i < 5 {
+                // sizeof(snapshot) == 1918 bytes. The first 1918 is for region 100.
+                // That snapshot won't be deleted because it's not for generating.
+                assert_eq!(snap_mgr.get_total_snap_size() as usize, 1918 * (i + 2));
+            } else {
+                assert_eq!(snap_mgr.get_total_snap_size() as usize, 1918 * 6);
+            }
+        }
     }
 }

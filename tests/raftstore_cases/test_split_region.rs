@@ -210,13 +210,13 @@ fn put_cf_till_size<T: Simulator>(
         len += value.len() as u64;
         // Flush memtable to SST periodically, to make approximate size more accurate.
         if len - last_len >= 1000 {
-            cluster.must_flush(true);
+            cluster.must_flush_cf(cf, true);
             last_len = len;
         }
     }
     // Approximate size of memtable is inaccurate for small data,
     // we flush it to SST so we can use the size properties instead.
-    cluster.must_flush(true);
+    cluster.must_flush_cf(cf, true);
     key
 }
 
