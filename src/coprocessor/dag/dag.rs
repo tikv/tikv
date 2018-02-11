@@ -116,16 +116,13 @@ impl DAGContext {
     ) -> Result<(Option<Response>, bool)> {
         let (mut record_cnt, mut finished) = (0, false);
         let mut chunk = Chunk::new();
-        let (mut start_key, mut support_partial_retry) = (None, true);
+        let mut start_key = None;
         while record_cnt < batch_row_limit {
             match self.exec.next() {
                 Ok(Some(row)) => {
                     record_cnt += 1;
-                    if support_partial_retry && start_key.is_none() {
+                    if record_cnt == 1 {
                         start_key = self.exec.take_last_key();
-                        if start_key.is_none() {
-                            support_partial_retry = false;
-                        }
                     }
                     if self.has_aggr {
                         chunk.mut_rows_data().extend_from_slice(&row.data.value);
