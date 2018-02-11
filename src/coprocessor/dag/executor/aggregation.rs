@@ -229,12 +229,11 @@ impl Executor for StreamAggExecutor {
             )?;
             let new_group = self.meet_new_group(&cols)?;
             let mut ret = if new_group {
-                self.get_partial_result()?
+                Some(self.get_partial_result()?)
             } else {
                 None
             };
-            let funcs = self.agg_funcs.iter_mut();
-            for (expr, func) in self.agg_exprs.iter().zip(funcs) {
+            for (expr, func) in self.agg_exprs.iter().zip(&mut self.agg_funcs) {
                 func.update_with_expr(&self.ctx, expr, &cols)?;
             }
             if new_group {
@@ -248,7 +247,7 @@ impl Executor for StreamAggExecutor {
         if self.count == 0 && !self.group_by_exprs.is_empty() {
             return Ok(None);
         }
-        self.get_partial_result()
+        Ok(Some(self.get_partial_result()?))
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
@@ -349,7 +348,7 @@ impl StreamAggExecutor {
     }
 
     // get_partial_result gets a result for the same group.
-    fn get_partial_result(&mut self) -> Result<Option<Row>> {
+    fn get_partial_result(&mut self) -> Result<Row> {
         let mut agg_cols = Vec::with_capacity(2 * self.agg_funcs.len());
         // Calculate all aggregation funcutions.
         for (i, agg_func) in self.agg_funcs.iter_mut().enumerate() {
@@ -373,10 +372,10 @@ impl StreamAggExecutor {
 
         self.count += 1;
 
-        Ok(Some(Row {
+        Ok(Row {
             handle: 0,
             data: RowColsDict::new(map![], value),
-        }))
+        })
     }
 }
 
