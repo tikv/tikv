@@ -20,17 +20,15 @@ use tipb::schema::ColumnInfo;
 
 use coprocessor::codec::{datum, mysql, table};
 use coprocessor::endpoint::is_point;
-use coprocessor::metrics::*;
-use coprocessor::local_metrics::*;
 use coprocessor::{Error, Result};
-use storage::{Key, SnapshotStore, Statistics};
+use storage::{Key, SnapshotStore};
 
 use super::{Executor, Row};
 use super::scanner::{ScanOn, Scanner};
+use super::ExecutorMetrics;
 
 pub struct IndexScanExecutor {
     store: SnapshotStore,
-    statistics: Statistics,
     desc: bool,
     col_ids: Vec<i64>,
     pk_col: Option<ColumnInfo>,
@@ -39,7 +37,8 @@ pub struct IndexScanExecutor {
     last_key: Option<Vec<u8>>,
     unique: bool,
     count: i64,
-    scan_counter: ScanCounter,
+    metrics: ExecutorMetrics,
+    first_collect: bool,
 }
 
 impl IndexScanExecutor {
@@ -61,10 +60,8 @@ impl IndexScanExecutor {
         }
         let col_ids = cols.iter().map(|c| c.get_column_id()).collect();
 
-        COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
         Ok(IndexScanExecutor {
             store: store,
-            statistics: Statistics::default(),
             desc: desc,
             col_ids: col_ids,
             pk_col: pk_col,
@@ -73,7 +70,8 @@ impl IndexScanExecutor {
             last_key: None,
             unique: unique,
             count: 0,
-            scan_counter: ScanCounter::default(),
+            metrics: Default::default(),
+            first_collect: true,
         })
     }
 
@@ -84,10 +82,8 @@ impl IndexScanExecutor {
     ) -> Result<IndexScanExecutor> {
         box_try!(table::check_table_ranges(&key_ranges));
         let col_ids: Vec<i64> = (0..cols).collect();
-        COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
         Ok(IndexScanExecutor {
             store: store,
-            statistics: Statistics::default(),
             desc: false,
             col_ids: col_ids,
             pk_col: None,
@@ -96,7 +92,8 @@ impl IndexScanExecutor {
             last_key: None,
             unique: false,
             count: 0,
-            scan_counter: ScanCounter::default(),
+            metrics: ExecutorMetrics::default(),
+            first_collect: true,
         })
     }
 
@@ -104,7 +101,7 @@ impl IndexScanExecutor {
         if self.scanner.is_none() {
             return Ok(None);
         }
-        self.scan_counter.inc_range();
+        self.metrics.scan_counter.inc_range();
 
         let (key, value) = {
             let scanner = self.scanner.as_mut().unwrap();
@@ -138,8 +135,10 @@ impl IndexScanExecutor {
     }
 
     fn get_row_from_point(&mut self, mut range: KeyRange) -> Result<Option<Row>> {
+        self.metrics.scan_counter.inc_point();
         let key = range.take_start();
-        let value = self.store.get(&Key::from_raw(&key), &mut self.statistics)?;
+        let value = self.store
+            .get(&Key::from_raw(&key), &mut self.metrics.cf_stats)?;
         if let Some(value) = value {
             self.last_key = Some(key.clone());
             return self.decode_index_key_value(key, value);
@@ -167,7 +166,6 @@ impl Executor for IndexScanExecutor {
             }
             if let Some(range) = self.key_ranges.next() {
                 if self.is_point(&range) {
-                    self.scan_counter.inc_point();
                     if let Some(row) = self.get_row_from_point(range)? {
                         self.count += 1;
                         return Ok(Some(row));
@@ -192,20 +190,19 @@ impl Executor for IndexScanExecutor {
         self.count = 0;
     }
 
-    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
-        statistics.add(&self.statistics);
-        self.statistics = Statistics::default();
-        if let Some(scanner) = self.scanner.as_mut() {
-            scanner.collect_statistics_into(statistics);
-        }
-    }
-
     fn take_last_key(&mut self) -> Option<Vec<u8>> {
         self.last_key.take()
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
-        metrics.merge(&mut self.scan_counter);
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
+        metrics.merge(&mut self.metrics);
+        if let Some(scanner) = self.scanner.as_mut() {
+            scanner.collect_statistics_into(&mut self.metrics.cf_stats);
+        }
+        if self.first_collect {
+            metrics.executor_count.index_scan += 1;
+            self.first_collect = false;
+        }
     }
 }
 

@@ -21,12 +21,11 @@ use protobuf::{Message as PbMsg, RepeatedField};
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::dag::expr::EvalContext;
-use coprocessor::local_metrics::*;
 use coprocessor::{Error, Result};
 use coprocessor::endpoint::{get_pk, prefix_next, to_pb_error, ReqContext};
-use storage::{Snapshot, SnapshotStore, Statistics};
+use storage::{Snapshot, SnapshotStore};
 
-use super::executor::{build_exec, Executor, Row};
+use super::executor::{build_exec, Executor, ExecutorMetrics, Row};
 
 pub struct DAGContext {
     columns: Arc<Vec<ColumnInfo>>,
@@ -194,11 +193,7 @@ impl DAGContext {
         Ok(resp)
     }
 
-    pub fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
-        self.exec.collect_statistics_into(statistics);
-    }
-
-    pub fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
+    pub fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         self.exec.collect_metrics_into(metrics);
     }
 }

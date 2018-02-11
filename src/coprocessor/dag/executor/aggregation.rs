@@ -22,13 +22,11 @@ use coprocessor::codec::table::RowColsDict;
 use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
 use coprocessor::endpoint::SINGLE_GROUP;
 use coprocessor::dag::expr::{EvalContext, Expression};
-use coprocessor::metrics::*;
-use coprocessor::local_metrics::*;
 use coprocessor::Result;
-use storage::Statistics;
 
 use super::aggregate::{self, AggrFunc};
 use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
+use super::ExecutorMetrics;
 
 struct AggFuncExpr {
     args: Vec<Expression>,
@@ -81,6 +79,7 @@ pub struct HashAggExecutor {
     related_cols_offset: Vec<usize>, // offset of related columns
     src: Box<Executor + Send>,
     count: i64,
+    first_collect: bool,
 }
 
 impl HashAggExecutor {
@@ -96,9 +95,6 @@ impl HashAggExecutor {
         visitor.batch_visit(&group_by)?;
         let aggr_func = meta.take_agg_func().into_vec();
         visitor.batch_visit(&aggr_func)?;
-        COPR_EXECUTOR_COUNT
-            .with_label_values(&["aggregation"])
-            .inc();
         Ok(HashAggExecutor {
             group_by: box_try!(Expression::batch_build(&ctx, group_by)),
             aggr_func: AggFuncExpr::batch_build(&ctx, aggr_func)?,
@@ -110,6 +106,7 @@ impl HashAggExecutor {
             related_cols_offset: visitor.column_offsets(),
             src: src,
             count: 0,
+            first_collect: true,
         })
     }
 
@@ -199,12 +196,12 @@ impl Executor for HashAggExecutor {
         self.count = 0;
     }
 
-    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
-        self.src.collect_statistics_into(statistics);
-    }
-
-    fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         self.src.collect_metrics_into(metrics);
+        if self.first_collect {
+            metrics.executor_count.aggregation += 1;
+            self.first_collect = false;
+        }
     }
 }
 

@@ -34,16 +34,16 @@ use util::time::{duration_to_sec, Instant};
 use util::worker::{FutureScheduler, Runnable, Scheduler};
 use util::collections::HashMap;
 use server::{Config, OnResponse};
-use storage::{self, engine, Engine, Snapshot, Statistics};
+use storage::{self, engine, Engine, Snapshot};
 use storage::engine::Error as EngineError;
 use pd::PdTask;
 
 use super::codec::mysql;
 use super::codec::datum::Datum;
 use super::dag::DAGContext;
+use super::dag::executor::ExecutorMetrics;
 use super::statistics::analyze::AnalyzeContext;
 use super::metrics::*;
-use super::local_metrics::*;
 use super::{Error, Result};
 
 pub const REQ_TYPE_DAG: i64 = 103;
@@ -62,12 +62,6 @@ pub const SINGLE_GROUP: &[u8] = b"SingleGroup";
 const OUTDATED_ERROR_MSG: &str = "request outdated.";
 
 const ENDPOINT_IS_BUSY: &str = "endpoint is busy";
-
-#[derive(Debug, Default)]
-struct CopStats {
-    stats: Statistics,
-    scan_counter: ScanCounter,
-}
 
 struct ExecutorPool {
     pool: CpuPool,
@@ -182,10 +176,9 @@ impl Host {
                     let do_request = move || {
                         tracker.record_wait();
                         let mut resp = ctx.handle_request(batch_row_limit).unwrap_or_else(err_resp);
-                        let mut cop_stats = CopStats::default();
-                        ctx.collect_statistics_into(&mut cop_stats.stats);
-                        ctx.collect_metrics_into(&mut cop_stats.scan_counter);
-                        tracker.record_handle(&mut resp, cop_stats);
+                        let mut exec_metrics = ExecutorMetrics::default();
+                        ctx.collect_metrics_into(&mut exec_metrics);
+                        tracker.record_handle(&mut resp, exec_metrics);
                         future::ok::<_, ()>(on_resp.respond(resp))
                     };
                     return pool.spawn_fn(do_request).forget();
@@ -200,10 +193,9 @@ impl Host {
                     let (item, finished) = ctx.handle_streaming_request(batch_row_limit)
                         .unwrap_or_else(|e| (Some(err_resp(e)), true));
                     item.map(|mut resp| {
-                        let mut cop_stats = CopStats::default();
-                        ctx.collect_statistics_into(&mut cop_stats.stats);
-                        ctx.collect_metrics_into(&mut cop_stats.scan_counter);
-                        tracker.record_handle(&mut resp, cop_stats);
+                        let mut exec_metrics = ExecutorMetrics::default();
+                        ctx.collect_metrics_into(&mut exec_metrics);
+                        tracker.record_handle(&mut resp, exec_metrics);
                         future::ok::<_, futures_mpsc::SendError<_>>((resp, (ctx, finished)))
                     })
                 });
@@ -211,12 +203,12 @@ impl Host {
             }
             CopRequest::Analyze(analyze) => {
                 let ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx);
-                let mut cop_stats = CopStats::default();
+                let mut exec_metrics = ExecutorMetrics::default();
                 let do_request = move || {
                     tracker.record_wait();
-                    let mut resp = ctx.handle_request(&mut cop_stats.stats)
+                    let mut resp = ctx.handle_request(&mut exec_metrics)
                         .unwrap_or_else(err_resp);
-                    tracker.record_handle(&mut resp, cop_stats);
+                    tracker.record_handle(&mut resp, exec_metrics);
                     future::ok::<_, ()>(on_resp.respond(resp))
                 };
                 pool.spawn_fn(do_request).forget();
@@ -295,7 +287,7 @@ struct RequestTracker {
     record_handle_time: bool,
     record_scan_detail: bool,
 
-    cop_stats: CopStats,
+    exec_metrics: ExecutorMetrics,
     start: Instant, // The request start time.
     total_handle_time: f64,
 
@@ -334,16 +326,14 @@ impl RequestTracker {
     }
 
     #[allow(useless_let_if_seq)]
-    fn record_handle(&mut self, resp: &mut Response, cop_stats: CopStats) {
+    fn record_handle(&mut self, resp: &mut Response, mut exec_metrics: ExecutorMetrics) {
         let handle_start = self.handle_start.take().unwrap();
         let now = Instant::now_coarse();
         self.handle_time = Some(duration_to_sec(now - handle_start));
         self.wait_start = Some(now);
         self.total_handle_time += self.handle_time.unwrap();
 
-        let (stats, mut scan_counter) = (cop_stats.stats, cop_stats.scan_counter);
-        self.cop_stats.stats.add(&stats);
-        self.cop_stats.scan_counter.merge(&mut scan_counter);
+        self.exec_metrics.merge(&mut exec_metrics);
 
         let mut record_handle_time = self.record_handle_time;
         let mut record_scan_detail = self.record_scan_detail;
@@ -358,7 +348,7 @@ impl RequestTracker {
             resp.mut_exec_details().set_handle_time(handle);
         }
         if record_scan_detail {
-            let detail = stats.scan_detail();
+            let detail = self.exec_metrics.cf_stats.scan_detail();
             resp.mut_exec_details().set_scan_detail(detail);
         }
     }
@@ -375,8 +365,8 @@ impl Drop for RequestTracker {
                 self.txn_start_ts,
                 self.scan_tag,
                 query_time,
-                self.cop_stats.stats.total_op_count(),
-                self.cop_stats.stats.total_processed(),
+                self.exec_metrics.cf_stats.total_op_count(),
+                self.exec_metrics.cf_stats.total_processed(),
                 self.ranges_len,
                 self.first_range,
             );
@@ -393,7 +383,7 @@ impl Drop for RequestTracker {
             .observe(self.total_handle_time);
         COPR_SCAN_KEYS
             .with_label_values(&[self.scan_tag])
-            .observe(self.cop_stats.stats.total_op_count() as f64);
+            .observe(self.exec_metrics.cf_stats.total_op_count() as f64);
 
         if let Some(task_count) = self.running_task_count.take() {
             task_count.fetch_sub(1, Ordering::Release);
@@ -460,7 +450,7 @@ impl RequestTask {
             handle_start: None,
             wait_time: None,
             handle_time: None,
-            cop_stats: CopStats::default(),
+            exec_metrics: ExecutorMetrics::default(),
 
             region_id: req.get_context().get_region_id(),
             txn_start_ts: start_ts,
