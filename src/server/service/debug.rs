@@ -311,48 +311,14 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
     ) {
         let region_id = req.get_region_id();
         let debugger = self.debugger.clone();
-
-        let raft_router = self.raft_router.clone();
-        let get_region_status = move |store_id: u64| {
-            let mut header = RaftRequestHeader::new();
-            header.set_region_id(region_id);
-            header.mut_peer().set_store_id(store_id);
-            let mut status_request = StatusRequest::new();
-            status_request.set_cmd_type(StatusCmdType::RegionDetail);
-            let mut raft_cmd = RaftCmdRequest::new();
-            raft_cmd.set_header(header);
-            raft_cmd.set_status_request(status_request);
-
-            let (tx, rx) = oneshot::channel();
-            let cb = Callback::Read(box |resp| tx.send(resp).unwrap());
-            raft_router
-                .send_command(raft_cmd, cb)
-                .map(|_| rx.map(|mut r| r.response.take_status_response().take_region_detail()))
-                .map(|rx| rx.map_err(|e| Error::Other(box e)))
-                .map_err(|e| Error::Other(box e))
-        };
-
-        let raft_router = self.raft_router.clone();
-        let do_check = move |mut detail: RegionDetailResponse| {
-            let mut header = RaftRequestHeader::new();
-            header.set_region_id(region_id);
-            header.set_peer(detail.take_leader());
-            let mut admin_request = AdminRequest::new();
-            admin_request.set_cmd_type(AdminCmdType::ComputeHash);
-            let mut raft_cmd = RaftCmdRequest::new();
-            raft_cmd.set_header(header);
-            raft_cmd.set_admin_request(admin_request);
-
-            raft_router
-                .send_command(raft_cmd, Callback::None)
-                .map_err(|e| Error::Other(box e))
-        };
+        let router1 = self.raft_router.clone();
+        let router2 = self.raft_router.clone();
 
         let consistent_check = move || {
             future::result(debugger.get_store_id())
-                .and_then(get_region_status)
+                .and_then(move |store_id| region_detail(router2, region_id, store_id))
                 .flatten()
-                .and_then(do_check)
+                .and_then(|detail| consistent_check(router1, detail))
         };
         let f = self.pool.spawn_fn(consistent_check).map(|_| {
             let mut resp = RegionConsistentCheckResponse::new();
@@ -361,4 +327,45 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
         });
         self.handle_response(ctx, sink, f, "region_consistent_check");
     }
+}
+
+fn region_detail<T: RaftStoreRouter>(
+    raft_router: T,
+    region_id: u64,
+    store_id: u64,
+) -> Result<impl Future<Item = RegionDetailResponse, Error = Error>, Error> {
+    let mut header = RaftRequestHeader::new();
+    header.set_region_id(region_id);
+    header.mut_peer().set_store_id(store_id);
+    let mut status_request = StatusRequest::new();
+    status_request.set_cmd_type(StatusCmdType::RegionDetail);
+    let mut raft_cmd = RaftCmdRequest::new();
+    raft_cmd.set_header(header);
+    raft_cmd.set_status_request(status_request);
+
+    let (tx, rx) = oneshot::channel();
+    let cb = Callback::Read(box |resp| tx.send(resp).unwrap());
+    raft_router
+        .send_command(raft_cmd, cb)
+        .map(|_| rx.map(|mut r| r.response.take_status_response().take_region_detail()))
+        .map(|rx| rx.map_err(|e| Error::Other(box e)))
+        .map_err(|e| Error::Other(box e))
+}
+
+fn consistent_check<T>(raft_router: T, mut detail: RegionDetailResponse) -> Result<(), Error>
+where
+    T: RaftStoreRouter,
+{
+    let mut header = RaftRequestHeader::new();
+    header.set_region_id(detail.get_region().get_id());
+    header.set_peer(detail.take_leader());
+    let mut admin_request = AdminRequest::new();
+    admin_request.set_cmd_type(AdminCmdType::ComputeHash);
+    let mut raft_cmd = RaftCmdRequest::new();
+    raft_cmd.set_header(header);
+    raft_cmd.set_admin_request(admin_request);
+
+    raft_router
+        .send_command(raft_cmd, Callback::None)
+        .map_err(|e| Error::Other(box e))
 }
