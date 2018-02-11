@@ -164,7 +164,7 @@ pub enum ExecResult {
     },
     Merge {
         region: Region,
-        source_region: Region,
+        source: Region,
     },
     RollbackPreMerge {
         region_id: u64,
@@ -641,10 +641,10 @@ impl ApplyDelegate {
                 }
                 ExecResult::Merge {
                     ref region,
-                    ref source_region,
+                    ref source,
                 } => {
                     self.region = region.clone();
-                    ctx.merged_regions.push(source_region.get_id());
+                    ctx.merged_regions.push(source.get_id());
                 }
             }
         }
@@ -1006,12 +1006,11 @@ impl ApplyDelegate {
         let exec_ctx = ctx.exec_ctx.as_ref().unwrap();
         let first_index = peer_storage::first_index(&exec_ctx.apply_state);
         if index < first_index {
-            // It's possible that a compact log is invoked before pre-merge.
-            info!(
+            // We filter `CompactLog` command before.
+            panic!(
                 "{} first index {} > min_index {}, skip pre merge.",
                 self.tag, first_index, index
             );
-            return Err(box_err!("log gap not covered."));
         }
         let mut region = self.region.clone();
         let region_version = region.get_region_epoch().get_version() + 1;
@@ -1026,9 +1025,8 @@ impl ApplyDelegate {
         region.mut_region_epoch().set_conf_ver(conf_version);
         let mut merging_state = MergeState::new();
         merging_state.set_min_index(index);
-        merging_state.set_direction(pre_merge.get_direction());
+        merging_state.set_target(pre_merge.get_target().to_owned());
         merging_state.set_commit(exec_ctx.index);
-        merging_state.set_conf_version(pre_merge.get_conf_version());
         write_merge_state(
             &self.engine,
             &ctx.wb,
@@ -1061,7 +1059,7 @@ impl ApplyDelegate {
             .inc();
 
         let merge = req.get_merge();
-        let source_region = merge.get_source_region();
+        let source_region = merge.get_source();
         let region_state_key = keys::region_state_key(source_region.get_id());
         let state: RegionLocalState = self.engine
             .get_msg_cf(CF_RAFT, &region_state_key)
@@ -1163,7 +1161,7 @@ impl ApplyDelegate {
             resp,
             Some(ExecResult::Merge {
                 region: region,
-                source_region: source_region.to_owned(),
+                source: source_region.to_owned(),
             }),
         ))
     }

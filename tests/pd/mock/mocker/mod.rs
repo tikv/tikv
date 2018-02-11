@@ -56,10 +56,6 @@ pub trait PdMocker {
         None
     }
 
-    fn get_all_stores(&self, _: &GetAllStoresRequest) -> Option<Result<GetAllStoresResponse>> {
-        None
-    }
-
     fn put_store(&self, _: &PutStoreRequest) -> Option<Result<PutStoreResponse>> {
         None
     }

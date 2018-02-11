@@ -29,7 +29,6 @@ use time::{self, Timespec};
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftMessage, RaftSnapshotData,
                              RaftTruncatedState, RegionLocalState};
 use kvproto::eraftpb::{ConfChangeType, MessageType};
-use kvproto::metapb::MergeDirection;
 use kvproto::pdpb::StoreStats;
 use util::{escape, rocksdb};
 use util::time::{duration_to_sec, SlowTimer};
@@ -1496,22 +1495,70 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
+    fn get_merge_peer(&self, tag: &str, target_region: &metapb::Region) -> Result<Option<&Peer>> {
+        let region_id = target_region.get_id();
+        if let Some(p) = self.region_peers.get(&region_id) {
+            if p.region().get_region_epoch().get_conf_ver()
+                > target_region.get_region_epoch().get_conf_ver()
+            {
+                return Err(box_err!(
+                    "target region changed {:?} -> {:?}",
+                    target_region,
+                    p.region()
+                ));
+            }
+            return Ok(Some(p));
+        }
+
+        let state_key = keys::region_state_key(region_id);
+        let state: RegionLocalState = match self.kv_engine().get_msg_cf(CF_RAFT, &state_key) {
+            Err(e) => {
+                error!(
+                    "{} failed to load region state of {}, ignore: {}",
+                    tag, region_id, e
+                );
+                return Ok(None);
+            }
+            Ok(None) => {
+                info!(
+                    "{} seems to merge into a new replica of region {}, let's wait.",
+                    tag, region_id
+                );
+                return Ok(None);
+            }
+            Ok(Some(state)) => state,
+        };
+        if state.get_state() != PeerState::Tombstone {
+            info!("{} wait for region {} split.", tag, region_id);
+            return Ok(None);
+        }
+
+        let tombstone_region = state.get_region();
+        if tombstone_region.get_region_epoch().get_conf_ver()
+            < target_region.get_region_epoch().get_conf_ver()
+        {
+            info!(
+                "{} seems to merge into a new replica of region {}, let's wait.",
+                tag, region_id
+            );
+            return Ok(None);
+        }
+
+        Err(box_err!("region {} is destroyed", region_id))
+    }
+
     fn schedule_merge(&mut self, region: &metapb::Region, state: &MergeState) -> Result<()> {
         fail_point!("on_schedule_merge", |_| Ok(()));
         let req = {
-            let direction = state.get_direction();
-            let slibing_peer = match self.get_slibing_peer(region, direction) {
-                None => return Err(box_err!("slibing peer not exist")),
+            let peer = &self.region_peers[&region.get_id()];
+            let expect_region = state.get_target();
+            let sibling_peer = match self.get_merge_peer(&peer.tag, expect_region)? {
+                // Wait till next round.
+                None => return Ok(()),
                 Some(p) => p,
             };
-            if slibing_peer.region().get_region_epoch().get_conf_ver() > state.get_conf_version() {
-                return Err(box_err!(
-                    "slibing region changed: {:?}",
-                    slibing_peer.region()
-                ));
-            }
+            let sibling_region = sibling_peer.region();
 
-            let peer = &self.region_peers[&region.get_id()];
             let min_index = peer.get_min_progress() + 1;
             let low = cmp::max(min_index, state.get_min_index());
             // TODO: move this into raft module.
@@ -1524,14 +1571,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     .unwrap()
             };
 
-            let mut request =
-                new_admin_request(slibing_peer.region().get_id(), slibing_peer.peer.clone());
+            let mut request = new_admin_request(sibling_region.get_id(), sibling_peer.peer.clone());
             request
                 .mut_header()
-                .set_region_epoch(slibing_peer.region().get_region_epoch().clone());
+                .set_region_epoch(sibling_region.get_region_epoch().clone());
             let mut admin = AdminRequest::new();
             admin.set_cmd_type(AdminCmdType::Merge);
-            admin.mut_merge().set_source_region(region.clone());
+            admin.mut_merge().set_source(region.clone());
             admin.mut_merge().set_commit(state.get_commit());
             admin
                 .mut_merge()
@@ -1539,6 +1585,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             request.set_admin_request(admin);
             request
         };
+        // Please note that, here assumes that the unit of network isolation is store rather than
+        // peer. So a quorum stores of souce region should also be the quorum stores of target
+        // region. Otherwise we need to enable proposal forwarding.
         self.propose_raft_command(req, Callback::None);
         Ok(())
     }
@@ -1585,7 +1634,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         if let Err(e) = self.schedule_merge(&region, &state) {
-            warn!(
+            info!(
                 "[region {}] failed to schedule merge, rollback: {:?}",
                 region.get_id(),
                 e
@@ -1595,33 +1644,28 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.merge_states.push((region, state));
     }
 
-    fn on_ready_merge(&mut self, region: metapb::Region, source_region: metapb::Region) {
+    fn on_ready_merge(&mut self, region: metapb::Region, source: metapb::Region) {
         let source_peer = {
-            let peer = self.region_peers.get_mut(&source_region.get_id()).unwrap();
+            let peer = self.region_peers.get_mut(&source.get_id()).unwrap();
             // In some case, PreMerge entry may be carried by the dst region. So
             // the peer is not in merging mode.
             peer.is_merging = true;
             peer.peer.clone()
         };
-        self.destroy_peer(source_region.get_id(), source_peer);
+        self.destroy_peer(source.get_id(), source_peer);
         self.merge_states
-            .retain(|&(ref r, _)| r.get_id() != source_region.get_id());
+            .retain(|&(ref r, _)| r.get_id() != source.get_id());
         // If merge backward, then stale meta is clear when source region is destroyed.
         // So only forward needs to be considered.
-        if region.get_end_key() == source_region.get_end_key() {
-            self.region_ranges
-                .remove(&keys::enc_start_key(&source_region));
+        if region.get_end_key() == source.get_end_key() {
+            self.region_ranges.remove(&keys::enc_start_key(&source));
             self.region_ranges
                 .insert(keys::enc_end_key(&region), region.get_id());
         }
         let region_id = region.get_id();
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         peer.mut_store().region = region;
-        info!(
-            "notify pd with merge {:?} into {:?}",
-            source_region,
-            peer.region()
-        );
+        info!("notify pd with merge {:?} into {:?}", source, peer.region());
         peer.heartbeat_pd(&self.pd_worker);
     }
 
@@ -1713,11 +1757,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::PreMerge { region, state } => {
                     self.on_ready_pre_merge(region, state);
                 }
-                ExecResult::Merge {
-                    region,
-                    source_region,
-                } => {
-                    self.on_ready_merge(region, source_region);
+                ExecResult::Merge { region, source } => {
+                    self.on_ready_merge(region, source);
                 }
                 ExecResult::RollbackPreMerge { region_id, commit } => {
                     self.on_ready_rollback_pre_merge(region_id, commit)
@@ -1737,76 +1778,58 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn get_slibing_peer(
-        &self,
-        region: &metapb::Region,
-        direction: MergeDirection,
-    ) -> Option<&Peer> {
-        match direction {
-            MergeDirection::Forward => {
-                let region_start_key = enc_end_key(region);
-                self.region_ranges
-                    .range((Excluded(region_start_key), Unbounded::<Key>))
-                    .next()
-                    .and_then(|(_, id)| {
-                        let peer = match self.region_peers.get(id) {
-                            None => return None,
-                            Some(p) => p,
-                        };
-                        if enc_start_key(peer.region()) == enc_end_key(region) {
-                            return Some(peer);
-                        }
-                        None
-                    })
-            }
-            MergeDirection::Backward => {
-                let slibing_region_key = enc_start_key(region);
-                self.region_ranges
-                    .get(&slibing_region_key)
-                    .and_then(|region_id| self.region_peers.get(region_id))
-            }
-        }
-    }
-
+    /// Check if a request is valid if it has premerge/merge proposal.
     fn check_merge_proposal(&self, msg: &mut RaftCmdRequest) -> Result<()> {
         if !msg.get_admin_request().has_pre_merge() && !msg.get_admin_request().has_merge() {
             return Ok(());
         }
 
         let region_id = msg.get_header().get_region_id();
-        let region = self.region_peers[&region_id].region();
+        let peer = &self.region_peers[&region_id];
+        let region = peer.region();
 
-        let slibing_peer = if msg.get_admin_request().has_pre_merge() {
-            let direction = msg.get_admin_request().get_pre_merge().get_direction();
-            self.get_slibing_peer(region, direction)
-        } else {
-            let region_id = msg.get_admin_request()
-                .get_merge()
-                .get_source_region()
-                .get_id();
-            self.region_peers.get(&region_id)
-        };
-        let slibing_region = match slibing_peer {
-            Some(r) => r.region(),
-            None => {
+        if msg.get_admin_request().has_pre_merge() {
+            let target_region = msg.get_admin_request().get_pre_merge().get_target();
+            let peer = match self.region_peers.get(&target_region.get_id()) {
+                None => return Err(box_err!("target region doesn't exist.")),
+                Some(p) => p,
+            };
+            if peer.region() != target_region {
+                return Err(box_err!("target region not matched, skip proposing."));
+            }
+            if !keys::is_sibling_regions(target_region, region) {
+                return Err(box_err!("regions are not sibling, skip proposing."));
+            }
+            if !util::region_on_same_store(target_region, region) {
                 return Err(box_err!(
-                    "slibing of region {} doesn't exist, reject",
-                    region_id
+                    "peers doesn't match {:?} != {:?}, reject merge",
+                    region.get_peers(),
+                    target_region.get_peers()
                 ));
             }
+        } else {
+            let source_region = msg.get_admin_request().get_merge().get_source();
+            let source_peer = &self.region_peers[&source_region.get_id()];
+            // only merging peer can propose merge request.
+            assert!(
+                source_peer.is_merging,
+                "{} {} should be in merging state",
+                peer.tag, source_peer.tag
+            );
+            assert_eq!(source_region, source_peer.region());
+            assert!(
+                keys::is_sibling_regions(source_region, region),
+                "{:?} {:?} should be sibling",
+                source_region,
+                region
+            );
+            assert!(
+                util::region_on_same_store(source_region, region),
+                "peers not matched: {:?} {:?}",
+                source_region,
+                region
+            );
         };
-        if !util::region_on_same_store(region, slibing_region) {
-            return Err(box_err!(
-                "peers doesn't match {:?} != {:?}, reject merge",
-                region.get_peers(),
-                slibing_region.get_peers()
-            ));
-        }
-        if msg.get_admin_request().has_pre_merge() {
-            msg.mut_admin_request()
-                .mut_pre_merge()
-                .set_conf_version(slibing_region.get_region_epoch().get_conf_ver());
-        }
 
         Ok(())
     }
@@ -1840,7 +1863,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         if let Err(e) = self.check_merge_proposal(&mut msg) {
-            warn!("{} failed to propose merge: {:?}", self.tag, msg);
+            warn!("{} failed to propose merge: {:?}: {}", self.tag, msg, e);
             cb.invoke_with_response(new_error(e));
             return;
         }

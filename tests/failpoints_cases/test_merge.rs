@@ -16,7 +16,6 @@ use std::sync::Arc;
 
 use fail;
 use futures::Future;
-use kvproto::metapb::MergeDirection;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use tikv::util::config::*;
 use tikv::pd::PdClient;
@@ -51,11 +50,12 @@ fn test_node_merge_rollback() {
 
     let region = pd_client.get_region(b"k1").unwrap();
     let epoch = region.get_region_epoch();
+    let target_region = pd_client.get_region(b"k3").unwrap();
 
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
-    let pre_merge = util::new_pre_merge(MergeDirection::Forward);
+    let pre_merge = util::new_pre_merge(target_region);
     let req = util::new_admin_request(region.get_id(), epoch, pre_merge);
     // The callback will be called when pre-merge is applied.
     let res = cluster.call_command_on_leader(req, Duration::from_secs(3));
@@ -106,7 +106,7 @@ fn test_node_merge_restart() {
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
-    let pre_merge = util::new_pre_merge(MergeDirection::Forward);
+    let pre_merge = util::new_pre_merge(right.clone());
     let epoch = left.get_region_epoch();
     let req = util::new_admin_request(left.get_id(), epoch, pre_merge);
     // The callback will be called when pre-merge is applied.
@@ -185,11 +185,12 @@ fn test_node_merge_recover_snapshot() {
 
     let region = pd_client.get_region(b"k3").unwrap();
     let epoch = region.get_region_epoch();
+    let target_region = pd_client.get_region(b"k1").unwrap();
 
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
-    let pre_merge = util::new_pre_merge(MergeDirection::Backward);
+    let pre_merge = util::new_pre_merge(target_region);
     let req = util::new_admin_request(region.get_id(), epoch, pre_merge);
     // The callback will be called when pre-merge is applied.
     let res = cluster.call_command_on_leader(req, Duration::from_secs(3));

@@ -21,7 +21,7 @@ use tempdir::TempDir;
 use rocksdb::{CompactionJobInfo, DB};
 use protobuf;
 
-use kvproto::metapb::{self, MergeDirection, RegionEpoch};
+use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
 use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, TransferLeader};
@@ -244,10 +244,10 @@ pub fn new_transfer_leader_cmd(peer: metapb::Peer) -> AdminRequest {
 }
 
 #[allow(dead_code)]
-pub fn new_pre_merge(direction: MergeDirection) -> AdminRequest {
+pub fn new_pre_merge(target_region: metapb::Region) -> AdminRequest {
     let mut cmd = AdminRequest::new();
     cmd.set_cmd_type(AdminCmdType::PreMerge);
-    cmd.mut_pre_merge().set_direction(direction);
+    cmd.mut_pre_merge().set_target(target_region);
     cmd
 }
 
@@ -319,9 +319,9 @@ pub fn new_pd_transfer_leader(peer: metapb::Peer) -> Option<RegionHeartbeatRespo
     Some(resp)
 }
 
-pub fn new_pd_merge_region(direction: metapb::MergeDirection) -> Option<RegionHeartbeatResponse> {
+pub fn new_pd_merge_region(target_region: metapb::Region) -> Option<RegionHeartbeatResponse> {
     let mut merge = Merge::new();
-    merge.set_direction(direction);
+    merge.set_target(target_region);
 
     let mut resp = RegionHeartbeatResponse::new();
     resp.set_merge(merge);

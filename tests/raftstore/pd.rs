@@ -544,12 +544,12 @@ impl TestPdClient {
         self.must_none_peer(region_id, peer);
     }
 
-    pub fn must_merge(&self, from: u64, direction: metapb::MergeDirection) {
+    pub fn must_merge(&self, from: u64, target_region: metapb::Region) {
         self.set_rule(box move |region: &metapb::Region, _: &metapb::Peer| {
             if region.get_id() != from {
                 return None;
             }
-            new_pd_merge_region(direction)
+            new_pd_merge_region(target_region.clone())
         });
 
         for _ in 1..500 {

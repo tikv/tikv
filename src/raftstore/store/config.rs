@@ -225,7 +225,7 @@ impl Config {
         if self.merge_check_tick_interval.as_millis() == 0 {
             return Err(box_err!("raftstore.merge-check-tick-interval can't be 0."));
         }
-        
+
         let abnormal_leader_missing = self.abnormal_leader_missing_duration.as_millis() as u64;
         if abnormal_leader_missing < election_timeout * 2 {
             return Err(box_err!(

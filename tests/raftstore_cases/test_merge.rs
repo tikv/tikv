@@ -15,16 +15,17 @@ use std::time::Duration;
 use std::sync::Arc;
 use std::thread;
 
-use kvproto::metapb;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
+use tikv::util::config::*;
 use tikv::storage::CF_RAFT;
 use tikv::raftstore::store::Peekable;
 
 use super::node::new_node_cluster;
 use super::util;
 use raftstore::util::*;
+use raftstore::transport_simulate::*;
 
 #[test]
 fn test_node_base_merge() {
@@ -60,7 +61,7 @@ fn test_node_base_merge() {
         resp
     );
 
-    pd_client.must_merge(left.get_id(), metapb::MergeDirection::Forward);
+    pd_client.must_merge(left.get_id(), right.clone());
 
     let region = pd_client.get_region(b"k1").unwrap();
     assert_eq!(region.get_id(), right.get_id());
@@ -129,7 +130,8 @@ fn test_node_merge_with_admin_entries() {
     pd_client.must_add_peer(left.get_id(), new_peer(2, 2));
     pd_client.must_add_peer(right.get_id(), new_peer(2, 4));
 
-    pd_client.must_merge(left.get_id(), metapb::MergeDirection::Forward);
+    let right = pd_client.get_region(b"k2").unwrap();
+    pd_client.must_merge(left.get_id(), right.clone());
 
     let region = pd_client.get_region(b"k1").unwrap();
     assert_eq!(region.get_id(), right.get_id());
@@ -148,4 +150,120 @@ fn test_node_merge_with_admin_entries() {
         .unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
     assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
+}
+
+#[test]
+fn test_node_merge_dist_isolation() {
+    // ::util::init_log();
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_rule();
+
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k3").unwrap();
+
+    cluster.must_transfer_leader(right.get_id(), new_peer(1, 1));
+    let target_leader = left.get_peers()
+        .iter()
+        .filter(|p| p.get_store_id() == 3)
+        .next()
+        .unwrap()
+        .clone();
+    cluster.must_transfer_leader(left.get_id(), target_leader);
+    util::must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
+
+    // So cluster becomes:
+    //  left region: 1         I 2 3(leader)
+    // right region: 1(leader) I 2 3
+    // I means isolation.
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+    pd_client.must_merge(left.get_id(), right.clone());
+    cluster.must_put(b"k4", b"v4");
+    cluster.clear_send_filters();
+    util::must_get_equal(&cluster.get_engine(1), b"k4", b"v4");
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k3").unwrap();
+
+    cluster.must_put(b"k11", b"v11");
+    pd_client.must_remove_peer(right.get_id(), new_peer(3, 3));
+    cluster.must_put(b"k33", b"v33");
+
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(right.get_id(), 3).direction(Direction::Recv),
+    ));
+    pd_client.must_add_peer(right.get_id(), new_peer(3, 4));
+    let right = pd_client.get_region(b"k3").unwrap();
+    // So cluster becomes:
+    //  left region: 1         2   3(leader)
+    // right region: 1(leader) 2  [3]
+    // [x] means a replica exists logically but is not created on the store x yet.
+    /*let pre_merge = util::new_pre_merge(MergeDirection::Forward);
+    let req = util::new_admin_request(region.get_id(), epoch, pre_merge);
+    // The callback will be called when pre-merge is applied.
+    let res = cluster.call_command_on_leader(req, Duration::from_secs(3));
+    assert!(res.is_ok(), "{:?}", res);*/
+    pd_client.must_merge(left.get_id(), right.clone());
+    cluster.must_put(b"k4", b"v4");
+
+    // cluster.clear_send_filters();
+    util::must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+}
+
+#[test]
+fn test_node_merge_brain_split() {
+    // ::util::init_log();
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
+
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+
+    cluster.must_put(b"k11", b"v11");
+    util::must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    let right = pd_client.get_region(b"k3").unwrap();
+    pd_client.must_merge(left.get_id(), right);
+
+    for i in 0..100 {
+        cluster.must_put(format!("k4{}", i).as_bytes(), b"v4");
+    }
+    util::must_get_equal(&cluster.get_engine(2), b"k40", b"v4");
+    util::must_get_equal(&cluster.get_engine(1), b"k40", b"v4");
+
+    cluster.clear_send_filters();
+
+    cluster.must_transfer_leader(1, new_peer(3, 3));
+    cluster.must_put(b"k40", b"v5");
+
+    let state_key = keys::region_state_key(left.get_id());
+    let state: RegionLocalState = cluster
+        .get_engine(3)
+        .get_msg_cf(CF_RAFT, &state_key)
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.get_state(), PeerState::Tombstone);
+    for i in 0..100 {
+        util::must_get_equal(&cluster.get_engine(3), format!("k4{}", i).as_bytes(), b"v4");
+    }
 }

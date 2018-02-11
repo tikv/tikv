@@ -1354,9 +1354,6 @@ impl Peer {
         let last_index = self.raft_group.raft.raft_log.last_index();
         let min_progress = self.get_min_progress();
         let min_index = min_progress + 1;
-        // It's OK that min_index < first_index, it will be filtered out reliably
-        // when applied. Actually we can't ensure min_index >= first_index without
-        // iterating all proposed logs.
         if min_progress == 0 || last_index - min_progress > self.cfg.max_merge_log_gap {
             return Err(box_err!(
                 "log gap ({}, {}] is too large, skip merge",
@@ -1384,7 +1381,7 @@ impl Peer {
                 _ => {}
             }
             return Err(box_err!(
-                "log gap contains admin request {:?}, skip merge.",
+                "log gap contains admin request {:?}, skip merging.",
                 cmd_type
             ));
         }
