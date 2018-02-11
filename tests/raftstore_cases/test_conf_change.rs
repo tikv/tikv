@@ -610,9 +610,12 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Add peer on store which already has learner.
     pd_client.add_peer(r1, new_peer(4, 10));
+    pd_client.must_add_peer(r1, new_peer(5, 100)); // For ensure the last is proposed.
     pd_client.must_none_peer(r1, new_peer(4, 10));
     pd_client.must_have_learner(r1, new_peer(4, 10));
+
     pd_client.add_peer(r1, new_peer(4, 11));
+    pd_client.must_remove_peer(r1, new_peer(5, 100)); // For ensure the last is proposed.
     pd_client.must_none_peer(r1, new_peer(4, 11));
     pd_client.must_have_learner(r1, new_peer(4, 10));
 
@@ -624,9 +627,14 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Add learner on store which already has peer.
     pd_client.add_learner(r1, new_peer(4, 10));
+    pd_client.must_add_peer(r1, new_peer(5, 100)); // For ensure the last is proposed.
     pd_client.must_none_learner(r1, new_peer(4, 10));
+    pd_client.must_have_peer(r1, new_peer(4, 10));
+
     pd_client.add_learner(r1, new_peer(4, 11));
+    pd_client.must_remove_peer(r1, new_peer(5, 100)); // For ensure the last is proposed.
     pd_client.must_none_learner(r1, new_peer(4, 11));
+    pd_client.must_have_peer(r1, new_peer(4, 10));
 }
 
 #[test]
@@ -680,12 +688,5 @@ fn test_conf_change_remove_leader() {
 fn test_node_learner_conf_change() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_learner_conf_change(&mut cluster);
-}
-
-#[test]
-fn test_server_learner_conf_change() {
-    let count = 5;
-    let mut cluster = new_server_cluster(0, count);
     test_learner_conf_change(&mut cluster);
 }

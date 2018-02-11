@@ -1310,14 +1310,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     p.remove_peer_from_cache(cp.peer.get_id());
                 }
                 ConfChangeType::AddLearnerNode => {
-                    let peer = cp.peer.clone();
-                    p.learner_heartbeats.insert(peer.get_id(), Instant::now());
-                    p.insert_peer_cache(peer);
+                    p.insert_peer_cache(cp.peer.clone());
                 }
                 ConfChangeType::PromoteLearnerNode => {
-                    p.learner_heartbeats.remove(&cp.peer.get_id());
-                    let peer = cp.peer.clone();
-                    p.peer_heartbeats.insert(peer.get_id(), Instant::now());
+                    p.peer_heartbeats.insert(cp.peer.get_id(), Instant::now());
                 }
             }
             my_peer_id = p.peer_id();
@@ -2013,7 +2009,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for peer in self.region_peers.values_mut() {
-            peer.check_peers();
+            peer.check_voters();
         }
         let mut leader_count = 0;
         for peer in self.region_peers.values() {

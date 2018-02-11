@@ -201,7 +201,6 @@ pub struct Peer {
     pending_reads: ReadIndexQueue,
     // Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: FlatMap<u64, Instant>,
-    pub learner_heartbeats: FlatMap<u64, Instant>,
     coprocessor_host: Arc<CoprocessorHost>,
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
@@ -325,7 +324,6 @@ impl Peer {
             pending_reads: Default::default(),
             peer_cache: RefCell::new(FlatMap::default()),
             peer_heartbeats: FlatMap::default(),
-            learner_heartbeats: FlatMap::default(),
             coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
             delete_keys_hint: 0,
@@ -545,16 +543,14 @@ impl Peer {
         Ok(())
     }
 
-    pub fn check_peers(&mut self) {
+    pub fn check_voters(&mut self) {
         if !self.is_leader() {
             self.peer_heartbeats.clear();
             return;
         }
-
         if self.peer_heartbeats.len() == self.region().get_peers().len() {
             return;
         }
-
         // Insert heartbeats in case that some peers never response heartbeats.
         for peer in self.region().get_peers().to_owned() {
             self.peer_heartbeats
