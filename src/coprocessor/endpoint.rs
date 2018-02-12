@@ -22,7 +22,7 @@ use futures::{future, stream};
 use futures::sync::mpsc as futures_mpsc;
 use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 
-use tipb::select::{self, DAGRequest};
+use tipb::select::DAGRequest;
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
@@ -54,8 +54,6 @@ pub const REQ_TYPE_ANALYZE: i64 = 104;
 const REQUEST_MAX_HANDLE_SECS: u64 = 60;
 // If handle time is larger than the lower bound, the query is considered as slow query.
 const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
-
-const DEFAULT_ERROR_CODE: i32 = 1;
 
 pub const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
@@ -643,13 +641,6 @@ pub fn err_resp(e: Error) -> Response {
     resp
 }
 
-pub fn to_pb_error(err: &Error) -> select::Error {
-    let mut e = select::Error::new();
-    e.set_code(DEFAULT_ERROR_CODE);
-    e.set_msg(format!("{}", err));
-    e
-}
-
 pub fn prefix_next(key: &[u8]) -> Vec<u8> {
     let mut nk = key.to_vec();
     if nk.is_empty() {
@@ -778,7 +769,7 @@ mod tests {
                 req.mut_context().set_priority(CommandPri::High);
             }
             let on_resp = OnResponse::Unary(box move |msg| {
-                thread::sleep(Duration::from_millis(100));
+                thread::sleep(Duration::from_millis(200));
                 tx.send(msg).unwrap();
             });
 
