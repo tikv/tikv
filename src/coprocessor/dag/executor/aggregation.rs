@@ -267,7 +267,7 @@ impl Executor for StreamAggExecutor {
 // When next() is called, it finds a group and returns a result for the same group.
 pub struct StreamAggExecutor {
     ctx: Arc<EvalContext>,
-    src: Box<Executor>,
+    src: Box<Executor + Send>,
 
     executed: bool,
     group_by_exprs: Vec<Expression>,
@@ -285,7 +285,7 @@ pub struct StreamAggExecutor {
 impl StreamAggExecutor {
     pub fn new(
         ctx: Arc<EvalContext>,
-        src: Box<Executor>,
+        src: Box<Executor + Send>,
         mut meta: Aggregation,
         columns: Arc<Vec<ColumnInfo>>,
     ) -> Result<StreamAggExecutor> {

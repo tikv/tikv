@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use mio::Token;
 use grpc::{ClientStreamingSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
            RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
-use futures::{future, Future, Sink, Stream};
+use futures::{future, stream, Future, Sink, Stream};
 use futures::sync::{mpsc, oneshot};
 use futures_cpupool::CpuPool;
 use protobuf::RepeatedField;
@@ -42,7 +42,7 @@ use server::snap::Task as SnapTask;
 use server::metrics::*;
 use server::{CopStream, Error, OnResponse};
 use raftstore::store::{Callback, Msg as StoreMessage};
-use coprocessor::{EndPointTask, RequestTask};
+use coprocessor::{err_resp, EndPointTask, RequestTask};
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 
@@ -806,9 +806,14 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
             Ok(req_task) => req_task,
             Err(e) => {
-                let error = box_err!(e);
-                let code = RpcStatusCode::InvalidArgument;
-                return self.send_fail_status(ctx, sink, error, code);
+                let response = err_resp(e);
+                let future = sink.success(response)
+                    .map(|_| timer.observe_duration())
+                    .map_err(move |e| {
+                        debug!("{} failed: {:?}", label, e);
+                        GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+                    });
+                return ctx.spawn(future);
             }
         };
 
@@ -845,9 +850,15 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
             Ok(req_task) => req_task,
             Err(e) => {
-                let error = box_err!(e);
-                let code = RpcStatusCode::InvalidArgument;
-                return self.send_fail_status_to_stream(ctx, sink, error, code);
+                let stream = stream::once::<_, GrpcError>(Ok(err_resp(e)))
+                    .map(|resp| (resp, WriteFlags::default()));
+                let future = sink.send_all(stream)
+                    .map(|_| timer.observe_duration())
+                    .map_err(move |e| {
+                        debug!("{} failed: {:?}", label, e);
+                        GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+                    });
+                return ctx.spawn(future);
             }
         };
 
@@ -866,14 +877,14 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 GrpcError::RpcFailure(RpcStatus::new(code, msg))
             });
 
-        ctx.spawn(
-            sink.send_all(stream)
-                .map(|_| timer.observe_duration())
-                .map_err(move |e| {
-                    debug!("{} failed: {:?}", label, e);
-                    GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
-                }),
-        );
+        let future = sink.send_all(stream)
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed: {:?}", label, e);
+                GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+            });
+
+        ctx.spawn(future);
     }
 
     fn raft(

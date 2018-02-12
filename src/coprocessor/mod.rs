@@ -18,6 +18,7 @@ mod statistics;
 mod local_metrics;
 pub mod codec;
 
+pub use self::endpoint::err_resp;
 use std::result;
 use std::error;
 

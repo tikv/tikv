@@ -604,7 +604,7 @@ impl Runnable<Task> for Host {
     }
 }
 
-fn err_resp(e: Error) -> Response {
+pub fn err_resp(e: Error) -> Response {
     let mut resp = Response::new();
     match e {
         Error::Region(e) => {
