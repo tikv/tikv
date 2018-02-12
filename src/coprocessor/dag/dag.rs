@@ -164,10 +164,6 @@ impl DAGContext {
         }
     }
 
-    pub fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
-        self.exec.collect_statistics_into(statistics);
-    }
-
     pub fn can_cache(&mut self) -> bool {
         self.distsql_cache.is_some() && (self.has_aggr || self.has_topn)
     }
