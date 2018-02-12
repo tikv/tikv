@@ -13,7 +13,7 @@
 
 use std::fmt;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use protobuf::RepeatedField;
 use futures::{future, Future, Sink, Stream};
@@ -301,6 +301,10 @@ impl PdClient for RpcClient {
         req.set_bytes_read(region_stat.read_bytes);
         req.set_keys_read(region_stat.read_bytes);
         req.set_approximate_size(region_stat.approximate_size);
+
+        let now = SystemTime::now();
+        let ts = now.duration_since(UNIX_EPOCH).unwrap().as_secs();
+        req.set_timestamp(ts);
 
         let executor = |client: &RwLock<Inner>, req: pdpb::RegionHeartbeatRequest| {
             let mut inner = client.wl();
