@@ -1350,6 +1350,22 @@ pub fn write_peer_state<T: Mutable>(
     Ok(())
 }
 
+pub fn mark_merge_done<T: Mutable>(
+    kv_engine: &DB,
+    kv_wb: &T,
+    region: &metapb::Region,
+    target: &metapb::Region,
+) -> Result<()> {
+    let region_id = region.get_id();
+    let mut region_state = RegionLocalState::new();
+    region_state.set_state(PeerState::Tombstone);
+    region_state.set_region(region.to_owned());
+    region_state.mut_merge_state().set_target(target.to_owned());
+    let handle = rocksdb::get_cf_handle(kv_engine, CF_RAFT)?;
+    kv_wb.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
+    Ok(())
+}
+
 pub fn write_merge_state<T: Mutable>(
     kv_engine: &DB,
     kv_wb: &T,

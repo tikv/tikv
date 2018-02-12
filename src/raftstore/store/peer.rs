@@ -26,7 +26,7 @@ use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
                           RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse};
-use kvproto::raft_serverpb::{PeerState, RaftMessage};
+use kvproto::raft_serverpb::{MergeState, PeerState, RaftMessage};
 use kvproto::pdpb::PeerStats;
 
 use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
@@ -46,7 +46,8 @@ use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
 use pd::{PdTask, INVALID_ID};
 
 use super::store::{DestroyPeerJob, Store, StoreStat};
-use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
+use super::peer_storage::{mark_merge_done, write_peer_state, ApplySnapResult, InvokeContext,
+                          PeerStorage};
 use super::util::{self, Lease, LeaseState};
 use super::cmd_resp;
 use super::transport::Transport;
@@ -225,7 +226,12 @@ pub struct Peer {
     apply_scheduler: Scheduler<ApplyTask>,
 
     pub pending_remove: bool,
-    pub is_merging: bool,
+    // A marker used to indicate if the peer is going to apply a snapshot
+    // with different range.
+    // It assumes that when a peer is going to accept snapshot, it can never
+    // captch up by normal log replication.
+    pub pending_cross_snap: bool,
+    pub pending_merge: Option<MergeState>,
 
     marked_to_be_checked: bool,
 
@@ -334,7 +340,8 @@ impl Peer {
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
             marked_to_be_checked: false,
-            is_merging: false,
+            pending_cross_snap: false,
+            pending_merge: None,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
             last_applying_idx: applied_index,
@@ -408,14 +415,18 @@ impl Peer {
         let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
         self.mut_store().clear_meta(&kv_wb, &raft_wb)?;
-        write_peer_state(&self.kv_engine, &kv_wb, &region, PeerState::Tombstone)?;
+        if let Some(ref state) = self.pending_merge {
+            mark_merge_done(&self.kv_engine, &kv_wb, &region, state.get_target())?;
+        } else {
+            write_peer_state(&self.kv_engine, &kv_wb, &region, PeerState::Tombstone)?;
+        }
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(self.cfg.sync_log);
         self.kv_engine.write_opt(kv_wb, &write_opts)?;
         self.raft_engine.write_opt(raft_wb, &write_opts)?;
 
-        if self.get_store().is_initialized() && !self.is_merging {
+        if self.get_store().is_initialized() && self.pending_merge.is_none() {
             // If we meet panic when deleting data and raft log, the dirty data
             // will be cleared by a newer snapshot applying or restart.
             if let Err(e) = self.get_store().clear_data() {
@@ -1396,7 +1407,7 @@ impl Peer {
         mut req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
     ) -> Result<u64> {
-        if self.is_merging
+        if self.pending_merge.is_some()
             && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackPreMerge
         {
             return Err(box_err!("peer in merging mode, can't do proposal."));
@@ -1466,8 +1477,8 @@ impl Peer {
         req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
     ) -> Result<u64> {
-        if self.is_merging {
-            return Err(box_err!("peer in read only mode, can't do proposal."));
+        if self.pending_merge.is_some() {
+            return Err(box_err!("peer in merging mode, can't do proposal."));
         }
         if self.raft_group.raft.pending_conf {
             info!("{} there is a pending conf change, try later", self.tag);

@@ -174,8 +174,7 @@ fn test_node_merge_dist_isolation() {
     cluster.must_transfer_leader(right.get_id(), new_peer(1, 1));
     let target_leader = left.get_peers()
         .iter()
-        .filter(|p| p.get_store_id() == 3)
-        .next()
+        .find(|p| p.get_store_id() == 3)
         .unwrap()
         .clone();
     cluster.must_transfer_leader(left.get_id(), target_leader);
@@ -209,15 +208,25 @@ fn test_node_merge_dist_isolation() {
     //  left region: 1         2   3(leader)
     // right region: 1(leader) 2  [3]
     // [x] means a replica exists logically but is not created on the store x yet.
-    /*let pre_merge = util::new_pre_merge(MergeDirection::Forward);
-    let req = util::new_admin_request(region.get_id(), epoch, pre_merge);
+    let pre_merge = util::new_pre_merge(right.clone());
+    let req = util::new_admin_request(region.get_id(), left.get_region_epoch(), pre_merge);
     // The callback will be called when pre-merge is applied.
-    let res = cluster.call_command_on_leader(req, Duration::from_secs(3));
-    assert!(res.is_ok(), "{:?}", res);*/
+    let res = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+    // Leader can't find replica 3 of right region, so it fails.
+    assert!(res.get_header().has_error(), "{:?}", res);
+
+    let target_leader = left.get_peers()
+        .iter()
+        .find(|p| p.get_store_id() == 2)
+        .unwrap()
+        .clone();
+    cluster.must_transfer_leader(left.get_id(), target_leader);
     pd_client.must_merge(left.get_id(), right.clone());
     cluster.must_put(b"k4", b"v4");
 
-    // cluster.clear_send_filters();
+    cluster.clear_send_filters();
     util::must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 }
 
@@ -263,7 +272,8 @@ fn test_node_merge_brain_split() {
         .unwrap()
         .unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
-    for i in 0..100 {
+    util::must_get_equal(&cluster.get_engine(3), b"k40", b"v5");
+    for i in 1..100 {
         util::must_get_equal(&cluster.get_engine(3), format!("k4{}", i).as_bytes(), b"v4");
     }
 }
