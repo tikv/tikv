@@ -125,6 +125,9 @@ impl TopNHeap {
         order_cols: Arc<Vec<ByItem>>,
         ctx: Arc<EvalContext>,
     ) -> Result<()> {
+        if self.limit == 0 {
+            return Ok(());
+        }
         let row = SortRow::new(handle, data, values, order_cols, ctx, Arc::clone(&self.err));
         // push into heap when heap is not full
         if self.rows.len() < self.limit {
@@ -466,5 +469,24 @@ mod tests {
         assert!(topn_heap.is_ok());
         let topn_heap = TopNHeap::new(usize::MAX);
         assert!(topn_heap.is_err());
+    }
+
+    #[test]
+    fn test_topn_with_empty_limit() {
+        let mut topn_heap = TopNHeap::new(0).unwrap();
+        let cur_key: Vec<Datum> = vec![Datum::I64(1), Datum::I64(2)];
+        let row_data = RowColsDict::new(HashMap::default(), b"ssss".to_vec());
+        let ctx = Arc::new(EvalContext::default());
+        topn_heap
+            .try_add_row(
+                i64::from(1),
+                row_data,
+                cur_key,
+                Arc::new(Vec::default()),
+                ctx,
+            )
+            .unwrap();
+
+        assert!(topn_heap.into_sorted_vec().unwrap().is_empty());
     }
 }

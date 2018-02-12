@@ -64,12 +64,11 @@ use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::security::SecurityManager;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::FutureWorker;
-use tikv::util::io_limiter::IOLimiter;
 use tikv::storage::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::resolve;
-use tikv::raftstore::store::{self, new_compaction_listener, Engines, SnapManager};
+use tikv::raftstore::store::{self, new_compaction_listener, Engines, SnapManagerBuilder};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
@@ -213,18 +212,14 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let pd_worker = FutureWorker::new("pd worker");
     let (mut worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
         .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
-    let limiter = if cfg.server.snap_max_write_bytes_per_sec.0 > 0 {
-        Some(Arc::new(IOLimiter::new(
-            cfg.server.snap_max_write_bytes_per_sec.0,
-        )))
-    } else {
-        None
-    };
-    let snap_mgr = SnapManager::new(
-        snap_path.as_path().to_str().unwrap().to_owned(),
-        Some(store_sendch),
-        limiter,
-    );
+
+    let snap_mgr = SnapManagerBuilder::default()
+        .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0)
+        .max_total_size(cfg.server.snap_max_total_size.0)
+        .build(
+            snap_path.as_path().to_str().unwrap().to_owned(),
+            Some(store_sendch),
+        );
 
     let importer = Arc::new(SSTImporter::new(import_path).unwrap());
     let import_service = ImportSSTService::new(cfg.import.clone(), storage.clone(), importer);

@@ -20,17 +20,15 @@ use tipb::schema::ColumnInfo;
 
 use coprocessor::codec::{datum, mysql, table};
 use coprocessor::endpoint::is_point;
-use coprocessor::metrics::*;
-use coprocessor::local_metrics::*;
 use coprocessor::{Error, Result};
-use storage::{Key, SnapshotStore, Statistics};
+use storage::{Key, SnapshotStore};
 
 use super::{Executor, Row};
 use super::scanner::{ScanOn, Scanner};
+use super::ExecutorMetrics;
 
 pub struct IndexScanExecutor {
     store: SnapshotStore,
-    statistics: Statistics,
     desc: bool,
     col_ids: Vec<i64>,
     pk_col: Option<ColumnInfo>,
@@ -38,7 +36,8 @@ pub struct IndexScanExecutor {
     scanner: Option<Scanner>,
     unique: bool,
     count: i64,
-    scan_counter: ScanCounter,
+    metrics: ExecutorMetrics,
+    first_collect: bool,
 }
 
 impl IndexScanExecutor {
@@ -60,10 +59,8 @@ impl IndexScanExecutor {
         }
         let col_ids = cols.iter().map(|c| c.get_column_id()).collect();
 
-        COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
         Ok(IndexScanExecutor {
             store: store,
-            statistics: Statistics::default(),
             desc: desc,
             col_ids: col_ids,
             pk_col: pk_col,
@@ -71,7 +68,8 @@ impl IndexScanExecutor {
             scanner: None,
             unique: unique,
             count: 0,
-            scan_counter: ScanCounter::default(),
+            metrics: Default::default(),
+            first_collect: true,
         })
     }
 
@@ -82,10 +80,8 @@ impl IndexScanExecutor {
     ) -> Result<IndexScanExecutor> {
         box_try!(table::check_table_ranges(&key_ranges));
         let col_ids: Vec<i64> = (0..cols).collect();
-        COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
         Ok(IndexScanExecutor {
             store: store,
-            statistics: Statistics::default(),
             desc: false,
             col_ids: col_ids,
             pk_col: None,
@@ -93,7 +89,8 @@ impl IndexScanExecutor {
             scanner: None,
             unique: false,
             count: 0,
-            scan_counter: ScanCounter::default(),
+            metrics: ExecutorMetrics::default(),
+            first_collect: true,
         })
     }
 
@@ -101,7 +98,7 @@ impl IndexScanExecutor {
         if self.scanner.is_none() {
             return Ok(None);
         }
-        self.scan_counter.inc_range();
+        self.metrics.scan_counter.inc_range();
 
         let (key, value) = {
             let scanner = self.scanner.as_mut().unwrap();
@@ -134,8 +131,10 @@ impl IndexScanExecutor {
     }
 
     fn get_row_from_point(&mut self, range: KeyRange) -> Result<Option<Row>> {
+        self.metrics.scan_counter.inc_point();
         let key = range.get_start();
-        let value = self.store.get(&Key::from_raw(key), &mut self.statistics)?;
+        let value = self.store
+            .get(&Key::from_raw(key), &mut self.metrics.cf_stats)?;
         if let Some(value) = value {
             return self.decode_index_key_value(key.to_vec(), value);
         }
@@ -162,7 +161,6 @@ impl Executor for IndexScanExecutor {
             }
             if let Some(range) = self.key_ranges.next() {
                 if self.is_point(&range) {
-                    self.scan_counter.inc_point();
                     if let Some(row) = self.get_row_from_point(range)? {
                         self.count += 1;
                         return Ok(Some(row));
@@ -187,16 +185,15 @@ impl Executor for IndexScanExecutor {
         self.count = 0;
     }
 
-    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
-        statistics.add(&self.statistics);
-        self.statistics = Statistics::default();
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
+        metrics.merge(&mut self.metrics);
         if let Some(scanner) = self.scanner.take() {
-            scanner.collect_statistics_into(statistics);
+            scanner.collect_statistics_into(&mut metrics.cf_stats);
         }
-    }
-
-    fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
-        metrics.merge(&mut self.scan_counter);
+        if self.first_collect {
+            metrics.executor_count.index_scan += 1;
+            self.first_collect = false;
+        }
     }
 }
 
@@ -422,16 +419,15 @@ mod test {
         let mut wrapper = IndexTestWrapper::new(unique);
         wrapper.scan.set_desc(true);
 
-        let r1 = get_idx_range(TABLE_ID, INDEX_ID, i64::MIN, 0, unique);
-        let r2 = get_idx_range(TABLE_ID, INDEX_ID, 0, (KEY_NUMBER / 2) as i64, unique);
-        let r3 = get_idx_range(
+        let r1 = get_idx_range(TABLE_ID, INDEX_ID, 0, (KEY_NUMBER / 2) as i64, unique);
+        let r2 = get_idx_range(
             TABLE_ID,
             INDEX_ID,
             (KEY_NUMBER / 2) as i64,
             i64::MAX,
             unique,
         );
-        wrapper.ranges = vec![r1, r2, r3];
+        wrapper.ranges = vec![r1, r2];
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);

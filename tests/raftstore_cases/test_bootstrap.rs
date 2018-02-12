@@ -67,11 +67,7 @@ fn test_node_bootstrap_with_prepared_data() {
         &cfg.raft_store,
         Arc::clone(&pd_client),
     );
-    let snap_mgr = SnapManager::new(
-        tmp_mgr.path().to_str().unwrap(),
-        Some(node.get_sendch()),
-        None,
-    );
+    let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_sendch()));
     let (_, snapshot_status_receiver) = mpsc::channel();
     let pd_worker = FutureWorker::new("test-pd-worker");
 
