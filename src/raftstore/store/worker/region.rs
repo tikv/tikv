@@ -24,8 +24,7 @@ use kvproto::eraftpb::Snapshot as RaftSnapshot;
 
 use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use util::time;
-use util::timer::Timer;
-use util::worker::{Runnable, RunnableWithTimer};
+use util::worker::Runnable;
 use util::{escape, rocksdb};
 use raftstore::store::engine::{Mutable, Snapshot};
 use raftstore::store::peer_storage::{JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING,
@@ -43,7 +42,7 @@ use std::collections::Bound::{Excluded, Included, Unbounded};
 
 const GENERATE_POOL_SIZE: usize = 2;
 
-pub const PENDING_DELETE_RANGE_CHECK_INTERVAL: u64 = 10; // seconds
+pub const PENDING_DELETE_RANGE_CHECK_INTERVAL: u64 = 10_000; // milliseconds
 
 /// region related task.
 pub enum Task {
@@ -63,6 +62,8 @@ pub enum Task {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
     },
+    /// periodically clean pending delete ranges
+    Clean {},
 }
 
 impl Task {
@@ -91,6 +92,7 @@ impl Display for Task {
                 escape(start_key),
                 escape(end_key)
             ),
+            Task::Clean {} => write!(f, "Clean pending delete ranges"),
         }
     }
 }
@@ -339,7 +341,7 @@ impl PendingDeleteRanges {
                     //       start_key            end_key
                     //   [_ _ _ _ )                          after
                     let val = self.ranges.get_mut(s_key).unwrap();
-                    val.0 = start_key.to_owned();
+                    val.0 = start_key.to_vec();
                 } else {
                     // the middle part of the range is trimed
                     // s_key                   e_key
@@ -348,8 +350,8 @@ impl PendingDeleteRanges {
                     //      start_key   end_key
                     //   [_ _ _ _)       [_ _ _ _)        after
                     let mut val = self.ranges.remove(s_key).unwrap();
-                    self.ranges.insert(end_key.to_owned(), val.clone());
-                    val.0 = start_key.to_owned();
+                    self.ranges.insert(end_key.to_vec(), val.clone());
+                    val.0 = start_key.to_vec();
                     assert!(self.ranges.insert(s_key.clone(), val).is_none());
                 }
             } else if e_key <= &end_key.to_vec() {
@@ -368,7 +370,7 @@ impl PendingDeleteRanges {
                 //    [_ _ _ _ _ _ _)
                 //                  [_ _ _ )      after
                 let val = self.ranges.remove(s_key).unwrap();
-                assert!(self.ranges.insert(end_key.to_owned(), val).is_none());
+                assert!(self.ranges.insert(end_key.to_vec(), val).is_none());
             }
         }
     }
@@ -400,7 +402,7 @@ impl PendingDeleteRanges {
         ranges
     }
 
-    pub fn total_pending_ranges(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.ranges.len()
     }
 }
@@ -475,6 +477,20 @@ impl Runnable<Task> for Runner {
                     self.ctx.handle_destroy(start_key, end_key);
                 }
             }
+            Task::Clean {} => {
+                RANGE_DELETION_GAUGE_VEC
+                    .with_label_values(&["total"])
+                    .set(self.pending_delete_ranges.len() as f64);
+
+                let now = time::Instant::now();
+                let mut timeout_ranges = self.pending_delete_ranges.drain_timeout_ranges(now);
+                RANGE_DELETION_GAUGE_VEC
+                    .with_label_values(&["timeout"])
+                    .set(timeout_ranges.len() as f64);
+                for (start_key, end_key) in timeout_ranges.drain(..) {
+                    self.ctx.handle_destroy(start_key, end_key);
+                }
+            }
         }
     }
 
@@ -487,24 +503,6 @@ impl Runnable<Task> for Runner {
         for (start_key, end_key) in ranges.drain(..) {
             self.ctx.handle_destroy(start_key, end_key);
         }
-    }
-}
-
-impl RunnableWithTimer<Task, u32> for Runner {
-    fn on_timeout(&mut self, timer: &mut Timer<u32>, _: u32) {
-        let now = time::Instant::now();
-        let mut timeout_ranges = self.pending_delete_ranges.drain_timeout_ranges(now);
-        RANGE_DELETION_GAUGE_VEC
-            .with_label_values(&["total"])
-            .set(self.pending_delete_ranges.total_pending_ranges() as f64);
-        RANGE_DELETION_GAUGE_VEC
-            .with_label_values(&["timeout"])
-            .set(timeout_ranges.len() as f64);
-        for (start_key, end_key) in timeout_ranges.drain(..) {
-            self.ctx.handle_destroy(start_key, end_key);
-        }
-
-        timer.add_task(Duration::from_secs(PENDING_DELETE_RANGE_CHECK_INTERVAL), 0);
     }
 }
 
@@ -548,8 +546,7 @@ mod test {
         );
 
         // ranges will be deleted from pending_delete_ranges after popped out
-        let ranges = pending_delete_ranges.drain_all_ranges();
-        assert!(ranges.is_empty());
+        assert_eq!(pending_delete_ranges.len(), 0);
     }
 
     #[test]

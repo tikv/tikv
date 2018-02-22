@@ -40,7 +40,6 @@ use protobuf::Message;
 use raft::{self, SnapshotStatus, INVALID_INDEX};
 use raftstore::{Error, Result};
 use kvproto::metapb;
-use util::timer::Timer;
 use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
 use util::transport::SendCh;
 use util::RingQueue;
@@ -502,6 +501,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_snap_mgr_gc_tick(event_loop);
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
+        self.register_delete_range_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&self.kv_engine),
@@ -519,9 +519,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.cfg.use_delete_range,
             end_point_request_max_handle_secs + self.cfg.range_deletion_delay.as_secs(),
         );
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_secs(PENDING_DELETE_RANGE_CHECK_INTERVAL), 0);
-        box_try!(self.region_worker.start_with_timer(runner, timer));
+        box_try!(self.region_worker.start(runner));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
         box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
@@ -2214,6 +2212,25 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
         }
     }
+
+    fn register_delete_range_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(
+            event_loop,
+            Tick::DeleteRange,
+            PENDING_DELETE_RANGE_CHECK_INTERVAL,
+        ) {
+            error!("{} register delete range tick err: {:?}", self.tag, e);
+        }
+    }
+
+    fn on_delete_range_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        let task = RegionTask::Clean {};
+        if let Err(e) = self.snap_scheduler().schedule(task) {
+            error!("{} failed to schedule task range clean: {:?}", self.tag, e);
+        }
+
+        self.register_delete_range_tick(event_loop);
+    }
 }
 
 // Consistency Check implementation.
@@ -2539,6 +2556,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
+            Tick::DeleteRange => self.on_delete_range_tick(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }
