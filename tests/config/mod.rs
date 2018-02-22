@@ -73,6 +73,7 @@ fn test_serde_custom_tikv_config() {
         end_point_batch_row_limit: 64,
         end_point_request_max_handle_secs: 123,
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
+        snap_max_total_size: ReadableSize::gb(10),
     };
     value.readpool = ReadPoolConfig {
         high_concurrency: 1,
@@ -115,6 +116,7 @@ fn test_serde_custom_tikv_config() {
         messages_per_tick: 12_345,
         max_peer_down_duration: ReadableDuration::minutes(12),
         max_leader_missing_duration: ReadableDuration::hours(12),
+        abnormal_leader_missing_duration: ReadableDuration::hours(6),
         snap_apply_batch_size: ReadableSize::mb(12),
         lock_cf_compact_interval: ReadableDuration::minutes(12),
         lock_cf_compact_bytes_threshold: ReadableSize::mb(123),
