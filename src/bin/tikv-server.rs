@@ -56,7 +56,7 @@ use std::time::Duration;
 use clap::{App, Arg, ArgMatches};
 use fs2::FileExt;
 
-use tikv::config::{MetricConfig, TiKvConfig};
+use tikv::config::{auto_gen_critical_cfg_file, CriticalConfig, MetricConfig, TiKvConfig};
 use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
@@ -482,6 +482,26 @@ fn main() {
         });
 
     overwrite_config_with_cmd_args(&mut config, &matches);
+
+    if let Some(path) = matches.value_of("config") {
+        let cfg_file = Path::new(path);
+        if let Some(cfg_dir) = cfg_file.parent() {
+            // Check current critical configurations with last time, if there are something
+            // changes, user must guarantee relevant works have been done.
+            let critical_cfg_file = auto_gen_critical_cfg_file(cfg_dir.to_str().unwrap());
+            if Path::new(critical_cfg_file.as_str()).exists() {
+                let last_critical_cfg = CriticalConfig::from_file(critical_cfg_file.as_str());
+                if let Err(e) = config.check_last_critical_cfg(&last_critical_cfg) {
+                    fatal!("check critical config failed, err {:?}", e);
+                }
+            }
+
+            // Persist current critical configurations to file.
+            if let Err(e) = config.persist_critical_cfg(cfg_dir.to_str().unwrap()) {
+                fatal!("persist critical config failed, err {:?}", e);
+            }
+        }
+    }
 
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validata()`,
