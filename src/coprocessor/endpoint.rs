@@ -754,7 +754,7 @@ mod tests {
         cfg.end_point_concurrency = 1;
         let pd_worker = FutureWorker::new("test-pd-worker");
         let mut end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
-        end_point.max_running_task_count = 3;
+        end_point.max_running_task_count = 1;
         worker.start(end_point).unwrap();
         let (tx, rx) = mpsc::channel();
         for pos in 0..30 * 4 {
@@ -769,7 +769,7 @@ mod tests {
                 req.mut_context().set_priority(CommandPri::High);
             }
             let on_resp = OnResponse::Unary(box move |msg| {
-                thread::sleep(Duration::from_millis(200));
+                thread::sleep(Duration::from_millis(100));
                 tx.send(msg).unwrap();
             });
 
