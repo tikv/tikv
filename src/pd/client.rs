@@ -454,6 +454,6 @@ impl PdClient for RpcClient {
     }
 
     fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, f: F) {
-        self.leader_client.handle_reconnect(Box::new(f))
+        self.leader_client.on_reconnect(Box::new(f))
     }
 }

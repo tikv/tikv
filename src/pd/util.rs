@@ -43,7 +43,7 @@ pub struct Inner {
     pub client: PdClient,
     members: GetMembersResponse,
     security_mgr: Arc<SecurityManager>,
-    handle_reconnect: Option<Box<Fn() + Sync + Send + 'static>>,
+    on_reconnect: Option<Box<Fn() + Sync + Send + 'static>>,
 
     last_update: Instant,
 }
@@ -110,7 +110,7 @@ impl LeaderClient {
                 client: client,
                 members: members,
                 security_mgr: security_mgr,
-                handle_reconnect: None,
+                on_reconnect: None,
 
                 last_update: Instant::now(),
             })),
@@ -131,9 +131,9 @@ impl LeaderClient {
         }).map_err(|e| panic!("unexpected error: {:?}", e)))
     }
 
-    pub fn handle_reconnect(&self, f: Box<Fn() + Sync + Send + 'static>) {
+    pub fn on_reconnect(&self, f: Box<Fn() + Sync + Send + 'static>) {
         let mut inner = self.inner.wl();
-        inner.handle_reconnect = Some(f);
+        inner.on_reconnect = Some(f);
     }
 
     pub fn request<Req, Resp, F>(&self, req: Req, f: F, retry: usize) -> Request<Req, Resp, F>
@@ -185,8 +185,8 @@ impl LeaderClient {
             inner.client = client;
             inner.members = members;
             inner.last_update = Instant::now();
-            if let Some(ref handle_reconnect) = inner.handle_reconnect {
-                handle_reconnect();
+            if let Some(ref on_reconnect) = inner.on_reconnect {
+                on_reconnect();
             }
         }
         warn!("updating PD client done, spent {:?}", start.elapsed());
