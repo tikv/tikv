@@ -135,7 +135,7 @@ impl Simulator for ServerCluster {
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
-        let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch), None);
+        let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch));
         let pd_worker = FutureWorker::new("test-pd-worker");
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());

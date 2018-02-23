@@ -289,7 +289,7 @@ mod tests {
                 quick_fail: Arc::clone(&quick_fail),
                 addr: Arc::clone(&addr),
             },
-            SnapManager::new("", None, None),
+            SnapManager::new("", None),
             pd_worker.scheduler(),
             None,
             None,

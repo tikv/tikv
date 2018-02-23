@@ -166,7 +166,7 @@ mod tests {
     pub fn expect_err<T>(desc: &str, x: result::Result<T, BoxError>) {
         assert!(x.is_err());
         match x {
-            Err(e) => assert_eq!(e.description(), desc),
+            Err(e) => assert!(e.description().contains(desc), "{:?}", e),
             _ => unreachable!(),
         }
     }
