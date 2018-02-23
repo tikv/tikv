@@ -173,7 +173,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), significant_msg_sender);
     let compaction_listener = new_compaction_listener(store_sendch.clone());
 
-    // Create pd client and pd work
+    // Create pd client and pd worker
     let pd_client = Arc::new(pd_client);
     let pd_worker = FutureWorker::new("pd worker");
     let (mut worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
