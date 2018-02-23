@@ -56,7 +56,7 @@ use std::time::Duration;
 use clap::{App, Arg, ArgMatches};
 use fs2::FileExt;
 
-use tikv::config::{auto_gen_critical_cfg_file, CriticalConfig, MetricConfig, TiKvConfig};
+use tikv::config::{auto_gen_cfg_file, MetricConfig, TiKvConfig};
 use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
@@ -486,18 +486,18 @@ fn main() {
     if let Some(path) = matches.value_of("config") {
         let cfg_file = Path::new(path);
         if let Some(cfg_dir) = cfg_file.parent() {
-            // Check current critical configurations with last time, if there are something
+            // Check current critical configurations with last time, if there are some
             // changes, user must guarantee relevant works have been done.
-            let critical_cfg_file = auto_gen_critical_cfg_file(cfg_dir.to_str().unwrap());
-            if Path::new(critical_cfg_file.as_str()).exists() {
-                let last_critical_cfg = CriticalConfig::from_file(&critical_cfg_file);
-                if let Err(e) = config.check_last_critical_cfg(&last_critical_cfg) {
+            let last_cfg_file = auto_gen_cfg_file(cfg_dir.to_str().unwrap());
+            if Path::new(last_cfg_file.as_str()).exists() {
+                let last_cfg = TiKvConfig::from_file(&last_cfg_file);
+                if let Err(e) = config.check_critical_cfg_with(&last_cfg) {
                     fatal!("check critical config failed, err {:?}", e);
                 }
             }
 
             // Persist current critical configurations to file.
-            if let Err(e) = config.write_critical_cfg_to(&critical_cfg_file) {
+            if let Err(e) = config.write_to_file(&last_cfg_file) {
                 fatal!("persist critical config failed, err {:?}", e);
             }
         }

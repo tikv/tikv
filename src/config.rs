@@ -43,7 +43,7 @@ const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
-const CRITICAL_CONFIG_FILE: &str = "auto_gen_critical.toml";
+const AUTO_GEN_CONFIG_FILE: &str = "auto_gen_tikv.toml";
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = sys_info::mem_info().unwrap().total * KB;
@@ -668,51 +668,6 @@ pub struct TiKvConfig {
     pub import: ImportConfig,
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
-pub struct CriticalConfig {
-    pub db_wal_dir: String,
-    pub raftdb_wal_dir: String,
-}
-
-impl Default for CriticalConfig {
-    fn default() -> CriticalConfig {
-        CriticalConfig {
-            db_wal_dir: "".to_owned(),
-            raftdb_wal_dir: "".to_owned(),
-        }
-    }
-}
-
-impl CriticalConfig {
-    pub fn from_file(path: &str) -> CriticalConfig {
-        fs::File::open(path)
-            .map_err::<Box<Error>, _>(|e| Box::new(e))
-            .and_then(|mut f| {
-                let mut s = String::new();
-                f.read_to_string(&mut s)?;
-                let c = toml::from_str(&s)?;
-                Ok(c)
-            })
-            .unwrap_or_else(|e| {
-                panic!(
-                    "invalid auto generated critical configuration file {:?}: {}",
-                    path, e
-                );
-            })
-    }
-
-    pub fn write_to_file(&self, path: &str) -> Result<(), IoError> {
-        let critical_cfg_str = toml::to_string(&self).unwrap();
-        let mut f = fs::File::create(&path)?;
-        f.write_all(critical_cfg_str.as_bytes())?;
-        f.sync_all()?;
-
-        Ok(())
-    }
-}
-
 impl Default for TiKvConfig {
     fn default() -> TiKvConfig {
         TiKvConfig {
@@ -800,45 +755,59 @@ impl TiKvConfig {
         }
     }
 
-    pub fn check_last_critical_cfg(
-        &self,
-        last_critical_cfg: &CriticalConfig,
-    ) -> Result<(), Box<Error>> {
-        if last_critical_cfg.db_wal_dir != self.rocksdb.wal_dir {
+    pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), Box<Error>> {
+        if last_cfg.rocksdb.wal_dir != self.rocksdb.wal_dir {
             return Err(format!(
                 "db wal_dir have been changed, former db wal_dir is {}, \
                  current db wal_dir is {}, please guarantee all data wal log \
                  have been moved to destination directory.",
-                last_critical_cfg.db_wal_dir, self.rocksdb.wal_dir
+                last_cfg.rocksdb.wal_dir, self.rocksdb.wal_dir
             ).into());
         }
 
-        if last_critical_cfg.raftdb_wal_dir != self.raftdb.wal_dir {
+        if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir {
             return Err(format!(
                 "raftdb wal_dir have been changed, former raftdb wal_dir is {}, \
                  current raftdb wal_dir is {}, please guarantee all raft wal log \
                  have been moved to destination directory.",
-                last_critical_cfg.db_wal_dir, self.rocksdb.wal_dir
+                last_cfg.raftdb.wal_dir, self.rocksdb.wal_dir
             ).into());
         }
 
         Ok(())
     }
 
-    pub fn write_critical_cfg_to(&self, path: &str) -> Result<(), IoError> {
-        let mut critical_cfg = CriticalConfig::default();
-        critical_cfg.db_wal_dir = self.rocksdb.wal_dir.clone();
-        critical_cfg.raftdb_wal_dir = self.raftdb.wal_dir.clone();
-        critical_cfg.write_to_file(path)?;
+    pub fn from_file(path: &str) -> Self {
+        fs::File::open(path)
+            .map_err::<Box<Error>, _>(|e| Box::new(e))
+            .and_then(|mut f| {
+                let mut s = String::new();
+                f.read_to_string(&mut s)?;
+                let c = toml::from_str(&s)?;
+                Ok(c)
+            })
+            .unwrap_or_else(|e| {
+                panic!(
+                    "invalid auto generated configuration file {:?}: {}",
+                    path, e
+                );
+            })
+    }
+
+    pub fn write_to_file(&self, path: &str) -> Result<(), IoError> {
+        let content = toml::to_string(&self).unwrap();
+        let mut f = fs::File::create(&path)?;
+        f.write_all(content.as_bytes())?;
+        f.sync_all()?;
 
         Ok(())
     }
 }
 
-pub fn auto_gen_critical_cfg_file(config_dir: &str) -> String {
+pub fn auto_gen_cfg_file(config_dir: &str) -> String {
     let mut path = String::from(config_dir);
     path.push_str("/");
-    path.push_str(CRITICAL_CONFIG_FILE);
+    path.push_str(AUTO_GEN_CONFIG_FILE);
     path
 }
 
@@ -849,51 +818,51 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_auto_gen_critical_cfg_file() {
-        let file_name = auto_gen_critical_cfg_file("/conf");
-        assert_eq!(file_name, String::from("/conf/auto_gen_critical.toml"))
+    fn test_auto_gen_cfg_file() {
+        let file_name = auto_gen_cfg_file("/conf");
+        assert_eq!(file_name, String::from("/conf/auto_gen_tikv.toml"))
     }
 
     #[test]
-    fn test_check_last_critical_cfg() {
+    fn test_check_critical_cfg_with() {
         let mut tikv_cfg = TiKvConfig::default();
-        let mut critical_cfg = CriticalConfig::default();
-        assert!(tikv_cfg.check_last_critical_cfg(&critical_cfg).is_ok());
+        let mut last_cfg = TiKvConfig::default();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
 
         tikv_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
-        assert!(tikv_cfg.check_last_critical_cfg(&critical_cfg).is_err());
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
 
-        critical_cfg.db_wal_dir = "/data/wal_dir".to_owned();
-        assert!(tikv_cfg.check_last_critical_cfg(&critical_cfg).is_ok());
+        last_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
 
         tikv_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
-        assert!(tikv_cfg.check_last_critical_cfg(&critical_cfg).is_err());
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
 
-        critical_cfg.raftdb_wal_dir = "/raft/wal_dir".to_owned();
-        assert!(tikv_cfg.check_last_critical_cfg(&critical_cfg).is_ok());
+        last_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
     }
 
     #[test]
-    fn test_persist_critical_cfg() {
-        let dir = TempDir::new("test_persist_critical_cfg").unwrap();
-        let file = auto_gen_critical_cfg_file(dir.path().to_str().unwrap());
+    fn test_persist_cfg() {
+        let dir = TempDir::new("test_persist_cfg").unwrap();
+        let file = auto_gen_cfg_file(dir.path().to_str().unwrap());
         let (s1, s2) = ("/xxx/wal_dir".to_owned(), "/yyy/wal_dir".to_owned());
 
         let mut tikv_cfg = TiKvConfig::default();
 
         tikv_cfg.rocksdb.wal_dir = s1.clone();
         tikv_cfg.raftdb.wal_dir = s2.clone();
-        tikv_cfg.write_critical_cfg_to(&file).unwrap();
-        let critical_cfg = CriticalConfig::from_file(&file);
-        assert_eq!(critical_cfg.db_wal_dir, s1.clone());
-        assert_eq!(critical_cfg.raftdb_wal_dir, s2.clone());
+        tikv_cfg.write_to_file(&file).unwrap();
+        let cfg_from_file = TiKvConfig::from_file(&file);
+        assert_eq!(cfg_from_file.rocksdb.wal_dir, s1.clone());
+        assert_eq!(cfg_from_file.raftdb.wal_dir, s2.clone());
 
         // write critical config when exist.
         tikv_cfg.rocksdb.wal_dir = s2.clone();
         tikv_cfg.raftdb.wal_dir = s1.clone();
-        tikv_cfg.write_critical_cfg_to(&file).unwrap();
-        let critical_cfg = CriticalConfig::from_file(&file);
-        assert_eq!(critical_cfg.db_wal_dir, s2.clone());
-        assert_eq!(critical_cfg.raftdb_wal_dir, s1.clone());
+        tikv_cfg.write_to_file(&file).unwrap();
+        let cfg_from_file = TiKvConfig::from_file(&file);
+        assert_eq!(cfg_from_file.rocksdb.wal_dir, s2.clone());
+        assert_eq!(cfg_from_file.raftdb.wal_dir, s1.clone());
     }
 }
