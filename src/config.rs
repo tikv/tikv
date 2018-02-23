@@ -702,6 +702,15 @@ impl CriticalConfig {
                 );
             })
     }
+
+    pub fn write_to_file(&self, path: &str) -> Result<(), IoError> {
+        let critical_cfg_str = toml::to_string(&self).unwrap();
+        let mut f = fs::File::create(&path)?;
+        f.write_all(critical_cfg_str.as_bytes())?;
+        f.sync_all()?;
+
+        Ok(())
+    }
 }
 
 impl Default for TiKvConfig {
@@ -816,16 +825,11 @@ impl TiKvConfig {
         Ok(())
     }
 
-    pub fn persist_critical_cfg(&self, config_dir: &str) -> Result<(), IoError> {
+    pub fn write_critical_cfg_to(&self, path: &str) -> Result<(), IoError> {
         let mut critical_cfg = CriticalConfig::default();
         critical_cfg.db_wal_dir = self.rocksdb.wal_dir.clone();
         critical_cfg.raftdb_wal_dir = self.raftdb.wal_dir.clone();
-        let critical_cfg_str = toml::to_string(&critical_cfg).unwrap();
-
-        let path = auto_gen_critical_cfg_file(config_dir);
-        let mut f = fs::File::create(&path)?;
-        f.write_all(critical_cfg_str.as_bytes())?;
-        f.sync_all()?;
+        critical_cfg.write_to_file(path)?;
 
         Ok(())
     }
@@ -872,17 +876,24 @@ mod test {
     #[test]
     fn test_persist_critical_cfg() {
         let dir = TempDir::new("test_persist_critical_cfg").unwrap();
+        let file = auto_gen_critical_cfg_file(dir.path().to_str().unwrap());
+        let (s1, s2) = ("/xxx/wal_dir".to_owned(), "/yyy/wal_dir".to_owned());
 
         let mut tikv_cfg = TiKvConfig::default();
-        tikv_cfg.rocksdb.wal_dir = "/xxx/wal_dir".to_owned();
-        tikv_cfg.raftdb.wal_dir = "/yyy/wal_dir".to_owned();
-        tikv_cfg
-            .persist_critical_cfg(dir.path().to_str().unwrap())
-            .unwrap();
 
-        let critical_cfg =
-            CriticalConfig::from_file(&auto_gen_critical_cfg_file(dir.path().to_str().unwrap()));
-        assert_eq!(critical_cfg.db_wal_dir, "/xxx/wal_dir".to_owned());
-        assert_eq!(critical_cfg.raftdb_wal_dir, "/yyy/wal_dir".to_owned());
+        tikv_cfg.rocksdb.wal_dir = s1.clone();
+        tikv_cfg.raftdb.wal_dir = s2.clone();
+        tikv_cfg.write_critical_cfg_to(&file).unwrap();
+        let critical_cfg = CriticalConfig::from_file(&file);
+        assert_eq!(critical_cfg.db_wal_dir, s1.clone());
+        assert_eq!(critical_cfg.raftdb_wal_dir, s2.clone());
+
+        // write critical config when exist.
+        tikv_cfg.rocksdb.wal_dir = s2.clone();
+        tikv_cfg.raftdb.wal_dir = s1.clone();
+        tikv_cfg.write_critical_cfg_to(&file).unwrap();
+        let critical_cfg = CriticalConfig::from_file(&file);
+        assert_eq!(critical_cfg.db_wal_dir, s2.clone());
+        assert_eq!(critical_cfg.raftdb_wal_dir, s1.clone());
     }
 }

@@ -490,14 +490,14 @@ fn main() {
             // changes, user must guarantee relevant works have been done.
             let critical_cfg_file = auto_gen_critical_cfg_file(cfg_dir.to_str().unwrap());
             if Path::new(critical_cfg_file.as_str()).exists() {
-                let last_critical_cfg = CriticalConfig::from_file(critical_cfg_file.as_str());
+                let last_critical_cfg = CriticalConfig::from_file(&critical_cfg_file);
                 if let Err(e) = config.check_last_critical_cfg(&last_critical_cfg) {
                     fatal!("check critical config failed, err {:?}", e);
                 }
             }
 
             // Persist current critical configurations to file.
-            if let Err(e) = config.persist_critical_cfg(cfg_dir.to_str().unwrap()) {
+            if let Err(e) = config.write_critical_cfg_to(&critical_cfg_file) {
                 fatal!("persist critical config failed, err {:?}", e);
             }
         }
