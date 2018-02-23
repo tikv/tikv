@@ -62,8 +62,8 @@ pub enum Task {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
     },
-    /// periodically clean pending delete ranges
-    Clean {},
+    /// periodically clean stale peer
+    CleanStalePeer {},
 }
 
 impl Task {
@@ -92,7 +92,7 @@ impl Display for Task {
                 escape(start_key),
                 escape(end_key)
             ),
-            Task::Clean {} => write!(f, "Clean pending delete ranges"),
+            Task::CleanStalePeer {} => write!(f, "Clean stale peer"),
         }
     }
 }
@@ -477,7 +477,7 @@ impl Runnable<Task> for Runner {
                     self.ctx.handle_destroy(start_key, end_key);
                 }
             }
-            Task::Clean {} => {
+            Task::CleanStalePeer {} => {
                 RANGE_DELETION_GAUGE_VEC
                     .with_label_values(&["total"])
                     .set(self.pending_delete_ranges.len() as f64);

@@ -106,7 +106,7 @@ pub enum Tick {
     SnapGc,
     CompactLockCf,
     ConsistencyCheck,
-    DeleteRange,
+    CleanStalePeer,
 }
 
 #[derive(Debug, PartialEq)]

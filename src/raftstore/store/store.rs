@@ -501,7 +501,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_snap_mgr_gc_tick(event_loop);
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
-        self.register_delete_range_tick(event_loop);
+        self.register_clean_stale_peer_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&self.kv_engine),
@@ -2224,23 +2224,23 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn register_delete_range_tick(&self, event_loop: &mut EventLoop<Self>) {
+    fn register_clean_stale_peer_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(
             event_loop,
-            Tick::DeleteRange,
+            Tick::CleanStalePeer,
             PENDING_DELETE_RANGE_CHECK_INTERVAL,
         ) {
             error!("{} register delete range tick err: {:?}", self.tag, e);
         }
     }
 
-    fn on_delete_range_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        let task = RegionTask::Clean {};
+    fn on_clean_stale_peer_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        let task = RegionTask::CleanStalePeer {};
         if let Err(e) = self.snap_scheduler().schedule(task) {
             error!("{} failed to schedule task range clean: {:?}", self.tag, e);
         }
 
-        self.register_delete_range_tick(event_loop);
+        self.register_clean_stale_peer_tick(event_loop);
     }
 }
 
@@ -2567,7 +2567,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
-            Tick::DeleteRange => self.on_delete_range_tick(event_loop),
+            Tick::CleanStalePeer => self.on_clean_stale_peer_tick(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }
