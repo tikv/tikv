@@ -19,7 +19,7 @@ use coprocessor::codec::mysql::{charset, types, Decimal, Duration, Json, Res, Ti
 use coprocessor::codec::mysql::decimal::RoundMode;
 use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
 
-use super::{EvalContext, FnCall, Result};
+use super::{Error, EvalContext, FnCall, Result};
 
 impl FnCall {
     pub fn cast_int_as_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -197,7 +197,7 @@ impl FnCall {
             match Decimal::from_bytes(&val)? {
                 Res::Ok(d) => Cow::Owned(d),
                 Res::Truncated(d) | Res::Overflow(d) => {
-                    convert::handle_truncate(ctx, true)?;
+                    box_try!(ctx.handle_truncate(true));
                     Cow::Owned(d)
                 }
             }
@@ -601,13 +601,10 @@ impl FnCall {
                 return Ok(s);
             }
             let (char_count, truncate_pos) = truncate_info.unwrap();
-            if convert::handle_truncate_as_error(ctx) {
-                return Err(box_err!(
-                    "Data Too Long, field len {}, data len {}",
-                    flen,
-                    char_count
-                ));
-            }
+            ctx.handle_truncate_err(Error::Truncated(format!(
+                "Data Too Long, field len {}, data len {}",
+                flen, char_count
+            )))?;
 
             let mut res = s.into_owned();
             convert::truncate_binary(&mut res, truncate_pos as isize);
@@ -615,13 +612,11 @@ impl FnCall {
         }
 
         if s.len() > flen {
-            if convert::handle_truncate_as_error(ctx) {
-                return Err(box_err!(
-                    "Data Too Long, field len {}, data len {}",
-                    flen,
-                    s.len()
-                ));
-            }
+            ctx.handle_truncate_err(Error::Truncated(format!(
+                "Data Too Long, field len {}, data len {}",
+                flen,
+                s.len()
+            )))?;
             let mut res = s.into_owned();
             convert::truncate_binary(&mut res, flen as isize);
             return Ok(Cow::Owned(res));
@@ -654,7 +649,7 @@ impl FnCall {
             Res::Ok(d) => Ok(d),
             Res::Overflow(d) | Res::Truncated(d) => {
                 //TODO process warning with ctx
-                convert::handle_truncate(ctx, true)?;
+                ctx.handle_truncate(true)?;
                 Ok(d)
             }
         }

@@ -27,6 +27,8 @@ use std::{error, io, str};
 use std::borrow::Cow;
 use std::string::FromUtf8Error;
 use std::str::Utf8Error;
+use std::cell::RefCell;
+use std::sync::RwLock;
 
 use chrono::FixedOffset;
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
@@ -58,6 +60,7 @@ pub struct EvalContext {
     pub tz: FixedOffset,
     pub ignore_truncate: bool,
     pub truncate_as_warning: bool,
+    warnings: RwLock<RefCell<Vec<Error>>>,
 }
 
 impl Default for EvalContext {
@@ -66,6 +69,7 @@ impl Default for EvalContext {
             tz: FixedOffset::east(0),
             ignore_truncate: false,
             truncate_as_warning: false,
+            warnings: RwLock::new(RefCell::new(Vec::new())),
         }
     }
 }
@@ -86,9 +90,38 @@ impl EvalContext {
             tz: tz,
             ignore_truncate: (flags & FLAG_IGNORE_TRUNCATE) > 0,
             truncate_as_warning: (flags & FLAG_TRUNCATE_AS_WARNING) > 0,
+            warnings: RwLock::new(RefCell::new(Vec::new())),
         };
 
         Ok(e)
+    }
+
+    pub fn append_warning(&self, err: Error) -> Result<()> {
+        let lock = box_try!(self.warnings.write());
+        lock.borrow_mut().push(err);
+        Ok(())
+    }
+
+    pub fn handle_truncate(&self, is_truncated: bool) -> Result<()> {
+        if !is_truncated {
+            return Ok(());
+        }
+        self.handle_truncate_err(Error::Truncated("[1265] Data Truncated".into()))
+    }
+
+    pub fn handle_truncate_err(&self, err: Error) -> Result<()> {
+        if self.ignore_truncate {
+            return Ok(());
+        }
+        if self.truncate_as_warning {
+            return self.append_warning(err);
+        }
+        Err(err)
+    }
+
+    pub fn take_warnings(&self) -> Result<Vec<Error>> {
+        let lock = box_try!(self.warnings.write());
+        Ok(lock.replace(Vec::default()))
     }
 }
 
@@ -119,9 +152,9 @@ quick_error! {
             description("Unknown signature")
             display("Unknown signature: {:?}", sig)
         }
-        Truncated {
+        Truncated(s:String) {
             description("Truncated")
-            display("error Truncated")
+            display("{}",s)
         }
         Overflow {
             description("Overflow")
@@ -157,7 +190,7 @@ impl<T> Into<Result<T>> for Res<T> {
     fn into(self) -> Result<T> {
         match self {
             Res::Ok(t) => Ok(t),
-            Res::Truncated(_) => Err(Error::Truncated),
+            Res::Truncated(_) => Err(Error::Truncated("Truncated".into())),
             Res::Overflow(_) => Err(Error::Overflow),
         }
     }
@@ -448,7 +481,7 @@ mod test {
     use coprocessor::codec::mysql::json::JsonEncoder;
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
     use util::codec::number::{self, NumberEncoder};
-    use super::{Error, EvalContext, Expression};
+    use super::{Error, EvalContext, Expression, FLAG_IGNORE_TRUNCATE, FLAG_TRUNCATE_AS_WARNING};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
@@ -623,5 +656,25 @@ mod test {
             let res = e.eval(&ctx, &cols).unwrap();
             assert_eq!(res, exp);
         }
+    }
+
+    #[test]
+    fn test_handle_truncate() {
+        // ignore_truncate = false, truncate_as_warning = false
+        let ctx = EvalContext::new(0, 0).unwrap();
+        assert!(ctx.handle_truncate(false).is_ok());
+        assert!(ctx.handle_truncate(true).is_err());
+        assert!(ctx.take_warnings().unwrap().is_empty());
+        // ignore_truncate = false;
+        let ctx = EvalContext::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
+        assert!(ctx.handle_truncate(false).is_ok());
+        assert!(ctx.handle_truncate(true).is_ok());
+        assert!(ctx.take_warnings().unwrap().is_empty());
+
+        // ignore_truncate = false, truncate_as_warning = true
+        let ctx = EvalContext::new(0, FLAG_TRUNCATE_AS_WARNING).unwrap();
+        assert!(ctx.handle_truncate(false).is_ok());
+        assert!(ctx.handle_truncate(true).is_ok());
+        assert!(!ctx.take_warnings().unwrap().is_empty());
     }
 }

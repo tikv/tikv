@@ -1653,14 +1653,9 @@ mod test {
             ),
             (Datum::Dec(0u64.into()), Some(false)),
         ];
-        use chrono::FixedOffset;
-        use coprocessor::dag::expr::EvalContext;
+        use coprocessor::dag::expr::{EvalContext, FLAG_IGNORE_TRUNCATE};
 
-        let ctx = EvalContext {
-            tz: FixedOffset::east(0),
-            ignore_truncate: true,
-            truncate_as_warning: true,
-        };
+        let ctx = EvalContext::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
 
         for (d, b) in tests {
             if d.clone().into_bool(&ctx).unwrap() != b {

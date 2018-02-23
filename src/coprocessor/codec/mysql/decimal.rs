@@ -1081,7 +1081,7 @@ impl Decimal {
         // TODO: process over_flow
         if !ret.is_zero() && frac > decimal && ret != tmp {
             // TODO handle InInsertStmt in ctx
-            convert::handle_truncate(ctx, true)?;
+            box_try!(ctx.handle_truncate(true));
         }
         Ok(ret)
     }
@@ -1457,7 +1457,7 @@ impl Decimal {
     /// `as_i64_with_ctx` returns int part of the decimal.
     pub fn as_i64_with_ctx(&self, ctx: &EvalContext) -> ::std::result::Result<i64, ExprError> {
         let res = self.as_i64();
-        convert::handle_truncate(ctx, res.is_truncated())?;
+        box_try!(ctx.handle_truncate(res.is_truncated()));
         res.into()
     }
 

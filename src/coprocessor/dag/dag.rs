@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use tipb::schema::ColumnInfo;
-use tipb::select::{Chunk, DAGRequest, SelectResponse};
+use tipb::select::{self, Chunk, DAGRequest, SelectResponse};
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message as PbMsg, RepeatedField};
 
@@ -34,6 +34,7 @@ pub struct DAGContext {
     exec: Box<Executor>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
+    eval_ctx: Arc<EvalContext>,
 }
 
 impl DAGContext {
@@ -55,7 +56,12 @@ impl DAGContext {
             req_ctx.fill_cache,
         );
 
-        let dag_executor = build_exec(req.take_executors().into_vec(), store, ranges, eval_ctx)?;
+        let dag_executor = build_exec(
+            req.take_executors().into_vec(),
+            store,
+            ranges,
+            Arc::clone(&eval_ctx),
+        )?;
         Ok(DAGContext {
             columns: dag_executor.columns,
             has_aggr: dag_executor.has_aggr,
@@ -63,6 +69,7 @@ impl DAGContext {
             exec: dag_executor.exec,
             output_offsets: req.take_output_offsets(),
             batch_row_limit: batch_row_limit,
+            eval_ctx: eval_ctx,
         })
     }
 
@@ -94,6 +101,8 @@ impl DAGContext {
                     let mut counts = Vec::with_capacity(4);
                     self.exec.collect_output_counts(&mut counts);
                     sel_resp.set_output_counts(counts);
+                    let warnings = self.collect_eval_warnings()?;
+                    sel_resp.set_warnings(RepeatedField::from_vec(warnings));
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);
                     return Ok(resp);
@@ -103,13 +112,25 @@ impl DAGContext {
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_error(to_pb_error(&e));
                     resp.set_data(box_try!(sel_resp.write_to_bytes()));
-                    resp.set_other_error(format!("{}", e));
                     return Ok(resp);
                 } else {
                     return Err(e);
                 },
             }
         }
+    }
+
+    pub fn collect_eval_warnings(&self) -> Result<Vec<select::Error>> {
+        let warnings = box_try!(self.eval_ctx.take_warnings());
+        let warnings_msgs: Vec<select::Error> = warnings
+            .into_iter()
+            .map(|w| {
+                let mut e = select::Error::new();
+                e.set_msg(format!("{}", w));
+                e
+            })
+            .collect();
+        Ok(warnings_msgs)
     }
 
     pub fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {

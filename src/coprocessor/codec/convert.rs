@@ -183,19 +183,16 @@ pub fn bytes_to_f64(ctx: &EvalContext, bytes: &[u8]) -> Result<f64> {
     bytes_to_f64_without_context(vs.as_bytes())
 }
 
-#[inline]
-pub fn handle_truncate_as_error(ctx: &EvalContext) -> bool {
-    !(ctx.ignore_truncate || ctx.truncate_as_warning)
-}
+// #[inline]
+// pub fn handle_truncate_as_error(ctx: &EvalContext) -> bool {
+//     !(ctx.ignore_truncate || ctx.truncate_as_warning)
+// }
 
-#[inline]
-pub fn handle_truncate(ctx: &EvalContext, is_truncated: bool) -> Result<()> {
-    if is_truncated && handle_truncate_as_error(ctx) {
-        Err(box_err!("[1265] Data Truncated"))
-    } else {
-        Ok(())
-    }
-}
+// #[inline]
+// pub fn handle_truncate(ctx: &EvalContext, is_truncated: bool) -> Result<()> {
+//     box_try!(ctx.handle_truncate(is_truncated));
+//     Ok(())
+// }
 
 fn get_valid_int_prefix<'a>(ctx: &EvalContext, s: &'a str) -> Result<Cow<'a, str>> {
     let vs = get_valid_float_prefix(ctx, s)?;
@@ -240,8 +237,7 @@ fn get_valid_float_prefix<'a>(ctx: &EvalContext, s: &'a str) -> Result<&'a str> 
             valid_len = i + 1;
         }
     }
-
-    handle_truncate(ctx, valid_len < s.len())?;
+    box_try!(ctx.handle_truncate(valid_len < s.len()));
     if valid_len == 0 {
         Ok("0")
     } else {
@@ -325,9 +321,7 @@ mod test {
     use std::f64::EPSILON;
     use std::{isize, f64, i64, u64};
 
-    use chrono::FixedOffset;
-
-    use coprocessor::dag::expr::EvalContext;
+    use coprocessor::dag::expr::{EvalContext, FLAG_IGNORE_TRUNCATE};
     use coprocessor::codec::mysql::types;
 
     use super::*;
@@ -405,41 +399,6 @@ mod test {
     }
 
     #[test]
-    fn test_handle_truncate() {
-        let ctxs = vec![
-            EvalContext {
-                tz: FixedOffset::east(0),
-                ignore_truncate: true,
-                truncate_as_warning: true,
-            },
-            EvalContext {
-                tz: FixedOffset::east(0),
-                ignore_truncate: true,
-                truncate_as_warning: false,
-            },
-            EvalContext {
-                tz: FixedOffset::east(0),
-                ignore_truncate: false,
-                truncate_as_warning: true,
-            },
-            EvalContext {
-                tz: FixedOffset::east(0),
-                ignore_truncate: false,
-                truncate_as_warning: false,
-            },
-        ];
-
-        for ctx in &ctxs {
-            assert!(super::handle_truncate(ctx, false).is_ok());
-        }
-
-        assert!(super::handle_truncate(&ctxs[0], true).is_ok());
-        assert!(super::handle_truncate(&ctxs[1], true).is_ok());
-        assert!(super::handle_truncate(&ctxs[2], true).is_ok());
-        assert!(super::handle_truncate(&ctxs[3], true).is_err());
-    }
-
-    #[test]
     fn test_get_valid_float_prefix() {
         let cases = vec![
             ("-100", "-100"),
@@ -458,11 +417,7 @@ mod test {
             ("123.e", "123."),
         ];
 
-        let ctx = EvalContext {
-            tz: FixedOffset::east(0),
-            ignore_truncate: true,
-            truncate_as_warning: false,
-        };
+        let ctx = EvalContext::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
         for (i, o) in cases {
             assert_eq!(super::get_valid_float_prefix(&ctx, i).unwrap(), o);
         }
