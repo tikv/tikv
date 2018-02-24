@@ -344,6 +344,28 @@ fn configure_grpc_poll_strategy() {
     }
 }
 
+fn check_and_persist_critical_config(config: &TiKvConfig, matches: &ArgMatches) {
+    if let Some(path) = matches.value_of("config") {
+        let cfg_file = Path::new(path);
+        if let Some(cfg_dir) = cfg_file.parent() {
+            // Check current critical configurations with last time, if there are some
+            // changes, user must guarantee relevant works have been done.
+            let last_cfg_file = auto_gen_cfg_file(cfg_dir.to_str().unwrap());
+            if Path::new(last_cfg_file.as_str()).exists() {
+                let last_cfg = TiKvConfig::from_file(&last_cfg_file);
+                if let Err(e) = config.check_critical_cfg_with(&last_cfg) {
+                    fatal!("check critical config failed, err {:?}", e);
+                }
+            }
+
+            // Persist current critical configurations to file.
+            if let Err(e) = config.write_to_file(&last_cfg_file) {
+                fatal!("persist critical config failed, err {:?}", e);
+            }
+        }
+    }
+}
+
 fn main() {
     let long_version: String = {
         let (hash, branch, time, rust_ver) = util::build_info();
@@ -483,25 +505,7 @@ fn main() {
 
     overwrite_config_with_cmd_args(&mut config, &matches);
 
-    if let Some(path) = matches.value_of("config") {
-        let cfg_file = Path::new(path);
-        if let Some(cfg_dir) = cfg_file.parent() {
-            // Check current critical configurations with last time, if there are some
-            // changes, user must guarantee relevant works have been done.
-            let last_cfg_file = auto_gen_cfg_file(cfg_dir.to_str().unwrap());
-            if Path::new(last_cfg_file.as_str()).exists() {
-                let last_cfg = TiKvConfig::from_file(&last_cfg_file);
-                if let Err(e) = config.check_critical_cfg_with(&last_cfg) {
-                    fatal!("check critical config failed, err {:?}", e);
-                }
-            }
-
-            // Persist current critical configurations to file.
-            if let Err(e) = config.write_to_file(&last_cfg_file) {
-                fatal!("persist critical config failed, err {:?}", e);
-            }
-        }
-    }
+    check_and_persist_critical_config(&config, &matches);
 
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validata()`,
