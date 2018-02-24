@@ -770,7 +770,7 @@ mod tests {
             }
             let on_resp = OnResponse::Unary(box move |msg| {
                 thread::sleep(Duration::from_millis(100));
-                tx.send(msg).unwrap();
+                let _ = tx.send(msg); // To avoid panic if rx is closed.
             });
 
             let task = RequestTask::new(req, on_resp, 1000).unwrap();
