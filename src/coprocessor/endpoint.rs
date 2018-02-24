@@ -70,7 +70,7 @@ pub struct Host {
     high_priority_pool: ThreadPool<CopContext>,
     max_running_task_count: usize,
     batch_row_limit: usize,
-    end_point_request_max_handle_secs: u64,
+    end_point_request_max_handle_duration: u64,
 }
 
 struct CopContextFactory {
@@ -136,7 +136,8 @@ impl Host {
             ).thread_count(cfg.end_point_concurrency)
                 .stack_size(cfg.end_point_stack_size.0 as usize)
                 .build(),
-            end_point_request_max_handle_secs: cfg.end_point_request_max_handle_secs.as_secs(),
+            end_point_request_max_handle_duration: cfg.end_point_request_max_handle_duration
+                .as_secs(),
         }
     }
 
@@ -155,7 +156,7 @@ impl Host {
                     e,
                     reqs,
                     &mut local_metrics,
-                    self.end_point_request_max_handle_secs,
+                    self.end_point_request_max_handle_duration,
                 );
                 return;
             }
@@ -166,7 +167,7 @@ impl Host {
                 Error::Full(self.max_running_task_count),
                 reqs,
                 &mut local_metrics,
-                self.end_point_request_max_handle_secs,
+                self.end_point_request_max_handle_duration,
             );
             return;
         }
@@ -186,7 +187,7 @@ impl Host {
             COPR_PENDING_REQS
                 .with_label_values(&[type_str, pri_str])
                 .inc();
-            let request_timeout_secs = self.end_point_request_max_handle_secs;
+            let request_timeout_duration = self.end_point_request_max_handle_duration;
             pool.execute(move |ctx: &mut CopContext| {
                 // decrease pending task
                 COPR_PENDING_REQS
@@ -197,7 +198,7 @@ impl Host {
                     req,
                     batch_row_limit,
                     &mut ctx.basic_local_metrics,
-                    request_timeout_secs,
+                    request_timeout_duration,
                 );
                 ctx.exec_local_metrics.collect(type_str, region_id, stats);
             });
@@ -272,10 +273,10 @@ impl RequestTask {
         req: Request,
         on_resp: OnResponse,
         recursion_limit: u32,
-        request_timeout_secs: u64,
+        request_timeout_duration: u64,
     ) -> RequestTask {
         let timer = Instant::now_coarse();
-        let deadline = timer + Duration::from_secs(request_timeout_secs);
+        let deadline = timer + Duration::from_secs(request_timeout_duration);
         let mut start_ts = None;
         let tp = req.get_tp();
         let mut table_scan = false;
@@ -442,7 +443,7 @@ impl Runnable<Task> for Host {
                             e,
                             req,
                             &mut local_metrics,
-                            self.end_point_request_max_handle_secs,
+                            self.end_point_request_max_handle_duration,
                         );
                         continue;
                     }
@@ -474,7 +475,7 @@ impl Runnable<Task> for Host {
                             e,
                             reqs,
                             &mut local_metrics,
-                            self.end_point_request_max_handle_secs,
+                            self.end_point_request_max_handle_duration,
                         );
                     } else {
                         self.reqs.insert(id, reqs);
@@ -538,7 +539,7 @@ impl Runnable<Task> for Host {
                     err,
                     reqs,
                     &mut local_metrics,
-                    self.end_point_request_max_handle_secs,
+                    self.end_point_request_max_handle_duration,
                 );
             }
         }
@@ -557,7 +558,7 @@ impl Runnable<Task> for Host {
     }
 }
 
-fn err_resp(e: Error, metrics: &mut BasicLocalMetrics, request_timeout_secs: u64) -> Response {
+fn err_resp(e: Error, metrics: &mut BasicLocalMetrics, request_timeout_duration: u64) -> Response {
     let mut resp = Response::new();
     let tag = match e {
         Error::Region(e) => {
@@ -570,7 +571,8 @@ fn err_resp(e: Error, metrics: &mut BasicLocalMetrics, request_timeout_secs: u64
             "lock"
         }
         Error::Outdated(deadline, now, scan_tag) => {
-            let elapsed = now.duration_since(deadline) + Duration::from_secs(request_timeout_secs);
+            let elapsed =
+                now.duration_since(deadline) + Duration::from_secs(request_timeout_duration);
             metrics
                 .outdate_time
                 .with_label_values(&[scan_tag])
@@ -604,9 +606,9 @@ fn on_error(
     e: Error,
     req: RequestTask,
     metrics: &mut BasicLocalMetrics,
-    request_timeout_secs: u64,
+    request_timeout_duration: u64,
 ) -> ExecutorMetrics {
-    let resp = err_resp(e, metrics, request_timeout_secs);
+    let resp = err_resp(e, metrics, request_timeout_duration);
     respond(resp, req, metrics)
 }
 
@@ -614,10 +616,10 @@ fn notify_batch_failed<E: Into<Error> + Debug>(
     e: E,
     reqs: Vec<RequestTask>,
     metrics: &mut BasicLocalMetrics,
-    request_timeout_secs: u64,
+    request_timeout_duration: u64,
 ) {
     debug!("failed to handle batch request: {:?}", e);
-    let resp = err_resp(e.into(), metrics, request_timeout_secs);
+    let resp = err_resp(e.into(), metrics, request_timeout_duration);
     for t in reqs {
         respond(resp.clone(), t, metrics);
     }
@@ -651,12 +653,12 @@ impl TiDbEndPoint {
         mut t: RequestTask,
         batch_row_limit: usize,
         metrics: &mut BasicLocalMetrics,
-        request_timeout_secs: u64,
+        request_timeout_duration: u64,
     ) -> ExecutorMetrics {
         t.stop_record_waiting(metrics);
 
         if let Err(e) = t.check_outdated() {
-            return on_error(e, t, metrics, request_timeout_secs);
+            return on_error(e, t, metrics, request_timeout_duration);
         }
 
         let resp = match t.cop_req.take().unwrap() {
@@ -666,7 +668,7 @@ impl TiDbEndPoint {
         };
         match resp {
             Ok(r) => respond(r, t, metrics),
-            Err(e) => on_error(e, t, metrics, request_timeout_secs),
+            Err(e) => on_error(e, t, metrics, request_timeout_duration),
         }
     }
 

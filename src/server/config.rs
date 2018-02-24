@@ -67,7 +67,7 @@ pub struct Config {
     pub end_point_stack_size: ReadableSize,
     pub end_point_recursion_limit: u32,
     pub end_point_batch_row_limit: usize,
-    pub end_point_request_max_handle_secs: ReadableDuration,
+    pub end_point_request_max_handle_duration: ReadableDuration,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
 
@@ -99,7 +99,7 @@ impl Default for Config {
             end_point_stack_size: ReadableSize::mb(DEFAULT_ENDPOINT_STACK_SIZE_MB),
             end_point_recursion_limit: 1000,
             end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,
-            end_point_request_max_handle_secs: ReadableDuration::secs(
+            end_point_request_max_handle_duration: ReadableDuration::secs(
                 DEFAULT_REQUEST_MAX_HANDLE_SECS,
             ),
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
@@ -144,7 +144,7 @@ impl Config {
             return Err(box_err!("server.end-point-recursion-limit is too small"));
         }
 
-        if self.end_point_request_max_handle_secs.as_secs() < DEFAULT_REQUEST_MAX_HANDLE_SECS {
+        if self.end_point_request_max_handle_duration.as_secs() < DEFAULT_REQUEST_MAX_HANDLE_SECS {
             return Err(box_err!(
                 "server.end-point-request-max-handle-secs is too small."
             ));
@@ -219,7 +219,7 @@ mod tests {
         assert!(invalid_cfg.validate().is_err());
 
         let mut invalid_cfg = cfg.clone();
-        invalid_cfg.end_point_request_max_handle_secs = ReadableDuration::secs(0);
+        invalid_cfg.end_point_request_max_handle_duration = ReadableDuration::secs(0);
         assert!(invalid_cfg.validate().is_err());
 
         invalid_cfg = Config::default();
