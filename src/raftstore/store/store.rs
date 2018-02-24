@@ -1912,7 +1912,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if peer.region() != target_region {
                 return Err(box_err!("target region not matched, skip proposing."));
             }
-            if !keys::is_sibling_regions(target_region, region) {
+            if !util::is_sibling_regions(target_region, region) {
                 return Err(box_err!("regions are not sibling, skip proposing."));
             }
             if !util::region_on_same_store(target_region, region) {
@@ -1934,7 +1934,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             );
             assert_eq!(source_region, source_peer.region());
             assert!(
-                keys::is_sibling_regions(source_region, region),
+                util::is_sibling_regions(source_region, region),
                 "{:?} {:?} should be sibling",
                 source_region,
                 region

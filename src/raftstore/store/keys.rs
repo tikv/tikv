@@ -209,19 +209,6 @@ pub fn enc_end_key(region: &Region) -> Vec<u8> {
     data_end_key(region.get_end_key())
 }
 
-pub fn is_sibling_regions(lhs: &Region, rhs: &Region) -> bool {
-    if lhs.get_id() == rhs.get_id() {
-        return false;
-    }
-    if lhs.get_start_key() == rhs.get_end_key() && !rhs.get_end_key().is_empty() {
-        return true;
-    }
-    if lhs.get_end_key() == rhs.get_start_key() && !lhs.get_end_key().is_empty() {
-        return true;
-    }
-    false
-}
-
 #[inline]
 pub fn data_end_key(region_end_key: &[u8]) -> Vec<u8> {
     if region_end_key.is_empty() {
@@ -357,40 +344,5 @@ mod tests {
         region.set_end_key(vec![2]);
         assert_eq!(enc_start_key(&region), vec![DATA_PREFIX, 1]);
         assert_eq!(enc_end_key(&region), vec![DATA_PREFIX, 2]);
-    }
-
-    fn split(mut r: Region, key: &[u8]) -> (Region, Region) {
-        let mut r2 = r.clone();
-        r.set_end_key(key.to_owned());
-        r2.set_id(r.get_id() + 1);
-        r2.set_start_key(key.to_owned());
-        (r, r2)
-    }
-
-    macro_rules! check_sibling {
-        ($r1:expr, $r2:expr, $is_sibling:expr) => {
-            assert_eq!(is_sibling_regions($r1, $r2), $is_sibling);
-            assert_eq!(is_sibling_regions($r2, $r1), $is_sibling);
-        };
-    }
-
-    #[test]
-    fn test_region_sibling() {
-        let r1 = Region::new();
-        check_sibling!(&r1, &r1, false);
-
-        let (r1, r2) = split(r1, b"k1");
-        check_sibling!(&r1, &r2, true);
-
-        let (r2, r3) = split(r2, b"k2");
-        check_sibling!(&r2, &r3, true);
-
-        let (r3, r4) = split(r3, b"k3");
-        check_sibling!(&r3, &r4, true);
-        check_sibling!(&r1, &r2, true);
-        check_sibling!(&r2, &r3, true);
-        check_sibling!(&r1, &r3, false);
-        check_sibling!(&r2, &r4, false);
-        check_sibling!(&r1, &r4, false);
     }
 }

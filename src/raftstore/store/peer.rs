@@ -1336,14 +1336,13 @@ impl Peer {
     }
 
     pub fn get_min_progress(&self) -> u64 {
-        let mut min_index = self.raft_group.raft.raft_log.last_index();
-        let status = self.raft_group.status();
-        for pr in status.progress.values() {
-            if pr.matched < min_index {
-                min_index = pr.matched;
-            }
-        }
-        min_index
+        self.raft_group
+            .status()
+            .progress
+            .values()
+            .map(|pr| pr.matched)
+            .min()
+            .unwrap_or_default()
     }
 
     fn pre_propose(&self, req: &mut RaftCmdRequest) -> Result<()> {
@@ -1365,7 +1364,7 @@ impl Peer {
         }
         for entry in self.raft_group.raft.raft_log.entries(min_index, NO_LIMIT)? {
             if entry.get_entry_type() == EntryType::EntryConfChange {
-                return Err(box_err!("log gap contains admin request, skip merge."));
+                return Err(box_err!("log gap contains conf change, skip merging."));
             }
             if entry.get_data().is_empty() {
                 continue;
