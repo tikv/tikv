@@ -43,7 +43,7 @@ const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
-const AUTO_GEN_CONFIG_FILE: &str = "auto_gen_tikv.toml";
+pub const AUTO_GEN_CONFIG_FILE: &str = "auto_gen_tikv.toml";
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = sys_info::mem_info().unwrap().total * KB;
@@ -804,24 +804,11 @@ impl TiKvConfig {
     }
 }
 
-pub fn auto_gen_cfg_file(config_dir: &str) -> String {
-    let mut path = String::from(config_dir);
-    path.push_str("/");
-    path.push_str(AUTO_GEN_CONFIG_FILE);
-    path
-}
-
 #[cfg(test)]
 mod test {
     use tempdir::TempDir;
 
     use super::*;
-
-    #[test]
-    fn test_auto_gen_cfg_file() {
-        let file_name = auto_gen_cfg_file("/conf");
-        assert_eq!(file_name, String::from("/conf/auto_gen_tikv.toml"))
-    }
 
     #[test]
     fn test_check_critical_cfg_with() {
@@ -845,23 +832,24 @@ mod test {
     #[test]
     fn test_persist_cfg() {
         let dir = TempDir::new("test_persist_cfg").unwrap();
-        let file = auto_gen_cfg_file(dir.path().to_str().unwrap());
+        let path_buf = dir.path().join(AUTO_GEN_CONFIG_FILE);
+        let file = path_buf.as_path().to_str().unwrap();
         let (s1, s2) = ("/xxx/wal_dir".to_owned(), "/yyy/wal_dir".to_owned());
 
         let mut tikv_cfg = TiKvConfig::default();
 
         tikv_cfg.rocksdb.wal_dir = s1.clone();
         tikv_cfg.raftdb.wal_dir = s2.clone();
-        tikv_cfg.write_to_file(&file).unwrap();
-        let cfg_from_file = TiKvConfig::from_file(&file);
+        tikv_cfg.write_to_file(file).unwrap();
+        let cfg_from_file = TiKvConfig::from_file(file);
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s1.clone());
         assert_eq!(cfg_from_file.raftdb.wal_dir, s2.clone());
 
         // write critical config when exist.
         tikv_cfg.rocksdb.wal_dir = s2.clone();
         tikv_cfg.raftdb.wal_dir = s1.clone();
-        tikv_cfg.write_to_file(&file).unwrap();
-        let cfg_from_file = TiKvConfig::from_file(&file);
+        tikv_cfg.write_to_file(file).unwrap();
+        let cfg_from_file = TiKvConfig::from_file(file);
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s2.clone());
         assert_eq!(cfg_from_file.raftdb.wal_dir, s1.clone());
     }
