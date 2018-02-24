@@ -17,6 +17,7 @@ use std::{fmt, u64};
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_serverpb::RaftMessage;
+use protobuf::{self, Message, MessageStatic};
 use raftstore::{Error, Result};
 use raftstore::store::keys;
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
@@ -337,6 +338,15 @@ impl fmt::Debug for Lease {
             None => fmter.finish(),
         }
     }
+}
+
+// TODO: make sure received entries are not corrupted
+// If this happens, TiKV will panic and can't recover without extra effort.
+#[inline]
+pub fn parse_data_at<T: Message + MessageStatic>(data: &[u8], index: u64, tag: &str) -> T {
+    protobuf::parse_from_bytes::<T>(data).unwrap_or_else(|e| {
+        panic!("{} data is corrupted at {}: {:?}", tag, index, e);
+    })
 }
 
 #[cfg(test)]

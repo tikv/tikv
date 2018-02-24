@@ -21,8 +21,8 @@ use std::time::{Duration, Instant};
 use time::Timespec;
 use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
-use protobuf::{self, Message, MessageStatic};
-use kvproto::metapb;
+use protobuf::{self, Message};
+use kvproto::metapb::{self, RegionEpoch};
 use kvproto::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
                           RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse};
@@ -157,15 +157,6 @@ impl<'a, T> ReadyContext<'a, T> {
     }
 }
 
-// TODO: make sure received entries are not corrupted
-// If this happens, TiKV will panic and can't recover without extra effort.
-#[inline]
-pub fn parse_data_at<T: Message + MessageStatic>(data: &[u8], index: u64, tag: &str) -> T {
-    protobuf::parse_from_bytes::<T>(data).unwrap_or_else(|e| {
-        panic!("{} data is corrupted at {}: {:?}", tag, index, e);
-    })
-}
-
 pub struct ConsistencyState {
     pub last_check_time: Instant,
     // (computed_result_or_to_be_verified, index, hash)
@@ -230,7 +221,7 @@ pub struct Peer {
     // with different range.
     // It assumes that when a peer is going to accept snapshot, it can never
     // captch up by normal log replication.
-    pub pending_cross_snap: bool,
+    pub pending_cross_snap: Option<RegionEpoch>,
     pub pending_merge: Option<MergeState>,
 
     marked_to_be_checked: bool,
@@ -340,7 +331,7 @@ impl Peer {
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
             marked_to_be_checked: false,
-            pending_cross_snap: false,
+            pending_cross_snap: None,
             pending_merge: None,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
@@ -1379,7 +1370,8 @@ impl Peer {
             if entry.get_data().is_empty() {
                 continue;
             }
-            let cmd: RaftCmdRequest = parse_data_at(entry.get_data(), entry.get_index(), &self.tag);
+            let cmd: RaftCmdRequest =
+                util::parse_data_at(entry.get_data(), entry.get_index(), &self.tag);
             if !cmd.has_admin_request() {
                 continue;
             }

@@ -1041,37 +1041,64 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         if let Some(peer) = self.region_peers.get_mut(&target_region_id) {
             debug!(
-                "{} checking cross snap: {}",
+                "{} checking cross snap: {:?}",
                 peer.tag, peer.pending_cross_snap
             );
-            if peer.pending_cross_snap {
-                return Ok(true);
+            if let Some(ref epoch) = peer.pending_cross_snap {
+                // So the snapshot is behind the merge, there is no way to resume.
+                if epoch.get_version() > merge_target.get_region_epoch().get_version() {
+                    return Ok(true);
+                }
             }
-        }
-
-        let state_key = keys::region_state_key(target_region_id);
-        let state: RegionLocalState = match self.kv_engine().get_msg_cf(CF_RAFT, &state_key)? {
-            // So there is no such region at all. Then it needs to be created on this store
-            // and then apply snapshot. If the range is still the old one, then it will need
-            // to change the range as others did the merge already; if the range is the new one,
-            // then it must be cross range. In either cases, this peer need to gc self first.
-            // TODO: check split.
-            None => return Ok(true),
-            Some(state) => state,
-        };
-        debug!(
-            "[region {}] check local state {:?}",
-            target_region_id, state
-        );
-        if state.get_state() != PeerState::Tombstone {
             return Ok(false);
         }
 
-        // So there is no such region at all. Then it needs to be created on this store
-        // and then apply snapshot. If the range is still the old one, then it will need
-        // to change the range as others did the merge already; if the range is the new one,
-        // then it must be cross range. In either cases, this peer need to gc self first.
-        // TODO: check split.
+        let state_key = keys::region_state_key(target_region_id);
+        if let Some(state) = self.kv_engine()
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)?
+        {
+            debug!(
+                "[region {}] check local state {:?}",
+                target_region_id, state
+            );
+            if state.get_state() != PeerState::Tombstone {
+                // Maybe it's just split, let's wait.
+                return Ok(false);
+            }
+            // The peer was destroyed. It can't be split from a region anymore as
+            // split always introduces new region id. If it will be created via messages,
+            // then a snapshot is acquired. The snapshot always contains the merge result.
+            return Ok(true);
+        }
+
+        // So there is no sunch region at all. It can be created by message or by split.
+        let gc_target = match self.region_peers.get(&msg.get_region_id()) {
+            // It has been gc.
+            None => return Ok(false),
+            Some(p) => p,
+        };
+        let (mut range_start, mut range_end) =
+            (enc_start_key(merge_target), enc_end_key(merge_target));
+        let gc_region = gc_target.region();
+        let (gc_start, gc_end) = (enc_start_key(gc_region), enc_end_key(gc_region));
+        if range_start == gc_start {
+            range_start = gc_end;
+        } else if range_end == gc_end {
+            range_end = gc_start;
+        }
+        assert!(range_start < range_end);
+        let r = self.region_ranges
+            .range((Excluded(range_start), Unbounded::<Key>))
+            .map(|(_, &region_id)| self.region_peers[&region_id].region())
+            .take_while(|r| enc_start_key(r) < range_end)
+            .next();
+        if let Some(r) = r {
+            if r.get_region_epoch().get_version() < merge_target.get_region_epoch().get_version() {
+                // The peer may be split by it, let's wait.
+                return Ok(false);
+            }
+        }
+        // So the peer can only be created by message, which requires a snapshot.
         Ok(true)
     }
 
@@ -1145,7 +1172,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_peers
                 .get_mut(&region_id)
                 .unwrap()
-                .pending_cross_snap = true;
+                .pending_cross_snap = Some(snap_region.get_region_epoch().to_owned());
             self.raft_metrics.message_dropped.region_overlap += 1;
             return Ok(Some(key));
         }
@@ -1167,7 +1194,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.region_peers
             .get_mut(&region_id)
             .unwrap()
-            .pending_cross_snap = false;
+            .pending_cross_snap = None;
 
         Ok(None)
     }
@@ -1383,6 +1410,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 self.store_id()
             );
         }
+        self.merge_states
+            .retain(|r| r.get_id() != p.region().get_id());
     }
 
     fn on_ready_change_peer(&mut self, region_id: u64, cp: ChangePeer) {
@@ -1733,14 +1762,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // the peer is not in merging mode.
             if peer.pending_merge.is_none() {
                 let mut state = MergeState::new();
-                // Actually we only need ID. But save more information in case it helps.
                 state.set_target(region.clone());
                 peer.pending_merge = Some(state);
             }
             peer.peer.clone()
         };
         self.destroy_peer(source.get_id(), source_peer);
-        self.merge_states.retain(|r| r.get_id() != source.get_id());
         // If merge backward, then stale meta is clear when source region is destroyed.
         // So only forward needs to be considered.
         if region.get_end_key() == source.get_end_key() {
