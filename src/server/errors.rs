@@ -18,10 +18,11 @@ use std::net::AddrParseError;
 
 use futures::Canceled;
 use protobuf::ProtobufError;
-use grpc::Error as GrpcError;
+use grpc::{Error as GrpcError, RpcStatus, RpcStatusCode};
 
 use util::codec::Error as CodecError;
 use util::worker::ScheduleError;
+use util::rpc::Error as RpcError;
 use raftstore::Error as RaftServerError;
 use storage::engine::Error as EngineError;
 use storage::Error as StorageError;
@@ -109,7 +110,27 @@ quick_error!{
             display("{:?}", err)
             description(err.description())
         }
+        Rpc(err: RpcError) {
+            from()
+            cause(err)
+            display("{:?}", err)
+            description(err.description())
+        }
     }
 }
 
 pub type Result<T> = result::Result<T, Error>;
+
+impl Into<RpcStatus> for Error {
+    fn into(self) -> RpcStatus {
+        let msg = Some(format!("{:?}", self));
+        let code = match self {
+            Error::Storage(_) | Error::EndPointStopped(_) | Error::SnapWorkerStopped(_) => {
+                RpcStatusCode::ResourceExhausted
+            }
+            Error::Rpc(e) => return e.into(),
+            _ => RpcStatusCode::Internal,
+        };
+        RpcStatus::new(code, msg)
+    }
+}

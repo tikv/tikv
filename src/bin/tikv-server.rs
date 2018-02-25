@@ -209,7 +209,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         );
 
     let importer = Arc::new(SSTImporter::new(import_path).unwrap());
-    let import_service = ImportSSTService::new(cfg.import.clone(), storage.clone(), importer);
+    let import_service = ImportSSTService::new(
+        cfg.server.cluster_id,
+        cfg.import.clone(),
+        storage.clone(),
+        importer,
+    );
 
     let server_cfg = Arc::new(cfg.server.clone());
     // Create server

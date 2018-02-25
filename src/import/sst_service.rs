@@ -22,13 +22,14 @@ use kvproto::importpb_grpc::*;
 
 use storage::Storage;
 use util::time::Instant;
+use util::rpc::check_header;
 
-use super::service::*;
 use super::metrics::*;
 use super::{Config, Error, SSTImporter};
 
 #[derive(Clone)]
 pub struct ImportSSTService {
+    cluster_id: u64,
     cfg: Config,
     threads: CpuPool,
     storage: Storage,
@@ -36,12 +37,18 @@ pub struct ImportSSTService {
 }
 
 impl ImportSSTService {
-    pub fn new(cfg: Config, storage: Storage, importer: Arc<SSTImporter>) -> ImportSSTService {
+    pub fn new(
+        cluster_id: u64,
+        cfg: Config,
+        storage: Storage,
+        importer: Arc<SSTImporter>,
+    ) -> ImportSSTService {
         let threads = Builder::new()
             .name_prefix("sst-importer")
             .pool_size(cfg.num_threads)
             .create();
         ImportSSTService {
+            cluster_id: cluster_id,
             cfg: cfg,
             threads: threads,
             storage: storage,
@@ -58,6 +65,10 @@ impl ImportSst for ImportSSTService {
         sink: ClientStreamingSink<UploadResponse>,
     ) {
         let label = "upload";
+        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
+            send_response!(ctx, sink, e.into(), label);
+            return;
+        }
         let timer = Instant::now_coarse();
 
         let token = self.importer.token();
@@ -67,39 +78,50 @@ impl ImportSst for ImportSSTService {
         let import2 = Arc::clone(&self.importer);
         let bounded_stream = mpsc::spawn(stream, &self.threads, self.cfg.stream_channel_window);
 
-        ctx.spawn(
-            bounded_stream
-                .map_err(Error::from)
-                .for_each(move |chunk| {
-                    let import1 = Arc::clone(&import1);
-                    thread1.spawn_fn(move || {
-                        let start = Instant::now_coarse();
-                        if chunk.has_meta() {
-                            import1.create(token, chunk.get_meta())?;
-                        }
-                        if !chunk.get_data().is_empty() {
-                            let data = chunk.get_data();
-                            import1.append(token, data)?;
-                            IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
-                        }
-                        IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
-                        Ok(())
-                    })
+        let result = bounded_stream
+            .map_err(Error::from)
+            .for_each(move |chunk| {
+                let import1 = Arc::clone(&import1);
+                thread1.spawn_fn(move || {
+                    let start = Instant::now_coarse();
+                    if chunk.has_meta() {
+                        import1.create(token, chunk.get_meta())?;
+                    }
+                    if !chunk.get_data().is_empty() {
+                        let data = chunk.get_data();
+                        import1.append(token, data)?;
+                        IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
+                    }
+                    IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
+                    Ok(())
                 })
-                .then(move |res| {
-                    thread2.spawn_fn(move || match res {
-                        Ok(_) => import2.finish(token),
-                        Err(e) => {
-                            if let Some(f) = import2.remove(token) {
-                                error!("remove {:?}: {:?}", f, e);
-                            }
-                            Err(e)
+            })
+            .then(move |res| {
+                thread2.spawn_fn(move || match res {
+                    Ok(_) => import2.finish(token),
+                    Err(e) => {
+                        if let Some(f) = import2.remove(token) {
+                            error!("remove {:?}: {:?}", f, e);
                         }
-                    })
+                        Err(e)
+                    }
                 })
-                .map(|_| UploadResponse::new())
-                .then(move |res| send_rpc_response!(res, sink, label, timer)),
-        )
+            })
+            .then(move |res| match res {
+                Ok(_) => {
+                    IMPORT_RPC_DURATION
+                        .with_label_values(&[label, "ok"])
+                        .observe(timer.elapsed_secs());
+                    Ok(UploadResponse::new())
+                }
+                Err(e) => {
+                    IMPORT_RPC_DURATION
+                        .with_label_values(&[label, "error"])
+                        .observe(timer.elapsed_secs());
+                    Err(e)
+                }
+            });
+        send_response!(ctx, sink, result, Into::into, label);
     }
 
     fn ingest(&self, _: RpcContext, _: IngestRequest, _: UnarySink<IngestResponse>) {

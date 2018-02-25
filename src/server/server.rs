@@ -87,6 +87,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         let snap_worker = Worker::new("snap-handler");
 
         let kv_service = KvService::new(
+            cfg.cluster_id,
             storage.clone(),
             end_point_worker.scheduler(),
             raft_router.clone(),
@@ -109,7 +110,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                 .register_service(create_tikv(kv_service));
             sb = security_mgr.bind(sb, &ip, addr.port());
             if let Some(engines) = debug_engines {
-                sb = sb.register_service(create_debug(DebugService::new(engines)));
+                sb = sb.register_service(create_debug(DebugService::new(cfg.cluster_id, engines)));
             }
             if let Some(service) = import_service {
                 sb = sb.register_service(create_import_sst(service));
