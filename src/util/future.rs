@@ -16,7 +16,7 @@ use futures::sync::oneshot;
 
 /// Generated a paired future and callback so that when callback is being called, its result
 /// is automatically passed as a future result.
-pub fn gen_paired_future_callback<T>() -> (Box<boxed::FnBox(T) + Send>, oneshot::Receiver<T>)
+pub fn paired_future_callback<T>() -> (Box<boxed::FnBox(T) + Send>, oneshot::Receiver<T>)
 where
     T: Send + 'static,
 {

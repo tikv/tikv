@@ -206,7 +206,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     );
     let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
 
-    // Create pd client and pd work, snapshot manager, server.
+    // Create snapshot manager, server.
     let snap_mgr = SnapManagerBuilder::default()
         .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0)
         .max_total_size(cfg.server.snap_max_total_size.0)
