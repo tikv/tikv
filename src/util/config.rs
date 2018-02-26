@@ -800,7 +800,6 @@ mod check_data_dir {
             )));
         }
         let dev = fsname.trim_left_matches("/dev/");
-        use std::path::Path;
         let block_dir = "/sys/block";
         let mut device_dir = format!("{}/{}", block_dir, dev);
         if !Path::new(&device_dir).exists() {
@@ -864,7 +863,17 @@ mod check_data_dir {
         let fs_info = get_fs_info(&real_path, "/proc/mounts")?;
         // TODO check ext4 nodelalloc
         info!("data_path: {:?}, mount fs info: {:?}", data_path, fs_info);
-        let rotational_info = get_rotational_info(&fs_info.fsname)?;
+        // get device path
+        let device = match fs::canonicalize(&fs_info.fsname) {
+            Ok(path) => format!("{}", path.display()),
+            Err(e) => {
+                return Err(ConfigError::FileSystem(format!(
+                    "path: {:?} device: {:?} canonicalize failed: {:?}",
+                    data_path, fs_info.fsname, e
+                )))
+            }
+        };
+        let rotational_info = get_rotational_info(&device)?;
         if rotational_info != "0" {
             warn!("{:?} not on SSD device", data_path);
         }
