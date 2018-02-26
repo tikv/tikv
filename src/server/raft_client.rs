@@ -150,7 +150,7 @@ impl RaftClient {
 
     pub fn flush(&mut self) {
         let addrs = &mut self.addrs;
-        let mut counter = 0;
+        let mut counter: u64 = 0;
         self.conns.retain(|&(ref addr, _), conn| {
             let store_id = conn.store_id;
             if !conn.alive.load(Ordering::SeqCst) {
