@@ -24,7 +24,7 @@ use kvproto::kvrpcpb::Context;
 use tikv::coprocessor::codec::{datum, table, Datum};
 use tikv::coprocessor::codec::datum::DatumDecoder;
 use tikv::util::codec::number::*;
-use tikv::storage::{Key, Mutation, ALL_CFS};
+use tikv::storage::{self, Key, Mutation, ALL_CFS};
 use tikv::server::Config;
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
@@ -375,7 +375,9 @@ pub struct Store {
 
 impl Store {
     fn new(engine: Box<Engine>) -> Store {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+            || storage::ReadPoolContext::new(None)
+        });
         Store {
             store: SyncStorage::from_engine(engine, &Default::default(), read_pool),
             current_ts: 1,

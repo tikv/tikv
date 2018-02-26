@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tikv::storage::Engine;
+use tikv::storage::{self, Engine};
 use tikv::storage::config::Config;
 use kvproto::kvrpcpb::Context;
 use raftstore::cluster::Cluster;
@@ -40,7 +40,9 @@ pub fn new_raft_storage_with_store_count(
     count: usize,
     key: &str,
 ) -> (Cluster<ServerCluster>, SyncStorage, Context) {
-    let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
+    let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+        || storage::ReadPoolContext::new(None)
+    });
     let (cluster, engine, ctx) = new_raft_engine(count, key);
     (
         cluster,

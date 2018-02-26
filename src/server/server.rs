@@ -197,7 +197,7 @@ mod tests {
     use super::super::{Config, Result};
     use super::super::transport::RaftStoreRouter;
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
-    use storage::{Config as StorageConfig, Storage};
+    use storage::{self, Config as StorageConfig, Storage};
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::Result as RaftStoreResult;
     use raftstore::store::Msg as StoreMsg;
@@ -263,7 +263,9 @@ mod tests {
         let storage_cfg = StorageConfig::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+            || storage::ReadPoolContext::new(None)
+        });
         let mut storage = Storage::new(&storage_cfg, read_pool).unwrap();
         storage.start(&storage_cfg).unwrap();
 

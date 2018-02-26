@@ -64,7 +64,7 @@ use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::security::SecurityManager;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::FutureWorker;
-use tikv::storage::DEFAULT_ROCKSDB_SUB_DIR;
+use tikv::storage::{self, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::resolve;
@@ -186,7 +186,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {:?}", s)),
     );
-    let read_pool = ReadPool::new(&cfg.readpool, Some(pd_worker.scheduler()));
+    let pd_sender = pd_worker.scheduler();
+    let read_pool = ReadPool::new(&cfg.readpool, || {
+        let pd_sender = pd_sender.clone();
+        move || storage::ReadPoolContext::new(Some(pd_sender.clone()))
+    });
     let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage, read_pool)
         .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 

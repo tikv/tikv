@@ -34,6 +34,7 @@ pub mod txn;
 pub mod config;
 pub mod types;
 mod metrics;
+mod readpool_context;
 
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::engine::{new_local_engine, CFStatistics, Cursor, Engine, Error as EngineError,
@@ -42,6 +43,7 @@ pub use self::engine::{new_local_engine, CFStatistics, Cursor, Engine, Error as 
 pub use self::engine::raftkv::RaftKv;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
 pub use self::types::{make_key, Key, KvPair, MvccInfo, Value};
+pub use self::readpool_context::Context as ReadPoolContext;
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;
@@ -404,7 +406,7 @@ pub struct Storage {
     worker: Arc<Mutex<Worker<Msg>>>,
     worker_scheduler: worker::Scheduler<Msg>,
 
-    read_pool: ReadPool,
+    read_pool: ReadPool<ReadPoolContext>,
 
     // Storage configurations.
     gc_ratio_threshold: f64,
@@ -415,7 +417,7 @@ impl Storage {
     pub fn from_engine(
         engine: Box<Engine>,
         config: &Config,
-        read_pool: ReadPool,
+        read_pool: ReadPool<ReadPoolContext>,
     ) -> Result<Storage> {
         info!("storage {:?} started.", engine);
 
@@ -436,7 +438,7 @@ impl Storage {
         })
     }
 
-    pub fn new(config: &Config, read_pool: ReadPool) -> Result<Storage> {
+    pub fn new(config: &Config, read_pool: ReadPool<ReadPoolContext>) -> Result<Storage> {
         let engine = engine::new_local_engine(&config.data_dir, ALL_CFS)?;
         Storage::from_engine(engine, config, read_pool)
     }
@@ -494,30 +496,24 @@ impl Storage {
         start_ts: u64,
     ) -> Box<Future<Item = Option<Value>, Error = Error> + Send> {
         static CMD: &'static str = "kv_get";
-        static CMD_TYPE: &'static str = "kv";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
         match self.read_pool.future_execute(priority, move |ctxd| {
-            let _t_snapshot = {
+            {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
-                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
-            };
+                thread_ctx.collect_command_count(CMD, priority);
+            }
 
             engine
                 .future_snapshot(&ctx)
-                .then(move |r| {
-                    _t_snapshot.observe_duration();
-                    r
-                })
                 // map storage::engine::Error -> storage::txn::Error -> storage::Error
                 .map_err(txn::Error::from)
                 .map_err(Error::from)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
+                    let _t_process = thread_ctx.collect_processing_read_duration(CMD);
 
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
@@ -531,11 +527,11 @@ impl Storage {
                         // map storage::txn::Error -> storage::Error
                         .map_err(Error::from)
                         .map(|r| {
-                            thread_ctx.collect_key_reads(CMD, CMD_TYPE, 1);
+                            thread_ctx.collect_key_reads(CMD, 1);
                             r
                         });
 
-                    thread_ctx.collect_scan_count(CMD, CMD_TYPE, &statistics);
+                    thread_ctx.collect_scan_count(CMD, &statistics);
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
 
                     result
@@ -554,30 +550,24 @@ impl Storage {
         start_ts: u64,
     ) -> Box<Future<Item = Vec<Result<KvPair>>, Error = Error> + Send> {
         static CMD: &'static str = "kv_batchget";
-        static CMD_TYPE: &'static str = "kv";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
         match self.read_pool.future_execute(priority, move |ctxd| {
-            let _t_snapshot = {
+            {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
-                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
-            };
+                thread_ctx.collect_command_count(CMD, priority);
+            }
 
             engine
                 .future_snapshot(&ctx)
-                .then(move |r| {
-                    _t_snapshot.observe_duration();
-                    r
-                })
                 // map storage::engine::Error -> storage::txn::Error -> storage::Error
                 .map_err(txn::Error::from)
                 .map_err(Error::from)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
+                    let _t_process = thread_ctx.collect_processing_read_duration(CMD);
 
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
@@ -604,11 +594,11 @@ impl Storage {
                             .collect()
                         )
                         .map(|r: Vec<Result<KvPair>>| {
-                            thread_ctx.collect_key_reads(CMD, CMD_TYPE, r.len() as u64);
+                            thread_ctx.collect_key_reads(CMD, r.len() as u64);
                             r
                         });
 
-                    thread_ctx.collect_scan_count(CMD, CMD_TYPE, &statistics);
+                    thread_ctx.collect_scan_count(CMD, &statistics);
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
 
                     result
@@ -629,30 +619,24 @@ impl Storage {
         options: Options,
     ) -> Box<Future<Item = Vec<Result<KvPair>>, Error = Error> + Send> {
         static CMD: &'static str = "kv_scan";
-        static CMD_TYPE: &'static str = "kv";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
         match self.read_pool.future_execute(priority, move |ctxd| {
-            let _t_snapshot = {
+            {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
-                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
-            };
+                thread_ctx.collect_command_count(CMD, priority);
+            }
 
             engine
                 .future_snapshot(&ctx)
-                .then(move |r| {
-                    _t_snapshot.observe_duration();
-                    r
-                })
                 // map storage::engine::Error -> storage::txn::Error -> storage::Error
                 .map_err(txn::Error::from)
                 .map_err(Error::from)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
+                    let _t_process = thread_ctx.collect_processing_read_duration(CMD);
 
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -665,13 +649,13 @@ impl Storage {
                         .and_then(|mut scanner| {
                             let res = scanner.scan(start_key, limit);
                             let statistics = scanner.get_statistics();
-                            thread_ctx.collect_scan_count(CMD, CMD_TYPE, statistics);
+                            thread_ctx.collect_scan_count(CMD, statistics);
                             thread_ctx.collect_read_flow(ctx.get_region_id(), statistics);
                             res
                         })
                         .map_err(Error::from)
                         .map(|results| {
-                            thread_ctx.collect_key_reads(CMD, CMD_TYPE, results.len() as u64);
+                            thread_ctx.collect_key_reads(CMD, results.len() as u64);
                             results
                                 .into_iter()
                                 .map(|x| x.map_err(Error::from))
@@ -872,30 +856,24 @@ impl Storage {
         key: Vec<u8>,
     ) -> Box<Future<Item = Option<Vec<u8>>, Error = Error> + Send> {
         static CMD: &'static str = "raw_get";
-        static CMD_TYPE: &'static str = "raw";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
         match self.read_pool.future_execute(priority, move |ctxd| {
-            let _t_snapshot = {
+            {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
-                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
-            };
+                thread_ctx.collect_command_count(CMD, priority);
+            }
 
             engine
                 .future_snapshot(&ctx)
-                .then(move |r| {
-                    _t_snapshot.observe_duration();
-                    r
-                })
                 // map storage::engine::Error -> storage::txn::Error -> storage::Error
                 .map_err(txn::Error::from)
                 .map_err(Error::from)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
+                    let _t_process = thread_ctx.collect_processing_read_duration(CMD);
 
                     // no scan_count for this kind of op.
 
@@ -903,7 +881,7 @@ impl Storage {
                         // map storage::engine::Error -> storage::Error
                         .map_err(Error::from)
                         .map(|r| {
-                            thread_ctx.collect_key_reads(CMD, CMD_TYPE, 1);
+                            thread_ctx.collect_key_reads(CMD, 1);
                             r
                         })
                 })
@@ -979,30 +957,24 @@ impl Storage {
         limit: usize,
     ) -> Box<Future<Item = Vec<Result<KvPair>>, Error = Error> + Send> {
         static CMD: &'static str = "raw_scan";
-        static CMD_TYPE: &'static str = "raw";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
         match self.read_pool.future_execute(priority, move |ctxd| {
-            let _t_snapshot = {
+            {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.collect_command_count(CMD, CMD_TYPE, priority);
-                thread_ctx.collect_command_duration(CMD, CMD_TYPE, "snapshot")
-            };
+                thread_ctx.collect_command_count(CMD, priority);
+            }
 
             engine
                 .future_snapshot(&ctx)
-                .then(move |r| {
-                    _t_snapshot.observe_duration();
-                    r
-                })
                 // map storage::engine::Error -> storage::txn::Error -> storage::Error
                 .map_err(txn::Error::from)
                 .map_err(Error::from)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.collect_command_duration(CMD, CMD_TYPE, "process");
+                    let _t_process = thread_ctx.collect_processing_read_duration(CMD);
 
                     let mut statistics = Statistics::default();
                     let result = Storage::raw_scan(
@@ -1014,11 +986,11 @@ impl Storage {
                         .map_err(Error::from)
                         .map(|r| {
                             // TODO: Should we collect statistics even when failed?
-                            thread_ctx.collect_key_reads(CMD, CMD_TYPE, r.len() as u64);
+                            thread_ctx.collect_key_reads(CMD, r.len() as u64);
                             r
                         });
 
-                    thread_ctx.collect_scan_count(CMD, CMD_TYPE, &statistics);
+                    thread_ctx.collect_scan_count(CMD, &statistics);
 
                     result
                 })
@@ -1186,9 +1158,15 @@ mod tests {
         assert_eq!(x, v);
     }
 
+    fn read_pool_context_factory() -> ReadPoolContext {
+        ReadPoolContext::new(None)
+    }
+
     #[test]
     fn test_get_put() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+            read_pool_context_factory
+        });
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1235,7 +1213,9 @@ mod tests {
 
     #[test]
     fn test_put_with_err() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+            read_pool_context_factory
+        });
         let config = Config::default();
         // New engine lack of some column families.
         let engine = engine::new_local_engine(&config.data_dir, &["default"]).unwrap();
@@ -1262,7 +1242,9 @@ mod tests {
 
     #[test]
     fn test_scan() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+            read_pool_context_factory
+        });
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1313,7 +1295,9 @@ mod tests {
 
     #[test]
     fn test_batch_get() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+            read_pool_context_factory
+        });
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1367,7 +1351,9 @@ mod tests {
 
     #[test]
     fn test_txn() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+            read_pool_context_factory
+        });
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1442,7 +1428,9 @@ mod tests {
 
     #[test]
     fn test_sched_too_busy() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+            read_pool_context_factory
+        });
         let mut config = Config::default();
         config.scheduler_pending_write_threshold = ReadableSize(1);
         let mut storage = Storage::new(&config, read_pool).unwrap();
@@ -1491,7 +1479,9 @@ mod tests {
 
     #[test]
     fn test_cleanup() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+            read_pool_context_factory
+        });
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1526,7 +1516,9 @@ mod tests {
 
     #[test]
     fn test_high_priority_get_put() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+            read_pool_context_factory
+        });
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
@@ -1573,7 +1565,9 @@ mod tests {
 
     #[test]
     fn test_high_priority_no_block() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+            read_pool_context_factory
+        });
         let mut config = Config::default();
         config.scheduler_worker_pool_size = 1;
         let mut storage = Storage::new(&config, read_pool).unwrap();
@@ -1623,7 +1617,9 @@ mod tests {
 
     #[test]
     fn test_delete_range() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), None);
+        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+            read_pool_context_factory
+        });
         let config = Config::default();
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();

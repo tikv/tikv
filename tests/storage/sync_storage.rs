@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use futures::Future;
 
 use tikv::util::collections::HashMap;
-use tikv::storage::{Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
+use tikv::storage::{self, Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
 use tikv::storage::config::Config;
 use tikv::server::readpool::ReadPool;
 use kvproto::kvrpcpb::{Context, LockInfo};
@@ -28,7 +28,7 @@ pub struct SyncStorage {
 }
 
 impl SyncStorage {
-    pub fn new(config: &Config, read_pool: ReadPool) -> SyncStorage {
+    pub fn new(config: &Config, read_pool: ReadPool<storage::ReadPoolContext>) -> SyncStorage {
         let storage = Storage::new(config, read_pool).unwrap();
         let mut s = SyncStorage {
             store: storage,
@@ -38,13 +38,21 @@ impl SyncStorage {
         s
     }
 
-    pub fn from_engine(engine: Box<Engine>, config: &Config, read_pool: ReadPool) -> SyncStorage {
+    pub fn from_engine(
+        engine: Box<Engine>,
+        config: &Config,
+        read_pool: ReadPool<storage::ReadPoolContext>,
+    ) -> SyncStorage {
         let mut s = SyncStorage::prepare(engine, config, read_pool);
         s.start(config);
         s
     }
 
-    pub fn prepare(engine: Box<Engine>, config: &Config, read_pool: ReadPool) -> SyncStorage {
+    pub fn prepare(
+        engine: Box<Engine>,
+        config: &Config,
+        read_pool: ReadPool<storage::ReadPoolContext>,
+    ) -> SyncStorage {
         let storage = Storage::from_engine(engine, config, read_pool).unwrap();
         SyncStorage {
             store: storage,
