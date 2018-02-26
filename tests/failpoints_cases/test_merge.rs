@@ -66,7 +66,7 @@ fn test_node_merge_rollback() {
     cluster.must_put(b"k4", b"v4");
     util::must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 
-    let region = pd_client.get_region(b"k1").unwrap();
+    let mut region = pd_client.get_region(b"k1").unwrap();
     // After split and pre-merge, version becomes 1 + 2 = 3;
     assert_eq!(region.get_region_epoch().get_version(), 3);
     // After ConfChange and pre-merge, conf version becomes 1 + 2 = 3;
@@ -75,6 +75,8 @@ fn test_node_merge_rollback() {
     // Wait till rollback.
     cluster.must_put(b"k11", b"v11");
 
+    // After rollback, version becomes 3 + 1 = 4;
+    region.mut_region_epoch().set_version(4);
     for i in 1..3 {
         let state_key = keys::region_state_key(region.get_id());
         let state: RegionLocalState = cluster
@@ -146,6 +148,7 @@ fn test_node_merge_restart() {
     cluster.must_put(b"k4", b"v4");
 
     for i in 1..4 {
+        util::must_get_equal(&cluster.get_engine(i), b"k4", b"v4");
         let state_key = keys::region_state_key(left.get_id());
         let state: RegionLocalState = cluster
             .get_engine(i)

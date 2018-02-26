@@ -1277,7 +1277,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             };
             if is_merging && res.is_some() {
                 // After applying a snapshot, PreMerge is rollback implicitly.
-                self.on_ready_rollback_pre_merge(region_id, 0);
+                self.on_ready_rollback_pre_merge(region_id, 0, None);
             }
             ready_results.push((region_id, ready, res));
         }
@@ -1778,8 +1778,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region_id = region.get_id();
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         peer.mut_store().region = region;
-        info!("notify pd with merge {:?} into {:?}", source, peer.region());
-        peer.heartbeat_pd(&self.pd_worker);
+        if peer.is_leader() {
+            info!("notify pd with merge {:?} into {:?}", source, peer.region());
+            peer.heartbeat_pd(&self.pd_worker);
+        }
     }
 
     /// Handle rollback PreMerge result.
@@ -1787,7 +1789,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     /// If commit is 0, it means that PreMerge is rollback by a snapshot; otherwise
     /// it's rollback by a proposal, and its value should be equal to the commit
     /// index of previous PreMerge.
-    fn on_ready_rollback_pre_merge(&mut self, region_id: u64, commit: u64) {
+    fn on_ready_rollback_pre_merge(
+        &mut self,
+        region_id: u64,
+        commit: u64,
+        region: Option<metapb::Region>,
+    ) {
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         let pending_commit = peer.pending_merge.as_ref().unwrap().get_commit();
         self.merge_states.retain(|r| {
@@ -1800,6 +1807,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             false
         });
         peer.pending_merge = None;
+        if let Some(r) = region {
+            peer.mut_store().region = r;
+        }
+        if peer.is_leader() {
+            info!("{} notify pd with rollback pre_merge {}", peer.tag, commit);
+            peer.heartbeat_pd(&self.pd_worker);
+        }
     }
 
     fn report_split_pd(&self, left: &Peer, right: &Peer) {
@@ -1875,8 +1889,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::Merge { region, source } => {
                     self.on_ready_merge(region, source);
                 }
-                ExecResult::RollbackPreMerge { region_id, commit } => {
-                    self.on_ready_rollback_pre_merge(region_id, commit)
+                ExecResult::RollbackPreMerge { region, commit } => {
+                    self.on_ready_rollback_pre_merge(region.get_id(), commit, Some(region))
                 }
                 ExecResult::ComputeHash {
                     region,

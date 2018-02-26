@@ -167,7 +167,7 @@ pub enum ExecResult {
         source: Region,
     },
     RollbackPreMerge {
-        region_id: u64,
+        region: Region,
         commit: u64,
     },
     ComputeHash {
@@ -291,7 +291,8 @@ fn should_flush_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
             // ComputeHash require an up to date snapshot.
             AdminCmdType::ComputeHash |
             // Merge needs to get the latest apply index.
-            AdminCmdType::Merge => return true,
+            AdminCmdType::Merge |
+            AdminCmdType::RollbackPreMerge => return true,
             _ => {}
         }
     }
@@ -619,9 +620,6 @@ impl ApplyDelegate {
                 | ExecResult::VerifyHash { .. }
                 | ExecResult::CompactLog { .. }
                 | ExecResult::DeleteRange { .. } => {}
-                ExecResult::RollbackPreMerge { .. } => {
-                    self.is_merging = false;
-                }
                 ExecResult::SplitRegion {
                     ref left,
                     ref right,
@@ -645,6 +643,10 @@ impl ApplyDelegate {
                 } => {
                     self.region = region.clone();
                     ctx.merged_regions.push(source.get_id());
+                }
+                ExecResult::RollbackPreMerge { ref region, .. } => {
+                    self.region = region.clone();
+                    self.is_merging = false;
                 }
             }
         }
@@ -1179,21 +1181,20 @@ impl ApplyDelegate {
         assert_eq!(state.get_state(), PeerState::Merging);
         let rollback = req.get_rollback_pre_merge();
         assert_eq!(state.get_merge_state().get_commit(), rollback.get_commit());
-        // Epoch doesn't need to be touched here. All effective proposals should be
-        // dropped by readonly state.
-        write_peer_state(&self.engine, &ctx.wb, &self.region, PeerState::Normal).unwrap_or_else(
-            |e| {
-                panic!(
-                    "{} failed to rollback pre merge {:?}: {:?}",
-                    self.tag, rollback, e
-                )
-            },
-        );
+        let mut region = self.region.clone();
+        let version = region.get_region_epoch().get_version();
+        region.mut_region_epoch().set_version(version + 1);
+        write_peer_state(&self.engine, &ctx.wb, &region, PeerState::Normal).unwrap_or_else(|e| {
+            panic!(
+                "{} failed to rollback pre merge {:?}: {:?}",
+                self.tag, rollback, e
+            )
+        });
         let resp = AdminResponse::new();
         Ok((
             resp,
             Some(ExecResult::RollbackPreMerge {
-                region_id: self.region.get_id(),
+                region: region,
                 commit: rollback.get_commit(),
             }),
         ))
