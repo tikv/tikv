@@ -287,7 +287,6 @@ pub fn new_pd_add_change_peer(
         assert_eq!(p.get_id(), peer.get_id());
         return None;
     }
-
     Some(new_pd_change_peer(ConfChangeType::AddNode, peer))
 }
 
@@ -295,7 +294,7 @@ pub fn new_pd_remove_change_peer(
     region: &metapb::Region,
     peer: metapb::Peer,
 ) -> Option<RegionHeartbeatResponse> {
-    if find_peer(region, peer.get_store_id()).is_none() {
+    if find_peer_or_learner(region, peer.get_store_id()).is_none() {
         return None;
     }
     Some(new_pd_change_peer(ConfChangeType::RemoveNode, peer))
