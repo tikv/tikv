@@ -70,6 +70,7 @@ zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.4", features = [ "serde", "v4" ] }
+raft = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.4"
@@ -79,6 +80,7 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
+branch = "busyjay/remove-eraftpb"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"

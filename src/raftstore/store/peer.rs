@@ -23,7 +23,7 @@ use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::{self, Message, MessageStatic};
 use kvproto::metapb;
-use kvproto::eraftpb::{self, ConfChangeType, MessageType};
+use raft::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
                           RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{PeerState, RaftMessage};
@@ -1107,6 +1107,7 @@ impl Peer {
                         r.get_cmd_type()
                     ));
                 }
+                CmdType::IngestSST => unimplemented!(),
             }
 
             if is_read && is_write {
@@ -1391,7 +1392,7 @@ impl Peer {
         req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
     ) -> Result<u64> {
-        if self.raft_group.raft.pending_conf {
+        if self.raft_group.raft.pending_conf_index > self.get_store().applied_index() {
             info!("{} there is a pending conf change, try later", self.tag);
             return Err(box_err!(
                 "{} there is a pending conf change, try later",
@@ -1648,6 +1649,7 @@ impl Peer {
                 | CmdType::Delete
                 | CmdType::DeleteRange
                 | CmdType::Invalid => unreachable!(),
+                CmdType::IngestSST => unimplemented!(),
             };
             resp.set_cmd_type(cmd_type);
             responses.push(resp);

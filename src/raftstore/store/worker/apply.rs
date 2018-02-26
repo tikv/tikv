@@ -23,7 +23,7 @@ use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::RepeatedField;
 
 use kvproto::metapb::{Peer as PeerMeta, Region};
-use kvproto::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
+use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftTruncatedState};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType,
                           RaftCmdRequest, RaftCmdResponse, Request, Response};
@@ -1029,6 +1029,7 @@ impl ApplyDelegate {
                 CmdType::Prewrite | CmdType::Invalid => {
                     Err(box_err!("invalid cmd type, message maybe currupted"))
                 }
+                CmdType::IngestSST => unimplemented!(),
             }?;
 
             resp.set_cmd_type(cmd_type);

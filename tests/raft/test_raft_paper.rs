@@ -26,7 +26,7 @@
 // limitations under the License.
 
 use super::test_raft::*;
-use kvproto::eraftpb::*;
+use raft::eraftpb::*;
 use tikv::raft::*;
 use tikv::raft::storage::MemStorage;
 use protobuf::RepeatedField;

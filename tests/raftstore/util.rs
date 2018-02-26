@@ -25,7 +25,7 @@ use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse,
                           Request, StatusCmdType, StatusRequest};
 use kvproto::pdpb::{ChangePeer, RegionHeartbeatResponse, TransferLeader};
-use kvproto::eraftpb::ConfChangeType;
+use raft::eraftpb::ConfChangeType;
 
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
@@ -321,6 +321,7 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdRespons
             CmdType::Get | CmdType::Snap => is_read = true,
             CmdType::Put | CmdType::Delete | CmdType::DeleteRange => is_write = true,
             CmdType::Invalid | CmdType::Prewrite => panic!("Invalid RaftCmdRequest: {:?}", cmd),
+            CmdType::IngestSST => unimplemented!(),
         }
     }
     assert!(is_read ^ is_write, "Invalid RaftCmdRequest: {:?}", cmd);
