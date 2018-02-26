@@ -495,7 +495,7 @@ impl Storage {
         key: Key,
         start_ts: u64,
     ) -> Box<Future<Item = Option<Value>, Error = Error> + Send> {
-        static CMD: &'static str = "kv_get";
+        static CMD: &'static str = "get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
@@ -503,7 +503,7 @@ impl Storage {
             {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.collect_command_count(CMD, priority);
+                thread_ctx.collect_command_count(CMD, priority, false);
             }
 
             engine
@@ -549,7 +549,7 @@ impl Storage {
         keys: Vec<Key>,
         start_ts: u64,
     ) -> Box<Future<Item = Vec<Result<KvPair>>, Error = Error> + Send> {
-        static CMD: &'static str = "kv_batchget";
+        static CMD: &'static str = "batch_get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
@@ -557,7 +557,7 @@ impl Storage {
             {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.collect_command_count(CMD, priority);
+                thread_ctx.collect_command_count(CMD, priority, false);
             }
 
             engine
@@ -618,7 +618,7 @@ impl Storage {
         start_ts: u64,
         options: Options,
     ) -> Box<Future<Item = Vec<Result<KvPair>>, Error = Error> + Send> {
-        static CMD: &'static str = "kv_scan";
+        static CMD: &'static str = "scan";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
@@ -626,7 +626,7 @@ impl Storage {
             {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.collect_command_count(CMD, priority);
+                thread_ctx.collect_command_count(CMD, priority, false);
             }
 
             engine
@@ -863,7 +863,7 @@ impl Storage {
             {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.collect_command_count(CMD, priority);
+                thread_ctx.collect_command_count(CMD, priority, true);
             }
 
             engine
@@ -964,7 +964,7 @@ impl Storage {
             {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.collect_command_count(CMD, priority);
+                thread_ctx.collect_command_count(CMD, priority, true);
             }
 
             engine
