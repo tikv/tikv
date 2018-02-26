@@ -785,7 +785,7 @@ impl ApplyDelegate {
                     .with_label_values(&["remove_peer", "all"])
                     .inc();
 
-                if !peer_exists {
+                if !peer_exists && !learner_exists {
                     error!(
                         "{} remove missing peer {:?} from region {:?}",
                         self.tag, peer, self.region

@@ -1215,6 +1215,10 @@ impl Peer {
                 status.progress.insert(peer.get_id(), Progress::default());
             }
             ConfChangeType::RemoveNode => {
+                if status.learner_progress.remove(&peer.get_id()).is_some() {
+                    // If the node is a learner, we can return directly.
+                    return Ok(());
+                }
                 if status.progress.remove(&peer.get_id()).is_none() {
                     // It's always safe to remove a unexisting node.
                     return Ok(());
