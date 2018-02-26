@@ -18,6 +18,8 @@ use std::usize;
 use std::fs;
 use std::io::{Read, Write};
 use std::io::Error as IoError;
+use std::path::Path;
+use std::fmt;
 
 use log::LogLevelFilter;
 use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompressionType,
@@ -43,7 +45,7 @@ const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
-pub const AUTO_GEN_CONFIG_FILE: &str = "auto_gen_tikv.toml";
+pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = sys_info::mem_info().unwrap().total * KB;
@@ -777,8 +779,11 @@ impl TiKvConfig {
         Ok(())
     }
 
-    pub fn from_file(path: &str) -> Self {
-        fs::File::open(path)
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Self
+    where
+        P: fmt::Debug,
+    {
+        fs::File::open(&path)
             .map_err::<Box<Error>, _>(|e| Box::new(e))
             .and_then(|mut f| {
                 let mut s = String::new();
@@ -788,13 +793,13 @@ impl TiKvConfig {
             })
             .unwrap_or_else(|e| {
                 panic!(
-                    "invalid auto generated configuration file {:?}: {}",
+                    "invalid auto generated configuration file {:?}, err {}",
                     path, e
                 );
             })
     }
 
-    pub fn write_to_file(&self, path: &str) -> Result<(), IoError> {
+    pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), IoError> {
         let content = toml::to_string(&self).unwrap();
         let mut f = fs::File::create(&path)?;
         f.write_all(content.as_bytes())?;
@@ -832,7 +837,7 @@ mod test {
     #[test]
     fn test_persist_cfg() {
         let dir = TempDir::new("test_persist_cfg").unwrap();
-        let path_buf = dir.path().join(AUTO_GEN_CONFIG_FILE);
+        let path_buf = dir.path().join(LAST_CONFIG_FILE);
         let file = path_buf.as_path().to_str().unwrap();
         let (s1, s2) = ("/xxx/wal_dir".to_owned(), "/yyy/wal_dir".to_owned());
 
