@@ -500,11 +500,12 @@ impl Storage {
         let priority = readpool::Priority::from(ctx.get_priority());
 
         match self.read_pool.future_execute(priority, move |ctxd| {
-            {
+            let _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
                 thread_ctx.collect_command_count(CMD, priority, false);
-            }
+                thread_ctx.collect_command_duration(CMD)
+            };
 
             engine
                 .future_snapshot(&ctx)
@@ -554,11 +555,12 @@ impl Storage {
         let priority = readpool::Priority::from(ctx.get_priority());
 
         match self.read_pool.future_execute(priority, move |ctxd| {
-            {
+            let _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
                 thread_ctx.collect_command_count(CMD, priority, false);
-            }
+                thread_ctx.collect_command_duration(CMD)
+            };
 
             engine
                 .future_snapshot(&ctx)
@@ -623,11 +625,12 @@ impl Storage {
         let priority = readpool::Priority::from(ctx.get_priority());
 
         match self.read_pool.future_execute(priority, move |ctxd| {
-            {
+            let _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
                 thread_ctx.collect_command_count(CMD, priority, false);
-            }
+                thread_ctx.collect_command_duration(CMD)
+            };
 
             engine
                 .future_snapshot(&ctx)
@@ -860,11 +863,12 @@ impl Storage {
         let priority = readpool::Priority::from(ctx.get_priority());
 
         match self.read_pool.future_execute(priority, move |ctxd| {
-            {
+            let _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
                 thread_ctx.collect_command_count(CMD, priority, true);
-            }
+                thread_ctx.collect_command_duration(CMD)
+            };
 
             engine
                 .future_snapshot(&ctx)
@@ -961,11 +965,12 @@ impl Storage {
         let priority = readpool::Priority::from(ctx.get_priority());
 
         match self.read_pool.future_execute(priority, move |ctxd| {
-            {
+            let _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
                 thread_ctx.collect_command_count(CMD, priority, true);
-            }
+                thread_ctx.collect_command_duration(CMD)
+            };
 
             engine
                 .future_snapshot(&ctx)

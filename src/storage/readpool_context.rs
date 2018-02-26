@@ -27,6 +27,7 @@ use super::metrics::*;
 pub struct Context {
     pd_sender: Option<worker::FutureScheduler<pd::PdTask>>,
 
+    command_duration: LocalHistogramVec,
     processing_read_duration: LocalHistogramVec,
     command_keyreads: LocalHistogramVec,
     // TODO: kv_command_counter, raw_command_counter, command_pri_counter can be merged together
@@ -48,6 +49,7 @@ impl Context {
     pub fn new(pd_sender: Option<worker::FutureScheduler<pd::PdTask>>) -> Self {
         Context {
             pd_sender,
+            command_duration: SCHED_HISTOGRAM_VEC.local(),
             processing_read_duration: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
             command_keyreads: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
             kv_command_counter: KV_COMMAND_COUNTER_VEC.local(),
@@ -56,6 +58,13 @@ impl Context {
             scan_details: KV_COMMAND_SCAN_DETAILS.local(),
             read_flow_stats: HashMap::default(),
         }
+    }
+
+    #[inline]
+    pub fn collect_command_duration(&mut self, cmd: &str) -> LocalHistogramTimer {
+        self.command_duration
+            .with_label_values(&[cmd])
+            .start_coarse_timer()
     }
 
     #[inline]
@@ -112,6 +121,7 @@ impl Context {
 impl futurepool::Context for Context {
     fn on_tick(&mut self) {
         // Flush Prometheus metrics
+        self.command_duration.flush();
         self.processing_read_duration.flush();
         self.command_keyreads.flush();
         self.kv_command_counter.flush();
