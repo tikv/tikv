@@ -59,6 +59,7 @@ pub struct Service<T: RaftStoreRouter + 'static> {
     token: Arc<AtomicUsize>, // TODO: remove it.
     recursion_limit: u32,
     metrics: Metrics,
+    request_max_handle_secs: u64,
 }
 
 #[derive(Clone)]
@@ -118,6 +119,7 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         recursion_limit: u32,
+        request_max_handle_secs: u64,
     ) -> Service<T> {
         Service {
             storage: storage,
@@ -127,6 +129,7 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
             token: Arc::new(AtomicUsize::new(1)),
             recursion_limit: recursion_limit,
             metrics: Metrics::new(),
+            request_max_handle_secs: request_max_handle_secs,
         }
     }
 
@@ -797,6 +800,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 req,
                 cb,
                 self.recursion_limit,
+                self.request_max_handle_secs,
             )));
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
