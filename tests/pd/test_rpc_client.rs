@@ -13,6 +13,7 @@
 
 use std::thread;
 use std::sync::{mpsc, Arc};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use grpc::EnvBuilder;
@@ -349,7 +350,12 @@ fn test_change_leader_async() {
 
     thread::sleep(Duration::from_secs(1));
 
+    let counter = Arc::new(AtomicUsize::new(0));
     let client = new_client(eps);
+    let counter1 = Arc::clone(&counter);
+    client.handle_reconnect(move || {
+        counter1.fetch_add(1, Ordering::SeqCst);
+    });
     let leader = client.get_leader();
 
     for _ in 0..5 {
@@ -358,6 +364,7 @@ fn test_change_leader_async() {
 
         let new = client.get_leader();
         if new != leader {
+            assert_eq!(1, counter.load(Ordering::SeqCst));
             return;
         }
         thread::sleep(LeaderChange::get_leader_interval());

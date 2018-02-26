@@ -166,6 +166,11 @@ pub trait PdClient: Send + Sync {
     fn scatter_region(&self, _: RegionInfo) -> Result<()> {
         unimplemented!();
     }
+
+    // Register a handler to the client, it will be invoked after reconnecting to PD.
+    //
+    // Please note that this method should only be called once.
+    fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, _: F) {}
 }
 
 const REQUEST_TIMEOUT: u64 = 2; // 2s

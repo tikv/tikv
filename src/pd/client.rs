@@ -453,4 +453,8 @@ impl PdClient for RpcClient {
         })?;
         check_resp_header(resp.get_header())
     }
+
+    fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, f: F) {
+        self.leader_client.on_reconnect(Box::new(f))
+    }
 }
