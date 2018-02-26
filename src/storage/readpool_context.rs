@@ -27,10 +27,11 @@ use super::metrics::*;
 pub struct Context {
     pd_sender: Option<worker::FutureScheduler<pd::PdTask>>,
 
+    // TODO: command_duration, processing_read_duration can be merged together.
     command_duration: LocalHistogramVec,
     processing_read_duration: LocalHistogramVec,
     command_keyreads: LocalHistogramVec,
-    // TODO: kv_command_counter, raw_command_counter, command_pri_counter can be merged together
+    // TODO: kv_command_counter, raw_command_counter, command_pri_counter can be merged together.
     kv_command_counter: LocalCounterVec,
     raw_command_counter: LocalCounterVec,
     command_pri_counter: LocalCounterVec,
