@@ -42,14 +42,12 @@ mod signal_handler;
 #[cfg(unix)]
 mod profiling;
 
-use std::error::Error;
 use std::process;
 use std::fs::File;
 use std::usize;
 use std::path::Path;
 use std::sync::{mpsc, Arc};
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
-use std::io::Read;
 use std::env;
 use std::time::Duration;
 
@@ -489,19 +487,7 @@ fn main() {
 
     let mut config = matches
         .value_of("config")
-        .map_or_else(TiKvConfig::default, |path| {
-            File::open(&path)
-                .map_err::<Box<Error>, _>(|e| Box::new(e))
-                .and_then(|mut f| {
-                    let mut s = String::new();
-                    f.read_to_string(&mut s)?;
-                    let c = toml::from_str(&s)?;
-                    Ok(c)
-                })
-                .unwrap_or_else(|e| {
-                    fatal!("invalid configuration file {:?}: {}", path, e);
-                })
-        });
+        .map_or_else(TiKvConfig::default, |path| TiKvConfig::from_file(&path));
 
     overwrite_config_with_cmd_args(&mut config, &matches);
 
