@@ -1224,9 +1224,9 @@ impl Peer {
                 return Ok(());
             }
             ConfChangeType::PromoteLearnerNode => {
-                if let Some(mut prog) = status.learner_progress.remove(&peer.get_id()) {
-                    prog.is_learner = false;
-                    status.progress.insert(peer.get_id(), prog);
+                if let Some(mut progress) = status.learner_progress.remove(&peer.get_id()) {
+                    progress.is_learner = false;
+                    status.progress.insert(peer.get_id(), progress);
                 }
             }
         }

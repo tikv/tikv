@@ -141,8 +141,7 @@ impl<M, C: Channel<M>> SimulateTransport<M, C> {
     }
 }
 
-use std::fmt::Debug;
-impl<M: Debug, C: Channel<M>> Channel<M> for SimulateTransport<M, C> {
+impl<M, C: Channel<M>> Channel<M> for SimulateTransport<M, C> {
     fn send(&self, msg: M) -> Result<()> {
         let mut taken = 0;
         let mut msgs = vec![msg];
