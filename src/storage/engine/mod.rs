@@ -121,7 +121,7 @@ pub trait Engine: Send + Debug {
     fn clone(&self) -> Box<Engine + 'static>;
 }
 
-pub trait Snapshot: Send {
+pub trait Snapshot: Send + Debug {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
     #[allow(needless_lifetimes)]
@@ -137,7 +137,7 @@ pub trait Snapshot: Send {
     fn clone(&self) -> Box<Snapshot>;
 }
 
-pub trait Iterator: Send {
+pub trait Iterator {
     fn next(&mut self) -> bool;
     fn prev(&mut self) -> bool;
     fn seek(&mut self, key: &Key) -> Result<bool>;
@@ -293,7 +293,7 @@ impl StatisticsSummary {
 }
 
 pub struct Cursor {
-    iter: Box<Iterator>,
+    iter: Box<Iterator + Send>,
     scan_mode: ScanMode,
     // the data cursor can be seen will be
     min_key: Option<Vec<u8>>,
@@ -301,7 +301,7 @@ pub struct Cursor {
 }
 
 impl Cursor {
-    pub fn new(iter: Box<Iterator>, mode: ScanMode) -> Cursor {
+    pub fn new(iter: Box<Iterator + Send>, mode: ScanMode) -> Cursor {
         Cursor {
             iter: iter,
             scan_mode: mode,

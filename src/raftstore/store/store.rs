@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
 
-use rocksdb::{WriteBatch, DB};
+use rocksdb::{CompactionJobInfo, WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
@@ -44,6 +44,7 @@ use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
 use util::transport::SendCh;
 use util::RingQueue;
 use util::collections::{HashMap, HashSet};
+use util::rocksdb::{CompactedEvent, CompactionListener};
 use util::sys as util_sys;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
@@ -367,21 +368,26 @@ impl<T, C> Store<T, C> {
     /// `clear_stale_data` clean up all possible garbage data.
     fn clear_stale_data(&mut self) -> Result<()> {
         let t = Instant::now();
+
+        let mut ranges = Vec::new();
         let mut last_start_key = keys::data_key(b"");
         for region_id in self.region_ranges.values() {
             let region = self.region_peers[region_id].region();
             let start_key = keys::enc_start_key(region);
-            rocksdb::roughly_cleanup_range(&self.kv_engine, &last_start_key, &start_key)?;
+            ranges.push((last_start_key, start_key));
             last_start_key = keys::enc_end_key(region);
         }
+        ranges.push((last_start_key, keys::DATA_MAX_KEY.to_vec()));
 
-        rocksdb::roughly_cleanup_range(&self.kv_engine, &last_start_key, keys::DATA_MAX_KEY)?;
+        rocksdb::roughly_cleanup_ranges(&self.kv_engine, &ranges)?;
 
         info!(
-            "{} cleans up garbage data, takes {:?}",
+            "{} cleans up {} ranges garbage data, takes {:?}",
             self.tag,
+            ranges.len(),
             t.elapsed()
         );
+
         Ok(())
     }
 
@@ -584,6 +590,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let timer = self.raft_metrics.process_tick.start_coarse_timer();
+        let mut leader_missing = 0;
         for peer in &mut self.region_peers.values_mut() {
             if peer.pending_remove {
                 continue;
@@ -616,23 +623,33 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // In this case, peer B would notice that the leader is missing for a long time,
             // and it would check with pd to confirm whether it's still a member of the cluster.
             // If not, it destroys itself as a stale peer which is removed out already.
-            let max_missing_duration = self.cfg.max_leader_missing_duration.0;
-            if let StaleState::ToValidate = peer.check_stale_state(max_missing_duration) {
-                // for peer B in case 1 above
-                info!(
-                    "{} detects leader missing for a long time. To check with pd \
-                     whether it's still valid",
-                    peer.tag
-                );
-                let task = PdTask::ValidatePeer {
-                    peer: peer.peer.clone(),
-                    region: peer.region().clone(),
-                };
-                if let Err(e) = self.pd_worker.schedule(task) {
-                    error!("{} failed to notify pd: {}", peer.tag, e)
+            match peer.check_stale_state() {
+                StaleState::Valid => (),
+                StaleState::LeaderMissing => {
+                    warn!(
+                        "{} leader missing longer than abnormal_leader_missing_duration {:?}",
+                        peer.tag, self.cfg.abnormal_leader_missing_duration.0,
+                    );
+                    leader_missing += 1;
+                }
+                StaleState::ToValidate => {
+                    // for peer B in case 1 above
+                    warn!(
+                        "{} leader missing longer than max_leader_missing_duration {:?}. \
+                         To check with pd whether it's still valid",
+                        peer.tag, self.cfg.max_leader_missing_duration.0,
+                    );
+                    let task = PdTask::ValidatePeer {
+                        peer: peer.peer.clone(),
+                        region: peer.region().clone(),
+                    };
+                    if let Err(e) = self.pd_worker.schedule(task) {
+                        error!("{} failed to notify pd: {}", peer.tag, e)
+                    }
                 }
             }
         }
+        self.raft_metrics.leader_missing = leader_missing;
 
         self.poll_significant_msg();
 
@@ -1145,19 +1162,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.raft_metrics.ready.snapshot - previous_ready_metrics.snapshot
         );
 
-        let mut apply_tasks = Vec::with_capacity(ready_results.len());
-        for (region_id, ready, res) in ready_results {
-            self.region_peers
-                .get_mut(&region_id)
-                .unwrap()
-                .handle_raft_ready_apply(ready, &mut apply_tasks);
-            if let Some(apply_result) = res {
-                self.on_ready_apply_snapshot(apply_result);
+        if !ready_results.is_empty() {
+            let mut apply_tasks = Vec::with_capacity(ready_results.len());
+            for (region_id, ready, res) in ready_results {
+                self.region_peers
+                    .get_mut(&region_id)
+                    .unwrap()
+                    .handle_raft_ready_apply(ready, &mut apply_tasks);
+                if let Some(apply_result) = res {
+                    self.on_ready_apply_snapshot(apply_result);
+                }
             }
+            self.apply_worker
+                .schedule(ApplyTask::applies(apply_tasks))
+                .unwrap();
         }
-        self.apply_worker
-            .schedule(ApplyTask::applies(apply_tasks))
-            .unwrap();
 
         let dur = t.elapsed();
         if !self.is_busy {
@@ -1772,6 +1791,45 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
+    fn on_compaction_finished(&mut self, event: CompactedEvent) {
+        // If size declining is trivial, skip.
+        let total_bytes_declined = if event.total_input_bytes > event.total_output_bytes {
+            event.total_input_bytes - event.total_output_bytes
+        } else {
+            0
+        };
+        if total_bytes_declined < self.cfg.region_split_check_diff.0
+            || total_bytes_declined * 10 < event.total_input_bytes
+        {
+            return;
+        }
+
+        let output_level_str = event.output_level.to_string();
+        COMPACTION_DECLINED_BYTES
+            .with_label_values(&[&output_level_str])
+            .observe(total_bytes_declined as f64);
+
+        // self.cfg.region_split_check_diff.0 / 16 is an experienced value.
+        let mut region_declined_bytes = calc_region_declined_bytes(
+            event,
+            &self.region_ranges,
+            self.cfg.region_split_check_diff.0 / 16,
+        );
+
+        COMPACTION_RELATED_REGION_COUNT
+            .with_label_values(&[&output_level_str])
+            .observe(region_declined_bytes.len() as f64);
+
+        for (region_id, declined_bytes) in region_declined_bytes.drain(..) {
+            if let Some(peer) = self.region_peers.get_mut(&region_id) {
+                peer.compaction_declined_bytes += declined_bytes;
+                if peer.compaction_declined_bytes >= self.cfg.region_split_check_diff.0 {
+                    UPDATE_REGION_SIZE_BY_COMPACTION_COUNTER.inc();
+                }
+            }
+        }
+    }
+
     fn on_split_region_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         // To avoid frequent scan, we only add new scan tasks if all previous tasks
         // have finished.
@@ -1788,7 +1846,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // split check will first check the region size, and then
             // check whether the region should split.  This should
             // work even if we change the region max size.
+            // If peer says should update approximate size, update region
+            // size and check whether the region should split.
             if peer.approximate_size.is_some()
+                && peer.compaction_declined_bytes < self.cfg.region_split_check_diff.0
                 && peer.size_diff_hint < self.cfg.region_split_check_diff.0
             {
                 continue;
@@ -1798,6 +1859,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 error!("{} failed to schedule split check: {}", self.tag, e);
             }
             peer.size_diff_hint = 0;
+            peer.compaction_declined_bytes = 0;
         }
 
         self.register_split_region_check_tick(event_loop);
@@ -2463,6 +2525,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 region_id,
                 region_size,
             } => self.on_approximate_region_size(region_id, region_size),
+            Msg::CompactedEvent(event) => self.on_compaction_finished(event),
         }
     }
 
@@ -2558,5 +2621,128 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         Ok(resp)
+    }
+}
+
+fn size_change_filter(info: &CompactionJobInfo) -> bool {
+    // When calculating region size, we only consider write and default
+    // column families.
+    let cf = info.cf_name();
+    if cf != CF_WRITE && cf != CF_DEFAULT {
+        return false;
+    }
+    // Compactions in level 0 and level 1 are very frequently.
+    if info.output_level() < 2 {
+        return false;
+    }
+
+    true
+}
+
+pub fn new_compaction_listener(ch: SendCh<Msg>) -> CompactionListener {
+    let compacted_handler = box move |compacted_event: CompactedEvent| {
+        if let Err(e) = ch.try_send(Msg::CompactedEvent(compacted_event)) {
+            error!(
+                "Send compaction finished event to raftstore failed: {:?}",
+                e
+            );
+        }
+    };
+    CompactionListener::new(compacted_handler, Some(size_change_filter))
+}
+
+fn calc_region_declined_bytes(
+    event: CompactedEvent,
+    region_ranges: &BTreeMap<Key, u64>,
+    bytes_threshold: u64,
+) -> Vec<(u64, u64)> {
+    // Calculate influenced regions.
+    let mut influenced_regions = vec![];
+    for (end_key, region_id) in
+        region_ranges.range((Excluded(event.start_key), Included(event.end_key.clone())))
+    {
+        influenced_regions.push((region_id, end_key.clone()));
+    }
+    if let Some((end_key, region_id)) = region_ranges
+        .range((Included(event.end_key), Unbounded))
+        .next()
+    {
+        influenced_regions.push((region_id, end_key.clone()));
+    }
+
+    // Calculate declined bytes for each region.
+    // `end_key` in influenced_regions are in incremental order.
+    let mut region_declined_bytes = vec![];
+    let mut last_end_key: Vec<u8> = vec![];
+    for (region_id, end_key) in influenced_regions {
+        let mut old_size = 0;
+        for prop in &event.input_props {
+            old_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
+        }
+        let mut new_size = 0;
+        for prop in &event.output_props {
+            new_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
+        }
+        last_end_key = end_key;
+
+        // Filter some trivial declines for better performance.
+        if old_size > new_size && old_size - new_size > bytes_threshold {
+            region_declined_bytes.push((*region_id, old_size - new_size));
+        }
+    }
+
+    region_declined_bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use util::rocksdb::CompactedEvent;
+    use util::rocksdb::properties::{IndexHandle, IndexHandles, SizeProperties};
+
+    use super::*;
+
+    #[test]
+    fn test_calc_region_declined_bytes() {
+        let index_handle1 = IndexHandle {
+            size: 4 * 1024,
+            offset: 4 * 1024,
+        };
+        let index_handle2 = IndexHandle {
+            size: 4 * 1024,
+            offset: 8 * 1024,
+        };
+        let index_handle3 = IndexHandle {
+            size: 4 * 1024,
+            offset: 12 * 1024,
+        };
+        let mut index_handles = IndexHandles::new();
+        index_handles.add(b"a".to_vec(), index_handle1);
+        index_handles.add(b"b".to_vec(), index_handle2);
+        index_handles.add(b"c".to_vec(), index_handle3);
+        let size_prop = SizeProperties {
+            total_size: 12 * 1024,
+            index_handles: index_handles,
+        };
+        let event = CompactedEvent {
+            cf: "default".to_owned(),
+            output_level: 3,
+            total_input_bytes: 12 * 1024,
+            total_output_bytes: 0,
+            start_key: size_prop.smallest_key().unwrap(),
+            end_key: size_prop.largest_key().unwrap(),
+            input_props: vec![size_prop],
+            output_props: vec![],
+        };
+
+        let mut region_ranges = BTreeMap::new();
+        region_ranges.insert(b"a".to_vec(), 1);
+        region_ranges.insert(b"b".to_vec(), 2);
+        region_ranges.insert(b"c".to_vec(), 3);
+
+        let declined_bytes = calc_region_declined_bytes(event, &region_ranges, 1024);
+        let expected_declined_bytes = vec![(2, 8192), (3, 4096)];
+        assert_eq!(declined_bytes, expected_declined_bytes);
     }
 }

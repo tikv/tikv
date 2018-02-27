@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use mio::Token;
 use grpc::{ClientStreamingSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
            RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
-use futures::{future, Future, Sink, Stream};
+use futures::{future, stream, Future, Sink, Stream};
 use futures::sync::{mpsc, oneshot};
 use futures_cpupool::CpuPool;
 use protobuf::RepeatedField;
@@ -42,7 +42,7 @@ use server::snap::Task as SnapTask;
 use server::metrics::*;
 use server::{CopStream, Error, OnResponse};
 use raftstore::store::{Callback, Msg as StoreMessage};
-use coprocessor::{EndPointTask, RequestTask};
+use coprocessor::{err_resp, EndPointTask, RequestTask};
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 
@@ -58,6 +58,7 @@ pub struct Service<T: RaftStoreRouter + 'static> {
     snap_scheduler: Scheduler<SnapTask>,
     token: Arc<AtomicUsize>, // TODO: remove it.
     recursion_limit: u32,
+    stream_channel_size: usize,
 }
 
 impl<T: RaftStoreRouter + 'static> Service<T> {
@@ -67,6 +68,7 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         recursion_limit: u32,
+        stream_channel_size: usize,
     ) -> Service<T> {
         Service {
             storage: storage,
@@ -75,6 +77,7 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
             snap_scheduler: snap_scheduler,
             token: Arc::new(AtomicUsize::new(1)),
             recursion_limit: recursion_limit,
+            stream_channel_size: stream_channel_size,
         }
     }
 
@@ -107,9 +110,15 @@ fn make_callback<T: Send + Debug + 'static>() -> (Box<FnBox(T) + Send>, oneshot:
     (box callback, rx)
 }
 
-fn make_stream_callback<T: Send + Debug + 'static>() -> (OnResponse<T>, mpsc::Receiver<T>) {
-    let (tx, rx) = mpsc::channel(8);
+fn make_stream_callback<T>(channel_size: usize) -> (OnResponse<T>, mpsc::Receiver<T>)
+where
+    T: Send + Debug + 'static,
+{
+    let (tx, rx) = mpsc::channel(channel_size);
     let callback = move |s: CopStream<T>, executor: Option<CpuPool>| {
+        // We can run the callback in two place: Endpoint thread and Cpu pool threads.
+        // In the first case the `executor` will be None so that we needs to wait the
+        // future finish, oterwise we can just spawn it in the executor.
         let f = s.forward(tx);
         if let Some(executor) = executor {
             return executor.spawn(f).forget();
@@ -464,8 +473,13 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .start_coarse_timer();
 
         let (cb, future) = make_callback();
-        let res = self.storage
-            .async_scan_lock(req.take_context(), req.get_max_version(), cb);
+        let res = self.storage.async_scan_lock(
+            req.take_context(),
+            req.get_max_version(),
+            req.take_start_key(),
+            req.get_limit() as usize,
+            cb,
+        );
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -792,9 +806,14 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
             Ok(req_task) => req_task,
             Err(e) => {
-                let error = box_err!(e);
-                let code = RpcStatusCode::InvalidArgument;
-                return self.send_fail_status(ctx, sink, error, code);
+                let response = err_resp(e);
+                let future = sink.success(response)
+                    .map(|_| timer.observe_duration())
+                    .map_err(move |e| {
+                        debug!("{} failed: {:?}", label, e);
+                        GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+                    });
+                return ctx.spawn(future);
             }
         };
 
@@ -827,13 +846,19 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        let (on_resp, future) = make_stream_callback();
+        let (on_resp, stream) = make_stream_callback(self.stream_channel_size);
         let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
             Ok(req_task) => req_task,
             Err(e) => {
-                let error = box_err!(e);
-                let code = RpcStatusCode::InvalidArgument;
-                return self.send_fail_status_to_stream(ctx, sink, error, code);
+                let stream = stream::once::<_, GrpcError>(Ok(err_resp(e)))
+                    .map(|resp| (resp, WriteFlags::default()));
+                let future = sink.send_all(stream)
+                    .map(|_| timer.observe_duration())
+                    .map_err(move |e| {
+                        debug!("{} failed: {:?}", label, e);
+                        GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+                    });
+                return ctx.spawn(future);
             }
         };
 
@@ -844,7 +869,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             return self.send_fail_status_to_stream(ctx, sink, error, code);
         }
 
-        let future = future
+        let stream = stream
             .map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
             .map_err(|e| {
                 let code = RpcStatusCode::Unknown;
@@ -852,14 +877,14 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 GrpcError::RpcFailure(RpcStatus::new(code, msg))
             });
 
-        ctx.spawn(
-            sink.send_all(future)
-                .map(|_| timer.observe_duration())
-                .map_err(move |e| {
-                    debug!("{} failed: {:?}", label, e);
-                    GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
-                }),
-        );
+        let future = sink.send_all(stream)
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed: {:?}", label, e);
+                GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+            });
+
+        ctx.spawn(future);
     }
 
     fn raft(

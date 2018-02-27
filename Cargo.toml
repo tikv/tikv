@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "1.1.0-dev"
+version = "1.1.0-dev.1"
 keywords = ["KV", "distributed-systems", "raft"]
 build = "build.rs"
 
@@ -58,6 +58,7 @@ flat_map = "0.0.4"
 ordermap = "0.3"
 mio = "0.5"
 futures = "0.1"
+futures-cpupool = "0.1"
 tokio-core = "0.1"
 tokio-timer = "0.1"
 serde = "1.0"
@@ -65,10 +66,10 @@ serde_json = "1.0"
 serde_derive = "1.0"
 rustc-serialize = "0.3"
 murmur3 = "0.4.0"
-futures-cpupool = "0.1"
 zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
+uuid = { version = "0.4", features = [ "serde", "v4" ] }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.4"
@@ -103,7 +104,7 @@ features = ["secure"]
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
 debug = true   # Controls whether the compiler passes `-g`
-codegen-units = 2
+codegen-units = 4
 
 # The release profile, used for `cargo build --release`
 [profile.release]

@@ -17,24 +17,23 @@
 use tipb::executor::Limit;
 
 use coprocessor::Result;
-use coprocessor::metrics::*;
-use coprocessor::local_metrics::*;
 use coprocessor::dag::executor::{Executor, Row};
-use storage::Statistics;
+use super::ExecutorMetrics;
 
 pub struct LimitExecutor<'a> {
     limit: u64,
     cursor: u64,
-    src: Box<Executor + 'a>,
+    src: Box<Executor + Send + 'a>,
+    first_collect: bool,
 }
 
 impl<'a> LimitExecutor<'a> {
-    pub fn new(limit: Limit, src: Box<Executor + 'a>) -> LimitExecutor {
-        COPR_EXECUTOR_COUNT.with_label_values(&["limit"]).inc();
+    pub fn new(limit: Limit, src: Box<Executor + Send + 'a>) -> LimitExecutor {
         LimitExecutor {
             limit: limit.get_limit(),
             cursor: 0,
             src: src,
+            first_collect: true,
         }
     }
 }
@@ -56,12 +55,12 @@ impl<'a> Executor for LimitExecutor<'a> {
         // We do not know whether `limit` has consumed all of it's source, so just ignore it.
     }
 
-    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
-        self.src.collect_statistics_into(statistics);
-    }
-
-    fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         self.src.collect_metrics_into(metrics);
+        if self.first_collect {
+            metrics.executor_count.limit += 1;
+            self.first_collect = false;
+        }
     }
 }
 
@@ -110,7 +109,7 @@ mod test {
         // init TableScan
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store);
+        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store).unwrap();
 
         // init Limit meta
         let mut limit_meta = Limit::default();

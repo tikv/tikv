@@ -19,6 +19,7 @@
 #![feature(box_syntax)]
 #![feature(iterator_for_each)]
 #![feature(conservative_impl_trait)]
+#![feature(entry_or_default)]
 #![cfg_attr(feature = "dev", feature(plugin))]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
@@ -82,6 +83,7 @@ extern crate toml;
 extern crate url;
 #[cfg(test)]
 extern crate utime;
+extern crate uuid;
 extern crate zipf;
 
 #[macro_use]
@@ -93,5 +95,6 @@ pub mod raftstore;
 pub mod pd;
 pub mod server;
 pub mod coprocessor;
+pub mod import;
 
 pub use storage::Storage;

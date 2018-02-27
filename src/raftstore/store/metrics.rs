@@ -135,6 +135,28 @@ lazy_static! {
             "Total number of GC raft log."
         ).unwrap();
 
+    pub static ref UPDATE_REGION_SIZE_BY_COMPACTION_COUNTER: Counter =
+        register_counter!(
+            "update_region_size_count_by_compaction",
+            "Total number of update region size caused by compaction."
+        ).unwrap();
+
+    pub static ref COMPACTION_RELATED_REGION_COUNT: HistogramVec =
+        register_histogram_vec!(
+            "compaction_related_region_count",
+            "Associated number of regions for each compaction job",
+            &["output_level"],
+            exponential_buckets(1.0, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref COMPACTION_DECLINED_BYTES: HistogramVec =
+        register_histogram_vec!(
+            "compaction_declined_bytes",
+            "total bytes declined for each compaction job",
+            &["output_level"],
+            exponential_buckets(1024.0, 2.0, 30).unwrap()
+        ).unwrap();
+
     pub static ref SNAPSHOT_CF_KV_COUNT: HistogramVec =
         register_histogram_vec!(
             "tikv_snapshot_cf_kv_count",
@@ -185,5 +207,11 @@ lazy_static! {
             "Bucketed histogram of total size of batch snapshot commands",
             vec![1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0,
                  20.0, 24.0, 32.0, 64.0, 128.0, 256.0]
+        ).unwrap();
+
+    pub static ref LEADER_MISSING: Gauge =
+        register_gauge!(
+            "tikv_raftstore_leader_missing",
+            "Total number of leader missed region"
         ).unwrap();
 }

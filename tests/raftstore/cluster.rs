@@ -13,9 +13,9 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{self, Arc, RwLock};
+use std::path::Path;
 use std::time::*;
 use std::{result, thread};
-use std::path::Path;
 
 use rocksdb::DB;
 use tempdir::TempDir;
@@ -24,7 +24,7 @@ use futures::Future;
 use tikv::raftstore::{Error, Result};
 use tikv::raftstore::store::*;
 use tikv::config::TiKvConfig;
-use tikv::storage::{ALL_CFS, CF_DEFAULT};
+use tikv::storage::CF_DEFAULT;
 use super::util::*;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
@@ -48,15 +48,20 @@ pub trait Simulator {
     // and the node id must be the same as given argument.
     // Return the node id.
     // TODO: we will rename node name here because now we use store only.
-    fn run_node(&mut self, node_id: u64, cfg: TiKvConfig, engines: Engines) -> u64;
+    fn run_node(
+        &mut self,
+        node_id: u64,
+        cfg: TiKvConfig,
+        Option<Engines>,
+    ) -> (u64, Engines, Option<TempDir>);
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
-    fn call_command_on_node(
+    fn async_command_on_node(
         &self,
         node_id: u64,
         request: RaftCmdRequest,
-        timeout: Duration,
-    ) -> Result<RaftCmdResponse>;
+        cb: Callback,
+    ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<Msg>>;
@@ -69,6 +74,18 @@ pub trait Simulator {
         let node_id = request.get_header().get_peer().get_store_id();
         self.call_command_on_node(node_id, request, timeout)
     }
+    fn call_command_on_node(
+        &self,
+        node_id: u64,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
+        let (cb, rx) = make_cb(&request);
+
+        self.async_command_on_node(node_id, request, cb)?;
+        rx.recv_timeout(timeout)
+            .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
+    }
 }
 
 pub struct Cluster<T: Simulator> {
@@ -76,8 +93,8 @@ pub struct Cluster<T: Simulator> {
     leaders: HashMap<u64, metapb::Peer>,
     paths: Vec<TempDir>,
     dbs: Vec<Engines>,
+    count: usize,
 
-    // node id -> {db, raft_db} engine.
     pub engines: HashMap<u64, Engines>,
 
     pub sim: Arc<RwLock<T>>,
@@ -89,68 +106,73 @@ impl<T: Simulator> Cluster<T> {
     pub fn new(
         id: u64,
         count: usize,
-        cfs: &[&str],
         sim: Arc<RwLock<T>>,
         pd_client: Arc<TestPdClient>,
     ) -> Cluster<T> {
-        let mut c = Cluster {
+        Cluster {
             cfg: new_tikv_config(id),
             leaders: HashMap::new(),
             paths: vec![],
             dbs: vec![],
+            count: count,
             engines: HashMap::new(),
             sim: sim,
             pd_client: pd_client,
-        };
-
-        c.create_engines(count, cfs);
-
-        c
+        }
     }
 
     pub fn id(&self) -> u64 {
         self.cfg.server.cluster_id
     }
 
-    fn create_engines(&mut self, count: usize, cfs: &[&str]) {
-        for _ in 0..count {
-            self.paths.push(TempDir::new("test_cluster").unwrap());
-        }
-
-        let mut kv_cfs = vec![];
-        kv_cfs.extend_from_slice(ALL_CFS);
-        kv_cfs.extend_from_slice(cfs);
-        for item in &self.paths {
+    fn create_engines(&mut self) {
+        for _ in 0..self.count {
+            let path = TempDir::new("test_cluster").unwrap();
+            let kv_db_opt = self.cfg.rocksdb.build_opt();
+            let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts();
             let engine = Arc::new(
-                rocksdb::new_engine(item.path().to_str().unwrap(), &kv_cfs, None).unwrap(),
+                rocksdb::new_engine_opt(path.path().to_str().unwrap(), kv_db_opt, kv_cfs_opt)
+                    .unwrap(),
             );
-            let raft_path = item.path().join(Path::new("raft"));
+            let raft_path = path.path().join(Path::new("raft"));
             let raft_engine = Arc::new(
                 rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
             );
-            self.dbs.push(Engines::new(engine, raft_engine));
+            let engines = Engines::new(engine, raft_engine);
+            self.dbs.push(engines);
+            self.paths.push(path);
         }
     }
 
     pub fn start(&mut self) {
         if self.engines.is_empty() {
             let mut sim = self.sim.wl();
-            for engines in &self.dbs {
-                let node_id = sim.run_node(0, self.cfg.clone(), engines.clone());
-                self.engines.insert(node_id, engines.clone());
+            for _ in 0..self.count {
+                let (node_id, engines, path) = sim.run_node(0, self.cfg.clone(), None);
+                self.dbs.push(engines.clone());
+                self.engines.insert(node_id, engines);
+                self.paths.push(path.unwrap());
             }
         } else {
             // recover from last shutdown.
-            let node_ids = self.engines.keys().cloned().collect::<Vec<_>>();
-            for node_id in node_ids {
+            let mut node_ids: Vec<u64> = self.engines.iter().map(|(&id, _)| id).collect();
+            for node_id in node_ids.drain(..) {
                 self.run_node(node_id);
             }
+        }
+    }
+
+    pub fn compact_data(&self) {
+        for engine in self.engines.values() {
+            let handle = rocksdb::get_cf_handle(&engine.kv_engine, "default").unwrap();
+            rocksdb::compact_range(&engine.kv_engine, handle, None, None, false);
         }
     }
 
     // Bootstrap the store with fixed ID (like 1, 2, .. 5) and
     // initialize first region in all stores, then start the cluster.
     pub fn run(&mut self) {
+        self.create_engines();
         self.bootstrap_region().unwrap();
         self.start();
     }
@@ -158,16 +180,22 @@ impl<T: Simulator> Cluster<T> {
     // Bootstrap the store with fixed ID (like 1, 2, .. 5) and
     // initialize first region in store 1, then start the cluster.
     pub fn run_conf_change(&mut self) -> u64 {
+        self.create_engines();
         let region_id = self.bootstrap_conf_change();
         self.start();
         region_id
     }
 
+    pub fn get_node_ids(&self) -> HashSet<u64> {
+        self.sim.rl().get_node_ids()
+    }
+
     pub fn run_node(&mut self, node_id: u64) {
         debug!("starting node {}", node_id);
+        let engines = self.engines[&node_id].clone();
         self.sim
             .wl()
-            .run_node(node_id, self.cfg.clone(), self.engines[&node_id].clone());
+            .run_node(node_id, self.cfg.clone(), Some(engines));
         debug!("node {} started", node_id);
     }
 
@@ -649,10 +677,10 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::DeleteRange);
     }
 
-    pub fn must_flush(&mut self, sync: bool) {
+    pub fn must_flush_cf(&mut self, cf: &str, sync: bool) {
         for engines in &self.dbs {
-            engines.kv_engine.flush(sync).unwrap();
-            engines.raft_engine.flush(sync).unwrap();
+            let handle = engines.kv_engine.cf_handle(cf).unwrap();
+            engines.kv_engine.flush_cf(handle, sync).unwrap();
         }
     }
 
@@ -760,11 +788,13 @@ impl<T: Simulator> Cluster<T> {
                     let mut resp = write_resp.response;
                     if resp.get_header().has_error() {
                         let error = resp.get_header().get_error();
-                        if error.has_stale_epoch() || error.has_not_leader() {
+                        if error.has_stale_epoch() || error.has_not_leader()
+                            || error.has_stale_command()
+                        {
                             warn!("fail to split: {:?}, ignore.", error);
                             return;
                         }
-                        panic!("failed to split: {:?}", error);
+                        panic!("failed to split: {:?}", resp);
                     }
                     let admin_resp = resp.mut_admin_response();
                     let split_resp = admin_resp.mut_split();

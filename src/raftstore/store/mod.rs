@@ -31,7 +31,8 @@ mod region_snapshot;
 
 pub use self::msg::{BatchReadCallback, Callback, Msg, ReadCallback, ReadResponse, SignificantMsg,
                     Tick, WriteCallback, WriteResponse};
-pub use self::store::{create_event_loop, Engines, Store, StoreChannel, StoreStat};
+pub use self::store::{create_event_loop, new_compaction_listener, Engines, Store, StoreChannel,
+                      StoreStat};
 pub use self::config::Config;
 pub use self::transport::Transport;
 pub use self::peer::{Peer, PeerStat};
@@ -41,8 +42,9 @@ pub use self::engine::{Iterable, Mutable, Peekable};
 pub use self::peer_storage::{do_snapshot, init_apply_state, init_raft_state, write_peer_state,
                              CacheQueryStats, PeerStorage, SnapState, RAFT_INIT_LOG_INDEX,
                              RAFT_INIT_LOG_TERM};
-pub use self::snap::{check_abort, copy_snapshot, ApplyOptions, SnapEntry, SnapKey, SnapManager,
-                     Snapshot, SnapshotDeleter, SnapshotStatistics};
+pub use self::snap::{check_abort, copy_snapshot, ApplyOptions, Error as SnapError, SnapEntry,
+                     SnapKey, SnapManager, SnapManagerBuilder, Snapshot, SnapshotDeleter,
+                     SnapshotStatistics};
 pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 
 // Only used in tests

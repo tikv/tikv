@@ -13,7 +13,7 @@
 
 use std::fmt;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use protobuf::RepeatedField;
 use futures::{future, Future, Sink, Stream};
@@ -169,6 +169,23 @@ impl PdClient for RpcClient {
         Ok(resp.take_store())
     }
 
+    fn get_all_stores(&self) -> Result<Vec<metapb::Store>> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["get_all_stores"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::GetAllStoresRequest::new();
+        req.set_header(self.header());
+
+        let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            client.get_all_stores_opt(&req, option)
+        })?;
+        check_resp_header(resp.get_header())?;
+
+        Ok(resp.take_stores().to_vec())
+    }
+
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["get_cluster_config"])
@@ -283,6 +300,10 @@ impl PdClient for RpcClient {
         req.set_bytes_read(region_stat.read_bytes);
         req.set_keys_read(region_stat.read_bytes);
         req.set_approximate_size(region_stat.approximate_size);
+
+        let now = SystemTime::now();
+        let ts = now.duration_since(UNIX_EPOCH).unwrap().as_secs();
+        req.set_timestamp(ts);
 
         let executor = |client: &RwLock<Inner>, req: pdpb::RegionHeartbeatRequest| {
             let mut inner = client.wl();

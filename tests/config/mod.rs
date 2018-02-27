@@ -19,10 +19,12 @@ use log::LogLevelFilter;
 use rocksdb::{CompactionPriority, DBCompressionType, DBRecoveryMode};
 use tikv::pd::Config as PdConfig;
 use tikv::server::Config as ServerConfig;
+use tikv::server::readpool::Config as ReadPoolConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::config::*;
 use tikv::storage::Config as StorageConfig;
+use tikv::import::Config as ImportConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
 use tikv::util::security::SecurityConfig;
 
@@ -68,9 +70,20 @@ fn test_serde_custom_tikv_config() {
         end_point_max_tasks: 12,
         end_point_stack_size: ReadableSize::mb(12),
         end_point_recursion_limit: 100,
+        end_point_stream_channel_size: 16,
         end_point_batch_row_limit: 64,
         end_point_stream_batch_row_limit: 4096,
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
+        snap_max_total_size: ReadableSize::gb(10),
+    };
+    value.readpool = ReadPoolConfig {
+        high_concurrency: 1,
+        normal_concurrency: 3,
+        low_concurrency: 7,
+        max_tasks_high: 10000,
+        max_tasks_normal: 20000,
+        max_tasks_low: 30000,
+        stack_size: ReadableSize::mb(20),
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),
@@ -103,6 +116,7 @@ fn test_serde_custom_tikv_config() {
         messages_per_tick: 12_345,
         max_peer_down_duration: ReadableDuration::minutes(12),
         max_leader_missing_duration: ReadableDuration::hours(12),
+        abnormal_leader_missing_duration: ReadableDuration::hours(6),
         snap_apply_batch_size: ReadableSize::mb(12),
         lock_cf_compact_interval: ReadableDuration::minutes(12),
         lock_cf_compact_bytes_threshold: ReadableSize::mb(123),
@@ -356,6 +370,10 @@ fn test_serde_custom_tikv_config() {
         cert_path: "invalid path".to_owned(),
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
+    };
+    value.import = ImportConfig {
+        num_threads: 123,
+        stream_channel_window: 123,
     };
 
     let custom = read_file_in_project_dir("tests/config/test-custom.toml");

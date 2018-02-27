@@ -10,6 +10,22 @@
 # file to store log, write to stderr if it's empty.
 # log-file = ""
 
+[readpool]
+# size of thread pool for high-priority read operations
+# high-concurrency = 8
+# size of thread pool for normal-priority read operations
+# normal-concurrency = 8
+# size of thread pool for low-priority read operations
+# low-concurrency = 8
+# max running high-priority read operations, reject if exceed
+# max-tasks-high = 16000
+# max running normal-priority read operations, reject if exceed
+# max-tasks-normal = 16000
+# max running low-priority read operations, reject if exceed
+# max-tasks-low = 16000
+# size of stack size for each thread pool
+# stack-size = "10MB"
+
 [server]
 # set listening address.
 # addr = "127.0.0.1:20160"
@@ -421,3 +437,9 @@
 # ca-path = ""
 # cert-path = ""
 # key-path = ""
+
+[import]
+# number of threads to handle RPC requests.
+# num-threads = 8
+# stream channel window size, stream will be blocked on channel full.
+# stream-channel-window = 128
