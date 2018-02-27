@@ -22,7 +22,6 @@ use kvproto::importpb_grpc::*;
 
 use storage::Storage;
 use util::time::Instant;
-use util::rpc::check_header;
 
 use super::metrics::*;
 use super::{Config, Error, SSTImporter};
@@ -65,12 +64,9 @@ impl ImportSst for ImportSSTService {
         sink: ClientStreamingSink<UploadResponse>,
     ) {
         let label = "upload";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
-        let timer = Instant::now_coarse();
+        try_check_header!(ctx, sink, self.cluster_id, label);
 
+        let timer = Instant::now_coarse();
         let token = self.importer.token();
         let thread1 = self.threads.clone();
         let thread2 = self.threads.clone();

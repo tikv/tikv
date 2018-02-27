@@ -30,6 +30,16 @@ macro_rules! send_response {
     })
 }
 
+macro_rules! try_check_header {
+    ($ctx:expr, $sink:expr, $cluster_id:expr, $tag:expr) => ({
+        if let Err(e) = $crate::util::rpc::check_header(
+                $ctx.request_headers(), $cluster_id) {
+            send_response!($ctx, $sink, e.into(), $tag);
+            return;
+        }
+    })
+}
+
 const CLUSTER_ID: &str = "cluster-id-bin";
 
 pub fn make_header(cluster_id: u64) -> Metadata {
@@ -42,25 +52,20 @@ pub fn make_header(cluster_id: u64) -> Metadata {
 }
 
 pub fn check_header(header: &Metadata, cluster_id: u64) -> Result<(), Error> {
-    if header.is_empty() {
-        return Err(Error::Invalid("empty header".to_owned()));
-    }
-
     if let Some((_, id)) = header.iter().find(|&(k, _)| k == CLUSTER_ID) {
         if id.len() != 8 {
             return Err(Error::Invalid(format!("cluster id {:?}", id)));
         }
         let mut array = [0; 8];
         array.copy_from_slice(id);
-        let from = u64::from_be(unsafe { mem::transmute::<[u8; 8], u64>(array) });
+        let from = u64::from_be(unsafe { mem::transmute::<_, u64>(array) });
         if from == cluster_id {
             return Ok(());
         } else {
             return Err(Error::ClusterId(from));
         }
     }
-
-    Err(Error::Invalid(format!("no {}", CLUSTER_ID)))
+    Ok(())
 }
 
 quick_error! {

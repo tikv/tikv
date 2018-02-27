@@ -69,9 +69,6 @@ fn test_cluster_id() {
     put_req.set_context(ctx.clone());
     put_req.key = k.clone();
     put_req.value = v.clone();
-    // Miss cluster ID.
-    client.raw_put(&put_req).unwrap_err();
-
     // Cluster ID mismatch.
     let option = CallOption::default().headers(make_header(2));
     client.raw_put_opt(&put_req, option).unwrap_err();

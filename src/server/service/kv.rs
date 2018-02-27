@@ -32,7 +32,6 @@ use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use util::worker::Scheduler;
 use util::collections::HashMap;
 use util::buf::PipeBuffer;
-use util::rpc::check_header;
 use storage::{self, Key, Mutation, Options, Storage, Value};
 use storage::txn::Error as TxnError;
 use storage::mvcc::{Error as MvccError, Write as MvccWrite, WriteType};
@@ -96,10 +95,8 @@ fn make_callback<T: Debug + Send + 'static>() -> (Box<FnBox(T) + Send>, oneshot:
 impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
     fn kv_get(&self, ctx: RpcContext, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         let label = "kv_get";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();
@@ -143,10 +140,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
     fn kv_scan(&self, ctx: RpcContext, mut req: ScanRequest, sink: UnarySink<ScanResponse>) {
         let label = "kv_scan";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();
@@ -197,10 +192,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         sink: UnarySink<PrewriteResponse>,
     ) {
         let label = "kv_prewrite";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();
@@ -255,10 +248,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
     fn kv_commit(&self, ctx: RpcContext, mut req: CommitRequest, sink: UnarySink<CommitResponse>) {
         let label = "kv_commit";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();
@@ -299,8 +290,13 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         ctx.spawn(future);
     }
 
-    fn kv_import(&self, _: RpcContext, _: ImportRequest, _: UnarySink<ImportResponse>) {
-        unimplemented!();
+    fn kv_import(&self, ctx: RpcContext, _req: ImportRequest, sink: UnarySink<ImportResponse>) {
+        let label = "kv_import";
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
+        let f = sink.fail(RpcStatus::new(RpcStatusCode::Unimplemented, None))
+            .map_err(|e| error!("failed to report unimplemented method: {:?}", e));
+        ctx.spawn(f);
     }
 
     fn kv_cleanup(
@@ -310,10 +306,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         sink: UnarySink<CleanupResponse>,
     ) {
         let label = "kv_cleanup";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();
@@ -362,10 +356,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         sink: UnarySink<BatchGetResponse>,
     ) {
         let label = "kv_batchget";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();
@@ -411,10 +403,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         sink: UnarySink<BatchRollbackResponse>,
     ) {
         let label = "kv_batch_rollback";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();
@@ -461,10 +451,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         sink: UnarySink<ScanLockResponse>,
     ) {
         let label = "kv_scan_lock";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();
@@ -513,10 +501,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         sink: UnarySink<ResolveLockResponse>,
     ) {
         let label = "kv_resolve_lock";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();
@@ -565,10 +551,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
     fn kv_gc(&self, ctx: RpcContext, mut req: GCRequest, sink: UnarySink<GCResponse>) {
         let label = "kv_gc";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();
@@ -609,10 +593,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         sink: UnarySink<DeleteRangeResponse>,
     ) {
         let label = "kv_delete_range";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();
@@ -652,10 +634,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
     fn raw_get(&self, ctx: RpcContext, mut req: RawGetRequest, sink: UnarySink<RawGetResponse>) {
         let label = "raw_get";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();
@@ -695,10 +675,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
     fn raw_scan(&self, ctx: RpcContext, mut req: RawScanRequest, sink: UnarySink<RawScanResponse>) {
         let label = "raw_scan";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();
@@ -738,10 +716,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
     fn raw_put(&self, ctx: RpcContext, mut req: RawPutRequest, sink: UnarySink<RawPutResponse>) {
         let label = "raw_put";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();
@@ -783,10 +759,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         sink: UnarySink<RawDeleteResponse>,
     ) {
         let label = "raw_delete";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();
@@ -822,10 +796,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
     fn coprocessor(&self, ctx: RpcContext, req: Request, sink: UnarySink<Response>) {
         let label = "coprocessor";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();
@@ -856,6 +828,9 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
     }
 
     fn coprocessor_stream(&self, ctx: RpcContext, _: Request, sink: ServerStreamingSink<Response>) {
+        let label = "coprocessor_stream";
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let f = sink.fail(RpcStatus::new(RpcStatusCode::Unimplemented, None))
             .map_err(|e| error!("failed to report unimplemented method: {:?}", e));
         ctx.spawn(f);
@@ -865,8 +840,11 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         &self,
         ctx: RpcContext,
         stream: RequestStream<RaftMessage>,
-        _: ClientStreamingSink<Done>,
+        sink: ClientStreamingSink<Done>,
     ) {
+        let label = "raft";
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let ch = self.ch.clone();
         ctx.spawn(
             stream
@@ -886,6 +864,9 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         stream: RequestStream<SnapshotChunk>,
         sink: ClientStreamingSink<Done>,
     ) {
+        let label = "snapshot";
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let token = Token(self.token.fetch_add(1, Ordering::SeqCst));
         let sched = self.snap_scheduler.clone();
         let sched2 = sched.clone();
@@ -931,10 +912,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         sink: UnarySink<MvccGetByKeyResponse>,
     ) {
         let label = "mvcc_get_by_key";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();
@@ -982,10 +961,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         sink: UnarySink<MvccGetByStartTsResponse>,
     ) {
         let label = "mvcc_get_by_start_ts";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();
@@ -1036,10 +1013,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         sink: UnarySink<SplitRegionResponse>,
     ) {
         let label = "split_region";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), label);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, label);
+
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();

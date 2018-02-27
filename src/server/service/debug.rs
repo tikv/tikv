@@ -20,7 +20,6 @@ use fail;
 
 use raftstore::store::Engines;
 use server::debug::{Debugger, Error, Result};
-use util::rpc::check_header;
 
 #[derive(Clone)]
 pub struct Service {
@@ -57,10 +56,7 @@ impl Service {
 impl debugpb_grpc::Debug for Service {
     fn get(&self, ctx: RpcContext, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), TAG);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, TAG);
 
         let db = req.get_db();
         let cf = req.take_cf();
@@ -82,10 +78,7 @@ impl debugpb_grpc::Debug for Service {
 
     fn raft_log(&self, ctx: RpcContext, req: RaftLogRequest, sink: UnarySink<RaftLogResponse>) {
         const TAG: &str = "debug_raft_log";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), TAG);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, TAG);
 
         let region_id = req.get_region_id();
         let log_index = req.get_log_index();
@@ -111,10 +104,7 @@ impl debugpb_grpc::Debug for Service {
         sink: UnarySink<RegionInfoResponse>,
     ) {
         const TAG: &str = "debug_region_log";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), TAG);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, TAG);
 
         let region_id = req.get_region_id();
 
@@ -147,10 +137,7 @@ impl debugpb_grpc::Debug for Service {
         sink: UnarySink<RegionSizeResponse>,
     ) {
         const TAG: &str = "debug_region_size";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), TAG);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, TAG);
 
         let region_id = req.get_region_id();
         let cfs = req.take_cfs().into_vec();
@@ -186,10 +173,7 @@ impl debugpb_grpc::Debug for Service {
         sink: ServerStreamingSink<ScanMvccResponse>,
     ) {
         const TAG: &str = "debug_scan_mvcc";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), TAG);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, TAG);
 
         let debugger = self.debugger.clone();
         let from = req.take_from_key();
@@ -215,10 +199,7 @@ impl debugpb_grpc::Debug for Service {
 
     fn compact(&self, ctx: RpcContext, req: CompactRequest, sink: UnarySink<CompactResponse>) {
         const TAG: &str = "debug_compact";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), TAG);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, TAG);
 
         let debugger = self.debugger.clone();
         let f = self.pool.spawn_fn(move || {
@@ -241,10 +222,7 @@ impl debugpb_grpc::Debug for Service {
         sink: UnarySink<InjectFailPointResponse>,
     ) {
         const TAG: &str = "debug_inject_fail_point";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), TAG);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, TAG);
 
         let f = self.pool.spawn_fn(move || {
             let name = req.take_name();
@@ -268,10 +246,7 @@ impl debugpb_grpc::Debug for Service {
         sink: UnarySink<RecoverFailPointResponse>,
     ) {
         const TAG: &str = "debug_recover_fail_point";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), TAG);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, TAG);
 
         let f = self.pool.spawn_fn(move || {
             let name = req.take_name();
@@ -292,10 +267,7 @@ impl debugpb_grpc::Debug for Service {
         sink: UnarySink<ListFailPointsResponse>,
     ) {
         const TAG: &str = "debug_list_fail_points";
-        if let Err(e) = check_header(ctx.request_headers(), self.cluster_id) {
-            send_response!(ctx, sink, e.into(), TAG);
-            return;
-        }
+        try_check_header!(ctx, sink, self.cluster_id, TAG);
 
         let f = self.pool.spawn_fn(move || {
             let list = fail::list().into_iter().map(|(name, actions)| {

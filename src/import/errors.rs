@@ -20,7 +20,6 @@ use grpc::{Error as GrpcError, RpcStatus, RpcStatusCode};
 use uuid::ParseError;
 
 use util::codec::Error as CodecError;
-use util::rpc::Error as RpcError;
 
 quick_error! {
     #[derive(Debug)]
@@ -68,12 +67,6 @@ quick_error! {
         TokenNotFound(token: usize) {
             display("Token {} not found", token)
         }
-        Rpc(err: RpcError) {
-            from()
-            cause(err)
-            display("{:?}", err)
-            description(err.description())
-        }
     }
 }
 
@@ -81,9 +74,6 @@ pub type Result<T> = result::Result<T, Error>;
 
 impl Into<RpcStatus> for Error {
     fn into(self) -> RpcStatus {
-        match self {
-            Error::Rpc(e) => e.into(),
-            other => RpcStatus::new(RpcStatusCode::Internal, Some(format!("{:?}", other))),
-        }
+        RpcStatus::new(RpcStatusCode::Internal, Some(format!("{:?}", self)))
     }
 }
