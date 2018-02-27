@@ -70,6 +70,7 @@ pub struct Host {
     high_priority_pool: ThreadPool<CopContext>,
     max_running_task_count: usize,
     batch_row_limit: usize,
+    request_max_handle_secs: u64,
 }
 
 struct CopContextFactory {
@@ -135,6 +136,7 @@ impl Host {
             ).thread_count(cfg.end_point_concurrency)
                 .stack_size(cfg.end_point_stack_size.0 as usize)
                 .build(),
+            request_max_handle_secs: cfg.end_point_request_max_handle_duration.as_secs(),
         }
     }
 
@@ -149,7 +151,7 @@ impl Host {
         let snap = match snapshot {
             Ok(s) => s,
             Err(e) => {
-                notify_batch_failed(e, reqs, &mut local_metrics);
+                notify_batch_failed(e, reqs, &mut local_metrics, self.request_max_handle_secs);
                 return;
             }
         };
@@ -159,6 +161,7 @@ impl Host {
                 Error::Full(self.max_running_task_count),
                 reqs,
                 &mut local_metrics,
+                self.request_max_handle_secs,
             );
             return;
         }
@@ -178,14 +181,19 @@ impl Host {
             COPR_PENDING_REQS
                 .with_label_values(&[type_str, pri_str])
                 .inc();
+            let request_max_handle_secs = self.request_max_handle_secs;
             pool.execute(move |ctx: &mut CopContext| {
                 // decrease pending task
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
                     .dec();
                 let region_id = req.req.get_context().get_region_id();
-                let stats =
-                    end_point.handle_request(req, batch_row_limit, &mut ctx.basic_local_metrics);
+                let stats = end_point.handle_request(
+                    req,
+                    batch_row_limit,
+                    &mut ctx.basic_local_metrics,
+                    request_max_handle_secs,
+                );
                 ctx.exec_local_metrics.collect(type_str, region_id, stats);
             });
         }
@@ -259,10 +267,10 @@ impl RequestTask {
         req: Request,
         on_resp: OnResponse,
         recursion_limit: u32,
-        request_timeout_secs: u64,
+        request_max_handle_secs: u64,
     ) -> RequestTask {
         let timer = Instant::now_coarse();
-        let deadline = timer + Duration::from_secs(request_timeout_secs);
+        let deadline = timer + Duration::from_secs(request_max_handle_secs);
         let mut start_ts = None;
         let tp = req.get_tp();
         let mut table_scan = false;
@@ -425,7 +433,7 @@ impl Runnable<Task> for Host {
             match task {
                 Task::Request(req) => {
                     if let Err(e) = req.check_outdated() {
-                        on_error(e, req, &mut local_metrics);
+                        on_error(e, req, &mut local_metrics, self.request_max_handle_secs);
                         continue;
                     }
                     let key = {
@@ -452,7 +460,12 @@ impl Runnable<Task> for Host {
                         .async_snapshot(reqs[0].req.get_context(), box move |(_, res)| {
                             sched.schedule(Task::SnapRes(id, res)).unwrap()
                         }) {
-                        notify_batch_failed(e, reqs, &mut local_metrics);
+                        notify_batch_failed(
+                            e,
+                            reqs,
+                            &mut local_metrics,
+                            self.request_max_handle_secs,
+                        );
                     } else {
                         self.reqs.insert(id, reqs);
                     }
@@ -511,7 +524,7 @@ impl Runnable<Task> for Host {
                     error!("async snapshot batch failed error {:?}", e);
                     EngineError::Other(box_err!("{:?}", e))
                 });
-                notify_batch_failed(err, reqs, &mut local_metrics);
+                notify_batch_failed(err, reqs, &mut local_metrics, self.request_max_handle_secs);
             }
         }
     }
@@ -529,7 +542,7 @@ impl Runnable<Task> for Host {
     }
 }
 
-fn err_resp(e: Error, metrics: &mut BasicLocalMetrics) -> Response {
+fn err_resp(e: Error, metrics: &mut BasicLocalMetrics, request_max_handle_secs: u64) -> Response {
     let mut resp = Response::new();
     let tag = match e {
         Error::Region(e) => {
@@ -543,7 +556,7 @@ fn err_resp(e: Error, metrics: &mut BasicLocalMetrics) -> Response {
         }
         Error::Outdated(deadline, now, scan_tag) => {
             let elapsed =
-                now.duration_since(deadline) + Duration::from_secs(DEFAULT_REQUEST_MAX_HANDLE_SECS);
+                now.duration_since(deadline) + Duration::from_secs(request_max_handle_secs);
             metrics
                 .outdate_time
                 .with_label_values(&[scan_tag])
@@ -573,8 +586,13 @@ fn err_resp(e: Error, metrics: &mut BasicLocalMetrics) -> Response {
     resp
 }
 
-fn on_error(e: Error, req: RequestTask, metrics: &mut BasicLocalMetrics) -> ExecutorMetrics {
-    let resp = err_resp(e, metrics);
+fn on_error(
+    e: Error,
+    req: RequestTask,
+    metrics: &mut BasicLocalMetrics,
+    request_max_handle_secs: u64,
+) -> ExecutorMetrics {
+    let resp = err_resp(e, metrics, request_max_handle_secs);
     respond(resp, req, metrics)
 }
 
@@ -582,9 +600,10 @@ fn notify_batch_failed<E: Into<Error> + Debug>(
     e: E,
     reqs: Vec<RequestTask>,
     metrics: &mut BasicLocalMetrics,
+    request_max_handle_secs: u64,
 ) {
     debug!("failed to handle batch request: {:?}", e);
-    let resp = err_resp(e.into(), metrics);
+    let resp = err_resp(e.into(), metrics, request_max_handle_secs);
     for t in reqs {
         respond(resp.clone(), t, metrics);
     }
@@ -618,11 +637,12 @@ impl TiDbEndPoint {
         mut t: RequestTask,
         batch_row_limit: usize,
         metrics: &mut BasicLocalMetrics,
+        request_max_handle_secs: u64,
     ) -> ExecutorMetrics {
         t.stop_record_waiting(metrics);
 
         if let Err(e) = t.check_outdated() {
-            return on_error(e, t, metrics);
+            return on_error(e, t, metrics, request_max_handle_secs);
         }
 
         let resp = match t.cop_req.take().unwrap() {
@@ -632,7 +652,7 @@ impl TiDbEndPoint {
         };
         match resp {
             Ok(r) => respond(r, t, metrics),
-            Err(e) => on_error(e, t, metrics),
+            Err(e) => on_error(e, t, metrics, request_max_handle_secs),
         }
     }
 

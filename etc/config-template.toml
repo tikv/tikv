@@ -57,7 +57,7 @@
 # end-point-recursion-limit = 1000
 
 # max time to handle coprocessor request before timeout
-# end-point-request-max-handle-secs = 60
+# end-point-request-max-handle-duration = "60s"
 
 # the max bytes that snapshot can be written to disk in one second,
 # should be set based on your disk performance
