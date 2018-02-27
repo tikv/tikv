@@ -776,6 +776,14 @@ impl TiKvConfig {
             ).into());
         }
 
+        if last_cfg.storage.data_dir != self.storage.data_dir {
+            return Err(format!(
+                "storage data dir have been changed, former data dir is {}, \
+                 current data dir is {}, please check if it is expected.",
+                last_cfg.storage.data_dir, self.storage.data_dir
+            ).into());
+        }
+
         Ok(())
     }
 
@@ -831,6 +839,12 @@ mod test {
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
 
         last_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+
+        tikv_cfg.storage.data_dir = "/data1".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+
+        last_cfg.storage.data_dir = "/data1".to_owned();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
     }
 
