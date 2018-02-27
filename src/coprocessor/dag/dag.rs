@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use tipb::schema::ColumnInfo;
 use tipb::select::{Chunk, DAGRequest, SelectResponse};
@@ -24,6 +25,7 @@ use coprocessor::dag::expr::EvalContext;
 use coprocessor::{Error, Result};
 use coprocessor::endpoint::{get_pk, to_pb_error, ReqContext};
 use storage::{Snapshot, SnapshotStore};
+use util::time::Instant;
 
 use super::executor::{build_exec, Executor, ExecutorMetrics, Row};
 
@@ -34,6 +36,7 @@ pub struct DAGContext {
     exec: Box<Executor>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
+    start_time: Instant,
 }
 
 impl DAGContext {
@@ -43,6 +46,7 @@ impl DAGContext {
         snap: Box<Snapshot>,
         req_ctx: Arc<ReqContext>,
         batch_row_limit: usize,
+        start_time: Instant,
     ) -> Result<DAGContext> {
         let eval_ctx = Arc::new(box_try!(EvalContext::new(
             req.get_time_zone_offset(),
@@ -63,16 +67,27 @@ impl DAGContext {
             exec: dag_executor.exec,
             output_offsets: req.take_output_offsets(),
             batch_row_limit: batch_row_limit,
+            start_time: start_time,
         })
     }
 
-    pub fn handle_request(&mut self) -> Result<Response> {
+    #[inline]
+    fn check_outdated(&self, request_max_handle_duration: Duration) -> Result<()> {
+        let now = Instant::now_coarse();
+        let deadline = self.start_time + request_max_handle_duration;
+        if deadline <= now {
+            return Err(Error::Outdated(deadline, now, self.req_ctx.get_scan_tag()));
+        }
+        Ok(())
+    }
+
+    pub fn handle_request(&mut self, request_max_handle_duration: Duration) -> Result<Response> {
         let mut record_cnt = 0;
         let mut chunks = Vec::new();
         loop {
             match self.exec.next() {
                 Ok(Some(row)) => {
-                    self.req_ctx.check_if_outdated()?;
+                    self.check_outdated(request_max_handle_duration)?;
                     if chunks.is_empty() || record_cnt >= self.batch_row_limit {
                         let chunk = Chunk::new();
                         chunks.push(chunk);

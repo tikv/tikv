@@ -70,7 +70,7 @@ pub struct Host {
     high_priority_pool: ThreadPool<CopContext>,
     max_running_task_count: usize,
     batch_row_limit: usize,
-    request_max_handle_secs: u64,
+    request_max_handle_duration: Duration,
 }
 
 struct CopContextFactory {
@@ -136,7 +136,9 @@ impl Host {
             ).thread_count(cfg.end_point_concurrency)
                 .stack_size(cfg.end_point_stack_size.0 as usize)
                 .build(),
-            request_max_handle_secs: cfg.end_point_request_max_handle_duration.as_secs(),
+            request_max_handle_duration: Duration::from_secs(
+                cfg.end_point_request_max_handle_duration.as_secs(),
+            ),
         }
     }
 
@@ -148,10 +150,11 @@ impl Host {
     fn handle_snapshot_result(&mut self, id: u64, snapshot: engine::Result<Box<Snapshot>>) {
         let reqs = self.reqs.remove(&id).unwrap();
         let mut local_metrics = BasicLocalMetrics::default();
+        let request_max_handle_duration = self.request_max_handle_duration;
         let snap = match snapshot {
             Ok(s) => s,
             Err(e) => {
-                notify_batch_failed(e, reqs, &mut local_metrics, self.request_max_handle_secs);
+                notify_batch_failed(e, reqs, &mut local_metrics, request_max_handle_duration);
                 return;
             }
         };
@@ -161,7 +164,7 @@ impl Host {
                 Error::Full(self.max_running_task_count),
                 reqs,
                 &mut local_metrics,
-                self.request_max_handle_secs,
+                request_max_handle_duration,
             );
             return;
         }
@@ -181,7 +184,6 @@ impl Host {
             COPR_PENDING_REQS
                 .with_label_values(&[type_str, pri_str])
                 .inc();
-            let request_max_handle_secs = self.request_max_handle_secs;
             pool.execute(move |ctx: &mut CopContext| {
                 // decrease pending task
                 COPR_PENDING_REQS
@@ -192,7 +194,7 @@ impl Host {
                     req,
                     batch_row_limit,
                     &mut ctx.basic_local_metrics,
-                    request_max_handle_secs,
+                    request_max_handle_duration,
                 );
                 ctx.exec_local_metrics.collect(type_str, region_id, stats);
             });
@@ -224,8 +226,6 @@ enum CopRequest {
 }
 
 pub struct ReqContext {
-    // The deadline before which the task should be responded.
-    pub deadline: Instant,
     pub isolation_level: IsolationLevel,
     pub fill_cache: bool,
     // whether is a table scan request.
@@ -234,20 +234,12 @@ pub struct ReqContext {
 
 impl ReqContext {
     #[inline]
-    fn get_scan_tag(&self) -> &'static str {
+    pub fn get_scan_tag(&self) -> &'static str {
         if self.table_scan {
             STR_REQ_TYPE_SELECT
         } else {
             STR_REQ_TYPE_INDEX
         }
-    }
-
-    pub fn check_if_outdated(&self) -> Result<()> {
-        let now = Instant::now_coarse();
-        if self.deadline <= now {
-            return Err(Error::Outdated(self.deadline, now, self.get_scan_tag()));
-        }
-        Ok(())
     }
 }
 
@@ -267,10 +259,8 @@ impl RequestTask {
         req: Request,
         on_resp: OnResponse,
         recursion_limit: u32,
-        request_max_handle_secs: u64,
     ) -> RequestTask {
         let timer = Instant::now_coarse();
-        let deadline = timer + Duration::from_secs(request_max_handle_secs);
         let mut start_ts = None;
         let tp = req.get_tp();
         let mut table_scan = false;
@@ -309,7 +299,6 @@ impl RequestTask {
             _ => Err(box_err!("unsupported tp {}", tp)),
         };
         let req_ctx = ReqContext {
-            deadline: deadline,
             isolation_level: req.get_context().get_isolation_level(),
             fill_cache: !req.get_context().get_not_fill_cache(),
             table_scan: table_scan,
@@ -327,8 +316,13 @@ impl RequestTask {
     }
 
     #[inline]
-    fn check_outdated(&self) -> Result<()> {
-        self.ctx.check_if_outdated()
+    fn check_outdated(&self, request_max_handle_duration: Duration) -> Result<()> {
+        let now = Instant::now_coarse();
+        let deadline = self.timer + request_max_handle_duration;
+        if deadline <= now {
+            return Err(Error::Outdated(deadline, now, self.ctx.get_scan_tag()));
+        }
+        Ok(())
     }
 
     fn stop_record_waiting(&mut self, metrics: &mut BasicLocalMetrics) {
@@ -404,6 +398,10 @@ impl RequestTask {
     pub fn priority(&self) -> CommandPri {
         self.req.get_context().get_priority()
     }
+
+    pub fn start_time(&self) -> Instant {
+        self.timer
+    }
 }
 
 impl Display for RequestTask {
@@ -429,11 +427,12 @@ impl Runnable<Task> for Host {
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
         let mut grouped_reqs = map![];
         let mut local_metrics = BasicLocalMetrics::default();
+        let request_max_handle_duration = self.request_max_handle_duration;
         for task in tasks.drain(..) {
             match task {
                 Task::Request(req) => {
-                    if let Err(e) = req.check_outdated() {
-                        on_error(e, req, &mut local_metrics, self.request_max_handle_secs);
+                    if let Err(e) = req.check_outdated(request_max_handle_duration) {
+                        on_error(e, req, &mut local_metrics, request_max_handle_duration);
                         continue;
                     }
                     let key = {
@@ -464,7 +463,7 @@ impl Runnable<Task> for Host {
                             e,
                             reqs,
                             &mut local_metrics,
-                            self.request_max_handle_secs,
+                            request_max_handle_duration,
                         );
                     } else {
                         self.reqs.insert(id, reqs);
@@ -524,7 +523,12 @@ impl Runnable<Task> for Host {
                     error!("async snapshot batch failed error {:?}", e);
                     EngineError::Other(box_err!("{:?}", e))
                 });
-                notify_batch_failed(err, reqs, &mut local_metrics, self.request_max_handle_secs);
+                notify_batch_failed(
+                    err,
+                    reqs,
+                    &mut local_metrics,
+                    self.request_max_handle_duration,
+                );
             }
         }
     }
@@ -542,7 +546,11 @@ impl Runnable<Task> for Host {
     }
 }
 
-fn err_resp(e: Error, metrics: &mut BasicLocalMetrics, request_max_handle_secs: u64) -> Response {
+fn err_resp(
+    e: Error,
+    metrics: &mut BasicLocalMetrics,
+    request_max_handle_duration: Duration,
+) -> Response {
     let mut resp = Response::new();
     let tag = match e {
         Error::Region(e) => {
@@ -555,8 +563,7 @@ fn err_resp(e: Error, metrics: &mut BasicLocalMetrics, request_max_handle_secs: 
             "lock"
         }
         Error::Outdated(deadline, now, scan_tag) => {
-            let elapsed =
-                now.duration_since(deadline) + Duration::from_secs(request_max_handle_secs);
+            let elapsed = now.duration_since(deadline) + request_max_handle_duration;
             metrics
                 .outdate_time
                 .with_label_values(&[scan_tag])
@@ -590,9 +597,9 @@ fn on_error(
     e: Error,
     req: RequestTask,
     metrics: &mut BasicLocalMetrics,
-    request_max_handle_secs: u64,
+    request_max_handle_duration: Duration,
 ) -> ExecutorMetrics {
-    let resp = err_resp(e, metrics, request_max_handle_secs);
+    let resp = err_resp(e, metrics, request_max_handle_duration);
     respond(resp, req, metrics)
 }
 
@@ -600,10 +607,10 @@ fn notify_batch_failed<E: Into<Error> + Debug>(
     e: E,
     reqs: Vec<RequestTask>,
     metrics: &mut BasicLocalMetrics,
-    request_max_handle_secs: u64,
+    request_max_handle_duration: Duration,
 ) {
     debug!("failed to handle batch request: {:?}", e);
-    let resp = err_resp(e.into(), metrics, request_max_handle_secs);
+    let resp = err_resp(e.into(), metrics, request_max_handle_duration);
     for t in reqs {
         respond(resp.clone(), t, metrics);
     }
@@ -637,22 +644,22 @@ impl TiDbEndPoint {
         mut t: RequestTask,
         batch_row_limit: usize,
         metrics: &mut BasicLocalMetrics,
-        request_max_handle_secs: u64,
+        request_max_handle_duration: Duration,
     ) -> ExecutorMetrics {
         t.stop_record_waiting(metrics);
 
-        if let Err(e) = t.check_outdated() {
-            return on_error(e, t, metrics, request_max_handle_secs);
+        if let Err(e) = t.check_outdated(request_max_handle_duration) {
+            return on_error(e, t, metrics, request_max_handle_duration);
         }
 
         let resp = match t.cop_req.take().unwrap() {
-            Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t, batch_row_limit),
+            Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t, batch_row_limit, request_max_handle_duration),
             Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t),
             Err(err) => Err(err),
         };
         match resp {
             Ok(r) => respond(r, t, metrics),
-            Err(e) => on_error(e, t, metrics, request_max_handle_secs),
+            Err(e) => on_error(e, t, metrics, request_max_handle_duration),
         }
     }
 
@@ -661,10 +668,11 @@ impl TiDbEndPoint {
         dag: DAGRequest,
         t: &mut RequestTask,
         batch_row_limit: usize,
+        request_max_handle_duration: Duration,
     ) -> Result<Response> {
         let ranges = t.req.take_ranges().into_vec();
-        let mut ctx = DAGContext::new(dag, ranges, self.snap, Arc::clone(&t.ctx), batch_row_limit)?;
-        let res = ctx.handle_request();
+        let mut ctx = DAGContext::new(dag, ranges, self.snap, Arc::clone(&t.ctx), batch_row_limit, t.start_time())?;
+        let res = ctx.handle_request(request_max_handle_duration);
         ctx.collect_metrics_into(&mut t.metrics);
         res
     }
@@ -756,7 +764,6 @@ mod tests {
     #[test]
     fn test_get_reg_scan_tag() {
         let mut ctx = ReqContext {
-            deadline: Instant::now_coarse(),
             isolation_level: IsolationLevel::RC,
             fill_cache: true,
             table_scan: true,
@@ -782,11 +789,8 @@ mod tests {
                 tx.send(msg).unwrap();
             },
             1000,
-            super::DEFAULT_REQUEST_MAX_HANDLE_SECS,
         );
         let ctx = ReqContext {
-            deadline: task.ctx.deadline
-                - Duration::from_secs(super::DEFAULT_REQUEST_MAX_HANDLE_SECS),
             isolation_level: task.ctx.isolation_level,
             fill_cache: task.ctx.fill_cache,
             table_scan: task.ctx.table_scan,
@@ -815,11 +819,8 @@ mod tests {
                 tx.send(msg).unwrap();
             },
             1000,
-            super::DEFAULT_REQUEST_MAX_HANDLE_SECS,
         );
         let ctx = ReqContext {
-            deadline: task.ctx.deadline
-                - Duration::from_secs(super::DEFAULT_REQUEST_MAX_HANDLE_SECS),
             isolation_level: task.ctx.isolation_level,
             fill_cache: task.ctx.fill_cache,
             table_scan: task.ctx.table_scan,
@@ -868,7 +869,6 @@ mod tests {
                     let _ = tx.send(msg);
                 },
                 1000,
-                super::DEFAULT_REQUEST_MAX_HANDLE_SECS,
             );
             worker.schedule(Task::Request(task)).unwrap();
         }
@@ -899,12 +899,7 @@ mod tests {
         let mut req = Request::new();
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(dag.write_to_bytes().unwrap());
-        RequestTask::new(
-            req.clone(),
-            box move |_| unreachable!(),
-            100,
-            super::DEFAULT_REQUEST_MAX_HANDLE_SECS,
-        );
+        RequestTask::new(req.clone(), box move |_| unreachable!(), 100);
         RequestTask::new(
             req,
             box move |res| {
@@ -916,7 +911,6 @@ mod tests {
                 );
             },
             5,
-            super::DEFAULT_REQUEST_MAX_HANDLE_SECS,
         );
     }
 }
