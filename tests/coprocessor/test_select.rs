@@ -1475,7 +1475,7 @@ fn test_reverse() {
 pub fn handle_request(end_point: &Worker<EndPointTask>, req: Request) -> Response {
     let (tx, rx) = mpsc::channel();
     let on_resp = OnResponse::Unary(box move |r| tx.send(r).unwrap());
-    let req = RequestTask::new(req, on_resp, 100).unwrap();
+    let req = RequestTask::new(req, on_resp, 100, 60).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();
     rx.recv().unwrap()
 }
@@ -1507,7 +1507,7 @@ where
             tx.send(stream_resp).unwrap();
         }
     });
-    let req = RequestTask::new(req, on_resp, 100).unwrap();
+    let req = RequestTask::new(req, on_resp, 100, 60).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();
     rx.into_iter().collect()
 }
@@ -2092,7 +2092,7 @@ fn test_handle_truncate() {
             .build();
         let (tx, rx) = mpsc::channel();
         let on_resp = OnResponse::Unary(box move |r| tx.send(r).unwrap());
-        let req = RequestTask::new(req, on_resp, 100).unwrap();
+        let req = RequestTask::new(req, on_resp, 100, 60).unwrap();
         end_point.schedule(EndPointTask::Request(req)).unwrap();
         let resp = rx.recv().unwrap();
         assert!(!resp.get_other_error().is_empty());

@@ -51,7 +51,7 @@ pub const REQ_TYPE_ANALYZE: i64 = 104;
 
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.
-const REQUEST_MAX_HANDLE_SECS: u64 = 60;
+pub const DEFAULT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 // If handle time is larger than the lower bound, the query is considered as slow query.
 const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
 
@@ -77,6 +77,7 @@ pub struct Host {
     running_task_count: Arc<AtomicUsize>,
     batch_row_limit: usize,
     stream_batch_row_limit: usize,
+    request_max_handle_secs: u64,
 }
 
 impl Host {
@@ -109,6 +110,7 @@ impl Host {
             max_running_task_count: cfg.end_point_max_tasks,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
+            request_max_handle_secs: cfg.end_point_request_max_handle_duration.as_secs(),
             running_task_count: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -135,7 +137,7 @@ impl Host {
 
     fn notify_failed<E: Into<Error> + Debug>(&mut self, e: E, reqs: Vec<RequestTask>) {
         debug!("failed to handle batch request: {:?}", e);
-        let resp = err_resp(e.into());
+        let resp = err_resp(e.into(), self.request_max_handle_secs);
         for t in reqs {
             t.on_resp.respond(resp.clone());
         }
@@ -149,7 +151,7 @@ impl Host {
 
     fn handle_request(&mut self, snap: Box<Snapshot>, t: RequestTask) {
         if let Err(e) = t.check_outdated() {
-            return t.on_resp.respond(err_resp(e));
+            return t.on_resp.respond(err_resp(e, self.request_max_handle_secs));
         }
 
         let (mut req, cop_req, req_ctx, on_resp) = (t.req, t.cop_req, t.ctx, t.on_resp);
@@ -162,18 +164,20 @@ impl Host {
             CommandPri::Normal => &mut self.pool,
         };
         let pool = &pool_and_ctx_pool.pool;
+        let request_max_handle_secs = self.request_max_handle_secs;
 
         match cop_req {
             CopRequest::DAG(dag) => {
                 let mut ctx = match DAGContext::new(dag, ranges, snap, req_ctx) {
                     Ok(ctx) => ctx,
-                    Err(e) => return on_resp.respond(err_resp(e)),
+                    Err(e) => return on_resp.respond(err_resp(e, request_max_handle_secs)),
                 };
                 if !on_resp.is_streaming() {
                     let batch_row_limit = self.batch_row_limit;
                     let do_request = move || {
                         tracker.record_wait();
-                        let mut resp = ctx.handle_request(batch_row_limit).unwrap_or_else(err_resp);
+                        let mut resp = ctx.handle_request(batch_row_limit)
+                            .unwrap_or_else(|e| err_resp(e, request_max_handle_secs));
                         let mut exec_metrics = ExecutorMetrics::default();
                         ctx.collect_metrics_into(&mut exec_metrics);
                         tracker.record_handle(&mut resp, exec_metrics);
@@ -189,7 +193,7 @@ impl Host {
                     }
                     tracker.record_wait();
                     let (item, finished) = ctx.handle_streaming_request(batch_row_limit)
-                        .unwrap_or_else(|e| (Some(err_resp(e)), true));
+                        .unwrap_or_else(|e| (Some(err_resp(e, request_max_handle_secs)), true));
                     item.map(|mut resp| {
                         let mut exec_metrics = ExecutorMetrics::default();
                         ctx.collect_metrics_into(&mut exec_metrics);
@@ -205,7 +209,7 @@ impl Host {
                 let do_request = move || {
                     tracker.record_wait();
                     let mut resp = ctx.handle_request(&mut exec_metrics)
-                        .unwrap_or_else(err_resp);
+                        .unwrap_or_else(|e| err_resp(e, request_max_handle_secs));
                     tracker.record_handle(&mut resp, exec_metrics);
                     future::ok::<_, ()>(on_resp.respond(resp))
                 };
@@ -403,6 +407,7 @@ impl RequestTask {
         req: Request,
         on_resp: OnResponse<Response>,
         recursion_limit: u32,
+        request_max_handle_secs: u64,
     ) -> Result<RequestTask> {
         let mut table_scan = false;
         let (start_ts, cop_req) = match req.get_tp() {
@@ -428,7 +433,7 @@ impl RequestTask {
         };
 
         let start = Instant::now_coarse();
-        let deadline = start + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
+        let deadline = start + Duration::from_secs(request_max_handle_secs);
 
         let req_ctx = ReqContext {
             deadline: deadline,
@@ -515,7 +520,8 @@ impl Runnable<Task> for Host {
             match task {
                 Task::Request(req) => {
                     if let Err(e) = req.check_outdated() {
-                        req.on_resp.respond(err_resp(e));
+                        req.on_resp
+                            .respond(err_resp(e, self.request_max_handle_secs));
                         continue;
                     }
                     let key = req.get_request_key();
@@ -602,7 +608,7 @@ impl Runnable<Task> for Host {
     }
 }
 
-pub fn err_resp(e: Error) -> Response {
+pub fn err_resp(e: Error, request_max_handle_secs: u64) -> Response {
     let mut resp = Response::new();
     match e {
         Error::Region(e) => {
@@ -616,7 +622,7 @@ pub fn err_resp(e: Error) -> Response {
         }
         Error::Outdated(deadline, now, scan_tag) => {
             let elapsed =
-                now.duration_since(deadline) + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
+                now.duration_since(deadline) + Duration::from_secs(request_max_handle_secs);
             COPR_REQ_ERROR.with_label_values(&["outdated"]).inc();
             OUTDATED_REQ_WAIT_TIME
                 .with_label_values(&[scan_tag])
@@ -737,8 +743,9 @@ mod tests {
         req.set_tp(REQ_TYPE_DAG);
         let (tx, rx) = mpsc::channel();
         let on_resp = OnResponse::Unary(box move |msg| tx.send(msg).unwrap());
-        let mut task = RequestTask::new(req, on_resp, 1000).unwrap();
-        task.ctx.deadline -= Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS);
+        let mut task =
+            RequestTask::new(req, on_resp, 1000, super::DEFAULT_REQUEST_MAX_HANDLE_SECS).unwrap();
+        task.ctx.deadline -= Duration::from_secs(super::DEFAULT_REQUEST_MAX_HANDLE_SECS);
 
         worker.schedule(Task::Request(task)).unwrap();
         let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -773,7 +780,8 @@ mod tests {
                 let _ = tx.send(msg); // To avoid panic if rx is closed.
             });
 
-            let task = RequestTask::new(req, on_resp, 1000).unwrap();
+            let task = RequestTask::new(req, on_resp, 1000, super::DEFAULT_REQUEST_MAX_HANDLE_SECS)
+                .unwrap();
             worker.schedule(Task::Request(task)).unwrap();
         }
         for _ in 0..120 {
@@ -803,7 +811,12 @@ mod tests {
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(dag.write_to_bytes().unwrap());
 
-        let err = RequestTask::new(req, OnResponse::Unary(box |_| ()), 5).unwrap_err();
+        let err = RequestTask::new(
+            req,
+            OnResponse::Unary(box |_| ()),
+            5,
+            super::DEFAULT_REQUEST_MAX_HANDLE_SECS,
+        ).unwrap_err();
         let s = format!("{:?}", err);
         assert!(
             s.contains("Recursion"),

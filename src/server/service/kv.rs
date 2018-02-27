@@ -59,6 +59,7 @@ pub struct Service<T: RaftStoreRouter + 'static> {
     token: Arc<AtomicUsize>, // TODO: remove it.
     recursion_limit: u32,
     stream_channel_size: usize,
+    request_max_handle_secs: u64,
 }
 
 impl<T: RaftStoreRouter + 'static> Service<T> {
@@ -69,6 +70,7 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
         snap_scheduler: Scheduler<SnapTask>,
         recursion_limit: u32,
         stream_channel_size: usize,
+        request_max_handle_secs: u64,
     ) -> Service<T> {
         Service {
             storage: storage,
@@ -78,6 +80,7 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
             token: Arc::new(AtomicUsize::new(1)),
             recursion_limit: recursion_limit,
             stream_channel_size: stream_channel_size,
+            request_max_handle_secs: request_max_handle_secs,
         }
     }
 
@@ -803,10 +806,15 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let (cb, future) = make_callback();
         let on_resp = OnResponse::Unary(cb);
-        let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
+        let req_task = match RequestTask::new(
+            req,
+            on_resp,
+            self.recursion_limit,
+            self.request_max_handle_secs,
+        ) {
             Ok(req_task) => req_task,
             Err(e) => {
-                let response = err_resp(e);
+                let response = err_resp(e, self.request_max_handle_secs);
                 let future = sink.success(response)
                     .map(|_| timer.observe_duration())
                     .map_err(move |e| {
@@ -847,11 +855,17 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .start_coarse_timer();
 
         let (on_resp, stream) = make_stream_callback(self.stream_channel_size);
-        let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
+        let req_task = match RequestTask::new(
+            req,
+            on_resp,
+            self.recursion_limit,
+            self.request_max_handle_secs,
+        ) {
             Ok(req_task) => req_task,
             Err(e) => {
-                let stream = stream::once::<_, GrpcError>(Ok(err_resp(e)))
-                    .map(|resp| (resp, WriteFlags::default()));
+                let stream =
+                    stream::once::<_, GrpcError>(Ok(err_resp(e, self.request_max_handle_secs)))
+                        .map(|resp| (resp, WriteFlags::default()));
                 let future = sink.send_all(stream)
                     .map(|_| timer.observe_duration())
                     .map_err(move |e| {
