@@ -14,8 +14,6 @@
 mod config;
 mod errors;
 mod metrics;
-#[macro_use]
-mod service;
 mod sst_service;
 mod sst_importer;
 

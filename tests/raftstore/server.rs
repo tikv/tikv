@@ -19,7 +19,7 @@ use tempdir::TempDir;
 
 use tikv::config::TiKvConfig;
 use tikv::server::{Server, ServerTransport};
-use tikv::server::{create_raft_storage, Config, Node, PdStoreAddrResolver, RaftClient};
+use tikv::server::{create_raft_storage, Node, PdStoreAddrResolver, RaftClient};
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::raftstore::{store, Result};
@@ -58,25 +58,18 @@ pub struct ServerCluster {
     pub storages: HashMap<u64, Box<Engine>>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
-    raft_client: RaftClient,
+    raft_client: Option<RaftClient>,
 }
 
 impl ServerCluster {
     pub fn new(pd_client: Arc<TestPdClient>) -> ServerCluster {
-        let env = Arc::new(
-            EnvBuilder::new()
-                .cq_count(1)
-                .name_prefix(thd_name!("server-cluster"))
-                .build(),
-        );
-        let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
         ServerCluster {
             metas: HashMap::new(),
             addrs: HashMap::new(),
             pd_client: pd_client,
             storages: HashMap::new(),
             snap_paths: HashMap::new(),
-            raft_client: RaftClient::new(env, Arc::new(Config::default()), security_mgr),
+            raft_client: None,
         }
     }
 
@@ -94,6 +87,18 @@ impl Simulator for ServerCluster {
         engines: Option<Engines>,
     ) -> (u64, Engines, Option<TempDir>) {
         assert!(node_id == 0 || !self.metas.contains_key(&node_id));
+        let env = Arc::new(
+            EnvBuilder::new()
+                .cq_count(1)
+                .name_prefix(thd_name!("server-cluster"))
+                .build(),
+        );
+        let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
+        self.raft_client = Some(RaftClient::new(
+            env,
+            Arc::new(cfg.server.clone()),
+            security_mgr,
+        ));
 
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = TempDir::new("test_cluster").unwrap();
@@ -129,7 +134,12 @@ impl Simulator for ServerCluster {
             let dir = TempDir::new("test-import-sst").unwrap().into_path();
             Arc::new(SSTImporter::new(dir).unwrap())
         };
-        let import_service = ImportSSTService::new(cfg.import.clone(), store.clone(), importer);
+        let import_service = ImportSSTService::new(
+            cfg.server.cluster_id,
+            cfg.import.clone(),
+            store.clone(),
+            importer,
+        );
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
@@ -235,8 +245,9 @@ impl Simulator for ServerCluster {
     fn send_raft_msg(&mut self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
         let store_id = raft_msg.get_to_peer().get_store_id();
         let addr = self.get_addr(store_id).to_owned();
-        self.raft_client.send(store_id, &addr, raft_msg).unwrap();
-        self.raft_client.flush();
+        let raft_client = self.raft_client.as_mut().unwrap();
+        raft_client.send(store_id, &addr, raft_msg).unwrap();
+        raft_client.flush();
         Ok(())
     }
 

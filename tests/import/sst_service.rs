@@ -19,7 +19,7 @@ use futures::{stream, Future, Stream};
 use kvproto::kvrpcpb::*;
 use kvproto::importpb::*;
 use kvproto::importpb_grpc::*;
-use grpc::{ChannelBuilder, Environment, Result, WriteFlags};
+use grpc::{CallOption, ChannelBuilder, Environment, Result, WriteFlags};
 
 use tikv::util::HandyRwLock;
 use tikv::import::test_helpers::*;
@@ -58,7 +58,7 @@ fn new_cluster_and_import_client() -> (Cluster<ServerCluster>, ImportSstClient) 
 
 #[test]
 fn test_upload_sst() {
-    let (_cluster, import) = new_cluster_and_import_client();
+    let (cluster, import) = new_cluster_and_import_client();
 
     let data = vec![1; 1024];
     let crc32 = calc_data_crc32(&data);
@@ -70,19 +70,19 @@ fn test_upload_sst() {
     // Mismatch crc32
     let meta = new_sst_meta(0, length);
     upload.set_meta(meta);
-    assert!(send_upload_sst(&import, &upload).is_err());
+    assert!(send_upload_sst(&import, &upload, cluster.call_option()).is_err());
 
     // Mismatch length
     let meta = new_sst_meta(crc32, 0);
     upload.set_meta(meta);
-    assert!(send_upload_sst(&import, &upload).is_err());
+    assert!(send_upload_sst(&import, &upload, cluster.call_option()).is_err());
 
     let meta = new_sst_meta(crc32, length);
     upload.set_meta(meta);
-    send_upload_sst(&import, &upload).unwrap();
+    send_upload_sst(&import, &upload, cluster.call_option()).unwrap();
 
     // Can't upload the same uuid file again.
-    assert!(send_upload_sst(&import, &upload).is_err());
+    assert!(send_upload_sst(&import, &upload, cluster.call_option()).is_err());
 }
 
 fn new_sst_meta(crc32: u32, length: u64) -> SSTMeta {
@@ -93,8 +93,12 @@ fn new_sst_meta(crc32: u32, length: u64) -> SSTMeta {
     m
 }
 
-fn send_upload_sst(client: &ImportSstClient, m: &UploadRequest) -> Result<UploadResponse> {
-    let (tx, rx) = client.upload().unwrap();
+fn send_upload_sst(
+    client: &ImportSstClient,
+    m: &UploadRequest,
+    option: CallOption,
+) -> Result<UploadResponse> {
+    let (tx, rx) = client.upload_opt(option).unwrap();
     let stream = stream::once({ Ok((m.clone(), WriteFlags::default().buffer_hint(true))) });
     stream.forward(tx).and_then(|_| rx).wait()
 }

@@ -46,6 +46,8 @@ pub mod security;
 pub mod timer;
 pub mod sys;
 pub mod futurepool;
+#[macro_use]
+pub mod rpc;
 
 pub use self::rocksdb::properties;
 

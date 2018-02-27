@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::result;
 
 use futures::sync::oneshot::Canceled;
-use grpc::Error as GrpcError;
+use grpc::{Error as GrpcError, RpcStatus, RpcStatusCode};
 use uuid::ParseError;
 
 use util::codec::Error as CodecError;
@@ -71,3 +71,9 @@ quick_error! {
 }
 
 pub type Result<T> = result::Result<T, Error>;
+
+impl Into<RpcStatus> for Error {
+    fn into(self) -> RpcStatus {
+        RpcStatus::new(RpcStatusCode::Internal, Some(format!("{:?}", self)))
+    }
+}

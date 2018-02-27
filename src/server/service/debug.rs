@@ -11,8 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use grpc::{Error as GrpcError, WriteFlags};
-use grpc::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
+use grpc::{Error as GrpcError, RpcContext, ServerStreamingSink, UnarySink, WriteFlags};
 use futures::{future, stream, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use kvproto::debugpb_grpc;
@@ -20,46 +19,27 @@ use kvproto::debugpb::*;
 use fail;
 
 use raftstore::store::Engines;
-use server::debug::{Debugger, Error};
+use server::debug::{Debugger, Error, Result};
 
 #[derive(Clone)]
 pub struct Service {
+    cluster_id: u64,
     pool: CpuPool,
     debugger: Debugger,
 }
 
 impl Service {
-    pub fn new(engines: Engines) -> Service {
+    pub fn new(cluster_id: u64, engines: Engines) -> Service {
         let pool = Builder::new()
             .name_prefix(thd_name!("debugger"))
             .pool_size(1)
             .create();
         let debugger = Debugger::new(engines);
-        Service { pool, debugger }
-    }
-
-    fn handle_response<F, P>(&self, ctx: RpcContext, sink: UnarySink<P>, resp: F, tag: &'static str)
-    where
-        P: Send + 'static,
-        F: Future<Item = P, Error = Error> + Send + 'static,
-    {
-        let f = resp.then(|v| match v {
-            Ok(resp) => sink.success(resp),
-            Err(e) => {
-                let status = Service::error_to_status(e);
-                sink.fail(status)
-            }
-        });
-        ctx.spawn(f.map_err(move |e| Service::on_grpc_error(tag, &e)));
-    }
-
-    fn error_to_status(e: Error) -> RpcStatus {
-        let (code, msg) = match e {
-            Error::NotFound(msg) => (RpcStatusCode::NotFound, Some(msg)),
-            Error::InvalidArgument(msg) => (RpcStatusCode::InvalidArgument, Some(msg)),
-            Error::Other(e) => (RpcStatusCode::Unknown, Some(format!("{:?}", e))),
-        };
-        RpcStatus::new(code, msg)
+        Service {
+            cluster_id,
+            pool,
+            debugger,
+        }
     }
 
     fn on_grpc_error(tag: &'static str, e: &GrpcError) {
@@ -67,8 +47,7 @@ impl Service {
     }
 
     fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
-        let status = Service::error_to_status(e);
-        let e = GrpcError::RpcFailure(status);
+        let e = GrpcError::RpcFailure(e.into());
         Service::on_grpc_error(tag, &e);
         e
     }
@@ -77,6 +56,7 @@ impl Service {
 impl debugpb_grpc::Debug for Service {
     fn get(&self, ctx: RpcContext, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
+        try_check_header!(ctx, sink, self.cluster_id, TAG);
 
         let db = req.get_db();
         let cf = req.take_cf();
@@ -93,11 +73,12 @@ impl debugpb_grpc::Debug for Service {
                 resp
             });
 
-        self.handle_response(ctx, sink, f, TAG);
+        send_response!(ctx, sink, f, Into::into, TAG);
     }
 
     fn raft_log(&self, ctx: RpcContext, req: RaftLogRequest, sink: UnarySink<RaftLogResponse>) {
         const TAG: &str = "debug_raft_log";
+        try_check_header!(ctx, sink, self.cluster_id, TAG);
 
         let region_id = req.get_region_id();
         let log_index = req.get_log_index();
@@ -113,7 +94,7 @@ impl debugpb_grpc::Debug for Service {
                 resp
             });
 
-        self.handle_response(ctx, sink, f, TAG);
+        send_response!(ctx, sink, f, Into::into, TAG);
     }
 
     fn region_info(
@@ -123,6 +104,7 @@ impl debugpb_grpc::Debug for Service {
         sink: UnarySink<RegionInfoResponse>,
     ) {
         const TAG: &str = "debug_region_log";
+        try_check_header!(ctx, sink, self.cluster_id, TAG);
 
         let region_id = req.get_region_id();
 
@@ -145,7 +127,7 @@ impl debugpb_grpc::Debug for Service {
                 resp
             });
 
-        self.handle_response(ctx, sink, f, TAG);
+        send_response!(ctx, sink, f, Into::into, TAG);
     }
 
     fn region_size(
@@ -155,6 +137,7 @@ impl debugpb_grpc::Debug for Service {
         sink: UnarySink<RegionSizeResponse>,
     ) {
         const TAG: &str = "debug_region_size";
+        try_check_header!(ctx, sink, self.cluster_id, TAG);
 
         let region_id = req.get_region_id();
         let cfs = req.take_cfs().into_vec();
@@ -180,15 +163,18 @@ impl debugpb_grpc::Debug for Service {
                 resp
             });
 
-        self.handle_response(ctx, sink, f, TAG);
+        send_response!(ctx, sink, f, Into::into, TAG);
     }
 
     fn scan_mvcc(
         &self,
-        _: RpcContext,
+        ctx: RpcContext,
         mut req: ScanMvccRequest,
         sink: ServerStreamingSink<ScanMvccResponse>,
     ) {
+        const TAG: &str = "debug_scan_mvcc";
+        try_check_header!(ctx, sink, self.cluster_id, TAG);
+
         let debugger = self.debugger.clone();
         let from = req.take_from_key();
         let to = req.take_to_key();
@@ -196,8 +182,7 @@ impl debugpb_grpc::Debug for Service {
         let future = future::result(debugger.scan_mvcc(&from, &to, limit))
             .map_err(|e| Service::error_to_grpc_error("scan_mvcc", e))
             .and_then(|iter| {
-                #[allow(deprecated)]
-                stream::iter(iter)
+                stream::iter_result(iter)
                     .map_err(|e| Service::error_to_grpc_error("scan_mvcc", e))
                     .map(|(key, mvcc_info)| {
                         let mut resp = ScanMvccResponse::new();
@@ -213,6 +198,9 @@ impl debugpb_grpc::Debug for Service {
     }
 
     fn compact(&self, ctx: RpcContext, req: CompactRequest, sink: UnarySink<CompactResponse>) {
+        const TAG: &str = "debug_compact";
+        try_check_header!(ctx, sink, self.cluster_id, TAG);
+
         let debugger = self.debugger.clone();
         let f = self.pool.spawn_fn(move || {
             debugger
@@ -224,7 +212,7 @@ impl debugpb_grpc::Debug for Service {
                 )
                 .map(|_| CompactResponse::default())
         });
-        self.handle_response(ctx, sink, f, "debug_compact");
+        send_response!(ctx, sink, f, Into::into, "debug_compact");
     }
 
     fn inject_fail_point(
@@ -234,6 +222,7 @@ impl debugpb_grpc::Debug for Service {
         sink: UnarySink<InjectFailPointResponse>,
     ) {
         const TAG: &str = "debug_inject_fail_point";
+        try_check_header!(ctx, sink, self.cluster_id, TAG);
 
         let f = self.pool.spawn_fn(move || {
             let name = req.take_name();
@@ -247,7 +236,7 @@ impl debugpb_grpc::Debug for Service {
             Ok(InjectFailPointResponse::new())
         });
 
-        self.handle_response(ctx, sink, f, TAG);
+        send_response!(ctx, sink, f, Into::into, TAG);
     }
 
     fn recover_fail_point(
@@ -257,6 +246,7 @@ impl debugpb_grpc::Debug for Service {
         sink: UnarySink<RecoverFailPointResponse>,
     ) {
         const TAG: &str = "debug_recover_fail_point";
+        try_check_header!(ctx, sink, self.cluster_id, TAG);
 
         let f = self.pool.spawn_fn(move || {
             let name = req.take_name();
@@ -267,7 +257,7 @@ impl debugpb_grpc::Debug for Service {
             Ok(RecoverFailPointResponse::new())
         });
 
-        self.handle_response(ctx, sink, f, TAG);
+        send_response!(ctx, sink, f, Into::into, TAG);
     }
 
     fn list_fail_points(
@@ -277,6 +267,7 @@ impl debugpb_grpc::Debug for Service {
         sink: UnarySink<ListFailPointsResponse>,
     ) {
         const TAG: &str = "debug_list_fail_points";
+        try_check_header!(ctx, sink, self.cluster_id, TAG);
 
         let f = self.pool.spawn_fn(move || {
             let list = fail::list().into_iter().map(|(name, actions)| {
@@ -287,9 +278,9 @@ impl debugpb_grpc::Debug for Service {
             });
             let mut resp = ListFailPointsResponse::new();
             resp.set_entries(list.collect());
-            Ok(resp)
+            Ok(resp) as Result<_>
         });
 
-        self.handle_response(ctx, sink, f, TAG);
+        send_response!(ctx, sink, f, Into::into, TAG);
     }
 }

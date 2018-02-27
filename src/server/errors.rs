@@ -18,7 +18,7 @@ use std::net::AddrParseError;
 
 use futures::Canceled;
 use protobuf::ProtobufError;
-use grpc::Error as GrpcError;
+use grpc::{Error as GrpcError, RpcStatus, RpcStatusCode};
 
 use util::codec::Error as CodecError;
 use util::worker::ScheduleError;
@@ -113,3 +113,16 @@ quick_error!{
 }
 
 pub type Result<T> = result::Result<T, Error>;
+
+impl Into<RpcStatus> for Error {
+    fn into(self) -> RpcStatus {
+        let msg = Some(format!("{:?}", self));
+        let code = match self {
+            Error::Storage(_) | Error::EndPointStopped(_) | Error::SnapWorkerStopped(_) => {
+                RpcStatusCode::ResourceExhausted
+            }
+            _ => RpcStatusCode::Internal,
+        };
+        RpcStatus::new(code, msg)
+    }
+}

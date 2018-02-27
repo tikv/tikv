@@ -18,10 +18,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
 use futures::sync::mpsc::{self, UnboundedSender};
 use futures::sync::oneshot::{self, Sender};
 use futures::{stream, Future, Sink, Stream};
-use grpc::{ChannelBuilder, Environment, WriteFlags};
+use grpc::{CallOption, ChannelBuilder, Environment, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 
+use util::rpc::make_header;
 use util::collections::HashMap;
 use util::security::SecurityManager;
 use super::{Config, Error, Result};
@@ -68,7 +69,8 @@ impl Conn {
         let client = TikvClient::new(channel);
         let (tx, rx) = mpsc::unbounded();
         let (tx_close, rx_close) = oneshot::channel();
-        let (sink, _) = client.raft().unwrap();
+        let option = CallOption::default().headers(make_header(cfg.cluster_id));
+        let (sink, _) = client.raft_opt(option).unwrap();
         let addr = addr.to_owned();
         client.spawn(
             rx_close

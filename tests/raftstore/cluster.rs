@@ -20,6 +20,7 @@ use std::{result, thread};
 use rocksdb::DB;
 use tempdir::TempDir;
 use futures::Future;
+use grpc::CallOption;
 
 use tikv::raftstore::{Error, Result};
 use tikv::raftstore::store::*;
@@ -34,6 +35,7 @@ use kvproto::errorpb::Error as PbError;
 use tikv::pd::PdClient;
 use tikv::util::{escape, rocksdb, HandyRwLock};
 use tikv::util::transport::SendCh;
+use tikv::util::rpc::make_header;
 use super::pd::TestPdClient;
 use super::transport_simulate::*;
 
@@ -123,6 +125,10 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn id(&self) -> u64 {
         self.cfg.server.cluster_id
+    }
+
+    pub fn call_option(&self) -> CallOption {
+        CallOption::default().headers(make_header(self.id()))
     }
 
     fn create_engines(&mut self) {
