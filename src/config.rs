@@ -165,7 +165,7 @@ impl Default for DefaultCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
-            dynamic_level_bytes: false,
+            dynamic_level_bytes: true,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
         }
@@ -215,7 +215,7 @@ impl Default for WriteCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
-            dynamic_level_bytes: false,
+            dynamic_level_bytes: true,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
         }
@@ -267,7 +267,7 @@ impl Default for LockCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
-            dynamic_level_bytes: false,
+            dynamic_level_bytes: true,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
         }
@@ -312,7 +312,7 @@ impl Default for RaftCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
-            dynamic_level_bytes: false,
+            dynamic_level_bytes: true,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
         }
@@ -487,7 +487,7 @@ impl Default for RaftDefaultCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
-            dynamic_level_bytes: false,
+            dynamic_level_bytes: true,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
         }
