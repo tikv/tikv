@@ -8,10 +8,12 @@ RUN yum install -y epel-release
 RUN yum makecache \
 	&& yum update -y \
 	&& yum install -y tar wget git which file unzip python-pip \
-	&& yum install -y make cmake gcc gcc-c++ libstdc++-static pkg-config psmisc \
+	&& yum install -y make cmake3 gcc gcc-c++ libstdc++-static pkg-config psmisc \
 	&& yum install -y libzstd-devel lz4-devel zlib-devel bzip2-devel snappy-devel libdwarf-devel elfutils-libelf-devel elfutils-devel binutils-devel \
 	&& yum install -y openssl-devel \
 	&& yum clean all
+
+RUN ln -s /usr/bin/cmake3 /usr/bin/cmake
 
 RUN curl -L https://github.com/gflags/gflags/archive/v2.1.2.tar.gz -o gflags.tar.gz \
 	&& tar xf gflags.tar.gz \
