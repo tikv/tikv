@@ -747,5 +747,9 @@ impl TiKvConfig {
             }
             self.raft_store.region_split_size = default_raft_store.region_split_size;
         }
+
+        let delay_secs = self.raft_store.clean_stale_peer_delay.as_secs()
+            + self.server.end_point_request_max_handle_duration.as_secs();
+        self.raft_store.clean_stale_peer_delay = ReadableDuration::secs(delay_secs);
     }
 }

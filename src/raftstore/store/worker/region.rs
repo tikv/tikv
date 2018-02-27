@@ -410,7 +410,7 @@ impl PendingDeleteRanges {
 pub struct Runner {
     pool: ThreadPool<DefaultContext>,
     ctx: SnapContext,
-    range_deletion_delay: Duration,
+    clean_stale_peer_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
 }
 
@@ -421,7 +421,7 @@ impl Runner {
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
-        range_deletion_delay: u64,
+        clean_stale_peer_delay: u64,
     ) -> Runner {
         Runner {
             pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap generator"))
@@ -434,7 +434,7 @@ impl Runner {
                 batch_size: batch_size,
                 use_delete_range: use_delete_range,
             },
-            range_deletion_delay: Duration::from_secs(range_deletion_delay),
+            clean_stale_peer_delay: Duration::from_secs(clean_stale_peer_delay),
             pending_delete_ranges: PendingDeleteRanges::default(),
         }
     }
@@ -462,7 +462,7 @@ impl Runnable<Task> for Runner {
                 start_key,
                 end_key,
             } => {
-                if self.range_deletion_delay.as_secs() > 0 {
+                if self.clean_stale_peer_delay.as_secs() > 0 {
                     info!(
                         "[region {}] register deleting data in [{}, {})",
                         region_id,
@@ -470,7 +470,7 @@ impl Runnable<Task> for Runner {
                         escape(&end_key)
                     );
                     // delay the range deletion becase there might be a coprocessor request related to this range
-                    let timeout = time::Instant::now() + self.range_deletion_delay;
+                    let timeout = time::Instant::now() + self.clean_stale_peer_delay;
                     self.pending_delete_ranges
                         .insert(start_key, end_key, timeout);
                 } else {

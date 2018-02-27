@@ -161,8 +161,8 @@
 # Use delete range to drop a large number of continuous keys.
 # use-delete-range = false
 
-# delay time before deleting a region range
-# range-deletion-delay = "60s"
+# delay time before deleting a stale peer
+# clean-stale-peer-delay = "60s"
 
 [coprocessor]
 # When it is true, it will try to split a region with table prefix if

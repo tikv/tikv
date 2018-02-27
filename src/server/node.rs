@@ -128,7 +128,6 @@ where
         significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
         coprocessor_host: CoprocessorHost,
-        end_point_request_max_handle_secs: u64,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -168,7 +167,6 @@ where
             significant_msg_receiver,
             pd_worker,
             coprocessor_host,
-            end_point_request_max_handle_secs,
         )?;
         Ok(())
     }
@@ -320,7 +318,6 @@ where
         significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
         coprocessor_host: CoprocessorHost,
-        end_point_request_max_handle_secs: u64,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -358,7 +355,7 @@ where
                 Ok(s) => s,
             };
             tx.send(0).unwrap();
-            if let Err(e) = store.run(&mut event_loop, end_point_request_max_handle_secs) {
+            if let Err(e) = store.run(&mut event_loop) {
                 error!("store {} run err {:?}", store_id, e);
             };
         })?;

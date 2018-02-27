@@ -195,7 +195,6 @@ impl Simulator for NodeCluster {
             snap_status_receiver,
             pd_worker,
             coprocessor_host,
-            0,
         ).unwrap();
         assert!(
             Arc::clone(&engines.kv_engine)

@@ -174,7 +174,6 @@ impl Simulator for ServerCluster {
             snap_status_receiver,
             pd_worker,
             coprocessor_host,
-            0,
         ).unwrap();
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

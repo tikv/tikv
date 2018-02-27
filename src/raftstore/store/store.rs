@@ -485,11 +485,7 @@ impl<T, C> Store<T, C> {
 }
 
 impl<T: Transport, C: PdClient> Store<T, C> {
-    pub fn run(
-        &mut self,
-        event_loop: &mut EventLoop<Self>,
-        end_point_request_max_handle_secs: u64,
-    ) -> Result<()> {
+    pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
         self.snap_mgr.init()?;
 
         self.register_raft_base_tick(event_loop);
@@ -517,7 +513,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.snap_mgr.clone(),
             self.cfg.snap_apply_batch_size.0 as usize,
             self.cfg.use_delete_range,
-            end_point_request_max_handle_secs + self.cfg.range_deletion_delay.as_secs(),
+            self.cfg.clean_stale_peer_delay.as_secs(),
         );
         box_try!(self.region_worker.start(runner));
 
