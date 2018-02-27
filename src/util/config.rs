@@ -877,7 +877,6 @@ mod check_data_dir {
 
     #[cfg(test)]
     mod test {
-
         use std::fs::File;
         use std::io::Write;
         use std::os::unix::fs::symlink;
@@ -937,7 +936,6 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
         fn test_check_data_dir_with_device_mapper() {
             let tmp_dir = TempDir::new("test-get-fs-info").unwrap();
             let data_path = format!("{}/data1", tmp_dir.path().display());
-            canonicalize_path(&data_path).unwrap();
             let fs_info = get_fs_info(&data_path, "/proc/mounts").unwrap();
             let expect = get_rotational_info(&fs_info.fsname).unwrap();
             // ln -s fs_info.fsname tmp_device
