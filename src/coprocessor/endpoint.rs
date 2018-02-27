@@ -168,7 +168,6 @@ impl Host {
         }
 
         let batch_row_limit = self.batch_row_limit;
-        let request_max_handle_duration = self.request_max_handle_duration;
         for req in reqs {
             let pri = req.priority();
             let pri_str = get_req_pri_str(pri);
@@ -189,12 +188,8 @@ impl Host {
                     .with_label_values(&[type_str, pri_str])
                     .dec();
                 let region_id = req.req.get_context().get_region_id();
-                let stats = end_point.handle_request(
-                    req,
-                    batch_row_limit,
-                    &mut ctx.basic_local_metrics,
-                    request_max_handle_duration,
-                );
+                let stats =
+                    end_point.handle_request(req, batch_row_limit, &mut ctx.basic_local_metrics);
                 ctx.exec_local_metrics.collect(type_str, region_id, stats);
             });
         }
@@ -247,6 +242,7 @@ pub struct RequestTask {
     start_ts: Option<u64>,
     wait_time: Option<f64>,
     timer: Instant,
+    deadline: Instant,
     metrics: ExecutorMetrics,
     on_resp: OnResponse,
     cop_req: Option<Result<CopRequest>>,
@@ -303,6 +299,7 @@ impl RequestTask {
             start_ts: start_ts,
             wait_time: None,
             timer: timer,
+            deadline: timer,
             metrics: Default::default(),
             on_resp: on_resp,
             cop_req: Some(cop_req),
@@ -311,10 +308,9 @@ impl RequestTask {
     }
 
     #[inline]
-    fn check_outdated(&self, request_max_handle_duration: Duration) -> Result<()> {
+    fn check_outdated(&self) -> Result<()> {
         let now = Instant::now_coarse();
-        let deadline = self.timer + request_max_handle_duration;
-        if deadline <= now {
+        if self.deadline <= now {
             let elapsed = now.duration_since(self.timer);
             return Err(Error::Outdated(elapsed, self.ctx.get_scan_tag()));
         }
@@ -398,6 +394,14 @@ impl RequestTask {
     pub fn start_time(&self) -> Instant {
         self.timer
     }
+
+    pub fn set_deadline(&mut self, request_max_handle_duration: Duration) {
+        self.deadline = self.timer + request_max_handle_duration;
+    }
+
+    pub fn deadline(&self) -> Instant {
+        self.deadline
+    }
 }
 
 impl Display for RequestTask {
@@ -425,8 +429,9 @@ impl Runnable<Task> for Host {
         let mut local_metrics = BasicLocalMetrics::default();
         for task in tasks.drain(..) {
             match task {
-                Task::Request(req) => {
-                    if let Err(e) = req.check_outdated(self.request_max_handle_duration) {
+                Task::Request(mut req) => {
+                    req.set_deadline(self.request_max_handle_duration);
+                    if let Err(e) = req.check_outdated() {
                         on_error(e, req, &mut local_metrics);
                         continue;
                     }
@@ -618,18 +623,15 @@ impl TiDbEndPoint {
         mut t: RequestTask,
         batch_row_limit: usize,
         metrics: &mut BasicLocalMetrics,
-        request_max_handle_duration: Duration,
     ) -> ExecutorMetrics {
         t.stop_record_waiting(metrics);
 
-        if let Err(e) = t.check_outdated(request_max_handle_duration) {
+        if let Err(e) = t.check_outdated() {
             return on_error(e, t, metrics);
         }
 
         let resp = match t.cop_req.take().unwrap() {
-            Ok(CopRequest::DAG(dag)) => {
-                self.handle_dag(dag, &mut t, batch_row_limit, request_max_handle_duration)
-            }
+            Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t, batch_row_limit),
             Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t),
             Err(err) => Err(err),
         };
@@ -644,10 +646,8 @@ impl TiDbEndPoint {
         dag: DAGRequest,
         t: &mut RequestTask,
         batch_row_limit: usize,
-        request_max_handle_duration: Duration,
     ) -> Result<Response> {
         let ranges = t.req.take_ranges().into_vec();
-        let deadline = t.start_time() + request_max_handle_duration;
         let mut ctx = DAGContext::new(
             dag,
             ranges,
@@ -655,7 +655,7 @@ impl TiDbEndPoint {
             Arc::clone(&t.ctx),
             batch_row_limit,
             t.start_time(),
-            deadline,
+            t.deadline(),
         )?;
         let res = ctx.handle_request();
         ctx.collect_metrics_into(&mut t.metrics);
