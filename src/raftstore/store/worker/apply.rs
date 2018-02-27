@@ -747,7 +747,7 @@ impl ApplyDelegate {
         );
 
         // TODO: we should need more check, like peer validation, duplicated id, etc.
-        let peer_exists = util::find_peer(&region, store_id).is_some();
+        let peer_exists = util::find_voter(&region, store_id).is_some();
         let learner_exists = util::find_learner(&region, store_id).is_some();
         let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
         region.mut_region_epoch().set_conf_ver(conf_ver);

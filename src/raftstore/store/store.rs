@@ -872,7 +872,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let epoch = region.get_region_epoch();
 
             if util::is_epoch_stale(from_epoch, epoch)
-                && util::find_peer_or_learner(region, from_store_id).is_none()
+                && util::find_peer(region, from_store_id).is_none()
             {
                 // The message is stale and not in current region.
                 Self::handle_stale_msg(trans, msg, epoch, is_vote_msg, raft_metrics);
@@ -914,7 +914,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     region_id, region_epoch, msg_type,
                 );
 
-                let not_exist = util::find_peer_or_learner(region, from_store_id).is_none();
+                let not_exist = util::find_peer(region, from_store_id).is_none();
                 Self::handle_stale_msg(
                     trans,
                     msg,

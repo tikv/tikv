@@ -30,7 +30,7 @@ use util::time::monotonic_raw_now;
 use super::engine::{IterOption, Iterable};
 use super::peer_storage;
 
-pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
+pub fn find_voter(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
     region
         .get_peers()
         .iter()
@@ -44,8 +44,8 @@ pub fn find_learner(region: &metapb::Region, store_id: u64) -> Option<&metapb::P
         .find(|p| p.get_store_id() == store_id)
 }
 
-pub fn find_peer_or_learner(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
-    find_peer(region, store_id).or_else(|| find_learner(region, store_id))
+pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
+    find_voter(region, store_id).or_else(|| find_learner(region, store_id))
 }
 
 pub fn remove_peer(region: &mut metapb::Region, store_id: u64) -> Option<metapb::Peer> {
@@ -443,12 +443,12 @@ mod tests {
         region.set_id(1);
         region.mut_peers().push(new_peer(1, 1));
 
-        assert!(find_peer(&region, 1).is_some());
-        assert!(find_peer(&region, 10).is_none());
+        assert!(find_voter(&region, 1).is_some());
+        assert!(find_voter(&region, 10).is_none());
 
         assert!(remove_peer(&mut region, 1).is_some());
         assert!(remove_peer(&mut region, 1).is_none());
-        assert!(find_peer(&region, 1).is_none());
+        assert!(find_voter(&region, 1).is_none());
     }
 
     #[test]

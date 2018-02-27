@@ -380,7 +380,7 @@ fn check_stale_region(region: &metapb::Region, check_region: &metapb::Region) ->
 fn must_same_peers(left: &metapb::Region, right: &metapb::Region) {
     assert_eq!(left.get_peers().len(), right.get_peers().len());
     for peer in left.get_peers() {
-        let p = find_peer(right, peer.get_store_id()).unwrap();
+        let p = find_voter(right, peer.get_store_id()).unwrap();
         assert_eq!(p.get_id(), peer.get_id());
     }
 }
@@ -389,7 +389,7 @@ fn must_same_peers(left: &metapb::Region, right: &metapb::Region) {
 fn setdiff_peers(left: &metapb::Region, right: &metapb::Region) -> Vec<metapb::Peer> {
     let mut peers = vec![];
     for peer in left.get_peers() {
-        if let Some(p) = find_peer(right, peer.get_store_id()) {
+        if let Some(p) = find_voter(right, peer.get_store_id()) {
             assert_eq!(p.get_id(), peer.get_id());
             continue;
         }
@@ -480,7 +480,7 @@ impl TestPdClient {
             let have = if is_learner {
                 find_learner(&region, peer.get_store_id())
             } else {
-                find_peer(&region, peer.get_store_id())
+                find_voter(&region, peer.get_store_id())
             };
             match have {
                 Some(p) if p.get_id() == peer.get_id() => return,
@@ -502,7 +502,7 @@ impl TestPdClient {
             let have = if is_learner {
                 find_learner(&region, peer.get_store_id())
             } else {
-                find_peer(&region, peer.get_store_id())
+                find_voter(&region, peer.get_store_id())
             };
             if have.is_none() {
                 return;

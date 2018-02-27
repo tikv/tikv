@@ -40,7 +40,7 @@ use tikv::raftstore::store::Msg as StoreMsg;
 
 use super::cluster::{Cluster, Simulator};
 
-pub use tikv::raftstore::store::util::{find_learner, find_peer, find_peer_or_learner};
+pub use tikv::raftstore::store::util::{find_learner, find_peer, find_voter};
 
 pub const MAX_LEADER_LEASE: u64 = 250; // 250ms
 
@@ -283,7 +283,7 @@ pub fn new_pd_add_change_peer(
     region: &metapb::Region,
     peer: metapb::Peer,
 ) -> Option<RegionHeartbeatResponse> {
-    if let Some(p) = find_peer(region, peer.get_store_id()) {
+    if let Some(p) = find_voter(region, peer.get_store_id()) {
         assert_eq!(p.get_id(), peer.get_id());
         return None;
     }
@@ -294,7 +294,7 @@ pub fn new_pd_remove_change_peer(
     region: &metapb::Region,
     peer: metapb::Peer,
 ) -> Option<RegionHeartbeatResponse> {
-    if find_peer_or_learner(region, peer.get_store_id()).is_none() {
+    if find_peer(region, peer.get_store_id()).is_none() {
         return None;
     }
     Some(new_pd_change_peer(ConfChangeType::RemoveNode, peer))

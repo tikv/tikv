@@ -244,7 +244,7 @@ impl Peer {
     // for this store.
     pub fn create<T, C>(store: &mut Store<T, C>, region: &metapb::Region) -> Result<Peer> {
         let store_id = store.store_id();
-        let peer_id = match util::find_peer_or_learner(region, store_id) {
+        let peer_id = match util::find_peer(region, store_id) {
             None => {
                 return Err(box_err!(
                     "find no peer for store {} in region {:?}",
