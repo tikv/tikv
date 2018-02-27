@@ -35,6 +35,7 @@ pub struct DAGContext {
     exec: Box<Executor>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
+    start_time: Instant,
     deadline: Instant,
 }
 
@@ -45,6 +46,7 @@ impl DAGContext {
         snap: Box<Snapshot>,
         req_ctx: Arc<ReqContext>,
         batch_row_limit: usize,
+        start_time: Instant,
         deadline: Instant,
     ) -> Result<DAGContext> {
         let eval_ctx = Arc::new(box_try!(EvalContext::new(
@@ -66,6 +68,7 @@ impl DAGContext {
             exec: dag_executor.exec,
             output_offsets: req.take_output_offsets(),
             batch_row_limit: batch_row_limit,
+            start_time: start_time,
             deadline: deadline,
         })
     }
@@ -74,7 +77,8 @@ impl DAGContext {
     fn check_outdated(&self) -> Result<()> {
         let now = Instant::now_coarse();
         if self.deadline <= now {
-            return Err(Error::Outdated(self.deadline, now, self.req_ctx.get_scan_tag()));
+            let elapsed = now.duration_since(self.start_time);
+            return Err(Error::Outdated(elapsed, self.req_ctx.get_scan_tag()));
         }
         Ok(())
     }

@@ -150,11 +150,10 @@ impl Host {
     fn handle_snapshot_result(&mut self, id: u64, snapshot: engine::Result<Box<Snapshot>>) {
         let reqs = self.reqs.remove(&id).unwrap();
         let mut local_metrics = BasicLocalMetrics::default();
-        let request_max_handle_duration = self.request_max_handle_duration;
         let snap = match snapshot {
             Ok(s) => s,
             Err(e) => {
-                notify_batch_failed(e, reqs, &mut local_metrics, request_max_handle_duration);
+                notify_batch_failed(e, reqs, &mut local_metrics);
                 return;
             }
         };
@@ -164,12 +163,12 @@ impl Host {
                 Error::Full(self.max_running_task_count),
                 reqs,
                 &mut local_metrics,
-                request_max_handle_duration,
             );
             return;
         }
 
         let batch_row_limit = self.batch_row_limit;
+        let request_max_handle_duration = self.request_max_handle_duration;
         for req in reqs {
             let pri = req.priority();
             let pri_str = get_req_pri_str(pri);
@@ -255,11 +254,7 @@ pub struct RequestTask {
 }
 
 impl RequestTask {
-    pub fn new(
-        req: Request,
-        on_resp: OnResponse,
-        recursion_limit: u32,
-    ) -> RequestTask {
+    pub fn new(req: Request, on_resp: OnResponse, recursion_limit: u32) -> RequestTask {
         let timer = Instant::now_coarse();
         let mut start_ts = None;
         let tp = req.get_tp();
@@ -320,7 +315,8 @@ impl RequestTask {
         let now = Instant::now_coarse();
         let deadline = self.timer + request_max_handle_duration;
         if deadline <= now {
-            return Err(Error::Outdated(deadline, now, self.ctx.get_scan_tag()));
+            let elapsed = now.duration_since(self.timer);
+            return Err(Error::Outdated(elapsed, self.ctx.get_scan_tag()));
         }
         Ok(())
     }
@@ -427,12 +423,11 @@ impl Runnable<Task> for Host {
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
         let mut grouped_reqs = map![];
         let mut local_metrics = BasicLocalMetrics::default();
-        let request_max_handle_duration = self.request_max_handle_duration;
         for task in tasks.drain(..) {
             match task {
                 Task::Request(req) => {
-                    if let Err(e) = req.check_outdated(request_max_handle_duration) {
-                        on_error(e, req, &mut local_metrics, request_max_handle_duration);
+                    if let Err(e) = req.check_outdated(self.request_max_handle_duration) {
+                        on_error(e, req, &mut local_metrics);
                         continue;
                     }
                     let key = {
@@ -459,12 +454,7 @@ impl Runnable<Task> for Host {
                         .async_snapshot(reqs[0].req.get_context(), box move |(_, res)| {
                             sched.schedule(Task::SnapRes(id, res)).unwrap()
                         }) {
-                        notify_batch_failed(
-                            e,
-                            reqs,
-                            &mut local_metrics,
-                            request_max_handle_duration,
-                        );
+                        notify_batch_failed(e, reqs, &mut local_metrics);
                     } else {
                         self.reqs.insert(id, reqs);
                     }
@@ -523,12 +513,7 @@ impl Runnable<Task> for Host {
                     error!("async snapshot batch failed error {:?}", e);
                     EngineError::Other(box_err!("{:?}", e))
                 });
-                notify_batch_failed(
-                    err,
-                    reqs,
-                    &mut local_metrics,
-                    self.request_max_handle_duration,
-                );
+                notify_batch_failed(err, reqs, &mut local_metrics);
             }
         }
     }
@@ -546,11 +531,7 @@ impl Runnable<Task> for Host {
     }
 }
 
-fn err_resp(
-    e: Error,
-    metrics: &mut BasicLocalMetrics,
-    request_max_handle_duration: Duration,
-) -> Response {
+fn err_resp(e: Error, metrics: &mut BasicLocalMetrics) -> Response {
     let mut resp = Response::new();
     let tag = match e {
         Error::Region(e) => {
@@ -562,8 +543,7 @@ fn err_resp(
             resp.set_locked(info);
             "lock"
         }
-        Error::Outdated(deadline, now, scan_tag) => {
-            let elapsed = now.duration_since(deadline) + request_max_handle_duration;
+        Error::Outdated(elapsed, scan_tag) => {
             metrics
                 .outdate_time
                 .with_label_values(&[scan_tag])
@@ -593,13 +573,8 @@ fn err_resp(
     resp
 }
 
-fn on_error(
-    e: Error,
-    req: RequestTask,
-    metrics: &mut BasicLocalMetrics,
-    request_max_handle_duration: Duration,
-) -> ExecutorMetrics {
-    let resp = err_resp(e, metrics, request_max_handle_duration);
+fn on_error(e: Error, req: RequestTask, metrics: &mut BasicLocalMetrics) -> ExecutorMetrics {
+    let resp = err_resp(e, metrics);
     respond(resp, req, metrics)
 }
 
@@ -607,10 +582,9 @@ fn notify_batch_failed<E: Into<Error> + Debug>(
     e: E,
     reqs: Vec<RequestTask>,
     metrics: &mut BasicLocalMetrics,
-    request_max_handle_duration: Duration,
 ) {
     debug!("failed to handle batch request: {:?}", e);
-    let resp = err_resp(e.into(), metrics, request_max_handle_duration);
+    let resp = err_resp(e.into(), metrics);
     for t in reqs {
         respond(resp.clone(), t, metrics);
     }
@@ -649,17 +623,19 @@ impl TiDbEndPoint {
         t.stop_record_waiting(metrics);
 
         if let Err(e) = t.check_outdated(request_max_handle_duration) {
-            return on_error(e, t, metrics, request_max_handle_duration);
+            return on_error(e, t, metrics);
         }
 
         let resp = match t.cop_req.take().unwrap() {
-            Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t, batch_row_limit, request_max_handle_duration),
+            Ok(CopRequest::DAG(dag)) => {
+                self.handle_dag(dag, &mut t, batch_row_limit, request_max_handle_duration)
+            }
             Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t),
             Err(err) => Err(err),
         };
         match resp {
             Ok(r) => respond(r, t, metrics),
-            Err(e) => on_error(e, t, metrics, request_max_handle_duration),
+            Err(e) => on_error(e, t, metrics),
         }
     }
 
@@ -672,7 +648,15 @@ impl TiDbEndPoint {
     ) -> Result<Response> {
         let ranges = t.req.take_ranges().into_vec();
         let deadline = t.start_time() + request_max_handle_duration;
-        let mut ctx = DAGContext::new(dag, ranges, self.snap, Arc::clone(&t.ctx), batch_row_limit, deadline)?;
+        let mut ctx = DAGContext::new(
+            dag,
+            ranges,
+            self.snap,
+            Arc::clone(&t.ctx),
+            batch_row_limit,
+            t.start_time(),
+            deadline,
+        )?;
         let res = ctx.handle_request();
         ctx.collect_metrics_into(&mut t.metrics);
         res
