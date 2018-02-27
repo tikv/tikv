@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use tipb::schema::ColumnInfo;
 use tipb::select::{Chunk, DAGRequest, SelectResponse};
@@ -36,7 +35,7 @@ pub struct DAGContext {
     exec: Box<Executor>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
-    start_time: Instant,
+    deadline: Instant,
 }
 
 impl DAGContext {
@@ -46,7 +45,7 @@ impl DAGContext {
         snap: Box<Snapshot>,
         req_ctx: Arc<ReqContext>,
         batch_row_limit: usize,
-        start_time: Instant,
+        deadline: Instant,
     ) -> Result<DAGContext> {
         let eval_ctx = Arc::new(box_try!(EvalContext::new(
             req.get_time_zone_offset(),
@@ -67,27 +66,26 @@ impl DAGContext {
             exec: dag_executor.exec,
             output_offsets: req.take_output_offsets(),
             batch_row_limit: batch_row_limit,
-            start_time: start_time,
+            deadline: deadline,
         })
     }
 
     #[inline]
-    fn check_outdated(&self, request_max_handle_duration: Duration) -> Result<()> {
+    fn check_outdated(&self) -> Result<()> {
         let now = Instant::now_coarse();
-        let deadline = self.start_time + request_max_handle_duration;
-        if deadline <= now {
-            return Err(Error::Outdated(deadline, now, self.req_ctx.get_scan_tag()));
+        if self.deadline <= now {
+            return Err(Error::Outdated(self.deadline, now, self.req_ctx.get_scan_tag()));
         }
         Ok(())
     }
 
-    pub fn handle_request(&mut self, request_max_handle_duration: Duration) -> Result<Response> {
+    pub fn handle_request(&mut self) -> Result<Response> {
         let mut record_cnt = 0;
         let mut chunks = Vec::new();
         loop {
             match self.exec.next() {
                 Ok(Some(row)) => {
-                    self.check_outdated(request_max_handle_duration)?;
+                    self.check_outdated()?;
                     if chunks.is_empty() || record_cnt >= self.batch_row_limit {
                         let chunk = Chunk::new();
                         chunks.push(chunk);

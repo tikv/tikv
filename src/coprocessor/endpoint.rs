@@ -671,8 +671,9 @@ impl TiDbEndPoint {
         request_max_handle_duration: Duration,
     ) -> Result<Response> {
         let ranges = t.req.take_ranges().into_vec();
-        let mut ctx = DAGContext::new(dag, ranges, self.snap, Arc::clone(&t.ctx), batch_row_limit, t.start_time())?;
-        let res = ctx.handle_request(request_max_handle_duration);
+        let deadline = t.start_time() + request_max_handle_duration;
+        let mut ctx = DAGContext::new(dag, ranges, self.snap, Arc::clone(&t.ctx), batch_row_limit, deadline)?;
+        let res = ctx.handle_request();
         ctx.collect_metrics_into(&mut t.metrics);
         res
     }
@@ -758,8 +759,8 @@ mod tests {
     use tipb::expression::Expr;
     use tipb::executor::Executor;
 
+    use util::config::ReadableDuration;
     use util::worker::{Builder as WorkerBuilder, FutureWorker};
-    use util::time::Instant;
 
     #[test]
     fn test_get_reg_scan_tag() {
@@ -778,6 +779,7 @@ mod tests {
         let mut worker = WorkerBuilder::new("test-endpoint").batch_size(30).create();
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
+        cfg.end_point_request_max_handle_duration = ReadableDuration::secs(0);
         cfg.end_point_concurrency = 1;
         let pd_worker = FutureWorker::new("test-pd-worker");
         let end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
