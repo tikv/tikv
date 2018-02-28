@@ -254,7 +254,7 @@ pub mod test {
         }
 
         fn init_data(&mut self, kv_data: &[(Vec<u8>, Vec<u8>)]) {
-            if kv_data.len() == 0 {
+            if kv_data.is_empty() {
                 return;
             }
 
