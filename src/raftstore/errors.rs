@@ -23,6 +23,7 @@ use pd;
 use raft;
 use kvproto::{errorpb, metapb};
 
+use super::store::SnapError;
 use super::coprocessor::Error as CopError;
 use util::{escape, transport};
 
@@ -132,6 +133,12 @@ quick_error!{
             cause(err)
             description(err.description())
             display("Transport {}", err)
+        }
+        Snapshot(err: SnapError) {
+            from()
+            cause(err)
+            description(err.description())
+            display("Snapshot {}", err)
         }
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "1.1.0-dev"
+version = "1.1.0-dev.1"
 keywords = ["KV", "distributed-systems", "raft"]
 build = "build.rs"
 
@@ -104,7 +104,7 @@ features = ["secure"]
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
 debug = true   # Controls whether the compiler passes `-g`
-codegen-units = 2
+codegen-units = 4
 
 # The release profile, used for `cargo build --release`
 [profile.release]
