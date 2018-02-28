@@ -779,7 +779,7 @@ mod check_data_dir {
                     fs.opts = CStr::from_ptr(ent.mnt_opts).to_str().unwrap().to_owned();
                     fs.fsname = CStr::from_ptr(ent.mnt_fsname).to_str().unwrap().to_owned();
                     fs.mnt_dir = cur_dir.to_owned();
-                    println!("fsinfo:{},{:?}",path,fs);
+                    println!("fsinfo:{},{:?}", path, fs);
                 }
             }
 
