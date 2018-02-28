@@ -341,8 +341,11 @@ fn region_detail<T: RaftStoreRouter>(
     raft_router
         .send_command(raft_cmd, cb)
         .map(|_| {
-            rx.map(|mut r| r.response.take_status_response().take_region_detail())
-                .map_err(|e| Error::Other(box e))
+            rx.map(|mut r| {
+                let detail = r.response.take_status_response().take_region_detail();
+                debug!("Debug::consistent-check got region detail: {}", detail);
+                detail
+            }).map_err(|e| Error::Other(box e))
         })
         .map_err(|e| Error::Other(box e))
 }
