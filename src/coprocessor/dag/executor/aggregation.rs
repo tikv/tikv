@@ -527,7 +527,7 @@ mod test {
         agg_ect.collect_output_counts(&mut counts);
         assert_eq!(expected_counts, counts);
 
-        // test no row
+        // test one row
         let idx_vals = vec![
             vec![(2, Datum::Bytes(b"a".to_vec())), (3, Datum::Dec(12.into()))],
         ];
