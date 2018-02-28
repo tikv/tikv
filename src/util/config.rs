@@ -936,7 +936,7 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             // ln -s fs_info.fsname tmp_device
             let tmp_device = format!("{}/tmp_device", tmp_dir.path().display());
             // /dev/xxx may not exists in container.
-            if !Path::new(fs_info.fsname).exists() {
+            if !Path::new(&fs_info.fsname).exists() {
                 return;
             }
             symlink(&fs_info.fsname, &tmp_device).unwrap();
