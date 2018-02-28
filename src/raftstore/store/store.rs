@@ -1044,11 +1044,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 "{} checking cross snap: {:?}",
                 peer.tag, peer.pending_cross_snap
             );
-            if let Some(ref epoch) = peer.pending_cross_snap {
-                // So the snapshot is behind the merge, there is no way to resume.
-                if epoch.get_version() > merge_target.get_region_epoch().get_version() {
-                    return Ok(true);
-                }
+            let epoch = peer.pending_cross_snap
+                .as_ref()
+                .unwrap_or_else(|| peer.region().get_region_epoch());
+            // So the target peer has moved on, we should let it go.
+            if epoch.get_version() > merge_target.get_region_epoch().get_version() {
+                return Ok(true);
             }
             return Ok(false);
         }
