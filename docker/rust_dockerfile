@@ -52,5 +52,15 @@ ENV PATH /root/.cargo/bin/:$PATH
 ENV LIBRARY_PATH /usr/local/lib:$LIBRARY_PATH
 ENV LD_LIBRARY_PATH /usr/local/lib:$LD_LIBRARY_PATH
 
+# A proper PID 1 that will handle Ctrl+C, etc
+ENV TINI_VERSION v0.17.0
+ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /tini
+ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini.asc /tini.asc
+RUN gpg --keyserver hkp://p80.pool.sks-keyservers.net:80 --recv-keys 595E85A6B1B4779EA4DAAEC70B588DFF0527A9B7 \
+ && gpg --verify /tini.asc \
+ && rm /tini.asc
+RUN chmod +x /tini && mv /tini /sbin/tini
+ENTRYPOINT ["/sbin/tini", "--"]
+
 CMD ["/bin/bash"]
 
