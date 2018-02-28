@@ -62,7 +62,7 @@ impl Display for Task {
                 tombstones_threshold,
             } => write!(
                 f,
-                "Space check ranges count {}, min num del {}",
+                "Space check ranges count {}, tombstones threshold {}",
                 ranges.len(),
                 tombstones_threshold
             ),
