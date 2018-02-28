@@ -1107,6 +1107,7 @@ impl Peer {
                         r.get_cmd_type()
                     ));
                 }
+                CmdType::IngestSST => unimplemented!(),
             }
 
             if is_read && is_write {
@@ -1648,6 +1649,7 @@ impl Peer {
                 | CmdType::Delete
                 | CmdType::DeleteRange
                 | CmdType::Invalid => unreachable!(),
+                CmdType::IngestSST => unimplemented!(),
             };
             resp.set_cmd_type(cmd_type);
             responses.push(resp);
