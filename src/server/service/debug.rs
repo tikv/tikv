@@ -27,6 +27,15 @@ use raftstore::store::msg::Callback;
 use server::debug::{Debugger, Error};
 use server::transport::RaftStoreRouter;
 
+fn error_to_status(e: Error) -> RpcStatus {
+    let (code, msg) = match e {
+        Error::NotFound(msg) => (RpcStatusCode::NotFound, Some(msg)),
+        Error::InvalidArgument(msg) => (RpcStatusCode::InvalidArgument, Some(msg)),
+        Error::Other(e) => (RpcStatusCode::Unknown, Some(format!("{:?}", e))),
+    };
+    RpcStatus::new(code, msg)
+}
+
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter> {
     pool: CpuPool,
@@ -55,21 +64,9 @@ impl<T: RaftStoreRouter> Service<T> {
     {
         let f = resp.then(|v| match v {
             Ok(resp) => sink.success(resp),
-            Err(e) => {
-                let status = Self::error_to_status(e);
-                sink.fail(status)
-            }
+            Err(e) => sink.fail(error_to_status(e)),
         });
         ctx.spawn(f.map_err(move |e| Self::on_grpc_error(tag, &e)));
-    }
-
-    fn error_to_status(e: Error) -> RpcStatus {
-        let (code, msg) = match e {
-            Error::NotFound(msg) => (RpcStatusCode::NotFound, Some(msg)),
-            Error::InvalidArgument(msg) => (RpcStatusCode::InvalidArgument, Some(msg)),
-            Error::Other(e) => (RpcStatusCode::Unknown, Some(format!("{:?}", e))),
-        };
-        RpcStatus::new(code, msg)
     }
 
     fn on_grpc_error(tag: &'static str, e: &GrpcError) {
@@ -77,7 +74,7 @@ impl<T: RaftStoreRouter> Service<T> {
     }
 
     fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
-        let status = Self::error_to_status(e);
+        let status = error_to_status(e);
         let e = GrpcError::RpcFailure(status);
         Self::on_grpc_error(tag, &e);
         e
@@ -314,17 +311,13 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
         let router1 = self.raft_router.clone();
         let router2 = self.raft_router.clone();
 
-        let consistent_check = move || {
-            future::result(debugger.get_store_id())
-                .and_then(move |store_id| region_detail(router2, region_id, store_id))
-                .flatten()
-                .and_then(|detail| consistent_check(router1, detail))
-        };
-        let f = self.pool.spawn_fn(consistent_check).map(|_| {
-            let mut resp = RegionConsistentCheckResponse::new();
-            resp.set_success(true);
-            resp
-        });
+        let consistent_check = future::result(debugger.get_store_id())
+            .and_then(move |store_id| region_detail(router2, region_id, store_id))
+            .flatten()
+            .and_then(|detail| consistent_check(router1, detail));
+        let f = self.pool
+            .spawn(consistent_check)
+            .map(|_| RegionConsistentCheckResponse::new());
         self.handle_response(ctx, sink, f, "region_consistent_check");
     }
 }
@@ -347,8 +340,10 @@ fn region_detail<T: RaftStoreRouter>(
     let cb = Callback::Read(box |resp| tx.send(resp).unwrap());
     raft_router
         .send_command(raft_cmd, cb)
-        .map(|_| rx.map(|mut r| r.response.take_status_response().take_region_detail()))
-        .map(|rx| rx.map_err(|e| Error::Other(box e)))
+        .map(|_| {
+            rx.map(|mut r| r.response.take_status_response().take_region_detail())
+                .map_err(|e| Error::Other(box e))
+        })
         .map_err(|e| Error::Other(box e))
 }
 
