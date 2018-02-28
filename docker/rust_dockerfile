@@ -9,7 +9,7 @@ RUN yum makecache \
 	&& yum update -y \
 	&& yum install -y tar wget git which file unzip python-pip \
 	&& yum install -y make cmake3 gcc gcc-c++ libstdc++-static pkg-config psmisc \
-	&& yum install -y libzstd-devel lz4-devel zlib-devel bzip2-devel snappy-devel libdwarf-devel elfutils-libelf-devel elfutils-devel binutils-devel \
+	&& yum install -y libdwarf-devel elfutils-libelf-devel elfutils-devel binutils-devel \
 	&& yum install -y openssl-devel \
 	&& yum clean all
 
