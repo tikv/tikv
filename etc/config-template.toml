@@ -145,7 +145,7 @@
 # max-peer-down-duration = "5m"
 
 # Interval to check whether start manual compaction for a region,
-# region-compact-check-interval = "2m"
+# region-compact-check-interval = "5m"
 # Number of regions for each time to check.
 # region-compact-check-step = 100
 # The minimum number of delete tombstones to trigger manual compaction.
