@@ -779,7 +779,6 @@ mod check_data_dir {
                     fs.opts = CStr::from_ptr(ent.mnt_opts).to_str().unwrap().to_owned();
                     fs.fsname = CStr::from_ptr(ent.mnt_fsname).to_str().unwrap().to_owned();
                     fs.mnt_dir = cur_dir.to_owned();
-                    println!("fsinfo:{},{:?}", path, fs);
                 }
             }
 
@@ -794,24 +793,11 @@ mod check_data_dir {
         }
     }
 
-    fn read_dir_test() {
-        for entry in fs::read_dir("/dev").unwrap() {
-            let dir = entry.unwrap();
-            println!("{:?}", dir.path());
-        }
-    }
-
     fn get_rotational_info(fsname: &str) -> Result<String, ConfigError> {
         // get device path
         let device = match fs::canonicalize(fsname) {
             Ok(path) => format!("{}", path.display()),
-            Err(e) => {
-                read_dir_test();
-                return Err(ConfigError::FileSystem(format!(
-                    "device: {:?} canonicalize failed: {:?}",
-                    fsname, e
-                )));
-            }
+            Err(_) => String::from(fsname),
         };
         let dev = device.trim_left_matches("/dev/");
         let block_dir = "/sys/block";
@@ -938,7 +924,6 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             assert!(ret.is_err());
             // test normal case
             let ret = check_data_dir("./", "/proc/mounts");
-            println!("{:?}", ret);
             assert!(ret.is_ok());
         }
 
