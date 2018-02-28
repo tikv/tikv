@@ -24,19 +24,16 @@ use coprocessor::dag::expr::EvalContext;
 use coprocessor::{Error, Result};
 use coprocessor::endpoint::{get_pk, to_pb_error, ReqContext};
 use storage::{Snapshot, SnapshotStore};
-use util::time::Instant;
 
 use super::executor::{build_exec, Executor, ExecutorMetrics, Row};
 
 pub struct DAGContext {
     columns: Arc<Vec<ColumnInfo>>,
     has_aggr: bool,
-    req_ctx: Arc<ReqContext>,
+    req_ctx: ReqContext,
     exec: Box<Executor>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
-    start_time: Instant,
-    deadline: Instant,
 }
 
 impl DAGContext {
@@ -44,10 +41,8 @@ impl DAGContext {
         mut req: DAGRequest,
         ranges: Vec<KeyRange>,
         snap: Box<Snapshot>,
-        req_ctx: Arc<ReqContext>,
+        req_ctx: ReqContext,
         batch_row_limit: usize,
-        start_time: Instant,
-        deadline: Instant,
     ) -> Result<DAGContext> {
         let eval_ctx = Arc::new(box_try!(EvalContext::new(
             req.get_time_zone_offset(),
@@ -68,19 +63,7 @@ impl DAGContext {
             exec: dag_executor.exec,
             output_offsets: req.take_output_offsets(),
             batch_row_limit: batch_row_limit,
-            start_time: start_time,
-            deadline: deadline,
         })
-    }
-
-    #[inline]
-    fn check_outdated(&self) -> Result<()> {
-        let now = Instant::now_coarse();
-        if self.deadline <= now {
-            let elapsed = now.duration_since(self.start_time);
-            return Err(Error::Outdated(elapsed, self.req_ctx.get_scan_tag()));
-        }
-        Ok(())
     }
 
     pub fn handle_request(&mut self) -> Result<Response> {
@@ -89,7 +72,7 @@ impl DAGContext {
         loop {
             match self.exec.next() {
                 Ok(Some(row)) => {
-                    self.check_outdated()?;
+                    self.req_ctx.check_if_outdated()?;
                     if chunks.is_empty() || record_cnt >= self.batch_row_limit {
                         let chunk = Chunk::new();
                         chunks.push(chunk);

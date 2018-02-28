@@ -13,7 +13,6 @@
 
 use std::usize;
 use std::time::Duration;
-use std::sync::Arc;
 use std::fmt::{self, Debug, Display, Formatter};
 
 use tipb::select::{self, DAGRequest};
@@ -219,7 +218,10 @@ enum CopRequest {
     Analyze(AnalyzeReq),
 }
 
+#[derive(Clone)]
 pub struct ReqContext {
+    pub start_time: Instant,
+    pub deadline: Instant,
     pub isolation_level: IsolationLevel,
     pub fill_cache: bool,
     // whether is a table scan request.
@@ -228,12 +230,25 @@ pub struct ReqContext {
 
 impl ReqContext {
     #[inline]
-    pub fn get_scan_tag(&self) -> &'static str {
+    fn get_scan_tag(&self) -> &'static str {
         if self.table_scan {
             STR_REQ_TYPE_SELECT
         } else {
             STR_REQ_TYPE_INDEX
         }
+    }
+
+    pub fn check_if_outdated(&self) -> Result<()> {
+        let now = Instant::now_coarse();
+        if self.deadline <= now {
+            let elapsed = now.duration_since(self.start_time);
+            return Err(Error::Outdated(elapsed, self.get_scan_tag()));
+        }
+        Ok(())
+    }
+
+    pub fn set_deadline(&mut self, request_max_handle_duration: Duration) {
+        self.deadline = self.start_time + request_max_handle_duration;
     }
 }
 
@@ -241,17 +256,15 @@ pub struct RequestTask {
     req: Request,
     start_ts: Option<u64>,
     wait_time: Option<f64>,
-    timer: Instant,
-    deadline: Instant,
     metrics: ExecutorMetrics,
     on_resp: OnResponse,
     cop_req: Option<Result<CopRequest>>,
-    ctx: Arc<ReqContext>,
+    ctx: ReqContext,
 }
 
 impl RequestTask {
     pub fn new(req: Request, on_resp: OnResponse, recursion_limit: u32) -> RequestTask {
-        let timer = Instant::now_coarse();
+        let start_time = Instant::now_coarse();
         let mut start_ts = None;
         let tp = req.get_tp();
         let mut table_scan = false;
@@ -290,6 +303,8 @@ impl RequestTask {
             _ => Err(box_err!("unsupported tp {}", tp)),
         };
         let req_ctx = ReqContext {
+            start_time: start_time,
+            deadline: start_time,
             isolation_level: req.get_context().get_isolation_level(),
             fill_cache: !req.get_context().get_not_fill_cache(),
             table_scan: table_scan,
@@ -298,30 +313,23 @@ impl RequestTask {
             req: req,
             start_ts: start_ts,
             wait_time: None,
-            timer: timer,
-            deadline: timer,
             metrics: Default::default(),
             on_resp: on_resp,
             cop_req: Some(cop_req),
-            ctx: Arc::new(req_ctx),
+            ctx: req_ctx,
         }
     }
 
     #[inline]
     fn check_outdated(&self) -> Result<()> {
-        let now = Instant::now_coarse();
-        if self.deadline <= now {
-            let elapsed = now.duration_since(self.timer);
-            return Err(Error::Outdated(elapsed, self.ctx.get_scan_tag()));
-        }
-        Ok(())
+        self.ctx.check_if_outdated()
     }
 
     fn stop_record_waiting(&mut self, metrics: &mut BasicLocalMetrics) {
         if self.wait_time.is_some() {
             return;
         }
-        let wait_time = duration_to_sec(self.timer.elapsed());
+        let wait_time = duration_to_sec(self.ctx.start_time.elapsed());
         metrics
             .wait_time
             .with_label_values(&[self.ctx.get_scan_tag()])
@@ -331,7 +339,7 @@ impl RequestTask {
 
     fn stop_record_handling(&mut self, metrics: &mut BasicLocalMetrics) -> Option<ExecDetails> {
         self.stop_record_waiting(metrics);
-        let query_time = duration_to_sec(self.timer.elapsed());
+        let query_time = duration_to_sec(self.ctx.start_time.elapsed());
         let type_str = self.ctx.get_scan_tag();
         metrics
             .req_time
@@ -391,16 +399,8 @@ impl RequestTask {
         self.req.get_context().get_priority()
     }
 
-    pub fn start_time(&self) -> Instant {
-        self.timer
-    }
-
     pub fn set_deadline(&mut self, request_max_handle_duration: Duration) {
-        self.deadline = self.timer + request_max_handle_duration;
-    }
-
-    pub fn deadline(&self) -> Instant {
-        self.deadline
+        self.ctx.set_deadline(request_max_handle_duration);
     }
 }
 
@@ -648,15 +648,7 @@ impl TiDbEndPoint {
         batch_row_limit: usize,
     ) -> Result<Response> {
         let ranges = t.req.take_ranges().into_vec();
-        let mut ctx = DAGContext::new(
-            dag,
-            ranges,
-            self.snap,
-            Arc::clone(&t.ctx),
-            batch_row_limit,
-            t.start_time(),
-            t.deadline(),
-        )?;
+        let mut ctx = DAGContext::new(dag, ranges, self.snap, t.ctx.clone(), batch_row_limit)?;
         let res = ctx.handle_request();
         ctx.collect_metrics_into(&mut t.metrics);
         res
@@ -664,7 +656,7 @@ impl TiDbEndPoint {
 
     pub fn handle_analyze(self, analyze: AnalyzeReq, t: &mut RequestTask) -> Result<Response> {
         let ranges = t.req.take_ranges().into_vec();
-        let ctx = AnalyzeContext::new(analyze, ranges, self.snap, t.ctx.as_ref());
+        let ctx = AnalyzeContext::new(analyze, ranges, self.snap, &t.ctx);
         ctx.handle_request(&mut t.metrics)
     }
 }
@@ -744,11 +736,14 @@ mod tests {
     use tipb::executor::Executor;
 
     use util::config::ReadableDuration;
+    use util::time::Instant;
     use util::worker::{Builder as WorkerBuilder, FutureWorker};
 
     #[test]
     fn test_get_reg_scan_tag() {
         let mut ctx = ReqContext {
+            start_time: Instant::now_coarse(),
+            deadline: Instant::now_coarse(),
             isolation_level: IsolationLevel::RC,
             fill_cache: true,
             table_scan: true,
@@ -769,19 +764,13 @@ mod tests {
         let end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
         worker.start(end_point).unwrap();
         let (tx, rx) = mpsc::channel();
-        let mut task = RequestTask::new(
+        let task = RequestTask::new(
             Request::new(),
             box move |msg| {
                 tx.send(msg).unwrap();
             },
             1000,
         );
-        let ctx = ReqContext {
-            isolation_level: task.ctx.isolation_level,
-            fill_cache: task.ctx.fill_cache,
-            table_scan: task.ctx.table_scan,
-        };
-        task.ctx = Arc::new(ctx);
         worker.schedule(Task::Request(task)).unwrap();
         let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_other_error().is_empty());
@@ -794,6 +783,7 @@ mod tests {
         let mut worker = WorkerBuilder::new("test-endpoint").batch_size(30).create();
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
+        cfg.end_point_request_max_handle_duration = ReadableDuration::secs(0);
         cfg.end_point_concurrency = 1;
         let pd_worker = FutureWorker::new("test-pd-worker");
         let end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
@@ -806,15 +796,9 @@ mod tests {
             },
             1000,
         );
-        let ctx = ReqContext {
-            isolation_level: task.ctx.isolation_level,
-            fill_cache: task.ctx.fill_cache,
-            table_scan: task.ctx.table_scan,
-        };
-        task.ctx = Arc::new(ctx);
         let mut metrics = BasicLocalMetrics::default();
         task.stop_record_waiting(&mut metrics);
-        task.timer = task.timer.sub(Duration::from_secs(
+        task.ctx.start_time = task.ctx.start_time.sub(Duration::from_secs(
             (super::SLOW_QUERY_LOWER_BOUND * 2.0) as u64,
         ));
         worker.schedule(Task::Request(task)).unwrap();
