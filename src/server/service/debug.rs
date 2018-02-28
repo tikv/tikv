@@ -36,6 +36,10 @@ fn error_to_status(e: Error) -> RpcStatus {
     RpcStatus::new(code, msg)
 }
 
+fn on_grpc_error(tag: &'static str, e: &GrpcError) {
+    error!("{} failed: {:?}", tag, e);
+}
+
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter> {
     pool: CpuPool,
@@ -66,17 +70,13 @@ impl<T: RaftStoreRouter> Service<T> {
             Ok(resp) => sink.success(resp),
             Err(e) => sink.fail(error_to_status(e)),
         });
-        ctx.spawn(f.map_err(move |e| Self::on_grpc_error(tag, &e)));
-    }
-
-    fn on_grpc_error(tag: &'static str, e: &GrpcError) {
-        error!("{} failed: {:?}", tag, e);
+        ctx.spawn(f.map_err(move |e| on_grpc_error(tag, &e)));
     }
 
     fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
         let status = error_to_status(e);
         let e = GrpcError::RpcFailure(status);
-        Self::on_grpc_error(tag, &e);
+        on_grpc_error(tag, &e);
         e
     }
 }
@@ -215,7 +215,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
                     .forward(sink)
                     .map(|_| ())
             })
-            .map_err(|e| Self::on_grpc_error("scan_mvcc", &e));
+            .map_err(|e| on_grpc_error("scan_mvcc", &e));
         self.pool.spawn(future).forget();
     }
 
@@ -341,11 +341,14 @@ fn region_detail<T: RaftStoreRouter>(
     raft_router
         .send_command(raft_cmd, cb)
         .map(|_| {
-            rx.map(|mut r| {
+            rx.map_err(|e| Error::Other(box e)).and_then(move |mut r| {
                 let detail = r.response.take_status_response().take_region_detail();
-                debug!("Debug::consistent-check got region detail: {}", detail);
-                detail
-            }).map_err(|e| Error::Other(box e))
+                info!("Debug::consistent-check got region detail: {:?}", detail);
+                if detail.get_leader().get_store_id() != store_id {
+                    return Err(Error::Other("not leader".into()));
+                }
+                Ok(detail)
+            })
         })
         .map_err(|e| Error::Other(box e))
 }
