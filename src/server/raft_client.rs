@@ -29,7 +29,7 @@ use super::metrics::*;
 
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: usize = 10 * 1024 * 1024;
-const INITIAL_BUFFER_CAP: usize = 1024;
+const PRESERVED_MSG_BUFFER_COUNT: usize = 1024;
 
 static CONN_ID: AtomicUsize = ATOMIC_USIZE_INIT;
 
@@ -94,7 +94,7 @@ impl Conn {
         );
         Conn {
             stream: tx,
-            buffer: Some(Vec::with_capacity(INITIAL_BUFFER_CAP)),
+            buffer: Some(Vec::with_capacity(PRESERVED_MSG_BUFFER_COUNT)),
             store_id: store_id,
             alive: alive1,
 
@@ -183,7 +183,7 @@ impl RaftClient {
                 return false;
             }
 
-            conn.buffer = Some(Vec::with_capacity(INITIAL_BUFFER_CAP));
+            conn.buffer = Some(Vec::with_capacity(PRESERVED_MSG_BUFFER_COUNT));
             true
         });
 
