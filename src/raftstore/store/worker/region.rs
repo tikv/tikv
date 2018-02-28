@@ -42,7 +42,7 @@ use std::collections::Bound::{Excluded, Included, Unbounded};
 
 const GENERATE_POOL_SIZE: usize = 2;
 
-pub const PENDING_DELETE_RANGE_CHECK_INTERVAL: u64 = 10_000; // milliseconds
+pub const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // milliseconds
 
 /// region related task.
 pub enum Task {
@@ -149,12 +149,7 @@ impl SnapContext {
         timer.observe_duration();
     }
 
-    fn apply_snap(
-        &self,
-        pending_delete_ranges: &mut PendingDeleteRanges,
-        region_id: u64,
-        abort: Arc<AtomicUsize>,
-    ) -> Result<()> {
+    fn apply_snap(&self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<(Vec<u8>, Vec<u8>)> {
         info!("[region {}] begin apply snap data", region_id);
         fail_point!("region_apply_snap");
         check_abort(&abort)?;
@@ -175,7 +170,6 @@ impl SnapContext {
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
-        pending_delete_ranges.remove(&start_key, &end_key);
         box_try!(util::delete_all_in_range(
             &self.kv_db,
             &start_key,
@@ -229,7 +223,7 @@ impl SnapContext {
             region_id,
             timer.elapsed()
         );
-        Ok(())
+        Ok((start_key, end_key))
     }
 
     fn handle_apply(
@@ -243,8 +237,9 @@ impl SnapContext {
         let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
         let timer = apply_histogram.start_coarse_timer();
 
-        match self.apply_snap(pending_delete_ranges, region_id, Arc::clone(&status)) {
-            Ok(()) => {
+        match self.apply_snap(region_id, Arc::clone(&status)) {
+            Ok((start_key, end_key)) => {
+                pending_delete_ranges.remove(&start_key, &end_key);
                 status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
                 SNAP_COUNTER_VEC
                     .with_label_values(&["apply", "success"])
@@ -270,10 +265,11 @@ impl SnapContext {
         timer.observe_duration();
     }
 
-    fn handle_destroy(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) {
+    fn handle_destroy(&mut self, region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) {
         if let Err(e) = util::delete_all_files_in_range(&self.kv_db, &start_key, &end_key) {
             error!(
-                "failed to delete files in [{}, {}): {:?}",
+                "[region {}] failed to delete files in [{}, {}): {:?}",
+                region_id,
                 escape(&start_key),
                 escape(&end_key),
                 e
@@ -284,14 +280,16 @@ impl SnapContext {
             util::delete_all_in_range(&self.kv_db, &start_key, &end_key, self.use_delete_range)
         {
             error!(
-                "failed to delete data in [{}, {}): {:?}",
+                "[region {}] failed to delete data in [{}, {}): {:?}",
+                region_id,
                 escape(&start_key),
                 escape(&end_key),
                 e
             );
         } else {
             info!(
-                "succeed in deleting data in [{}, {})",
+                "[region {}] succeed in deleting data in [{}, {})",
+                region_id,
                 escape(&start_key),
                 escape(&end_key),
             );
@@ -301,7 +299,7 @@ impl SnapContext {
 
 #[derive(Default)]
 struct PendingDeleteRanges {
-    ranges: BTreeMap<Vec<u8>, (Vec<u8>, time::Instant)>, // start_key -> (end_key, ttl)
+    ranges: BTreeMap<Vec<u8>, (Vec<u8>, u64, time::Instant)>, // start_key -> (end_key, region_id, ttl)
 }
 
 impl PendingDeleteRanges {
@@ -310,14 +308,14 @@ impl PendingDeleteRanges {
         let mut ranges = Vec::new();
         // find the first range that may overlap with [start_key, end_key)
         let sub_range = self.ranges.range((Unbounded, Excluded(start_key.to_vec())));
-        if let Some((s_key, &(ref e_key, _))) = sub_range.last() {
+        if let Some((s_key, &(ref e_key, _, _))) = sub_range.last() {
             if e_key > &start_key.to_vec() {
                 ranges.push((s_key.clone(), e_key.clone()));
             }
         }
 
         // find the rest ranges that overlap with [start_key, end_key)
-        for (s_key, &(ref e_key, _)) in self.ranges
+        for (s_key, &(ref e_key, _, _)) in self.ranges
             .range((Included(start_key.to_vec()), Excluded(end_key.to_vec())))
         {
             ranges.push((s_key.clone(), e_key.clone()));
@@ -375,28 +373,34 @@ impl PendingDeleteRanges {
         }
     }
 
-    pub fn insert(&mut self, start_key: Vec<u8>, end_key: Vec<u8>, timeout: time::Instant) {
+    pub fn insert(
+        &mut self,
+        region_id: u64,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+        timeout: time::Instant,
+    ) {
         self.remove(&start_key, &end_key);
-        self.ranges.insert(start_key, (end_key, timeout));
+        self.ranges.insert(start_key, (end_key, region_id, timeout));
     }
 
-    pub fn drain_timeout_ranges(&mut self, now: time::Instant) -> Vec<(Vec<u8>, Vec<u8>)> {
+    pub fn drain_timeout_ranges(&mut self, now: time::Instant) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
         let mut ranges = Vec::new();
-        for (s_key, &(ref e_key, ref timeout)) in &self.ranges {
+        for (s_key, &(ref e_key, region_id, ref timeout)) in &self.ranges {
             if timeout <= &now {
-                ranges.push((s_key.clone(), e_key.clone()));
+                ranges.push((region_id, s_key.clone(), e_key.clone()));
             }
         }
-        for &(ref s_key, _) in &ranges {
+        for &(_, ref s_key, _) in &ranges {
             self.ranges.remove(s_key).unwrap();
         }
         ranges
     }
 
-    pub fn drain_all_ranges(&mut self) -> Vec<(Vec<u8>, Vec<u8>)> {
+    pub fn drain_all_ranges(&mut self) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
         let ranges = self.ranges
             .iter()
-            .map(|(s_key, &(ref e_key, _))| (s_key.clone(), e_key.clone()))
+            .map(|(s_key, &(ref e_key, region_id, _))| (region_id, s_key.clone(), e_key.clone()))
             .collect();
         self.ranges.clear();
         ranges
@@ -472,23 +476,23 @@ impl Runnable<Task> for Runner {
                     // delay the range deletion becase there might be a coprocessor request related to this range
                     let timeout = time::Instant::now() + self.clean_stale_peer_delay;
                     self.pending_delete_ranges
-                        .insert(start_key, end_key, timeout);
+                        .insert(region_id, start_key, end_key, timeout);
                 } else {
-                    self.ctx.handle_destroy(start_key, end_key);
+                    self.ctx.handle_destroy(region_id, start_key, end_key);
                 }
             }
             Task::CleanStalePeer {} => {
-                RANGE_DELETION_GAUGE_VEC
+                STALE_PEER_GAUGE_VEC
                     .with_label_values(&["total"])
                     .set(self.pending_delete_ranges.len() as f64);
 
                 let now = time::Instant::now();
                 let mut timeout_ranges = self.pending_delete_ranges.drain_timeout_ranges(now);
-                RANGE_DELETION_GAUGE_VEC
+                STALE_PEER_GAUGE_VEC
                     .with_label_values(&["timeout"])
                     .set(timeout_ranges.len() as f64);
-                for (start_key, end_key) in timeout_ranges.drain(..) {
-                    self.ctx.handle_destroy(start_key, end_key);
+                for (region_id, start_key, end_key) in timeout_ranges.drain(..) {
+                    self.ctx.handle_destroy(region_id, start_key, end_key);
                 }
             }
         }
@@ -500,8 +504,8 @@ impl Runnable<Task> for Runner {
         }
         // handle rest of the ranges that need to be destroyed
         let mut ranges = self.pending_delete_ranges.drain_all_ranges();
-        for (start_key, end_key) in ranges.drain(..) {
-            self.ctx.handle_destroy(start_key, end_key);
+        for (region_id, start_key, end_key) in ranges.drain(..) {
+            self.ctx.handle_destroy(region_id, start_key, end_key);
         }
     }
 }
@@ -522,10 +526,11 @@ mod test {
             ranges: BTreeMap::new(),
         };
         let delay = Duration::from_millis(100);
+        let id = 0;
 
         let timeout = time::Instant::now() + delay;
-        pending_delete_ranges.insert(b"aa".to_vec(), b"bb".to_vec(), timeout);
-        pending_delete_ranges.insert(b"bb".to_vec(), b"cc".to_vec(), timeout);
+        pending_delete_ranges.insert(id, b"aa".to_vec(), b"bb".to_vec(), timeout);
+        pending_delete_ranges.insert(id + 1, b"bb".to_vec(), b"cc".to_vec(), timeout);
 
         // not reaching the timeout, so no regions
         let now = time::Instant::now();
@@ -540,8 +545,8 @@ mod test {
         assert_eq!(
             ranges,
             [
-                (b"aa".to_vec(), b"bb".to_vec()),
-                (b"bb".to_vec(), b"cc".to_vec())
+                (id, b"aa".to_vec(), b"bb".to_vec()),
+                (id + 1, b"bb".to_vec(), b"cc".to_vec())
             ]
         );
 
@@ -555,14 +560,15 @@ mod test {
             ranges: BTreeMap::new(),
         };
         let delay = Duration::from_millis(100);
+        let id = 0;
 
         let timeout = time::Instant::now() + delay;
-        pending_delete_ranges.insert(b"aa".to_vec(), b"bb".to_vec(), timeout);
+        pending_delete_ranges.insert(id, b"aa".to_vec(), b"bb".to_vec(), timeout);
 
         thread::sleep(delay / 2);
 
         let timeout = time::Instant::now() + delay;
-        pending_delete_ranges.insert(b"aa".to_vec(), b"bb".to_vec(), timeout);
+        pending_delete_ranges.insert(id + 1, b"aa".to_vec(), b"bb".to_vec(), timeout);
 
         thread::sleep(delay / 2);
 
@@ -576,7 +582,7 @@ mod test {
         // now will timeout
         let now = time::Instant::now();
         let ranges = pending_delete_ranges.drain_timeout_ranges(now);
-        assert_eq!(ranges, [(b"aa".to_vec(), b"bb".to_vec())]);
+        assert_eq!(ranges, [(id + 1, b"aa".to_vec(), b"bb".to_vec())]);
     }
 
     #[test]
@@ -585,9 +591,10 @@ mod test {
             ranges: BTreeMap::new(),
         };
         let delay = Duration::from_millis(100);
+        let id = 0;
 
         let timeout = time::Instant::now() + delay;
-        pending_delete_ranges.insert(b"aa".to_vec(), b"bb".to_vec(), timeout);
+        pending_delete_ranges.insert(id, b"aa".to_vec(), b"bb".to_vec(), timeout);
 
         thread::sleep(delay / 2);
 
@@ -607,18 +614,19 @@ mod test {
             ranges: BTreeMap::new(),
         };
         let delay = Duration::from_millis(100);
+        let id = 0;
 
         let timeout = time::Instant::now() + delay;
-        pending_delete_ranges.insert(b"a".to_vec(), b"c".to_vec(), timeout);
-        pending_delete_ranges.insert(b"f".to_vec(), b"i".to_vec(), timeout);
-        pending_delete_ranges.insert(b"m".to_vec(), b"n".to_vec(), timeout);
-        pending_delete_ranges.insert(b"p".to_vec(), b"t".to_vec(), timeout);
-        pending_delete_ranges.insert(b"x".to_vec(), b"z".to_vec(), timeout);
+        pending_delete_ranges.insert(id, b"a".to_vec(), b"c".to_vec(), timeout);
+        pending_delete_ranges.insert(id + 1, b"f".to_vec(), b"i".to_vec(), timeout);
+        pending_delete_ranges.insert(id, b"m".to_vec(), b"n".to_vec(), timeout);
+        pending_delete_ranges.insert(id + 1, b"p".to_vec(), b"t".to_vec(), timeout);
+        pending_delete_ranges.insert(id, b"x".to_vec(), b"z".to_vec(), timeout);
 
         thread::sleep(delay / 2);
 
         let timeout = time::Instant::now() + delay;
-        pending_delete_ranges.insert(b"g".to_vec(), b"q".to_vec(), timeout);
+        pending_delete_ranges.insert(id + 2, b"g".to_vec(), b"q".to_vec(), timeout);
 
         thread::sleep(delay / 2);
 
@@ -627,10 +635,10 @@ mod test {
         assert_eq!(
             ranges,
             [
-                (b"a".to_vec(), b"c".to_vec()),
-                (b"f".to_vec(), b"g".to_vec()),
-                (b"q".to_vec(), b"t".to_vec()),
-                (b"x".to_vec(), b"z".to_vec()),
+                (id, b"a".to_vec(), b"c".to_vec()),
+                (id + 1, b"f".to_vec(), b"g".to_vec()),
+                (id + 1, b"q".to_vec(), b"t".to_vec()),
+                (id, b"x".to_vec(), b"z".to_vec()),
             ]
         );
 
@@ -638,7 +646,7 @@ mod test {
 
         let now = time::Instant::now();
         let ranges = pending_delete_ranges.drain_timeout_ranges(now);
-        assert_eq!(ranges, [(b"g".to_vec(), b"q".to_vec())]);
+        assert_eq!(ranges, [(id + 2, b"g".to_vec(), b"q".to_vec())]);
     }
 
     #[test]
@@ -647,16 +655,17 @@ mod test {
             ranges: BTreeMap::new(),
         };
         let delay = Duration::from_millis(100);
+        let id = 0;
 
         let timeout = time::Instant::now() + delay;
-        pending_delete_ranges.insert(b"a".to_vec(), b"c".to_vec(), timeout);
-        pending_delete_ranges.insert(b"f".to_vec(), b"t".to_vec(), timeout);
-        pending_delete_ranges.insert(b"x".to_vec(), b"z".to_vec(), timeout);
+        pending_delete_ranges.insert(id, b"a".to_vec(), b"c".to_vec(), timeout);
+        pending_delete_ranges.insert(id + 1, b"f".to_vec(), b"t".to_vec(), timeout);
+        pending_delete_ranges.insert(id, b"x".to_vec(), b"z".to_vec(), timeout);
 
         thread::sleep(delay / 2);
 
         let timeout = time::Instant::now() + delay;
-        pending_delete_ranges.insert(b"g".to_vec(), b"q".to_vec(), timeout);
+        pending_delete_ranges.insert(id + 2, b"g".to_vec(), b"q".to_vec(), timeout);
 
         thread::sleep(delay / 2);
 
@@ -665,10 +674,10 @@ mod test {
         assert_eq!(
             ranges,
             [
-                (b"a".to_vec(), b"c".to_vec()),
-                (b"f".to_vec(), b"g".to_vec()),
-                (b"q".to_vec(), b"t".to_vec()),
-                (b"x".to_vec(), b"z".to_vec()),
+                (id, b"a".to_vec(), b"c".to_vec()),
+                (id + 1, b"f".to_vec(), b"g".to_vec()),
+                (id + 1, b"q".to_vec(), b"t".to_vec()),
+                (id, b"x".to_vec(), b"z".to_vec()),
             ]
         );
 
@@ -676,6 +685,6 @@ mod test {
 
         let now = time::Instant::now();
         let ranges = pending_delete_ranges.drain_timeout_ranges(now);
-        assert_eq!(ranges, [(b"g".to_vec(), b"q".to_vec())]);
+        assert_eq!(ranges, [(id + 2, b"g".to_vec(), b"q".to_vec())]);
     }
 }

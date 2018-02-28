@@ -52,7 +52,7 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
                     ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
                     RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask,
-                    PENDING_DELETE_RANGE_CHECK_INTERVAL};
+                    STALE_PEER_CHECK_INTERVAL};
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -2221,11 +2221,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn register_clean_stale_peer_tick(&self, event_loop: &mut EventLoop<Self>) {
-        if let Err(e) = register_timer(
-            event_loop,
-            Tick::CleanStalePeer,
-            PENDING_DELETE_RANGE_CHECK_INTERVAL,
-        ) {
+        if let Err(e) = register_timer(event_loop, Tick::CleanStalePeer, STALE_PEER_CHECK_INTERVAL)
+        {
             error!("{} register delete range tick err: {:?}", self.tag, e);
         }
     }
