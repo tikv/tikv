@@ -490,8 +490,44 @@ mod test {
             new_col_info(2, types::VARCHAR),
             new_col_info(3, types::NEW_DECIMAL),
         ];
+        // init aggregation meta
+        let mut aggregation = Aggregation::default();
+        let group_by_cols = vec![1, 2];
+        let group_by = build_group_by(&group_by_cols);
+        aggregation.set_group_by(RepeatedField::from_vec(group_by));
+        let funcs = vec![(ExprType::Count, 1), (ExprType::Sum, 2), (ExprType::Avg, 2)];
+        let agg_funcs = build_aggr_func(&funcs);
+        aggregation.set_agg_func(RepeatedField::from_vec(agg_funcs));
 
-        // test one row
+        // test no row
+        let idx_vals = vec![];
+        let idx_data = prepare_index_data(tid, idx_id, col_infos.clone(), idx_vals);
+        let idx_row_cnt = idx_data.kv_data.len() as i64;
+        let unique = false;
+        let mut wrapper = IndexTestWrapper::new(unique, idx_data);
+        let (snapshot, start_ts) = wrapper.store.get_snapshot();
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let is_executor =
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique).unwrap();
+        // init the stream aggregation executor
+        let mut agg_ect = StreamAggExecutor::new(
+            Arc::new(EvalContext::default()),
+            Box::new(is_executor),
+            aggregation.clone(),
+            Arc::new(col_infos.clone()),
+        ).unwrap();
+        let expect_row_cnt = 0;
+        let mut row_data = Vec::with_capacity(1);
+        while let Some(row) = agg_ect.next().unwrap() {
+            row_data.push(row.data);
+        }
+        assert_eq!(row_data.len(), expect_row_cnt);
+        let expected_counts = vec![idx_row_cnt, expect_row_cnt as i64];
+        let mut counts = Vec::with_capacity(2);
+        agg_ect.collect_output_counts(&mut counts);
+        assert_eq!(expected_counts, counts);
+
+        // test no row
         let idx_vals = vec![
             vec![(2, Datum::Bytes(b"a".to_vec())), (3, Datum::Dec(12.into()))],
         ];
@@ -503,14 +539,6 @@ mod test {
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let is_executor =
             IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique).unwrap();
-        // init aggregation meta
-        let mut aggregation = Aggregation::default();
-        let group_by_cols = vec![1, 2];
-        let group_by = build_group_by(&group_by_cols);
-        aggregation.set_group_by(RepeatedField::from_vec(group_by));
-        let funcs = vec![(ExprType::Count, 1), (ExprType::Sum, 2), (ExprType::Avg, 2)];
-        let agg_funcs = build_aggr_func(&funcs);
-        aggregation.set_agg_func(RepeatedField::from_vec(agg_funcs));
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalContext::default()),
