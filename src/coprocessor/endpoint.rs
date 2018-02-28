@@ -137,7 +137,7 @@ impl Host {
 
     fn notify_failed<E: Into<Error> + Debug>(&mut self, e: E, reqs: Vec<RequestTask>) {
         debug!("failed to handle batch request: {:?}", e);
-        let resp = err_resp(e.into(), self.request_max_handle_secs);
+        let resp = err_multi_resp(e.into(), reqs.len(), self.request_max_handle_secs);
         for t in reqs {
             t.on_resp.respond(resp.clone());
         }
@@ -613,22 +613,32 @@ impl Runnable<Task> for Host {
     }
 }
 
-pub fn err_resp(e: Error, request_max_handle_secs: u64) -> Response {
+fn err_multi_resp(e: Error, count: usize, request_max_handle_secs: u64) -> Response {
     let mut resp = Response::new();
+    let count = count as f64;
     match e {
         Error::Region(e) => {
             let tag = storage::get_tag_from_header(&e);
-            COPR_REQ_ERROR.with_label_values(&[tag]).inc();
+            COPR_REQ_ERROR
+                .with_label_values(&[tag])
+                .inc_by(count)
+                .unwrap();
             resp.set_region_error(e);
         }
         Error::Locked(info) => {
             resp.set_locked(info);
-            COPR_REQ_ERROR.with_label_values(&["lock"]).inc();
+            COPR_REQ_ERROR
+                .with_label_values(&["lock"])
+                .inc_by(count)
+                .unwrap();
         }
         Error::Outdated(deadline, now, scan_tag) => {
             let elapsed =
                 now.duration_since(deadline) + Duration::from_secs(request_max_handle_secs);
-            COPR_REQ_ERROR.with_label_values(&["outdated"]).inc();
+            COPR_REQ_ERROR
+                .with_label_values(&["outdated"])
+                .inc_by(count)
+                .unwrap();
             OUTDATED_REQ_WAIT_TIME
                 .with_label_values(&[scan_tag])
                 .observe(elapsed.as_secs() as f64);
@@ -636,7 +646,10 @@ pub fn err_resp(e: Error, request_max_handle_secs: u64) -> Response {
             resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
         }
         Error::Full(allow) => {
-            COPR_REQ_ERROR.with_label_values(&["full"]).inc();
+            COPR_REQ_ERROR
+                .with_label_values(&["full"])
+                .inc_by(count)
+                .unwrap();
             let mut errorpb = errorpb::Error::new();
             errorpb.set_message(format!("running batches reach limit {}", allow));
             let mut server_is_busy_err = ServerIsBusy::new();
@@ -646,10 +659,17 @@ pub fn err_resp(e: Error, request_max_handle_secs: u64) -> Response {
         }
         Error::Other(_) => {
             resp.set_other_error(format!("{}", e));
-            COPR_REQ_ERROR.with_label_values(&["other"]).inc();
+            COPR_REQ_ERROR
+                .with_label_values(&["other"])
+                .inc_by(count)
+                .unwrap();
         }
     }
     resp
+}
+
+pub fn err_resp(e: Error, request_max_handle_secs: u64) -> Response {
+    err_multi_resp(e, 1, request_max_handle_secs)
 }
 
 pub fn prefix_next(key: &[u8]) -> Vec<u8> {
