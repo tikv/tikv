@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 use rocksdb::{Writable, WriteBatch, DB};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
+use kvproto::metapb::Region;
 
 use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use util::time;
@@ -41,8 +42,6 @@ use super::super::util;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 
 const GENERATE_POOL_SIZE: usize = 2;
-
-pub const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // milliseconds
 
 /// region related task.
 pub enum Task {
@@ -149,7 +148,7 @@ impl SnapContext {
         timer.observe_duration();
     }
 
-    fn apply_snap(&self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<(Vec<u8>, Vec<u8>)> {
+    fn apply_snap(&self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<(Region)> {
         info!("[region {}] begin apply snap data", region_id);
         fail_point!("region_apply_snap");
         check_abort(&abort)?;
@@ -223,23 +222,19 @@ impl SnapContext {
             region_id,
             timer.elapsed()
         );
-        Ok((start_key, end_key))
+        Ok((region))
     }
 
-    fn handle_apply(
-        &self,
-        pending_delete_ranges: &mut PendingDeleteRanges,
-        region_id: u64,
-        status: Arc<AtomicUsize>,
-    ) {
+    fn handle_apply(&self, region_id: u64, status: Arc<AtomicUsize>) -> Option<Region> {
         status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
         SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
         let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
         let timer = apply_histogram.start_coarse_timer();
 
+        let mut region = None;
         match self.apply_snap(region_id, Arc::clone(&status)) {
-            Ok((start_key, end_key)) => {
-                pending_delete_ranges.remove(&start_key, &end_key);
+            Ok(r) => {
+                region = Some(r);
                 status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
                 SNAP_COUNTER_VEC
                     .with_label_values(&["apply", "success"])
@@ -263,6 +258,7 @@ impl SnapContext {
         }
 
         timer.observe_duration();
+        region
     }
 
     fn handle_destroy(&mut self, region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) {
@@ -425,7 +421,7 @@ impl Runner {
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
-        clean_stale_peer_delay: u64,
+        clean_stale_peer_delay: Duration,
     ) -> Runner {
         Runner {
             pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap generator"))
@@ -438,7 +434,7 @@ impl Runner {
                 batch_size: batch_size,
                 use_delete_range: use_delete_range,
             },
-            clean_stale_peer_delay: Duration::from_secs(clean_stale_peer_delay),
+            clean_stale_peer_delay: clean_stale_peer_delay,
             pending_delete_ranges: PendingDeleteRanges::default(),
         }
     }
@@ -458,8 +454,11 @@ impl Runnable<Task> for Runner {
                     .execute(move |_| ctx.handle_gen(region_id, notifier))
             }
             Task::Apply { region_id, status } => {
-                self.ctx
-                    .handle_apply(&mut self.pending_delete_ranges, region_id, status)
+                if let Some(region) = self.ctx.handle_apply(region_id, status) {
+                    let start_key = keys::enc_start_key(&region);
+                    let end_key = keys::enc_end_key(&region);
+                    self.pending_delete_ranges.remove(&start_key, &end_key);
+                }
             }
             Task::Destroy {
                 region_id,
@@ -482,15 +481,12 @@ impl Runnable<Task> for Runner {
                 }
             }
             Task::CleanStalePeer {} => {
-                STALE_PEER_GAUGE_VEC
+                STALE_PEER_PENDING_DELETE_RANGE_GAUGE_VEC
                     .with_label_values(&["total"])
                     .set(self.pending_delete_ranges.len() as f64);
 
                 let now = time::Instant::now();
                 let mut timeout_ranges = self.pending_delete_ranges.drain_timeout_ranges(now);
-                STALE_PEER_GAUGE_VEC
-                    .with_label_values(&["timeout"])
-                    .set(timeout_ranges.len() as f64);
                 for (region_id, start_key, end_key) in timeout_ranges.drain(..) {
                     self.ctx.handle_destroy(region_id, start_key, end_key);
                 }

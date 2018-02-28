@@ -63,7 +63,7 @@ lazy_static! {
             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
 
-    pub static ref STALE_PEER_GAUGE_VEC: GaugeVec =
+    pub static ref STALE_PEER_PENDING_DELETE_RANGE_GAUGE_VEC: GaugeVec =
         register_gauge_vec!(
             "tikv_pending_delete_ranges_of_stale_peer",
             "Total number of tikv pending delete range of stale peer",

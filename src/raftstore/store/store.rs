@@ -51,8 +51,7 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
                     ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
-                    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask,
-                    STALE_PEER_CHECK_INTERVAL};
+                    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -70,6 +69,9 @@ type Key = Vec<u8>;
 
 const MIO_TICK_RATIO: u64 = 10;
 const PENDING_VOTES_CAP: usize = 20;
+
+// used to periodically check whether we should delete a stale peer's range in snapshot worker
+pub const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // milliseconds
 
 #[derive(Clone)]
 pub struct Engines {
@@ -513,7 +515,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.snap_mgr.clone(),
             self.cfg.snap_apply_batch_size.0 as usize,
             self.cfg.use_delete_range,
-            self.cfg.clean_stale_peer_delay.as_secs(),
+            self.cfg.clean_stale_peer_delay.0,
         );
         box_try!(self.region_worker.start(runner));
 
