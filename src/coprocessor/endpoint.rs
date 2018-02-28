@@ -180,7 +180,7 @@ impl Host {
                             .unwrap_or_else(|e| err_resp(e, request_max_handle_secs));
                         let mut exec_metrics = ExecutorMetrics::default();
                         ctx.collect_metrics_into(&mut exec_metrics);
-                        tracker.record_handle(&mut resp, exec_metrics);
+                        tracker.record_handle(Some(&mut resp), exec_metrics);
                         future::ok::<_, ()>(on_resp.respond(resp))
                     };
                     return pool.spawn_fn(do_request).forget();
@@ -192,12 +192,12 @@ impl Host {
                         return None;
                     }
                     tracker.record_wait();
-                    let (item, finished) = ctx.handle_streaming_request(batch_row_limit)
+                    let (mut item, finished) = ctx.handle_streaming_request(batch_row_limit)
                         .unwrap_or_else(|e| (Some(err_resp(e, request_max_handle_secs)), true));
-                    item.map(|mut resp| {
-                        let mut exec_metrics = ExecutorMetrics::default();
-                        ctx.collect_metrics_into(&mut exec_metrics);
-                        tracker.record_handle(&mut resp, exec_metrics);
+                    let mut exec_metrics = ExecutorMetrics::default();
+                    ctx.collect_metrics_into(&mut exec_metrics);
+                    tracker.record_handle(item.as_mut(), exec_metrics);
+                    item.map(|resp| {
                         future::ok::<_, futures_mpsc::SendError<_>>((resp, (ctx, finished)))
                     })
                 });
@@ -210,7 +210,7 @@ impl Host {
                     tracker.record_wait();
                     let mut resp = ctx.handle_request(&mut exec_metrics)
                         .unwrap_or_else(|e| err_resp(e, request_max_handle_secs));
-                    tracker.record_handle(&mut resp, exec_metrics);
+                    tracker.record_handle(Some(&mut resp), exec_metrics);
                     future::ok::<_, ()>(on_resp.respond(resp))
                 };
                 pool.spawn_fn(do_request).forget();
@@ -328,7 +328,7 @@ impl RequestTracker {
     }
 
     #[allow(useless_let_if_seq)]
-    fn record_handle(&mut self, resp: &mut Response, mut exec_metrics: ExecutorMetrics) {
+    fn record_handle(&mut self, resp: Option<&mut Response>, mut exec_metrics: ExecutorMetrics) {
         let handle_start = self.handle_start.take().unwrap();
         let now = Instant::now_coarse();
         self.handle_time = Some(duration_to_sec(now - handle_start));
@@ -343,15 +343,17 @@ impl RequestTracker {
             record_handle_time = true;
             record_scan_detail = true;
         }
-        if record_handle_time {
-            let mut handle = HandleTime::new();
-            handle.set_process_ms((self.handle_time.unwrap() * 1000f64) as i64);
-            handle.set_wait_ms((self.wait_time.unwrap() * 1000f64) as i64);
-            resp.mut_exec_details().set_handle_time(handle);
-        }
-        if record_scan_detail {
-            let detail = self.exec_metrics.cf_stats.scan_detail();
-            resp.mut_exec_details().set_scan_detail(detail);
+        if let Some(resp) = resp {
+            if record_handle_time {
+                let mut handle = HandleTime::new();
+                handle.set_process_ms((self.handle_time.unwrap() * 1000f64) as i64);
+                handle.set_wait_ms((self.wait_time.unwrap() * 1000f64) as i64);
+                resp.mut_exec_details().set_handle_time(handle);
+            }
+            if record_scan_detail {
+                let detail = self.exec_metrics.cf_stats.scan_detail();
+                resp.mut_exec_details().set_scan_detail(detail);
+            }
         }
     }
 }
@@ -372,6 +374,9 @@ impl Drop for RequestTracker {
                 self.ranges_len,
                 self.first_range,
             );
+        }
+        if self.wait_time.is_none() {
+            self.record_wait();
         }
 
         COPR_PENDING_REQS
