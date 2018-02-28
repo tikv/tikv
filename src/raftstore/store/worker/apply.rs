@@ -758,7 +758,7 @@ impl ApplyDelegate {
                     .with_label_values(&["add_peer", "all"])
                     .inc();
 
-                if peer_exists || learner_exists {
+                if peer_exists {
                     error!(
                         "{} can't add duplicated peer {:?} to region {:?}",
                         self.tag, peer, self.region
@@ -769,8 +769,12 @@ impl ApplyDelegate {
                         self.region
                     ));
                 }
+
                 // TODO: Do we allow adding peer in same node?
                 region.mut_peers().push(peer.clone());
+                if learner_exists {
+                    util::remove_learner(&mut region, store_id).unwrap();
+                }
 
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["add_peer", "success"])
@@ -803,7 +807,12 @@ impl ApplyDelegate {
                     self.pending_remove = true;
                 }
 
-                util::remove_peer(&mut region, store_id).unwrap();
+                if peer_exists {
+                    util::remove_peer(&mut region, store_id).unwrap();
+                } else {
+                    util::remove_learner(&mut region, store_id).unwrap();
+                }
+
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["remove_peer", "success"])
                     .inc();
@@ -838,33 +847,6 @@ impl ApplyDelegate {
                     .inc();
                 info!(
                     "{} add learner {:?} to region {:?}",
-                    self.tag, peer, self.region
-                );
-            }
-            ConfChangeType::PromoteLearnerNode => {
-                PEER_ADMIN_CMD_COUNTER_VEC
-                    .with_label_values(&["promote_learner", "all"])
-                    .inc();
-
-                if peer_exists || !learner_exists {
-                    error!(
-                        "{} can't promote learner {:?} on region {:?}",
-                        self.tag, peer, self.region
-                    );
-                    return Err(box_err!(
-                        "can't promote learner {:?} to region {:?}",
-                        peer,
-                        self.region
-                    ));
-                }
-                region.mut_peers().push(peer.clone());
-                util::remove_learner(&mut region, store_id).unwrap();
-
-                PEER_ADMIN_CMD_COUNTER_VEC
-                    .with_label_values(&["promote_learner", "success"])
-                    .inc();
-                info!(
-                    "{} promote learner {:?} on region {:?}",
                     self.tag, peer, self.region
                 );
             }

@@ -608,19 +608,13 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_4, b"k1", b"v1");
     must_get_equal(&engine_4, b"k2", b"v2");
 
-    // Add peer on store which already has learner.
-    pd_client.add_peer(r1, new_peer(4, 10));
-    pd_client.must_add_peer(r1, new_peer(5, 100)); // For ensure the last is proposed.
-    pd_client.must_none_peer(r1, new_peer(4, 10));
-    pd_client.must_have_learner(r1, new_peer(4, 10));
-
-    pd_client.add_peer(r1, new_peer(4, 11));
-    pd_client.must_remove_peer(r1, new_peer(5, 100)); // For ensure the last is proposed.
-    pd_client.must_none_peer(r1, new_peer(4, 11));
-    pd_client.must_have_learner(r1, new_peer(4, 10));
+    // Remove learner (4, 10) from region 1.
+    pd_client.must_remove_peer(r1, new_peer(4, 10));
+    pd_client.must_add_learner(r1, new_peer(4, 10));
+    must_get_equal(&engine_4, b"k2", b"v2");
 
     // Promote learner (4 ,10) to voter.
-    pd_client.must_promote_learner(r1, new_peer(4, 10));
+    pd_client.must_add_peer(r1, new_peer(4, 10));
     cluster.stop_node(2);
     cluster.must_put(b"k3", b"v3");
     must_get_equal(&engine_4, b"k3", b"v3");

@@ -191,7 +191,7 @@ pub struct Peer {
     kv_engine: Arc<DB>,
     raft_engine: Arc<DB>,
     cfg: Rc<Config>,
-    // Cache the `metapb::Peer`s for peers and learners, index by id.
+    // Cache the `metapb::Peer`s for voters and learners, index by id.
     peer_cache: RefCell<FlatMap<u64, metapb::Peer>>,
     pub peer: metapb::Peer,
     region_id: u64,
@@ -548,11 +548,18 @@ impl Peer {
             self.peer_heartbeats.clear();
             return;
         }
-        if self.peer_heartbeats.len() == self.region().get_peers().len() {
+        let voters_count = self.region().get_peers().len();
+        let learners_count = self.region().get_learners().len();
+        if self.peer_heartbeats.len() == voters_count + learners_count {
             return;
         }
         // Insert heartbeats in case that some peers never response heartbeats.
-        for peer in self.region().get_peers().to_owned() {
+        for peer in self.region()
+            .get_peers()
+            .to_owned()
+            .into_iter()
+            .chain(self.region().get_learners().to_owned())
+        {
             self.peer_heartbeats
                 .entry(peer.get_id())
                 .or_insert_with(Instant::now);
@@ -1212,7 +1219,13 @@ impl Peer {
 
         match change_type {
             ConfChangeType::AddNode => {
-                status.progress.insert(peer.get_id(), Progress::default());
+                if let Some(mut progress) = status.learner_progress.remove(&peer.get_id()) {
+                    // For promote learner to voter.
+                    progress.is_learner = false;
+                    status.progress.insert(peer.get_id(), progress);
+                } else {
+                    status.progress.insert(peer.get_id(), Progress::default());
+                }
             }
             ConfChangeType::RemoveNode => {
                 if status.learner_progress.remove(&peer.get_id()).is_some() {
@@ -1226,12 +1239,6 @@ impl Peer {
             }
             ConfChangeType::AddLearnerNode => {
                 return Ok(());
-            }
-            ConfChangeType::PromoteLearnerNode => {
-                if let Some(mut progress) = status.learner_progress.remove(&peer.get_id()) {
-                    progress.is_learner = false;
-                    status.progress.insert(peer.get_id(), progress);
-                }
             }
         }
         let healthy = self.count_healthy_node(status.progress.values());
@@ -1540,17 +1547,17 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
 }
 
 impl Peer {
-    /// Insert the peer or learner into cache.
+    /// Insert the voter or learner into cache.
     pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
     }
 
-    /// Remove the peer or learner by its id from cache.
+    /// Remove the voter or learner by its id from cache.
     pub fn remove_peer_from_cache(&mut self, peer_id: u64) {
         self.peer_cache.borrow_mut().remove(&peer_id);
     }
 
-    /// Get the peer or learner by its id from cache.
+    /// Get the voter or learner by its id from cache.
     pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
         if let Some(peer) = self.peer_cache.borrow().get(&peer_id) {
             return Some(peer.clone());

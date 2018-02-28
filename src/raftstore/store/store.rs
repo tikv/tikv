@@ -1298,8 +1298,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             match change_type {
-                ConfChangeType::AddNode => {
-                    // Add this peer to cache.
+                ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
+                    // Add this peer to cache and heartbeats.
                     let peer = cp.peer.clone();
                     p.peer_heartbeats.insert(peer.get_id(), Instant::now());
                     p.insert_peer_cache(peer);
@@ -1308,12 +1308,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     // Remove this peer from cache.
                     p.peer_heartbeats.remove(&cp.peer.get_id());
                     p.remove_peer_from_cache(cp.peer.get_id());
-                }
-                ConfChangeType::AddLearnerNode => {
-                    p.insert_peer_cache(cp.peer.clone());
-                }
-                ConfChangeType::PromoteLearnerNode => {
-                    p.peer_heartbeats.insert(cp.peer.get_id(), Instant::now());
                 }
             }
             my_peer_id = p.peer_id();

@@ -254,7 +254,7 @@ impl Cluster {
                 // For AddLearner.
                 let region_learner_len = region.get_learners().len();
                 let cur_region_learner_len = cur_region.get_learners().len();
-                assert!(region_learner_len > cur_region_learner_len);
+                assert!(region_learner_len != cur_region_learner_len);
             } else if cur_region_peer_len > region_peer_len {
                 // If ConfVer changed, TiKV has added/removed one peer already.
                 // So pd and TiKV can't have same peer count and can only have
@@ -548,7 +548,8 @@ impl TestPdClient {
 
     pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.add_peer(region_id, peer.clone());
-        self.must_have_peer(region_id, peer);
+        self.must_have_peer(region_id, peer.clone());
+        self.must_none_learner(region_id, peer);
     }
 
     pub fn add_learner(&self, region_id: u64, peer: metapb::Peer) {
@@ -580,21 +581,7 @@ impl TestPdClient {
 
     pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.remove_peer(region_id, peer.clone());
-        self.must_none_peer(region_id, peer);
-    }
-
-    pub fn promote_learner(&self, region_id: u64, peer: metapb::Peer) {
-        self.set_rule(box move |region: &metapb::Region, _: &metapb::Peer| {
-            if region.get_id() != region_id {
-                return None;
-            }
-            new_pd_promote_learner_change_peer(region, peer.clone())
-        });
-    }
-
-    pub fn must_promote_learner(&self, region_id: u64, peer: metapb::Peer) {
-        self.promote_learner(region_id, peer.clone());
-        self.must_have_peer(region_id, peer.clone());
+        self.must_none_peer(region_id, peer.clone());
         self.must_none_learner(region_id, peer);
     }
 

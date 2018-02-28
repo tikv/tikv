@@ -290,7 +290,7 @@ impl<T: Storage> RawNode<T> {
         }
         let nid = cc.get_node_id();
         match cc.get_change_type() {
-            ConfChangeType::AddNode | ConfChangeType::PromoteLearnerNode => self.raft.add_node(nid),
+            ConfChangeType::AddNode => self.raft.add_node(nid),
             ConfChangeType::AddLearnerNode => self.raft.add_learner(nid),
             ConfChangeType::RemoveNode => self.raft.remove_node(nid),
         }

@@ -78,9 +78,8 @@ signal = "0.4"
 git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
-# git = "https://github.com/pingcap/kvproto.git"
-git = "https://github.com/Connor1996/kvproto.git"
-branch = "learner"
+git = "https://github.com/pingcap/kvproto.git"
+branch = "raftstore-learner"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"

@@ -103,14 +103,12 @@ pub fn is_first_vote_msg(msg: &RaftMessage) -> bool {
 const STR_CONF_CHANGE_ADD_NODE: &str = "AddNode";
 const STR_CONF_CHANGE_REMOVE_NODE: &str = "RemoveNode";
 const STR_CONF_CHANGE_ADDLEARNER_NODE: &str = "AddLearner";
-const STR_CONF_CHANGE_PROMOTELEARNER_NODE: &str = "PromoteLearner";
 
 pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str {
     match *conf_type {
         ConfChangeType::AddNode => STR_CONF_CHANGE_ADD_NODE,
         ConfChangeType::RemoveNode => STR_CONF_CHANGE_REMOVE_NODE,
         ConfChangeType::AddLearnerNode => STR_CONF_CHANGE_ADDLEARNER_NODE,
-        ConfChangeType::PromoteLearnerNode => STR_CONF_CHANGE_PROMOTELEARNER_NODE,
     }
 }
 

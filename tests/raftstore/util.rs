@@ -310,16 +310,6 @@ pub fn new_pd_add_learner_change_peer(
     Some(new_pd_change_peer(ConfChangeType::AddLearnerNode, peer))
 }
 
-pub fn new_pd_promote_learner_change_peer(
-    region: &metapb::Region,
-    peer: metapb::Peer,
-) -> Option<RegionHeartbeatResponse> {
-    if let Some(p) = find_learner(region, peer.get_store_id()) {
-        assert_eq!(p.get_id(), peer.get_id());
-    }
-    Some(new_pd_change_peer(ConfChangeType::PromoteLearnerNode, peer))
-}
-
 pub fn new_pd_transfer_leader(peer: metapb::Peer) -> Option<RegionHeartbeatResponse> {
     let mut transfer_leader = TransferLeader::new();
     transfer_leader.set_peer(peer);
