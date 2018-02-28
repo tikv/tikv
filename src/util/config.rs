@@ -935,6 +935,10 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             let expect = get_rotational_info(&fs_info.fsname).unwrap();
             // ln -s fs_info.fsname tmp_device
             let tmp_device = format!("{}/tmp_device", tmp_dir.path().display());
+            // /dev/xxx may not exists in container.
+            if !Path::new(fs_info.fsname).exists() {
+                return;
+            }
             symlink(&fs_info.fsname, &tmp_device).unwrap();
             // mount info: data_path=>tmp_device
             let mninfo = format!(
