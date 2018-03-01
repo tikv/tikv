@@ -148,7 +148,7 @@ impl SnapContext {
         timer.observe_duration();
     }
 
-    fn apply_snap(&self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<(Region)> {
+    fn apply_snap(&self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<Region> {
         info!("[region {}] begin apply snap data", region_id);
         fail_point!("region_apply_snap");
         check_abort(&abort)?;
@@ -222,7 +222,7 @@ impl SnapContext {
             region_id,
             timer.elapsed()
         );
-        Ok((region))
+        Ok(region)
     }
 
     fn handle_apply(&self, region_id: u64, status: Arc<AtomicUsize>) -> Option<Region> {
@@ -293,9 +293,18 @@ impl SnapContext {
     }
 }
 
+#[derive(Clone)]
+struct StalePeerInfo {
+    // the start_key is stored as a key in PendingDeleteRanges
+    // below are stored as a value in PendingDeleteRanges
+    pub region_id: u64,
+    pub end_key: Vec<u8>,
+    pub timeout: time::Instant,
+}
+
 #[derive(Default)]
 struct PendingDeleteRanges {
-    ranges: BTreeMap<Vec<u8>, (Vec<u8>, u64, time::Instant)>, // start_key -> (end_key, region_id, ttl)
+    ranges: BTreeMap<Vec<u8>, StalePeerInfo>, // start_key -> StalePeerInfo
 }
 
 impl PendingDeleteRanges {
@@ -304,17 +313,17 @@ impl PendingDeleteRanges {
         let mut ranges = Vec::new();
         // find the first range that may overlap with [start_key, end_key)
         let sub_range = self.ranges.range((Unbounded, Excluded(start_key.to_vec())));
-        if let Some((s_key, &(ref e_key, _, _))) = sub_range.last() {
-            if e_key > &start_key.to_vec() {
-                ranges.push((s_key.clone(), e_key.clone()));
+        if let Some((s_key, ref peer_info)) = sub_range.last() {
+            if peer_info.end_key > start_key.to_vec() {
+                ranges.push((s_key.clone(), peer_info.end_key.clone()));
             }
         }
 
         // find the rest ranges that overlap with [start_key, end_key)
-        for (s_key, &(ref e_key, _, _)) in self.ranges
+        for (s_key, ref peer_info) in self.ranges
             .range((Included(start_key.to_vec()), Excluded(end_key.to_vec())))
         {
-            ranges.push((s_key.clone(), e_key.clone()));
+            ranges.push((s_key.clone(), peer_info.end_key.clone()));
         }
         ranges
     }
@@ -334,8 +343,8 @@ impl PendingDeleteRanges {
                     //            [_ _ _ _ _ _ _ _ _ _)
                     //       start_key            end_key
                     //   [_ _ _ _ )                          after
-                    let val = self.ranges.get_mut(s_key).unwrap();
-                    val.0 = start_key.to_vec();
+                    let info = self.ranges.get_mut(s_key).unwrap();
+                    info.end_key = start_key.to_vec();
                 } else {
                     // the middle part of the range is trimed
                     // s_key                   e_key
@@ -343,10 +352,10 @@ impl PendingDeleteRanges {
                     //           [_ _ _ _)
                     //      start_key   end_key
                     //   [_ _ _ _)       [_ _ _ _)        after
-                    let mut val = self.ranges.remove(s_key).unwrap();
-                    self.ranges.insert(end_key.to_vec(), val.clone());
-                    val.0 = start_key.to_vec();
-                    assert!(self.ranges.insert(s_key.clone(), val).is_none());
+                    let mut info = self.ranges.remove(s_key).unwrap();
+                    self.ranges.insert(end_key.to_vec(), info.clone());
+                    info.end_key = start_key.to_vec();
+                    assert!(self.ranges.insert(s_key.clone(), info).is_none());
                 }
             } else if e_key <= &end_key.to_vec() {
                 // the whole range is discarded
@@ -363,8 +372,8 @@ impl PendingDeleteRanges {
                 // start_key      end_key
                 //    [_ _ _ _ _ _ _)
                 //                  [_ _ _ )      after
-                let val = self.ranges.remove(s_key).unwrap();
-                assert!(self.ranges.insert(end_key.to_vec(), val).is_none());
+                let info = self.ranges.remove(s_key).unwrap();
+                assert!(self.ranges.insert(end_key.to_vec(), info).is_none());
             }
         }
     }
@@ -377,28 +386,24 @@ impl PendingDeleteRanges {
         timeout: time::Instant,
     ) {
         self.remove(&start_key, &end_key);
-        self.ranges.insert(start_key, (end_key, region_id, timeout));
+        let info = StalePeerInfo {
+            region_id: region_id,
+            end_key: end_key,
+            timeout: timeout,
+        };
+        self.ranges.insert(start_key, info);
     }
 
     pub fn drain_timeout_ranges(&mut self, now: time::Instant) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
         let mut ranges = Vec::new();
-        for (s_key, &(ref e_key, region_id, ref timeout)) in &self.ranges {
-            if timeout <= &now {
-                ranges.push((region_id, s_key.clone(), e_key.clone()));
+        for (start_key, ref info) in &self.ranges {
+            if info.timeout <= now {
+                ranges.push((info.region_id, start_key.clone(), info.end_key.clone()));
             }
         }
-        for &(_, ref s_key, _) in &ranges {
-            self.ranges.remove(s_key).unwrap();
+        for &(_, ref start_key, _) in &ranges {
+            self.ranges.remove(start_key).unwrap();
         }
-        ranges
-    }
-
-    pub fn drain_all_ranges(&mut self) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
-        let ranges = self.ranges
-            .iter()
-            .map(|(s_key, &(ref e_key, region_id, _))| (region_id, s_key.clone(), e_key.clone()))
-            .collect();
-        self.ranges.clear();
         ranges
     }
 
@@ -465,25 +470,19 @@ impl Runnable<Task> for Runner {
                 start_key,
                 end_key,
             } => {
-                if self.clean_stale_peer_delay.as_secs() > 0 {
-                    info!(
-                        "[region {}] register deleting data in [{}, {})",
-                        region_id,
-                        escape(&start_key),
-                        escape(&end_key)
-                    );
-                    // delay the range deletion becase there might be a coprocessor request related to this range
-                    let timeout = time::Instant::now() + self.clean_stale_peer_delay;
-                    self.pending_delete_ranges
-                        .insert(region_id, start_key, end_key, timeout);
-                } else {
-                    self.ctx.handle_destroy(region_id, start_key, end_key);
-                }
+                info!(
+                    "[region {}] register deleting data in [{}, {})",
+                    region_id,
+                    escape(&start_key),
+                    escape(&end_key)
+                );
+                // delay the range deletion becase there might be a coprocessor request related to this range
+                let timeout = time::Instant::now() + self.clean_stale_peer_delay;
+                self.pending_delete_ranges
+                    .insert(region_id, start_key, end_key, timeout);
             }
             Task::CleanStalePeer {} => {
-                STALE_PEER_PENDING_DELETE_RANGE_GAUGE_VEC
-                    .with_label_values(&["total"])
-                    .set(self.pending_delete_ranges.len() as f64);
+                STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
 
                 let now = time::Instant::now();
                 let mut timeout_ranges = self.pending_delete_ranges.drain_timeout_ranges(now);
@@ -497,11 +496,6 @@ impl Runnable<Task> for Runner {
     fn shutdown(&mut self) {
         if let Err(e) = self.pool.stop() {
             warn!("Stop threadpool failed with {:?}", e);
-        }
-        // handle rest of the ranges that need to be destroyed
-        let mut ranges = self.pending_delete_ranges.drain_all_ranges();
-        for (region_id, start_key, end_key) in ranges.drain(..) {
-            self.ctx.handle_destroy(region_id, start_key, end_key);
         }
     }
 }

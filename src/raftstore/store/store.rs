@@ -71,7 +71,7 @@ const MIO_TICK_RATIO: u64 = 10;
 const PENDING_VOTES_CAP: usize = 20;
 
 // used to periodically check whether we should delete a stale peer's range in snapshot worker
-pub const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // milliseconds
+const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // milliseconds
 
 #[derive(Clone)]
 pub struct Engines {

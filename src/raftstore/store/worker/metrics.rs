@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{exponential_buckets, CounterVec, GaugeVec, Histogram, HistogramVec};
+use prometheus::{exponential_buckets, CounterVec, Gauge, Histogram, HistogramVec};
 
 lazy_static! {
     pub static ref SNAP_COUNTER_VEC: CounterVec =
@@ -63,10 +63,9 @@ lazy_static! {
             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
 
-    pub static ref STALE_PEER_PENDING_DELETE_RANGE_GAUGE_VEC: GaugeVec =
-        register_gauge_vec!(
+    pub static ref STALE_PEER_PENDING_DELETE_RANGE_GAUGE: Gauge =
+        register_gauge!(
             "tikv_pending_delete_ranges_of_stale_peer",
-            "Total number of tikv pending delete range of stale peer",
-            &["type"]
+            "Total number of tikv pending delete range of stale peer"
         ).unwrap();
 }
