@@ -117,7 +117,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 } else {
                     match v {
                         Ok(Some(val)) => resp.set_value(val),
-                        Ok(None) => resp.set_value(vec![]),
+                        Ok(None) => (),
                         Err(e) => resp.set_error(extract_key_error(&e)),
                     }
                 }

@@ -106,7 +106,7 @@ pub trait Engine: Send + Debug {
     fn future_snapshot(
         &self,
         ctx: &Context,
-    ) -> Box<Future<Item = Box<Snapshot>, Error = Error> + Send> {
+    ) -> Box<Future<Item = Box<Snapshot + 'static>, Error = Error> + Send> {
         let (callback, future) = util::future::paired_future_callback();
         let val = self.async_snapshot(ctx, callback);
         if let Err(e) = val {

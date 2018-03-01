@@ -62,7 +62,20 @@ impl Context {
     }
 
     #[inline]
-    pub fn collect_command_duration(&mut self, cmd: &str) -> LocalHistogramTimer {
+    pub fn collect_command_count_and_duration(
+        &mut self,
+        cmd: &str,
+        priority: readpool::Priority,
+        is_raw: bool,
+    ) -> LocalHistogramTimer {
+        if is_raw {
+            self.raw_command_counter.with_label_values(&[cmd]).inc();
+        } else {
+            self.kv_command_counter.with_label_values(&[cmd]).inc();
+        }
+        self.command_pri_counter
+            .with_label_values(&[&priority.to_string()])
+            .inc();
         self.command_duration
             .with_label_values(&[cmd])
             .start_coarse_timer()
@@ -73,18 +86,6 @@ impl Context {
         self.processing_read_duration
             .with_label_values(&[cmd])
             .start_coarse_timer()
-    }
-
-    #[inline]
-    pub fn collect_command_count(&mut self, cmd: &str, priority: readpool::Priority, is_raw: bool) {
-        if is_raw {
-            self.raw_command_counter.with_label_values(&[cmd]).inc();
-        } else {
-            self.kv_command_counter.with_label_values(&[cmd]).inc();
-        }
-        self.command_pri_counter
-            .with_label_values(&[&priority.to_string()])
-            .inc();
     }
 
     #[inline]
