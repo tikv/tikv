@@ -61,4 +61,10 @@ lazy_static! {
             "Total number of reporting failure messages",
             &["type", "store_id"]
         ).unwrap();
+
+    pub static ref RAFT_MESSAGE_FLUSH_COUNTER: Counter =
+        register_counter!(
+            "tikv_server_raft_message_flush_total",
+            "Total number of raft messages flushed"
+        ).unwrap();
 }
