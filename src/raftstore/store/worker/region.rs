@@ -313,14 +313,14 @@ impl PendingDeleteRanges {
         let mut ranges = Vec::new();
         // find the first range that may overlap with [start_key, end_key)
         let sub_range = self.ranges.range((Unbounded, Excluded(start_key.to_vec())));
-        if let Some((s_key, ref peer_info)) = sub_range.last() {
+        if let Some((s_key, peer_info)) = sub_range.last() {
             if peer_info.end_key > start_key.to_vec() {
                 ranges.push((s_key.clone(), peer_info.end_key.clone()));
             }
         }
 
         // find the rest ranges that overlap with [start_key, end_key)
-        for (s_key, ref peer_info) in self.ranges
+        for (s_key, peer_info) in self.ranges
             .range((Included(start_key.to_vec()), Excluded(end_key.to_vec())))
         {
             ranges.push((s_key.clone(), peer_info.end_key.clone()));
@@ -334,7 +334,7 @@ impl PendingDeleteRanges {
             return;
         }
         let overlapped_ranges = self.find_overlapped_ranges(start_key, end_key);
-        for &(ref s_key, ref e_key) in &overlapped_ranges {
+        for (ref s_key, ref e_key) in overlapped_ranges {
             if s_key < &start_key.to_vec() {
                 if e_key <= &end_key.to_vec() {
                     // the right part of the range is trimed
@@ -396,7 +396,7 @@ impl PendingDeleteRanges {
 
     pub fn drain_timeout_ranges(&mut self, now: time::Instant) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
         let mut ranges = Vec::new();
-        for (start_key, ref info) in &self.ranges {
+        for (start_key, info) in &self.ranges {
             if info.timeout <= now {
                 ranges.push((info.region_id, start_key.clone(), info.end_key.clone()));
             }
