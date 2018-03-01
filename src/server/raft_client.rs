@@ -150,6 +150,7 @@ impl RaftClient {
 
     pub fn flush(&mut self) {
         let addrs = &mut self.addrs;
+        let mut counter: u64 = 0;
         self.conns.retain(|&(ref addr, _), conn| {
             let store_id = conn.store_id;
             if !conn.alive.load(Ordering::SeqCst) {
@@ -165,6 +166,7 @@ impl RaftClient {
                 return true;
             }
 
+            counter += 1;
             let mut msgs = conn.buffer.take().unwrap();
             msgs.last_mut().unwrap().1 = WriteFlags::default();
             if let Err(e) = conn.stream.unbounded_send(msgs) {
@@ -184,6 +186,10 @@ impl RaftClient {
             conn.buffer = Some(Vec::with_capacity(PRESERVED_MSG_BUFFER_COUNT));
             true
         });
+
+        if counter > 0 {
+            RAFT_MESSAGE_FLUSH_COUNTER.inc_by(counter as f64).unwrap();
+        }
     }
 }
 
