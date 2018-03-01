@@ -1042,6 +1042,10 @@ impl ApplyDelegate {
             )
         });
 
+        PEER_ADMIN_CMD_COUNTER_VEC
+            .with_label_values(&["pre_merge", "success"])
+            .inc();
+
         Ok((
             AdminResponse::new(),
             Some(ExecResult::PreMerge {
@@ -1063,33 +1067,49 @@ impl ApplyDelegate {
         let merge = req.get_merge();
         let source_region = merge.get_source();
         let region_state_key = keys::region_state_key(source_region.get_id());
-        let state: RegionLocalState = self.engine
-            .get_msg_cf(CF_RAFT, &region_state_key)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "failed to get regions state of {:?}: {:?}",
-                    source_region, e
-                )
-            })
-            .unwrap();
+        let state: RegionLocalState = match self.engine.get_msg_cf(CF_RAFT, &region_state_key) {
+            Ok(Some(s)) => s,
+            e => panic!(
+                "{} failed to get regions state of {:?}: {:?}",
+                self.tag, source_region, e
+            ),
+        };
         match state.get_state() {
             PeerState::Normal | PeerState::Merging => {}
-            _ => panic!("unexpected state of merging region {:?}", state),
+            _ => panic!(
+                "{} unexpected state of merging region {:?}",
+                self.tag, state
+            ),
         }
         let exist_region = state.get_region();
-        assert_eq!(source_region.get_start_key(), exist_region.get_start_key());
-        assert_eq!(source_region.get_end_key(), exist_region.get_end_key());
+        assert_eq!(
+            source_region.get_start_key(),
+            exist_region.get_start_key(),
+            "{}",
+            self.tag
+        );
+        assert_eq!(
+            source_region.get_end_key(),
+            exist_region.get_end_key(),
+            "{}",
+            self.tag
+        );
 
         let apply_state_key = keys::apply_state_key(source_region.get_id());
-        let apply_state: RaftApplyState = self.engine
-            .get_msg_cf(CF_RAFT, &apply_state_key)
-            .unwrap_or_else(|e| panic!("failed to get apply state of {:?}: {:?}", source_region, e))
-            .unwrap();
+        let apply_state: RaftApplyState = match self.engine.get_msg_cf(CF_RAFT, &apply_state_key) {
+            Ok(Some(s)) => s,
+            e => panic!(
+                "{} failed to get apply state of {:?}: {:?}",
+                self.tag, source_region, e
+            ),
+        };
         let apply_index = apply_state.get_applied_index();
         if apply_index >= merge.get_commit() {
             assert_eq!(
                 source_region.get_region_epoch(),
-                exist_region.get_region_epoch()
+                exist_region.get_region_epoch(),
+                "{}",
+                self.tag
             );
         } else {
             let first_index = merge
@@ -1106,7 +1126,8 @@ impl ApplyDelegate {
                 &mut entries,
             ).unwrap_or_else(|e| {
                 panic!(
-                    "failed to load entries from region {}: {:?}",
+                    "{} failed to load entries from region {}: {:?}",
+                    self.tag,
                     source_region.get_id(),
                     e
                 );
@@ -1158,6 +1179,10 @@ impl ApplyDelegate {
                 )
             });
 
+        PEER_ADMIN_CMD_COUNTER_VEC
+            .with_label_values(&["merge", "success"])
+            .inc();
+
         let resp = AdminResponse::new();
         Ok((
             resp,
@@ -1173,14 +1198,22 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, Option<ExecResult>)> {
+        PEER_ADMIN_CMD_COUNTER_VEC
+            .with_label_values(&["rollback_pre_merge", "all"])
+            .inc();
         let region_state_key = keys::region_state_key(self.region_id());
-        let state: RegionLocalState = self.engine
-            .get_msg_cf(CF_RAFT, &region_state_key)
-            .unwrap_or_else(|e| panic!("{} failed to get regions state: {:?}", self.tag, e))
-            .unwrap();
-        assert_eq!(state.get_state(), PeerState::Merging);
+        let state: RegionLocalState = match self.engine.get_msg_cf(CF_RAFT, &region_state_key) {
+            Ok(Some(s)) => s,
+            e => panic!("{} failed to get regions state: {:?}", self.tag, e),
+        };
+        assert_eq!(state.get_state(), PeerState::Merging, "{}", self.tag);
         let rollback = req.get_rollback_pre_merge();
-        assert_eq!(state.get_merge_state().get_commit(), rollback.get_commit());
+        assert_eq!(
+            state.get_merge_state().get_commit(),
+            rollback.get_commit(),
+            "{}",
+            self.tag
+        );
         let mut region = self.region.clone();
         let version = region.get_region_epoch().get_version();
         region.mut_region_epoch().set_version(version + 1);
@@ -1190,6 +1223,10 @@ impl ApplyDelegate {
                 self.tag, rollback, e
             )
         });
+
+        PEER_ADMIN_CMD_COUNTER_VEC
+            .with_label_values(&["rollback_pre_merge", "success"])
+            .inc();
         let resp = AdminResponse::new();
         Ok((
             resp,
