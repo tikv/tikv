@@ -477,7 +477,7 @@ impl Runnable<Task> for Runner {
                         escape(&start_key),
                         escape(&end_key)
                     );
-                    // delay the range deletion becase there might be a coprocessor request related to this range
+                    // delay the range deletion because there might be a coprocessor request related to this range
                     let timeout = time::Instant::now() + self.clean_stale_peer_delay;
                     self.pending_delete_ranges
                         .insert(region_id, start_key, end_key, timeout);
