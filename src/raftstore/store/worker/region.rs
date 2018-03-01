@@ -470,16 +470,20 @@ impl Runnable<Task> for Runner {
                 start_key,
                 end_key,
             } => {
-                info!(
-                    "[region {}] register deleting data in [{}, {})",
-                    region_id,
-                    escape(&start_key),
-                    escape(&end_key)
-                );
-                // delay the range deletion becase there might be a coprocessor request related to this range
-                let timeout = time::Instant::now() + self.clean_stale_peer_delay;
-                self.pending_delete_ranges
-                    .insert(region_id, start_key, end_key, timeout);
+                if self.clean_stale_peer_delay.as_secs() > 0 {
+                    info!(
+                        "[region {}] register deleting data in [{}, {})",
+                        region_id,
+                        escape(&start_key),
+                        escape(&end_key)
+                    );
+                    // delay the range deletion becase there might be a coprocessor request related to this range
+                    let timeout = time::Instant::now() + self.clean_stale_peer_delay;
+                    self.pending_delete_ranges
+                        .insert(region_id, start_key, end_key, timeout);
+                } else {
+                    self.ctx.handle_destroy(region_id, start_key, end_key);
+                }
             }
             Task::CleanStalePeer {} => {
                 STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
