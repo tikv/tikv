@@ -40,6 +40,7 @@ pub use self::bootstrap::{bootstrap_store, clear_prepare_bootstrap, clear_prepar
                           prepare_bootstrap, write_prepare_bootstrap};
 pub use self::engine::{Iterable, Mutable, Peekable};
 pub use self::peer_storage::{clear_meta, do_snapshot, init_apply_state, init_raft_state,
+                             write_initial_apply_state, write_initial_raft_state,
                              write_peer_state, CacheQueryStats, PeerStorage, SnapState,
                              RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
 pub use self::snap::{check_abort, copy_snapshot, ApplyOptions, Error as SnapError, SnapEntry,

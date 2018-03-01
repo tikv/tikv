@@ -30,7 +30,8 @@ use kvproto::raft_serverpb::*;
 
 use raft::{self, quorum, RawNode};
 use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
-use raftstore::store::{clear_meta, init_apply_state, init_raft_state, write_peer_state};
+use raftstore::store::{clear_meta, init_apply_state, init_raft_state, write_initial_apply_state,
+                       write_initial_raft_state, write_peer_state};
 use raftstore::store::util as raftstore_util;
 use raftstore::store::engine::{IterOption, Mutable};
 use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -423,19 +424,18 @@ impl Debugger {
         box_try!(kv_wb.put_msg_cf(kv_handle, &key, &region_state));
 
         // RaftApplyState.
-        let apply_state = box_try!(init_apply_state(kv, region_state.get_region()));
         let key = keys::apply_state_key(region_id);
         if box_try!(kv.get_msg_cf::<RaftApplyState>(CF_RAFT, &key)).is_some() {
             return Err(Error::Other("Store already has the RaftApplyState".into()));
         }
-        box_try!(kv_wb.put_msg_cf(kv_handle, &key, &apply_state));
+        box_try!(write_initial_apply_state(kv, &kv_wb, region_id));
 
         // RaftLocalState.
         let key = keys::raft_state_key(region_id);
         if box_try!(raft.get_msg::<RaftLocalState>(&key)).is_some() {
             return Err(Error::Other("Store already has the RaftLocalState".into()));
         }
-        box_try!(init_raft_state(raft, region_state.get_region()));
+        box_try!(write_initial_raft_state(&raft_wb, region_id));
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
