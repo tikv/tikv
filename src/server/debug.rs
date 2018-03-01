@@ -22,7 +22,7 @@ use std::collections::HashSet;
 use protobuf::{self, Message, RepeatedField};
 
 use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
-use kvproto::metapb::Region;
+use kvproto::metapb::{Peer, Region};
 use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
 use kvproto::debugpb::DB as DBType;
 use kvproto::eraftpb::Entry;
@@ -30,7 +30,7 @@ use kvproto::raft_serverpb::*;
 
 use raft::{self, quorum, RawNode};
 use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
-use raftstore::store::{init_apply_state, init_raft_state, write_peer_state};
+use raftstore::store::{clear_meta, init_apply_state, init_raft_state, write_peer_state};
 use raftstore::store::util as raftstore_util;
 use raftstore::store::engine::{IterOption, Mutable};
 use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -371,6 +371,95 @@ impl Debugger {
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
         box_try!(self.engines.kv_engine.write_opt(wb, &write_opts));
+        Ok(())
+    }
+
+    pub fn remove_region(&self, region_id: u64) -> Result<()> {
+        let kv = self.engines.kv_engine.as_ref();
+        let raft = self.engines.raft_engine.as_ref();
+        let kv_wb = WriteBatch::new();
+        let raft_wb = WriteBatch::new();
+
+        let key = keys::raft_state_key(region_id);
+        let raft_state = match box_try!(raft.get_msg::<RaftLocalState>(&key)) {
+            Some(s) => s,
+            None => return Err(Error::Other("No RaftLocalState".into())),
+        };
+        box_try!(clear_meta(
+            kv,
+            raft,
+            &kv_wb,
+            &raft_wb,
+            region_id,
+            &raft_state
+        ));
+
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        box_try!(kv.write_opt(kv_wb, &write_opts));
+        box_try!(raft.write_opt(raft_wb, &write_opts));
+        Ok(())
+    }
+
+    pub fn init_empty_region(
+        &self,
+        region_id: u64,
+        peer_id: u64,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    ) -> Result<()> {
+        let store_id = self.get_store_id()?;
+        let kv = self.engines.kv_engine.as_ref();
+        let raft = self.engines.raft_engine.as_ref();
+
+        let kv_wb = WriteBatch::new();
+        let raft_wb = WriteBatch::new();
+        let kv_handle = box_try!(get_cf_handle(kv, CF_RAFT));
+
+        // RegionLocalState.
+        let mut region_state = RegionLocalState::new();
+        region_state.set_state(PeerState::Normal);
+        {
+            let region = region_state.mut_region();
+            region.set_id(region_id);
+            region.set_start_key(start_key);
+            region.set_end_key(end_key);
+
+            region.mut_region_epoch().set_conf_ver(1);
+            region.mut_region_epoch().set_version(1);
+
+            let mut peer = Peer::new();
+            peer.set_id(peer_id);
+            peer.set_store_id(store_id);
+            region.mut_peers().push(peer);
+        }
+        let key = keys::region_state_key(region_id);
+        if box_try!(kv.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)).is_some() {
+            return Err(Error::Other(
+                "Store already has the RegionLocalState".into(),
+            ));
+        }
+        box_try!(kv_wb.put_msg_cf(kv_handle, &key, &region_state));
+
+        // RaftApplyState.
+        let apply_state = box_try!(init_apply_state(kv, region_state.get_region()));
+        let key = keys::apply_state_key(region_id);
+        if box_try!(kv.get_msg_cf::<RaftApplyState>(CF_RAFT, &key)).is_some() {
+            return Err(Error::Other("Store already has the RaftApplyState".into()));
+        }
+        box_try!(kv_wb.put_msg_cf(kv_handle, &key, &apply_state));
+
+        // RaftLocalState.
+        let key = keys::raft_state_key(region_id);
+        if box_try!(raft.get_msg::<RaftLocalState>(&key)).is_some() {
+            return Err(Error::Other("Store already has the RaftLocalState".into()));
+        }
+        box_try!(init_raft_state(raft, region_state.get_region()));
+
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        box_try!(kv.write_opt(kv_wb, &write_opts));
+        box_try!(raft.write_opt(raft_wb, &write_opts));
         Ok(())
     }
 

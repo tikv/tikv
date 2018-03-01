@@ -399,6 +399,18 @@ trait DebugExecutor {
     /// Recover the cluster when given `store_ids` are failed.
     fn unsafe_recover(&self, store_ids: Vec<u64>);
 
+    /// Remove region.
+    fn remove_region(&self, region_id: u64);
+
+    /// Init a new empty region on the store with given infos.
+    fn init_empty_region(
+        &self,
+        mgr: Arc<SecurityManager>,
+        pd_cfg: &PdConfig,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    );
+
     fn check_local_mode(&self);
 
     fn get_all_meta_regions(&self) -> Vec<u64>;
@@ -524,6 +536,14 @@ impl DebugExecutor for DebugClient {
     fn unsafe_recover(&self, _: Vec<u64>) {
         self.check_local_mode();
     }
+
+    fn remove_region(&self, _: u64) {
+        self.check_local_mode();
+    }
+
+    fn init_empty_region(&self, _: Arc<SecurityManager>, _: &PdConfig, _: Vec<u8>, _: Vec<u8>) {
+        self.check_local_mode();
+    }
 }
 
 impl DebugExecutor for Debugger {
@@ -604,6 +624,34 @@ impl DebugExecutor for Debugger {
         println!("removing stores {:?} from configrations...", store_ids);
         self.remove_failed_stores(store_ids)
             .unwrap_or_else(|e| perror_and_exit("Debugger::unsafe_recover", e));
+        println!("success");
+    }
+
+    fn remove_region(&self, region_id: u64) {
+        self.remove_region(region_id).unwrap();
+    }
+
+    fn init_empty_region(
+        &self,
+        mgr: Arc<SecurityManager>,
+        pd_cfg: &PdConfig,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    ) {
+        let rpc_client =
+            RpcClient::new(pd_cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+        let region_id = rpc_client
+            .alloc_id()
+            .unwrap_or_else(|e| perror_and_exit("RpcClient::alloc_id", e));
+        let peer_id = rpc_client
+            .alloc_id()
+            .unwrap_or_else(|e| perror_and_exit("RpcClient::alloc_id", e));
+        println!(
+            "initing empty region {} with peer_id {}...",
+            region_id, peer_id
+        );
+        self.init_empty_region(region_id, peer_id, start_key, end_key)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::init_empty_region", e));
         println!("success");
     }
 }
@@ -940,6 +988,45 @@ fn main() {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("remove-region")
+                .about("remove a region")
+                .arg(
+                    Arg::with_name("region")
+                        .short("r")
+                        .takes_value(true)
+                        .help("the region id"),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("init-empty-region")
+                .about("init an empty region on the store")
+                .arg(
+                    Arg::with_name("pd")
+                        .required(true)
+                        .short("p")
+                        .takes_value(true)
+                        .multiple(true)
+                        .use_delimiter(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
+                        .help("PD endpoints"),
+                )
+                .arg(
+                    Arg::with_name("start_key")
+                        .required(true)
+                        .short("s")
+                        .takes_value(true)
+                        .help("set the start key, in escaped form"),
+                )
+                .arg(
+                    Arg::with_name("end_key")
+                        .required(true)
+                        .short("e")
+                        .takes_value(true)
+                        .help("set the end key, in escaped form"),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("bad-regions").about("get all regions with corrupt raft"),
         );
     let matches = app.clone().get_matches();
@@ -1044,6 +1131,15 @@ fn main() {
             Ok(store_ids) => debug_executor.unsafe_recover(store_ids),
             Err(e) => perror_and_exit("parse store id list", e),
         }
+    } else if let Some(matches) = matches.subcommand_matches("remove-region") {
+        let region_id = matches.value_of("region").unwrap().parse().unwrap();
+        debug_executor.remove_region(region_id);
+    } else if let Some(matches) = matches.subcommand_matches("init-empty-region") {
+        let mut pd_cfg = PdConfig::default();
+        pd_cfg.endpoints = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
+        let start_key = unescape(matches.value_of("start_key").unwrap());
+        let end_key = unescape(matches.value_of("end_key").unwrap());
+        debug_executor.init_empty_region(mgr, &pd_cfg, start_key, end_key);
     } else if matches.subcommand_matches("bad-regions").is_some() {
         debug_executor.print_bad_regions();
     } else {
