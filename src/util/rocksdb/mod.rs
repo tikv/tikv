@@ -25,8 +25,8 @@ use std::sync::Arc;
 use std::str::FromStr;
 
 use storage::{ALL_CFS, CF_DEFAULT};
-use rocksdb::{ColumnFamilyOptions, CompactOptions, DBCompressionType, DBOptions, Range,
-              SliceTransform, DB};
+use rocksdb::{ColumnFamilyOptions, CompactOptions, CompactionOptions, DBCompressionType,
+              DBOptions, Range, SliceTransform, DB};
 use rocksdb::rocksdb::supported_compression;
 use rocksdb::set_external_sst_file_global_seq_no;
 use util::rocksdb::engine_metrics::{ROCKSDB_COMPRESSION_RATIO_AT_LEVEL,
@@ -341,6 +341,33 @@ pub fn compact_range(
     db.compact_range_cf_opt(handle, &compact_opts, start_key, end_key);
 }
 
+pub fn compact_files(db: &DB, cf: &CFHandle, output_level: u32) -> Result<(), String> {
+    let cf_opts = db.get_options_cf(cf);
+    let compressions = cf_opts.get_compression_per_level();
+
+    let mut opts = CompactionOptions::new();
+    if let Some(compression) = compressions.get(output_level as usize) {
+        opts.set_compression(*compression);
+    }
+    opts.set_output_file_size_limit(cf_opts.get_target_file_size_base() as usize);
+
+    let mut input_files = Vec::new();
+    let cf_meta = db.get_column_family_meta_data(cf);
+    for (i, level) in cf_meta.get_levels().iter().enumerate() {
+        if i > output_level as usize {
+            break;
+        }
+        for f in level.get_files() {
+            input_files.push(f.get_name());
+        }
+    }
+    if input_files.is_empty() {
+        return Ok(());
+    }
+
+    db.compact_files_cf(cf, &opts, &input_files, output_level as i32)
+}
+
 /// Prepare the SST file for ingestion.
 /// The purpose is to make the ingestion retryable when using the `move_files` option.
 /// Things we need to consider here:
@@ -574,5 +601,38 @@ mod tests {
             .unwrap();
         check_db_with_kvs(&db, cf, &kvs);
         assert!(!sst_clone.exists());
+    }
+
+    fn get_num_files_in_level(db: &DB, cf: &CFHandle, level: usize) -> usize {
+        let cf_meta = db.get_column_family_meta_data(cf);
+        cf_meta.get_levels()[level].get_files().len()
+    }
+
+    #[test]
+    fn test_compact_files() {
+        let path = TempDir::new("_tikv_rocksdb_test_compact_files").unwrap();
+        let db_path = path.path().to_str().unwrap();
+
+        let cf_name = "default";
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_disable_auto_compactions(true);
+
+        let db = new_engine(
+            db_path,
+            &[cf_name],
+            Some(vec![CFOptions::new(cf_name, cf_opts)]),
+        ).unwrap();
+        let cf = db.cf_handle(cf_name).unwrap();
+        let cf_opts = db.get_options_cf(cf);
+        let num_levels = cf_opts.get_num_levels();
+
+        for i in 1..num_levels {
+            let k = &[i as u8];
+            db.put_cf(cf, k, k).unwrap();
+            db.flush_cf(cf, true).unwrap();
+            assert_eq!(get_num_files_in_level(&db, cf, i), 0);
+            compact_files(&db, cf, i as u32).unwrap();
+            assert_eq!(get_num_files_in_level(&db, cf, i), 1);
+        }
     }
 }

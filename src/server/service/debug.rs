@@ -227,6 +227,21 @@ impl debugpb_grpc::Debug for Service {
         self.handle_response(ctx, sink, f, "debug_compact");
     }
 
+    fn compact_files(
+        &self,
+        ctx: RpcContext,
+        req: CompactFilesRequest,
+        sink: UnarySink<CompactFilesResponse>,
+    ) {
+        let debugger = self.debugger.clone();
+        let f = self.pool.spawn_fn(move || {
+            debugger
+                .compact_files(req.get_db(), req.get_cf(), req.get_output_level())
+                .map(|_| CompactFilesResponse::default())
+        });
+        self.handle_response(ctx, sink, f, "debug_compact_files");
+    }
+
     fn inject_fail_point(
         &self,
         ctx: RpcContext,
