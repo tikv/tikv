@@ -1029,7 +1029,6 @@ impl ApplyDelegate {
                 CmdType::Prewrite | CmdType::Invalid => {
                     Err(box_err!("invalid cmd type, message maybe currupted"))
                 }
-                _ => unimplemented!(),
             }?;
 
             resp.set_cmd_type(cmd_type);
