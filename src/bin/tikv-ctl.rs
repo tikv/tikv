@@ -601,6 +601,7 @@ impl DebugExecutor for Debugger {
     }
 
     fn unsafe_recover(&self, store_ids: Vec<u64>) {
+        println!("removing stores {:?} from configrations...", store_ids);
         self.remove_failed_stores(store_ids)
             .unwrap_or_else(|e| perror_and_exit("Debugger::unsafe_recover", e));
         println!("success");
@@ -1040,9 +1041,7 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
         let stores = matches.values_of("stores").unwrap();
         match stores.map(|s| s.parse()).collect::<Result<Vec<u64>, _>>() {
-            Ok(store_ids) => {
-                debug_executor.unsafe_recover(store_ids);
-            }
+            Ok(store_ids) => debug_executor.unsafe_recover(store_ids),
             Err(e) => perror_and_exit("parse store id list", e),
         }
     } else if matches.subcommand_matches("bad-regions").is_some() {
