@@ -126,7 +126,7 @@ fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
     util::monitor_threads("tikv")
         .unwrap_or_else(|e| fatal!("failed to start monitor thread: {:?}", e));
 
-    util::run_prometheus(cfg.interval.0, &cfg.address, &push_job);
+    util::metrics::run_prometheus(cfg.interval.0, &cfg.address, &push_job);
 }
 
 fn check_system_config(config: &TiKvConfig) {

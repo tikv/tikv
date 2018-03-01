@@ -21,6 +21,7 @@ use fail;
 
 use raftstore::store::Engines;
 use server::debug::{Debugger, Error};
+use util::metrics;
 
 #[derive(Clone)]
 pub struct Service {
@@ -287,6 +288,24 @@ impl debugpb_grpc::Debug for Service {
             });
             let mut resp = ListFailPointsResponse::new();
             resp.set_entries(list.collect());
+            Ok(resp)
+        });
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
+
+    fn get_metrics(
+        &self,
+        ctx: RpcContext,
+        _: GetMetricsRequest,
+        sink: UnarySink<GetMetricsResponse>,
+    ) {
+        const TAG: &str = "debug_get_metrics";
+
+        let f = self.pool.spawn_fn(move || {
+            let metrics_info = metrics::dump_metrics();
+            let mut resp = GetMetricsResponse::new();
+            resp.set_metrics(metrics_info);
             Ok(resp)
         });
 
