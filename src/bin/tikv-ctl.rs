@@ -43,7 +43,7 @@ use protobuf::RepeatedField;
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::PeerState;
-use kvproto::metapb::Region;
+use kvproto::metapb::{Peer, Region};
 use kvproto::eraftpb::{ConfChange, Entry, EntryType};
 use kvproto::kvrpcpb::MvccInfo;
 use kvproto::debugpb::*;
@@ -403,13 +403,7 @@ trait DebugExecutor {
     fn remove_region(&self, region_id: u64);
 
     /// Init a new empty region on the store with given infos.
-    fn init_empty_region(
-        &self,
-        mgr: Arc<SecurityManager>,
-        pd_cfg: &PdConfig,
-        start_key: Vec<u8>,
-        end_key: Vec<u8>,
-    );
+    fn init_empty_region(&self, Arc<SecurityManager>, &PdConfig, u64);
 
     fn check_local_mode(&self);
 
@@ -541,7 +535,7 @@ impl DebugExecutor for DebugClient {
         self.check_local_mode();
     }
 
-    fn init_empty_region(&self, _: Arc<SecurityManager>, _: &PdConfig, _: Vec<u8>, _: Vec<u8>) {
+    fn init_empty_region(&self, _: Arc<SecurityManager>, _: &PdConfig, _: u64) {
         self.check_local_mode();
     }
 }
@@ -631,26 +625,44 @@ impl DebugExecutor for Debugger {
         self.remove_region(region_id).unwrap();
     }
 
-    fn init_empty_region(
-        &self,
-        mgr: Arc<SecurityManager>,
-        pd_cfg: &PdConfig,
-        start_key: Vec<u8>,
-        end_key: Vec<u8>,
-    ) {
+    fn init_empty_region(&self, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64) {
         let rpc_client =
             RpcClient::new(pd_cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
-        let region_id = rpc_client
+
+        let mut region = match rpc_client.get_region_by_id(region_id).wait() {
+            Ok(Some(region)) => region,
+            Ok(None) => {
+                eprintln!("no such region {} on PD", region_id);
+                process::exit(-1);
+            }
+            Err(e) => perror_and_exit("RpcClient::get_region_by_id", e),
+        };
+
+        let new_region_id = rpc_client
             .alloc_id()
             .unwrap_or_else(|e| perror_and_exit("RpcClient::alloc_id", e));
-        let peer_id = rpc_client
+        let new_peer_id = rpc_client
             .alloc_id()
             .unwrap_or_else(|e| perror_and_exit("RpcClient::alloc_id", e));
+
+        let store_id = self.get_store_id().expect("get store id");
+
+        region.set_id(new_region_id);
+        let old_version = region.get_region_epoch().get_version();
+        region.mut_region_epoch().set_version(old_version + 1);
+        region.mut_region_epoch().set_conf_ver(1);
+
+        region.peers.clear();
+        let mut peer = Peer::new();
+        peer.set_id(new_peer_id);
+        peer.set_store_id(store_id);
+        region.mut_peers().push(peer);
+
         println!(
             "initing empty region {} with peer_id {}...",
-            region_id, peer_id
+            new_region_id, new_peer_id
         );
-        self.init_empty_region(region_id, peer_id, start_key, end_key)
+        self.init_empty_region(region)
             .unwrap_or_else(|e| perror_and_exit("Debugger::init_empty_region", e));
         println!("success");
     }
@@ -1012,18 +1024,10 @@ fn main() {
                         .help("PD endpoints"),
                 )
                 .arg(
-                    Arg::with_name("start_key")
-                        .required(true)
-                        .short("s")
+                    Arg::with_name("region")
+                        .short("r")
                         .takes_value(true)
-                        .help("set the start key, in escaped form"),
-                )
-                .arg(
-                    Arg::with_name("end_key")
-                        .required(true)
-                        .short("e")
-                        .takes_value(true)
-                        .help("set the end key, in escaped form"),
+                        .help("the origin region id"),
                 ),
         )
         .subcommand(
@@ -1137,9 +1141,8 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("init-empty-region") {
         let mut pd_cfg = PdConfig::default();
         pd_cfg.endpoints = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
-        let start_key = unescape(matches.value_of("start_key").unwrap());
-        let end_key = unescape(matches.value_of("end_key").unwrap());
-        debug_executor.init_empty_region(mgr, &pd_cfg, start_key, end_key);
+        let region_id = matches.value_of("region").unwrap().parse().unwrap();
+        debug_executor.init_empty_region(mgr, &pd_cfg, region_id);
     } else if matches.subcommand_matches("bad-regions").is_some() {
         debug_executor.print_bad_regions();
     } else {

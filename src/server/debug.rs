@@ -22,7 +22,7 @@ use std::collections::HashSet;
 use protobuf::{self, Message, RepeatedField};
 
 use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
-use kvproto::metapb::{Peer, Region};
+use kvproto::metapb::Region;
 use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
 use kvproto::debugpb::DB as DBType;
 use kvproto::eraftpb::Entry;
@@ -401,14 +401,8 @@ impl Debugger {
         Ok(())
     }
 
-    pub fn init_empty_region(
-        &self,
-        region_id: u64,
-        peer_id: u64,
-        start_key: Vec<u8>,
-        end_key: Vec<u8>,
-    ) -> Result<()> {
-        let store_id = self.get_store_id()?;
+    pub fn init_empty_region(&self, region: Region) -> Result<()> {
+        let region_id = region.get_id();
         let kv = self.engines.kv_engine.as_ref();
         let raft = self.engines.raft_engine.as_ref();
 
@@ -419,20 +413,7 @@ impl Debugger {
         // RegionLocalState.
         let mut region_state = RegionLocalState::new();
         region_state.set_state(PeerState::Normal);
-        {
-            let region = region_state.mut_region();
-            region.set_id(region_id);
-            region.set_start_key(start_key);
-            region.set_end_key(end_key);
-
-            region.mut_region_epoch().set_conf_ver(1);
-            region.mut_region_epoch().set_version(1);
-
-            let mut peer = Peer::new();
-            peer.set_id(peer_id);
-            peer.set_store_id(store_id);
-            region.mut_peers().push(peer);
-        }
+        region_state.set_region(region);
         let key = keys::region_state_key(region_id);
         if box_try!(kv.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)).is_some() {
             return Err(Error::Other(
@@ -463,7 +444,7 @@ impl Debugger {
         Ok(())
     }
 
-    fn get_store_id(&self) -> Result<u64> {
+    pub fn get_store_id(&self) -> Result<u64> {
         let db = &self.engines.kv_engine;
         db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
             .map_err(|e| box_err!(e))
