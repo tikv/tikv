@@ -76,6 +76,8 @@ impl SchedulePolicy {
 #[derive(Clone, Debug)]
 enum Operator {
     AddPeer {
+        // Left: to be added.
+        // Right: pending peer.
         peer: Either<metapb::Peer, metapb::Peer>,
         policy: SchedulePolicy,
     },
@@ -106,7 +108,7 @@ impl Operator {
         }
     }
 
-    fn finished(
+    fn try_finished(
         &mut self,
         pending_peers: &HashMap<u64, metapb::Peer>,
         region: &metapb::Region,
@@ -162,7 +164,7 @@ struct Cluster {
 
     // region id -> Operator
     operators: HashMap<u64, Operator>,
-    enable_max_peer_count_check: bool,
+    enable_peer_count_check: bool,
 
     // region id -> leader
     leaders: HashMap<u64, metapb::Peer>,
@@ -187,7 +189,7 @@ impl Cluster {
             store_stats: HashMap::new(),
             split_count: 0,
             operators: HashMap::new(),
-            enable_max_peer_count_check: true,
+            enable_peer_count_check: true,
             leaders: HashMap::new(),
             down_peers: HashMap::new(),
             pending_peers: HashMap::new(),
@@ -452,10 +454,10 @@ impl Cluster {
         let region_id = region.get_id();
         let mut operator = None;
         if let Some(mut op) = self.operators.remove(&region_id) {
-            if !op.finished(&self.pending_peers, &region, &leader) {
+            if !op.try_finished(&self.pending_peers, &region, &leader) {
                 operator = Some(op);
             };
-        } else if self.enable_max_peer_count_check {
+        } else if self.enable_peer_count_check {
             // There is no on-going operator, start next round.
             operator = self.handle_heartbeat_max_peer_count(&region, &leader);
         }
@@ -620,11 +622,11 @@ impl TestPdClient {
     }
 
     pub fn disable_default_operator(&self) {
-        self.cluster.wl().enable_max_peer_count_check = false;
+        self.cluster.wl().enable_peer_count_check = false;
     }
 
     pub fn enable_default_operator(&self) {
-        self.cluster.wl().enable_max_peer_count_check = true;
+        self.cluster.wl().enable_peer_count_check = true;
     }
 
     pub fn must_have_peer(&self, region_id: u64, peer: metapb::Peer) {
