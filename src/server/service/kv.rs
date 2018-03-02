@@ -839,8 +839,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 let future = sink.success(response)
                     .map(|_| timer.observe_duration())
                     .map_err(move |e| {
-                        debug!("{} failed: {:?}", label, e);
-                        GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+                        debug!("{} failed: {:?}", LABEL, e);
+                        GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
                     });
                 return ctx.spawn(future);
             }
