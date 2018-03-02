@@ -27,7 +27,7 @@ use kvproto::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState,
                              RegionLocalState};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType,
-                          RaftCmdRequest, RaftCmdResponse, Request, Response};
+                          MergeRequest, RaftCmdRequest, RaftCmdResponse, Request, Response};
 
 use util::worker::Runnable;
 use util::{escape, rocksdb, MustConsumeVec};
@@ -1055,6 +1055,93 @@ impl ApplyDelegate {
         ))
     }
 
+    fn load_entries_for_merge(&self, merge: &MergeRequest, apply_index: u64) -> Vec<Entry> {
+        // Entries from [first_index, last_index) need to be loaded.
+        let first_index = apply_index + 1;
+        let last_index = merge.get_commit();
+        if first_index >= last_index {
+            return vec![];
+        }
+        let exist_first_index = merge
+            .get_entries()
+            .get(0)
+            .map_or(last_index, |e| e.get_index());
+        if first_index >= exist_first_index {
+            return merge.get_entries()[(first_index - exist_first_index) as usize..].to_vec();
+        }
+        let source_region = merge.get_source();
+        let mut entries = Vec::with_capacity((last_index - first_index) as usize);
+        peer_storage::fetch_entries_to(
+            &self.raft_engine,
+            source_region.get_id(),
+            first_index,
+            exist_first_index,
+            NO_LIMIT,
+            &mut entries,
+        ).unwrap_or_else(|e| {
+            panic!(
+                "{} failed to load entries [{}:{}) from region {}: {:?}",
+                self.tag,
+                first_index,
+                exist_first_index,
+                source_region.get_id(),
+                e
+            );
+        });
+        entries.extend_from_slice(merge.get_entries());
+        entries
+    }
+
+    fn catch_up_log_for_merge(
+        &mut self,
+        ctx: &mut ApplyContext,
+        merge: &MergeRequest,
+        exist_region: &Region,
+    ) {
+        let source_region = merge.get_source();
+        let apply_state_key = keys::apply_state_key(source_region.get_id());
+        let apply_state: RaftApplyState = match self.engine.get_msg_cf(CF_RAFT, &apply_state_key) {
+            Ok(Some(s)) => s,
+            e => panic!(
+                "{} failed to get apply state of {:?}: {:?}",
+                self.tag, source_region, e
+            ),
+        };
+        let apply_index = apply_state.get_applied_index();
+        if apply_index >= merge.get_commit() {
+            if source_region.get_region_epoch() != exist_region.get_region_epoch() {
+                panic!(
+                    "{} source region {:?} not match exist region {:?}",
+                    self.tag, source_region, exist_region
+                );
+            }
+            return;
+        }
+
+        let entries = self.load_entries_for_merge(merge, apply_index);
+        if entries.is_empty() {
+            return;
+        }
+        let exec_ctx = ctx.exec_ctx.take();
+        let reg = Registration {
+            id: 0,
+            term: 0,
+            apply_state: apply_state,
+            // It's not used.
+            applied_index_term: 0,
+            region: exist_region.to_owned(),
+        };
+        let mut delegate = ApplyDelegate::from_registration(
+            Arc::clone(&self.engine),
+            Arc::clone(&self.raft_engine),
+            reg,
+        );
+        // Effective administration commands are filtered, so ExecResults can be
+        // ignored directly.
+        delegate.handle_raft_committed_entries(ctx, entries);
+        ctx.exec_ctx = exec_ctx;
+    }
+
     fn exec_merge(
         &mut self,
         ctx: &mut ApplyContext,
@@ -1082,78 +1169,16 @@ impl ApplyDelegate {
             ),
         }
         let exist_region = state.get_region();
-        assert_eq!(
-            source_region.get_start_key(),
-            exist_region.get_start_key(),
-            "{}",
-            self.tag
-        );
-        assert_eq!(
-            source_region.get_end_key(),
-            exist_region.get_end_key(),
-            "{}",
-            self.tag
-        );
-
-        let apply_state_key = keys::apply_state_key(source_region.get_id());
-        let apply_state: RaftApplyState = match self.engine.get_msg_cf(CF_RAFT, &apply_state_key) {
-            Ok(Some(s)) => s,
-            e => panic!(
-                "{} failed to get apply state of {:?}: {:?}",
-                self.tag, source_region, e
-            ),
-        };
-        let apply_index = apply_state.get_applied_index();
-        if apply_index >= merge.get_commit() {
-            assert_eq!(
-                source_region.get_region_epoch(),
-                exist_region.get_region_epoch(),
-                "{}",
-                self.tag
+        if source_region.get_start_key() != exist_region.get_start_key()
+            || source_region.get_end_key() != exist_region.get_end_key()
+        {
+            panic!(
+                "{} source_region {:?} not match exist region {:?}",
+                self.tag, source_region, exist_region
             );
-        } else {
-            let first_index = merge
-                .get_entries()
-                .get(0)
-                .map_or(merge.get_commit(), |e| e.get_index());
-            let mut entries = vec![];
-            peer_storage::fetch_entries_to(
-                &self.raft_engine,
-                source_region.get_id(),
-                apply_index + 1,
-                first_index,
-                NO_LIMIT,
-                &mut entries,
-            ).unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to load entries from region {}: {:?}",
-                    self.tag,
-                    source_region.get_id(),
-                    e
-                );
-            });
-            if !merge.get_entries().is_empty() {
-                entries.extend(merge.get_entries().to_vec());
-            }
-            let exec_ctx = ctx.exec_ctx.take();
-            let reg = Registration {
-                id: 0,
-                term: 0,
-                apply_state: apply_state,
-                // It's not used.
-                applied_index_term: 0,
-                region: exist_region.to_owned(),
-            };
-            let mut delegate = ApplyDelegate::from_registration(
-                Arc::clone(&self.engine),
-                Arc::clone(&self.raft_engine),
-                reg,
-            );
-            // Effective administration commands are filtered, so ExecResults can be
-            // ignored directly.
-            delegate.handle_raft_committed_entries(ctx, entries);
-            ctx.exec_ctx = exec_ctx;
         }
+
+        self.catch_up_log_for_merge(ctx, merge, exist_region);
 
         let mut region = self.region.clone();
         // Use a max value so that pd can ensure overlapped region has a priority.
