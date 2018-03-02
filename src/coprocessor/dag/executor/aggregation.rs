@@ -224,6 +224,7 @@ impl Executor for StreamAggExecutor {
                 &self.related_cols_offset,
                 row.handle,
             )?;
+            self.has_data = true;
             let new_group = self.meet_new_group(&cols)?;
             let mut ret = if new_group {
                 Some(self.get_partial_result()?)
@@ -241,7 +242,7 @@ impl Executor for StreamAggExecutor {
         // If there is no data in the t, then whether there is 'group by' that can affect the result.
         // e.g. select count(*) from t. Result is 0.
         // e.g. select count(*) from t group by c. Result is empty.
-        if self.count == 0 && !self.group_by_exprs.is_empty() {
+        if !self.has_data && !self.group_by_exprs.is_empty() {
             return Ok(None);
         }
         Ok(Some(self.get_partial_result()?))
@@ -280,6 +281,7 @@ pub struct StreamAggExecutor {
     is_first_group: bool,
     count: i64,
     first_collect: bool,
+    has_data: bool,
 }
 
 impl StreamAggExecutor {
@@ -317,6 +319,7 @@ impl StreamAggExecutor {
             is_first_group: true,
             count: 0,
             first_collect: true,
+            has_data: false,
         })
     }
 
@@ -452,19 +455,15 @@ mod test {
         (expect_row, idx_key)
     }
 
-    pub fn prepare_index_data(table_id: i64, index_id: i64, cols: Vec<ColumnInfo>) -> Data {
+    pub fn prepare_index_data(
+        table_id: i64,
+        index_id: i64,
+        cols: Vec<ColumnInfo>,
+        idx_vals: Vec<Vec<(i64, Datum)>>,
+    ) -> Data {
         let mut kv_data = Vec::new();
         let mut expect_rows = Vec::new();
 
-        let idx_vals = vec![
-            vec![(2, Datum::Bytes(b"a".to_vec())), (3, Datum::Dec(12.into()))],
-            vec![(2, Datum::Bytes(b"c".to_vec())), (3, Datum::Dec(12.into()))],
-            vec![(2, Datum::Bytes(b"c".to_vec())), (3, Datum::Dec(2.into()))],
-            vec![(2, Datum::Bytes(b"b".to_vec())), (3, Datum::Dec(2.into()))],
-            vec![(2, Datum::Bytes(b"a".to_vec())), (3, Datum::Dec(12.into()))],
-            vec![(2, Datum::Bytes(b"b".to_vec())), (3, Datum::Dec(2.into()))],
-            vec![(2, Datum::Bytes(b"a".to_vec())), (3, Datum::Dec(12.into()))],
-        ];
         let mut handle = 1;
         for val in idx_vals {
             let (expect_row, idx_key) =
@@ -491,15 +490,6 @@ mod test {
             new_col_info(2, types::VARCHAR),
             new_col_info(3, types::NEW_DECIMAL),
         ];
-        let idx_data = prepare_index_data(tid, idx_id, col_infos.clone());
-        let idx_row_cnt = idx_data.kv_data.len() as i64;
-        let unique = false;
-        let mut wrapper = IndexTestWrapper::new(unique, idx_data);
-        let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let is_executor =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique).unwrap();
-
         // init aggregation meta
         let mut aggregation = Aggregation::default();
         let group_by_cols = vec![1, 2];
@@ -508,6 +498,98 @@ mod test {
         let funcs = vec![(ExprType::Count, 1), (ExprType::Sum, 2), (ExprType::Avg, 2)];
         let agg_funcs = build_aggr_func(&funcs);
         aggregation.set_agg_func(RepeatedField::from_vec(agg_funcs));
+
+        // test no row
+        let idx_vals = vec![];
+        let idx_data = prepare_index_data(tid, idx_id, col_infos.clone(), idx_vals);
+        let idx_row_cnt = idx_data.kv_data.len() as i64;
+        let unique = false;
+        let mut wrapper = IndexTestWrapper::new(unique, idx_data);
+        let (snapshot, start_ts) = wrapper.store.get_snapshot();
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let is_executor =
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique).unwrap();
+        // init the stream aggregation executor
+        let mut agg_ect = StreamAggExecutor::new(
+            Arc::new(EvalContext::default()),
+            Box::new(is_executor),
+            aggregation.clone(),
+            Arc::new(col_infos.clone()),
+        ).unwrap();
+        let expect_row_cnt = 0;
+        let mut row_data = Vec::with_capacity(1);
+        while let Some(row) = agg_ect.next().unwrap() {
+            row_data.push(row.data);
+        }
+        assert_eq!(row_data.len(), expect_row_cnt);
+        let expected_counts = vec![idx_row_cnt, expect_row_cnt as i64];
+        let mut counts = Vec::with_capacity(2);
+        agg_ect.collect_output_counts(&mut counts);
+        assert_eq!(expected_counts, counts);
+
+        // test one row
+        let idx_vals = vec![
+            vec![(2, Datum::Bytes(b"a".to_vec())), (3, Datum::Dec(12.into()))],
+        ];
+        let idx_data = prepare_index_data(tid, idx_id, col_infos.clone(), idx_vals);
+        let idx_row_cnt = idx_data.kv_data.len() as i64;
+        let unique = false;
+        let mut wrapper = IndexTestWrapper::new(unique, idx_data);
+        let (snapshot, start_ts) = wrapper.store.get_snapshot();
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let is_executor =
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique).unwrap();
+        // init the stream aggregation executor
+        let mut agg_ect = StreamAggExecutor::new(
+            Arc::new(EvalContext::default()),
+            Box::new(is_executor),
+            aggregation.clone(),
+            Arc::new(col_infos.clone()),
+        ).unwrap();
+        let expect_row_cnt = 1;
+        let mut row_data = Vec::with_capacity(expect_row_cnt);
+        while let Some(row) = agg_ect.next().unwrap() {
+            row_data.push(row.data);
+        }
+        assert_eq!(row_data.len(), expect_row_cnt);
+        let expect_row_data = vec![
+            (
+                1 as u64,
+                Decimal::from(12),
+                1 as u64,
+                Decimal::from(12),
+                b"a".as_ref(),
+                Decimal::from(12),
+            ),
+        ];
+        let expect_col_cnt = 6;
+        for (row, expect_cols) in row_data.into_iter().zip(expect_row_data) {
+            let ds = row.value.as_slice().decode().unwrap();
+            assert_eq!(ds.len(), expect_col_cnt);
+            assert_eq!(ds[0], Datum::from(expect_cols.0));
+        }
+        let expected_counts = vec![idx_row_cnt, expect_row_cnt as i64];
+        let mut counts = Vec::with_capacity(2);
+        agg_ect.collect_output_counts(&mut counts);
+        assert_eq!(expected_counts, counts);
+
+        // test multiple rows
+        let idx_vals = vec![
+            vec![(2, Datum::Bytes(b"a".to_vec())), (3, Datum::Dec(12.into()))],
+            vec![(2, Datum::Bytes(b"c".to_vec())), (3, Datum::Dec(12.into()))],
+            vec![(2, Datum::Bytes(b"c".to_vec())), (3, Datum::Dec(2.into()))],
+            vec![(2, Datum::Bytes(b"b".to_vec())), (3, Datum::Dec(2.into()))],
+            vec![(2, Datum::Bytes(b"a".to_vec())), (3, Datum::Dec(12.into()))],
+            vec![(2, Datum::Bytes(b"b".to_vec())), (3, Datum::Dec(2.into()))],
+            vec![(2, Datum::Bytes(b"a".to_vec())), (3, Datum::Dec(12.into()))],
+        ];
+        let idx_data = prepare_index_data(tid, idx_id, col_infos.clone(), idx_vals);
+        let idx_row_cnt = idx_data.kv_data.len() as i64;
+        let mut wrapper = IndexTestWrapper::new(unique, idx_data);
+        let (snapshot, start_ts) = wrapper.store.get_snapshot();
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let is_executor =
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique).unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalContext::default()),
