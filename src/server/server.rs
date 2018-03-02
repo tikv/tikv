@@ -93,6 +93,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             raft_router.clone(),
             snap_worker.scheduler(),
             cfg.end_point_recursion_limit,
+            cfg.end_point_request_max_handle_duration.as_secs(),
         );
         let addr = SocketAddr::from_str(&cfg.addr)?;
         info!("listening on {}", addr);

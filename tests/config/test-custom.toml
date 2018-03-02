@@ -27,6 +27,7 @@ distsql-cache-entry-max-size = "5MB"
 end-point-stack-size = "12MB"
 end-point-recursion-limit = 100
 end-point-batch-row-limit = 64
+end-point-request-max-handle-duration = "12s"
 snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
 

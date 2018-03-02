@@ -29,7 +29,7 @@ use super::metrics::*;
 
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: usize = 10 * 1024 * 1024;
-const INITIAL_BUFFER_CAP: usize = 1024;
+const PRESERVED_MSG_BUFFER_COUNT: usize = 1024;
 
 static CONN_ID: AtomicUsize = ATOMIC_USIZE_INIT;
 
@@ -94,7 +94,7 @@ impl Conn {
         );
         Conn {
             stream: tx,
-            buffer: Some(Vec::with_capacity(INITIAL_BUFFER_CAP)),
+            buffer: Some(Vec::with_capacity(PRESERVED_MSG_BUFFER_COUNT)),
             store_id: store_id,
             alive: alive1,
 
@@ -150,6 +150,7 @@ impl RaftClient {
 
     pub fn flush(&mut self) {
         let addrs = &mut self.addrs;
+        let mut counter: u64 = 0;
         self.conns.retain(|&(ref addr, _), conn| {
             let store_id = conn.store_id;
             if !conn.alive.load(Ordering::SeqCst) {
@@ -165,6 +166,7 @@ impl RaftClient {
                 return true;
             }
 
+            counter += 1;
             let mut msgs = conn.buffer.take().unwrap();
             msgs.last_mut().unwrap().1 = WriteFlags::default();
             if let Err(e) = conn.stream.unbounded_send(msgs) {
@@ -181,9 +183,13 @@ impl RaftClient {
                 return false;
             }
 
-            conn.buffer = Some(Vec::with_capacity(INITIAL_BUFFER_CAP));
+            conn.buffer = Some(Vec::with_capacity(PRESERVED_MSG_BUFFER_COUNT));
             true
         });
+
+        if counter > 0 {
+            RAFT_MESSAGE_FLUSH_COUNTER.inc_by(counter as f64).unwrap();
+        }
     }
 }
 
