@@ -372,3 +372,63 @@ fn test_change_leader_async() {
 
     panic!("failed, leader should changed");
 }
+
+#[test]
+fn test_region_heartbeat_on_leader_change() {
+    let eps_count = 3;
+    let se = Arc::new(Service::new());
+    let lc = Arc::new(LeaderChange::new());
+    let server = MockServer::run(eps_count, Arc::clone(&se), Some(Arc::clone(&lc)));
+    let eps: Vec<String> = server
+        .bind_addrs()
+        .into_iter()
+        .map(|addr| format!("{}:{}", addr.0, addr.1))
+        .collect();
+    thread::sleep(Duration::from_secs(1));
+
+    let client = new_client(eps);
+    let poller = Builder::new()
+        .pool_size(1)
+        .name_prefix(thd_name!("poller"))
+        .create();
+    let (tx, rx) = mpsc::channel();
+    let f = client.handle_region_heartbeat_response(1, move |resp| {
+        tx.send(resp).unwrap();
+    });
+    poller.spawn(f).forget();
+    let region = metapb::Region::new();
+    let peer = metapb::Peer::new();
+    let stat = RegionStat::default();
+    poller
+        .spawn(client.region_heartbeat(region.clone(), peer.clone(), stat.clone()))
+        .forget();
+    rx.recv_timeout(LeaderChange::get_leader_interval())
+        .unwrap();
+
+    let change_leader = |count| {
+        let mut leader = client.get_leader();
+        for _ in 0..count {
+            loop {
+                client.get_region_by_id(1).wait().ok();
+                let new = client.get_leader();
+                if leader != new {
+                    leader = new;
+                    info!("leader changed!");
+                    break;
+                }
+                thread::sleep(LeaderChange::get_leader_interval());
+            }
+        }
+        poller
+            .spawn(client.region_heartbeat(region.clone(), peer.clone(), stat.clone()))
+            .forget();
+        rx.recv_timeout(LeaderChange::get_leader_interval())
+            .unwrap();
+    };
+
+    // Change PD leader once.
+    change_leader(1);
+
+    // Change PD leader twice without update the heartbeat sender.
+    change_leader(2);
+}
