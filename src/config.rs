@@ -784,6 +784,14 @@ impl TiKvConfig {
             ).into());
         }
 
+        if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path {
+            return Err(format!(
+                "raft dir have been changed, former raft dir is {}, \
+                 current raft dir is {}, please check if it is expected.",
+                last_cfg.raft_store.raftdb_path, self.raft_store.raftdb_path
+            ).into());
+        }
+
         Ok(())
     }
 
@@ -845,6 +853,12 @@ mod test {
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
 
         last_cfg.storage.data_dir = "/data1".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+
+        tikv_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+
+        last_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
     }
 
