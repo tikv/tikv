@@ -8,10 +8,12 @@ RUN yum install -y epel-release
 RUN yum makecache \
 	&& yum update -y \
 	&& yum install -y tar wget git which file unzip python-pip \
-	&& yum install -y make cmake gcc gcc-c++ libstdc++-static pkg-config psmisc \
-	&& yum install -y libzstd-devel lz4-devel zlib-devel bzip2-devel snappy-devel libdwarf-devel elfutils-libelf-devel elfutils-devel binutils-devel \
+	&& yum install -y make cmake3 gcc gcc-c++ libstdc++-static pkg-config psmisc \
+	&& yum install -y libdwarf-devel elfutils-libelf-devel elfutils-devel binutils-devel \
 	&& yum install -y openssl-devel \
 	&& yum clean all
+
+RUN ln -s /usr/bin/cmake3 /usr/bin/cmake
 
 RUN curl -L https://github.com/gflags/gflags/archive/v2.1.2.tar.gz -o gflags.tar.gz \
 	&& tar xf gflags.tar.gz \
@@ -49,6 +51,16 @@ RUN curl -L https://github.com/pingcap/tikv/archive/master.tar.gz -o /root/maste
 ENV PATH /root/.cargo/bin/:$PATH
 ENV LIBRARY_PATH /usr/local/lib:$LIBRARY_PATH
 ENV LD_LIBRARY_PATH /usr/local/lib:$LD_LIBRARY_PATH
+
+# A proper PID 1 that will handle Ctrl+C, etc
+ENV TINI_VERSION v0.17.0
+ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /tini
+ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini.asc /tini.asc
+RUN gpg --keyserver hkp://p80.pool.sks-keyservers.net:80 --recv-keys 595E85A6B1B4779EA4DAAEC70B588DFF0527A9B7 \
+ && gpg --verify /tini.asc \
+ && rm /tini.asc
+RUN chmod +x /tini && mv /tini /sbin/tini
+ENTRYPOINT ["/sbin/tini", "--"]
 
 CMD ["/bin/bash"]
 
