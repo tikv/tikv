@@ -1300,7 +1300,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ConfChangeType::AddNode => {
                     // Add this peer to cache.
                     let peer = cp.peer.clone();
-                    p.peer_heartbeats.insert(peer.get_id(), Instant::now());
+                    let now = Instant::now();
+                    p.peer_heartbeats.insert(peer.get_id(), now);
+                    p.peer_going_effect.insert(peer.get_id(), now);
                     p.insert_peer_cache(peer);
                 }
                 ConfChangeType::RemoveNode => {

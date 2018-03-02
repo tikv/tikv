@@ -39,8 +39,8 @@ use raftstore::store::worker::{Apply, ApplyRes, ApplyTask};
 
 use util::MustConsumeVec;
 use util::worker::{FutureWorker, Scheduler};
-use util::time::monotonic_raw_now;
-use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
+use util::time::{duration_to_sec, monotonic_raw_now};
+use util::collections::{FlatMap, FlatMapEntry as Entry, FlatMapValues as Values, HashSet};
 
 use pd::{PdTask, INVALID_ID};
 
@@ -200,6 +200,8 @@ pub struct Peer {
     pending_reads: ReadIndexQueue,
     // Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: FlatMap<u64, Instant>,
+    /// Record the instant of the peer being effective in the configuration.
+    pub peer_going_effect: FlatMap<u64, Instant>,
     coprocessor_host: Arc<CoprocessorHost>,
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
@@ -324,6 +326,7 @@ impl Peer {
             pending_reads: Default::default(),
             peer_cache: RefCell::new(peer_cache),
             peer_heartbeats: FlatMap::default(),
+            peer_going_effect: FlatMap::default(),
             coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
             delete_keys_hint: 0,
@@ -540,6 +543,13 @@ impl Peer {
     pub fn step(&mut self, m: eraftpb::Message) -> Result<()> {
         if self.is_leader() && m.get_from() != INVALID_ID {
             self.peer_heartbeats.insert(m.get_from(), Instant::now());
+        }
+        if let Entry::Occupied(e) = self.peer_going_effect.entry(m.get_from()) {
+            if m.get_msg_type() == MessageType::MsgAppendResponse && !m.get_reject() {
+                let effective_time = e.remove();
+                let elapsed = duration_to_sec(effective_time.elapsed());
+                PEER_PENDING_TIME.observe(elapsed);
+            }
         }
         self.raft_group.step(m)?;
         Ok(())
