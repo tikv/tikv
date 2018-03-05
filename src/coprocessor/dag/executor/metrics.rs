@@ -60,7 +60,6 @@ impl ScanCounter {
         other.point = 0;
     }
 
-    #[allow(dead_code)] // TODO: remove it.
     pub fn consume(self, metrics: &mut LocalCounterVec) {
         if self.point > 0 {
             metrics

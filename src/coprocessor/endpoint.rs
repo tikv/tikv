@@ -11,9 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::usize;
+use std::{mem, usize};
 use std::time::Duration;
-use std::sync::Arc;
+use std::cell::RefCell;
+use std::sync::{mpsc, Arc};
+use std::iter::FromIterator;
+use std::thread::{self, ThreadId};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Debug, Display, Formatter};
 
@@ -34,7 +37,7 @@ use util::time::{duration_to_sec, Instant};
 use util::worker::{FutureScheduler, Runnable, Scheduler};
 use util::collections::HashMap;
 use server::{Config, OnResponse};
-use storage::{self, engine, Engine, Snapshot};
+use storage::{self, engine, Engine, FlowStatistics, Snapshot, Statistics, StatisticsSummary};
 use storage::engine::Error as EngineError;
 use pd::PdTask;
 
@@ -61,8 +64,128 @@ const OUTDATED_ERROR_MSG: &str = "request outdated.";
 
 const ENDPOINT_IS_BUSY: &str = "endpoint is busy";
 
+struct CopContextInner {
+    select_stats: StatisticsSummary,
+    index_stats: StatisticsSummary,
+    flow_stats: HashMap<u64, FlowStatistics>,
+    timer: Instant,
+    timeout: Duration,
+    pd_task_sender: FutureScheduler<PdTask>,
+}
+
+impl CopContextInner {
+    fn get_statistics(&mut self, type_str: &str) -> &mut StatisticsSummary {
+        match type_str {
+            STR_REQ_TYPE_SELECT => &mut self.select_stats,
+            STR_REQ_TYPE_INDEX => &mut self.index_stats,
+            _ => {
+                warn!("unknown STR_REQ_TYPE: {}", type_str);
+                &mut self.select_stats
+            }
+        }
+    }
+
+    fn add_statistics(&mut self, type_str: &str, stats: &Statistics) {
+        self.get_statistics(type_str).add_statistics(stats);
+    }
+
+    fn add_flow_stats_by_region(&mut self, region_id: u64, stats: &Statistics) {
+        let flow_stats = self.flow_stats
+            .entry(region_id)
+            .or_insert_with(FlowStatistics::default);
+        flow_stats.add(&stats.write.flow_stats);
+        flow_stats.add(&stats.data.flow_stats);
+    }
+
+    fn collect(&mut self, region_id: u64, scan_tag: &str, metrics: ExecutorMetrics) {
+        let (stats, mut scan_counter) = (metrics.cf_stats, metrics.scan_counter);
+        self.add_statistics(scan_tag, &stats);
+        self.add_flow_stats_by_region(region_id, &stats);
+        scan_counter.consume();
+
+        let new_timer = Instant::now_coarse();
+        if new_timer.duration_since(self.timer) < self.timeout {
+            return;
+        }
+        self.timer = new_timer;
+        for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX] {
+            let this_statistics = self.get_statistics(type_str);
+            if this_statistics.count == 0 {
+                continue;
+            }
+            for (cf, details) in this_statistics.stat.details() {
+                for (tag, count) in details {
+                    COPR_SCAN_DETAILS
+                        .with_label_values(&[type_str, cf, tag])
+                        .inc_by(count as f64)
+                        .unwrap();
+                }
+            }
+            *this_statistics = StatisticsSummary::default();
+        }
+        let pd_task = PdTask::ReadStats {
+            read_stats: mem::replace(&mut self.flow_stats, map![]),
+        };
+        if let Err(e) = self.pd_task_sender.schedule(pd_task) {
+            error!("send coprocessor statistics: {:?}", e);
+        }
+    }
+}
+
+struct CopContext(RefCell<CopContextInner>);
+
+impl CopContext {
+    fn new(pd_task_sender: FutureScheduler<PdTask>) -> Self {
+        let inner = CopContextInner {
+            select_stats: StatisticsSummary::default(),
+            index_stats: StatisticsSummary::default(),
+            flow_stats: map![],
+            timer: Instant::now_coarse(),
+            timeout: Duration::from_secs(1),
+            pd_task_sender: pd_task_sender,
+        };
+        CopContext(RefCell::new(inner))
+    }
+}
+
+unsafe impl Sync for CopContext {}
+
+#[derive(Clone)]
+struct CopContextPool {
+    cop_ctxs: Arc<HashMap<ThreadId, CopContext>>,
+}
+
+impl CopContextPool {
+    fn collect(&self, region_id: u64, scan_tag: &str, metrics: ExecutorMetrics) {
+        let thread_id = thread::current().id();
+        if let Some(cop_ctx) = self.cop_ctxs.get(&thread_id) {
+            // If the request is failed before enter into CpuPool,
+            // we don't need to collect anything.
+            cop_ctx.0.borrow_mut().collect(region_id, scan_tag, metrics);
+        }
+    }
+}
+
+impl FromIterator<(ThreadId, CopContext)> for CopContextPool {
+    fn from_iter<T: IntoIterator<Item = (ThreadId, CopContext)>>(iter: T) -> Self {
+        let mut cop_ctxs = map![];
+        for (thread_id, cop_ctx) in iter {
+            cop_ctxs.insert(thread_id, cop_ctx);
+        }
+        let cop_ctxs = Arc::new(cop_ctxs);
+        CopContextPool { cop_ctxs: cop_ctxs }
+    }
+}
+
+impl Debug for CopContextPool {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "CopContextPool")
+    }
+}
+
 struct ExecutorPool {
     pool: CpuPool,
+    contexts: CopContextPool,
 }
 
 pub struct Host {
@@ -85,7 +208,7 @@ impl Host {
         engine: Box<Engine>,
         scheduler: Scheduler<Task>,
         cfg: &Config,
-        _pd_task_sender: FutureScheduler<PdTask>,
+        pd_task_sender: FutureScheduler<PdTask>,
     ) -> Host {
         Host {
             engine: engine,
@@ -96,16 +219,19 @@ impl Host {
                 "endpoint-normal-pool",
                 cfg.end_point_concurrency,
                 cfg.end_point_stack_size.0 as usize,
+                pd_task_sender.clone(),
             ),
             low_priority_pool: Host::create_executor_pool(
                 "endpoint-low-pool",
                 cfg.end_point_concurrency,
                 cfg.end_point_stack_size.0 as usize,
+                pd_task_sender.clone(),
             ),
             high_priority_pool: Host::create_executor_pool(
                 "endpoint-high-pool",
                 cfg.end_point_concurrency,
                 cfg.end_point_stack_size.0 as usize,
+                pd_task_sender,
             ),
             max_running_task_count: cfg.end_point_max_tasks,
             batch_row_limit: cfg.end_point_batch_row_limit,
@@ -119,15 +245,25 @@ impl Host {
         name_prefix: &str,
         pool_size: usize,
         thread_stack_size: usize,
+        pd_task_sender: FutureScheduler<PdTask>,
     ) -> ExecutorPool {
+        let (tx, rx) = mpsc::sync_channel(pool_size);
         let cpu_pool = {
             CpuPoolBuilder::new()
                 .name_prefix(name_prefix)
                 .pool_size(pool_size)
                 .stack_size(thread_stack_size)
+                .after_start(move || {
+                    let thread_id = thread::current().id();
+                    let cop_ctx = CopContext::new(pd_task_sender.clone());
+                    tx.send((thread_id, cop_ctx)).unwrap();
+                })
                 .create()
         };
-        ExecutorPool { pool: cpu_pool }
+        ExecutorPool {
+            pool: cpu_pool,
+            contexts: CopContextPool::from_iter(rx),
+        }
     }
 
     #[inline]
@@ -164,6 +300,7 @@ impl Host {
             CommandPri::Normal => &mut self.pool,
         };
         let pool = &pool_and_ctx_pool.pool;
+        tracker.attach_ctx_pool(pool_and_ctx_pool.contexts.clone());
         let request_max_handle_secs = self.request_max_handle_secs;
 
         match cop_req {
@@ -286,6 +423,7 @@ impl ReqContext {
 #[derive(Debug)]
 struct RequestTracker {
     running_task_count: Option<Arc<AtomicUsize>>,
+    ctx_pool: Option<CopContextPool>,
     record_handle_time: bool,
     record_scan_detail: bool,
 
@@ -311,6 +449,10 @@ impl RequestTracker {
     fn attach_task_count(&mut self, running_task_count: Arc<AtomicUsize>) {
         running_task_count.fetch_add(1, Ordering::Release);
         self.running_task_count = Some(running_task_count);
+    }
+
+    fn attach_ctx_pool(&mut self, ctx_pool: CopContextPool) {
+        self.ctx_pool = Some(ctx_pool);
     }
 
     fn record_wait(&mut self) {
@@ -395,6 +537,9 @@ impl Drop for RequestTracker {
         if let Some(task_count) = self.running_task_count.take() {
             task_count.fetch_sub(1, Ordering::Release);
         }
+        if let Some(ctx_pool) = self.ctx_pool.take() {
+            ctx_pool.collect(self.region_id, self.scan_tag, self.exec_metrics);
+        }
     }
 }
 
@@ -449,6 +594,7 @@ impl RequestTask {
 
         let request_tracker = RequestTracker {
             running_task_count: None,
+            ctx_pool: None,
             record_handle_time: req.get_context().get_handle_time(),
             record_scan_detail: req.get_context().get_scan_detail(),
 
