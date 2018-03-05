@@ -16,7 +16,7 @@ use std::fmt::Debug;
 use std::cmp::Ordering;
 use std::boxed::FnBox;
 use std::time::Duration;
-use futures::{self, future, Future};
+use futures::{future, Future};
 
 pub use self::rocksdb::EngineRocksdb;
 use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
@@ -113,11 +113,8 @@ pub trait Engine: Send + Debug {
             box future::err(e)
         } else {
             box future
-                // map future::oneshot::Canceled to Error::Other
-                .map_err(Error::from)
-                .map(|(_ctx, r)| r)
-                // map Err(e) to err future and Ok(snapshot) to success future
-                .flatten()
+                .map_err(|cancel| Error::Other(box_err!(cancel)))
+                .and_then(|(_ctx, result)| result)
         }
     }
 
@@ -598,12 +595,6 @@ quick_error! {
             description(err.description())
             display("unknown error {:?}", err)
         }
-    }
-}
-
-impl From<futures::Canceled> for Error {
-    fn from(err: futures::Canceled) -> Self {
-        Error::Other(box err)
     }
 }
 

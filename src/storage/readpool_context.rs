@@ -42,7 +42,7 @@ pub struct Context {
 
 impl fmt::Debug for Context {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Context").finish()
+        f.debug_struct("storage::ReadPoolContext").finish()
     }
 }
 
