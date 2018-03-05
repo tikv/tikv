@@ -958,7 +958,7 @@ fn process_write_impl(
                 let status = txn_status.get(&current_lock.ts);
                 let commit_ts = match status {
                     Some(ts) => *ts,
-                    None => panic!("txn status not found."),
+                    None => panic!("txn status {} not found.", current_lock.ts),
                 };
                 if commit_ts > 0 {
                     if current_lock.ts >= commit_ts {
@@ -1309,7 +1309,7 @@ impl Scheduler {
         if let Err(e) = self.engine.async_snapshot(ctx, cb) {
             for cid in cids {
                 SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(cid), "async_snap_err"])
+                    .with_label_values(&[self.get_ctx_tag(cid), "async_snapshot_err"])
                     .inc();
 
                 let e = e.maybe_clone().unwrap_or_else(|| {
@@ -1329,7 +1329,7 @@ impl Scheduler {
         for &(_, ref cids) in &batch {
             for cid in cids {
                 SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(*cid), "snapshot"])
+                    .with_label_values(&[self.get_ctx_tag(*cid), "batch_snapshot"])
                     .inc();
             }
             all_cids.extend(cids);
@@ -1380,12 +1380,13 @@ impl Scheduler {
         if let Err(e) = self.engine.async_batch_snapshot(batch1, on_finished) {
             for cid in all_cids {
                 SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(cid), "async_snap_err"])
+                    .with_label_values(&[self.get_ctx_tag(cid), "async_batch_snapshot_err"])
                     .inc();
                 let e = e.maybe_clone().unwrap_or_else(|| {
                     error!("async snapshot failed for cid={}, error {:?}", cid, e);
                     EngineError::Other(box_err!("{:?}", e))
                 });
+
                 self.finish_with_err(cid, Error::from(e));
             }
         }
@@ -1431,6 +1432,7 @@ impl Scheduler {
                         .inc();
                     let e = e.maybe_clone()
                         .unwrap_or_else(|| EngineError::Other(box_err!("{:?}", e)));
+
                     self.finish_with_err(cid, Error::from(e));
                 }
             }
@@ -1610,10 +1612,10 @@ impl Runnable<Msg> for Scheduler {
 
     fn shutdown(&mut self) {
         if let Err(e) = self.worker_pool.stop() {
-            error!("scheduler run err:{:?}", e);
+            error!("scheduler run err when worker pool stop:{:?}", e);
         }
         if let Err(e) = self.high_priority_pool.stop() {
-            error!("scheduler run err:{:?}", e);
+            error!("scheduler run err when high priority pool stop:{:?}", e);
         }
         info!("scheduler stopped");
     }
