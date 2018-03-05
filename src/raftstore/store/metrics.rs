@@ -217,7 +217,7 @@ lazy_static! {
 
     pub static ref PEER_PENDING_TIME: Histogram =
         register_histogram!(
-            "tikv_raftstore_peer_pending_time_duration_secs",
+            "tikv_raftstore_peer_pending_time_duration_seconds",
             "Bucketed histogram of peer pending time duration",
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();

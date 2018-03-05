@@ -22,6 +22,7 @@ use time::Timespec;
 use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::{self, Message, MessageStatic};
+use prometheus::local::LocalHistogram;
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
@@ -200,8 +201,12 @@ pub struct Peer {
     pending_reads: ReadIndexQueue,
     // Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: FlatMap<u64, Instant>,
-    /// Record the instant of the peer being effective in the configuration.
-    pub peer_going_effect: FlatMap<u64, Instant>,
+
+    /// Record the instants of peers being added into the configuration.
+    /// Remove them after they are not pending any more.
+    pub peer_pending_after: FlatMap<u64, Instant>,
+    pub peer_pending_time: LocalHistogram,
+
     coprocessor_host: Arc<CoprocessorHost>,
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
@@ -326,7 +331,8 @@ impl Peer {
             pending_reads: Default::default(),
             peer_cache: RefCell::new(peer_cache),
             peer_heartbeats: FlatMap::default(),
-            peer_going_effect: FlatMap::default(),
+            peer_pending_after: FlatMap::default(),
+            peer_pending_time: PEER_PENDING_TIME.local(),
             coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
             delete_keys_hint: 0,
@@ -544,11 +550,15 @@ impl Peer {
         if self.is_leader() && m.get_from() != INVALID_ID {
             self.peer_heartbeats.insert(m.get_from(), Instant::now());
         }
-        if let Entry::Occupied(e) = self.peer_going_effect.entry(m.get_from()) {
-            if m.get_msg_type() == MessageType::MsgAppendResponse && !m.get_reject() {
-                let effective_time = e.remove();
-                let elapsed = duration_to_sec(effective_time.elapsed());
-                PEER_PENDING_TIME.observe(elapsed);
+        if let Entry::Occupied(e) = self.peer_pending_after.entry(m.get_from()) {
+            let status = self.raft_group.status();
+            let truncated_idx = self.raft_group.get_store().truncated_index();
+            if let Some(progress) = status.progress.get(&m.get_from()) {
+                if progress.matched >= truncated_idx {
+                    let effective_time = e.remove();
+                    let elapsed = duration_to_sec(effective_time.elapsed());
+                    self.peer_pending_time.observe(elapsed);
+                }
             }
         }
         self.raft_group.step(m)?;

@@ -592,6 +592,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let timer = self.raft_metrics.process_tick.start_coarse_timer();
         let mut leader_missing = 0;
         for peer in &mut self.region_peers.values_mut() {
+            peer.peer_pending_time.flush();
             if peer.pending_remove {
                 continue;
             }
@@ -1302,7 +1303,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     let peer = cp.peer.clone();
                     let now = Instant::now();
                     p.peer_heartbeats.insert(peer.get_id(), now);
-                    p.peer_going_effect.insert(peer.get_id(), now);
+                    p.peer_pending_after.insert(peer.get_id(), now);
                     p.insert_peer_cache(peer);
                 }
                 ConfChangeType::RemoveNode => {
