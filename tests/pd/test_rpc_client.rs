@@ -426,9 +426,9 @@ fn test_region_heartbeat_on_leader_change() {
             .unwrap();
     };
 
-    // Change PD leader once.
+    // Change PD leader once then heartbeat PD.
     heartbeat_on_leader_change(1);
 
-    // Change PD leader twice without update the heartbeat sender.
+    // Change PD leader twice without update the heartbeat sender, then heartbeat PD.
     heartbeat_on_leader_change(2);
 }
