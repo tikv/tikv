@@ -135,9 +135,7 @@ impl Host {
             ).thread_count(cfg.end_point_concurrency)
                 .stack_size(cfg.end_point_stack_size.0 as usize)
                 .build(),
-            request_max_handle_duration: Duration::from_secs(
-                cfg.end_point_request_max_handle_duration.as_secs(),
-            ),
+            request_max_handle_duration: cfg.end_point_request_max_handle_duration.0,
         }
     }
 
@@ -247,7 +245,7 @@ impl ReqContext {
         Ok(())
     }
 
-    pub fn set_deadline(&mut self, request_max_handle_duration: Duration) {
+    pub fn set_max_handle_duration(&mut self, request_max_handle_duration: Duration) {
         self.deadline = self.start_time + request_max_handle_duration;
     }
 }
@@ -399,8 +397,9 @@ impl RequestTask {
         self.req.get_context().get_priority()
     }
 
-    pub fn set_deadline(&mut self, request_max_handle_duration: Duration) {
-        self.ctx.set_deadline(request_max_handle_duration);
+    pub fn set_max_handle_duration(&mut self, request_max_handle_duration: Duration) {
+        self.ctx
+            .set_max_handle_duration(request_max_handle_duration);
     }
 }
 
@@ -430,7 +429,7 @@ impl Runnable<Task> for Host {
         for task in tasks.drain(..) {
             match task {
                 Task::Request(mut req) => {
-                    req.set_deadline(self.request_max_handle_duration);
+                    req.set_max_handle_duration(self.request_max_handle_duration);
                     if let Err(e) = req.check_outdated() {
                         on_error(e, req, &mut local_metrics);
                         continue;
