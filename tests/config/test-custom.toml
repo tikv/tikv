@@ -1,6 +1,15 @@
 log-level = "debug"
 log-file = "foo"
 
+[readpool]
+high-concurrency = 1
+normal-concurrency = 3
+low-concurrency = 7
+max-tasks-high = 10000
+max-tasks-normal = 20000
+max-tasks-low = 30000
+stack-size = "20MB"
+
 [server]
 addr = "example.com:443"
 advertise-addr = "example.com:443"
@@ -17,7 +26,9 @@ end-point-recursion-limit = 100
 end-point-stream-channel-size = 16
 end-point-batch-row-limit = 64
 end-point-stream-batch-row-limit = 4096
+end-point-request-max-handle-duration = "12s"
 snap-max-write-bytes-per-sec = "10MB"
+snap-max-total-size = "10GB"
 
 [server.labels]
 a = "b"
@@ -70,6 +81,7 @@ notify-capacity = 12345
 messages-per-tick = 12345
 max-peer-down-duration = "12m"
 max-leader-missing-duration = "12h"
+abnormal-leader-missing-duration = "6h"
 snap-apply-batch-size = "12MB"
 consistency-check-interval = "12s"
 report-region-flow-interval = "12m"

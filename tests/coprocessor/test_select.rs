@@ -851,7 +851,21 @@ fn test_stream_batch_row_limit() {
     };
 
     let req = DAGSelect::from(&product.table).build();
-    let resps = handle_streaming_select(&end_point, req);
+
+    // Check the Response.range by check its last bytes.  We can know the last bytes
+    // because our query is a simple table scan, and row ids are 1, 2, 4, 5. And if
+    // the streaming contains at most 2 records in a chunk, the ranges of responses
+    // should be [(0x___1, 0x___3), (0x___4, 0x___6)].
+    let mut expected_ranges_last_byte = vec![(1, 3), (4, 6)];
+    let check_range = move |resp: &Response| {
+        let (start_last_byte, end_last_byte) = expected_ranges_last_byte.remove(0);
+        let start = resp.get_range().get_start();
+        let end = resp.get_range().get_end();
+        assert_eq!(start[start.len() - 1], start_last_byte);
+        assert_eq!(end[end.len() - 1], end_last_byte);
+    };
+
+    let resps = handle_streaming_select(&end_point, req, check_range);
     assert_eq!(resps.len(), 2);
 
     for (i, resp) in resps.into_iter().enumerate() {
@@ -1461,7 +1475,7 @@ fn test_reverse() {
 pub fn handle_request(end_point: &Worker<EndPointTask>, req: Request) -> Response {
     let (tx, rx) = mpsc::channel();
     let on_resp = OnResponse::Unary(box move |r| tx.send(r).unwrap());
-    let req = RequestTask::new(req, on_resp, 100).unwrap();
+    let req = RequestTask::new(req, on_resp, 100, 60).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();
     rx.recv().unwrap()
 }
@@ -1474,18 +1488,26 @@ fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectRespon
     sel_resp
 }
 
-fn handle_streaming_select(end_point: &Worker<EndPointTask>, req: Request) -> Vec<StreamResponse> {
+fn handle_streaming_select<F>(
+    end_point: &Worker<EndPointTask>,
+    req: Request,
+    mut check_range: F,
+) -> Vec<StreamResponse>
+where
+    F: FnMut(&Response) + Send + 'static,
+{
     let (tx, rx) = mpsc::channel();
     let on_resp = OnResponse::Streaming(box move |s, _| {
         for r in Stream::wait(s) {
             let resp: Response = r.unwrap();
+            check_range(&resp);
             assert!(!resp.get_data().is_empty());
             let mut stream_resp = StreamResponse::new();
             stream_resp.merge_from_bytes(resp.get_data()).unwrap();
             tx.send(stream_resp).unwrap();
         }
     });
-    let req = RequestTask::new(req, on_resp, 100).unwrap();
+    let req = RequestTask::new(req, on_resp, 100, 60).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();
     rx.into_iter().collect()
 }
@@ -2070,7 +2092,7 @@ fn test_handle_truncate() {
             .build();
         let (tx, rx) = mpsc::channel();
         let on_resp = OnResponse::Unary(box move |r| tx.send(r).unwrap());
-        let req = RequestTask::new(req, on_resp, 100).unwrap();
+        let req = RequestTask::new(req, on_resp, 100, 60).unwrap();
         end_point.schedule(EndPointTask::Request(req)).unwrap();
         let resp = rx.recv().unwrap();
         assert!(!resp.get_other_error().is_empty());

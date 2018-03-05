@@ -93,6 +93,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             snap_worker.scheduler(),
             cfg.end_point_recursion_limit,
             cfg.end_point_stream_channel_size,
+            cfg.end_point_request_max_handle_duration.as_secs(),
         );
         let addr = SocketAddr::from_str(&cfg.addr)?;
         info!("listening on {}", addr);
@@ -288,7 +289,7 @@ mod tests {
                 quick_fail: Arc::clone(&quick_fail),
                 addr: Arc::clone(&addr),
             },
-            SnapManager::new("", None, None),
+            SnapManager::new("", None),
             pd_worker.scheduler(),
             None,
             None,

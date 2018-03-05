@@ -10,6 +10,22 @@
 # file to store log, write to stderr if it's empty.
 # log-file = ""
 
+[readpool]
+# size of thread pool for high-priority read operations
+# high-concurrency = 8
+# size of thread pool for normal-priority read operations
+# normal-concurrency = 8
+# size of thread pool for low-priority read operations
+# low-concurrency = 8
+# max running high-priority read operations, reject if exceed
+# max-tasks-high = 16000
+# max running normal-priority read operations, reject if exceed
+# max-tasks-normal = 16000
+# max running low-priority read operations, reject if exceed
+# max-tasks-low = 16000
+# size of stack size for each thread pool
+# stack-size = "10MB"
+
 [server]
 # set listening address.
 # addr = "127.0.0.1:20160"
@@ -40,9 +56,12 @@
 # max recursion level allowed when decoding dag expression
 # end-point-recursion-limit = 1000
 
+# max time to handle coprocessor request before timeout
+# end-point-request-max-handle-duration = "60s"
+
 # the max bytes that snapshot can be written to disk in one second,
 # should be set based on your disk performance
-# snap_max_write_bytes_per_sec = "30MB"
+# snap-max-write-bytes-per-sec = "30MB"
 
 # set attributes about this server, e.g. { zone = "us-west-1", disk = "ssd" }.
 # labels = {}

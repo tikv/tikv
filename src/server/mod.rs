@@ -15,6 +15,7 @@ mod metrics;
 mod service;
 mod raft_client;
 
+pub mod readpool;
 pub mod config;
 pub mod errors;
 pub mod server;

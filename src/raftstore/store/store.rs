@@ -368,21 +368,26 @@ impl<T, C> Store<T, C> {
     /// `clear_stale_data` clean up all possible garbage data.
     fn clear_stale_data(&mut self) -> Result<()> {
         let t = Instant::now();
+
+        let mut ranges = Vec::new();
         let mut last_start_key = keys::data_key(b"");
         for region_id in self.region_ranges.values() {
             let region = self.region_peers[region_id].region();
             let start_key = keys::enc_start_key(region);
-            rocksdb::roughly_cleanup_range(&self.kv_engine, &last_start_key, &start_key)?;
+            ranges.push((last_start_key, start_key));
             last_start_key = keys::enc_end_key(region);
         }
+        ranges.push((last_start_key, keys::DATA_MAX_KEY.to_vec()));
 
-        rocksdb::roughly_cleanup_range(&self.kv_engine, &last_start_key, keys::DATA_MAX_KEY)?;
+        rocksdb::roughly_cleanup_ranges(&self.kv_engine, &ranges)?;
 
         info!(
-            "{} cleans up garbage data, takes {:?}",
+            "{} cleans up {} ranges garbage data, takes {:?}",
             self.tag,
+            ranges.len(),
             t.elapsed()
         );
+
         Ok(())
     }
 
@@ -585,6 +590,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let timer = self.raft_metrics.process_tick.start_coarse_timer();
+        let mut leader_missing = 0;
         for peer in &mut self.region_peers.values_mut() {
             if peer.pending_remove {
                 continue;
@@ -617,23 +623,33 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // In this case, peer B would notice that the leader is missing for a long time,
             // and it would check with pd to confirm whether it's still a member of the cluster.
             // If not, it destroys itself as a stale peer which is removed out already.
-            let max_missing_duration = self.cfg.max_leader_missing_duration.0;
-            if let StaleState::ToValidate = peer.check_stale_state(max_missing_duration) {
-                // for peer B in case 1 above
-                info!(
-                    "{} detects leader missing for a long time. To check with pd \
-                     whether it's still valid",
-                    peer.tag
-                );
-                let task = PdTask::ValidatePeer {
-                    peer: peer.peer.clone(),
-                    region: peer.region().clone(),
-                };
-                if let Err(e) = self.pd_worker.schedule(task) {
-                    error!("{} failed to notify pd: {}", peer.tag, e)
+            match peer.check_stale_state() {
+                StaleState::Valid => (),
+                StaleState::LeaderMissing => {
+                    warn!(
+                        "{} leader missing longer than abnormal_leader_missing_duration {:?}",
+                        peer.tag, self.cfg.abnormal_leader_missing_duration.0,
+                    );
+                    leader_missing += 1;
+                }
+                StaleState::ToValidate => {
+                    // for peer B in case 1 above
+                    warn!(
+                        "{} leader missing longer than max_leader_missing_duration {:?}. \
+                         To check with pd whether it's still valid",
+                        peer.tag, self.cfg.max_leader_missing_duration.0,
+                    );
+                    let task = PdTask::ValidatePeer {
+                        peer: peer.peer.clone(),
+                        region: peer.region().clone(),
+                    };
+                    if let Err(e) = self.pd_worker.schedule(task) {
+                        error!("{} failed to notify pd: {}", peer.tag, e)
+                    }
                 }
             }
         }
+        self.raft_metrics.leader_missing = leader_missing;
 
         self.poll_significant_msg();
 
@@ -2726,7 +2742,7 @@ mod tests {
         region_ranges.insert(b"c".to_vec(), 3);
 
         let declined_bytes = calc_region_declined_bytes(event, &region_ranges, 1024);
-        let expected_declined_bytes = vec![(2, 4096), (3, 4096)];
+        let expected_declined_bytes = vec![(2, 8192), (3, 4096)];
         assert_eq!(declined_bytes, expected_declined_bytes);
     }
 }

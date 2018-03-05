@@ -24,8 +24,7 @@ use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::endpoint::get_pk;
 use coprocessor::dag::expr::EvalContext;
 use coprocessor::{Error, Result};
-use coprocessor::local_metrics::*;
-use storage::{SnapshotStore, Statistics};
+use storage::SnapshotStore;
 use util::codec::number::NumberDecoder;
 use util::collections::HashSet;
 
@@ -39,13 +38,16 @@ mod limit;
 mod aggregation;
 mod aggregate;
 
+mod metrics;
+
 pub use self::table_scan::TableScanExecutor;
 pub use self::index_scan::IndexScanExecutor;
 pub use self::selection::SelectionExecutor;
 pub use self::topn::TopNExecutor;
 pub use self::limit::LimitExecutor;
-pub use self::aggregation::HashAggExecutor;
+pub use self::aggregation::{HashAggExecutor, StreamAggExecutor};
 pub use self::scanner::{ScanOn, Scanner};
+pub use self::metrics::*;
 
 pub struct ExprColumnRefVisitor {
     cols_offset: HashSet<usize>,
@@ -130,21 +132,21 @@ impl Row {
     }
 }
 
-pub trait Executor: Send {
+pub trait Executor {
     fn next(&mut self) -> Result<Option<Row>>;
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>);
-    fn collect_statistics_into(&mut self, stats: &mut Statistics);
-    fn collect_metrics_into(&mut self, metrics: &mut ScanCounter);
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics);
     /// Take the last key accessed by the executor.
     ///
-    /// If the executor doesn't support this, return None.
+    /// If the executor doesn't support this, return None. Now all
+    /// executors don't support this except TableScan and IndexScan.
     fn take_last_key(&mut self) -> Option<Vec<u8>> {
         None
     }
 }
 
 pub struct DAGExecutor {
-    pub exec: Box<Executor>,
+    pub exec: Box<Executor + Send>,
     pub columns: Arc<Vec<ColumnInfo>>,
     pub has_aggr: bool,
 }
@@ -162,7 +164,7 @@ pub fn build_exec(
     let (mut src, columns) = build_first_executor(first, store, ranges)?;
     let mut has_aggr = false;
     for mut exec in execs {
-        let curr: Box<Executor> = match exec.get_tp() {
+        let curr: Box<Executor + Send> = match exec.get_tp() {
             ExecType::TypeTableScan | ExecType::TypeIndexScan => {
                 return Err(box_err!("got too much *scan exec, should be only one"))
             }
@@ -181,6 +183,15 @@ pub fn build_exec(
                     src,
                 )?)
             }
+            ExecType::TypeStreamAgg => {
+                has_aggr = true;
+                Box::new(StreamAggExecutor::new(
+                    Arc::clone(&ctx),
+                    src,
+                    exec.take_aggregation(),
+                    Arc::clone(&columns),
+                )?)
+            }
             ExecType::TypeTopN => Box::new(TopNExecutor::new(
                 exec.take_topN(),
                 Arc::clone(&ctx),
@@ -188,7 +199,6 @@ pub fn build_exec(
                 src,
             )?),
             ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
-            ExecType::TypeStreamAgg => unimplemented!(),
         };
         src = curr;
     }
@@ -199,7 +209,7 @@ pub fn build_exec(
     })
 }
 
-type FirstExecutor = (Box<Executor>, Arc<Vec<ColumnInfo>>);
+type FirstExecutor = (Box<Executor + Send>, Arc<Vec<ColumnInfo>>);
 
 fn build_first_executor(
     mut first: executor::Executor,

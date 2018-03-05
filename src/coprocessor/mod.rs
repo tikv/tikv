@@ -13,11 +13,12 @@
 
 mod endpoint;
 mod metrics;
-mod local_metrics;
 mod dag;
 mod statistics;
+mod local_metrics;
 pub mod codec;
 
+pub use self::endpoint::err_resp;
 use std::result;
 use std::error;
 
@@ -85,5 +86,5 @@ impl From<txn::Error> for Error {
     }
 }
 
-pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask, REQ_TYPE_DAG,
-                         SINGLE_GROUP};
+pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask,
+                         DEFAULT_REQUEST_MAX_HANDLE_SECS, REQ_TYPE_DAG, SINGLE_GROUP};

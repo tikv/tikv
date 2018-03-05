@@ -11,21 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{mem, usize};
+use std::usize;
 use std::time::Duration;
-use std::sync::{mpsc, Arc};
-use std::cell::RefCell;
-use std::iter::FromIterator;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Debug, Display, Formatter};
-use std::thread::{self, ThreadId};
 
 use protobuf::{CodedInputStream, Message as PbMsg};
 use futures::{future, stream};
 use futures::sync::mpsc as futures_mpsc;
 use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 
-use tipb::select::{self, DAGRequest};
+use tipb::select::DAGRequest;
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
@@ -37,16 +34,16 @@ use util::time::{duration_to_sec, Instant};
 use util::worker::{FutureScheduler, Runnable, Scheduler};
 use util::collections::HashMap;
 use server::{Config, OnResponse};
-use storage::{self, engine, Engine, FlowStatistics, Snapshot, Statistics, StatisticsSummary};
+use storage::{self, engine, Engine, Snapshot};
 use storage::engine::Error as EngineError;
 use pd::PdTask;
 
 use super::codec::mysql;
 use super::codec::datum::Datum;
 use super::dag::DAGContext;
+use super::dag::executor::ExecutorMetrics;
 use super::statistics::analyze::AnalyzeContext;
 use super::metrics::*;
-use super::local_metrics::*;
 use super::{Error, Result};
 
 pub const REQ_TYPE_DAG: i64 = 103;
@@ -54,13 +51,9 @@ pub const REQ_TYPE_ANALYZE: i64 = 104;
 
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.
-const REQUEST_MAX_HANDLE_SECS: u64 = 60;
-// Like REQUEST_MAX_HANDLE_SECS but for every response in one streaming.
-const REQUEST_MAX_STREAM_HANDLE_SECS: u64 = 10;
+pub const DEFAULT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 // If handle time is larger than the lower bound, the query is considered as slow query.
 const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
-
-const DEFAULT_ERROR_CODE: i32 = 1;
 
 pub const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
@@ -68,134 +61,8 @@ const OUTDATED_ERROR_MSG: &str = "request outdated.";
 
 const ENDPOINT_IS_BUSY: &str = "endpoint is busy";
 
-struct CopContextInner {
-    select_stats: StatisticsSummary,
-    index_stats: StatisticsSummary,
-    flow_stats: HashMap<u64, FlowStatistics>,
-    timer: Instant,
-    timeout: Duration,
-    pd_task_sender: FutureScheduler<PdTask>,
-}
-
-impl CopContextInner {
-    fn get_statistics(&mut self, type_str: &str) -> &mut StatisticsSummary {
-        match type_str {
-            STR_REQ_TYPE_SELECT => &mut self.select_stats,
-            STR_REQ_TYPE_INDEX => &mut self.index_stats,
-            _ => {
-                warn!("unknown STR_REQ_TYPE: {}", type_str);
-                &mut self.select_stats
-            }
-        }
-    }
-
-    fn add_statistics(&mut self, type_str: &str, stats: &Statistics) {
-        self.get_statistics(type_str).add_statistics(stats);
-    }
-
-    fn add_flow_stats_by_region(&mut self, region_id: u64, stats: &Statistics) {
-        let flow_stats = self.flow_stats
-            .entry(region_id)
-            .or_insert_with(FlowStatistics::default);
-        flow_stats.add(&stats.write.flow_stats);
-        flow_stats.add(&stats.data.flow_stats);
-    }
-
-    fn collect(&mut self, region_id: u64, scan_tag: &str, stats: CopStats) {
-        let (stats, mut scan_counter) = (stats.stats, stats.scan_counter);
-        self.add_statistics(scan_tag, &stats);
-        self.add_flow_stats_by_region(region_id, &stats);
-        scan_counter.flush();
-
-        let new_timer = Instant::now_coarse();
-        if new_timer.duration_since(self.timer) < self.timeout {
-            return;
-        }
-        self.timer = new_timer;
-        for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX] {
-            let this_statistics = self.get_statistics(type_str);
-            if this_statistics.count == 0 {
-                continue;
-            }
-            for (cf, details) in this_statistics.stat.details() {
-                for (tag, count) in details {
-                    COPR_SCAN_DETAILS
-                        .with_label_values(&[type_str, cf, tag])
-                        .inc_by(count as f64)
-                        .unwrap();
-                }
-            }
-            *this_statistics = StatisticsSummary::default();
-        }
-        let pd_task = PdTask::ReadStats {
-            read_stats: mem::replace(&mut self.flow_stats, map![]),
-        };
-        if let Err(e) = self.pd_task_sender.schedule(pd_task) {
-            error!("send coprocessor statistics: {:?}", e);
-        }
-    }
-}
-
-struct CopContext(RefCell<CopContextInner>);
-
-impl CopContext {
-    fn new(pd_task_sender: FutureScheduler<PdTask>) -> Self {
-        let inner = CopContextInner {
-            select_stats: StatisticsSummary::default(),
-            index_stats: StatisticsSummary::default(),
-            flow_stats: map![],
-            timer: Instant::now_coarse(),
-            timeout: Duration::from_secs(1),
-            pd_task_sender: pd_task_sender,
-        };
-        CopContext(RefCell::new(inner))
-    }
-}
-
-unsafe impl Sync for CopContext {}
-
-#[derive(Clone)]
-struct CopContextPool {
-    cop_ctxs: Arc<HashMap<thread::ThreadId, CopContext>>,
-}
-
-impl CopContextPool {
-    fn collect(&self, region_id: u64, scan_tag: &str, stats: CopStats) {
-        let thread_id = thread::current().id();
-        if let Some(cop_ctx) = self.cop_ctxs.get(&thread_id) {
-            // If the request is failed before enter into CpuPool,
-            // we don't need to collect anything.
-            cop_ctx.0.borrow_mut().collect(region_id, scan_tag, stats);
-        }
-    }
-}
-
-impl FromIterator<(thread::ThreadId, CopContext)> for CopContextPool {
-    fn from_iter<T: IntoIterator<Item = (ThreadId, CopContext)>>(iter: T) -> Self {
-        let mut cop_ctxs = map![];
-        for (thread_id, cop_ctx) in iter {
-            cop_ctxs.insert(thread_id, cop_ctx);
-        }
-        let cop_ctxs = Arc::new(cop_ctxs);
-        CopContextPool { cop_ctxs: cop_ctxs }
-    }
-}
-
-impl Debug for CopContextPool {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "CopContextPool")
-    }
-}
-
-#[derive(Debug, Default)]
-struct CopStats {
-    stats: Statistics,
-    scan_counter: ScanCounter,
-}
-
 struct ExecutorPool {
     pool: CpuPool,
-    contexts: CopContextPool,
 }
 
 pub struct Host {
@@ -210,6 +77,7 @@ pub struct Host {
     running_task_count: Arc<AtomicUsize>,
     batch_row_limit: usize,
     stream_batch_row_limit: usize,
+    request_max_handle_secs: u64,
 }
 
 impl Host {
@@ -217,7 +85,7 @@ impl Host {
         engine: Box<Engine>,
         scheduler: Scheduler<Task>,
         cfg: &Config,
-        pd_task_sender: FutureScheduler<PdTask>,
+        _pd_task_sender: FutureScheduler<PdTask>,
     ) -> Host {
         Host {
             engine: engine,
@@ -228,23 +96,21 @@ impl Host {
                 "endpoint-normal-pool",
                 cfg.end_point_concurrency,
                 cfg.end_point_stack_size.0 as usize,
-                pd_task_sender.clone(),
             ),
             low_priority_pool: Host::create_executor_pool(
                 "endpoint-low-pool",
                 cfg.end_point_concurrency,
                 cfg.end_point_stack_size.0 as usize,
-                pd_task_sender.clone(),
             ),
             high_priority_pool: Host::create_executor_pool(
                 "endpoint-high-pool",
                 cfg.end_point_concurrency,
                 cfg.end_point_stack_size.0 as usize,
-                pd_task_sender,
             ),
             max_running_task_count: cfg.end_point_max_tasks,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
+            request_max_handle_secs: cfg.end_point_request_max_handle_duration.as_secs(),
             running_task_count: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -253,25 +119,15 @@ impl Host {
         name_prefix: &str,
         pool_size: usize,
         thread_stack_size: usize,
-        pd_task_sender: FutureScheduler<PdTask>,
     ) -> ExecutorPool {
-        let (tx, rx) = mpsc::sync_channel(pool_size);
         let cpu_pool = {
             CpuPoolBuilder::new()
                 .name_prefix(name_prefix)
                 .pool_size(pool_size)
                 .stack_size(thread_stack_size)
-                .after_start(move || {
-                    let thread_id = thread::current().id();
-                    let cop_ctx = CopContext::new(pd_task_sender.clone());
-                    tx.send((thread_id, cop_ctx)).unwrap();
-                })
                 .create()
         };
-        ExecutorPool {
-            pool: cpu_pool,
-            contexts: CopContextPool::from_iter(rx),
-        }
+        ExecutorPool { pool: cpu_pool }
     }
 
     #[inline]
@@ -281,7 +137,7 @@ impl Host {
 
     fn notify_failed<E: Into<Error> + Debug>(&mut self, e: E, reqs: Vec<RequestTask>) {
         debug!("failed to handle batch request: {:?}", e);
-        let resp = err_resp(e.into());
+        let resp = err_multi_resp(e.into(), reqs.len(), self.request_max_handle_secs);
         for t in reqs {
             t.on_resp.respond(resp.clone());
         }
@@ -295,7 +151,7 @@ impl Host {
 
     fn handle_request(&mut self, snap: Box<Snapshot>, t: RequestTask) {
         if let Err(e) = t.check_outdated() {
-            return t.on_resp.respond(err_resp(e));
+            return t.on_resp.respond(err_resp(e, self.request_max_handle_secs));
         }
 
         let (mut req, cop_req, req_ctx, on_resp) = (t.req, t.cop_req, t.ctx, t.on_resp);
@@ -308,23 +164,23 @@ impl Host {
             CommandPri::Normal => &mut self.pool,
         };
         let pool = &pool_and_ctx_pool.pool;
-        tracker.attach_ctx_pool(pool_and_ctx_pool.contexts.clone());
+        let request_max_handle_secs = self.request_max_handle_secs;
 
         match cop_req {
             CopRequest::DAG(dag) => {
                 let mut ctx = match DAGContext::new(dag, ranges, snap, req_ctx) {
                     Ok(ctx) => ctx,
-                    Err(e) => return on_resp.respond(err_resp(e)),
+                    Err(e) => return on_resp.respond(err_resp(e, request_max_handle_secs)),
                 };
                 if !on_resp.is_streaming() {
                     let batch_row_limit = self.batch_row_limit;
                     let do_request = move || {
                         tracker.record_wait();
-                        let mut resp = ctx.handle_request(batch_row_limit).unwrap_or_else(err_resp);
-                        let mut cop_stats = CopStats::default();
-                        ctx.collect_statistics_into(&mut cop_stats.stats);
-                        ctx.collect_metrics_into(&mut cop_stats.scan_counter);
-                        tracker.record_handle(&mut resp, cop_stats);
+                        let mut resp = ctx.handle_request(batch_row_limit)
+                            .unwrap_or_else(|e| err_resp(e, request_max_handle_secs));
+                        let mut exec_metrics = ExecutorMetrics::default();
+                        ctx.collect_metrics_into(&mut exec_metrics);
+                        tracker.record_handle(Some(&mut resp), exec_metrics);
                         future::ok::<_, ()>(on_resp.respond(resp))
                     };
                     return pool.spawn_fn(do_request).forget();
@@ -336,13 +192,12 @@ impl Host {
                         return None;
                     }
                     tracker.record_wait();
-                    let (item, finished) = ctx.handle_streaming_request(batch_row_limit)
-                        .unwrap_or_else(|e| (Some(err_resp(e)), true));
-                    item.map(|mut resp| {
-                        let mut cop_stats = CopStats::default();
-                        ctx.collect_statistics_into(&mut cop_stats.stats);
-                        ctx.collect_metrics_into(&mut cop_stats.scan_counter);
-                        tracker.record_handle(&mut resp, cop_stats);
+                    let (mut item, finished) = ctx.handle_streaming_request(batch_row_limit)
+                        .unwrap_or_else(|e| (Some(err_resp(e, request_max_handle_secs)), true));
+                    let mut exec_metrics = ExecutorMetrics::default();
+                    ctx.collect_metrics_into(&mut exec_metrics);
+                    tracker.record_handle(item.as_mut(), exec_metrics);
+                    item.map(|resp| {
                         future::ok::<_, futures_mpsc::SendError<_>>((resp, (ctx, finished)))
                     })
                 });
@@ -350,12 +205,12 @@ impl Host {
             }
             CopRequest::Analyze(analyze) => {
                 let ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx);
-                let mut cop_stats = CopStats::default();
+                let mut exec_metrics = ExecutorMetrics::default();
                 let do_request = move || {
                     tracker.record_wait();
-                    let mut resp = ctx.handle_request(&mut cop_stats.stats)
-                        .unwrap_or_else(err_resp);
-                    tracker.record_handle(&mut resp, cop_stats);
+                    let mut resp = ctx.handle_request(&mut exec_metrics)
+                        .unwrap_or_else(|e| err_resp(e, request_max_handle_secs));
+                    tracker.record_handle(Some(&mut resp), exec_metrics);
                     future::ok::<_, ()>(on_resp.respond(resp))
                 };
                 pool.spawn_fn(do_request).forget();
@@ -404,7 +259,6 @@ pub struct ReqContext {
     // it should be 60s. For coprocessor streaming request, the deadline is 60s
     // for the first response and 10s for rest, if they exceed the first deadline.
     deadline: Instant,
-    is_stream_head: bool, // A flag for coprocessor streaming.
     pub isolation_level: IsolationLevel,
     pub fill_cache: bool,
     pub table_scan: bool, // Whether is a table scan request.
@@ -427,24 +281,15 @@ impl ReqContext {
         }
         Ok(())
     }
-
-    pub fn renew_streaming_outdated(&mut self) {
-        let now = Instant::now_coarse();
-        if !self.is_stream_head || self.deadline <= now {
-            self.is_stream_head = false;
-            self.deadline = now + Duration::from_secs(REQUEST_MAX_STREAM_HANDLE_SECS);
-        }
-    }
 }
 
 #[derive(Debug)]
 struct RequestTracker {
     running_task_count: Option<Arc<AtomicUsize>>,
-    ctx_pool: Option<CopContextPool>,
     record_handle_time: bool,
     record_scan_detail: bool,
 
-    cop_stats: CopStats,
+    exec_metrics: ExecutorMetrics,
     start: Instant, // The request start time.
     total_handle_time: f64,
 
@@ -468,10 +313,6 @@ impl RequestTracker {
         self.running_task_count = Some(running_task_count);
     }
 
-    fn attach_ctx_pool(&mut self, ctx_pool: CopContextPool) {
-        self.ctx_pool = Some(ctx_pool);
-    }
-
     fn record_wait(&mut self) {
         let stop_first_wait = self.wait_time.is_none();
         let wait_start = self.wait_start.take().unwrap();
@@ -487,16 +328,14 @@ impl RequestTracker {
     }
 
     #[allow(useless_let_if_seq)]
-    fn record_handle(&mut self, resp: &mut Response, cop_stats: CopStats) {
+    fn record_handle(&mut self, resp: Option<&mut Response>, mut exec_metrics: ExecutorMetrics) {
         let handle_start = self.handle_start.take().unwrap();
         let now = Instant::now_coarse();
         self.handle_time = Some(duration_to_sec(now - handle_start));
         self.wait_start = Some(now);
         self.total_handle_time += self.handle_time.unwrap();
 
-        let (stats, mut scan_counter) = (cop_stats.stats, cop_stats.scan_counter);
-        self.cop_stats.stats.add(&stats);
-        self.cop_stats.scan_counter.merge(&mut scan_counter);
+        self.exec_metrics.merge(&mut exec_metrics);
 
         let mut record_handle_time = self.record_handle_time;
         let mut record_scan_detail = self.record_scan_detail;
@@ -504,15 +343,17 @@ impl RequestTracker {
             record_handle_time = true;
             record_scan_detail = true;
         }
-        if record_handle_time {
-            let mut handle = HandleTime::new();
-            handle.set_process_ms((self.handle_time.unwrap() * 1000f64) as i64);
-            handle.set_wait_ms((self.wait_time.unwrap() * 1000f64) as i64);
-            resp.mut_exec_details().set_handle_time(handle);
-        }
-        if record_scan_detail {
-            let detail = stats.scan_detail();
-            resp.mut_exec_details().set_scan_detail(detail);
+        if let Some(resp) = resp {
+            if record_handle_time {
+                let mut handle = HandleTime::new();
+                handle.set_process_ms((self.handle_time.unwrap() * 1000f64) as i64);
+                handle.set_wait_ms((self.wait_time.unwrap() * 1000f64) as i64);
+                resp.mut_exec_details().set_handle_time(handle);
+            }
+            if record_scan_detail {
+                let detail = self.exec_metrics.cf_stats.scan_detail();
+                resp.mut_exec_details().set_scan_detail(detail);
+            }
         }
     }
 }
@@ -528,11 +369,14 @@ impl Drop for RequestTracker {
                 self.txn_start_ts,
                 self.scan_tag,
                 query_time,
-                self.cop_stats.stats.total_op_count(),
-                self.cop_stats.stats.total_processed(),
+                self.exec_metrics.cf_stats.total_op_count(),
+                self.exec_metrics.cf_stats.total_processed(),
                 self.ranges_len,
                 self.first_range,
             );
+        }
+        if self.wait_time.is_none() {
+            self.record_wait();
         }
 
         COPR_PENDING_REQS
@@ -546,14 +390,10 @@ impl Drop for RequestTracker {
             .observe(self.total_handle_time);
         COPR_SCAN_KEYS
             .with_label_values(&[self.scan_tag])
-            .observe(self.cop_stats.stats.total_op_count() as f64);
+            .observe(self.exec_metrics.cf_stats.total_op_count() as f64);
 
         if let Some(task_count) = self.running_task_count.take() {
             task_count.fetch_sub(1, Ordering::Release);
-        }
-        if let Some(ctx_pool) = self.ctx_pool.take() {
-            let cop_stats = mem::replace(&mut self.cop_stats, CopStats::default());
-            ctx_pool.collect(self.region_id, self.scan_tag, cop_stats);
         }
     }
 }
@@ -572,6 +412,7 @@ impl RequestTask {
         req: Request,
         on_resp: OnResponse<Response>,
         recursion_limit: u32,
+        request_max_handle_secs: u64,
     ) -> Result<RequestTask> {
         let mut table_scan = false;
         let (start_ts, cop_req) = match req.get_tp() {
@@ -597,11 +438,10 @@ impl RequestTask {
         };
 
         let start = Instant::now_coarse();
-        let deadline = start + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
+        let deadline = start + Duration::from_secs(request_max_handle_secs);
 
         let req_ctx = ReqContext {
             deadline: deadline,
-            is_stream_head: true,
             isolation_level: req.get_context().get_isolation_level(),
             fill_cache: !req.get_context().get_not_fill_cache(),
             table_scan: table_scan,
@@ -609,7 +449,6 @@ impl RequestTask {
 
         let request_tracker = RequestTracker {
             running_task_count: None,
-            ctx_pool: None,
             record_handle_time: req.get_context().get_handle_time(),
             record_scan_detail: req.get_context().get_scan_detail(),
 
@@ -619,7 +458,7 @@ impl RequestTask {
             handle_start: None,
             wait_time: None,
             handle_time: None,
-            cop_stats: CopStats::default(),
+            exec_metrics: ExecutorMetrics::default(),
 
             region_id: req.get_context().get_region_id(),
             txn_start_ts: start_ts,
@@ -686,7 +525,8 @@ impl Runnable<Task> for Host {
             match task {
                 Task::Request(req) => {
                     if let Err(e) = req.check_outdated() {
-                        req.on_resp.respond(err_resp(e));
+                        req.on_resp
+                            .respond(err_resp(e, self.request_max_handle_secs));
                         continue;
                     }
                     let key = req.get_request_key();
@@ -773,22 +613,32 @@ impl Runnable<Task> for Host {
     }
 }
 
-fn err_resp(e: Error) -> Response {
+fn err_multi_resp(e: Error, count: usize, request_max_handle_secs: u64) -> Response {
     let mut resp = Response::new();
+    let count = count as f64;
     match e {
         Error::Region(e) => {
             let tag = storage::get_tag_from_header(&e);
-            COPR_REQ_ERROR.with_label_values(&[tag]).inc();
+            COPR_REQ_ERROR
+                .with_label_values(&[tag])
+                .inc_by(count)
+                .unwrap();
             resp.set_region_error(e);
         }
         Error::Locked(info) => {
             resp.set_locked(info);
-            COPR_REQ_ERROR.with_label_values(&["lock"]).inc();
+            COPR_REQ_ERROR
+                .with_label_values(&["lock"])
+                .inc_by(count)
+                .unwrap();
         }
         Error::Outdated(deadline, now, scan_tag) => {
             let elapsed =
-                now.duration_since(deadline) + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
-            COPR_REQ_ERROR.with_label_values(&["outdated"]).inc();
+                now.duration_since(deadline) + Duration::from_secs(request_max_handle_secs);
+            COPR_REQ_ERROR
+                .with_label_values(&["outdated"])
+                .inc_by(count)
+                .unwrap();
             OUTDATED_REQ_WAIT_TIME
                 .with_label_values(&[scan_tag])
                 .observe(elapsed.as_secs() as f64);
@@ -796,7 +646,10 @@ fn err_resp(e: Error) -> Response {
             resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
         }
         Error::Full(allow) => {
-            COPR_REQ_ERROR.with_label_values(&["full"]).inc();
+            COPR_REQ_ERROR
+                .with_label_values(&["full"])
+                .inc_by(count)
+                .unwrap();
             let mut errorpb = errorpb::Error::new();
             errorpb.set_message(format!("running batches reach limit {}", allow));
             let mut server_is_busy_err = ServerIsBusy::new();
@@ -806,17 +659,17 @@ fn err_resp(e: Error) -> Response {
         }
         Error::Other(_) => {
             resp.set_other_error(format!("{}", e));
-            COPR_REQ_ERROR.with_label_values(&["other"]).inc();
+            COPR_REQ_ERROR
+                .with_label_values(&["other"])
+                .inc_by(count)
+                .unwrap();
         }
     }
     resp
 }
 
-pub fn to_pb_error(err: &Error) -> select::Error {
-    let mut e = select::Error::new();
-    e.set_code(DEFAULT_ERROR_CODE);
-    e.set_msg(format!("{}", err));
-    e
+pub fn err_resp(e: Error, request_max_handle_secs: u64) -> Response {
+    err_multi_resp(e, 1, request_max_handle_secs)
 }
 
 pub fn prefix_next(key: &[u8]) -> Vec<u8> {
@@ -876,6 +729,7 @@ pub fn get_req_pri_str(pri: CommandPri) -> &'static str {
 mod tests {
     use super::*;
     use storage::engine::{self, TEMP_DIR};
+    use std::thread;
     use std::time::Duration;
     use std::sync::mpsc;
 
@@ -891,7 +745,6 @@ mod tests {
     fn test_get_reg_scan_tag() {
         let mut ctx = ReqContext {
             deadline: Instant::now_coarse(),
-            is_stream_head: true,
             isolation_level: IsolationLevel::RC,
             fill_cache: true,
             table_scan: true,
@@ -915,8 +768,9 @@ mod tests {
         req.set_tp(REQ_TYPE_DAG);
         let (tx, rx) = mpsc::channel();
         let on_resp = OnResponse::Unary(box move |msg| tx.send(msg).unwrap());
-        let mut task = RequestTask::new(req, on_resp, 1000).unwrap();
-        task.ctx.deadline -= Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS);
+        let mut task =
+            RequestTask::new(req, on_resp, 1000, super::DEFAULT_REQUEST_MAX_HANDLE_SECS).unwrap();
+        task.ctx.deadline -= Duration::from_secs(super::DEFAULT_REQUEST_MAX_HANDLE_SECS);
 
         worker.schedule(Task::Request(task)).unwrap();
         let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -932,7 +786,7 @@ mod tests {
         cfg.end_point_concurrency = 1;
         let pd_worker = FutureWorker::new("test-pd-worker");
         let mut end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
-        end_point.max_running_task_count = 3;
+        end_point.max_running_task_count = 1;
         worker.start(end_point).unwrap();
         let (tx, rx) = mpsc::channel();
         for pos in 0..30 * 4 {
@@ -948,10 +802,11 @@ mod tests {
             }
             let on_resp = OnResponse::Unary(box move |msg| {
                 thread::sleep(Duration::from_millis(100));
-                tx.send(msg).unwrap();
+                let _ = tx.send(msg); // To avoid panic if rx is closed.
             });
 
-            let task = RequestTask::new(req, on_resp, 1000).unwrap();
+            let task = RequestTask::new(req, on_resp, 1000, super::DEFAULT_REQUEST_MAX_HANDLE_SECS)
+                .unwrap();
             worker.schedule(Task::Request(task)).unwrap();
         }
         for _ in 0..120 {
@@ -981,7 +836,12 @@ mod tests {
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(dag.write_to_bytes().unwrap());
 
-        let err = RequestTask::new(req, OnResponse::Unary(box |_| ()), 5).unwrap_err();
+        let err = RequestTask::new(
+            req,
+            OnResponse::Unary(box |_| ()),
+            5,
+            super::DEFAULT_REQUEST_MAX_HANDLE_SECS,
+        ).unwrap_err();
         let s = format!("{:?}", err);
         assert!(
             s.contains("Recursion"),
