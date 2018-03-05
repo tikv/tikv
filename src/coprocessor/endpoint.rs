@@ -13,7 +13,7 @@
 
 use std::{mem, usize};
 use std::time::Duration;
-use std::cell::RefCell;
+use std::cell::{RefCell, RefMut};
 use std::sync::{mpsc, Arc};
 use std::iter::FromIterator;
 use std::thread::{self, ThreadId};
@@ -37,7 +37,7 @@ use util::time::{duration_to_sec, Instant};
 use util::worker::{FutureScheduler, Runnable, Scheduler};
 use util::collections::HashMap;
 use server::{Config, OnResponse};
-use storage::{self, engine, Engine, FlowStatistics, Snapshot, Statistics, StatisticsSummary};
+use storage::{self, engine, Engine, Snapshot};
 use storage::engine::Error as EngineError;
 use pd::PdTask;
 
@@ -47,6 +47,7 @@ use super::dag::DAGContext;
 use super::dag::executor::ExecutorMetrics;
 use super::statistics::analyze::AnalyzeContext;
 use super::metrics::*;
+use super::local_metrics::*;
 use super::{Error, Result};
 
 pub const REQ_TYPE_DAG: i64 = 103;
@@ -65,69 +66,22 @@ const OUTDATED_ERROR_MSG: &str = "request outdated.";
 const ENDPOINT_IS_BUSY: &str = "endpoint is busy";
 
 struct CopContextInner {
-    select_stats: StatisticsSummary,
-    index_stats: StatisticsSummary,
-    flow_stats: HashMap<u64, FlowStatistics>,
+    exec_local_metrics: ExecLocalMetrics,
+    basic_local_metrics: BasicLocalMetrics,
     timer: Instant,
     timeout: Duration,
-    pd_task_sender: FutureScheduler<PdTask>,
 }
 
 impl CopContextInner {
-    fn get_statistics(&mut self, type_str: &str) -> &mut StatisticsSummary {
-        match type_str {
-            STR_REQ_TYPE_SELECT => &mut self.select_stats,
-            STR_REQ_TYPE_INDEX => &mut self.index_stats,
-            _ => {
-                warn!("unknown STR_REQ_TYPE: {}", type_str);
-                &mut self.select_stats
-            }
-        }
-    }
-
-    fn add_statistics(&mut self, type_str: &str, stats: &Statistics) {
-        self.get_statistics(type_str).add_statistics(stats);
-    }
-
-    fn add_flow_stats_by_region(&mut self, region_id: u64, stats: &Statistics) {
-        let flow_stats = self.flow_stats
-            .entry(region_id)
-            .or_insert_with(FlowStatistics::default);
-        flow_stats.add(&stats.write.flow_stats);
-        flow_stats.add(&stats.data.flow_stats);
-    }
-
     fn collect(&mut self, region_id: u64, scan_tag: &str, metrics: ExecutorMetrics) {
-        let (stats, mut scan_counter) = (metrics.cf_stats, metrics.scan_counter);
-        self.add_statistics(scan_tag, &stats);
-        self.add_flow_stats_by_region(region_id, &stats);
-        scan_counter.consume();
+        self.exec_local_metrics
+            .collect(scan_tag, region_id, metrics);
 
         let new_timer = Instant::now_coarse();
-        if new_timer.duration_since(self.timer) < self.timeout {
-            return;
-        }
-        self.timer = new_timer;
-        for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX] {
-            let this_statistics = self.get_statistics(type_str);
-            if this_statistics.count == 0 {
-                continue;
-            }
-            for (cf, details) in this_statistics.stat.details() {
-                for (tag, count) in details {
-                    COPR_SCAN_DETAILS
-                        .with_label_values(&[type_str, cf, tag])
-                        .inc_by(count as f64)
-                        .unwrap();
-                }
-            }
-            *this_statistics = StatisticsSummary::default();
-        }
-        let pd_task = PdTask::ReadStats {
-            read_stats: mem::replace(&mut self.flow_stats, map![]),
-        };
-        if let Err(e) = self.pd_task_sender.schedule(pd_task) {
-            error!("send coprocessor statistics: {:?}", e);
+        if new_timer.duration_since(self.timer) >= self.timeout {
+            self.exec_local_metrics.flush();
+            self.basic_local_metrics.flush();
+            self.timer = new_timer;
         }
     }
 }
@@ -137,12 +91,10 @@ struct CopContext(RefCell<CopContextInner>);
 impl CopContext {
     fn new(pd_task_sender: FutureScheduler<PdTask>) -> Self {
         let inner = CopContextInner {
-            select_stats: StatisticsSummary::default(),
-            index_stats: StatisticsSummary::default(),
-            flow_stats: map![],
+            exec_local_metrics: ExecLocalMetrics::new(pd_task_sender),
+            basic_local_metrics: BasicLocalMetrics::default(),
             timer: Instant::now_coarse(),
             timeout: Duration::from_secs(1),
-            pd_task_sender: pd_task_sender,
         };
         CopContext(RefCell::new(inner))
     }
@@ -156,13 +108,10 @@ struct CopContextPool {
 }
 
 impl CopContextPool {
-    fn collect(&self, region_id: u64, scan_tag: &str, metrics: ExecutorMetrics) {
+    // Must be called in thread pool.
+    fn get_context(&self) -> &CopContext {
         let thread_id = thread::current().id();
-        if let Some(cop_ctx) = self.cop_ctxs.get(&thread_id) {
-            // If the request is failed before enter into CpuPool,
-            // we don't need to collect anything.
-            cop_ctx.0.borrow_mut().collect(region_id, scan_tag, metrics);
-        }
+        self.cop_ctxs.get(&thread_id).unwrap()
     }
 }
 
@@ -196,6 +145,7 @@ pub struct Host {
     pool: ExecutorPool,
     low_priority_pool: ExecutorPool,
     high_priority_pool: ExecutorPool,
+    basic_local_metrics: BasicLocalMetrics,
     max_running_task_count: usize,
     running_task_count: Arc<AtomicUsize>,
     batch_row_limit: usize,
@@ -233,6 +183,7 @@ impl Host {
                 cfg.end_point_stack_size.0 as usize,
                 pd_task_sender,
             ),
+            basic_local_metrics: BasicLocalMetrics::default(),
             max_running_task_count: cfg.end_point_max_tasks,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
@@ -273,7 +224,12 @@ impl Host {
 
     fn notify_failed<E: Into<Error> + Debug>(&mut self, e: E, reqs: Vec<RequestTask>) {
         debug!("failed to handle batch request: {:?}", e);
-        let resp = err_multi_resp(e.into(), reqs.len(), self.request_max_handle_secs);
+        let resp = err_multi_resp(
+            e.into(),
+            reqs.len(),
+            &mut self.basic_local_metrics,
+            self.request_max_handle_secs,
+        );
         for t in reqs {
             t.on_resp.respond(resp.clone());
         }
@@ -286,8 +242,10 @@ impl Host {
     }
 
     fn handle_request(&mut self, snap: Box<Snapshot>, t: RequestTask) {
+        let metrics = &mut self.basic_local_metrics;
         if let Err(e) = t.check_outdated() {
-            return t.on_resp.respond(err_resp(e, self.request_max_handle_secs));
+            let resp = err_resp(e, metrics, self.request_max_handle_secs);
+            return t.on_resp.respond(resp);
         }
 
         let (mut req, cop_req, req_ctx, on_resp) = (t.req, t.cop_req, t.ctx, t.on_resp);
@@ -307,14 +265,16 @@ impl Host {
             CopRequest::DAG(dag) => {
                 let mut ctx = match DAGContext::new(dag, ranges, snap, req_ctx) {
                     Ok(ctx) => ctx,
-                    Err(e) => return on_resp.respond(err_resp(e, request_max_handle_secs)),
+                    Err(e) => return on_resp.respond(err_resp(e, metrics, request_max_handle_secs)),
                 };
                 if !on_resp.is_streaming() {
                     let batch_row_limit = self.batch_row_limit;
                     let do_request = move || {
                         tracker.record_wait();
-                        let mut resp = ctx.handle_request(batch_row_limit)
-                            .unwrap_or_else(|e| err_resp(e, request_max_handle_secs));
+                        let mut resp = ctx.handle_request(batch_row_limit).unwrap_or_else(|e| {
+                            let mut metrics = tracker.get_basic_metrics();
+                            err_resp(e, &mut metrics, request_max_handle_secs)
+                        });
                         let mut exec_metrics = ExecutorMetrics::default();
                         ctx.collect_metrics_into(&mut exec_metrics);
                         tracker.record_handle(Some(&mut resp), exec_metrics);
@@ -330,7 +290,13 @@ impl Host {
                     }
                     tracker.record_wait();
                     let (mut item, finished) = ctx.handle_streaming_request(batch_row_limit)
-                        .unwrap_or_else(|e| (Some(err_resp(e, request_max_handle_secs)), true));
+                        .unwrap_or_else(|e| {
+                            let mut metrics = tracker.get_basic_metrics();
+                            (
+                                Some(err_resp(e, &mut metrics, request_max_handle_secs)),
+                                true,
+                            )
+                        });
                     let mut exec_metrics = ExecutorMetrics::default();
                     ctx.collect_metrics_into(&mut exec_metrics);
                     tracker.record_handle(item.as_mut(), exec_metrics);
@@ -345,8 +311,10 @@ impl Host {
                 let mut exec_metrics = ExecutorMetrics::default();
                 let do_request = move || {
                     tracker.record_wait();
-                    let mut resp = ctx.handle_request(&mut exec_metrics)
-                        .unwrap_or_else(|e| err_resp(e, request_max_handle_secs));
+                    let mut resp = ctx.handle_request(&mut exec_metrics).unwrap_or_else(|e| {
+                        let mut metrics = tracker.get_basic_metrics();
+                        err_resp(e, &mut metrics, request_max_handle_secs)
+                    });
                     tracker.record_handle(Some(&mut resp), exec_metrics);
                     future::ok::<_, ()>(on_resp.respond(resp))
                 };
@@ -455,6 +423,14 @@ impl RequestTracker {
         self.ctx_pool = Some(ctx_pool);
     }
 
+    // This function will be only called in thread pool.
+    fn get_basic_metrics(&self) -> RefMut<BasicLocalMetrics> {
+        let ctx_pool = self.ctx_pool.as_ref().unwrap();
+        let ctx = ctx_pool.get_context().0.borrow_mut();
+        RefMut::map(ctx, |c| &mut c.basic_local_metrics)
+    }
+
+    // This function will be only called in thread pool.
     fn record_wait(&mut self) {
         let stop_first_wait = self.wait_time.is_none();
         let wait_start = self.wait_start.take().unwrap();
@@ -463,7 +439,11 @@ impl RequestTracker {
         self.handle_start = Some(now);
 
         if stop_first_wait {
-            COPR_REQ_WAIT_TIME
+            let ctx_pool = self.ctx_pool.as_ref().unwrap();
+            let mut cop_ctx = ctx_pool.get_context().0.borrow_mut();
+            cop_ctx
+                .basic_local_metrics
+                .wait_time
                 .with_label_values(&[self.scan_tag])
                 .observe(self.wait_time.unwrap());
         }
@@ -502,6 +482,14 @@ impl RequestTracker {
 
 impl Drop for RequestTracker {
     fn drop(&mut self) {
+        COPR_PENDING_REQS
+            .with_label_values(&[self.scan_tag, self.pri_str])
+            .dec();
+
+        if let Some(task_count) = self.running_task_count.take() {
+            task_count.fetch_sub(1, Ordering::Release);
+        }
+
         let query_time = duration_to_sec(self.start.elapsed());
         if query_time > SLOW_QUERY_LOWER_BOUND {
             info!(
@@ -518,28 +506,38 @@ impl Drop for RequestTracker {
             );
         }
         if self.wait_time.is_none() {
-            self.record_wait();
+            // For the request is failed before enter into thread pool.
+            let wait_start = self.wait_start.take().unwrap();
+            let now = Instant::now_coarse();
+            let wait_time = duration_to_sec(now - wait_start);
+            BasicLocalMetrics::default()
+                .wait_time
+                .with_label_values(&[self.scan_tag])
+                .observe(wait_time);
+            return;
         }
 
-        COPR_PENDING_REQS
-            .with_label_values(&[self.scan_tag, self.pri_str])
-            .dec();
-        COPR_REQ_HISTOGRAM_VEC
+        let ctx_pool = self.ctx_pool.take().unwrap();
+        let mut cop_ctx = ctx_pool.get_context().0.borrow_mut();
+
+        cop_ctx
+            .basic_local_metrics
+            .req_time
             .with_label_values(&[self.scan_tag])
             .observe(query_time);
-        COPR_REQ_HANDLE_TIME
+        cop_ctx
+            .basic_local_metrics
+            .handle_time
             .with_label_values(&[self.scan_tag])
             .observe(self.total_handle_time);
-        COPR_SCAN_KEYS
+        cop_ctx
+            .basic_local_metrics
+            .scan_keys
             .with_label_values(&[self.scan_tag])
             .observe(self.exec_metrics.cf_stats.total_op_count() as f64);
 
-        if let Some(task_count) = self.running_task_count.take() {
-            task_count.fetch_sub(1, Ordering::Release);
-        }
-        if let Some(ctx_pool) = self.ctx_pool.take() {
-            ctx_pool.collect(self.region_id, self.scan_tag, self.exec_metrics);
-        }
+        let exec_metrics = mem::replace(&mut self.exec_metrics, ExecutorMetrics::default());
+        cop_ctx.collect(self.region_id, self.scan_tag, exec_metrics);
     }
 }
 
@@ -671,8 +669,11 @@ impl Runnable<Task> for Host {
             match task {
                 Task::Request(req) => {
                     if let Err(e) = req.check_outdated() {
-                        req.on_resp
-                            .respond(err_resp(e, self.request_max_handle_secs));
+                        req.on_resp.respond(err_resp(
+                            e,
+                            &mut self.basic_local_metrics,
+                            self.request_max_handle_secs,
+                        ));
                         continue;
                     }
                     let key = req.get_request_key();
@@ -759,63 +760,62 @@ impl Runnable<Task> for Host {
     }
 }
 
-fn err_multi_resp(e: Error, count: usize, request_max_handle_secs: u64) -> Response {
+fn err_multi_resp(
+    e: Error,
+    count: usize,
+    metrics: &mut BasicLocalMetrics,
+    request_max_handle_secs: u64,
+) -> Response {
     let mut resp = Response::new();
     let count = count as f64;
-    match e {
+    let tag = match e {
         Error::Region(e) => {
             let tag = storage::get_tag_from_header(&e);
-            COPR_REQ_ERROR
-                .with_label_values(&[tag])
-                .inc_by(count)
-                .unwrap();
             resp.set_region_error(e);
+            tag
         }
         Error::Locked(info) => {
             resp.set_locked(info);
-            COPR_REQ_ERROR
-                .with_label_values(&["lock"])
-                .inc_by(count)
-                .unwrap();
+            "lock"
         }
         Error::Outdated(deadline, now, scan_tag) => {
             let elapsed =
                 now.duration_since(deadline) + Duration::from_secs(request_max_handle_secs);
-            COPR_REQ_ERROR
-                .with_label_values(&["outdated"])
-                .inc_by(count)
-                .unwrap();
-            OUTDATED_REQ_WAIT_TIME
+            metrics
+                .outdate_time
                 .with_label_values(&[scan_tag])
                 .observe(elapsed.as_secs() as f64);
-
             resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
+            "outdated"
         }
         Error::Full(allow) => {
-            COPR_REQ_ERROR
-                .with_label_values(&["full"])
-                .inc_by(count)
-                .unwrap();
             let mut errorpb = errorpb::Error::new();
             errorpb.set_message(format!("running batches reach limit {}", allow));
             let mut server_is_busy_err = ServerIsBusy::new();
             server_is_busy_err.set_reason(ENDPOINT_IS_BUSY.to_owned());
             errorpb.set_server_is_busy(server_is_busy_err);
             resp.set_region_error(errorpb);
+            "full"
         }
         Error::Other(_) => {
             resp.set_other_error(format!("{}", e));
-            COPR_REQ_ERROR
-                .with_label_values(&["other"])
-                .inc_by(count)
-                .unwrap();
+            "other"
         }
-    }
+    };
+    metrics
+        .error_cnt
+        .with_label_values(&[tag])
+        .inc_by(count)
+        .unwrap();
     resp
 }
 
-pub fn err_resp(e: Error, request_max_handle_secs: u64) -> Response {
-    err_multi_resp(e, 1, request_max_handle_secs)
+pub fn err_resp(
+    e: Error,
+    metrics: &mut BasicLocalMetrics,
+    request_max_handle_secs: u64,
+) -> Response {
+    err_multi_resp(e, 1, metrics, request_max_handle_secs)
 }
 
 pub fn prefix_next(key: &[u8]) -> Vec<u8> {

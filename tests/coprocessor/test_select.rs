@@ -18,7 +18,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::i64;
 use std::thread;
 use std::time::Duration;
-use futures::Stream;
+use futures::{Future, Stream};
+use futures::sync::mpsc as futures_mpsc;
+use futures_cpupool::CpuPool;
 
 use tikv::coprocessor::*;
 use kvproto::kvrpcpb::Context;
@@ -26,7 +28,7 @@ use tikv::coprocessor::codec::{datum, table, Datum};
 use tikv::coprocessor::codec::datum::DatumDecoder;
 use tikv::util::codec::number::*;
 use tikv::storage::{Key, Mutation, ALL_CFS};
-use tikv::server::{Config, OnResponse};
+use tikv::server::{Config, CopStream, OnResponse};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
 use kvproto::coprocessor::{KeyRange, Request, Response};
@@ -1496,19 +1498,27 @@ fn handle_streaming_select<F>(
 where
     F: FnMut(&Response) + Send + 'static,
 {
-    let (tx, rx) = mpsc::channel();
-    let on_resp = OnResponse::Streaming(box move |s, _| {
-        for r in Stream::wait(s) {
-            let resp: Response = r.unwrap();
-            check_range(&resp);
-            assert!(!resp.get_data().is_empty());
-            let mut stream_resp = StreamResponse::new();
-            stream_resp.merge_from_bytes(resp.get_data()).unwrap();
-            tx.send(stream_resp).unwrap();
+    let (ftx, frx) = futures_mpsc::channel(16);
+    let callback = box move |s: CopStream<Response>, executor: Option<CpuPool>| {
+        let f = s.forward(ftx);
+        if let Some(executor) = executor {
+            return executor.spawn(f).forget();
         }
-    });
-    let req = RequestTask::new(req, on_resp, 100, 60).unwrap();
+        f.wait().unwrap();
+    };
+    let req = RequestTask::new(req, OnResponse::Streaming(callback), 100, 60).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();
+
+    let (tx, rx) = mpsc::channel();
+    for resp in frx.wait() {
+        let resp = resp.unwrap();
+        check_range(&resp);
+        assert!(!resp.get_data().is_empty());
+        let mut stream_resp = StreamResponse::new();
+        stream_resp.merge_from_bytes(resp.get_data()).unwrap();
+        tx.send(stream_resp).unwrap();
+    }
+    drop(tx);
     rx.into_iter().collect()
 }
 

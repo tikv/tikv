@@ -15,7 +15,7 @@ mod endpoint;
 mod metrics;
 mod dag;
 mod statistics;
-mod local_metrics;
+pub mod local_metrics;
 pub mod codec;
 
 pub use self::endpoint::err_resp;

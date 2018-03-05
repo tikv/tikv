@@ -44,6 +44,7 @@ use server::metrics::*;
 use server::{CopStream, Error, OnResponse};
 use raftstore::store::{Callback, Msg as StoreMessage};
 use coprocessor::{err_resp, EndPointTask, RequestTask};
+use coprocessor::local_metrics::BasicLocalMetrics;
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 
@@ -166,7 +167,7 @@ fn make_callback<T: Send + Debug + 'static>() -> (Box<FnBox(T) + Send>, oneshot:
     (box callback, rx)
 }
 
-fn make_stream_callback<T>(channel_size: usize) -> (OnResponse<T>, mpsc::Receiver<T>)
+pub fn make_stream_callback<T>(channel_size: usize) -> (OnResponse<T>, mpsc::Receiver<T>)
 where
     T: Send + Debug + 'static,
 {
@@ -835,7 +836,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         ) {
             Ok(req_task) => req_task,
             Err(e) => {
-                let response = err_resp(e, self.request_max_handle_secs);
+                let mut metrics = BasicLocalMetrics::default();
+                let response = err_resp(e, &mut metrics, self.request_max_handle_secs);
                 let future = sink.success(response)
                     .map(|_| timer.observe_duration())
                     .map_err(move |e| {
@@ -884,9 +886,12 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         ) {
             Ok(req_task) => req_task,
             Err(e) => {
-                let stream =
-                    stream::once::<_, GrpcError>(Ok(err_resp(e, self.request_max_handle_secs)))
-                        .map(|resp| (resp, WriteFlags::default()));
+                let mut metrics = BasicLocalMetrics::default();
+                let stream = stream::once::<_, GrpcError>(Ok(err_resp(
+                    e,
+                    &mut metrics,
+                    self.request_max_handle_secs,
+                ))).map(|resp| (resp, WriteFlags::default()));
                 let future = sink.send_all(stream)
                     .map(|_| timer.observe_duration())
                     .map_err(move |e| {
