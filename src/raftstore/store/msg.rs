@@ -166,6 +166,9 @@ pub enum Msg {
 
     // Compaction finished event
     CompactedEvent(CompactedEvent),
+    HalfSplitRegion {
+        region_id: u64,
+    },
 }
 
 impl fmt::Debug for Msg {
@@ -201,6 +204,9 @@ impl fmt::Debug for Msg {
                 region_id, region_size
             ),
             Msg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),
+            Msg::HalfSplitRegion { ref region_id, .. } => {
+                write!(fmt, "Half Split region {}", region_id)
+            }
         }
     }
 }
@@ -222,6 +228,12 @@ impl Msg {
             send_time: Instant::now(),
             batch: batch,
             on_finished: Callback::BatchRead(on_finished),
+        }
+    }
+
+    pub fn new_half_split_region(region_id: u64) -> Msg {
+        Msg::HalfSplitRegion {
+            region_id: region_id,
         }
     }
 }

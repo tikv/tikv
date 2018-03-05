@@ -444,6 +444,15 @@ impl<T: PdClient> Runner<T> {
                     );
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
                     send_admin_request(&ch, region_id, epoch, peer, req, Callback::None);
+                } else if resp.has_split_region() {
+                    PD_HEARTBEAT_COUNTER_VEC
+                        .with_label_values(&["split region"])
+                        .inc();
+                    info!("[region {}] try to split {:?}", region_id, epoch);
+                    let msg = Msg::new_half_split_region(region_id);
+                    if let Err(e) = ch.try_send(msg) {
+                        error!("[region {}] send halfsplit request err {:?}", region_id, e);
+                    }
                 } else {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                 }
