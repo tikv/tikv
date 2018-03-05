@@ -994,7 +994,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "1.1.0-dev.1"
+version = "1.1.0-dev.2"
 dependencies = [
  "backtrace 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "bitflags 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
