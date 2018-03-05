@@ -31,7 +31,7 @@ use futures::Future;
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = Box<Future<Item = T, Error = Error> + Send>;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct RegionStat {
     pub down_peers: Vec<pdpb::PeerStats>,
     pub pending_peers: Vec<metapb::Peer>,
