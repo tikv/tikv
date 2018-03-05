@@ -511,24 +511,25 @@ impl Storage {
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let _timer = {
+            let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
                 thread_ctx.collect_command_count_and_duration(CMD, priority, false)
             };
 
-            Self::async_snapshot(engine, &ctx).and_then(move |snapshot: Box<Snapshot>| {
-                let mut thread_ctx = ctxd.current_thread_context_mut();
-                let _t_process = thread_ctx.collect_processing_read_duration(CMD);
+            Self::async_snapshot(engine, &ctx)
+                .and_then(move |snapshot: Box<Snapshot>| {
+                    let mut thread_ctx = ctxd.current_thread_context_mut();
+                    let _t_process = thread_ctx.collect_processing_read_duration(CMD);
 
-                let mut statistics = Statistics::default();
-                let snap_store = SnapshotStore::new(
-                    snapshot,
-                    start_ts,
-                    ctx.get_isolation_level(),
-                    !ctx.get_not_fill_cache(),
-                );
-                let result = snap_store
+                    let mut statistics = Statistics::default();
+                    let snap_store = SnapshotStore::new(
+                        snapshot,
+                        start_ts,
+                        ctx.get_isolation_level(),
+                        !ctx.get_not_fill_cache(),
+                    );
+                    let result = snap_store
                         .get(&key, &mut statistics)
                         // map storage::txn::Error -> storage::Error
                         .map_err(Error::from)
@@ -537,11 +538,15 @@ impl Storage {
                             r
                         });
 
-                thread_ctx.collect_scan_count(CMD, &statistics);
-                thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
+                    thread_ctx.collect_scan_count(CMD, &statistics);
+                    thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
 
-                result
-            })
+                    result
+                })
+                .then(move |r| {
+                    _timer.observe_duration();
+                    r
+                })
         });
         match res {
             Ok(val) => box val,
@@ -561,24 +566,25 @@ impl Storage {
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let _timer = {
+            let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
                 thread_ctx.collect_command_count_and_duration(CMD, priority, false)
             };
 
-            Self::async_snapshot(engine, &ctx).and_then(move |snapshot: Box<Snapshot>| {
-                let mut thread_ctx = ctxd.current_thread_context_mut();
-                let _t_process = thread_ctx.collect_processing_read_duration(CMD);
+            Self::async_snapshot(engine, &ctx)
+                .and_then(move |snapshot: Box<Snapshot>| {
+                    let mut thread_ctx = ctxd.current_thread_context_mut();
+                    let _t_process = thread_ctx.collect_processing_read_duration(CMD);
 
-                let mut statistics = Statistics::default();
-                let snap_store = SnapshotStore::new(
-                    snapshot,
-                    start_ts,
-                    ctx.get_isolation_level(),
-                    !ctx.get_not_fill_cache(),
-                );
-                let result = snap_store
+                    let mut statistics = Statistics::default();
+                    let snap_store = SnapshotStore::new(
+                        snapshot,
+                        start_ts,
+                        ctx.get_isolation_level(),
+                        !ctx.get_not_fill_cache(),
+                    );
+                    let result = snap_store
                         .batch_get(&keys, &mut statistics)
                         // map storage::txn::Error -> storage::Error
                         .map_err(Error::from)
@@ -600,11 +606,15 @@ impl Storage {
                             r
                         });
 
-                thread_ctx.collect_scan_count(CMD, &statistics);
-                thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
+                    thread_ctx.collect_scan_count(CMD, &statistics);
+                    thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
 
-                result
-            })
+                    result
+                })
+                .then(move |r| {
+                    _timer.observe_duration();
+                    r
+                })
         });
         match res {
             Ok(val) => box val,
@@ -626,40 +636,45 @@ impl Storage {
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let _timer = {
+            let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
                 thread_ctx.collect_command_count_and_duration(CMD, priority, false)
             };
 
-            Self::async_snapshot(engine, &ctx).and_then(move |snapshot: Box<Snapshot>| {
-                let mut thread_ctx = ctxd.current_thread_context_mut();
-                let _t_process = thread_ctx.collect_processing_read_duration(CMD);
+            Self::async_snapshot(engine, &ctx)
+                .and_then(move |snapshot: Box<Snapshot>| {
+                    let mut thread_ctx = ctxd.current_thread_context_mut();
+                    let _t_process = thread_ctx.collect_processing_read_duration(CMD);
 
-                let snap_store = SnapshotStore::new(
-                    snapshot,
-                    start_ts,
-                    ctx.get_isolation_level(),
-                    !ctx.get_not_fill_cache(),
-                );
-                snap_store
-                    .scanner(ScanMode::Forward, options.key_only, None, None)
-                    .and_then(|mut scanner| {
-                        let res = scanner.scan(start_key, limit);
-                        let statistics = scanner.get_statistics();
-                        thread_ctx.collect_scan_count(CMD, statistics);
-                        thread_ctx.collect_read_flow(ctx.get_region_id(), statistics);
-                        res
-                    })
-                    .map_err(Error::from)
-                    .map(|results| {
-                        thread_ctx.collect_key_reads(CMD, results.len() as u64);
-                        results
-                            .into_iter()
-                            .map(|x| x.map_err(Error::from))
-                            .collect()
-                    })
-            })
+                    let snap_store = SnapshotStore::new(
+                        snapshot,
+                        start_ts,
+                        ctx.get_isolation_level(),
+                        !ctx.get_not_fill_cache(),
+                    );
+                    snap_store
+                        .scanner(ScanMode::Forward, options.key_only, None, None)
+                        .and_then(|mut scanner| {
+                            let res = scanner.scan(start_key, limit);
+                            let statistics = scanner.get_statistics();
+                            thread_ctx.collect_scan_count(CMD, statistics);
+                            thread_ctx.collect_read_flow(ctx.get_region_id(), statistics);
+                            res
+                        })
+                        .map_err(Error::from)
+                        .map(|results| {
+                            thread_ctx.collect_key_reads(CMD, results.len() as u64);
+                            results
+                                .into_iter()
+                                .map(|x| x.map_err(Error::from))
+                                .collect()
+                        })
+                })
+                .then(move |r| {
+                    _timer.observe_duration();
+                    r
+                })
         });
         match res {
             Ok(val) => box val,
@@ -859,26 +874,31 @@ impl Storage {
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let _timer = {
+            let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
                 thread_ctx.collect_command_count_and_duration(CMD, priority, true)
             };
 
-            Self::async_snapshot(engine, &ctx).and_then(move |snapshot: Box<Snapshot>| {
-                let mut thread_ctx = ctxd.current_thread_context_mut();
-                let _t_process = thread_ctx.collect_processing_read_duration(CMD);
+            Self::async_snapshot(engine, &ctx)
+                .and_then(move |snapshot: Box<Snapshot>| {
+                    let mut thread_ctx = ctxd.current_thread_context_mut();
+                    let _t_process = thread_ctx.collect_processing_read_duration(CMD);
 
-                // no scan_count for this kind of op.
+                    // no scan_count for this kind of op.
 
-                snapshot.get(&Key::from_encoded(key))
+                    snapshot.get(&Key::from_encoded(key))
                         // map storage::engine::Error -> storage::Error
                         .map_err(Error::from)
                         .map(|r| {
                             thread_ctx.collect_key_reads(CMD, 1);
                             r
                         })
-            })
+                })
+                .then(move |r| {
+                    _timer.observe_duration();
+                    r
+                })
         });
         match res {
             Ok(val) => box val,
@@ -902,7 +922,9 @@ impl Storage {
             vec![Modify::Put(CF_DEFAULT, Key::from_encoded(key), value)],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
-        RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["put"]).inc();
+        RAWKV_COMMAND_COUNTER_VEC
+            .with_label_values(&["raw_put"])
+            .inc();
         Ok(())
     }
 
@@ -922,7 +944,7 @@ impl Storage {
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
         RAWKV_COMMAND_COUNTER_VEC
-            .with_label_values(&["delete"])
+            .with_label_values(&["raw_delete"])
             .inc();
         Ok(())
     }
@@ -956,30 +978,38 @@ impl Storage {
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let _timer = {
+            let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
                 thread_ctx.collect_command_count_and_duration(CMD, priority, true)
             };
 
-            Self::async_snapshot(engine, &ctx).and_then(move |snapshot: Box<Snapshot>| {
-                let mut thread_ctx = ctxd.current_thread_context_mut();
-                let _t_process = thread_ctx.collect_processing_read_duration(CMD);
+            Self::async_snapshot(engine, &ctx)
+                .and_then(move |snapshot: Box<Snapshot>| {
+                    let mut thread_ctx = ctxd.current_thread_context_mut();
+                    let _t_process = thread_ctx.collect_processing_read_duration(CMD);
 
-                let mut statistics = Statistics::default();
-                let result =
-                    Storage::raw_scan(snapshot, &Key::from_encoded(key), limit, &mut statistics)
-                        .map_err(Error::from)
+                    let mut statistics = Statistics::default();
+                    let result = Storage::raw_scan(
+                        snapshot,
+                        &Key::from_encoded(key),
+                        limit,
+                        &mut statistics,
+                    ).map_err(Error::from)
                         .map(|r| {
                             // TODO: Should we collect statistics even when failed?
                             thread_ctx.collect_key_reads(CMD, r.len() as u64);
                             r
                         });
 
-                thread_ctx.collect_scan_count(CMD, &statistics);
+                    thread_ctx.collect_scan_count(CMD, &statistics);
 
-                result
-            })
+                    result
+                })
+                .then(move |r| {
+                    _timer.observe_duration();
+                    r
+                })
         });
         match res {
             Ok(val) => box val,
