@@ -405,11 +405,11 @@ fn test_region_heartbeat_on_leader_change() {
     rx.recv_timeout(LeaderChange::get_leader_interval())
         .unwrap();
 
-    let change_leader = |count| {
+    let heartbeat_on_leader_change = |count| {
         let mut leader = client.get_leader();
         for _ in 0..count {
             loop {
-                client.get_region_by_id(1).wait().ok();
+                let _ = client.get_region_by_id(1).wait();
                 let new = client.get_leader();
                 if leader != new {
                     leader = new;
@@ -427,8 +427,8 @@ fn test_region_heartbeat_on_leader_change() {
     };
 
     // Change PD leader once.
-    change_leader(1);
+    heartbeat_on_leader_change(1);
 
     // Change PD leader twice without update the heartbeat sender.
-    change_leader(2);
+    heartbeat_on_leader_change(2);
 }
