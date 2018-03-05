@@ -948,14 +948,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     "[region {}] merged peer [epoch: {:?}] receive a stale message {:?}",
                     region_id, region_epoch, msg_type
                 );
-                Self::handle_stale_msg(
-                    trans,
-                    msg,
-                    region_epoch,
-                    true,
-                    Some(local_state.get_merge_state().get_target().to_owned()),
-                    raft_metrics,
-                );
+
+                let merge_target = if util::find_peer(region, from_store_id).is_none() {
+                    // If a peer is isolated before pre-merge and conf remove, it should just
+                    // remove itself.
+                    None
+                } else {
+                    // Let stale peer decides whether it should wait for merging or just remove
+                    // itself.
+                    Some(local_state.get_merge_state().get_target().to_owned())
+                };
+                Self::handle_stale_msg(trans, msg, region_epoch, true, merge_target, raft_metrics);
                 return Ok(true);
             }
             // The region in this peer is already destroyed
@@ -1087,7 +1090,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         } else if range_end == gc_end {
             range_end = gc_start;
         }
-        assert!(range_start < range_end);
+        if range_start >= range_end {
+            panic!(
+                "{} invalid merge target {:?} and gc region {:?}",
+                self.tag, merge_target, gc_region
+            );
+        }
         let r = self.region_ranges
             .range((Excluded(range_start), Unbounded::<Key>))
             .map(|(_, &region_id)| self.region_peers[&region_id].region())
@@ -1802,8 +1810,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if r.get_id() != region_id {
                 return true;
             }
-            if commit != 0 {
-                assert_eq!(pending_commit, commit);
+            if commit != 0 && pending_commit != commit {
+                panic!(
+                    "{} rollback a wrong merge: {} != {}",
+                    peer.tag, pending_commit, commit
+                );
             }
             false
         });
