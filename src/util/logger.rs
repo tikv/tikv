@@ -20,7 +20,13 @@ use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
 
 pub use log::LogLevelFilter;
 
-const ENABLED_TARGETS: &[&str] = &["tikv::", "tests::", "benches::"];
+const ENABLED_TARGETS: &[&str] = &[
+    "tikv::",
+    "tests::",
+    "benches::",
+    "integrations::",
+    "failpoints::",
+];
 
 pub fn init_log<W: LogWriter + Sync + Send + 'static>(
     writer: W,
@@ -43,6 +49,7 @@ pub fn init_log_for_tikv_only<W: LogWriter + Sync + Send + 'static>(
 ) -> Result<(), SetLoggerError> {
     log::set_logger(|filter| {
         filter.set(level);
+        grpc::redirect_log();
         Box::new(Logger {
             level: level,
             writer: writer,
