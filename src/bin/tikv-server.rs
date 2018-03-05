@@ -42,21 +42,19 @@ mod signal_handler;
 #[cfg(unix)]
 mod profiling;
 
-use std::error::Error;
 use std::process;
 use std::fs::File;
 use std::usize;
 use std::path::Path;
 use std::sync::{mpsc, Arc};
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
-use std::io::Read;
 use std::env;
 use std::time::Duration;
 
 use clap::{App, Arg, ArgMatches};
 use fs2::FileExt;
 
-use tikv::config::{MetricConfig, TiKvConfig};
+use tikv::config::{MetricConfig, TiKvConfig, LAST_CONFIG_FILE};
 use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
@@ -351,6 +349,28 @@ fn configure_grpc_poll_strategy() {
     }
 }
 
+fn check_and_persist_critical_config(config: &TiKvConfig, matches: &ArgMatches) {
+    if let Some(path) = matches.value_of("config") {
+        let cfg_file = Path::new(path);
+        if let Some(cfg_dir) = cfg_file.parent() {
+            // Check current critical configurations with last time, if there are some
+            // changes, user must guarantee relevant works have been done.
+            let path_buf = cfg_dir.join(LAST_CONFIG_FILE);
+            if path_buf.exists() {
+                let last_cfg = TiKvConfig::from_file(&path_buf);
+                if let Err(e) = config.check_critical_cfg_with(&last_cfg) {
+                    fatal!("check critical config failed, err {:?}", e);
+                }
+            }
+
+            // Persist current critical configurations to file.
+            if let Err(e) = config.write_to_file(&path_buf) {
+                fatal!("persist critical config failed, err {:?}", e);
+            }
+        }
+    }
+}
+
 fn main() {
     let long_version: String = {
         let (hash, branch, time, rust_ver) = util::build_info();
@@ -474,21 +494,11 @@ fn main() {
 
     let mut config = matches
         .value_of("config")
-        .map_or_else(TiKvConfig::default, |path| {
-            File::open(&path)
-                .map_err::<Box<Error>, _>(|e| Box::new(e))
-                .and_then(|mut f| {
-                    let mut s = String::new();
-                    f.read_to_string(&mut s)?;
-                    let c = toml::from_str(&s)?;
-                    Ok(c)
-                })
-                .unwrap_or_else(|e| {
-                    fatal!("invalid configuration file {:?}: {}", path, e);
-                })
-        });
+        .map_or_else(TiKvConfig::default, |path| TiKvConfig::from_file(&path));
 
     overwrite_config_with_cmd_args(&mut config, &matches);
+
+    check_and_persist_critical_config(&config, &matches);
 
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validata()`,
