@@ -1016,9 +1016,15 @@ mod tests {
         })
     }
 
-    fn expect_fail<T>(done: Sender<i32>, id: i32) -> Callback<T> {
+    fn expect_fail<T>(done: Sender<i32>, id: i32, expect_err: &'static str) -> Callback<T> {
         Box::new(move |x: Result<T>| {
-            assert!(x.is_err());
+            match x {
+                Err(e) => {
+                    let err = format!("{:?}", e);
+                    assert_eq!(&err, expect_err);
+                }
+                _ => panic!("expect err: {}", expect_err),
+            }
             done.send(id).unwrap();
         })
     }
@@ -1134,7 +1140,11 @@ mod tests {
                 b"a".to_vec(),
                 1,
                 Options::default(),
-                expect_fail(tx.clone(), 0),
+                expect_fail(
+                    tx.clone(),
+                    0,
+                    "Txn(Mvcc(Engine(Request(message: \"RocksDb error\"))))",
+                ),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1318,7 +1328,15 @@ mod tests {
                 b"x".to_vec(),
                 105,
                 Options::default(),
-                expect_fail(tx.clone(), 6),
+                expect_fail(
+                    tx.clone(),
+                    6,
+                    concat!(
+                        "Txn(Mvcc(WriteConflict {",
+                        " start_ts: 105, conflict_ts: 110, key: [120, 0, 0, 0, 0, 0, 0, 0, 248],",
+                        " primary: [120] }))"
+                    ),
+                ),
             )
             .unwrap();
         rx.recv().unwrap();
