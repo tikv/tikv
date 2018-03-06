@@ -25,6 +25,7 @@ use server::readpool::{self, ReadPool};
 use self::metrics::*;
 use self::mvcc::Lock;
 use self::txn::CMD_BATCH_SIZE;
+use util;
 use util::worker::{self, Builder, Worker};
 use raftstore::store::engine::IterOption;
 
@@ -492,8 +493,12 @@ impl Storage {
         engine: Box<Engine>,
         ctx: &Context,
     ) -> impl Future<Item = Box<Snapshot + 'static>, Error = Error> {
-        engine
-            .future_snapshot(ctx)
+        let (callback, future) = util::future::paired_future_callback();
+        let val = engine.async_snapshot(ctx, callback);
+
+        future::result(val)
+            .and_then(|_| future.map_err(|cancel| EngineError::Other(box_err!(cancel))))
+            .and_then(|(_ctx, result)| result)
             // map storage::engine::Error -> storage::txn::Error -> storage::Error
             .map_err(txn::Error::from)
             .map_err(Error::from)

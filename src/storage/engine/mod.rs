@@ -16,7 +16,6 @@ use std::fmt::Debug;
 use std::cmp::Ordering;
 use std::boxed::FnBox;
 use std::time::Duration;
-use futures::{future, Future};
 
 pub use self::rocksdb::EngineRocksdb;
 use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
@@ -26,7 +25,6 @@ use kvproto::errorpb::Error as ErrorHeader;
 
 use config;
 
-use util;
 use util::rocksdb::CFOptions;
 
 mod rocksdb;
@@ -100,21 +98,6 @@ pub trait Engine: Send + Debug {
         match wait_op!(|cb| self.async_snapshot(ctx, cb), timeout) {
             Some((_, res)) => res,
             None => Err(Error::Timeout(timeout)),
-        }
-    }
-
-    fn future_snapshot(
-        &self,
-        ctx: &Context,
-    ) -> Box<Future<Item = Box<Snapshot + 'static>, Error = Error> + Send> {
-        let (callback, future) = util::future::paired_future_callback();
-        let val = self.async_snapshot(ctx, callback);
-        if let Err(e) = val {
-            box future::err(e)
-        } else {
-            box future
-                .map_err(|cancel| Error::Other(box_err!(cancel)))
-                .and_then(|(_ctx, result)| result)
         }
     }
 
