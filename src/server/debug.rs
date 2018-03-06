@@ -16,6 +16,7 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::time::Instant;
 
 use protobuf::{self, RepeatedField};
 
@@ -36,7 +37,7 @@ use storage::types::{truncate_ts, Key};
 use storage::mvcc::{Lock, Write, WriteType};
 use util::escape;
 use util::config::ReadableSize;
-use util::rocksdb::{compact_range, get_cf_handle};
+use util::rocksdb::{compact_files, compact_range, get_cf_handle};
 use util::worker::Worker;
 
 pub type Result<T> = result::Result<T, Error>;
@@ -225,6 +226,28 @@ impl Debugger {
         let start = if start.is_empty() { None } else { Some(start) };
         let end = if end.is_empty() { None } else { Some(end) };
         compact_range(db, handle, start, end, false);
+        Ok(())
+    }
+
+    /// Compact files in the cf of the db.
+    pub fn compact_files(&self, db: DBType, cf: &str, output_level: u32) -> Result<()> {
+        let start = Instant::now();
+        validate_db_and_cf(db, cf)?;
+        let db = self.get_db_from_type(db)?;
+        let handle = box_try!(get_cf_handle(db, cf));
+        if let Err(e) = compact_files(db, handle, output_level) {
+            error!(
+                "compact files in cf {} to level {}: {:?}",
+                cf, output_level, e
+            );
+            return Err(Error::Other(e.into()));
+        }
+        info!(
+            "compact files in cf {} to level {} takes {:?}",
+            cf,
+            output_level,
+            start.elapsed()
+        );
         Ok(())
     }
 
