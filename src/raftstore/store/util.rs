@@ -17,6 +17,7 @@ use std::{fmt, u64};
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_serverpb::RaftMessage;
+use protobuf::{self, Message, MessageStatic};
 use raftstore::{Error, Result};
 use raftstore::store::keys;
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
@@ -203,6 +204,20 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
     Ok(size)
 }
 
+/// Check if replicas of two regions are on the same stores.
+pub fn region_on_same_store(lhs: &metapb::Region, rhs: &metapb::Region) -> bool {
+    if lhs.get_peers().len() != rhs.get_peers().len() {
+        return false;
+    }
+    // Because every store can only have one replica for the same region,
+    // so just one round check is enough.
+    lhs.get_peers().iter().all(|lp| {
+        rhs.get_peers()
+            .iter()
+            .any(|rp| rp.get_store_id() == lp.get_store_id())
+    })
+}
+
 /// Lease records an expired time, for examining the current moment is in lease or not.
 /// It's dedicated to the Raft leader lease mechanism, contains either state of
 ///   1. Suspect Timestamp
@@ -321,6 +336,32 @@ impl fmt::Debug for Lease {
             None => fmter.finish(),
         }
     }
+}
+
+/// Parse data of entry `index`.
+// TODO: make sure received entries are not corrupted
+// If this happens, TiKV will panic and can't recover without extra effort.
+#[inline]
+pub fn parse_data_at<T: Message + MessageStatic>(data: &[u8], index: u64, tag: &str) -> T {
+    protobuf::parse_from_bytes::<T>(data).unwrap_or_else(|e| {
+        panic!("{} data is corrupted at {}: {:?}", tag, index, e);
+    })
+}
+
+/// Check if two regions are sibling.
+///
+/// They are sibling only when they share borders and don't overlap.
+pub fn is_sibling_regions(lhs: &metapb::Region, rhs: &metapb::Region) -> bool {
+    if lhs.get_id() == rhs.get_id() {
+        return false;
+    }
+    if lhs.get_start_key() == rhs.get_end_key() && !rhs.get_end_key().is_empty() {
+        return true;
+    }
+    if lhs.get_end_key() == rhs.get_start_key() && !lhs.get_end_key().is_empty() {
+        return true;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -658,5 +699,63 @@ mod tests {
         // Delete all in ["k2", "k4").
         delete_all_in_range(&db, b"kabcdefg2", b"kabcdefg4", true).unwrap();
         check_data(&db, &[cf], kvs_left.as_slice());
+    }
+
+    #[test]
+    fn test_on_same_store() {
+        let cases = vec![
+            (vec![2, 3, 4], vec![1, 2, 3], false),
+            (vec![2, 3, 1], vec![1, 2, 3], true),
+            (vec![2, 3, 4], vec![1, 2], false),
+            (vec![1, 2, 3], vec![1, 2, 3], true),
+        ];
+
+        for (s1, s2, exp) in cases {
+            let mut r1 = metapb::Region::new();
+            for (store_id, peer_id) in s1.into_iter().zip(0..) {
+                r1.mut_peers().push(new_peer(store_id, peer_id));
+            }
+            let mut r2 = metapb::Region::new();
+            for (store_id, peer_id) in s2.into_iter().zip(5..) {
+                r2.mut_peers().push(new_peer(store_id, peer_id));
+            }
+            let res = super::region_on_same_store(&r1, &r2);
+            assert_eq!(res, exp, "{:?} vs {:?}", r1, r2);
+        }
+    }
+
+    fn split(mut r: metapb::Region, key: &[u8]) -> (metapb::Region, metapb::Region) {
+        let mut r2 = r.clone();
+        r.set_end_key(key.to_owned());
+        r2.set_id(r.get_id() + 1);
+        r2.set_start_key(key.to_owned());
+        (r, r2)
+    }
+
+    macro_rules! check_sibling {
+        ($r1:expr, $r2:expr, $is_sibling:expr) => {
+            assert_eq!(is_sibling_regions($r1, $r2), $is_sibling);
+            assert_eq!(is_sibling_regions($r2, $r1), $is_sibling);
+        };
+    }
+
+    #[test]
+    fn test_region_sibling() {
+        let r1 = metapb::Region::new();
+        check_sibling!(&r1, &r1, false);
+
+        let (r1, r2) = split(r1, b"k1");
+        check_sibling!(&r1, &r2, true);
+
+        let (r2, r3) = split(r2, b"k2");
+        check_sibling!(&r2, &r3, true);
+
+        let (r3, r4) = split(r3, b"k3");
+        check_sibling!(&r3, &r4, true);
+        check_sibling!(&r1, &r2, true);
+        check_sibling!(&r2, &r3, true);
+        check_sibling!(&r1, &r3, false);
+        check_sibling!(&r2, &r4, false);
+        check_sibling!(&r1, &r4, false);
     }
 }
