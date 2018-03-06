@@ -307,6 +307,14 @@ impl<L, R> Either<L, R> {
     }
 
     #[inline]
+    pub fn as_mut(&mut self) -> Either<&mut L, &mut R> {
+        match *self {
+            Either::Left(ref mut l) => Either::Left(l),
+            Either::Right(ref mut r) => Either::Right(r),
+        }
+    }
+
+    #[inline]
     pub fn left(self) -> Option<L> {
         match self {
             Either::Left(l) => Some(l),
