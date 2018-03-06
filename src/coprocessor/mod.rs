@@ -20,12 +20,12 @@ pub mod codec;
 
 use std::result;
 use std::error;
+use std::time::Duration;
 
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::errorpb;
 
 use storage::{engine, mvcc, txn};
-use util::time::Instant;
 
 quick_error! {
     #[derive(Debug)]
@@ -38,7 +38,7 @@ quick_error! {
             description("key is locked")
             display("locked {:?}", l)
         }
-        Outdated(deadline: Instant, now: Instant, tag: &'static str) {
+        Outdated(elapsed: Duration, tag: &'static str) {
             description("request is outdated")
         }
         Full(allow: usize) {

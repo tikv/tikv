@@ -1417,7 +1417,7 @@ fn test_reverse() {
 
 pub fn handle_request(end_point: &Worker<EndPointTask>, req: Request) -> Response {
     let (tx, rx) = mpsc::channel();
-    let req = RequestTask::new(req, box move |r| tx.send(r).unwrap(), 100, 60);
+    let req = RequestTask::new(req, box move |r| tx.send(r).unwrap(), 100);
     end_point.schedule(EndPointTask::Request(req)).unwrap();
     rx.recv().unwrap()
 }
@@ -2009,7 +2009,7 @@ fn test_handle_truncate() {
             .where_expr(cond.clone())
             .build();
         let (tx, rx) = mpsc::channel();
-        let req = RequestTask::new(req, box move |r| tx.send(r).unwrap(), 100, 60);
+        let req = RequestTask::new(req, box move |r| tx.send(r).unwrap(), 100);
         end_point.schedule(EndPointTask::Request(req)).unwrap();
         let resp = rx.recv().unwrap();
         assert!(!resp.get_other_error().is_empty());
