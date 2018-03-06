@@ -769,8 +769,9 @@ mod tests {
     use tipb::expression::Expr;
     use tipb::executor::Executor;
 
-    use util::worker::{Builder as WorkerBuilder, FutureWorker};
+    use util::config::ReadableDuration;
     use util::time::Instant;
+    use util::worker::{Builder as WorkerBuilder, FutureWorker};
 
     #[test]
     fn test_get_reg_scan_tag() {
@@ -791,6 +792,7 @@ mod tests {
         let mut worker = WorkerBuilder::new("test-endpoint").batch_size(30).create();
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
+        cfg.end_point_request_max_handle_duration = ReadableDuration::secs(0);
         cfg.end_point_concurrency = 1;
         let pd_worker = FutureWorker::new("test-pd-worker");
         let end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
@@ -800,13 +802,13 @@ mod tests {
         req.set_tp(REQ_TYPE_DAG);
         let (tx, rx) = mpsc::channel();
         let on_resp = OnResponse::Unary(box move |msg| tx.send(msg).unwrap());
-        let mut task = RequestTask::new(req, on_resp, 1000).unwrap();
-        task.ctx.deadline -= Duration::from_secs(super::DEFAULT_REQUEST_MAX_HANDLE_SECS);
+        let task = RequestTask::new(req, on_resp, 1000).unwrap();
 
         worker.schedule(Task::Request(task)).unwrap();
         let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_other_error().is_empty());
         assert_eq!(resp.get_other_error(), super::OUTDATED_ERROR_MSG);
+        worker.stop();
     }
 
     #[test]
