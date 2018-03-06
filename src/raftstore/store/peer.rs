@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use time::Timespec;
 use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
-use protobuf::{self, Message, MessageStatic};
+use protobuf::{self, Message};
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
@@ -153,15 +153,6 @@ impl<'a, T> ReadyContext<'a, T> {
             ready_res: Vec::with_capacity(cap),
         }
     }
-}
-
-// TODO: make sure received entries are not corrupted
-// If this happens, TiKV will panic and can't recover without extra effort.
-#[inline]
-pub fn parse_data_at<T: Message + MessageStatic>(data: &[u8], index: u64, tag: &str) -> T {
-    protobuf::parse_from_bytes::<T>(data).unwrap_or_else(|e| {
-        panic!("{} data is corrupted at {}: {:?}", tag, index, e);
-    })
 }
 
 pub struct ConsistencyState {

@@ -40,7 +40,7 @@ use raftstore::store::msg::Callback;
 use raftstore::store::engine::{Mutable, Peekable, Snapshot};
 use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply_state,
                                      write_peer_state};
-use raftstore::store::peer::{check_epoch, parse_data_at, Peer};
+use raftstore::store::peer::{check_epoch, Peer};
 use raftstore::store::metrics::*;
 
 use super::metrics::*;
@@ -426,7 +426,7 @@ impl ApplyDelegate {
         let data = entry.get_data();
 
         if !data.is_empty() {
-            let cmd = parse_data_at(data, index, &self.tag);
+            let cmd = util::parse_data_at(data, index, &self.tag);
 
             if should_flush_to_engine(&cmd, apply_ctx.wb.count()) {
                 self.write_apply_state(&apply_ctx.wb);
@@ -475,8 +475,8 @@ impl ApplyDelegate {
     ) -> Option<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
-        let conf_change: ConfChange = parse_data_at(entry.get_data(), index, &self.tag);
-        let cmd = parse_data_at(conf_change.get_context(), index, &self.tag);
+        let conf_change: ConfChange = util::parse_data_at(entry.get_data(), index, &self.tag);
+        let cmd = util::parse_data_at(conf_change.get_context(), index, &self.tag);
         Some(
             self.process_raft_cmd(apply_ctx, index, term, cmd)
                 .map_or_else(
