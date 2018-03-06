@@ -200,7 +200,12 @@ struct ApplyContext<'a> {
     wb_last_bytes: u64,
     wb_last_keys: u64,
     committed_count: usize,
+    // `sync_log_hint` is a global hint indicate that whether synchronize wal
+    // when data is written to kv engine.
     sync_log_hint: bool,
+    // Even `sync_log_hint` is true, it doesn't mean wal has to be synced every time.
+    // This field indicates whether wal really needs to be synced (to make failure recover
+    // more easy, for example).
     sync_log: bool,
     exec_ctx: Option<ExecContext>,
     use_delete_range: bool,
@@ -260,7 +265,7 @@ impl<'a> ApplyContext<'a> {
         }
         delegate.update_metrics(self);
         if persistent {
-            self.flush(&delegate.engine);
+            self.write_to_db(&delegate.engine);
             if self.wb.is_none() {
                 self.wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
             }
@@ -271,7 +276,7 @@ impl<'a> ApplyContext<'a> {
     }
 
     /// Write all the changes into rocksdb.
-    fn flush(&mut self, engine: &DB) {
+    fn write_to_db(&mut self, engine: &DB) {
         if self.wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.sync_log_hint && self.sync_log);
@@ -1570,7 +1575,7 @@ impl Runner {
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
-        apply_ctx.flush(&self.db);
+        apply_ctx.write_to_db(&self.db);
 
         if !apply_ctx.apply_res.is_empty() {
             self.notifier
@@ -2028,7 +2033,7 @@ mod tests {
             .register_query_observer(1, Box::new(obs.clone()));
         let mut apply_ctx = ApplyContext::new(&host).use_delete_range(true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.flush(&db);
+        apply_ctx.write_to_db(&db);
         assert!(apply_ctx.apply_res.last().unwrap().exec_res.is_empty());
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
@@ -2052,7 +2057,7 @@ mod tests {
             .build();
         let mut apply_ctx = ApplyContext::new(&host).use_delete_range(true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.flush(&db);
+        apply_ctx.write_to_db(&db);
         let lock_handle = db.cf_handle(CF_LOCK).unwrap();
         assert_eq!(db.get_cf(lock_handle, &dk_k1).unwrap().unwrap(), b"v1");
         assert_eq!(
@@ -2072,7 +2077,7 @@ mod tests {
             .build();
         let mut apply_ctx = ApplyContext::new(&host).use_delete_range(true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.flush(&db);
+        apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_stale_epoch());
         assert_eq!(delegate.applied_index_term, 2);
@@ -2086,7 +2091,7 @@ mod tests {
             .build();
         let mut apply_ctx = ApplyContext::new(&host).use_delete_range(true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.flush(&db);
+        apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         assert_eq!(delegate.applied_index_term, 2);
@@ -2109,7 +2114,7 @@ mod tests {
         let size_diff_hint = delegate.metrics.size_diff_hint;
         let mut apply_ctx = ApplyContext::new(&host).use_delete_range(true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.flush(&db);
+        apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         // stale command should be cleared.
         assert!(resp.get_header().get_error().has_stale_command());
@@ -2130,7 +2135,7 @@ mod tests {
             .build();
         let mut apply_ctx = ApplyContext::new(&host).use_delete_range(true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_entry]);
-        apply_ctx.flush(&db);
+        apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
 
@@ -2141,7 +2146,7 @@ mod tests {
             .build();
         let mut apply_ctx = ApplyContext::new(&host).use_delete_range(true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
-        apply_ctx.flush(&db);
+        apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         assert_eq!(db.get(&dk_k3).unwrap().unwrap(), b"v1");
@@ -2155,7 +2160,7 @@ mod tests {
             .build();
         let mut apply_ctx = ApplyContext::new(&host).use_delete_range(true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
-        apply_ctx.flush(&db);
+        apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         assert!(db.get(&dk_k1).unwrap().is_none());
@@ -2173,7 +2178,7 @@ mod tests {
         }
         let mut apply_ctx = ApplyContext::new(&host).use_delete_range(true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, entries);
-        apply_ctx.flush(&db);
+        apply_ctx.write_to_db(&db);
         for _ in 0..WRITE_BATCH_MAX_KEYS {
             rx.try_recv().unwrap();
         }
