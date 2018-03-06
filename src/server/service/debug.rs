@@ -16,6 +16,7 @@ use grpc::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink}
 use futures::{future, stream, Future, Stream};
 use futures::sync::oneshot;
 use futures_cpupool::{Builder, CpuPool};
+use protobuf::text_format::print_to_string;
 use kvproto::debugpb_grpc;
 use kvproto::debugpb::*;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader,
@@ -38,6 +39,13 @@ fn error_to_status(e: Error) -> RpcStatus {
 
 fn on_grpc_error(tag: &'static str, e: &GrpcError) {
     error!("{} failed: {:?}", tag, e);
+}
+
+fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
+    let status = error_to_status(e);
+    let e = GrpcError::RpcFailure(status);
+    on_grpc_error(tag, &e);
+    e
 }
 
 #[derive(Clone)]
@@ -71,13 +79,6 @@ impl<T: RaftStoreRouter> Service<T> {
             Err(e) => sink.fail(error_to_status(e)),
         });
         ctx.spawn(f.map_err(move |e| on_grpc_error(tag, &e)));
-    }
-
-    fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
-        let status = error_to_status(e);
-        let e = GrpcError::RpcFailure(status);
-        on_grpc_error(tag, &e);
-        e
     }
 }
 
@@ -201,11 +202,11 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
         let to = req.take_to_key();
         let limit = req.get_limit();
         let future = future::result(debugger.scan_mvcc(&from, &to, limit))
-            .map_err(|e| Self::error_to_grpc_error("scan_mvcc", e))
+            .map_err(|e| error_to_grpc_error("scan_mvcc", e))
             .and_then(|iter| {
                 #[allow(deprecated)]
                 stream::iter(iter)
-                    .map_err(|e| Self::error_to_grpc_error("scan_mvcc", e))
+                    .map_err(|e| error_to_grpc_error("scan_mvcc", e))
                     .map(|(key, mvcc_info)| {
                         let mut resp = ScanMvccResponse::new();
                         resp.set_key(key);
@@ -342,6 +343,12 @@ fn region_detail<T: RaftStoreRouter>(
         .send_command(raft_cmd, cb)
         .map(|_| {
             rx.map_err(|e| Error::Other(box e)).and_then(move |mut r| {
+                if r.response.get_header().has_error() {
+                    let e = r.response.get_header().get_error();
+                    warn!("Debug::consistent-check got error: {:?}", e);
+                    let msg = print_to_string(e);
+                    return Err(Error::Other(msg.into()));
+                }
                 let detail = r.response.take_status_response().take_region_detail();
                 info!("Debug::consistent-check got region detail: {:?}", detail);
                 if detail.get_leader().get_store_id() != store_id {
