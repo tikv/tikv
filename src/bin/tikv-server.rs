@@ -143,7 +143,7 @@ fn check_system_config(config: &TiKvConfig) {
         warn!("environment variable `TZ` is missing, use `/etc/localtime`");
     }
 
-    // check rocksb data dir
+    // check rocksdb data dir
     if let Err(e) = util::config::check_data_dir(&config.storage.data_dir) {
         warn!("{:?}", e);
     }

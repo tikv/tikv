@@ -45,7 +45,7 @@ quick_error! {
             description(msg)
             display("config value error: {}", msg)
         }
-        FileSystem(msg:String) {
+        FileSystem(msg: String) {
             description(msg)
             display("{}", msg)
         }
