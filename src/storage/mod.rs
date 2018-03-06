@@ -892,11 +892,18 @@ impl Storage {
 
                     // no scan_count for this kind of op.
 
+                    let key_len = key.len();
                     snapshot.get(&Key::from_encoded(key))
                         // map storage::engine::Error -> storage::Error
                         .map_err(Error::from)
                         .map(|r| {
-                            thread_ctx.collect_key_reads(CMD, 1);
+                            if let Some(ref value) = r {
+                                let mut stats = Statistics::default();
+                                stats.data.flow_stats.read_keys = 1;
+                                stats.data.flow_stats.read_bytes = key_len + value.len();
+                                thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
+                                thread_ctx.collect_key_reads(CMD, 1);
+                            }
                             r
                         })
                 })
@@ -1002,8 +1009,19 @@ impl Storage {
                         &mut statistics,
                     ).map_err(Error::from)
                         .map(|r| {
-                            // TODO: Should we collect statistics even when failed?
-                            thread_ctx.collect_key_reads(CMD, r.len() as u64);
+                            let mut valid_keys = 0;
+                            let mut bytes_read = 0;
+                            let mut stats = Statistics::default();
+                            r.iter().for_each(|r| {
+                                if let Ok(ref pair) = *r {
+                                    valid_keys += 1;
+                                    bytes_read += pair.0.len() + pair.1.len();
+                                }
+                            });
+                            stats.data.flow_stats.read_keys = valid_keys;
+                            stats.data.flow_stats.read_bytes = bytes_read;
+                            thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
+                            thread_ctx.collect_key_reads(CMD, valid_keys as u64);
                             r
                         });
 
