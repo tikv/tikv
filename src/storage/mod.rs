@@ -506,7 +506,7 @@ impl Storage {
         key: Key,
         start_ts: u64,
     ) -> Box<Future<Item = Option<Value>, Error = Error> + Send> {
-        static CMD: &'static str = "get";
+        const CMD: &str = "get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
@@ -561,7 +561,7 @@ impl Storage {
         keys: Vec<Key>,
         start_ts: u64,
     ) -> Box<Future<Item = Vec<Result<KvPair>>, Error = Error> + Send> {
-        static CMD: &'static str = "batch_get";
+        const CMD: &str = "batch_get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
@@ -631,7 +631,7 @@ impl Storage {
         start_ts: u64,
         options: Options,
     ) -> Box<Future<Item = Vec<Result<KvPair>>, Error = Error> + Send> {
-        static CMD: &'static str = "scan";
+        const CMD: &str = "scan";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
@@ -869,7 +869,7 @@ impl Storage {
         ctx: Context,
         key: Vec<u8>,
     ) -> Box<Future<Item = Option<Vec<u8>>, Error = Error> + Send> {
-        static CMD: &'static str = "raw_get";
+        const CMD: &str = "raw_get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
@@ -973,7 +973,7 @@ impl Storage {
         key: Vec<u8>,
         limit: usize,
     ) -> Box<Future<Item = Vec<Result<KvPair>>, Error = Error> + Send> {
-        static CMD: &'static str = "raw_scan";
+        const CMD: &str = "raw_scan";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
