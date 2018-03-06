@@ -351,21 +351,21 @@ pub fn notify_stale_req(term: u64, cb: Callback) {
     cb.invoke_with_response(resp);
 }
 
-/// Check if a commit is needed to be issued before handle the command.
+/// Check if a write is needed to be issued before handle the command.
 fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
-    // When encounter ComputeHash cmd, we must commit the write batch to engine immediately.
+    // When encounter ComputeHash cmd, we must write the write batch to engine immediately.
     if cmd.has_admin_request()
         && cmd.get_admin_request().get_cmd_type() == AdminCmdType::ComputeHash
     {
         return true;
     }
 
-    // When write batch contains more than `recommended` keys, commit the batch to engine.
+    // When write batch contains more than `recommended` keys, write the batch to engine.
     if wb_keys >= WRITE_BATCH_MAX_KEYS {
         return true;
     }
 
-    // When encounter DeleteRange command, we must commit current write batch to engine first,
+    // When encounter DeleteRange command, we must write current write batch to engine first,
     // because current write batch may contains keys are covered by DeleteRange.
     for req in cmd.get_requests() {
         if req.has_delete_range() {
