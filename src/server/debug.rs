@@ -329,6 +329,10 @@ impl Debugger {
     }
 
     pub fn remove_failed_stores(&self, store_ids: Vec<u64>) -> Result<()> {
+        let store_id = self.get_store_id()?;
+        if store_ids.iter().any(|&s| s == store_id) {
+            return Err(Error::Other("Store in the failed list".into()));
+        }
         let wb = WriteBatch::new();
         let handle = box_try!(get_cf_handle(self.engines.kv_engine.as_ref(), CF_RAFT));
         let store_ids = HashSet::<u64>::from_iter(store_ids);
@@ -933,6 +937,7 @@ mod tests {
     #[test]
     fn test_remove_failed_stores() {
         let debugger = new_debugger();
+        debugger.set_store_id(100);
         let engine = debugger.engines.kv_engine.as_ref();
 
         // region 1 with peers at stores 11, 12, 13.
@@ -945,6 +950,10 @@ mod tests {
         assert_eq!(region_state.get_region().get_peers().len(), 2);
         let region_state = get_region_state(engine, 2);
         assert_eq!(region_state.get_region().get_peers().len(), 3);
+
+        // Should fail when the store itself is in the failed list.
+        init_region_state(engine, 3, &[100, 31, 32, 33]);
+        assert!(debugger.remove_failed_stores(vec![100]).is_err());
     }
 
     #[test]
