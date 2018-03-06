@@ -1016,14 +1016,14 @@ mod tests {
         })
     }
 
-    fn expect_fail<T>(done: Sender<i32>, id: i32, expect_err: &'static str) -> Callback<T> {
+    fn expect_fail<T, F>(done: Sender<i32>, id: i32, err_matcher: F) -> Callback<T>
+    where
+        F: FnOnce(Error) + Send + 'static,
+    {
         Box::new(move |x: Result<T>| {
             match x {
-                Err(e) => {
-                    let err = format!("{:?}", e);
-                    assert_eq!(&err, expect_err);
-                }
-                _ => panic!("expect err: {}", expect_err),
+                Err(e) => err_matcher(e),
+                _ => panic!("expect error"),
             }
             done.send(id).unwrap();
         })
@@ -1140,11 +1140,12 @@ mod tests {
                 b"a".to_vec(),
                 1,
                 Options::default(),
-                expect_fail(
-                    tx.clone(),
-                    0,
-                    "Txn(Mvcc(Engine(Request(message: \"RocksDb error\"))))",
-                ),
+                expect_fail(tx.clone(), 0, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
+                        ()
+                    }
+                    _ => panic!("unexpected error chain"),
+                }),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1328,15 +1329,10 @@ mod tests {
                 b"x".to_vec(),
                 105,
                 Options::default(),
-                expect_fail(
-                    tx.clone(),
-                    6,
-                    concat!(
-                        "Txn(Mvcc(WriteConflict {",
-                        " start_ts: 105, conflict_ts: 110, key: [120, 0, 0, 0, 0, 0, 0, 0, 248],",
-                        " primary: [120] }))"
-                    ),
-                ),
+                expect_fail(tx.clone(), 6, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict { .. })) => (),
+                    _ => panic!("unexpected error chain"),
+                }),
             )
             .unwrap();
         rx.recv().unwrap();
