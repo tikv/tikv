@@ -547,13 +547,19 @@ impl Peer {
     }
 
     pub fn step(&mut self, m: eraftpb::Message) -> Result<()> {
-        if self.is_leader() && m.get_from() != INVALID_ID {
-            self.peer_heartbeats.insert(m.get_from(), Instant::now());
+        let from_peer_id = m.get_from();
+        if self.is_leader() && from_peer_id != INVALID_ID {
+            self.peer_heartbeats.insert(from_peer_id, Instant::now());
         }
-        if let Entry::Occupied(e) = self.peer_pending_after.entry(m.get_from()) {
+        self.raft_group.step(m)?;
+
+        if self.peer_pending_after.is_empty() {
+            return Ok(());
+        }
+        if let Entry::Occupied(e) = self.peer_pending_after.entry(from_peer_id) {
             let status = self.raft_group.status();
             let truncated_idx = self.raft_group.get_store().truncated_index();
-            if let Some(progress) = status.progress.get(&m.get_from()) {
+            if let Some(progress) = status.progress.get(&from_peer_id) {
                 if progress.matched >= truncated_idx {
                     let effective_time = e.remove();
                     let elapsed = duration_to_sec(effective_time.elapsed());
@@ -561,7 +567,6 @@ impl Peer {
                 }
             }
         }
-        self.raft_group.step(m)?;
         Ok(())
     }
 

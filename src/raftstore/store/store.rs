@@ -1308,8 +1308,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
                 ConfChangeType::RemoveNode => {
                     // Remove this peer from cache.
-                    p.peer_heartbeats.remove(&cp.peer.get_id());
-                    p.remove_peer_from_cache(cp.peer.get_id());
+                    let peer_id = cp.peer.get_id();
+                    p.peer_heartbeats.remove(&peer_id);
+                    p.peer_pending_after.remove(&peer_id);
+                    p.remove_peer_from_cache(peer_id);
                 }
                 ConfChangeType::AddLearnerNode => unimplemented!(),
             }
