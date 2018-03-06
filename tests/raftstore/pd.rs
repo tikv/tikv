@@ -430,7 +430,10 @@ impl Cluster {
         None
     }
 
-    fn poll_heartbeat_responses_of(&mut self, store_id: u64) -> Vec<pdpb::RegionHeartbeatResponse> {
+    fn poll_heartbeat_responses_for(
+        &mut self,
+        store_id: u64,
+    ) -> Vec<pdpb::RegionHeartbeatResponse> {
         let mut resps = vec![];
         for (region_id, leader) in self.leaders.clone() {
             if leader.get_store_id() != store_id {
@@ -868,7 +871,7 @@ impl PdClient for TestPdClient {
                         Some(interval.then(|_| Ok(((), timer))))
                     }).map(move |_| {
                         let mut cluster = cluster1.wl();
-                        cluster.poll_heartbeat_responses_of(store_id)
+                        cluster.poll_heartbeat_responses_for(store_id)
                     }),
                 )
                 .map_err(|e| box_err!("failed to receive next heartbeat response: {:?}", e))
