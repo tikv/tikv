@@ -347,7 +347,7 @@ pub fn notify_stale_req(term: u64, cb: Callback) {
 }
 
 /// Check if a commit is needed to be issued before handle the command.
-fn should_commit_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
+fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
     // When encounter ComputeHash cmd, we must commit the write batch to engine immediately.
     if cmd.has_admin_request()
         && cmd.get_admin_request().get_cmd_type() == AdminCmdType::ComputeHash
@@ -504,7 +504,7 @@ impl ApplyDelegate {
         if !data.is_empty() {
             let cmd = parse_data_at(data, index, &self.tag);
 
-            if should_commit_to_engine(&cmd, apply_ctx.wb().count()) {
+            if should_write_to_engine(&cmd, apply_ctx.wb().count()) {
                 apply_ctx.commit(self, true);
             }
 
@@ -1720,13 +1720,13 @@ mod tests {
     }
 
     #[test]
-    fn test_should_commit_to_engine() {
+    fn test_should_write_to_engine() {
         // ComputeHash command
         let mut req = RaftCmdRequest::new();
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
         let wb = WriteBatch::new();
-        assert_eq!(should_commit_to_engine(&req, wb.count()), true);
+        assert_eq!(should_write_to_engine(&req, wb.count()), true);
 
         // Write batch keys reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::new();
@@ -1735,7 +1735,7 @@ mod tests {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();
         }
-        assert_eq!(should_commit_to_engine(&req, wb.count()), true);
+        assert_eq!(should_write_to_engine(&req, wb.count()), true);
 
         // Write batch keys not reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::new();
@@ -1744,7 +1744,7 @@ mod tests {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();
         }
-        assert_eq!(should_commit_to_engine(&req, wb.count()), false);
+        assert_eq!(should_write_to_engine(&req, wb.count()), false);
     }
 
     #[test]
