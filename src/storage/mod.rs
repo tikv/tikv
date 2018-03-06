@@ -1091,12 +1091,24 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         storage
+            .async_get(
+                Context::new(),
+                make_key(b"x"),
+                101,
+                expect_fail(tx.clone(), 2, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked { .. })) => (),
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
             .async_commit(
                 Context::new(),
                 vec![make_key(b"x")],
                 100,
                 101,
-                expect_ok(tx.clone(), 2),
+                expect_ok(tx.clone(), 3),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1105,7 +1117,7 @@ mod tests {
                 Context::new(),
                 make_key(b"x"),
                 100,
-                expect_get_none(tx.clone(), 3),
+                expect_get_none(tx.clone(), 4),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1114,7 +1126,7 @@ mod tests {
                 Context::new(),
                 make_key(b"x"),
                 101,
-                expect_get_val(tx.clone(), b"100".to_vec(), 4),
+                expect_get_val(tx.clone(), b"100".to_vec(), 5),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1122,10 +1134,10 @@ mod tests {
     }
 
     #[test]
-    fn test_put_with_err() {
+    fn test_cf_error() {
         let config = Config::default();
-        // New engine lack of some column families.
-        let engine = engine::new_local_engine(&config.data_dir, &["default"]).unwrap();
+        // New engine lacks normal column families.
+        let engine = engine::new_local_engine(&config.data_dir, &["foo"]).unwrap();
         let mut storage = Storage::from_engine(engine, &config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -1144,8 +1156,45 @@ mod tests {
                     Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
                         ()
                     }
-                    _ => panic!("unexpected error chain"),
+                    e => panic!("unexpected error chain: {:?}", e),
                 }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_get(
+                Context::new(),
+                make_key(b"x"),
+                1,
+                expect_fail(tx.clone(), 1, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Other(..)))) => (),
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_scan(
+                Context::new(),
+                make_key(b"x"),
+                1000,
+                1,
+                Options::default(),
+                expect_fail(tx.clone(), 2, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
+                        ()
+                    }
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_batch_get(
+                Context::new(),
+                vec![make_key(b"c"), make_key(b"d")],
+                1,
+                expect_batch_get_vals(tx.clone(), vec![None, None], 3),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1174,12 +1223,23 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         storage
+            .async_scan(
+                Context::new(),
+                make_key(b"\x00"),
+                1000,
+                5,
+                Options::default(),
+                expect_scan(tx.clone(), vec![None, None, None], 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
             .async_commit(
                 Context::new(),
                 vec![make_key(b"a"), make_key(b"b"), make_key(b"c")],
                 1,
                 2,
-                expect_ok(tx.clone(), 1),
+                expect_ok(tx.clone(), 2),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1197,7 +1257,7 @@ mod tests {
                         Some((b"b".to_vec(), b"bb".to_vec())),
                         Some((b"c".to_vec(), b"cc".to_vec())),
                     ],
-                    2,
+                    3,
                 ),
             )
             .unwrap();
@@ -1227,12 +1287,21 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         storage
+            .async_batch_get(
+                Context::new(),
+                vec![make_key(b"c"), make_key(b"d")],
+                2,
+                expect_batch_get_vals(tx.clone(), vec![None], 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
             .async_commit(
                 Context::new(),
                 vec![make_key(b"a"), make_key(b"b"), make_key(b"c")],
                 1,
                 2,
-                expect_ok(tx.clone(), 1),
+                expect_ok(tx.clone(), 2),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1248,7 +1317,7 @@ mod tests {
                         Some((b"b".to_vec(), b"bb".to_vec())),
                         Some((b"c".to_vec(), b"cc".to_vec())),
                     ],
-                    2,
+                    3,
                 ),
             )
             .unwrap();
@@ -1331,7 +1400,7 @@ mod tests {
                 Options::default(),
                 expect_fail(tx.clone(), 6, |e| match e {
                     Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict { .. })) => (),
-                    _ => panic!("unexpected error chain"),
+                    e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
             .unwrap();
