@@ -330,6 +330,7 @@ impl<'a> ApplyContextCore<'a> {
             exec_res: results,
             metrics: delegate.metrics.clone(),
             applied_index_term: delegate.applied_index_term,
+            merged: false,
         });
     }
 
@@ -1223,10 +1224,9 @@ impl ApplyDelegate {
                 )
             }),
         };
-        // Effective administration commands are filtered, so ExecResults can be
-        // ignored directly.
         delegate.handle_raft_committed_entries(ctx, entries);
         *ctx.delegates.get_mut(&source_region.get_id()).unwrap() = Some(delegate);
+        ctx.apply_res.last_mut().unwrap().merged = true;
         ctx.restore_stash(stash);
     }
 
@@ -1832,6 +1832,7 @@ pub struct ApplyRes {
     pub applied_index_term: u64,
     pub exec_res: Vec<ExecResult>,
     pub metrics: ApplyMetrics,
+    pub merged: bool,
 }
 
 #[derive(Debug)]

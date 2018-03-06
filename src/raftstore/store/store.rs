@@ -693,7 +693,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         p.post_apply(&res, &mut self.pending_raft_groups, &mut self.store_stat);
                     }
                     self.store_stat.lock_cf_bytes_written += res.metrics.lock_cf_written_bytes;
-                    self.on_ready_result(res.region_id, res.exec_res);
+                    self.on_ready_result(res.region_id, res.merged, res.exec_res);
                 },
                 Ok(ApplyTaskRes::Destroy(p)) => {
                     let store_id = self.store_id();
@@ -1882,14 +1882,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .insert(enc_end_key(&region), region.get_id());
     }
 
-    fn on_ready_result(&mut self, region_id: u64, exec_results: Vec<ExecResult>) {
+    fn on_ready_result(&mut self, region_id: u64, merged: bool, exec_results: Vec<ExecResult>) {
         // handle executing committed log results
         for result in exec_results {
             match result {
                 ExecResult::ChangePeer(cp) => self.on_ready_change_peer(region_id, cp),
-                ExecResult::CompactLog { first_index, state } => {
+                ExecResult::CompactLog { first_index, state } => if !merged {
                     self.on_ready_compact_log(region_id, first_index, state)
-                }
+                },
                 ExecResult::SplitRegion {
                     left,
                     right,
