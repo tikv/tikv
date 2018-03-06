@@ -510,7 +510,7 @@ impl Storage {
         ctx: Context,
         key: Key,
         start_ts: u64,
-    ) -> Box<Future<Item = Option<Value>, Error = Error> + Send> {
+    ) -> impl Future<Item = Option<Value>, Error = Error> {
         const CMD: &str = "get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
@@ -553,10 +553,10 @@ impl Storage {
                     r
                 })
         });
-        match res {
-            Ok(val) => box val,
-            Err(_) => box future::err(Error::SchedTooBusy),
-        }
+
+        future::result(res)
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
     }
 
     /// Batch get from the snapshot.
@@ -565,7 +565,7 @@ impl Storage {
         ctx: Context,
         keys: Vec<Key>,
         start_ts: u64,
-    ) -> Box<Future<Item = Vec<Result<KvPair>>, Error = Error> + Send> {
+    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "batch_get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
@@ -621,10 +621,10 @@ impl Storage {
                     r
                 })
         });
-        match res {
-            Ok(val) => box val,
-            Err(_) => box future::err(Error::SchedTooBusy),
-        }
+
+        future::result(res)
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
     }
 
     /// Scan a range starting with `start_key` up to `limit` rows from the snapshot.
@@ -635,7 +635,7 @@ impl Storage {
         limit: usize,
         start_ts: u64,
         options: Options,
-    ) -> Box<Future<Item = Vec<Result<KvPair>>, Error = Error> + Send> {
+    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "scan";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
@@ -681,10 +681,10 @@ impl Storage {
                     r
                 })
         });
-        match res {
-            Ok(val) => box val,
-            Err(_) => box future::err(Error::SchedTooBusy),
-        }
+
+        future::result(res)
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
     }
 
     pub fn async_pause(&self, ctx: Context, duration: u64, callback: Callback<()>) -> Result<()> {
@@ -873,7 +873,7 @@ impl Storage {
         &self,
         ctx: Context,
         key: Vec<u8>,
-    ) -> Box<Future<Item = Option<Vec<u8>>, Error = Error> + Send> {
+    ) -> impl Future<Item = Option<Vec<u8>>, Error = Error> {
         const CMD: &str = "raw_get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
@@ -905,10 +905,10 @@ impl Storage {
                     r
                 })
         });
-        match res {
-            Ok(val) => box val,
-            Err(_) => box future::err(Error::SchedTooBusy),
-        }
+
+        future::result(res)
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
     }
 
     pub fn async_raw_put(
@@ -977,7 +977,7 @@ impl Storage {
         ctx: Context,
         key: Vec<u8>,
         limit: usize,
-    ) -> Box<Future<Item = Vec<Result<KvPair>>, Error = Error> + Send> {
+    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_scan";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
@@ -1016,10 +1016,10 @@ impl Storage {
                     r
                 })
         });
-        match res {
-            Ok(val) => box val,
-            Err(_) => box future::err(Error::SchedTooBusy),
-        }
+
+        future::result(res)
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
     }
 
     pub fn async_mvcc_by_key(
