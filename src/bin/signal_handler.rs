@@ -68,7 +68,7 @@ mod imp {
                 }
                 SIGUSR1 => {
                     // Use SIGUSR1 to log metrics.
-                    info!("{}", metrics::dump_metrics());
+                    info!("{}", metrics::dump());
 
                     print_rocksdb_stats(&engines.kv_engine);
                     print_rocksdb_stats(&engines.raft_engine);

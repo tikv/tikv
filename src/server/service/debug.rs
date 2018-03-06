@@ -303,7 +303,7 @@ impl debugpb_grpc::Debug for Service {
         const TAG: &str = "debug_get_metrics";
 
         let f = self.pool.spawn_fn(move || {
-            let metrics_info = metrics::dump_metrics();
+            let metrics_info = metrics::dump();
             let mut resp = GetMetricsResponse::new();
             resp.set_metrics(metrics_info);
             Ok(resp)

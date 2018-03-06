@@ -59,7 +59,7 @@ pub fn run_prometheus(
     Some(handler)
 }
 
-pub fn dump_metrics() -> String {
+pub fn dump() -> String {
     let mut buffer = vec![];
     let encoder = TextEncoder::new();
     let metric_familys = prometheus::gather();
