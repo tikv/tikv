@@ -11,12 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{mem, usize};
+use std::usize;
 use std::time::Duration;
-use std::cell::{RefCell, RefMut};
-use std::sync::{mpsc, Arc};
-use std::iter::FromIterator;
-use std::thread::{self, ThreadId};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Debug, Display, Formatter};
 
@@ -65,76 +62,8 @@ const OUTDATED_ERROR_MSG: &str = "request outdated.";
 
 const ENDPOINT_IS_BUSY: &str = "endpoint is busy";
 
-struct CopContextInner {
-    exec_local_metrics: ExecLocalMetrics,
-    basic_local_metrics: BasicLocalMetrics,
-    timer: Instant,
-    timeout: Duration,
-}
-
-impl CopContextInner {
-    fn collect(&mut self, region_id: u64, scan_tag: &str, metrics: ExecutorMetrics) {
-        self.exec_local_metrics
-            .collect(scan_tag, region_id, metrics);
-
-        let new_timer = Instant::now_coarse();
-        if new_timer.duration_since(self.timer) >= self.timeout {
-            self.exec_local_metrics.flush();
-            self.basic_local_metrics.flush();
-            self.timer = new_timer;
-        }
-    }
-}
-
-struct CopContext(RefCell<CopContextInner>);
-
-impl CopContext {
-    fn new(pd_task_sender: FutureScheduler<PdTask>) -> Self {
-        let inner = CopContextInner {
-            exec_local_metrics: ExecLocalMetrics::new(pd_task_sender),
-            basic_local_metrics: BasicLocalMetrics::default(),
-            timer: Instant::now_coarse(),
-            timeout: Duration::from_secs(1),
-        };
-        CopContext(RefCell::new(inner))
-    }
-}
-
-unsafe impl Sync for CopContext {}
-
-#[derive(Clone)]
-struct CopContextPool {
-    cop_ctxs: Arc<HashMap<ThreadId, CopContext>>,
-}
-
-impl CopContextPool {
-    // Must be called in thread pool.
-    fn get_context(&self) -> &CopContext {
-        let thread_id = thread::current().id();
-        self.cop_ctxs.get(&thread_id).unwrap()
-    }
-}
-
-impl FromIterator<(ThreadId, CopContext)> for CopContextPool {
-    fn from_iter<T: IntoIterator<Item = (ThreadId, CopContext)>>(iter: T) -> Self {
-        let mut cop_ctxs = map![];
-        for (thread_id, cop_ctx) in iter {
-            cop_ctxs.insert(thread_id, cop_ctx);
-        }
-        let cop_ctxs = Arc::new(cop_ctxs);
-        CopContextPool { cop_ctxs: cop_ctxs }
-    }
-}
-
-impl Debug for CopContextPool {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "CopContextPool")
-    }
-}
-
 struct ExecutorPool {
     pool: CpuPool,
-    contexts: CopContextPool,
 }
 
 pub struct Host {
@@ -196,25 +125,16 @@ impl Host {
         name_prefix: &str,
         pool_size: usize,
         thread_stack_size: usize,
-        pd_task_sender: FutureScheduler<PdTask>,
+        _pd_task_sender: FutureScheduler<PdTask>,
     ) -> ExecutorPool {
-        let (tx, rx) = mpsc::sync_channel(pool_size);
         let cpu_pool = {
             CpuPoolBuilder::new()
                 .name_prefix(name_prefix)
                 .pool_size(pool_size)
                 .stack_size(thread_stack_size)
-                .after_start(move || {
-                    let thread_id = thread::current().id();
-                    let cop_ctx = CopContext::new(pd_task_sender.clone());
-                    tx.send((thread_id, cop_ctx)).unwrap();
-                })
                 .create()
         };
-        ExecutorPool {
-            pool: cpu_pool,
-            contexts: CopContextPool::from_iter(rx),
-        }
+        ExecutorPool { pool: cpu_pool }
     }
 
     #[inline]
@@ -253,7 +173,6 @@ impl Host {
             CommandPri::Normal => &mut self.pool,
         };
         let pool = &pool_and_ctx_pool.pool;
-        tracker.attach_ctx_pool(pool_and_ctx_pool.contexts.clone());
 
         match cop_req {
             CopRequest::DAG(dag) => {
@@ -266,7 +185,7 @@ impl Host {
                     let do_request = move || {
                         tracker.record_wait();
                         let mut resp = ctx.handle_request(batch_row_limit).unwrap_or_else(|e| {
-                            let mut metrics = tracker.get_basic_metrics();
+                            let mut metrics = BasicLocalMetrics::default();
                             err_resp(e, &mut metrics)
                         });
                         let mut exec_metrics = ExecutorMetrics::default();
@@ -285,7 +204,7 @@ impl Host {
                     tracker.record_wait();
                     let (mut item, finished) = ctx.handle_streaming_request(batch_row_limit)
                         .unwrap_or_else(|e| {
-                            let mut metrics = tracker.get_basic_metrics();
+                            let mut metrics = BasicLocalMetrics::default();
                             (Some(err_resp(e, &mut metrics)), true)
                         });
                     let mut exec_metrics = ExecutorMetrics::default();
@@ -303,7 +222,7 @@ impl Host {
                 let do_request = move || {
                     tracker.record_wait();
                     let mut resp = ctx.handle_request(&mut exec_metrics).unwrap_or_else(|e| {
-                        let mut metrics = tracker.get_basic_metrics();
+                        let mut metrics = BasicLocalMetrics::default();
                         err_resp(e, &mut metrics)
                     });
                     tracker.record_handle(Some(&mut resp), exec_metrics);
@@ -385,7 +304,6 @@ impl ReqContext {
 #[derive(Debug)]
 struct RequestTracker {
     running_task_count: Option<Arc<AtomicUsize>>,
-    ctx_pool: Option<CopContextPool>,
     record_handle_time: bool,
     record_scan_detail: bool,
 
@@ -413,17 +331,6 @@ impl RequestTracker {
         self.running_task_count = Some(running_task_count);
     }
 
-    fn attach_ctx_pool(&mut self, ctx_pool: CopContextPool) {
-        self.ctx_pool = Some(ctx_pool);
-    }
-
-    // This function will be only called in thread pool.
-    fn get_basic_metrics(&self) -> RefMut<BasicLocalMetrics> {
-        let ctx_pool = self.ctx_pool.as_ref().unwrap();
-        let ctx = ctx_pool.get_context().0.borrow_mut();
-        RefMut::map(ctx, |c| &mut c.basic_local_metrics)
-    }
-
     // This function will be only called in thread pool.
     fn record_wait(&mut self) {
         let stop_first_wait = self.wait_time.is_none();
@@ -433,10 +340,8 @@ impl RequestTracker {
         self.handle_start = Some(now);
 
         if stop_first_wait {
-            let ctx_pool = self.ctx_pool.as_ref().unwrap();
-            let mut cop_ctx = ctx_pool.get_context().0.borrow_mut();
-            cop_ctx
-                .basic_local_metrics
+            let mut basic_local_metrics = BasicLocalMetrics::default();
+            basic_local_metrics
                 .wait_time
                 .with_label_values(&[self.scan_tag])
                 .observe(self.wait_time.unwrap());
@@ -511,27 +416,23 @@ impl Drop for RequestTracker {
             return;
         }
 
-        let ctx_pool = self.ctx_pool.take().unwrap();
-        let mut cop_ctx = ctx_pool.get_context().0.borrow_mut();
+        // TODO: use local metrics.
+        let mut basic_local_metrics = BasicLocalMetrics::default();
 
-        cop_ctx
-            .basic_local_metrics
+        basic_local_metrics
             .req_time
             .with_label_values(&[self.scan_tag])
             .observe(query_time);
-        cop_ctx
-            .basic_local_metrics
+        basic_local_metrics
             .handle_time
             .with_label_values(&[self.scan_tag])
             .observe(self.total_handle_time);
-        cop_ctx
-            .basic_local_metrics
+        basic_local_metrics
             .scan_keys
             .with_label_values(&[self.scan_tag])
             .observe(self.exec_metrics.cf_stats.total_op_count() as f64);
 
-        let exec_metrics = mem::replace(&mut self.exec_metrics, ExecutorMetrics::default());
-        cop_ctx.collect(self.region_id, self.scan_tag, exec_metrics);
+        // TODO: collect self.exec_metrics.
     }
 }
 
@@ -585,7 +486,6 @@ impl RequestTask {
 
         let request_tracker = RequestTracker {
             running_task_count: None,
-            ctx_pool: None,
             record_handle_time: req.get_context().get_handle_time(),
             record_scan_detail: req.get_context().get_scan_detail(),
 
@@ -875,6 +775,7 @@ mod tests {
     #[test]
     fn test_get_reg_scan_tag() {
         let mut ctx = ReqContext {
+            start_time: Instant::now_coarse(),
             deadline: Instant::now_coarse(),
             isolation_level: IsolationLevel::RC,
             fill_cache: true,
@@ -899,8 +800,7 @@ mod tests {
         req.set_tp(REQ_TYPE_DAG);
         let (tx, rx) = mpsc::channel();
         let on_resp = OnResponse::Unary(box move |msg| tx.send(msg).unwrap());
-        let mut task =
-            RequestTask::new(req, on_resp, 1000, super::DEFAULT_REQUEST_MAX_HANDLE_SECS).unwrap();
+        let mut task = RequestTask::new(req, on_resp, 1000).unwrap();
         task.ctx.deadline -= Duration::from_secs(super::DEFAULT_REQUEST_MAX_HANDLE_SECS);
 
         worker.schedule(Task::Request(task)).unwrap();
@@ -936,8 +836,7 @@ mod tests {
                 let _ = tx.send(msg); // To avoid panic if rx is closed.
             });
 
-            let task = RequestTask::new(req, on_resp, 1000, super::DEFAULT_REQUEST_MAX_HANDLE_SECS)
-                .unwrap();
+            let task = RequestTask::new(req, on_resp, 1000).unwrap();
             worker.schedule(Task::Request(task)).unwrap();
         }
         for _ in 0..120 {
@@ -967,12 +866,7 @@ mod tests {
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(dag.write_to_bytes().unwrap());
 
-        let err = RequestTask::new(
-            req,
-            OnResponse::Unary(box |_| ()),
-            5,
-            super::DEFAULT_REQUEST_MAX_HANDLE_SECS,
-        ).unwrap_err();
+        let err = RequestTask::new(req, OnResponse::Unary(box |_| ()), 5).unwrap_err();
         let s = format!("{:?}", err);
         assert!(
             s.contains("Recursion"),

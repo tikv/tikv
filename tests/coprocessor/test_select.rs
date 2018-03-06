@@ -1506,7 +1506,7 @@ where
         }
         f.wait().unwrap();
     };
-    let req = RequestTask::new(req, OnResponse::Streaming(callback), 100, 60).unwrap();
+    let req = RequestTask::new(req, OnResponse::Streaming(callback), 100).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();
 
     let (tx, rx) = mpsc::channel();
