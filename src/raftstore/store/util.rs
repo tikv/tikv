@@ -339,8 +339,11 @@ impl fmt::Debug for Lease {
 }
 
 /// Parse data of entry `index`.
+///
+/// # Panics
+///
+/// If `data` is corrupted, this function will panic.
 // TODO: make sure received entries are not corrupted
-// If this happens, TiKV will panic and can't recover without extra effort.
 #[inline]
 pub fn parse_data_at<T: Message + MessageStatic>(data: &[u8], index: u64, tag: &str) -> T {
     protobuf::parse_from_bytes::<T>(data).unwrap_or_else(|e| {
@@ -732,30 +735,28 @@ mod tests {
         (r, r2)
     }
 
-    macro_rules! check_sibling {
-        ($r1:expr, $r2:expr, $is_sibling:expr) => {
-            assert_eq!(is_sibling_regions($r1, $r2), $is_sibling);
-            assert_eq!(is_sibling_regions($r2, $r1), $is_sibling);
-        };
+    fn check_sibling(r1: &metapb::Region, r2: &metapb::Region, is_sibling: bool) {
+        assert_eq!(is_sibling_regions(r1, r2), is_sibling);
+        assert_eq!(is_sibling_regions(r2, r1), is_sibling);
     }
 
     #[test]
     fn test_region_sibling() {
         let r1 = metapb::Region::new();
-        check_sibling!(&r1, &r1, false);
+        check_sibling(&r1, &r1, false);
 
         let (r1, r2) = split(r1, b"k1");
-        check_sibling!(&r1, &r2, true);
+        check_sibling(&r1, &r2, true);
 
         let (r2, r3) = split(r2, b"k2");
-        check_sibling!(&r2, &r3, true);
+        check_sibling(&r2, &r3, true);
 
         let (r3, r4) = split(r3, b"k3");
-        check_sibling!(&r3, &r4, true);
-        check_sibling!(&r1, &r2, true);
-        check_sibling!(&r2, &r3, true);
-        check_sibling!(&r1, &r3, false);
-        check_sibling!(&r2, &r4, false);
-        check_sibling!(&r1, &r4, false);
+        check_sibling(&r3, &r4, true);
+        check_sibling(&r1, &r2, true);
+        check_sibling(&r2, &r3, true);
+        check_sibling(&r1, &r3, false);
+        check_sibling(&r2, &r4, false);
+        check_sibling(&r1, &r4, false);
     }
 }
