@@ -519,7 +519,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.collect_command_count_and_duration(CMD, priority, false)
+                thread_ctx.start_command_duration_timer(CMD, priority, false)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -574,7 +574,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.collect_command_count_and_duration(CMD, priority, false)
+                thread_ctx.start_command_duration_timer(CMD, priority, false)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -644,7 +644,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.collect_command_count_and_duration(CMD, priority, false)
+                thread_ctx.start_command_duration_timer(CMD, priority, false)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -882,7 +882,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.collect_command_count_and_duration(CMD, priority, true)
+                thread_ctx.start_command_duration_timer(CMD, priority, true)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -993,7 +993,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.collect_command_count_and_duration(CMD, priority, true)
+                thread_ctx.start_command_duration_timer(CMD, priority, true)
             };
 
             Self::async_snapshot(engine, &ctx)

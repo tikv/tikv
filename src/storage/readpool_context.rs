@@ -62,7 +62,7 @@ impl Context {
     }
 
     #[inline]
-    pub fn collect_command_count_and_duration(
+    pub fn start_command_duration_timer(
         &mut self,
         cmd: &str,
         priority: readpool::Priority,
