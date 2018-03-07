@@ -82,7 +82,7 @@ impl Context {
     }
 
     #[inline]
-    pub fn collect_processing_read_duration(&mut self, cmd: &str) -> LocalHistogramTimer {
+    pub fn start_processing_read_duration_timer(&mut self, cmd: &str) -> LocalHistogramTimer {
         self.processing_read_duration
             .with_label_values(&[cmd])
             .start_coarse_timer()

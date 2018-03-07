@@ -525,7 +525,7 @@ impl Storage {
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.collect_processing_read_duration(CMD);
+                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
@@ -580,7 +580,7 @@ impl Storage {
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.collect_processing_read_duration(CMD);
+                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
@@ -650,7 +650,7 @@ impl Storage {
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.collect_processing_read_duration(CMD);
+                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -888,7 +888,7 @@ impl Storage {
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.collect_processing_read_duration(CMD);
+                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
                     // no scan_count for this kind of op.
 
@@ -999,7 +999,7 @@ impl Storage {
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.collect_processing_read_duration(CMD);
+                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
                     let mut statistics = Statistics::default();
                     let result = Storage::raw_scan(
