@@ -62,10 +62,11 @@ use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::security::SecurityManager;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::FutureWorker;
-use tikv::storage::DEFAULT_ROCKSDB_SUB_DIR;
+use tikv::storage::{self, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::resolve;
+use tikv::server::readpool::ReadPool;
 use tikv::raftstore::store::{self, new_compaction_listener, Engines, SnapManagerBuilder};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
@@ -178,6 +179,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), significant_msg_sender);
     let compaction_listener = new_compaction_listener(store_sendch.clone());
 
+    // Create pd client and pd worker
+    let pd_client = Arc::new(pd_client);
+    let pd_worker = FutureWorker::new("pd worker");
+    let (mut worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
+        .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
+
     // Create kv engine, storage.
     let mut kv_db_opts = cfg.rocksdb.build_opt();
     kv_db_opts.add_event_listener(compaction_listener);
@@ -186,7 +193,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {:?}", s)),
     );
-    let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage)
+    let pd_sender = pd_worker.scheduler();
+    let read_pool = ReadPool::new(&cfg.readpool, || {
+        let pd_sender = pd_sender.clone();
+        move || storage::ReadPoolContext::new(Some(pd_sender.clone()))
+    });
+    let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage, read_pool)
         .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 
     // Create raft engine.
@@ -201,12 +213,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     );
     let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
 
-    // Create pd client and pd work, snapshot manager, server.
-    let pd_client = Arc::new(pd_client);
-    let pd_worker = FutureWorker::new("pd worker");
-    let (mut worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
-        .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
-
+    // Create snapshot manager, server.
     let snap_mgr = SnapManagerBuilder::default()
         .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0)
         .max_total_size(cfg.server.snap_max_total_size.0)
