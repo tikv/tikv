@@ -93,6 +93,10 @@ impl Debugger {
         Debugger { engines }
     }
 
+    pub fn get_engine(&self) -> &Engines {
+        &self.engines
+    }
+
     /// Get all regions holding region meta data from raft CF in KV storage.
     pub fn get_all_meta_regions(&self) -> Result<Vec<u64>> {
         let db = &self.engines.kv_engine;

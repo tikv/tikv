@@ -21,7 +21,7 @@ use fail;
 
 use raftstore::store::Engines;
 use server::debug::{Debugger, Error};
-use util::metrics;
+use util::{malloc, metrics, rocksdb_stats};
 
 #[derive(Clone)]
 pub struct Service {
@@ -297,15 +297,21 @@ impl debugpb_grpc::Debug for Service {
     fn get_metrics(
         &self,
         ctx: RpcContext,
-        _: GetMetricsRequest,
+        req: GetMetricsRequest,
         sink: UnarySink<GetMetricsResponse>,
     ) {
         const TAG: &str = "debug_get_metrics";
 
+        let debugger = self.debugger.clone();
         let f = self.pool.spawn_fn(move || {
-            let metrics_info = metrics::dump();
             let mut resp = GetMetricsResponse::new();
-            resp.set_metrics(metrics_info);
+            resp.set_prometheus(metrics::dump());
+            if req.get_complete() {
+                let engines = debugger.get_engine();
+                resp.set_rocksdb_kv(rocksdb_stats::dump(&engines.kv_engine));
+                resp.set_rocksdb_raft(rocksdb_stats::dump(&engines.raft_engine));
+                resp.set_malloc(malloc::dump_stats());
+            }
             Ok(resp)
         });
 

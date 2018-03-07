@@ -13,48 +13,12 @@
 
 #[cfg(unix)]
 mod imp {
-    use std::{ptr, slice};
-    use std::sync::Arc;
-    use libc::{self, c_char, c_int, c_void};
+    use libc::c_int;
 
-    use rocksdb::DB;
     use profiling;
 
     use tikv::raftstore::store::Engines;
-    use tikv::util::metrics;
-
-    const ROCKSDB_DB_STATS_KEY: &str = "rocksdb.dbstats";
-    const ROCKSDB_CF_STATS_KEY: &str = "rocksdb.cfstats";
-
-    extern "C" {
-        #[cfg_attr(target_os = "macos", link_name = "je_malloc_stats_print")]
-        fn malloc_stats_print(
-            write_cb: extern "C" fn(*mut c_void, *const c_char),
-            cbopaque: *mut c_void,
-            opts: *const c_char,
-        );
-    }
-
-    extern "C" fn write_cb(printer: *mut c_void, msg: *const c_char) {
-        unsafe {
-            let buf = &mut *(printer as *mut Vec<u8>);
-            let len = libc::strlen(msg);
-            let bytes = slice::from_raw_parts(msg as *const u8, len);
-            buf.extend_from_slice(bytes);
-        }
-    }
-
-    fn print_malloc_stats() {
-        let mut buf = Vec::new();
-        unsafe {
-            malloc_stats_print(
-                write_cb,
-                &mut buf as *mut Vec<u8> as *mut c_void,
-                ptr::null(),
-            )
-        }
-        info!("{}", String::from_utf8_lossy(&buf));
-    }
+    use tikv::util::{malloc, metrics, rocksdb_stats};
 
     pub fn handle_signal(engines: Engines) {
         use signal::trap::Trap;
@@ -69,43 +33,14 @@ mod imp {
                 SIGUSR1 => {
                     // Use SIGUSR1 to log metrics.
                     info!("{}", metrics::dump());
-
-                    print_rocksdb_stats(&engines.kv_engine);
-                    print_rocksdb_stats(&engines.raft_engine);
-                    print_malloc_stats();
+                    info!("{}", rocksdb_stats::dump(&engines.kv_engine));
+                    info!("{}", rocksdb_stats::dump(&engines.raft_engine));
+                    info!("{}", malloc::dump_stats());
                 }
                 SIGUSR2 => profiling::dump_prof(None),
                 // TODO: handle more signal
                 _ => unreachable!(),
             }
-        }
-    }
-
-    fn print_rocksdb_stats(engine: &Arc<DB>) {
-        // Log common rocksdb stats.
-        for name in engine.cf_names() {
-            let handler = engine.cf_handle(name).unwrap();
-            if let Some(v) = engine.get_property_value_cf(handler, ROCKSDB_CF_STATS_KEY) {
-                info!("{}", v)
-            }
-        }
-
-        if let Some(v) = engine.get_property_value(ROCKSDB_DB_STATS_KEY) {
-            info!("{}", v)
-        }
-
-        // Log more stats if enable_statistics is true.
-        if let Some(v) = engine.get_statistics() {
-            info!("{}", v)
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        #[test]
-        fn test_stats_print() {
-            // just print the data, ensure it doesn't core.
-            super::print_malloc_stats()
         }
     }
 }
