@@ -34,6 +34,12 @@ lazy_static! {
             exponential_buckets(1024.0, 2.0, 22).unwrap() // 1024,1024*2^1,..,4G
         ).unwrap();
 
+    pub static ref SNAP_MEM_USAGE: Gauge =
+        register_gauge!(
+            "tikv_server_snapshot_mem_usage",
+            "Memory usage of snapshot"
+        ).unwrap();
+
     pub static ref GRPC_MSG_HISTOGRAM_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_grpc_msg_duration_seconds",

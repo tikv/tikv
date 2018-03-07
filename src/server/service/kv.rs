@@ -820,6 +820,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                         // TODO: Remove PipeBuffer or take good use of it.
                         let chunk_size = chunk.get_data().len();
                         SNAP_CHUNK_SIZE_HISTOGRAM.observe(chunk_size as f64);
+                        SNAP_MEM_USAGE.add(chunk_size as f64);
                         let mut b = PipeBuffer::new(chunk_size);
                         b.write_all(chunk.get_data()).unwrap();
                         sched
