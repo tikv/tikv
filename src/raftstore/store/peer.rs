@@ -22,7 +22,7 @@ use time::Timespec;
 use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::{self, Message};
-use kvproto::metapb::{self, RegionEpoch};
+use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
                           RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse};
@@ -217,11 +217,6 @@ pub struct Peer {
     apply_scheduler: Scheduler<ApplyTask>,
 
     pub pending_remove: bool,
-    // A marker used to indicate if the peer is going to apply a snapshot
-    // with different range.
-    // It assumes that when a peer is going to accept snapshot, it can never
-    // captch up by normal log replication.
-    pub pending_cross_snap: Option<RegionEpoch>,
     pub pending_merge: Option<MergeState>,
 
     marked_to_be_checked: bool,
@@ -331,7 +326,6 @@ impl Peer {
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
             marked_to_be_checked: false,
-            pending_cross_snap: None,
             pending_merge: None,
             leader_missing_time: Some(Instant::now()),
             tag: tag,

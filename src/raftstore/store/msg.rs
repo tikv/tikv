@@ -167,6 +167,10 @@ pub enum Msg {
 
     // Compaction finished event
     CompactedEvent(CompactedEvent),
+
+    MergeFail {
+        region_id: u64,
+    },
 }
 
 impl fmt::Debug for Msg {
@@ -202,6 +206,7 @@ impl fmt::Debug for Msg {
                 region_id, region_size
             ),
             Msg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),
+            Msg::MergeFail { region_id } => write!(fmt, "MergeFail region_id {}", region_id),
         }
     }
 }

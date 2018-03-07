@@ -24,15 +24,13 @@ use rocksdb::{Writable, WriteBatch, DB};
 use protobuf::Message;
 
 use kvproto::metapb::{self, Region};
-use kvproto::eraftpb::{ConfState, Entry, EntryType, HardState, Snapshot};
-use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
+use kvproto::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftLocalState,
                              RaftSnapshotData, RegionLocalState};
 use util::worker::Scheduler;
 use util::{self, rocksdb};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 use raftstore::{Error, Result};
-use raftstore::store::util as store_util;
 use super::worker::RegionTask;
 use super::keys::{self, enc_end_key, enc_start_key};
 use super::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
@@ -644,12 +642,6 @@ impl PeerStorage {
         DbSnapshot::new(Arc::clone(&self.kv_engine))
     }
 
-    /// Ensure snapshot is fresh enough.
-    ///
-    /// A snapshot is triggered when MsgAppend is rejected. A snapshot
-    /// is considered fresh enough when it contains all committed region epoch
-    /// changes before `MsgAppend` is sent.
-    /// This method can be false negative but never false positive.
     fn validate_snap(&self, snap: &Snapshot) -> bool {
         let idx = snap.get_metadata().get_index();
         if idx < self.truncated_index() {
@@ -665,41 +657,29 @@ impl PeerStorage {
                 .inc();
             return false;
         }
-        let committed_index = self.committed_index();
-        if idx == committed_index {
-            return true;
+
+        let mut snap_data = RaftSnapshotData::new();
+        if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
+            error!(
+                "{} decode snapshot fail, it may be corrupted: {:?}",
+                self.tag, e
+            );
+            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
+                .with_label_values(&["decode"])
+                .inc();
+            return false;
         }
-        let entries = self.entries(idx + 1, committed_index + 1, raft::NO_LIMIT)
-            .unwrap();
-        for e in entries {
-            if e.get_entry_type() == EntryType::EntryConfChange {
-                STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
-                    .with_label_values(&["epoch"])
-                    .inc();
-                return false;
-            }
-            if e.get_data().is_empty() {
-                continue;
-            }
-            let cmd: RaftCmdRequest =
-                store_util::parse_data_at(e.get_data(), e.get_index(), &self.tag);
-            if !cmd.has_admin_request() {
-                continue;
-            }
-            let cmd_type = cmd.get_admin_request().get_cmd_type();
-            match cmd_type {
-                AdminCmdType::ChangePeer
-                | AdminCmdType::Split
-                | AdminCmdType::PreMerge
-                | AdminCmdType::Merge
-                | AdminCmdType::RollbackPreMerge => {
-                    STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
-                        .with_label_values(&["epoch"])
-                        .inc();
-                    return false;
-                }
-                _ => {}
-            }
+        let snap_epoch = snap_data.get_region().get_region_epoch();
+        let latest_epoch = self.get_region().get_region_epoch();
+        if snap_epoch.get_conf_ver() < latest_epoch.get_conf_ver() {
+            info!(
+                "{} snapshot epoch {:?} < {:?}, generate again.",
+                self.tag, snap_epoch, latest_epoch
+            );
+            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
+                .with_label_values(&["epoch"])
+                .inc();
+            return false;
         }
 
         true
