@@ -27,6 +27,13 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
+    pub static ref SNAP_CHUNK_SIZE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_server_snapshot_chunk_size",
+            "Size of snapshot chunk",
+            exponential_buckets(1024.0, 2.0, 22).unwrap() // 1024,1024*2^1,..,4G
+        ).unwrap();
+
     pub static ref GRPC_MSG_HISTOGRAM_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_grpc_msg_duration_seconds",
