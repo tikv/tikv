@@ -592,7 +592,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let timer = self.raft_metrics.process_tick.start_coarse_timer();
         let mut leader_missing = 0;
         for peer in &mut self.region_peers.values_mut() {
-            peer.peer_pending_time.flush();
             if peer.pending_remove {
                 continue;
             }
@@ -796,23 +795,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         let peer = self.region_peers.get_mut(&region_id).unwrap();
+        let from_peer_id = msg.get_from_peer().get_id();
         peer.insert_peer_cache(msg.take_from_peer());
         peer.step(msg.take_message())?;
 
-        if peer.is_leader() && !peer.peer_pending_after.is_empty() {
-            let peer_id = msg.get_from_peer().get_id();
-            if let Entry::Occupied(e) = self.peer_pending_after.entry(peer_id) {
-                let status = peer.raft_group.status();
-                let truncated_idx = peer.raft_group.get_store().truncated_index();
-                if let Some(progress) = status.progress.get(&peer_id) {
-                    if progress.matched >= truncated_idx {
-                        let effective_time = e.remove();
-                        let elapsed = duration_to_sec(effective_time.elapsed());
-                        info!("peer {} has caugth up logs", peer_id);
-                        peer.heartbeat_pd(&self.pd_worker);
-                    }
-                }
-            }
+        if peer.peer_pending_finished(from_peer_id) {
+            peer.heartbeat_pd(&self.pd_worker);
         }
 
         // Add into pending raft groups for later handling ready.

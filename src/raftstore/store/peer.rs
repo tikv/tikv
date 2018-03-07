@@ -21,8 +21,7 @@ use std::time::{Duration, Instant};
 use time::Timespec;
 use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
-use protobuf::{self, Message, MessageStatic};
-use prometheus::local::LocalHistogram;
+use protobuf::{self, Message};
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
@@ -156,15 +155,6 @@ impl<'a, T> ReadyContext<'a, T> {
     }
 }
 
-// TODO: make sure received entries are not corrupted
-// If this happens, TiKV will panic and can't recover without extra effort.
-#[inline]
-pub fn parse_data_at<T: Message + MessageStatic>(data: &[u8], index: u64, tag: &str) -> T {
-    protobuf::parse_from_bytes::<T>(data).unwrap_or_else(|e| {
-        panic!("{} data is corrupted at {}: {:?}", tag, index, e);
-    })
-}
-
 pub struct ConsistencyState {
     pub last_check_time: Instant,
     // (computed_result_or_to_be_verified, index, hash)
@@ -205,7 +195,6 @@ pub struct Peer {
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
     pub peer_pending_after: FlatMap<u64, Instant>,
-    pub peer_pending_time: LocalHistogram,
 
     coprocessor_host: Arc<CoprocessorHost>,
     /// an inaccurate difference in region size since last reset.
@@ -332,7 +321,6 @@ impl Peer {
             peer_cache: RefCell::new(peer_cache),
             peer_heartbeats: FlatMap::default(),
             peer_pending_after: FlatMap::default(),
-            peer_pending_time: PEER_PENDING_TIME.local(),
             coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
             delete_keys_hint: 0,
@@ -547,8 +535,8 @@ impl Peer {
     }
 
     pub fn step(&mut self, m: eraftpb::Message) -> Result<()> {
-        if self.is_leader() && from_peer_id != INVALID_ID {
-            self.peer_heartbeats.insert(from_peer_id, Instant::now());
+        if self.is_leader() && m.get_from() != INVALID_ID {
+            self.peer_heartbeats.insert(m.get_from(), Instant::now());
         }
         self.raft_group.step(m)?;
         Ok(())
@@ -605,6 +593,29 @@ impl Peer {
             }
         }
         pending_peers
+    }
+
+    pub fn peer_pending_finished(&mut self, peer_id: u64) -> bool {
+        if self.peer_pending_after.is_empty() {
+            return false;
+        }
+        if !self.is_leader() {
+            self.peer_pending_after.clear();
+            return false;
+        }
+        if let Entry::Occupied(e) = self.peer_pending_after.entry(peer_id) {
+            let status = self.raft_group.status();
+            let truncated_idx = self.raft_group.get_store().truncated_index();
+            if let Some(progress) = status.progress.get(&peer_id) {
+                if progress.matched >= truncated_idx {
+                    let effective_time = e.remove();
+                    let elapsed = duration_to_sec(effective_time.elapsed());
+                    info!("peer {} has caugth up logs, elapsed: {}", peer_id, elapsed);
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     pub fn check_stale_state(&mut self) -> StaleState {
