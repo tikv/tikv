@@ -199,6 +199,7 @@ struct ApplyContext<'a> {
     apply_res: Vec<ApplyRes>,
     wb_last_bytes: u64,
     wb_last_keys: u64,
+    last_applied_index: u64,
     committed_count: usize,
     // `enable_sync_log` is a global switch indicate that wal can be synchronized
     // when data is written to kv engine.
@@ -210,7 +211,7 @@ struct ApplyContext<'a> {
 }
 
 impl<'a> ApplyContext<'a> {
-    fn new(host: &CoprocessorHost) -> ApplyContext {
+    pub fn new(host: &CoprocessorHost) -> ApplyContext {
         ApplyContext {
             host: host,
             wb: None,
@@ -218,6 +219,7 @@ impl<'a> ApplyContext<'a> {
             apply_res: vec![],
             wb_last_bytes: 0,
             wb_last_keys: 0,
+            last_applied_index: 0,
             committed_count: 0,
             enable_sync_log: false,
             sync_log_hint: false,
@@ -226,17 +228,17 @@ impl<'a> ApplyContext<'a> {
         }
     }
 
-    fn enable_sync_log(mut self, eanbled: bool) -> ApplyContext<'a> {
+    pub fn enable_sync_log(mut self, eanbled: bool) -> ApplyContext<'a> {
         self.enable_sync_log = eanbled;
         self
     }
 
-    fn apply_res_capacity(mut self, cap: usize) -> ApplyContext<'a> {
+    pub fn apply_res_capacity(mut self, cap: usize) -> ApplyContext<'a> {
         self.apply_res = Vec::with_capacity(cap);
         self
     }
 
-    fn use_delete_range(mut self, use_delete_range: bool) -> ApplyContext<'a> {
+    pub fn use_delete_range(mut self, use_delete_range: bool) -> ApplyContext<'a> {
         self.use_delete_range = use_delete_range;
         self
     }
@@ -246,21 +248,27 @@ impl<'a> ApplyContext<'a> {
     /// A general apply progress for a delegate is:
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
     /// After all delegates are handled, `write_to_db` method should be called.
-    fn prepare_for(&mut self, delegate: &ApplyDelegate) {
+    pub fn prepare_for(&mut self, delegate: &ApplyDelegate) {
         if self.wb.is_none() {
             self.wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
         }
         self.cbs.push(ApplyCallback::new(delegate.region.clone()));
+        self.last_applied_index = delegate.apply_state.get_applied_index();
     }
 
     /// Commit all changes have done for delegate. `persistent` indicates whether
     /// write the changes into rocksdb.
     ///
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
-    fn commit(&mut self, delegate: &mut ApplyDelegate, persistent: bool) {
-        if persistent {
+    pub fn commit(&mut self, delegate: &mut ApplyDelegate) {
+        if self.last_applied_index < delegate.apply_state.get_applied_index() {
             delegate.write_apply_state(self.wb_mut());
         }
+        self.commit_opt(delegate, true);
+        self.last_applied_index = delegate.apply_state.get_applied_index();
+    }
+
+    fn commit_opt(&mut self, delegate: &mut ApplyDelegate, persistent: bool) {
         delegate.update_metrics(self);
         if persistent {
             self.write_to_db(&delegate.engine);
@@ -271,7 +279,7 @@ impl<'a> ApplyContext<'a> {
     }
 
     /// Write all the changes into rocksdb.
-    fn write_to_db(&mut self, engine: &DB) {
+    pub fn write_to_db(&mut self, engine: &DB) {
         if self.wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
@@ -287,8 +295,11 @@ impl<'a> ApplyContext<'a> {
     }
 
     /// Finish applys for the delegate.
-    fn finish_for(&mut self, delegate: &mut ApplyDelegate, results: Vec<ExecResult>) {
-        self.commit(delegate, false);
+    pub fn finish_for(&mut self, delegate: &mut ApplyDelegate, results: Vec<ExecResult>) {
+        if !delegate.pending_remove {
+            delegate.write_apply_state(self.wb_mut());
+        }
+        self.commit_opt(delegate, false);
         self.apply_res.push(ApplyRes {
             region_id: delegate.region_id(),
             apply_state: delegate.apply_state.clone(),
@@ -307,12 +318,12 @@ impl<'a> ApplyContext<'a> {
     }
 
     #[inline]
-    fn wb(&self) -> &WriteBatch {
+    pub fn wb(&self) -> &WriteBatch {
         self.wb.as_ref().unwrap()
     }
 
     #[inline]
-    fn wb_mut(&mut self) -> &mut WriteBatch {
+    pub fn wb_mut(&mut self) -> &mut WriteBatch {
         self.wb.as_mut().unwrap()
     }
 }
@@ -462,10 +473,6 @@ impl ApplyDelegate {
             }
         }
 
-        if !self.pending_remove {
-            self.write_apply_state(apply_ctx.wb_mut());
-        }
-
         apply_ctx.finish_for(self, results);
     }
 
@@ -505,7 +512,7 @@ impl ApplyDelegate {
             let cmd = parse_data_at(data, index, &self.tag);
 
             if should_write_to_engine(&cmd, apply_ctx.wb().count()) {
-                apply_ctx.commit(self, true);
+                apply_ctx.commit(self);
             }
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
