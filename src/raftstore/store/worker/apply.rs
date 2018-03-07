@@ -200,13 +200,11 @@ struct ApplyContext<'a> {
     wb_last_bytes: u64,
     wb_last_keys: u64,
     committed_count: usize,
-    // `sync_log_hint` is a global hint indicate that whether synchronize wal
+    // `enable_sync_log` is a global switch indicate that wal can be synchronized
     // when data is written to kv engine.
+    enable_sync_log: bool,
+    // `sync_log_hint` indicates whether synchronize wal is prefered.
     sync_log_hint: bool,
-    // Even `sync_log_hint` is true, it doesn't mean wal has to be synced every time.
-    // This field indicates whether wal really needs to be synced (to make failure recover
-    // more easy, for example).
-    sync_log: bool,
     exec_ctx: Option<ExecContext>,
     use_delete_range: bool,
 }
@@ -221,15 +219,15 @@ impl<'a> ApplyContext<'a> {
             wb_last_bytes: 0,
             wb_last_keys: 0,
             committed_count: 0,
+            enable_sync_log: false,
             sync_log_hint: false,
-            sync_log: false,
             exec_ctx: None,
             use_delete_range: false,
         }
     }
 
-    fn sync_log_hint(mut self, sync_log_hint: bool) -> ApplyContext<'a> {
-        self.sync_log_hint = sync_log_hint;
+    fn enable_sync_log(mut self, eanbled: bool) -> ApplyContext<'a> {
+        self.enable_sync_log = eanbled;
         self
     }
 
@@ -247,7 +245,7 @@ impl<'a> ApplyContext<'a> {
     ///
     /// A general apply progress for a delegate is:
     /// `prepare_for` -> `commit` -> `commit` -> `finish_for`.
-    /// After all delegates are handled, `flush` method should be called.
+    /// After all delegates are handled, `write_to_db` method should be called.
     fn prepare_for(&mut self, delegate: &ApplyDelegate) {
         if self.wb.is_none() {
             self.wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
@@ -266,10 +264,7 @@ impl<'a> ApplyContext<'a> {
         delegate.update_metrics(self);
         if persistent {
             self.write_to_db(&delegate.engine);
-            if self.wb.is_none() {
-                self.wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
-            }
-            self.cbs.push(ApplyCallback::new(delegate.region.clone()));
+            self.prepare_for(delegate);
         }
         self.wb_last_bytes = self.wb().data_size() as u64;
         self.wb_last_keys = self.wb().count() as u64;
@@ -279,7 +274,7 @@ impl<'a> ApplyContext<'a> {
     fn write_to_db(&mut self, engine: &DB) {
         if self.wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.sync_log_hint && self.sync_log);
+            write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
             engine
                 .write_opt(self.wb.take().unwrap(), &write_opts)
                 .unwrap_or_else(|e| {
@@ -601,7 +596,7 @@ impl ApplyDelegate {
         }
 
         if cmd.has_admin_request() {
-            apply_ctx.sync_log = true;
+            apply_ctx.sync_log_hint = true;
         }
 
         let cmd_cb = self.find_cb(index, term, &cmd);
@@ -1543,7 +1538,7 @@ impl Runner {
         let mut apply_ctx = ApplyContext::new(self.host.as_ref())
             .apply_res_capacity(applys.len())
             .use_delete_range(self.use_delete_range)
-            .sync_log_hint(self.sync_log);
+            .enable_sync_log(self.sync_log);
         for apply in applys {
             if apply.entries.is_empty() {
                 continue;
