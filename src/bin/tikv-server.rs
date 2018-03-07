@@ -359,24 +359,20 @@ fn configure_grpc_poll_strategy() {
 }
 
 fn check_and_persist_critical_config(config: &TiKvConfig, matches: &ArgMatches) {
-    if let Some(path) = matches.value_of("config") {
-        let cfg_file = Path::new(path);
-        if let Some(cfg_dir) = cfg_file.parent() {
-            // Check current critical configurations with last time, if there are some
-            // changes, user must guarantee relevant works have been done.
-            let path_buf = cfg_dir.join(LAST_CONFIG_FILE);
-            if path_buf.exists() {
-                let last_cfg = TiKvConfig::from_file(&path_buf);
-                if let Err(e) = config.check_critical_cfg_with(&last_cfg) {
-                    fatal!("check critical config failed, err {:?}", e);
-                }
-            }
-
-            // Persist current critical configurations to file.
-            if let Err(e) = config.write_to_file(&path_buf) {
-                fatal!("persist critical config failed, err {:?}", e);
-            }
+    // Check current critical configurations with last time, if there are some
+    // changes, user must guarantee relevant works have been done.
+    let store_path = Path::new(&config.storage.data_dir);
+    let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
+    if last_cfg_path.exists() {
+        let last_cfg = TiKvConfig::from_file(&last_cfg_path);
+        if let Err(e) = config.check_critical_cfg_with(&last_cfg) {
+            fatal!("check critical config failed, err {:?}", e);
         }
+    }
+
+    // Persist current critical configurations to file.
+    if let Err(e) = config.write_to_file(&last_cfg_path) {
+        fatal!("persist critical config failed, err {:?}", e);
     }
 }
 
