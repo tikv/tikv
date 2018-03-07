@@ -124,7 +124,7 @@ fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
     util::monitor_threads("tikv")
         .unwrap_or_else(|e| fatal!("failed to start monitor thread: {:?}", e));
 
-    util::run_prometheus(cfg.interval.0, &cfg.address, &push_job);
+    util::metrics::run_prometheus(cfg.interval.0, &cfg.address, &push_job);
 }
 
 fn check_system_config(config: &TiKvConfig) {
@@ -141,6 +141,15 @@ fn check_system_config(config: &TiKvConfig) {
     if cfg!(unix) && env::var("TZ").is_err() {
         env::set_var("TZ", ":/etc/localtime");
         warn!("environment variable `TZ` is missing, use `/etc/localtime`");
+    }
+
+    // check rocksdb data dir
+    if let Err(e) = util::config::check_data_dir(&config.storage.data_dir) {
+        warn!("{:?}", e);
+    }
+    // check raft data dir
+    if let Err(e) = util::config::check_data_dir(&config.raft_store.raftdb_path) {
+        warn!("{:?}", e);
     }
 }
 
