@@ -909,12 +909,6 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             // test device not exist
             let ret = get_rotational_info("/dev/invalid");
             assert!(ret.is_err());
-
-            // test normal device
-            let cur = canonicalize_path("./").unwrap();
-            let fs_info = get_fs_info(&cur, "/proc/mounts").unwrap();
-            let ret = get_rotational_info(&fs_info.fsname);
-            assert!(ret.is_ok());
         }
 
         #[test]
@@ -922,16 +916,22 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             // test invalid data_path
             let ret = check_data_dir("/sys/invalid", "/proc/mounts");
             assert!(ret.is_err());
-            // test normal case
-            let ret = check_data_dir("./", "/proc/mounts");
-            assert!(ret.is_ok());
-        }
-
-        #[test]
-        fn test_check_data_dir_with_device_mapper() {
+            // get real path's fs_info
             let tmp_dir = TempDir::new("test-get-fs-info").unwrap();
             let data_path = format!("{}/data1", tmp_dir.path().display());
             let fs_info = get_fs_info(&data_path, "/proc/mounts").unwrap();
+
+            // data_path may not mountted on a normal device on container
+            if !fs_info.fsname.starts_with("/dev") {
+                return;
+            }
+
+            // test with real path
+            let ret = check_data_dir(&data_path, "/proc/mounts");
+            assert!(ret.is_ok());
+
+            // test with device mapper
+            // get real_path's rotational info
             let expect = get_rotational_info(&fs_info.fsname).unwrap();
             // ln -s fs_info.fsname tmp_device
             let tmp_device = format!("{}/tmp_device", tmp_dir.path().display());
