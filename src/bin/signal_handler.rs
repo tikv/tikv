@@ -18,10 +18,10 @@ mod imp {
     use libc::{self, c_char, c_int, c_void};
 
     use rocksdb::DB;
-    use prometheus::{self, Encoder, TextEncoder};
     use profiling;
 
     use tikv::raftstore::store::Engines;
+    use tikv::util::metrics;
 
     const ROCKSDB_DB_STATS_KEY: &str = "rocksdb.dbstats";
     const ROCKSDB_CF_STATS_KEY: &str = "rocksdb.cfstats";
@@ -68,15 +68,7 @@ mod imp {
                 }
                 SIGUSR1 => {
                     // Use SIGUSR1 to log metrics.
-                    let mut buffer = vec![];
-                    let encoder = TextEncoder::new();
-                    let metric_familys = prometheus::gather();
-                    for mf in metric_familys {
-                        if let Err(e) = encoder.encode(&[mf], &mut buffer) {
-                            warn!("ignore prometheus encoding error: {:?}", e);
-                        }
-                    }
-                    info!("{}", String::from_utf8(buffer).unwrap());
+                    info!("{}", metrics::dump());
 
                     print_rocksdb_stats(&engines.kv_engine);
                     print_rocksdb_stats(&engines.raft_engine);
