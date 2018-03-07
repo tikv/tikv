@@ -50,10 +50,6 @@ pub struct Inner {
     last_update: Instant,
 }
 
-// PD will send heartbeats to tikv every minutes.
-// We choose 2 minutes in case of slow network or slow PD.
-const HEARTBEAT_KEEPALIVE_INTERVAL: u64 = 120;
-
 pub struct HeartbeatReceiver {
     receiver: Option<ClientDuplexReceiver<RegionHeartbeatResponse>>,
     inner: Arc<RwLock<Inner>>,
@@ -98,9 +94,12 @@ impl Stream for HeartbeatReceiver {
 }
 
 /// A leader client doing requests asynchronous.
+#[derive(Clone)]
 pub struct LeaderClient {
     timer: Timer,
     inner: Arc<RwLock<Inner>>,
+
+    keep_alive_timeout: Duration,
 }
 
 impl LeaderClient {
@@ -109,9 +108,11 @@ impl LeaderClient {
         security_mgr: Arc<SecurityManager>,
         client: PdClient,
         members: GetMembersResponse,
+        keep_alive_timeout: Duration,
     ) -> LeaderClient {
         let (tx, rx) = client.region_heartbeat().unwrap();
         LeaderClient {
+            keep_alive_timeout: keep_alive_timeout,
             timer: Timer::default(),
             inner: Arc::new(RwLock::new(Inner {
                 env: env,
@@ -139,8 +140,7 @@ impl LeaderClient {
         }.map(Some)
             .map_err(|e| panic!("unexpected error: {:?}", e));
 
-        let keep_alive_interval = self.timer
-            .interval(Duration::from_secs(HEARTBEAT_KEEPALIVE_INTERVAL));
+        let keep_alive_interval = self.timer.interval(self.keep_alive_timeout);
         let keep_alive_future = keep_alive_interval
             .map(|()| None)
             .map_err(|e| panic!("unexpected error: {:?}", e));
@@ -174,10 +174,7 @@ impl LeaderClient {
         Request {
             reconnect_count: retry,
             request_sent: 0,
-            client: LeaderClient {
-                timer: self.timer.clone(),
-                inner: Arc::clone(&self.inner),
-            },
+            client: self.clone(),
             req: req,
             resp: None,
             func: f,

@@ -33,6 +33,10 @@ use super::metrics::*;
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
 
+// PD will send heartbeats to tikv every minutes.
+// We choose 2 minutes in case of slow network or slow PD.
+const HEARTBEAT_KEEPALIVE_INTERVAL: u64 = 120;
+
 pub struct RpcClient {
     cluster_id: u64,
     leader_client: LeaderClient,
@@ -40,6 +44,18 @@ pub struct RpcClient {
 
 impl RpcClient {
     pub fn new(cfg: &Config, security_mgr: Arc<SecurityManager>) -> Result<RpcClient> {
+        RpcClient::with_keep_alive_timeout(
+            cfg,
+            security_mgr,
+            Duration::from_secs(HEARTBEAT_KEEPALIVE_INTERVAL),
+        )
+    }
+
+    pub fn with_keep_alive_timeout(
+        cfg: &Config,
+        security_mgr: Arc<SecurityManager>,
+        keep_alive_timeout: Duration,
+    ) -> Result<RpcClient> {
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(CQ_COUNT)
@@ -50,7 +66,13 @@ impl RpcClient {
 
         Ok(RpcClient {
             cluster_id: members.get_header().get_cluster_id(),
-            leader_client: LeaderClient::new(env, security_mgr, client, members),
+            leader_client: LeaderClient::new(
+                env,
+                security_mgr,
+                client,
+                members,
+                keep_alive_timeout,
+            ),
         })
     }
 
