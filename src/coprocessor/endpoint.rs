@@ -753,6 +753,8 @@ impl Runnable<Task> for Host {
                 self.notify_batch_failed(err, id);
             }
         }
+
+        self.basic_local_metrics.flush();
     }
 }
 
