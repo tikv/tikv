@@ -358,7 +358,7 @@ fn configure_grpc_poll_strategy() {
     }
 }
 
-fn check_and_persist_critical_config(config: &TiKvConfig, matches: &ArgMatches) {
+fn check_and_persist_critical_config(config: &TiKvConfig) {
     // Check current critical configurations with last time, if there are some
     // changes, user must guarantee relevant works have been done.
     let store_path = Path::new(&config.storage.data_dir);
@@ -503,7 +503,7 @@ fn main() {
 
     overwrite_config_with_cmd_args(&mut config, &matches);
 
-    check_and_persist_critical_config(&config, &matches);
+    check_and_persist_critical_config(&config);
 
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validata()`,
