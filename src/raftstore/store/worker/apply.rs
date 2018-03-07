@@ -264,8 +264,9 @@ impl<'a> ApplyContext<'a> {
         if self.last_applied_index < delegate.apply_state.get_applied_index() {
             delegate.write_apply_state(self.wb_mut());
         }
+        // last_applied_index doesn't need to be updated, set persistent to true will
+        // force it call `prepare_for` automatically.
         self.commit_opt(delegate, true);
-        self.last_applied_index = delegate.apply_state.get_applied_index();
     }
 
     fn commit_opt(&mut self, delegate: &mut ApplyDelegate, persistent: bool) {
