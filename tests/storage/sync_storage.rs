@@ -13,10 +13,12 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use futures::Future;
 
 use tikv::util::collections::HashMap;
-use tikv::storage::{Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
+use tikv::storage::{self, Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
 use tikv::storage::config::Config;
+use tikv::server::readpool::ReadPool;
 use kvproto::kvrpcpb::{Context, LockInfo};
 
 /// `SyncStorage` wraps `Storage` with sync API, usually used for testing.
@@ -26,8 +28,8 @@ pub struct SyncStorage {
 }
 
 impl SyncStorage {
-    pub fn new(config: &Config) -> SyncStorage {
-        let storage = Storage::new(config).unwrap();
+    pub fn new(config: &Config, read_pool: ReadPool<storage::ReadPoolContext>) -> SyncStorage {
+        let storage = Storage::new(config, read_pool).unwrap();
         let mut s = SyncStorage {
             store: storage,
             cnt: Arc::new(AtomicUsize::new(0)),
@@ -36,14 +38,22 @@ impl SyncStorage {
         s
     }
 
-    pub fn from_engine(engine: Box<Engine>, config: &Config) -> SyncStorage {
-        let mut s = SyncStorage::prepare(engine, config);
+    pub fn from_engine(
+        engine: Box<Engine>,
+        config: &Config,
+        read_pool: ReadPool<storage::ReadPoolContext>,
+    ) -> SyncStorage {
+        let mut s = SyncStorage::prepare(engine, config, read_pool);
         s.start(config);
         s
     }
 
-    pub fn prepare(engine: Box<Engine>, config: &Config) -> SyncStorage {
-        let storage = Storage::from_engine(engine, config).unwrap();
+    pub fn prepare(
+        engine: Box<Engine>,
+        config: &Config,
+        read_pool: ReadPool<storage::ReadPoolContext>,
+    ) -> SyncStorage {
+        let storage = Storage::from_engine(engine, config, read_pool).unwrap();
         SyncStorage {
             store: storage,
             cnt: Arc::new(AtomicUsize::new(0)),
@@ -63,7 +73,7 @@ impl SyncStorage {
     }
 
     pub fn get(&self, ctx: Context, key: &Key, start_ts: u64) -> Result<Option<Value>> {
-        wait_op!(|cb| self.store.async_get(ctx, key.to_owned(), start_ts, cb)).unwrap()
+        self.store.async_get(ctx, key.to_owned(), start_ts).wait()
     }
 
     #[allow(dead_code)]
@@ -73,9 +83,9 @@ impl SyncStorage {
         keys: &[Key],
         start_ts: u64,
     ) -> Result<Vec<Result<KvPair>>> {
-        wait_op!(|cb| self.store
-            .async_batch_get(ctx, keys.to_owned(), start_ts, cb))
-            .unwrap()
+        self.store
+            .async_batch_get(ctx, keys.to_owned(), start_ts)
+            .wait()
     }
 
     pub fn scan(
@@ -86,14 +96,9 @@ impl SyncStorage {
         key_only: bool,
         start_ts: u64,
     ) -> Result<Vec<Result<KvPair>>> {
-        wait_op!(|cb| self.store.async_scan(
-            ctx,
-            key,
-            limit,
-            start_ts,
-            Options::new(0, false, key_only),
-            cb,
-        )).unwrap()
+        self.store
+            .async_scan(ctx, key, limit, start_ts, Options::new(0, false, key_only))
+            .wait()
     }
 
     pub fn prewrite(
@@ -159,7 +164,7 @@ impl SyncStorage {
     }
 
     pub fn raw_get(&self, ctx: Context, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
-        wait_op!(|cb| self.store.async_raw_get(ctx, key, cb)).unwrap()
+        self.store.async_raw_get(ctx, key).wait()
     }
 
     pub fn raw_put(&self, ctx: Context, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
@@ -176,7 +181,7 @@ impl SyncStorage {
         start_key: Vec<u8>,
         limit: usize,
     ) -> Result<Vec<Result<KvPair>>> {
-        wait_op!(|cb| self.store.async_raw_scan(ctx, start_key, limit, cb)).unwrap()
+        self.store.async_raw_scan(ctx, start_key, limit).wait()
     }
 }
 
