@@ -35,6 +35,12 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
+    pub static ref KEEP_ALIVE_TIMEOUT_COUNTER: Counter =
+        register_counter!(
+            "tikv_pd_keep_alive_timeout_total",
+            "Total number of pd keep alive timeout."
+        ).unwrap();
+
     pub static ref STORE_SIZE_GAUGE_VEC: GaugeVec =
         register_gauge_vec!(
             "tikv_store_size_bytes",

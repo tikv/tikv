@@ -14,6 +14,7 @@
 use std::result;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use std::time::Duration;
 use std::collections::HashSet;
@@ -32,6 +33,7 @@ use kvproto::pdpb_grpc::PdClient;
 use util::{Either, HandyRwLock};
 use util::security::SecurityManager;
 use super::{Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
+use super::metrics::KEEP_ALIVE_TIMEOUT_COUNTER;
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -48,9 +50,15 @@ pub struct Inner {
     last_update: Instant,
 }
 
+// PD will send heartbeats to tikv every minutes.
+// We choose 2 minutes in case of slow network or slow PD.
+const HEARTBEAT_KEEPALIVE_INTERVAL: u64 = 120;
+
 pub struct HeartbeatReceiver {
     receiver: Option<ClientDuplexReceiver<RegionHeartbeatResponse>>,
     inner: Arc<RwLock<Inner>>,
+
+    keep_alive_counter: Arc<AtomicUsize>,
 }
 
 impl Stream for HeartbeatReceiver {
@@ -61,7 +69,10 @@ impl Stream for HeartbeatReceiver {
         loop {
             if let Some(ref mut receiver) = self.receiver {
                 match receiver.poll() {
-                    Ok(Async::Ready(Some(item))) => return Ok(Async::Ready(Some(item))),
+                    Ok(Async::Ready(Some(item))) => {
+                        self.keep_alive_counter.fetch_add(1, Ordering::Release);
+                        return Ok(Async::Ready(Some(item)));
+                    }
                     Ok(Async::NotReady) => return Ok(Async::NotReady),
                     // If it's None or there's error, we need to update receiver.
                     _ => {}
@@ -120,14 +131,34 @@ impl LeaderClient {
     where
         F: Fn(RegionHeartbeatResponse) + Send + 'static,
     {
+        let keep_alive_counter = Arc::new(AtomicUsize::new(0));
         let recv = HeartbeatReceiver {
             receiver: None,
             inner: Arc::clone(&self.inner),
-        };
-        Box::new(recv.for_each(move |resp| {
-            f(resp);
+            keep_alive_counter: Arc::clone(&keep_alive_counter),
+        }.map(Some)
+            .map_err(|e| panic!("unexpected error: {:?}", e));
+
+        let keep_alive_interval = self.timer
+            .interval(Duration::from_secs(HEARTBEAT_KEEPALIVE_INTERVAL));
+        let keep_alive_future = keep_alive_interval
+            .map(|()| None)
+            .map_err(|e| panic!("unexpected error: {:?}", e));
+
+        let mut local_counter = keep_alive_counter.load(Ordering::Relaxed);
+        Box::new(recv.select(keep_alive_future).for_each(move |resp| {
+            if let Some(resp) = resp {
+                f(resp);
+            } else {
+                let alive_counter = keep_alive_counter.load(Ordering::Acquire);
+                if local_counter == alive_counter {
+                    warn!("reciver region heartbeats timeout");
+                    KEEP_ALIVE_TIMEOUT_COUNTER.inc();
+                }
+                local_counter = alive_counter;
+            }
             Ok(())
-        }).map_err(|e| panic!("unexpected error: {:?}", e)))
+        }))
     }
 
     pub fn on_reconnect(&self, f: Box<Fn() + Sync + Send + 'static>) {
