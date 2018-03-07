@@ -109,9 +109,6 @@ impl Context {
 
     #[inline]
     pub fn collect_read_flow(&mut self, region_id: u64, statistics: &storage::Statistics) {
-        if self.pd_sender.is_none() {
-            return;
-        }
         let flow_stats = self.read_flow_stats
             .entry(region_id)
             .or_insert_with(storage::FlowStatistics::default);
