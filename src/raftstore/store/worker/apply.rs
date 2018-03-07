@@ -244,7 +244,7 @@ impl<'a> ApplyContext<'a> {
     /// Prepare for applying entries for `delegate`.
     ///
     /// A general apply progress for a delegate is:
-    /// `prepare_for` -> `commit` -> `commit` -> `finish_for`.
+    /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
     /// After all delegates are handled, `write_to_db` method should be called.
     fn prepare_for(&mut self, delegate: &ApplyDelegate) {
         if self.wb.is_none() {
