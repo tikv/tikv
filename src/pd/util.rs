@@ -43,6 +43,7 @@ pub struct Inner {
     pub client: PdClient,
     members: GetMembersResponse,
     security_mgr: Arc<SecurityManager>,
+    on_reconnect: Option<Box<Fn() + Sync + Send + 'static>>,
 
     last_update: Instant,
 }
@@ -67,16 +68,15 @@ impl Stream for HeartbeatReceiver {
                 }
             }
 
-            warn!("heartbeat receiver is stale, refreshing..");
             self.receiver.take();
 
             let mut inner = self.inner.wl();
             let mut receiver = None;
             if let Either::Left(ref mut recv) = inner.hb_receiver {
                 receiver = recv.take();
-                info!("heartbeat receiver is refreshed.");
             }
             if receiver.is_some() {
+                info!("heartbeat receiver is refreshed.");
                 self.receiver = receiver;
             } else {
                 inner.hb_receiver = Either::Right(task::current());
@@ -109,6 +109,7 @@ impl LeaderClient {
                 client: client,
                 members: members,
                 security_mgr: security_mgr,
+                on_reconnect: None,
 
                 last_update: Instant::now(),
             })),
@@ -127,6 +128,11 @@ impl LeaderClient {
             f(resp);
             Ok(())
         }).map_err(|e| panic!("unexpected error: {:?}", e)))
+    }
+
+    pub fn on_reconnect(&self, f: Box<Fn() + Sync + Send + 'static>) {
+        let mut inner = self.inner.wl();
+        inner.on_reconnect = Some(f);
     }
 
     pub fn request<Req, Resp, F>(&self, req: Req, f: F, retry: usize) -> Request<Req, Resp, F>
@@ -170,6 +176,13 @@ impl LeaderClient {
         {
             let mut inner = self.inner.wl();
             let (tx, rx) = client.region_heartbeat().unwrap();
+            warn!("heartbeat sender and receiver are stale, refreshing..");
+
+            // Try to cancel an unused heartbeat sender.
+            if let Either::Left(Some(ref mut r)) = inner.hb_sender {
+                info!("cancel region heartbeat sender");
+                r.cancel();
+            }
             inner.hb_sender = Either::Left(Some(tx));
             if let Either::Right(ref mut task) = inner.hb_receiver {
                 task.notify();
@@ -178,6 +191,9 @@ impl LeaderClient {
             inner.client = client;
             inner.members = members;
             inner.last_update = Instant::now();
+            if let Some(ref on_reconnect) = inner.on_reconnect {
+                on_reconnect();
+            }
         }
         warn!("updating PD client done, spent {:?}", start.elapsed());
         Ok(())
@@ -366,7 +382,7 @@ fn connect(
     security_mgr: &SecurityManager,
     addr: &str,
 ) -> Result<(PdClient, GetMembersResponse)> {
-    debug!("connect to PD endpoint: {:?}", addr);
+    info!("connect to PD endpoint: {:?}", addr);
     let addr = addr.trim_left_matches("http://")
         .trim_left_matches("https://");
     let cb = ChannelBuilder::new(env);

@@ -204,20 +204,18 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
     Ok(size)
 }
 
+/// Check if replicas of two regions are on the same stores.
 pub fn region_on_same_store(lhs: &metapb::Region, rhs: &metapb::Region) -> bool {
     if lhs.get_peers().len() != rhs.get_peers().len() {
         return false;
     }
-    for lp in lhs.get_peers() {
-        if rhs.get_peers()
+    // Because every store can only have one replica for the same region,
+    // so just one round check is enough.
+    lhs.get_peers().iter().all(|lp| {
+        rhs.get_peers()
             .iter()
-            .all(|rp| rp.get_store_id() != lp.get_store_id())
-        {
-            return false;
-        }
-    }
-    // Do we need to switch lhs and rhs then check again?
-    true
+            .any(|rp| rp.get_store_id() == lp.get_store_id())
+    })
 }
 
 /// Lease records an expired time, for examining the current moment is in lease or not.
@@ -340,8 +338,12 @@ impl fmt::Debug for Lease {
     }
 }
 
+/// Parse data of entry `index`.
+///
+/// # Panics
+///
+/// If `data` is corrupted, this function will panic.
 // TODO: make sure received entries are not corrupted
-// If this happens, TiKV will panic and can't recover without extra effort.
 #[inline]
 pub fn parse_data_at<T: Message + MessageStatic>(data: &[u8], index: u64, tag: &str) -> T {
     protobuf::parse_from_bytes::<T>(data).unwrap_or_else(|e| {
@@ -349,6 +351,9 @@ pub fn parse_data_at<T: Message + MessageStatic>(data: &[u8], index: u64, tag: &
     })
 }
 
+/// Check if two regions are sibling.
+///
+/// They are sibling only when they share borders and don't overlap.
 pub fn is_sibling_regions(lhs: &metapb::Region, rhs: &metapb::Region) -> bool {
     if lhs.get_id() == rhs.get_id() {
         return false;
@@ -730,30 +735,28 @@ mod tests {
         (r, r2)
     }
 
-    macro_rules! check_sibling {
-        ($r1:expr, $r2:expr, $is_sibling:expr) => {
-            assert_eq!(is_sibling_regions($r1, $r2), $is_sibling);
-            assert_eq!(is_sibling_regions($r2, $r1), $is_sibling);
-        };
+    fn check_sibling(r1: &metapb::Region, r2: &metapb::Region, is_sibling: bool) {
+        assert_eq!(is_sibling_regions(r1, r2), is_sibling);
+        assert_eq!(is_sibling_regions(r2, r1), is_sibling);
     }
 
     #[test]
     fn test_region_sibling() {
         let r1 = metapb::Region::new();
-        check_sibling!(&r1, &r1, false);
+        check_sibling(&r1, &r1, false);
 
         let (r1, r2) = split(r1, b"k1");
-        check_sibling!(&r1, &r2, true);
+        check_sibling(&r1, &r2, true);
 
         let (r2, r3) = split(r2, b"k2");
-        check_sibling!(&r2, &r3, true);
+        check_sibling(&r2, &r3, true);
 
         let (r3, r4) = split(r3, b"k3");
-        check_sibling!(&r3, &r4, true);
-        check_sibling!(&r1, &r2, true);
-        check_sibling!(&r2, &r3, true);
-        check_sibling!(&r1, &r3, false);
-        check_sibling!(&r2, &r4, false);
-        check_sibling!(&r1, &r4, false);
+        check_sibling(&r3, &r4, true);
+        check_sibling(&r1, &r2, true);
+        check_sibling(&r2, &r3, true);
+        check_sibling(&r1, &r3, false);
+        check_sibling(&r2, &r4, false);
+        check_sibling(&r1, &r4, false);
     }
 }

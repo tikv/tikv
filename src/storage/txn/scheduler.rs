@@ -49,7 +49,6 @@ use storage::mvcc::{Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, W
 use storage::{Key, KvPair, MvccInfo, Value, CMD_TAG_GC};
 use storage::engine::{self, Callback as EngineCallback, CbContext, Error as EngineError, Modify,
                       Result as EngineResult};
-use raftstore::store::engine::IterOption;
 use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
 use util::time::SlowTimer;
 use util::collections::HashMap;
@@ -57,7 +56,6 @@ use util::worker::{self, Runnable, ScheduleError};
 
 use super::Result;
 use super::Error;
-use super::store::SnapshotStore;
 use super::latch::{Latches, Lock};
 use super::super::metrics::*;
 
@@ -452,104 +450,6 @@ fn process_read(
     let mut statistics = Statistics::default();
 
     let pr = match cmd {
-        // Gets from the snapshot.
-        Command::Get {
-            ref ctx,
-            ref key,
-            start_ts,
-            ..
-        } => {
-            sched_ctx
-                .command_keyread_duration
-                .with_label_values(&[tag])
-                .observe(1f64);
-            let snap_store = SnapshotStore::new(
-                snapshot,
-                start_ts,
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            );
-            let res = snap_store.get(key, &mut statistics);
-            match res {
-                Ok(val) => ProcessResult::Value { value: val },
-                Err(e) => ProcessResult::Failed {
-                    err: StorageError::from(e),
-                },
-            }
-        }
-        // Batch gets from the snapshot.
-        Command::BatchGet {
-            ref ctx,
-            ref keys,
-            start_ts,
-            ..
-        } => {
-            sched_ctx
-                .command_keyread_duration
-                .with_label_values(&[tag])
-                .observe(keys.len() as f64);
-            let snap_store = SnapshotStore::new(
-                snapshot,
-                start_ts,
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            );
-            let res = snap_store.batch_get(keys, &mut statistics);
-            match res {
-                Ok(results) => {
-                    let mut res = vec![];
-                    for (k, v) in keys.into_iter().zip(results) {
-                        match v {
-                            Ok(Some(x)) => res.push(Ok((k.raw().unwrap(), x))),
-                            Ok(None) => {}
-                            Err(e) => res.push(Err(StorageError::from(e))),
-                        }
-                    }
-                    ProcessResult::MultiKvpairs { pairs: res }
-                }
-                Err(e) => ProcessResult::Failed {
-                    err: StorageError::from(e),
-                },
-            }
-        }
-        // Scans a range starting with `start_key` up to `limit` rows from the snapshot.
-        Command::Scan {
-            ref ctx,
-            ref start_key,
-            limit,
-            start_ts,
-            ref options,
-            ..
-        } => {
-            let snap_store = SnapshotStore::new(
-                snapshot,
-                start_ts,
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            );
-            let res = snap_store
-                .scanner(ScanMode::Forward, options.key_only, None, None)
-                .and_then(|mut scanner| {
-                    let res = scanner.scan(start_key.clone(), limit);
-                    statistics.add(scanner.get_statistics());
-                    res
-                })
-                .and_then(|mut results| {
-                    sched_ctx
-                        .command_keyread_duration
-                        .with_label_values(&[tag])
-                        .observe(results.len() as f64);
-                    Ok(results
-                        .drain(..)
-                        .map(|x| x.map_err(StorageError::from))
-                        .collect())
-                });
-
-            match res {
-                Ok(pairs) => ProcessResult::MultiKvpairs { pairs: pairs },
-                Err(e) => ProcessResult::Failed { err: e.into() },
-            }
-        }
         Command::MvccByKey { ref ctx, ref key } => {
             let mut reader = MvccReader::new(
                 snapshot,
@@ -748,28 +648,6 @@ fn process_read(
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
-        Command::RawGet { ref key, .. } => {
-            sched_ctx
-                .command_keyread_duration
-                .with_label_values(&[tag])
-                .observe(1f64);
-            match snapshot.get(key) {
-                Ok(val) => ProcessResult::Value { value: val },
-                Err(e) => ProcessResult::Failed {
-                    err: StorageError::from(e),
-                },
-            }
-        }
-        Command::RawScan {
-            ref start_key,
-            limit,
-            ..
-        } => match process_rawscan(snapshot, start_key, limit, &mut statistics) {
-            Ok(val) => ProcessResult::MultiKvpairs { pairs: val },
-            Err(e) => ProcessResult::Failed {
-                err: StorageError::from(e),
-            },
-        },
         Command::Pause { duration, .. } => {
             thread::sleep(Duration::from_millis(duration));
             ProcessResult::Res
@@ -782,24 +660,6 @@ fn process_read(
         panic!("schedule ReadFinished msg failed, cid={}, err={:?}", cid, e);
     }
     statistics
-}
-
-fn process_rawscan(
-    snapshot: Box<Snapshot>,
-    start_key: &Key,
-    limit: usize,
-    stats: &mut Statistics,
-) -> Result<Vec<StorageResult<KvPair>>> {
-    let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Forward)?;
-    if !cursor.seek(start_key, &mut stats.data)? {
-        return Ok(vec![]);
-    }
-    let mut pairs = vec![];
-    while cursor.valid() && pairs.len() < limit {
-        pairs.push(Ok((cursor.key().to_owned(), cursor.value().to_owned())));
-        cursor.next(&mut stats.data);
-    }
-    Ok(pairs)
 }
 
 /// Processes a write command within a worker thread, then posts either a `WritePrepareFinished`
@@ -958,7 +818,7 @@ fn process_write_impl(
                 let status = txn_status.get(&current_lock.ts);
                 let commit_ts = match status {
                     Some(ts) => *ts,
-                    None => panic!("txn status not found."),
+                    None => panic!("txn status {} not found.", current_lock.ts),
                 };
                 if commit_ts > 0 {
                     if current_lock.ts >= commit_ts {
@@ -1309,7 +1169,7 @@ impl Scheduler {
         if let Err(e) = self.engine.async_snapshot(ctx, cb) {
             for cid in cids {
                 SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(cid), "async_snap_err"])
+                    .with_label_values(&[self.get_ctx_tag(cid), "async_snapshot_err"])
                     .inc();
 
                 let e = e.maybe_clone().unwrap_or_else(|| {
@@ -1329,7 +1189,7 @@ impl Scheduler {
         for &(_, ref cids) in &batch {
             for cid in cids {
                 SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(*cid), "snapshot"])
+                    .with_label_values(&[self.get_ctx_tag(*cid), "batch_snapshot"])
                     .inc();
             }
             all_cids.extend(cids);
@@ -1380,12 +1240,13 @@ impl Scheduler {
         if let Err(e) = self.engine.async_batch_snapshot(batch1, on_finished) {
             for cid in all_cids {
                 SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(cid), "async_snap_err"])
+                    .with_label_values(&[self.get_ctx_tag(cid), "async_batch_snapshot_err"])
                     .inc();
                 let e = e.maybe_clone().unwrap_or_else(|| {
                     error!("async snapshot failed for cid={}, error {:?}", cid, e);
                     EngineError::Other(box_err!("{:?}", e))
                 });
+
                 self.finish_with_err(cid, Error::from(e));
             }
         }
@@ -1431,6 +1292,7 @@ impl Scheduler {
                         .inc();
                     let e = e.maybe_clone()
                         .unwrap_or_else(|| EngineError::Other(box_err!("{:?}", e)));
+
                     self.finish_with_err(cid, Error::from(e));
                 }
             }
@@ -1610,10 +1472,10 @@ impl Runnable<Msg> for Scheduler {
 
     fn shutdown(&mut self) {
         if let Err(e) = self.worker_pool.stop() {
-            error!("scheduler run err:{:?}", e);
+            error!("scheduler run err when worker pool stop:{:?}", e);
         }
         if let Err(e) = self.high_priority_pool.stop() {
-            error!("scheduler run err:{:?}", e);
+            error!("scheduler run err when high priority pool stop:{:?}", e);
         }
         info!("scheduler stopped");
     }
@@ -1655,23 +1517,6 @@ mod tests {
         let mut temp_map = HashMap::default();
         temp_map.insert(10, 20);
         let readonly_cmds = vec![
-            Command::Get {
-                ctx: Context::new(),
-                key: make_key(b"k"),
-                start_ts: 25,
-            },
-            Command::BatchGet {
-                ctx: Context::new(),
-                keys: vec![make_key(b"k")],
-                start_ts: 25,
-            },
-            Command::Scan {
-                ctx: Context::new(),
-                start_key: make_key(b"k"),
-                limit: 100,
-                start_ts: 25,
-                options: Options::default(),
-            },
             Command::ScanLock {
                 ctx: Context::new(),
                 max_ts: 5,
