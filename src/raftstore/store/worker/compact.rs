@@ -21,10 +21,8 @@ use util::rocksdb;
 use util::escape;
 use util::rocksdb::compact_range;
 use util::properties::MvccProperties;
-use util::transport::SendCh;
 use rocksdb::{CFHandle, Range, DB};
 use storage::CF_WRITE;
-use raftstore::store::msg::Msg as StoreMsg;
 
 use super::metrics::COMPACT_RANGE_CF;
 
@@ -37,9 +35,10 @@ pub enum Task {
         end_key: Option<Key>,   // None means largest key
     },
 
-    Check {
-        ranges: BTreeSet<Key>,
-        tombstones_threshold: u64,
+    CheckAndCompact {
+        cf_names: Vec<String>,  // Column families need to compact
+        ranges: BTreeSet<Key>,  // Ranges need to check
+        tombstones_threshold: u64,  // The minimum RocksDB tombstones a range that need compacting has
     },
 }
 
@@ -57,12 +56,14 @@ impl Display for Task {
                 start_key.as_ref().map(|k| escape(k)),
                 end_key.as_ref().map(|k| escape(k))
             ),
-            Task::Check {
+            Task::CheckAndCompact {
+                ref cf_names,
                 ref ranges,
                 tombstones_threshold,
             } => write!(
                 f,
-                "Space check ranges count {}, tombstones threshold {}",
+                "CheckAndCompact cf names {:?}, ranges count {}, tombstones threshold {}",
+                cf_names,
                 ranges.len(),
                 tombstones_threshold
             ),
@@ -84,15 +85,11 @@ quick_error! {
 
 pub struct Runner {
     engine: Arc<DB>,
-    notifier: Option<SendCh<StoreMsg>>,
 }
 
 impl Runner {
-    pub fn new(engine: Arc<DB>, notifier: Option<SendCh<StoreMsg>>) -> Runner {
-        Runner {
-            engine: engine,
-            notifier: notifier,
-        }
+    pub fn new(engine: Arc<DB>) -> Runner {
+        Runner { engine: engine }
     }
 
     pub fn compact_range_cf(
@@ -136,22 +133,25 @@ impl Runnable<Task> for Runner {
                     info!("compact range for cf {} finished", &cf);
                 }
             }
-            Task::Check {
+            Task::CheckAndCompact {
+                cf_names,
                 ranges,
                 tombstones_threshold,
             } => match self.collect_ranges_need_compact(ranges, tombstones_threshold) {
-                Ok(ranges) => {
-                    if ranges.is_empty() {
-                        return;
+                Ok(mut ranges) => for (start, end) in ranges.drain(..) {
+                    for cf in &cf_names {
+                        if let Err(e) = self.compact_range_cf(
+                            cf.clone(),
+                            Some(start.clone()),
+                            Some(end.clone()),
+                        ) {
+                            error!(
+                                "compact range ({:?}, {:?}) for cf {:?} failed, error {:?}",
+                                start, end, cf, e
+                            );
+                        }
                     }
-                    if let Err(e) = self.notifier.as_ref().unwrap().send(
-                        StoreMsg::SpaceCheckResult {
-                            ranges_need_compact: ranges,
-                        },
-                    ) {
-                        warn!("send ranges back to raftstore failed {:?}", e);
-                    }
-                }
+                },
                 Err(e) => warn!("check ranges need reclaim failed, err: {:?}", e),
             },
         }
@@ -205,41 +205,49 @@ fn collect_ranges_need_compact(
     ranges: BTreeSet<Key>,
     tombstones_threshold: u64,
 ) -> Result<VecDeque<(Key, Key)>, Error> {
+    // Check the SST properties for each range, and we will compact a range if the range
+    // contains too much RocksDB tombstones. we will merge multiple neighbouring ranges
+    // that need compacting into a single range.
     let mut ranges_need_compact = VecDeque::new();
-
     let cf = box_try!(rocksdb::get_cf_handle(engine, CF_WRITE));
-    let mut last_start_key = None;
+    let mut last_key = None;
     let mut compact_start = None;
     for key in ranges {
-        if last_start_key.is_none() {
-            last_start_key = Some(key);
+        // First key.
+        if last_key.is_none() {
+            last_key = Some(key);
             continue;
         }
 
+        // Get total entries and total versions in this range and check if need compacting.
         if let Some((num_entries, num_versions)) = get_range_entries_and_versions(
             engine,
             cf,
-            last_start_key.as_ref().unwrap().as_slice(),
+            last_key.as_ref().unwrap().as_slice(),
             &key,
         ) {
             if need_compact(num_entries, num_versions, tombstones_threshold) {
                 if compact_start.is_none() {
-                    compact_start = last_start_key.take();
+                    // The previous range doesn't need compacting.
+                    compact_start = last_key.take();
                 }
-                last_start_key = Some(key);
+                last_key = Some(key);
+                // Move to next range.
                 continue;
             }
         }
 
-        if compact_start.is_some() && last_start_key.is_some() {
-            ranges_need_compact.push_back((compact_start.unwrap(), last_start_key.unwrap()));
+        // Current range doesn't need compacting, save previous range that need compacting.
+        if compact_start.is_some() && last_key.is_some() {
+            ranges_need_compact.push_back((compact_start.unwrap(), last_key.unwrap()));
             compact_start = None;
         }
-        last_start_key = Some(key);
+        last_key = Some(key);
     }
 
-    if compact_start.is_some() && last_start_key.is_some() {
-        ranges_need_compact.push_back((compact_start.unwrap(), last_start_key.unwrap()));
+    // Save the last range that need compacting.
+    if compact_start.is_some() && last_key.is_some() {
+        ranges_need_compact.push_back((compact_start.unwrap(), last_key.unwrap()));
     }
 
     Ok(ranges_need_compact)
@@ -272,7 +280,7 @@ mod test {
         let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT], None).unwrap();
         let db = Arc::new(db);
 
-        let mut runner = Runner::new(Arc::clone(&db), None);
+        let mut runner = Runner::new(Arc::clone(&db));
 
         let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
 
