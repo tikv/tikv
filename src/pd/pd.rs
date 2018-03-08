@@ -54,6 +54,7 @@ pub enum Task {
         peer: metapb::Peer,
         down_peers: Vec<pdpb::PeerStats>,
         pending_peers: Vec<metapb::Peer>,
+        down_learners: Vec<pdpb::PeerStats>,
         pending_learners: Vec<metapb::Peer>,
         written_bytes: u64,
         written_keys: u64,
@@ -500,6 +501,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 region,
                 peer,
                 down_peers,
+                down_learners,
                 pending_peers,
                 pending_learners,
                 written_bytes,
@@ -535,6 +537,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     peer,
                     RegionStat {
                         down_peers: down_peers,
+                        down_learners: down_learners,
                         pending_peers: pending_peers,
                         pending_learners: pending_learners,
                         written_bytes: written_bytes_delta,

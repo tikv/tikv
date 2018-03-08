@@ -566,9 +566,15 @@ impl Peer {
         }
     }
 
-    pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<PeerStats> {
+    pub fn collect_down_peers(&self, max_duration: Duration, is_learner: bool) -> Vec<PeerStats> {
         let mut down_peers = Vec::new();
-        for p in self.region().get_peers() {
+        let peers = if !is_learner {
+            self.region().get_peers()
+        } else {
+            self.region().get_learners()
+        };
+
+        for p in peers {
             if p.get_id() == self.peer.get_id() {
                 continue;
             }
@@ -584,11 +590,18 @@ impl Peer {
         down_peers
     }
 
-    pub fn collect_pending_peers(&self) -> Vec<metapb::Peer> {
-        let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
-        let status = self.raft_group.status();
+    pub fn collect_pending_peers(&self, is_learner: bool) -> Vec<metapb::Peer> {
         let truncated_idx = self.get_store().truncated_index();
-        for (id, progress) in status.progress {
+        let status = self.raft_group.status();
+        let (progresses, mut pending_peers) = if is_learner {
+            let len = self.region().get_learners().len();
+            (status.learner_progress, Vec::with_capacity(len))
+        } else {
+            let len = self.region().get_peers().len();
+            (status.progress, Vec::with_capacity(len))
+        };
+
+        for (id, progress) in progresses {
             if id == self.peer.get_id() {
                 continue;
             }
@@ -599,21 +612,6 @@ impl Peer {
             }
         }
         pending_peers
-    }
-
-    pub fn collect_pending_learners(&self) -> Vec<metapb::Peer> {
-        let mut pending_learners = Vec::with_capacity(self.region().get_learners().len());
-        let status = self.raft_group.status();
-        let truncated_idx = self.get_store().truncated_index();
-        for (id, progress) in status.learner_progress {
-            assert!(id != self.peer.get_id());
-            if progress.matched < truncated_idx {
-                if let Some(p) = self.get_peer_from_cache(id) {
-                    pending_learners.push(p);
-                }
-            }
-        }
-        pending_learners
     }
 
     pub fn check_stale_state(&mut self) -> StaleState {
@@ -1577,9 +1575,10 @@ impl Peer {
         let task = PdTask::Heartbeat {
             region: self.region().clone(),
             peer: self.peer.clone(),
-            down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration.0),
-            pending_peers: self.collect_pending_peers(),
-            pending_learners: self.collect_pending_learners(),
+            down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration.0, false),
+            pending_peers: self.collect_pending_peers(false),
+            down_learners: self.collect_down_peers(self.cfg.max_peer_down_duration.0, true),
+            pending_learners: self.collect_pending_peers(true),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
             region_size: self.approximate_size,
