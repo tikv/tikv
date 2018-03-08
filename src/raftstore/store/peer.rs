@@ -365,6 +365,10 @@ impl Peer {
     }
 
     pub fn maybe_destroy(&mut self) -> Option<DestroyPeerJob> {
+        if self.pending_remove {
+            info!("{} is being destroyed, skip", self.tag);
+            return None;
+        }
         let initialized = self.get_store().is_initialized();
         let async_remove = if self.is_applying_snapshot() {
             if !self.mut_store().cancel_applying_snap() {
@@ -390,7 +394,7 @@ impl Peer {
         })
     }
 
-    pub fn destroy(&mut self) -> Result<()> {
+    pub fn destroy(&mut self, keep_data: bool) -> Result<()> {
         let t = Instant::now();
 
         let region = self.get_store().get_region().clone();
@@ -411,7 +415,7 @@ impl Peer {
         self.kv_engine.write_opt(kv_wb, &write_opts)?;
         self.raft_engine.write_opt(raft_wb, &write_opts)?;
 
-        if self.get_store().is_initialized() && self.pending_merge.is_none() {
+        if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
             // will be cleared by a newer snapshot applying or restart.
             if let Err(e) = self.get_store().clear_data() {

@@ -704,7 +704,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 },
                 Ok(ApplyTaskRes::Destroy(p)) => {
                     let store_id = self.store_id();
-                    self.destroy_peer(p.region_id(), util::new_peer(store_id, p.id()));
+                    self.destroy_peer(p.region_id(), util::new_peer(store_id, p.id()), false);
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(e) => panic!("unexpected error {:?}", e),
@@ -952,14 +952,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     region_id, region_epoch, msg_type
                 );
 
-                let merge_target = if util::find_peer(region, from_store_id).is_none() {
-                    // If a peer is isolated before pre-merge and conf remove, it should just
-                    // remove itself.
-                    None
-                } else {
+                let merge_target = if let Some(peer) = util::find_peer(region, from_store_id) {
+                    assert_eq!(peer, msg.get_from_peer());
                     // Let stale peer decides whether it should wait for merging or just remove
                     // itself.
                     Some(local_state.get_merge_state().get_target().to_owned())
+                } else {
+                    // If a peer is isolated before pre-merge and conf remove, it should just
+                    // remove itself.
+                    None
                 };
                 Self::handle_stale_msg(trans, msg, region_epoch, true, merge_target, raft_metrics);
                 return Ok(true);
@@ -1369,12 +1370,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             );
             false
         } else {
-            self.destroy_peer(job.region_id, job.peer);
+            self.destroy_peer(job.region_id, job.peer, false);
             true
         }
     }
 
-    pub fn destroy_peer(&mut self, region_id: u64, peer: metapb::Peer) {
+    pub fn destroy_peer(&mut self, region_id: u64, peer: metapb::Peer, keep_data: bool) {
         // Can we destroy it in another thread later?
 
         // Suppose cluster removes peer a from store and then add a new
@@ -1406,7 +1407,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             error!("{} failed to notify pd: {}", self.tag, e);
         }
         let is_initialized = p.is_initialized();
-        if let Err(e) = p.destroy() {
+        if let Err(e) = p.destroy(keep_data) {
             // If not panic here, the peer will be recreated in the next restart,
             // then it will be gc again. But if some overlap region is created
             // before restarting, the gc action will delete the overlap region's
@@ -1481,7 +1482,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // We only care remove itself now.
         if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
             if my_peer_id == peer.get_id() {
-                self.destroy_peer(region_id, peer)
+                self.destroy_peer(region_id, peer, false)
             } else {
                 panic!("{} trying to remove unknown peer {:?}", self.tag, peer);
             }
@@ -1805,7 +1806,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             peer.peer.clone()
         };
-        self.destroy_peer(source.get_id(), source_peer);
+        self.destroy_peer(source.get_id(), source_peer, true);
         // If merge backward, then stale meta is clear when source region is destroyed.
         // So only forward needs to be considered.
         if region.get_end_key() == source.get_end_key() {
@@ -1858,7 +1859,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_merge_fail(&mut self, region_id: u64) {
-        info!("[region {}] merge fail, gc stale peer.", region_id);
+        info!("[region {}] merge fail, try gc stale peer.", region_id);
         if let Some(job) = self.region_peers
             .get_mut(&region_id)
             .and_then(|p| p.maybe_destroy())

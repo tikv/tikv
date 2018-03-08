@@ -153,6 +153,88 @@ fn test_node_merge_with_admin_entries() {
 }
 
 #[test]
+fn test_node_check_merged_message() {
+    // ::util::init_log();
+    let mut cluster = new_node_cluster(0, 4);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 100;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 100;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_rule();
+
+    cluster.run_conf_change();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    // test if orphan merging peer will be gc
+    let mut region = pd_client.get_region(b"k2").unwrap();
+    pd_client.must_add_peer(region.get_id(), new_peer(2, 2));
+    cluster.must_split(&region, b"k2");
+    let mut left = pd_client.get_region(b"k1").unwrap();
+    pd_client.must_add_peer(left.get_id(), new_peer(3, 3));
+    let mut right = pd_client.get_region(b"k2").unwrap();
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(
+        right.get_id(),
+        3,
+    )));
+    pd_client.must_add_peer(right.get_id(), new_peer(3, 10));
+    let left_on_store1 = find_peer(&left, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(left.get_id(), left_on_store1);
+    right = pd_client.get_region(b"k2").unwrap();
+    pd_client.must_merge(left.get_id(), right.clone());
+    region = pd_client.get_region(b"k2").unwrap();
+    util::must_get_none(&cluster.get_engine(3), b"k3");
+    util::must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    let region_on_store3 = find_peer(&region, 3).unwrap().to_owned();
+    pd_client.must_remove_peer(region.get_id(), region_on_store3);
+    util::must_get_none(&cluster.get_engine(3), b"k1");
+    cluster.clear_send_filters();
+    pd_client.must_add_peer(region.get_id(), new_peer(3, 11));
+
+    // test if stale peer before conf removal is destroyed automatically
+    region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    left = pd_client.get_region(b"k1").unwrap();
+    right = pd_client.get_region(b"k2").unwrap();
+    pd_client.must_add_peer(left.get_id(), new_peer(4, 4));
+    util::must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
+    cluster.add_send_filter(IsolationFilterFactory::new(4));
+    pd_client.must_remove_peer(left.get_id(), new_peer(4, 4));
+    pd_client.must_merge(left.get_id(), right.clone());
+    cluster.clear_send_filters();
+    util::must_get_none(&cluster.get_engine(4), b"k1");
+
+    // test gc work under complicated situation.
+    cluster.must_put(b"k5", b"v5");
+    region = pd_client.get_region(b"k2").unwrap();
+    cluster.must_split(&region, b"k2");
+    region = pd_client.get_region(b"k4").unwrap();
+    cluster.must_split(&region, b"k4");
+    left = pd_client.get_region(b"k1").unwrap();
+    let middle = pd_client.get_region(b"k3").unwrap();
+    right = pd_client.get_region(b"k5").unwrap();
+    let left_on_store3 = find_peer(&left, 3).unwrap().to_owned();
+    pd_client.must_remove_peer(left.get_id(), left_on_store3);
+    util::must_get_none(&cluster.get_engine(3), b"k1");
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    left = pd_client.get_region(b"k1").unwrap();
+    pd_client.must_add_peer(left.get_id(), new_peer(3, 5));
+    left = pd_client.get_region(b"k1").unwrap();
+    pd_client.must_merge(middle.get_id(), left);
+    left = pd_client.get_region(b"k1").unwrap();
+    pd_client.must_merge(right.get_id(), left);
+    cluster.must_delete(b"k3");
+    cluster.must_delete(b"k5");
+    cluster.must_put(b"k4", b"v4");
+    cluster.clear_send_filters();
+    let engine3 = cluster.get_engine(3);
+    util::must_get_equal(&engine3, b"k1", b"v1");
+    util::must_get_equal(&engine3, b"k4", b"v4");
+    util::must_get_none(&engine3, b"k3");
+    util::must_get_none(&engine3, b"v5");
+}
+
+#[test]
 fn test_node_merge_dist_isolation() {
     // ::util::init_log();
     let mut cluster = new_node_cluster(0, 3);
