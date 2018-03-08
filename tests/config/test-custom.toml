@@ -86,7 +86,7 @@ report-region-flow-interval = "12m"
 raft-store-max-leader-lease = "12s"
 right-derive-when-split = false
 allow-remove-leader = true
-use-delete-range = true
+use-delete-range = false
 
 [coprocessor]
 split-region-on-table = true
