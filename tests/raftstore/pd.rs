@@ -674,7 +674,7 @@ impl TestPdClient {
         self.cluster.wl().add_region(region)
     }
 
-    pub fn ensure_transfer_leader(&self, region_id: u64, peer: metapb::Peer) {
+    pub fn transfer_leader(&self, region_id: u64, peer: metapb::Peer) {
         let op = Operator::TransferLeader {
             peer,
             policy: SchedulePolicy::TillSuccess,
@@ -685,7 +685,7 @@ impl TestPdClient {
     pub fn add_peer(&self, region_id: u64, peer: metapb::Peer) {
         let op = Operator::AddPeer {
             peer: Either::Left(peer),
-            policy: SchedulePolicy::Repeat(1),
+            policy: SchedulePolicy::TillSuccess,
         };
         self.schedule_operator(region_id, op);
     }
@@ -702,7 +702,7 @@ impl TestPdClient {
     pub fn remove_peer(&self, region_id: u64, peer: metapb::Peer) {
         let op = Operator::RemovePeer {
             peer,
-            policy: SchedulePolicy::Repeat(1),
+            policy: SchedulePolicy::TillSuccess,
         };
         self.schedule_operator(region_id, op);
     }

@@ -96,7 +96,7 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for id in 1..4 {
         // select a new leader to transfer
-        pd_client.ensure_transfer_leader(region.get_id(), new_peer(id, id));
+        pd_client.transfer_leader(region.get_id(), new_peer(id, id));
 
         for _ in 0..100 {
             // reset leader and wait transfer successfully.
