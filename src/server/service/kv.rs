@@ -59,7 +59,6 @@ pub struct Service<T: RaftStoreRouter + 'static> {
     token: Arc<AtomicUsize>, // TODO: remove it.
     recursion_limit: u32,
     metrics: Metrics,
-    request_max_handle_secs: u64,
 }
 
 #[derive(Clone)]
@@ -119,7 +118,6 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         recursion_limit: u32,
-        request_max_handle_secs: u64,
     ) -> Service<T> {
         Service {
             storage: storage,
@@ -129,7 +127,6 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
             token: Arc::new(AtomicUsize::new(1)),
             recursion_limit: recursion_limit,
             metrics: Metrics::new(),
-            request_max_handle_secs: request_max_handle_secs,
         }
     }
 
@@ -158,32 +155,24 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         const LABEL: &str = "kv_get";
         let timer = self.metrics.kv_get.start_coarse_timer();
 
-        let (cb, future) = make_callback();
-        let res = self.storage.async_get(
-            req.take_context(),
-            Key::from_raw(req.get_key()),
-            req.get_version(),
-            cb,
-        );
-        if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
-            return;
-        }
-
-        let future = future
-            .map_err(Error::from)
-            .map(|v| {
-                let mut res = GetResponse::new();
+        let future = self.storage
+            .async_get(
+                req.take_context(),
+                Key::from_raw(req.get_key()),
+                req.get_version(),
+            )
+            .then(|v| {
+                let mut resp = GetResponse::new();
                 if let Some(err) = extract_region_error(&v) {
-                    res.set_region_error(err);
+                    resp.set_region_error(err);
                 } else {
                     match v {
-                        Ok(Some(val)) => res.set_value(val),
-                        Ok(None) => res.set_value(vec![]),
-                        Err(e) => res.set_error(extract_key_error(&e)),
+                        Ok(Some(val)) => resp.set_value(val),
+                        Ok(None) => (),
+                        Err(e) => resp.set_error(extract_key_error(&e)),
                     }
                 }
-                res
+                Ok(resp)
             })
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
@@ -199,34 +188,25 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         const LABEL: &str = "kv_scan";
         let timer = self.metrics.kv_scan.start_coarse_timer();
 
-        let storage = self.storage.clone();
         let mut options = Options::default();
         options.key_only = req.get_key_only();
 
-        let (cb, future) = make_callback();
-        let res = storage.async_scan(
-            req.take_context(),
-            Key::from_raw(req.get_start_key()),
-            req.get_limit() as usize,
-            req.get_version(),
-            options,
-            cb,
-        );
-        if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
-            return;
-        }
-
-        let future = future
-            .map_err(Error::from)
-            .map(|v| {
+        let future = self.storage
+            .async_scan(
+                req.take_context(),
+                Key::from_raw(req.get_start_key()),
+                req.get_limit() as usize,
+                req.get_version(),
+                options,
+            )
+            .then(|v| {
                 let mut resp = ScanResponse::new();
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else {
                     resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
                 }
-                resp
+                Ok(resp)
             })
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
@@ -399,24 +379,16 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map(|x| Key::from_raw(x))
             .collect();
 
-        let (cb, future) = make_callback();
-        let res = self.storage
-            .async_batch_get(req.take_context(), keys, req.get_version(), cb);
-        if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
-            return;
-        }
-
-        let future = future
-            .map_err(Error::from)
-            .map(|v| {
+        let future = self.storage
+            .async_batch_get(req.take_context(), keys, req.get_version())
+            .then(|v| {
                 let mut resp = BatchGetResponse::new();
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else {
-                    resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)))
+                    resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
                 }
-                resp
+                Ok(resp)
             })
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
@@ -648,17 +620,9 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         const LABEL: &str = "raw_get";
         let timer = self.metrics.raw_get.start_coarse_timer();
 
-        let (cb, future) = make_callback();
-        let res = self.storage
-            .async_raw_get(req.take_context(), req.take_key(), cb);
-        if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
-            return;
-        }
-
-        let future = future
-            .map_err(Error::from)
-            .map(|v| {
+        let future = self.storage
+            .async_raw_get(req.take_context(), req.take_key())
+            .then(|v| {
                 let mut resp = RawGetResponse::new();
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
@@ -669,7 +633,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                         Err(e) => resp.set_error(format!("{}", e)),
                     }
                 }
-                resp
+                Ok(resp)
             })
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
@@ -685,28 +649,20 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         const LABEL: &str = "raw_scan";
         let timer = self.metrics.raw_scan.start_coarse_timer();
 
-        let (cb, future) = make_callback();
-        let res = self.storage.async_raw_scan(
-            req.take_context(),
-            req.take_start_key(),
-            req.get_limit() as usize,
-            cb,
-        );
-        if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
-            return;
-        }
-
-        let future = future
-            .map_err(Error::from)
-            .map(|v| {
+        let future = self.storage
+            .async_raw_scan(
+                req.take_context(),
+                req.take_start_key(),
+                req.get_limit() as usize,
+            )
+            .then(|v| {
                 let mut resp = RawScanResponse::new();
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else {
                     resp.set_kvs(RepeatedField::from_vec(extract_kv_pairs(v)));
                 }
-                resp
+                Ok(resp)
             })
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
@@ -800,7 +756,6 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 req,
                 cb,
                 self.recursion_limit,
-                self.request_max_handle_secs,
             )));
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
