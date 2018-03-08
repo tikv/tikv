@@ -12,7 +12,6 @@
 // limitations under the License.
 
 mod config;
-mod context;
 mod priority;
 
 use std::fmt;
@@ -25,49 +24,64 @@ use util;
 use util::futurepool::{self, FuturePool};
 
 pub use self::config::Config;
-pub use self::context::Context;
 pub use self::priority::Priority;
 
 const TICK_INTERVAL_SEC: u64 = 1;
 
-#[derive(Clone)]
-pub struct ReadPool {
-    pool_high: FuturePool<Context>,
-    pool_normal: FuturePool<Context>,
-    pool_low: FuturePool<Context>,
+pub struct ReadPool<T: futurepool::Context + 'static> {
+    pool_high: FuturePool<T>,
+    pool_normal: FuturePool<T>,
+    pool_low: FuturePool<T>,
     max_tasks_high: usize,
     max_tasks_normal: usize,
     max_tasks_low: usize,
 }
 
-impl util::AssertSend for ReadPool {}
-impl util::AssertSync for ReadPool {}
+impl<T: futurepool::Context + 'static> util::AssertSend for ReadPool<T> {}
+impl<T: futurepool::Context + 'static> util::AssertSync for ReadPool<T> {}
 
-impl ReadPool {
-    pub fn new(config: &Config) -> Self {
+impl<T: futurepool::Context + 'static> Clone for ReadPool<T> {
+    fn clone(&self) -> Self {
+        ReadPool {
+            pool_high: self.pool_high.clone(),
+            pool_normal: self.pool_normal.clone(),
+            pool_low: self.pool_low.clone(),
+            ..*self
+        }
+    }
+}
+
+impl<T: futurepool::Context + 'static> ReadPool<T> {
+    // Rust does not support copying closures (RFC 2132) so that we need a closure builder.
+    // TODO: Use a single closure once RFC 2132 is implemented.
+    pub fn new<F, CF>(config: &Config, context_factory_builder: F) -> Self
+    where
+        F: futurepool::Factory<CF>,
+        CF: futurepool::Factory<T>,
+    {
         let tick_interval = Duration::from_secs(TICK_INTERVAL_SEC);
-        let build_context_factory = || || Context {};
+
         ReadPool {
             pool_high: FuturePool::new(
                 config.high_concurrency,
                 config.stack_size.0 as usize,
                 "readpool-high",
                 tick_interval,
-                build_context_factory(),
+                context_factory_builder.build(),
             ),
             pool_normal: FuturePool::new(
                 config.normal_concurrency,
                 config.stack_size.0 as usize,
                 "readpool-normal",
                 tick_interval,
-                build_context_factory(),
+                context_factory_builder.build(),
             ),
             pool_low: FuturePool::new(
                 config.low_concurrency,
                 config.stack_size.0 as usize,
                 "readpool-low",
                 tick_interval,
-                build_context_factory(),
+                context_factory_builder.build(),
             ),
             max_tasks_high: config.max_tasks_high,
             max_tasks_normal: config.max_tasks_normal,
@@ -76,7 +90,7 @@ impl ReadPool {
     }
 
     #[inline]
-    fn get_pool_by_priority(&self, priority: Priority) -> &FuturePool<Context> {
+    fn get_pool_by_priority(&self, priority: Priority) -> &FuturePool<T> {
         match priority {
             Priority::High => &self.pool_high,
             Priority::Normal => &self.pool_normal,
@@ -102,7 +116,7 @@ impl ReadPool {
         future_factory: R,
     ) -> Result<CpuFuture<F::Item, F::Error>, Full>
     where
-        R: FnOnce(futurepool::ContextDelegators<Context>) -> F + Send + 'static,
+        R: FnOnce(futurepool::ContextDelegators<T>) -> F + Send + 'static,
         F: Future + Send + 'static,
         F::Item: Send + 'static,
         F::Error: Send + 'static,
@@ -161,9 +175,14 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct Context;
+
+    impl futurepool::Context for Context {}
+
     #[test]
     fn test_future_execute() {
-        let read_pool = ReadPool::new(&Config::default_for_test());
+        let read_pool = ReadPool::new(&Config::default_for_test(), || || Context {});
 
         expect_val(
             vec![1, 2, 4],
@@ -187,7 +206,7 @@ mod tests {
     }
 
     fn spawn_long_time_future(
-        pool: &ReadPool,
+        pool: &ReadPool<Context>,
         id: u64,
         future_duration_ms: u64,
     ) -> Result<CpuFuture<u64, ()>, Full> {
@@ -213,11 +232,14 @@ mod tests {
     fn test_full() {
         let (tx, rx) = channel();
 
-        let read_pool = ReadPool::new(&Config {
-            high_concurrency: 2,
-            max_tasks_high: 4,
-            ..Config::default()
-        });
+        let read_pool = ReadPool::new(
+            &Config {
+                high_concurrency: 2,
+                max_tasks_high: 4,
+                ..Config::default()
+            },
+            || || Context {},
+        );
 
         wait_on_new_thread(
             tx.clone(),
