@@ -18,7 +18,7 @@ mod imp {
     use profiling;
 
     use tikv::raftstore::store::Engines;
-    use tikv::util::{malloc, metrics, rocksdb_stats};
+    use tikv::util::{metrics, rocksdb_stats};
 
     pub fn handle_signal(engines: Engines) {
         use signal::trap::Trap;
@@ -35,7 +35,6 @@ mod imp {
                     info!("{}", metrics::dump());
                     info!("{}", rocksdb_stats::dump(&engines.kv_engine));
                     info!("{}", rocksdb_stats::dump(&engines.raft_engine));
-                    info!("{}", malloc::dump_stats());
                 }
                 SIGUSR2 => profiling::dump_prof(None),
                 // TODO: handle more signal
