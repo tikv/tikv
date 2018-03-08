@@ -1629,14 +1629,25 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn get_merge_peer(&self, tag: &str, target_region: &metapb::Region) -> Result<Option<&Peer>> {
         let region_id = target_region.get_id();
         if let Some(p) = self.region_peers.get(&region_id) {
-            if p.region().get_region_epoch().get_conf_ver()
-                > target_region.get_region_epoch().get_conf_ver()
-            {
+            let exist_epoch = p.region().get_region_epoch();
+            let expect_epoch = target_region.get_region_epoch();
+            // exist_epoch > expect_epoch
+            if util::is_epoch_stale(expect_epoch, exist_epoch) {
                 return Err(box_err!(
                     "target region changed {:?} -> {:?}",
                     target_region,
                     p.region()
                 ));
+            }
+            // exist_epoch < expect_epoch
+            if util::is_epoch_stale(exist_epoch, expect_epoch) {
+                info!(
+                    "{} target region still not catch up: {:?} vs {:?}, skip.",
+                    tag,
+                    target_region,
+                    p.region()
+                );
+                return Ok(None);
             }
             return Ok(Some(p));
         }
@@ -1689,6 +1700,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 None => return Ok(()),
                 Some(p) => p,
             };
+            if !sibling_peer.is_leader() {
+                info!("{} merge target peer is not leader, skip.", self.tag);
+                // skip early.
+                return Ok(());
+            }
             let sibling_region = sibling_peer.region();
 
             let min_index = peer.get_min_progress() + 1;
