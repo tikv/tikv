@@ -27,6 +27,7 @@ use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 
 use tipb::select::DAGRequest;
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
+use tipb::checksum::{ChecksumRequest, ChecksumScanOn};
 use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
 use kvproto::coprocessor::{KeyRange, Request, Response};
@@ -45,6 +46,7 @@ use super::codec::mysql;
 use super::codec::datum::Datum;
 use super::dag::DAGContext;
 use super::statistics::analyze::AnalyzeContext;
+use super::checksum::ChecksumContext;
 use super::metrics::*;
 use super::local_metrics::{BasicLocalMetrics, ExecLocalMetrics};
 use super::dag::executor::ExecutorMetrics;
@@ -52,6 +54,7 @@ use super::{Error, Result};
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
+pub const REQ_TYPE_CHECKSUM: i64 = 105;
 
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.
@@ -348,6 +351,7 @@ impl Display for Task {
 enum CopRequest {
     DAG(DAGRequest),
     Analyze(AnalyzeReq),
+    Checksum(ChecksumRequest),
 }
 
 #[derive(Debug)]
@@ -573,6 +577,14 @@ impl RequestTask {
                 box_try!(analyze.merge_from(&mut is));
                 table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
                 (analyze.get_start_ts(), CopRequest::Analyze(analyze))
+            }
+            REQ_TYPE_CHECKSUM => {
+                let mut is = CodedInputStream::from_bytes(req.get_data());
+                is.set_recursion_limit(recursion_limit);
+                let mut checksum = ChecksumRequest::new();
+                box_try!(checksum.merge_from(&mut is));
+                table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
+                (checksum.get_start_ts(), CopRequest::Checksum(checksum))
             }
             tp => return Err(box_err!("unsupported tp {}", tp)),
         };
