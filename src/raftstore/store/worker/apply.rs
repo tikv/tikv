@@ -201,8 +201,8 @@ struct ApplyContext<'a> {
     wb_last_keys: u64,
     last_applied_index: u64,
     committed_count: usize,
-    // `enable_sync_log` is a global switch indicate that wal can be synchronized
-    // when data is written to kv engine.
+    // `enable_sync_log` indicates that wal can be synchronized when data
+    // is written to kv engine.
     enable_sync_log: bool,
     // `sync_log_hint` indicates whether synchronize wal is prefered.
     sync_log_hint: bool,
