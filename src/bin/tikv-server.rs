@@ -43,7 +43,7 @@ mod signal_handler;
 mod profiling;
 
 use std::process;
-use std::fs::File;
+use std::fs::{self, File};
 use std::usize;
 use std::path::Path;
 use std::sync::{mpsc, Arc};
@@ -370,9 +370,22 @@ fn check_and_persist_critical_config(config: &TiKvConfig) {
         }
     }
 
+    // Create parent directory if missing.
+    if let Err(e) = fs::create_dir_all(&store_path) {
+        fatal!(
+            "create parent directory {} failed, err {:?}",
+            store_path.to_str().unwrap(),
+            e
+        );
+    }
+
     // Persist current critical configurations to file.
     if let Err(e) = config.write_to_file(&last_cfg_path) {
-        fatal!("persist critical config failed, err {:?}", e);
+        fatal!(
+            "persist critical config to {} failed, err {:?}",
+            last_cfg_path.to_str().unwrap(),
+            e
+        );
     }
 }
 
