@@ -327,7 +327,6 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdRespons
             CmdType::Get | CmdType::Snap => is_read = true,
             CmdType::Put | CmdType::Delete | CmdType::DeleteRange => is_write = true,
             CmdType::Invalid | CmdType::Prewrite => panic!("Invalid RaftCmdRequest: {:?}", cmd),
-            CmdType::IngestSST => unimplemented!(),
         }
     }
     assert!(is_read ^ is_write, "Invalid RaftCmdRequest: {:?}", cmd);
