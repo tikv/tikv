@@ -396,7 +396,7 @@ trait DebugExecutor {
         self.set_region_tombstone(regions);
     }
 
-    fn consistent_check(&self, _: u64);
+    fn check_region_consistency(&self, _: u64);
 
     fn check_local_mode(&self);
 
@@ -520,11 +520,11 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only avaliable for local mode");
     }
 
-    fn consistent_check(&self, region_id: u64) {
+    fn check_region_consistency(&self, region_id: u64) {
         let mut req = RegionConsistentCheckRequest::new();
         req.set_region_id(region_id);
-        self.region_consistent_check(&req)
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::region_consistent_check", e));
+        self.check_region_consistency(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::region_check_region_consistency", e));
         println!("success!");
     }
 }
@@ -603,7 +603,7 @@ impl DebugExecutor for Debugger {
         println!("all regions are healthy")
     }
 
-    fn consistent_check(&self, _: u64) {
+    fn check_region_consistency(&self, _: u64) {
         eprintln!("only support remote mode");
         process::exit(-1);
     }
@@ -1038,7 +1038,7 @@ fn main() {
         debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
     } else if let Some(matches) = matches.subcommand_matches("consistent-check") {
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
-        debug_executor.consistent_check(region_id);
+        debug_executor.check_region_consistency(region_id);
     } else if matches.subcommand_matches("bad-regions").is_some() {
         debug_executor.print_bad_regions();
     } else {

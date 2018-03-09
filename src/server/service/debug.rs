@@ -320,7 +320,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
         self.handle_response(ctx, sink, f, TAG);
     }
 
-    fn region_consistent_check(
+    fn check_region_consistency(
         &self,
         ctx: RpcContext,
         req: RegionConsistentCheckRequest,
@@ -331,14 +331,14 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
         let router1 = self.raft_router.clone();
         let router2 = self.raft_router.clone();
 
-        let consistent_check = future::result(debugger.get_store_id())
+        let consistency_check = future::result(debugger.get_store_id())
             .and_then(move |store_id| region_detail(router2, region_id, store_id))
             .flatten()
-            .and_then(|detail| consistent_check(router1, detail));
+            .and_then(|detail| consistency_check(router1, detail));
         let f = self.pool
-            .spawn(consistent_check)
+            .spawn(consistency_check)
             .map(|_| RegionConsistentCheckResponse::new());
-        self.handle_response(ctx, sink, f, "region_consistent_check");
+        self.handle_response(ctx, sink, f, "check_region_consistency");
     }
 }
 
@@ -369,9 +369,11 @@ fn region_detail<T: RaftStoreRouter>(
                     return Err(Error::Other(msg.into()));
                 }
                 let detail = r.response.take_status_response().take_region_detail();
-                info!("Debug::consistent-check got region detail: {:?}", detail);
-                if detail.get_leader().get_store_id() != store_id {
-                    return Err(Error::Other("not leader".into()));
+                debug!("Debug::consistent-check got region detail: {:?}", detail);
+                let leader_store_id = detail.get_leader().get_store_id();
+                if leader_store_id != store_id {
+                    let msg = format!("Leader is on store {}", leader_store_id);
+                    return Err(Error::Other(msg.into()));
                 }
                 Ok(detail)
             })
@@ -379,7 +381,7 @@ fn region_detail<T: RaftStoreRouter>(
         .map_err(|e| Error::Other(box e))
 }
 
-fn consistent_check<T>(raft_router: T, mut detail: RegionDetailResponse) -> Result<(), Error>
+fn consistency_check<T>(raft_router: T, mut detail: RegionDetailResponse) -> Result<(), Error>
 where
     T: RaftStoreRouter,
 {
