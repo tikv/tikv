@@ -337,6 +337,7 @@ mod test {
     fn open_db(path: &str) -> DB {
         let db_opts = rocksdb::DBOptions::new();
         let mut cf_opts = rocksdb::ColumnFamilyOptions::new();
+        cf_opts.set_level_zero_file_num_compaction_trigger(8);
         let f = Box::new(MvccPropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
         let cfs_opts = vec![
@@ -393,6 +394,30 @@ mod test {
         let ranges_need_to_compact =
             collect_ranges_need_compact(&engine, ranges_to_check, 1).unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k5"));
+        let mut expected_ranges = VecDeque::new();
+        expected_ranges.push_back((s, e));
+        assert_eq!(ranges_need_to_compact, expected_ranges);
+
+        // gc 5..10
+        for i in 5..10 {
+            let k = format!("k{}", i);
+            delete(&engine, k.as_bytes(), 2);
+        }
+        engine.flush_cf(cf, true).unwrap();
+
+        let (s, e) = (data_key(b"k5"), data_key(b"k9"));
+        let (entries, version) = get_range_entries_and_versions(&engine, cf, &s, &e).unwrap();
+        assert_eq!(entries, 10);
+        assert_eq!(version, 5);
+
+        let mut ranges_to_check = BTreeSet::new();
+        ranges_to_check.insert(data_key(b"k0"));
+        ranges_to_check.insert(data_key(b"k5"));
+        ranges_to_check.insert(data_key(b"k9"));
+
+        let ranges_need_to_compact =
+        collect_ranges_need_compact(&engine, ranges_to_check, 1).unwrap();
+        let (s, e) = (data_key(b"k0"), data_key(b"k9"));
         let mut expected_ranges = VecDeque::new();
         expected_ranges.push_back((s, e));
         assert_eq!(ranges_need_to_compact, expected_ranges);
