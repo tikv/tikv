@@ -360,13 +360,10 @@ impl Debugger {
                 let old_peers_len = region_state.get_region().get_peers().len();
 
                 if new_peers_len < quorum(old_peers_len) {
-                    {
-                        let region = region_state.mut_region();
-                        region.set_peers(RepeatedField::from_vec(new_peers));
-                        let old_conf_ver = region.get_region_epoch().get_conf_ver();
-                        let new_conf_ver = old_conf_ver + (old_peers_len - new_peers_len) as u64;
-                        region.mut_region_epoch().set_conf_ver(new_conf_ver);
-                    }
+                    // We need to leave epoch untouched to avoid inconsistency.
+                    region_state
+                        .mut_region()
+                        .set_peers(RepeatedField::from_vec(new_peers));
                     box_try!(wb.put_msg_cf(handle, key, &region_state));
                 }
                 Ok(true)
