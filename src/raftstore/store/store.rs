@@ -2536,7 +2536,12 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 };
 
                 if !peer.is_leader() {
-                    //TODO
+                    // region on this store is no longer leader, skipped.
+                    info!(
+                        "[region {}] region on {} is not leader, skip.",
+                        region_id,
+                        self.store_id()
+                    );
                     return;
                 }
                 let task = SplitCheckTask::new(peer.region(), false);

@@ -137,7 +137,12 @@ impl Task {
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "Split Check Task for {}", self.region.get_id())
+        write!(
+            f,
+            "Split Check Task for {}, auto_check: {}",
+            self.region.get_id(),
+            self.auto_check
+        )
     }
 }
 
