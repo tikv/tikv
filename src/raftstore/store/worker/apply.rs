@@ -16,7 +16,6 @@ use std::sync::mpsc::Sender;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::rc::Rc;
 use std::collections::VecDeque;
-use std::mem;
 
 use rocksdb::{Writable, WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
@@ -40,7 +39,7 @@ use raftstore::store::msg::Callback;
 use raftstore::store::engine::{Mutable, Peekable, Snapshot};
 use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply_state,
                                      write_peer_state};
-use raftstore::store::peer::{check_epoch, parse_data_at, Peer};
+use raftstore::store::peer::{check_epoch, Peer};
 use raftstore::store::metrics::*;
 
 use super::metrics::*;
@@ -195,48 +194,138 @@ impl ApplyCallback {
 
 struct ApplyContext<'a> {
     host: &'a CoprocessorHost,
-    wb: WriteBatch,
+    wb: Option<WriteBatch>,
     cbs: MustConsumeVec<ApplyCallback>,
+    apply_res: Vec<ApplyRes>,
     wb_last_bytes: u64,
     wb_last_keys: u64,
-    sync_log: bool,
+    last_applied_index: u64,
+    committed_count: usize,
+    // `enable_sync_log` indicates that wal can be synchronized when data
+    // is written to kv engine.
+    enable_sync_log: bool,
+    // `sync_log_hint` indicates whether synchronize wal is prefered.
+    sync_log_hint: bool,
     exec_ctx: Option<ExecContext>,
     use_delete_range: bool,
 }
 
 impl<'a> ApplyContext<'a> {
-    fn new(host: &CoprocessorHost, use_delete_range: bool) -> ApplyContext {
+    pub fn new(host: &CoprocessorHost) -> ApplyContext {
         ApplyContext {
             host: host,
-            wb: WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE),
+            wb: None,
             cbs: MustConsumeVec::new("callback of apply context"),
+            apply_res: vec![],
             wb_last_bytes: 0,
             wb_last_keys: 0,
-            sync_log: false,
+            last_applied_index: 0,
+            committed_count: 0,
+            enable_sync_log: false,
+            sync_log_hint: false,
             exec_ctx: None,
-            use_delete_range: use_delete_range,
+            use_delete_range: false,
         }
     }
 
-    fn prepare_for(&mut self, delegate: &ApplyDelegate) {
-        self.cbs.push(ApplyCallback::new(delegate.region.clone()));
+    pub fn enable_sync_log(mut self, eanbled: bool) -> ApplyContext<'a> {
+        self.enable_sync_log = eanbled;
+        self
     }
 
-    pub fn mark_last_bytes_and_keys(&mut self) {
-        self.wb_last_bytes = self.wb.data_size() as u64;
-        self.wb_last_keys = self.wb.count() as u64;
+    pub fn apply_res_capacity(mut self, cap: usize) -> ApplyContext<'a> {
+        self.apply_res = Vec::with_capacity(cap);
+        self
+    }
+
+    pub fn use_delete_range(mut self, use_delete_range: bool) -> ApplyContext<'a> {
+        self.use_delete_range = use_delete_range;
+        self
+    }
+
+    /// Prepare for applying entries for `delegate`.
+    ///
+    /// A general apply progress for a delegate is:
+    /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
+    /// After all delegates are handled, `write_to_db` method should be called.
+    pub fn prepare_for(&mut self, delegate: &ApplyDelegate) {
+        if self.wb.is_none() {
+            self.wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+        }
+        self.cbs.push(ApplyCallback::new(delegate.region.clone()));
+        self.last_applied_index = delegate.apply_state.get_applied_index();
+    }
+
+    /// Commit all changes have done for delegate. `persistent` indicates whether
+    /// write the changes into rocksdb.
+    ///
+    /// This call is valid only when it's between a `prepare_for` and `finish_for`.
+    pub fn commit(&mut self, delegate: &mut ApplyDelegate) {
+        if self.last_applied_index < delegate.apply_state.get_applied_index() {
+            delegate.write_apply_state(self.wb_mut());
+        }
+        // last_applied_index doesn't need to be updated, set persistent to true will
+        // force it call `prepare_for` automatically.
+        self.commit_opt(delegate, true);
+    }
+
+    fn commit_opt(&mut self, delegate: &mut ApplyDelegate, persistent: bool) {
+        delegate.update_metrics(self);
+        if persistent {
+            self.write_to_db(&delegate.engine);
+            self.prepare_for(delegate);
+        }
+        self.wb_last_bytes = self.wb().data_size() as u64;
+        self.wb_last_keys = self.wb().count() as u64;
+    }
+
+    /// Write all the changes into rocksdb.
+    pub fn write_to_db(&mut self, engine: &DB) {
+        if self.wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
+            let mut write_opts = WriteOptions::new();
+            write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
+            engine
+                .write_opt(self.wb.take().unwrap(), &write_opts)
+                .unwrap_or_else(|e| {
+                    panic!("failed to write to engine: {:?}", e);
+                });
+        }
+        for cbs in self.cbs.drain(..) {
+            cbs.invoke_all(self.host);
+        }
+    }
+
+    /// Finish applys for the delegate.
+    pub fn finish_for(&mut self, delegate: &mut ApplyDelegate, results: Vec<ExecResult>) {
+        if !delegate.pending_remove {
+            delegate.write_apply_state(self.wb_mut());
+        }
+        self.commit_opt(delegate, false);
+        self.apply_res.push(ApplyRes {
+            region_id: delegate.region_id(),
+            apply_state: delegate.apply_state.clone(),
+            exec_res: results,
+            metrics: delegate.metrics.clone(),
+            applied_index_term: delegate.applied_index_term,
+        });
     }
 
     pub fn delta_bytes(&self) -> u64 {
-        self.wb.data_size() as u64 - self.wb_last_bytes
+        self.wb().data_size() as u64 - self.wb_last_bytes
     }
 
     pub fn delta_keys(&self) -> u64 {
-        self.wb.count() as u64 - self.wb_last_keys
+        self.wb().count() as u64 - self.wb_last_keys
     }
 
-    pub fn use_delete_range(&self) -> bool {
-        self.use_delete_range
+    #[inline]
+    pub fn wb(&self) -> &WriteBatch {
+        self.wb.as_ref().unwrap()
+    }
+
+    #[inline]
+    pub fn wb_mut(&mut self) -> &mut WriteBatch {
+        self.wb.as_mut().unwrap()
     }
 }
 
@@ -269,20 +358,21 @@ pub fn notify_stale_req(term: u64, cb: Callback) {
     cb.invoke_with_response(resp);
 }
 
-fn should_flush_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
-    // When encounter ComputeHash cmd, we must flush the write batch to engine immediately.
+/// Check if a write is needed to be issued before handle the command.
+fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
+    // When encounter ComputeHash cmd, we must write the write batch to engine immediately.
     if cmd.has_admin_request()
         && cmd.get_admin_request().get_cmd_type() == AdminCmdType::ComputeHash
     {
         return true;
     }
 
-    // When write batch contains more than `recommended` keys, flush the batch to engine.
+    // When write batch contains more than `recommended` keys, write the batch to engine.
     if wb_keys >= WRITE_BATCH_MAX_KEYS {
         return true;
     }
 
-    // When encounter DeleteRange command, we must flush current write batch to engine first,
+    // When encounter DeleteRange command, we must write current write batch to engine first,
     // because current write batch may contains keys are covered by DeleteRange.
     for req in cmd.get_requests() {
         if req.has_delete_range() {
@@ -316,14 +406,6 @@ pub struct ApplyDelegate {
 }
 
 impl ApplyDelegate {
-    pub fn region_id(&self) -> u64 {
-        self.region.get_id()
-    }
-
-    pub fn id(&self) -> u64 {
-        self.id
-    }
-
     fn from_peer(peer: &Peer) -> ApplyDelegate {
         let reg = Registration::new(peer);
         ApplyDelegate::from_registration(peer.kv_engine(), reg)
@@ -344,18 +426,27 @@ impl ApplyDelegate {
         }
     }
 
+    pub fn region_id(&self) -> u64 {
+        self.region.get_id()
+    }
+
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
     fn handle_raft_committed_entries(
         &mut self,
         apply_ctx: &mut ApplyContext,
         committed_entries: Vec<Entry>,
-    ) -> Vec<ExecResult> {
+    ) {
         if committed_entries.is_empty() {
-            return vec![];
+            return;
         }
         apply_ctx.prepare_for(self);
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
+        apply_ctx.committed_count += committed_entries.len();
         let mut results = vec![];
         for entry in committed_entries {
             if self.pending_remove {
@@ -383,14 +474,7 @@ impl ApplyDelegate {
             }
         }
 
-        if !self.pending_remove {
-            self.write_apply_state(&apply_ctx.wb);
-        }
-
-        self.update_metrics(apply_ctx);
-        apply_ctx.mark_last_bytes_and_keys();
-
-        results
+        apply_ctx.finish_for(self, results);
     }
 
     fn update_metrics(&mut self, apply_ctx: &ApplyContext) {
@@ -426,26 +510,10 @@ impl ApplyDelegate {
         let data = entry.get_data();
 
         if !data.is_empty() {
-            let cmd = parse_data_at(data, index, &self.tag);
+            let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if should_flush_to_engine(&cmd, apply_ctx.wb.count()) {
-                self.write_apply_state(&apply_ctx.wb);
-
-                self.update_metrics(apply_ctx);
-                let wb = WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE);
-                // flush to engine
-                self.engine
-                    .write(mem::replace(&mut apply_ctx.wb, wb))
-                    .unwrap_or_else(|e| {
-                        panic!("{} failed to write to engine, error: {:?}", self.tag, e)
-                    });
-
-                // call callback
-                for cbs in apply_ctx.cbs.drain(..) {
-                    cbs.invoke_all(apply_ctx.host);
-                }
-                apply_ctx.prepare_for(self);
-                apply_ctx.mark_last_bytes_and_keys();
+            if should_write_to_engine(&cmd, apply_ctx.wb().count()) {
+                apply_ctx.commit(self);
             }
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
@@ -475,8 +543,8 @@ impl ApplyDelegate {
     ) -> Option<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
-        let conf_change: ConfChange = parse_data_at(entry.get_data(), index, &self.tag);
-        let cmd = parse_data_at(conf_change.get_context(), index, &self.tag);
+        let conf_change: ConfChange = util::parse_data_at(entry.get_data(), index, &self.tag);
+        let cmd = util::parse_data_at(conf_change.get_context(), index, &self.tag);
         Some(
             self.process_raft_cmd(apply_ctx, index, term, cmd)
                 .map_or_else(
@@ -536,7 +604,7 @@ impl ApplyDelegate {
         }
 
         if cmd.has_admin_request() {
-            apply_ctx.sync_log = true;
+            apply_ctx.sync_log_hint = true;
         }
 
         let cmd_cb = self.find_cb(index, term, &cmd);
@@ -570,10 +638,10 @@ impl ApplyDelegate {
         assert!(!self.pending_remove);
 
         ctx.exec_ctx = Some(self.new_ctx(index, term, req));
-        ctx.wb.set_save_point();
+        ctx.wb_mut().set_save_point();
         let (resp, exec_result) = self.exec_raft_cmd(ctx).unwrap_or_else(|e| {
             // clear dirty values.
-            ctx.wb.rollback_to_save_point().unwrap();
+            ctx.wb_mut().rollback_to_save_point().unwrap();
             match e {
                 Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
                 _ => error!("{} execute raft command err: {:?}", self.tag, e),
@@ -827,7 +895,7 @@ impl ApplyDelegate {
         } else {
             PeerState::Normal
         };
-        if let Err(e) = write_peer_state(&self.engine, &ctx.wb, &region, state) {
+        if let Err(e) = write_peer_state(&self.engine, ctx.wb_mut(), &region, state) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
@@ -907,9 +975,13 @@ impl ApplyDelegate {
         let region_ver = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_ver);
         new_region.mut_region_epoch().set_version(region_ver);
-        write_peer_state(&self.engine, &ctx.wb, &region, PeerState::Normal)
-            .and_then(|_| write_peer_state(&self.engine, &ctx.wb, &new_region, PeerState::Normal))
-            .and_then(|_| write_initial_apply_state(&self.engine, &ctx.wb, new_region.get_id()))
+        write_peer_state(&self.engine, ctx.wb_mut(), &region, PeerState::Normal)
+            .and_then(|_| {
+                write_peer_state(&self.engine, ctx.wb_mut(), &new_region, PeerState::Normal)
+            })
+            .and_then(|_| {
+                write_initial_apply_state(&self.engine, ctx.wb_mut(), new_region.get_id())
+            })
             .unwrap_or_else(|e| {
                 panic!(
                     "{} failed to save split region {:?}: {:?}",
@@ -1016,7 +1088,7 @@ impl ApplyDelegate {
                 CmdType::Put => self.handle_put(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
                 CmdType::DeleteRange => {
-                    self.handle_delete_range(req, &mut ranges, ctx.use_delete_range())
+                    self.handle_delete_range(req, &mut ranges, ctx.use_delete_range)
                 }
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
@@ -1074,7 +1146,7 @@ impl ApplyDelegate {
             }
             // TODO: check whether cf exists or not.
             rocksdb::get_cf_handle(&self.engine, cf)
-                .and_then(|handle| ctx.wb.put_cf(handle, &key, value))
+                .and_then(|handle| ctx.wb().put_cf(handle, &key, value))
                 .unwrap_or_else(|e| {
                     panic!(
                         "{} failed to write ({}, {}) to cf {}: {:?}",
@@ -1086,7 +1158,7 @@ impl ApplyDelegate {
                     )
                 });
         } else {
-            ctx.wb.put(&key, value).unwrap_or_else(|e| {
+            ctx.wb().put(&key, value).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,
@@ -1111,7 +1183,7 @@ impl ApplyDelegate {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
             rocksdb::get_cf_handle(&self.engine, cf)
-                .and_then(|handle| ctx.wb.delete_cf(handle, &key))
+                .and_then(|handle| ctx.wb().delete_cf(handle, &key))
                 .unwrap_or_else(|e| {
                     panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
                 });
@@ -1123,7 +1195,7 @@ impl ApplyDelegate {
                 self.metrics.delete_keys_hint += 1;
             }
         } else {
-            ctx.wb.delete(&key).unwrap_or_else(|e| {
+            ctx.wb().delete(&key).unwrap_or_else(|e| {
                 panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
             });
             self.metrics.delete_keys_hint += 1;
@@ -1472,9 +1544,10 @@ impl Runner {
     fn handle_applies(&mut self, applys: Vec<Apply>) {
         let t = SlowTimer::new();
 
-        let mut applys_res = Vec::with_capacity(applys.len());
-        let mut apply_ctx = ApplyContext::new(self.host.as_ref(), self.use_delete_range);
-        let mut committed_count = 0;
+        let mut apply_ctx = ApplyContext::new(self.host.as_ref())
+            .apply_res_capacity(applys.len())
+            .use_delete_range(self.use_delete_range)
+            .enable_sync_log(self.sync_log);
         for apply in applys {
             if apply.entries.is_empty() {
                 continue;
@@ -1490,20 +1563,11 @@ impl Runner {
                 let delegate = e.get_mut();
                 delegate.metrics = ApplyMetrics::default();
                 delegate.term = apply.term;
-                committed_count += apply.entries.len();
-                let results = delegate.handle_raft_committed_entries(&mut apply_ctx, apply.entries);
+                delegate.handle_raft_committed_entries(&mut apply_ctx, apply.entries);
 
                 if delegate.pending_remove {
                     delegate.destroy();
                 }
-
-                applys_res.push(ApplyRes {
-                    region_id: apply.region_id,
-                    apply_state: delegate.apply_state.clone(),
-                    exec_res: results,
-                    metrics: delegate.metrics.clone(),
-                    applied_index_term: delegate.applied_index_term,
-                });
             }
             if e.get().pending_remove {
                 e.remove();
@@ -1515,21 +1579,12 @@ impl Runner {
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(self.sync_log && apply_ctx.sync_log);
-        if !apply_ctx.wb.is_empty() {
-            self.db
-                .write_opt(apply_ctx.wb, &write_opts)
-                .unwrap_or_else(|e| panic!("failed to write to engine, error: {:?}", e));
-        }
+        apply_ctx.write_to_db(&self.db);
 
-        // Call callbacks
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&self.host);
-        }
-
-        if !applys_res.is_empty() {
-            self.notifier.send(TaskRes::Applys(applys_res)).unwrap();
+        if !apply_ctx.apply_res.is_empty() {
+            self.notifier
+                .send(TaskRes::Applys(apply_ctx.apply_res))
+                .unwrap();
         }
 
         STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
@@ -1538,7 +1593,7 @@ impl Runner {
             t,
             "{} handle ready {} committed entries",
             self.tag,
-            committed_count
+            apply_ctx.committed_count
         );
     }
 
@@ -1674,13 +1729,13 @@ mod tests {
     }
 
     #[test]
-    fn test_should_flush_to_engine() {
+    fn test_should_write_to_engine() {
         // ComputeHash command
         let mut req = RaftCmdRequest::new();
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
         let wb = WriteBatch::new();
-        assert_eq!(should_flush_to_engine(&req, wb.count()), true);
+        assert_eq!(should_write_to_engine(&req, wb.count()), true);
 
         // Write batch keys reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::new();
@@ -1689,7 +1744,7 @@ mod tests {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();
         }
-        assert_eq!(should_flush_to_engine(&req, wb.count()), true);
+        assert_eq!(should_write_to_engine(&req, wb.count()), true);
 
         // Write batch keys not reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::new();
@@ -1698,7 +1753,7 @@ mod tests {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();
         }
-        assert_eq!(should_flush_to_engine(&req, wb.count()), false);
+        assert_eq!(should_write_to_engine(&req, wb.count()), false);
     }
 
     #[test]
@@ -1980,13 +2035,10 @@ mod tests {
         let obs = ApplyObserver::default();
         host.registry
             .register_query_observer(1, Box::new(obs.clone()));
-        let mut apply_ctx = ApplyContext::new(&host, true);
-        let res = delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        db.write(apply_ctx.wb).unwrap();
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&host);
-        }
-        assert!(res.is_empty());
+        let mut apply_ctx = ApplyContext::new(&host).use_delete_range(true);
+        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
+        apply_ctx.write_to_db(&db);
+        assert!(apply_ctx.apply_res.last().unwrap().exec_res.is_empty());
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         assert_eq!(resp.get_responses().len(), 3);
@@ -2007,12 +2059,9 @@ mod tests {
             .put_cf(CF_LOCK, b"k1", b"v1")
             .epoch(1, 3)
             .build();
-        let mut apply_ctx = ApplyContext::new(&host, true);
+        let mut apply_ctx = ApplyContext::new(&host).use_delete_range(true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        db.write(apply_ctx.wb).unwrap();
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&host);
-        }
+        apply_ctx.write_to_db(&db);
         let lock_handle = db.cf_handle(CF_LOCK).unwrap();
         assert_eq!(db.get_cf(lock_handle, &dk_k1).unwrap().unwrap(), b"v1");
         assert_eq!(
@@ -2030,12 +2079,9 @@ mod tests {
             .epoch(1, 1)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new(&host, true);
+        let mut apply_ctx = ApplyContext::new(&host).use_delete_range(true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        db.write(apply_ctx.wb).unwrap();
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&host);
-        }
+        apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_stale_epoch());
         assert_eq!(delegate.applied_index_term, 2);
@@ -2047,12 +2093,9 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new(&host, true);
+        let mut apply_ctx = ApplyContext::new(&host).use_delete_range(true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        db.write(apply_ctx.wb).unwrap();
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&host);
-        }
+        apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         assert_eq!(delegate.applied_index_term, 2);
@@ -2073,12 +2116,9 @@ mod tests {
         let lock_written_bytes = delegate.metrics.lock_cf_written_bytes;
         let delete_keys_hint = delegate.metrics.delete_keys_hint;
         let size_diff_hint = delegate.metrics.size_diff_hint;
-        let mut apply_ctx = ApplyContext::new(&host, true);
+        let mut apply_ctx = ApplyContext::new(&host).use_delete_range(true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        db.write(apply_ctx.wb).unwrap();
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&host);
-        }
+        apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         // stale command should be cleared.
         assert!(resp.get_header().get_error().has_stale_command());
@@ -2097,12 +2137,9 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new(&host, true);
+        let mut apply_ctx = ApplyContext::new(&host).use_delete_range(true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_entry]);
-        db.write(apply_ctx.wb).unwrap();
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&host);
-        }
+        apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
 
@@ -2111,12 +2148,9 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new(&host, true);
+        let mut apply_ctx = ApplyContext::new(&host).use_delete_range(true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
-        db.write(apply_ctx.wb).unwrap();
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&host);
-        }
+        apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         assert_eq!(db.get(&dk_k3).unwrap().unwrap(), b"v1");
@@ -2128,12 +2162,9 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new(&host, true);
+        let mut apply_ctx = ApplyContext::new(&host).use_delete_range(true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
-        db.write(apply_ctx.wb).unwrap();
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&host);
-        }
+        apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         assert!(db.get(&dk_k1).unwrap().is_none());
@@ -2149,12 +2180,9 @@ mod tests {
                 .build();
             entries.push(put_entry);
         }
-        let mut apply_ctx = ApplyContext::new(&host, true);
+        let mut apply_ctx = ApplyContext::new(&host).use_delete_range(true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, entries);
-        db.write(apply_ctx.wb).unwrap();
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&host);
-        }
+        apply_ctx.write_to_db(&db);
         for _ in 0..WRITE_BATCH_MAX_KEYS {
             rx.try_recv().unwrap();
         }

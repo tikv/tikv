@@ -27,6 +27,7 @@ use raftstore::store::Engines;
 use raftstore::store::msg::Callback;
 use server::debug::{Debugger, Error};
 use server::transport::RaftStoreRouter;
+use util::metrics;
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
@@ -295,6 +296,24 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
             });
             let mut resp = ListFailPointsResponse::new();
             resp.set_entries(list.collect());
+            Ok(resp)
+        });
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
+
+    fn get_metrics(
+        &self,
+        ctx: RpcContext,
+        _: GetMetricsRequest,
+        sink: UnarySink<GetMetricsResponse>,
+    ) {
+        const TAG: &str = "debug_get_metrics";
+
+        let f = self.pool.spawn_fn(move || {
+            let metrics_info = metrics::dump();
+            let mut resp = GetMetricsResponse::new();
+            resp.set_metrics(metrics_info);
             Ok(resp)
         });
 
