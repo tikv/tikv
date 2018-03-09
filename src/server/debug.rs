@@ -331,7 +331,8 @@ impl Debugger {
     pub fn remove_failed_stores(&self, store_ids: Vec<u64>) -> Result<()> {
         let store_id = self.get_store_id()?;
         if store_ids.iter().any(|&s| s == store_id) {
-            return Err(Error::Other("Store in the failed list".into()));
+            let msg = format!("Store {} in the failed list", store_id);
+            return Err(Error::Other(msg.into()));
         }
         let wb = WriteBatch::new();
         let handle = box_try!(get_cf_handle(self.engines.kv_engine.as_ref(), CF_RAFT));
