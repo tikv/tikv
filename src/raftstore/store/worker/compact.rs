@@ -416,7 +416,7 @@ mod test {
         ranges_to_check.insert(data_key(b"k9"));
 
         let ranges_need_to_compact =
-        collect_ranges_need_compact(&engine, ranges_to_check, 1).unwrap();
+            collect_ranges_need_compact(&engine, ranges_to_check, 1).unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k9"));
         let mut expected_ranges = VecDeque::new();
         expected_ranges.push_back((s, e));
