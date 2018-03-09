@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::time::{Duration, Instant};
 use std::thread;
@@ -54,7 +54,7 @@ use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, Compact
                     RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
-use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key, DATA_MIN_KEY};
+use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
@@ -151,7 +151,7 @@ pub struct Store<T, C: 'static> {
     pub apply_worker: Worker<ApplyTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
 
-    last_compact_checked_key: Option<Key>,
+    last_compact_checked_key: Key,
 
     trans: T,
     pd_client: Arc<C>,
@@ -228,7 +228,7 @@ impl<T, C> Store<T, C> {
             consistency_check_worker: Worker::new("consistency check worker"),
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
-            last_compact_checked_key: None,
+            last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
             region_ranges: BTreeMap::new(),
             pending_snapshot_regions: vec![],
             trans: trans,
@@ -1881,31 +1881,37 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_compact_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if self.compact_worker.is_busy() {
             info!("compact worker is busy, check space redundancy next time");
+        } else if self.region_ranges.is_empty() {
+            debug!("there is no range need to check");
         } else {
             // Start from last checked key.
-            let mut ranges_need_check = BTreeSet::new();
-            let last_compact_checked_key = match self.last_compact_checked_key.take() {
-                Some(key) => key,
-                None => {
-                    ranges_need_check.insert(DATA_MIN_KEY.to_vec());
-                    DATA_MIN_KEY.to_vec()
-                }
-            };
+            let mut ranges_need_check =
+                Vec::with_capacity(self.cfg.region_compact_check_step as usize + 1);
+            ranges_need_check.push(self.last_compact_checked_key.clone());
 
-            // Collect multiple continuous ranges.
-            let left_ranges = self.region_ranges
-                .range((Included(last_compact_checked_key), Unbounded::<Key>));
-            for (count, (key, _)) in left_ranges.enumerate() {
-                ranges_need_check.insert(key.to_vec());
-                if count > self.cfg.region_compact_check_step as usize {
-                    self.last_compact_checked_key = Some(key.to_vec());
-                    break;
-                }
-            }
+            // Collect continuous ranges.
+            let left_ranges = self.region_ranges.range((
+                Excluded(self.last_compact_checked_key.clone()),
+                Unbounded::<Key>,
+            ));
+            ranges_need_check.extend(
+                left_ranges
+                    .take(self.cfg.region_compact_check_step as usize)
+                    .map(|(k, _)| k.to_owned()),
+            );
 
-            // Handle the last range if needed.
-            if self.last_compact_checked_key.is_none() {
-                ranges_need_check.insert(keys::DATA_MAX_KEY.to_vec());
+            // Update last_compact_checked_key.
+            let largest_key = self.region_ranges.keys().next_back().unwrap().to_vec();
+            let last_key = ranges_need_check[ranges_need_check.len()].clone();
+            if last_key == largest_key {
+                // Range [largest key, DATA_MAX_KEY) also need to check.
+                if last_key != keys::DATA_MAX_KEY.to_vec() {
+                    ranges_need_check.push(keys::DATA_MAX_KEY.to_vec());
+                }
+                // Next task will start from the very beginning.
+                self.last_compact_checked_key = keys::DATA_MIN_KEY.to_vec();
+            } else {
+                self.last_compact_checked_key = last_key;
             }
 
             // Schedule the task.

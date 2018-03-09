@@ -13,7 +13,7 @@
 
 use std::fmt::{self, Display, Formatter};
 use std::error;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use util::worker::Runnable;
@@ -37,7 +37,7 @@ pub enum Task {
 
     CheckAndCompact {
         cf_names: Vec<String>,     // Column families need to compact
-        ranges: BTreeSet<Key>,     // Ranges need to check
+        ranges: Vec<Key>,          // Ranges need to check
         tombstones_threshold: u64, // The minimum RocksDB tombstones a range that need compacting has
     },
 }
@@ -111,7 +111,7 @@ impl Runner {
 
     pub fn collect_ranges_need_compact(
         &self,
-        ranges: BTreeSet<Key>,
+        ranges: Vec<Key>,
         tombstones_threshold: u64,
     ) -> Result<VecDeque<(Key, Key)>, Error> {
         collect_ranges_need_compact(&self.engine, ranges, tombstones_threshold)
@@ -202,7 +202,7 @@ fn get_range_entries_and_versions(
 
 fn collect_ranges_need_compact(
     engine: &DB,
-    ranges: BTreeSet<Key>,
+    ranges: Vec<Key>,
     tombstones_threshold: u64,
 ) -> Result<VecDeque<(Key, Key)>, Error> {
     // Check the SST properties for each range, and we will compact a range if the range
@@ -254,7 +254,6 @@ fn collect_ranges_need_compact(
 mod test {
     use std::time::Duration;
     use std::thread::sleep;
-    use std::collections::BTreeSet;
 
     use tempdir::TempDir;
 
@@ -386,13 +385,11 @@ mod test {
         assert_eq!(entries, 5);
         assert_eq!(version, 5);
 
-        let mut ranges_to_check = BTreeSet::new();
-        ranges_to_check.insert(data_key(b"k0"));
-        ranges_to_check.insert(data_key(b"k5"));
-        ranges_to_check.insert(data_key(b"k9"));
-
-        let ranges_need_to_compact =
-            collect_ranges_need_compact(&engine, ranges_to_check, 1).unwrap();
+        let ranges_need_to_compact = collect_ranges_need_compact(
+            &engine,
+            vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
+            1,
+        ).unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k5"));
         let mut expected_ranges = VecDeque::new();
         expected_ranges.push_back((s, e));
@@ -410,13 +407,11 @@ mod test {
         assert_eq!(entries, 10);
         assert_eq!(version, 5);
 
-        let mut ranges_to_check = BTreeSet::new();
-        ranges_to_check.insert(data_key(b"k0"));
-        ranges_to_check.insert(data_key(b"k5"));
-        ranges_to_check.insert(data_key(b"k9"));
-
-        let ranges_need_to_compact =
-            collect_ranges_need_compact(&engine, ranges_to_check, 1).unwrap();
+        let ranges_need_to_compact = collect_ranges_need_compact(
+            &engine,
+            vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
+            1,
+        ).unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k9"));
         let mut expected_ranges = VecDeque::new();
         expected_ranges.push_back((s, e));
