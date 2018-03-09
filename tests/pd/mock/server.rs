@@ -215,10 +215,11 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
                 stream
                     .map_err(PdError::from)
                     .and_then(move |req| {
-                        match mock.case.as_ref().map_or_else(
-                            || mock.default_handler.region_heartbeat(&req),
-                            |s| s.region_heartbeat(&req),
-                        ) {
+                        let resp = mock.case
+                            .as_ref()
+                            .and_then(|case| case.region_heartbeat(&req))
+                            .or_else(|| mock.default_handler.region_heartbeat(&req));
+                        match resp {
                             None => Ok(None),
                             Some(Ok(resp)) => Ok(Some((resp, WriteFlags::default()))),
                             Some(Err(e)) => Err(box_err!("{:?}", e)),
