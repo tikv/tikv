@@ -825,6 +825,39 @@ impl TiKvConfig {
     }
 }
 
+pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
+    // Check current critical configurations with last time, if there are some
+    // changes, user must guarantee relevant works have been done.
+    let store_path = Path::new(&config.storage.data_dir);
+    let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
+    if last_cfg_path.exists() {
+        let last_cfg = TiKvConfig::from_file(&last_cfg_path);
+        if let Err(e) = config.check_critical_cfg_with(&last_cfg) {
+            return Err(format!("check critical config failed, err {:?}", e));
+        }
+    }
+
+    // Create parent directory if missing.
+    if let Err(e) = fs::create_dir_all(&store_path) {
+        return Err(format!(
+            "create parent directory {} failed, err {:?}",
+            store_path.to_str().unwrap(),
+            e
+        ));
+    }
+
+    // Persist current critical configurations to file.
+    if let Err(e) = config.write_to_file(&last_cfg_path) {
+        return Err(format!(
+            "persist critical config to {} failed, err {:?}",
+            last_cfg_path.to_str().unwrap(),
+            e
+        ));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod test {
     use tempdir::TempDir;
@@ -885,5 +918,15 @@ mod test {
         let cfg_from_file = TiKvConfig::from_file(file);
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s2.clone());
         assert_eq!(cfg_from_file.raftdb.wal_dir, s1.clone());
+    }
+
+    #[test]
+    fn test_create_parent_dir_if_missing() {
+        let tmp_path = TempDir::new("test_create_parent_dir_if_missing").unwrap();
+        let pathbuf = tmp_path.into_path().join("not_exist_dir");
+
+        let mut tikv_cfg = TiKvConfig::default();
+        tikv_cfg.storage.data_dir = pathbuf.as_path().to_str().unwrap().to_owned();
+        assert!(check_and_persist_critical_config(&tikv_cfg).is_ok());
     }
 }
