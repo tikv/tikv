@@ -40,7 +40,7 @@ use raftstore::store::worker::{Apply, ApplyRes, ApplyTask};
 use util::MustConsumeVec;
 use util::worker::{FutureWorker, Scheduler};
 use util::time::{duration_to_sec, monotonic_raw_now};
-use util::collections::{FlatMap, FlatMapEntry as Entry, FlatMapValues as Values, HashSet};
+use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
 
 use pd::{PdTask, INVALID_ID};
 
@@ -194,7 +194,7 @@ pub struct Peer {
 
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
-    pub peer_pending_after: FlatMap<u64, Instant>,
+    pub peer_pending_after: Vec<(u64, Instant)>,
 
     coprocessor_host: Arc<CoprocessorHost>,
     /// an inaccurate difference in region size since last reset.
@@ -320,7 +320,7 @@ impl Peer {
             pending_reads: Default::default(),
             peer_cache: RefCell::new(peer_cache),
             peer_heartbeats: FlatMap::default(),
-            peer_pending_after: FlatMap::default(),
+            peer_pending_after: Vec::with_capacity(5),
             coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
             delete_keys_hint: 0,
@@ -595,7 +595,7 @@ impl Peer {
         pending_peers
     }
 
-    pub fn peer_pending_finished(&mut self, peer_id: u64) -> bool {
+    pub fn peer_catch_up(&mut self, peer_id: u64) -> bool {
         if self.peer_pending_after.is_empty() {
             return false;
         }
@@ -603,13 +603,15 @@ impl Peer {
             self.peer_pending_after.clear();
             return false;
         }
-        if let Entry::Occupied(e) = self.peer_pending_after.entry(peer_id) {
-            let status = self.raft_group.status();
+        for i in 0..self.peer_pending_after.len() {
+            if self.peer_pending_after[i].0 != peer_id {
+                continue;
+            }
             let truncated_idx = self.raft_group.get_store().truncated_index();
-            if let Some(progress) = status.progress.get(&peer_id) {
+            if let Some(progress) = self.raft_group.raft.prs().get(peer_id) {
                 if progress.matched >= truncated_idx {
-                    let effective_time = e.remove();
-                    let elapsed = duration_to_sec(effective_time.elapsed());
+                    let (_, pending_after) = self.peer_pending_after.swap_remove(i);
+                    let elapsed = duration_to_sec(pending_after.elapsed());
                     info!("peer {} has caugth up logs, elapsed: {}", peer_id, elapsed);
                     return true;
                 }
