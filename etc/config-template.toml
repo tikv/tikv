@@ -61,7 +61,7 @@
 
 # the max bytes that snapshot can be written to disk in one second,
 # should be set based on your disk performance
-# snap-max-write-bytes-per-sec = "30MB"
+# snap-max-write-bytes-per-sec = "100MB"
 
 # set attributes about this server, e.g. { zone = "us-west-1", disk = "ssd" }.
 # labels = {}
