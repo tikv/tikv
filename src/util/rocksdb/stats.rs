@@ -20,7 +20,7 @@ const ROCKSDB_DB_STATS_KEY: &str = "rocksdb.dbstats";
 const ROCKSDB_CF_STATS_KEY: &str = "rocksdb.cfstats";
 
 pub fn dump(engine: &Arc<DB>) -> String {
-    let mut s = vec![];
+    let mut s = Vec::with_capacity(1024);
     // common rocksdb stats.
     for name in engine.cf_names() {
         let handler = engine.cf_handle(name).unwrap();

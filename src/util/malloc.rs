@@ -35,7 +35,7 @@ mod malloc {
     }
 
     pub fn dump_stats() -> String {
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(1024);
         unsafe {
             malloc_stats_print(
                 write_cb,
