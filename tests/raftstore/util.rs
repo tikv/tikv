@@ -24,7 +24,7 @@ use protobuf;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse,
                           Request, StatusCmdType, StatusRequest};
-use kvproto::pdpb::{ChangePeer, RegionHeartbeatResponse, TransferLeader};
+use kvproto::pdpb::{ChangePeer, RegionHeartbeatResponse, SplitRegion, TransferLeader};
 use kvproto::eraftpb::ConfChangeType;
 
 use tikv::raftstore::store::*;
@@ -277,6 +277,13 @@ pub fn new_pd_change_peer(
     let mut resp = RegionHeartbeatResponse::new();
     resp.set_change_peer(change_peer);
     resp
+}
+
+pub fn new_half_split_region() -> Option<RegionHeartbeatResponse> {
+    let split_region = SplitRegion::new();
+    let mut resp = RegionHeartbeatResponse::new();
+    resp.set_split_region(split_region);
+    Some(resp)
 }
 
 pub fn new_pd_add_change_peer(

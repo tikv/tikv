@@ -522,6 +522,24 @@ impl TestPdClient {
         });
     }
 
+    pub fn half_split_region(&self, src_region: metapb::Region) {
+        self.set_rule(box move |region: &metapb::Region, _: &metapb::Peer| {
+            debug!(
+                "[region {}] trying half split {:?}",
+                src_region.get_id(),
+                region
+            );
+            if region.get_id() != src_region.get_id() {
+                return None;
+            }
+
+            if region.get_region_epoch() != src_region.get_region_epoch() {
+                return None;
+            }
+            new_half_split_region()
+        });
+    }
+
     pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.add_peer(region_id, peer.clone());
         self.must_have_peer(region_id, peer);
