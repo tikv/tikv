@@ -28,7 +28,7 @@ use super::print_result;
 /// In mvcc kv is not actually deleted, which may cause performance issue
 /// when doing scan.
 fn bench_tombstone_scan() -> BenchSamples {
-    let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+    let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
         || storage::ReadPoolContext::new(None)
     });
     let store = SyncStorage::new(&Default::default(), read_pool);
