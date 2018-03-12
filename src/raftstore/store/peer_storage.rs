@@ -553,16 +553,24 @@ impl PeerStorage {
             return Ok(ents);
         }
         let cache_low = self.cache.first_index();
+        let region_id = self.get_region_id();
         if high <= cache_low {
             // not overlap
             self.stats.borrow_mut().miss += 1;
-            self.fetch_entries_to(low, high, max_size, &mut ents)?;
+            fetch_entries_to(&self.raft_engine, region_id, low, high, max_size, &mut ents)?;
             return Ok(ents);
         }
         let mut fetched_size = 0;
         let begin_idx = if low < cache_low {
             self.stats.borrow_mut().miss += 1;
-            fetched_size = self.fetch_entries_to(low, cache_low, max_size, &mut ents)?;
+            fetched_size = fetch_entries_to(
+                &self.raft_engine,
+                region_id,
+                low,
+                cache_low,
+                max_size,
+                &mut ents,
+            )?;
             if fetched_size > max_size {
                 // max_size exceed.
                 return Ok(ents);
@@ -576,76 +584,6 @@ impl PeerStorage {
         self.cache
             .fetch_entries_to(begin_idx, high, fetched_size, max_size, &mut ents);
         Ok(ents)
-    }
-
-    fn fetch_entries_to(
-        &self,
-        low: u64,
-        high: u64,
-        max_size: u64,
-        buf: &mut Vec<Entry>,
-    ) -> raft::Result<u64> {
-        let mut total_size: u64 = 0;
-        let mut next_index = low;
-        let mut exceeded_max_size = false;
-        if high - low <= RAFT_LOG_MULTI_GET_CNT {
-            // If election happens in inactive regions, they will just try
-            // to fetch one empty log.
-            for i in low..high {
-                let key = keys::raft_log_key(self.get_region_id(), i);
-                match self.raft_engine.get(&key) {
-                    Ok(None) => return Err(RaftError::Store(StorageError::Unavailable)),
-                    Ok(Some(v)) => {
-                        let mut entry = Entry::new();
-                        entry.merge_from_bytes(&v)?;
-                        assert_eq!(entry.get_index(), i);
-                        total_size += v.len() as u64;
-                        if buf.is_empty() || total_size <= max_size {
-                            buf.push(entry);
-                        }
-                        if total_size > max_size {
-                            break;
-                        }
-                    }
-                    Err(e) => return Err(storage_error(e)),
-                }
-            }
-            return Ok(total_size);
-        }
-
-        let start_key = keys::raft_log_key(self.get_region_id(), low);
-        let end_key = keys::raft_log_key(self.get_region_id(), high);
-        self.raft_engine.scan(
-            &start_key,
-            &end_key,
-            true, // fill_cache
-            &mut |_, value| {
-                let mut entry = Entry::new();
-                entry.merge_from_bytes(value)?;
-
-                // May meet gap or has been compacted.
-                if entry.get_index() != next_index {
-                    return Ok(false);
-                }
-                next_index += 1;
-
-                total_size += value.len() as u64;
-                exceeded_max_size = total_size > max_size;
-                if !exceeded_max_size || buf.is_empty() {
-                    buf.push(entry);
-                }
-                Ok(!exceeded_max_size)
-            },
-        )?;
-
-        // If we get the correct number of entries, returns,
-        // or the total size almost exceeds max_size, returns.
-        if buf.len() == (high - low) as usize || exceeded_max_size {
-            return Ok(total_size);
-        }
-
-        // Here means we don't fetch enough entries.
-        Err(RaftError::Store(StorageError::Unavailable))
     }
 
     pub fn term(&self, idx: u64) -> raft::Result<u64> {
@@ -1172,6 +1110,77 @@ impl PeerStorage {
             region: self.region.clone(),
         })
     }
+}
+
+pub fn fetch_entries_to(
+    engine: &DB,
+    region_id: u64,
+    low: u64,
+    high: u64,
+    max_size: u64,
+    buf: &mut Vec<Entry>,
+) -> raft::Result<u64> {
+    let mut total_size: u64 = 0;
+    let mut next_index = low;
+    let mut exceeded_max_size = false;
+    if high - low <= RAFT_LOG_MULTI_GET_CNT {
+        // If election happens in inactive regions, they will just try
+        // to fetch one empty log.
+        for i in low..high {
+            let key = keys::raft_log_key(region_id, i);
+            match engine.get(&key) {
+                Ok(None) => return Err(RaftError::Store(StorageError::Unavailable)),
+                Ok(Some(v)) => {
+                    let mut entry = Entry::new();
+                    entry.merge_from_bytes(&v)?;
+                    assert_eq!(entry.get_index(), i);
+                    total_size += v.len() as u64;
+                    if buf.is_empty() || total_size <= max_size {
+                        buf.push(entry);
+                    }
+                    if total_size > max_size {
+                        break;
+                    }
+                }
+                Err(e) => return Err(storage_error(e)),
+            }
+        }
+        return Ok(total_size);
+    }
+
+    let start_key = keys::raft_log_key(region_id, low);
+    let end_key = keys::raft_log_key(region_id, high);
+    engine.scan(
+        &start_key,
+        &end_key,
+        true, // fill_cache
+        &mut |_, value| {
+            let mut entry = Entry::new();
+            entry.merge_from_bytes(value)?;
+
+            // May meet gap or has been compacted.
+            if entry.get_index() != next_index {
+                return Ok(false);
+            }
+            next_index += 1;
+
+            total_size += value.len() as u64;
+            exceeded_max_size = total_size > max_size;
+            if !exceeded_max_size || buf.is_empty() {
+                buf.push(entry);
+            }
+            Ok(!exceeded_max_size)
+        },
+    )?;
+
+    // If we get the correct number of entries, returns,
+    // or the total size almost exceeds max_size, returns.
+    if buf.len() == (high - low) as usize || exceeded_max_size {
+        return Ok(total_size);
+    }
+
+    // Here means we don't fetch enough entries.
+    Err(RaftError::Store(StorageError::Unavailable))
 }
 
 /// Delete all meta belong to the region. Results are stored in `wb`.

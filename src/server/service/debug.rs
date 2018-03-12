@@ -21,6 +21,7 @@ use fail;
 
 use raftstore::store::Engines;
 use server::debug::{Debugger, Error};
+use util::{jemalloc, metrics, rocksdb_stats};
 
 #[derive(Clone)]
 pub struct Service {
@@ -287,6 +288,30 @@ impl debugpb_grpc::Debug for Service {
             });
             let mut resp = ListFailPointsResponse::new();
             resp.set_entries(list.collect());
+            Ok(resp)
+        });
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
+
+    fn get_metrics(
+        &self,
+        ctx: RpcContext,
+        req: GetMetricsRequest,
+        sink: UnarySink<GetMetricsResponse>,
+    ) {
+        const TAG: &str = "debug_get_metrics";
+
+        let debugger = self.debugger.clone();
+        let f = self.pool.spawn_fn(move || {
+            let mut resp = GetMetricsResponse::new();
+            resp.set_prometheus(metrics::dump());
+            if req.get_all() {
+                let engines = debugger.get_engine();
+                resp.set_rocksdb_kv(box_try!(rocksdb_stats::dump(&engines.kv_engine)));
+                resp.set_rocksdb_raft(box_try!(rocksdb_stats::dump(&engines.raft_engine)));
+                resp.set_jemalloc(jemalloc::dump_stats());
+            }
             Ok(resp)
         });
 

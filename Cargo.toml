@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "1.1.0-dev.1"
+version = "2.0.0-rc.1"
 keywords = ["KV", "distributed-systems", "raft"]
 build = "build.rs"
 
@@ -80,7 +80,6 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
-branch = "busyjay/remove-eraftpb"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"

@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use time::Timespec;
 use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
-use protobuf::{self, Message, MessageStatic};
+use protobuf::{self, Message};
 use kvproto::metapb;
 use raft::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
@@ -153,15 +153,6 @@ impl<'a, T> ReadyContext<'a, T> {
             ready_res: Vec::with_capacity(cap),
         }
     }
-}
-
-// TODO: make sure received entries are not corrupted
-// If this happens, TiKV will panic and can't recover without extra effort.
-#[inline]
-pub fn parse_data_at<T: Message + MessageStatic>(data: &[u8], index: u64, tag: &str) -> T {
-    protobuf::parse_from_bytes::<T>(data).unwrap_or_else(|e| {
-        panic!("{} data is corrupted at {}: {:?}", tag, index, e);
-    })
 }
 
 pub struct ConsistencyState {
@@ -1107,7 +1098,6 @@ impl Peer {
                         r.get_cmd_type()
                     ));
                 }
-                CmdType::IngestSST => unimplemented!(),
             }
 
             if is_read && is_write {
@@ -1649,7 +1639,6 @@ impl Peer {
                 | CmdType::Delete
                 | CmdType::DeleteRange
                 | CmdType::Invalid => unreachable!(),
-                CmdType::IngestSST => unimplemented!(),
             };
             resp.set_cmd_type(cmd_type);
             responses.push(resp);
@@ -1684,8 +1673,10 @@ fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderReques
 fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
     if msg.has_admin_request() {
         let req = msg.get_admin_request();
-        return req.get_cmd_type() == AdminCmdType::ChangePeer
-            || req.get_cmd_type() == AdminCmdType::Split;
+        return match req.get_cmd_type() {
+            AdminCmdType::ChangePeer | AdminCmdType::Split => true,
+            _ => false,
+        };
     }
 
     msg.get_header().get_sync_log()
@@ -1698,4 +1689,32 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
     let mut resp = RaftCmdResponse::new();
     resp.set_admin_response(response);
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use protobuf::ProtobufEnum;
+
+    use super::*;
+
+    #[test]
+    fn test_sync_log() {
+        let white_list = [
+            AdminCmdType::InvalidAdmin,
+            AdminCmdType::CompactLog,
+            AdminCmdType::TransferLeader,
+            AdminCmdType::ComputeHash,
+            AdminCmdType::VerifyHash,
+        ];
+        for tp in AdminCmdType::values() {
+            let mut msg = RaftCmdRequest::new();
+            msg.mut_admin_request().set_cmd_type(*tp);
+            assert_eq!(
+                get_sync_log_from_request(&msg),
+                !white_list.contains(tp),
+                "{:?}",
+                tp
+            );
+        }
+    }
 }

@@ -30,11 +30,12 @@ use raft::eraftpb::ConfChangeType;
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Config as ServerConfig;
+use tikv::server::readpool::Config as ReadPoolInstanceConfig;
 use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
 use tikv::util::escape;
 use tikv::util::rocksdb::{self, CompactionListener};
 use tikv::util::config::*;
-use tikv::config::TiKvConfig;
+use tikv::config::{ReadPoolConfig, TiKvConfig};
 use tikv::util::transport::SendCh;
 use tikv::raftstore::store::Msg as StoreMsg;
 
@@ -122,6 +123,12 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
     }
 }
 
+pub fn new_readpool_cfg() -> ReadPoolConfig {
+    ReadPoolConfig {
+        storage: ReadPoolInstanceConfig::default_for_test(),
+    }
+}
+
 pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
     TiKvConfig {
         storage: StorageConfig {
@@ -130,6 +137,7 @@ pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
         },
         server: new_server_config(cluster_id),
         raft_store: new_store_cfg(),
+        readpool: new_readpool_cfg(),
         ..TiKvConfig::default()
     }
 }
@@ -321,7 +329,6 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdRespons
             CmdType::Get | CmdType::Snap => is_read = true,
             CmdType::Put | CmdType::Delete | CmdType::DeleteRange => is_write = true,
             CmdType::Invalid | CmdType::Prewrite => panic!("Invalid RaftCmdRequest: {:?}", cmd),
-            CmdType::IngestSST => unimplemented!(),
         }
     }
     assert!(is_read ^ is_write, "Invalid RaftCmdRequest: {:?}", cmd);
