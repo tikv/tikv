@@ -121,7 +121,9 @@ impl Simulator for ServerCluster {
         let (engines, path) = create_test_engine(engines, store_sendch.clone(), &cfg);
 
         // Create storage.
-        let read_pool = ReadPool::new(&cfg.readpool, || || storage::ReadPoolContext::new(None));
+        let read_pool = ReadPool::new("readpool", &cfg.readpool.storage, || {
+            || storage::ReadPoolContext::new(None)
+        });
         let mut store = create_raft_storage(sim_router.clone(), &cfg.storage, read_pool).unwrap();
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());

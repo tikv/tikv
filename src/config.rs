@@ -28,7 +28,7 @@ use sys_info;
 
 use import::Config as ImportConfig;
 use server::Config as ServerConfig;
-use server::readpool::Config as ReadPoolConfig;
+use server::readpool::Config as ReadPoolInstanceConfig;
 use pd::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
@@ -649,6 +649,21 @@ pub enum LogLevel {
     Warn,
     Error,
     Off,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct ReadPoolConfig {
+    pub storage: ReadPoolInstanceConfig,
+}
+
+impl Default for ReadPoolConfig {
+    fn default() -> ReadPoolConfig {
+        ReadPoolConfig {
+            storage: ReadPoolInstanceConfig::default(),
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
