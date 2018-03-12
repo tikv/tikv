@@ -2549,13 +2549,8 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 }
 
                 let region = peer.region();
-                if region.get_region_epoch() != &region_epoch {
-                    // region epoch is timeout, skipped.
-                    info!(
-                        "[region {}] region on {} epoch is timeout, skip.",
-                        region_id,
-                        self.store_id()
-                    );
+                if util::is_epoch_stale(&region_epoch, region.get_region_epoch()) {
+                    info!("[region {}] receive a stale halfsplit message", region_id);
                     return;
                 }
 

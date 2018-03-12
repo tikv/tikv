@@ -26,10 +26,6 @@ pub struct HalfStatus {
 impl HalfStatus {
     pub fn on_split_check(&mut self, key: &[u8], value_size: u64) -> bool {
         self.current_size += key.len() as u64 + value_size;
-        debug!(
-            "key:{:?},current_size:{},region_size:{}",
-            key, self.current_size, self.region_size
-        );
         self.current_size > self.region_size / 2
     }
 }
