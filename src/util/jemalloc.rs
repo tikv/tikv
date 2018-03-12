@@ -12,7 +12,7 @@
 // limitations under the License.
 
 #[cfg(unix)]
-mod malloc {
+mod jemalloc {
     use std::{ptr, slice};
     use libc::{self, c_char, c_void};
 
@@ -57,7 +57,7 @@ mod malloc {
 }
 
 #[cfg(not(unix))]
-mod malloc {
+mod jemalloc {
     use tikv::raftstore::store::Engines;
 
     pub fn dump_stats() -> String {
@@ -65,4 +65,4 @@ mod malloc {
     }
 }
 
-pub use self::malloc::dump_stats;
+pub use self::jemalloc::dump_stats;

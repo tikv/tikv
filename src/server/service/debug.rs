@@ -21,7 +21,7 @@ use fail;
 
 use raftstore::store::Engines;
 use server::debug::{Debugger, Error};
-use util::{malloc, metrics, rocksdb_stats};
+use util::{jemalloc, metrics, rocksdb_stats};
 
 #[derive(Clone)]
 pub struct Service {
@@ -310,7 +310,7 @@ impl debugpb_grpc::Debug for Service {
                 let engines = debugger.get_engine();
                 resp.set_rocksdb_kv(rocksdb_stats::dump(&engines.kv_engine));
                 resp.set_rocksdb_raft(rocksdb_stats::dump(&engines.raft_engine));
-                resp.set_malloc(malloc::dump_stats());
+                resp.set_malloc(jemalloc::dump_stats());
             }
             Ok(resp)
         });

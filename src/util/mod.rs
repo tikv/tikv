@@ -45,7 +45,7 @@ pub mod timer;
 pub mod sys;
 pub mod future;
 pub mod futurepool;
-pub mod malloc;
+pub mod jemalloc;
 
 pub use self::rocksdb::properties;
 pub use self::rocksdb::stats as rocksdb_stats;
