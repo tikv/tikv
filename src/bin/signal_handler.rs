@@ -33,8 +33,8 @@ mod imp {
                 SIGUSR1 => {
                     // Use SIGUSR1 to log metrics.
                     info!("{}", metrics::dump());
-                    info!("{}", rocksdb_stats::dump(&engines.kv_engine));
-                    info!("{}", rocksdb_stats::dump(&engines.raft_engine));
+                    info!("{:?}", rocksdb_stats::dump(&engines.kv_engine));
+                    info!("{:?}", rocksdb_stats::dump(&engines.raft_engine));
                 }
                 SIGUSR2 => profiling::dump_prof(None),
                 // TODO: handle more signal

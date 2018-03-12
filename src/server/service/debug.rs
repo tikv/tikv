@@ -308,8 +308,8 @@ impl debugpb_grpc::Debug for Service {
             resp.set_prometheus(metrics::dump());
             if req.get_complete() {
                 let engines = debugger.get_engine();
-                resp.set_rocksdb_kv(rocksdb_stats::dump(&engines.kv_engine));
-                resp.set_rocksdb_raft(rocksdb_stats::dump(&engines.raft_engine));
+                resp.set_rocksdb_kv(box_try!(rocksdb_stats::dump(&engines.kv_engine)));
+                resp.set_rocksdb_raft(box_try!(rocksdb_stats::dump(&engines.raft_engine)));
                 resp.set_malloc(jemalloc::dump_stats());
             }
             Ok(resp)

@@ -13,13 +13,14 @@
 
 use std::sync::Arc;
 use std::io::Write;
+use std::string::FromUtf8Error;
 
 use rocksdb::DB;
 
 const ROCKSDB_DB_STATS_KEY: &str = "rocksdb.dbstats";
 const ROCKSDB_CF_STATS_KEY: &str = "rocksdb.cfstats";
 
-pub fn dump(engine: &Arc<DB>) -> String {
+pub fn dump(engine: &Arc<DB>) -> Result<String, FromUtf8Error> {
     let mut s = Vec::with_capacity(1024);
     // common rocksdb stats.
     for name in engine.cf_names() {
@@ -38,5 +39,5 @@ pub fn dump(engine: &Arc<DB>) -> String {
         writeln!(&mut s, "{}", v).unwrap();
     }
 
-    String::from_utf8(s).unwrap()
+    String::from_utf8(s)
 }
