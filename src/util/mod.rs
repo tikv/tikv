@@ -45,8 +45,10 @@ pub mod timer;
 pub mod sys;
 pub mod future;
 pub mod futurepool;
+pub mod jemalloc;
 
 pub use self::rocksdb::properties;
+pub use self::rocksdb::stats as rocksdb_stats;
 
 #[cfg(target_os = "linux")]
 mod thread_metrics;
