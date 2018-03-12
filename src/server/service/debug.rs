@@ -333,7 +333,6 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
 
         let consistency_check = future::result(debugger.get_store_id())
             .and_then(move |store_id| region_detail(router2, region_id, store_id))
-            .flatten()
             .and_then(|detail| consistency_check(router1, detail));
         let f = self.pool
             .spawn(consistency_check)
@@ -346,7 +345,7 @@ fn region_detail<T: RaftStoreRouter>(
     raft_router: T,
     region_id: u64,
     store_id: u64,
-) -> Result<impl Future<Item = RegionDetailResponse, Error = Error>, Error> {
+) -> impl Future<Item = RegionDetailResponse, Error = Error> {
     let mut header = RaftRequestHeader::new();
     header.set_region_id(region_id);
     header.mut_peer().set_store_id(store_id);
@@ -358,9 +357,9 @@ fn region_detail<T: RaftStoreRouter>(
 
     let (tx, rx) = oneshot::channel();
     let cb = Callback::Read(box |resp| tx.send(resp).unwrap());
-    raft_router
-        .send_command(raft_cmd, cb)
-        .map(|_| {
+    future::result(raft_router.send_command(raft_cmd, cb))
+        .map_err(|e| Error::Other(box e))
+        .and_then(move |_| {
             rx.map_err(|e| Error::Other(box e)).and_then(move |mut r| {
                 if r.response.get_header().has_error() {
                     let e = r.response.get_header().get_error();
@@ -378,7 +377,6 @@ fn region_detail<T: RaftStoreRouter>(
                 Ok(detail)
             })
         })
-        .map_err(|e| Error::Other(box e))
 }
 
 fn consistency_check<T>(raft_router: T, mut detail: RegionDetailResponse) -> Result<(), Error>
