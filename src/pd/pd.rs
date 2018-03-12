@@ -449,7 +449,7 @@ impl<T: PdClient> Runner<T> {
                         .with_label_values(&["split region"])
                         .inc();
                     info!("[region {}] try to split {:?}", region_id, epoch);
-                    let msg = Msg::new_half_split_region(region_id);
+                    let msg = Msg::new_half_split_region(region_id, epoch);
                     if let Err(e) = ch.try_send(msg) {
                         error!("[region {}] send halfsplit request err {:?}", region_id, e);
                     }

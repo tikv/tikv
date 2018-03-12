@@ -2526,7 +2526,10 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 region_size,
             } => self.on_approximate_region_size(region_id, region_size),
             Msg::CompactedEvent(event) => self.on_compaction_finished(event),
-            Msg::HalfSplitRegion { region_id } => {
+            Msg::HalfSplitRegion {
+                region_id,
+                region_epoch,
+            } => {
                 let peer = match self.region_peers.get(&region_id) {
                     Some(peer) => peer,
                     None => {
@@ -2544,7 +2547,19 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     );
                     return;
                 }
-                let task = SplitCheckTask::new(peer.region(), false);
+
+                let region = peer.region();
+                if region.get_region_epoch() != &region_epoch {
+                    // region epoch is timeout, skipped.
+                    info!(
+                        "[region {}] region on {} epoch is timeout, skip.",
+                        region_id,
+                        self.store_id()
+                    );
+                    return;
+                }
+
+                let task = SplitCheckTask::new(region, false);
                 if let Err(e) = self.split_check_worker.schedule(task) {
                     error!("{} failed to schedule split check: {}", self.tag, e);
                 }

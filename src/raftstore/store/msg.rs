@@ -168,6 +168,7 @@ pub enum Msg {
     CompactedEvent(CompactedEvent),
     HalfSplitRegion {
         region_id: u64,
+        region_epoch: RegionEpoch,
     },
 }
 
@@ -231,9 +232,10 @@ impl Msg {
         }
     }
 
-    pub fn new_half_split_region(region_id: u64) -> Msg {
+    pub fn new_half_split_region(region_id: u64, region_epoch: RegionEpoch) -> Msg {
         Msg::HalfSplitRegion {
             region_id: region_id,
+            region_epoch: region_epoch,
         }
     }
 }
