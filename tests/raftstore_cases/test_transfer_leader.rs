@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::thread;
 
-use kvproto::eraftpb::MessageType;
+use raft::eraftpb::MessageType;
 use tikv::util::config::*;
 
 use super::util::*;

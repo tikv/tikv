@@ -31,7 +31,7 @@ use std::ops::DerefMut;
 use std::cmp;
 
 use protobuf::{self, RepeatedField};
-use kvproto::eraftpb::{ConfChange, ConfChangeType, ConfState, Entry, EntryType, HardState,
+use raft::eraftpb::{ConfChange, ConfChangeType, ConfState, Entry, EntryType, HardState,
                        Message, MessageType, Snapshot};
 use rand;
 

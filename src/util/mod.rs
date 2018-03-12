@@ -470,7 +470,7 @@ mod tests {
     use std::rc::Rc;
     use std::*;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use kvproto::eraftpb::Entry;
+    use raft::eraftpb::Entry;
     use protobuf::Message;
     use super::*;
 
