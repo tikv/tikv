@@ -15,13 +15,11 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::{slice, thread};
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::time::Duration;
 use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::collections::vec_deque::{Iter, VecDeque};
 use std::{io, u64};
 
-use prometheus;
 use rand::{self, ThreadRng};
 use protobuf::Message;
 
@@ -45,6 +43,7 @@ pub mod io_limiter;
 pub mod security;
 pub mod timer;
 pub mod sys;
+pub mod future;
 pub mod futurepool;
 
 pub use self::rocksdb::properties;
@@ -309,6 +308,14 @@ impl<L, R> Either<L, R> {
     }
 
     #[inline]
+    pub fn as_mut(&mut self) -> Either<&mut L, &mut R> {
+        match *self {
+            Either::Left(ref mut l) => Either::Left(l),
+            Either::Right(ref mut r) => Either::Right(r),
+        }
+    }
+
+    #[inline]
     pub fn left(self) -> Option<L> {
         match self {
             Either::Left(l) => Some(l),
@@ -347,40 +354,6 @@ pub fn print_tikv_info() {
     info!("Git Commit Branch: {}", branch);
     info!("UTC Build Time:    {}", date);
     info!("Rustc Version:     {}", rustc);
-}
-
-/// `run_prometheus` runs a background prometheus client.
-pub fn run_prometheus(
-    interval: Duration,
-    address: &str,
-    job: &str,
-) -> Option<thread::JoinHandle<()>> {
-    if interval == Duration::from_secs(0) {
-        return None;
-    }
-
-    let job = job.to_owned();
-    let address = address.to_owned();
-    let handler = thread::Builder::new()
-        .name("promepusher".to_owned())
-        .spawn(move || loop {
-            let metric_familys = prometheus::gather();
-
-            let res = prometheus::push_metrics(
-                &job,
-                prometheus::hostname_grouping_key(),
-                &address,
-                metric_familys,
-            );
-            if let Err(e) = res {
-                error!("fail to push metrics: {}", e);
-            }
-
-            thread::sleep(interval);
-        })
-        .unwrap();
-
-    Some(handler)
 }
 
 #[cfg(target_os = "linux")]

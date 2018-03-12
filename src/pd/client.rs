@@ -13,7 +13,7 @@
 
 use std::fmt;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use protobuf::RepeatedField;
 use futures::{future, Future, Sink, Stream};
@@ -301,35 +301,44 @@ impl PdClient for RpcClient {
         req.set_keys_read(region_stat.read_bytes);
         req.set_approximate_size(region_stat.approximate_size);
 
+        let now = SystemTime::now();
+        let ts = now.duration_since(UNIX_EPOCH).unwrap().as_secs();
+        req.set_timestamp(ts);
+
         let executor = |client: &RwLock<Inner>, req: pdpb::RegionHeartbeatRequest| {
             let mut inner = client.wl();
-            let sender = match inner.hb_sender {
-                Either::Left(ref mut sender) => sender.take(),
-                Either::Right(ref sender) => {
-                    return Box::new(future::result(
-                        sender
-                            .unbounded_send(req)
-                            .map_err(|e| Error::Other(Box::new(e))),
-                    )) as PdFuture<_>
-                }
-            };
-
-            match sender {
-                Some(sender) => {
-                    let (tx, rx) = mpsc::unbounded();
-                    tx.unbounded_send(req).unwrap();
-                    inner.hb_sender = Either::Right(tx);
-                    Box::new(
-                        sender
-                            .sink_map_err(Error::Grpc)
-                            .send_all(rx.map_err(|e| {
-                                Error::Other(box_err!("failed to recv heartbeat: {:?}", e))
-                            }).map(|r| (r, WriteFlags::default())))
-                            .map(|(mut sender, _)| sender.get_mut().cancel()),
-                    ) as PdFuture<_>
-                }
-                None => unreachable!(),
+            if let Either::Right(ref sender) = inner.hb_sender {
+                return Box::new(future::result(
+                    sender
+                        .unbounded_send(req)
+                        .map_err(|e| Error::Other(Box::new(e))),
+                )) as PdFuture<_>;
             }
+
+            info!("heartbeat sender is refreshed.");
+            let sender = inner.hb_sender.as_mut().left().unwrap().take().unwrap();
+            let (tx, rx) = mpsc::unbounded();
+            tx.unbounded_send(req).unwrap();
+            inner.hb_sender = Either::Right(tx);
+            Box::new(
+                sender
+                    .sink_map_err(Error::Grpc)
+                    .send_all(rx.then(|r| match r {
+                        Ok(r) => Ok((r, WriteFlags::default())),
+                        Err(()) => Err(Error::Other(box_err!("failed to recv heartbeat"))),
+                    }))
+                    .then(|result| match result {
+                        Ok((mut sender, _)) => {
+                            info!("cancel region heartbeat sender");
+                            sender.get_mut().cancel();
+                            Ok(())
+                        }
+                        Err(e) => {
+                            error!("failed to send heartbeat: {:?}", e);
+                            Err(e)
+                        }
+                    }),
+            ) as PdFuture<_>
         };
 
         self.leader_client
@@ -447,5 +456,9 @@ impl PdClient for RpcClient {
             client.scatter_region_opt(&req, option)
         })?;
         check_resp_header(resp.get_header())
+    }
+
+    fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, f: F) {
+        self.leader_client.on_reconnect(Box::new(f))
     }
 }
