@@ -690,15 +690,6 @@ impl TestPdClient {
         self.schedule_operator(region_id, op);
     }
 
-    pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
-        let op = Operator::AddPeer {
-            peer: Either::Left(peer.clone()),
-            policy: SchedulePolicy::TillSuccess,
-        };
-        self.schedule_operator(region_id, op);
-        self.must_have_peer(region_id, peer);
-    }
-
     pub fn remove_peer(&self, region_id: u64, peer: metapb::Peer) {
         let op = Operator::RemovePeer {
             peer,
@@ -707,12 +698,13 @@ impl TestPdClient {
         self.schedule_operator(region_id, op);
     }
 
+    pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
+        self.add_peer(region_id, peer.clone());
+        self.must_have_peer(region_id, peer);
+    }
+
     pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {
-        let op = Operator::RemovePeer {
-            peer: peer.clone(),
-            policy: SchedulePolicy::TillSuccess,
-        };
-        self.schedule_operator(region_id, op);
+        self.remove_peer(region_id, peer.clone());
         self.must_none_peer(region_id, peer);
     }
 
