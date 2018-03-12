@@ -267,7 +267,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut kv_wb = WriteBatch::new();
         let mut raft_wb = WriteBatch::new();
         let mut applying_regions = vec![];
-        let mut pre_merge = vec![];
+        let mut prepare_merge = vec![];
         kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, &mut |key, value| {
             let (region_id, suffix) = keys::decode_region_meta_key(key)?;
             if suffix != keys::REGION_STATE_SUFFIX {
@@ -302,7 +302,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return Ok(true);
             }
             if local_state.get_state() == PeerState::Merging {
-                pre_merge.push((
+                prepare_merge.push((
                     local_state.get_region().to_owned(),
                     local_state.get_merge_state().to_owned(),
                 ));
@@ -340,14 +340,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         // recover pre-merge
-        let merging_count = pre_merge.len();
-        for (region, state) in pre_merge {
+        let merging_count = prepare_merge.len();
+        for (region, state) in prepare_merge {
             info!(
                 "region {:?} is merging in store {}",
                 region,
                 self.store_id()
             );
-            self.on_ready_pre_merge(region, state);
+            self.on_ready_prepare_merge(region, state);
         }
 
         info!(
@@ -1298,8 +1298,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 )
             };
             if is_merging && res.is_some() {
-                // After applying a snapshot, PreMerge is rollback implicitly.
-                self.on_ready_rollback_pre_merge(region_id, 0, None);
+                // After applying a snapshot, merge is rollback implicitly.
+                self.on_ready_rollback_merge(region_id, 0, None);
             }
             ready_results.push((region_id, ready, res));
         }
@@ -1725,11 +1725,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .mut_header()
                 .set_region_epoch(sibling_region.get_region_epoch().clone());
             let mut admin = AdminRequest::new();
-            admin.set_cmd_type(AdminCmdType::Merge);
-            admin.mut_merge().set_source(region.clone());
-            admin.mut_merge().set_commit(state.get_commit());
+            admin.set_cmd_type(AdminCmdType::CommitMerge);
+            admin.mut_commit_merge().set_source(region.clone());
+            admin.mut_commit_merge().set_commit(state.get_commit());
             admin
-                .mut_merge()
+                .mut_commit_merge()
                 .set_entries(RepeatedField::from_vec(entries));
             request.set_admin_request(admin);
             request
@@ -1741,7 +1741,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
-    fn rollback_pre_merge(&mut self, region: &metapb::Region) {
+    fn rollback_merge(&mut self, region: &metapb::Region) {
         let req = {
             let peer = &self.region_peers[&region.get_id()];
             let state = peer.pending_merge.as_ref().unwrap();
@@ -1750,10 +1750,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .mut_header()
                 .set_region_epoch(peer.region().get_region_epoch().clone());
             let mut admin = AdminRequest::new();
-            admin.set_cmd_type(AdminCmdType::RollbackPreMerge);
-            admin
-                .mut_rollback_pre_merge()
-                .set_commit(state.get_commit());
+            admin.set_cmd_type(AdminCmdType::RollbackMerge);
+            admin.mut_rollback_merge().set_commit(state.get_commit());
             request.set_admin_request(admin);
             request
         };
@@ -1769,14 +1767,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     region.get_id(),
                     e
                 );
-                self.rollback_pre_merge(region);
+                self.rollback_merge(region);
             }
         }
         self.merge_states = merge_states;
         self.register_merge_check_tick(event_loop);
     }
 
-    fn on_ready_pre_merge(&mut self, region: metapb::Region, state: MergeState) {
+    fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState) {
         {
             let peer = self.region_peers.get_mut(&region.get_id()).unwrap();
             peer.pending_merge = Some(state);
@@ -1789,15 +1787,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 region.get_id(),
                 e
             );
-            self.rollback_pre_merge(&region);
+            self.rollback_merge(&region);
         }
         self.merge_states.push(region);
     }
 
-    fn on_ready_merge(&mut self, region: metapb::Region, source: metapb::Region) {
+    fn on_ready_commit_merge(&mut self, region: metapb::Region, source: metapb::Region) {
         let source_peer = {
             let peer = self.region_peers.get_mut(&source.get_id()).unwrap();
-            // In some case, PreMerge entry may be carried by the dst region. So
+            // In some case, PrepareMerge entry may be carried by the dst region. So
             // the peer is not in merging mode.
             if peer.pending_merge.is_none() {
                 let mut state = MergeState::new();
@@ -1823,12 +1821,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    /// Handle rollback PreMerge result.
+    /// Handle rollback Merge result.
     ///
-    /// If commit is 0, it means that PreMerge is rollback by a snapshot; otherwise
+    /// If commit is 0, it means that Merge is rollback by a snapshot; otherwise
     /// it's rollback by a proposal, and its value should be equal to the commit
-    /// index of previous PreMerge.
-    fn on_ready_rollback_pre_merge(
+    /// index of previous PrepareMerge.
+    fn on_ready_rollback_merge(
         &mut self,
         region_id: u64,
         commit: u64,
@@ -1853,7 +1851,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             peer.mut_store().region = r;
         }
         if peer.is_leader() {
-            info!("{} notify pd with rollback pre_merge {}", peer.tag, commit);
+            info!("{} notify pd with rollback merge {}", peer.tag, commit);
             peer.heartbeat_pd(&self.pd_worker);
         }
     }
@@ -1935,14 +1933,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     right,
                     right_derive,
                 } => self.on_ready_split_region(region_id, left, right, right_derive),
-                ExecResult::PreMerge { region, state } => {
-                    self.on_ready_pre_merge(region, state);
+                ExecResult::PrepareMerge { region, state } => {
+                    self.on_ready_prepare_merge(region, state);
                 }
-                ExecResult::Merge { region, source } => {
-                    self.on_ready_merge(region, source);
+                ExecResult::CommitMerge { region, source } => {
+                    self.on_ready_commit_merge(region, source);
                 }
-                ExecResult::RollbackPreMerge { region, commit } => {
-                    self.on_ready_rollback_pre_merge(region.get_id(), commit, Some(region))
+                ExecResult::RollbackMerge { region, commit } => {
+                    self.on_ready_rollback_merge(region.get_id(), commit, Some(region))
                 }
                 ExecResult::ComputeHash {
                     region,
@@ -1959,9 +1957,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    /// Check if a request is valid if it has premerge/merge proposal.
+    /// Check if a request is valid if it has valid prepare_merge/commit_merge proposal.
     fn check_merge_proposal(&self, msg: &mut RaftCmdRequest) -> Result<()> {
-        if !msg.get_admin_request().has_pre_merge() && !msg.get_admin_request().has_merge() {
+        if !msg.get_admin_request().has_prepare_merge()
+            && !msg.get_admin_request().has_commit_merge()
+        {
             return Ok(());
         }
 
@@ -1969,8 +1969,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let peer = &self.region_peers[&region_id];
         let region = peer.region();
 
-        if msg.get_admin_request().has_pre_merge() {
-            let target_region = msg.get_admin_request().get_pre_merge().get_target();
+        if msg.get_admin_request().has_prepare_merge() {
+            let target_region = msg.get_admin_request().get_prepare_merge().get_target();
             let peer = match self.region_peers.get(&target_region.get_id()) {
                 None => return Err(box_err!("target region doesn't exist.")),
                 Some(p) => p,
@@ -1989,7 +1989,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ));
             }
         } else {
-            let source_region = msg.get_admin_request().get_merge().get_source();
+            let source_region = msg.get_admin_request().get_commit_merge().get_source();
             let source_peer = &self.region_peers[&source_region.get_id()];
             // only merging peer can propose merge request.
             assert!(

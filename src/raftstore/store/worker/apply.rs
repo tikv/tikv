@@ -28,7 +28,7 @@ use kvproto::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState,
                              RegionLocalState};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType,
-                          MergeRequest, RaftCmdRequest, RaftCmdResponse, Request, Response};
+                          CommitMergeRequest, RaftCmdRequest, RaftCmdResponse, Request, Response};
 
 use util::worker::Runnable;
 use util::{escape, rocksdb, MustConsumeVec};
@@ -159,15 +159,15 @@ pub enum ExecResult {
         right: Region,
         right_derive: bool,
     },
-    PreMerge {
+    PrepareMerge {
         region: Region,
         state: MergeState,
     },
-    Merge {
+    CommitMerge {
         region: Region,
         source: Region,
     },
-    RollbackPreMerge {
+    RollbackMerge {
         region: Region,
         commit: u64,
     },
@@ -431,8 +431,8 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
             // ComputeHash require an up to date snapshot.
             AdminCmdType::ComputeHash |
             // Merge needs to get the latest apply index.
-            AdminCmdType::Merge |
-            AdminCmdType::RollbackPreMerge => return true,
+            AdminCmdType::CommitMerge |
+            AdminCmdType::RollbackMerge => return true,
             _ => {}
         }
     }
@@ -752,18 +752,18 @@ impl ApplyDelegate {
                     self.metrics.size_diff_hint = 0;
                     self.metrics.delete_keys_hint = 0;
                 }
-                ExecResult::PreMerge { ref region, .. } => {
+                ExecResult::PrepareMerge { ref region, .. } => {
                     self.region = region.clone();
                     self.is_merging = true;
                 }
-                ExecResult::Merge {
+                ExecResult::CommitMerge {
                     ref region,
                     ref source,
                 } => {
                     self.region = region.clone();
                     ctx.merged_regions.push(source.get_id());
                 }
-                ExecResult::RollbackPreMerge { ref region, .. } => {
+                ExecResult::RollbackMerge { ref region, .. } => {
                     self.region = region.clone();
                     self.is_merging = false;
                 }
@@ -870,9 +870,9 @@ impl ApplyDelegate {
             AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
             AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
             // TODO: is it backward compatible to add new cmd_type?
-            AdminCmdType::PreMerge => self.exec_pre_merge(ctx, request),
-            AdminCmdType::Merge => self.exec_merge(ctx, request),
-            AdminCmdType::RollbackPreMerge => self.exec_rollback_pre_merge(ctx, request),
+            AdminCmdType::PrepareMerge => self.exec_prepare_merge(ctx, request),
+            AdminCmdType::CommitMerge => self.exec_commit_merge(ctx, request),
+            AdminCmdType::RollbackMerge => self.exec_rollback_merge(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         }?;
         response.set_cmd_type(cmd_type);
@@ -1117,17 +1117,17 @@ impl ApplyDelegate {
         }
     }
 
-    fn exec_pre_merge(
+    fn exec_prepare_merge(
         &mut self,
         ctx: &mut ApplyContext,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, Option<ExecResult>)> {
         PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["pre_merge", "all"])
+            .with_label_values(&["prepare_merge", "all"])
             .inc();
 
-        let pre_merge = req.get_pre_merge();
-        let index = pre_merge.get_min_index();
+        let prepare_merge = req.get_prepare_merge();
+        let index = prepare_merge.get_min_index();
         let exec_ctx = ctx.exec_ctx.as_ref().unwrap();
         let first_index = peer_storage::first_index(&exec_ctx.apply_state);
         if index < first_index {
@@ -1150,7 +1150,7 @@ impl ApplyDelegate {
         region.mut_region_epoch().set_conf_ver(conf_version);
         let mut merging_state = MergeState::new();
         merging_state.set_min_index(index);
-        merging_state.set_target(pre_merge.get_target().to_owned());
+        merging_state.set_target(prepare_merge.get_target().to_owned());
         merging_state.set_commit(exec_ctx.index);
         write_merge_state(
             &self.engine,
@@ -1166,19 +1166,19 @@ impl ApplyDelegate {
         });
 
         PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["pre_merge", "success"])
+            .with_label_values(&["prepare_merge", "success"])
             .inc();
 
         Ok((
             AdminResponse::new(),
-            Some(ExecResult::PreMerge {
+            Some(ExecResult::PrepareMerge {
                 region: region,
                 state: merging_state,
             }),
         ))
     }
 
-    fn load_entries_for_merge(&self, merge: &MergeRequest, apply_index: u64) -> Vec<Entry> {
+    fn load_entries_for_merge(&self, merge: &CommitMergeRequest, apply_index: u64) -> Vec<Entry> {
         // Entries from [first_index, last_index) need to be loaded.
         let first_index = apply_index + 1;
         let last_index = merge.get_commit();
@@ -1218,7 +1218,7 @@ impl ApplyDelegate {
     fn catch_up_log_for_merge(
         &mut self,
         ctx: &mut ApplyContext,
-        merge: &MergeRequest,
+        merge: &CommitMergeRequest,
         exist_region: &Region,
     ) {
         let source_region = merge.get_source();
@@ -1261,16 +1261,16 @@ impl ApplyDelegate {
         ctx.restore_stash(stash);
     }
 
-    fn exec_merge(
+    fn exec_commit_merge(
         &mut self,
         ctx: &mut ApplyContext,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, Option<ExecResult>)> {
         PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["merge", "all"])
+            .with_label_values(&["commit_merge", "all"])
             .inc();
 
-        let merge = req.get_merge();
+        let merge = req.get_commit_merge();
         let source_region = merge.get_source();
         let region_state_key = keys::region_state_key(source_region.get_id());
         let state: RegionLocalState = match self.engine.get_msg_cf(CF_RAFT, &region_state_key) {
@@ -1324,26 +1324,26 @@ impl ApplyDelegate {
             });
 
         PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["merge", "success"])
+            .with_label_values(&["commit_merge", "success"])
             .inc();
 
         let resp = AdminResponse::new();
         Ok((
             resp,
-            Some(ExecResult::Merge {
+            Some(ExecResult::CommitMerge {
                 region: region,
                 source: source_region.to_owned(),
             }),
         ))
     }
 
-    fn exec_rollback_pre_merge(
+    fn exec_rollback_merge(
         &mut self,
         ctx: &mut ApplyContext,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, Option<ExecResult>)> {
         PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["rollback_pre_merge", "all"])
+            .with_label_values(&["rollback_merge", "all"])
             .inc();
         let region_state_key = keys::region_state_key(self.region_id());
         let state: RegionLocalState = match self.engine.get_msg_cf(CF_RAFT, &region_state_key) {
@@ -1351,7 +1351,7 @@ impl ApplyDelegate {
             e => panic!("{} failed to get regions state: {:?}", self.tag, e),
         };
         assert_eq!(state.get_state(), PeerState::Merging, "{}", self.tag);
-        let rollback = req.get_rollback_pre_merge();
+        let rollback = req.get_rollback_merge();
         assert_eq!(
             state.get_merge_state().get_commit(),
             rollback.get_commit(),
@@ -1363,18 +1363,18 @@ impl ApplyDelegate {
         region.mut_region_epoch().set_version(version + 1);
         write_peer_state(&self.engine, ctx.wb(), &region, PeerState::Normal).unwrap_or_else(|e| {
             panic!(
-                "{} failed to rollback pre merge {:?}: {:?}",
+                "{} failed to rollback merge {:?}: {:?}",
                 self.tag, rollback, e
             )
         });
 
         PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["rollback_pre_merge", "success"])
+            .with_label_values(&["rollback_merge", "success"])
             .inc();
         let resp = AdminResponse::new();
         Ok((
             resp,
-            Some(ExecResult::RollbackPreMerge {
+            Some(ExecResult::RollbackMerge {
                 region: region,
                 commit: rollback.get_commit(),
             }),

@@ -1348,7 +1348,7 @@ impl Peer {
     fn pre_propose(&self, req: &mut RaftCmdRequest) -> Result<()> {
         self.coprocessor_host.pre_propose(self.region(), req)?;
 
-        if !req.get_admin_request().has_pre_merge() {
+        if !req.get_admin_request().has_prepare_merge() {
             return Ok(());
         }
 
@@ -1388,7 +1388,7 @@ impl Peer {
             ));
         }
         req.mut_admin_request()
-            .mut_pre_merge()
+            .mut_prepare_merge()
             .set_min_index(min_index);
         Ok(())
     }
@@ -1399,7 +1399,7 @@ impl Peer {
         metrics: &mut RaftProposeMetrics,
     ) -> Result<u64> {
         if self.pending_merge.is_some()
-            && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackPreMerge
+            && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge
         {
             return Err(box_err!("peer in merging mode, can't do proposal."));
         }
@@ -1554,9 +1554,9 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
             | AdminCmdType::VerifyHash => {}
             AdminCmdType::Split => check_ver = true,
             AdminCmdType::ChangePeer => check_conf_ver = true,
-            AdminCmdType::PreMerge
-            | AdminCmdType::Merge
-            | AdminCmdType::RollbackPreMerge
+            AdminCmdType::PrepareMerge
+            | AdminCmdType::CommitMerge
+            | AdminCmdType::RollbackMerge
             | AdminCmdType::TransferLeader => {
                 check_ver = true;
                 check_conf_ver = true;
@@ -1768,9 +1768,9 @@ fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
         return match req.get_cmd_type() {
             AdminCmdType::ChangePeer
             | AdminCmdType::Split
-            | AdminCmdType::PreMerge
-            | AdminCmdType::Merge
-            | AdminCmdType::RollbackPreMerge => true,
+            | AdminCmdType::PrepareMerge
+            | AdminCmdType::CommitMerge
+            | AdminCmdType::RollbackMerge => true,
             _ => false,
         };
     }

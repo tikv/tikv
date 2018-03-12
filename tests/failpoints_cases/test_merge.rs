@@ -55,8 +55,8 @@ fn test_node_merge_rollback() {
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
-    let pre_merge = util::new_pre_merge(target_region);
-    let req = util::new_admin_request(region.get_id(), epoch, pre_merge);
+    let prepare_merge = util::new_prepare_merge(target_region);
+    let req = util::new_admin_request(region.get_id(), epoch, prepare_merge);
     // The callback will be called when pre-merge is applied.
     let res = cluster.call_command_on_leader(req, Duration::from_secs(3));
     assert!(res.is_ok(), "{:?}", res);
@@ -108,9 +108,9 @@ fn test_node_merge_restart() {
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
-    let pre_merge = util::new_pre_merge(right.clone());
+    let prepare_merge = util::new_prepare_merge(right.clone());
     let epoch = left.get_region_epoch();
-    let req = util::new_admin_request(left.get_id(), epoch, pre_merge);
+    let req = util::new_admin_request(left.get_id(), epoch, prepare_merge);
     // The callback will be called when pre-merge is applied.
     let res = cluster.call_command_on_leader(req, Duration::from_secs(3));
     let leader = cluster.leader_of_region(left.get_id()).unwrap();
@@ -193,8 +193,8 @@ fn test_node_merge_recover_snapshot() {
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
-    let pre_merge = util::new_pre_merge(target_region);
-    let req = util::new_admin_request(region.get_id(), epoch, pre_merge);
+    let prepare_merge = util::new_prepare_merge(target_region);
+    let req = util::new_admin_request(region.get_id(), epoch, prepare_merge);
     // The callback will be called when pre-merge is applied.
     let res = cluster.call_command_on_leader(req, Duration::from_secs(3));
     assert!(res.is_ok(), "{:?}", res);

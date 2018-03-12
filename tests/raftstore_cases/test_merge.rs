@@ -69,7 +69,7 @@ fn test_node_base_merge() {
     assert_eq!(region.get_end_key(), right.get_end_key());
     let orgin_epoch = left.get_region_epoch();
     let new_epoch = region.get_region_epoch();
-    // PreMerge + Merge, so it should be 2.
+    // PrepareMerge + CommitMerge, so it should be 2.
     assert_eq!(new_epoch.get_version(), orgin_epoch.get_version() + 2);
     assert_eq!(new_epoch.get_conf_ver(), orgin_epoch.get_conf_ver());
     let get = util::new_request(
@@ -290,8 +290,8 @@ fn test_node_merge_dist_isolation() {
     //  left region: 1         2   3(leader)
     // right region: 1(leader) 2  [3]
     // [x] means a replica exists logically but is not created on the store x yet.
-    let pre_merge = util::new_pre_merge(right.clone());
-    let req = util::new_admin_request(region.get_id(), left.get_region_epoch(), pre_merge);
+    let prepare_merge = util::new_prepare_merge(right.clone());
+    let req = util::new_admin_request(region.get_id(), left.get_region_epoch(), prepare_merge);
     // The callback will be called when pre-merge is applied.
     let res = cluster
         .call_command_on_leader(req, Duration::from_secs(3))

@@ -607,8 +607,8 @@ fn new_transfer_leader_request(peer: metapb::Peer) -> AdminRequest {
 
 fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
     let mut req = AdminRequest::new();
-    req.set_cmd_type(AdminCmdType::PreMerge);
-    req.mut_pre_merge()
+    req.set_cmd_type(AdminCmdType::PrepareMerge);
+    req.mut_prepare_merge()
         .set_target(merge.get_target().to_owned());
     req
 }
