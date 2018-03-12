@@ -100,8 +100,6 @@ impl CopContext {
     }
 }
 
-unsafe impl Sync for CopContext {}
-
 #[derive(Clone)]
 struct CopContextPool {
     cop_ctxs: Arc<HashMap<ThreadId, CopContext>>,
@@ -111,7 +109,7 @@ impl CopContextPool {
     // Must be called in thread pool.
     fn get_context(&self) -> &CopContext {
         let thread_id = thread::current().id();
-        self.cop_ctxs.get(&thread_id).unwrap()
+        &self.cop_ctxs.get(&thread_id).unwrap()
     }
 }
 
@@ -125,6 +123,9 @@ impl FromIterator<(ThreadId, CopContext)> for CopContextPool {
         CopContextPool { cop_ctxs: cop_ctxs }
     }
 }
+
+unsafe impl Sync for CopContextPool {}
+unsafe impl Send for CopContextPool {}
 
 impl Debug for CopContextPool {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
