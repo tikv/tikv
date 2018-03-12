@@ -32,7 +32,7 @@ pub struct AssertionStorage {
 
 impl Default for AssertionStorage {
     fn default() -> AssertionStorage {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || storage::ReadPoolContext::new(None)
         });
         AssertionStorage {
@@ -67,7 +67,7 @@ impl AssertionStorage {
         self.ctx.set_region_id(region.get_id());
         self.ctx.set_region_epoch(region.get_region_epoch().clone());
         self.ctx.set_peer(leader.clone());
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || storage::ReadPoolContext::new(None)
         });
         self.store = SyncStorage::from_engine(engine, &Config::default(), read_pool);
