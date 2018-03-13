@@ -427,10 +427,6 @@ impl RequestTracker {
 
     // This function will be only called in thread pool.
     fn record_wait(&mut self) {
-        COPR_PENDING_REQS
-            .with_label_values(&[self.scan_tag, self.pri_str])
-            .dec();
-
         let stop_first_wait = self.wait_time.is_none();
         let wait_start = self.wait_start.take().unwrap();
         let now = Instant::now_coarse();
@@ -438,6 +434,10 @@ impl RequestTracker {
         self.handle_start = Some(now);
 
         if stop_first_wait {
+            COPR_PENDING_REQS
+                .with_label_values(&[self.scan_tag, self.pri_str])
+                .dec();
+
             let ctx_pool = self.ctx_pool.as_ref().unwrap();
             let mut cop_ctx = ctx_pool.get_context().0.borrow_mut();
             cop_ctx
