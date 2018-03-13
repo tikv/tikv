@@ -70,7 +70,7 @@ zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.4", features = [ "serde", "v4" ] }
-procinfo = "0.4.2"
+procinfo = "0.3.1"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.4"
