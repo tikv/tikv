@@ -49,6 +49,7 @@ extern crate fs2;
 extern crate futures;
 extern crate futures_cpupool;
 extern crate grpcio as grpc;
+extern crate indexmap;
 extern crate kvproto;
 #[macro_use]
 extern crate lazy_static;
@@ -57,7 +58,6 @@ extern crate libc;
 extern crate log;
 extern crate mio;
 extern crate murmur3;
-extern crate ordermap;
 #[macro_use]
 extern crate prometheus;
 extern crate protobuf;
