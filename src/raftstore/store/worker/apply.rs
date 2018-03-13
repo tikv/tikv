@@ -262,6 +262,8 @@ impl<'a> ApplyContextCore<'a> {
     pub fn prepare_for(&mut self, delegate: &ApplyDelegate) {
         if self.wb.is_none() {
             self.wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+            self.wb_last_bytes = 0;
+            self.wb_last_keys = 0;
         }
         self.cbs.push(ApplyCallback::new(delegate.region.clone()));
         self.last_applied_index = delegate.apply_state.get_applied_index();
@@ -363,31 +365,31 @@ impl<'a> ApplyContextCore<'a> {
     }
 }
 
-struct ApplyContext<'a, 'b> {
-    core: ApplyContextCore<'a>,
-    delegates: &'b mut HashMap<u64, Option<ApplyDelegate>>,
+struct ApplyContext<'a, 'b: 'a> {
+    core: &'a mut ApplyContextCore<'b>,
+    delegates: &'a mut HashMap<u64, Option<ApplyDelegate>>,
 }
 
 impl<'a, 'b> ApplyContext<'a, 'b> {
     pub fn new(
-        core: ApplyContextCore<'a>,
-        delegates: &'b mut HashMap<u64, Option<ApplyDelegate>>,
+        core: &'a mut ApplyContextCore<'b>,
+        delegates: &'a mut HashMap<u64, Option<ApplyDelegate>>,
     ) -> ApplyContext<'a, 'b> {
         ApplyContext { core, delegates }
     }
 }
 
 impl<'a, 'b> Deref for ApplyContext<'a, 'b> {
-    type Target = ApplyContextCore<'a>;
+    type Target = ApplyContextCore<'b>;
 
-    fn deref(&self) -> &ApplyContextCore<'a> {
-        &self.core
+    fn deref(&self) -> &ApplyContextCore<'b> {
+        self.core
     }
 }
 
 impl<'a, 'b> DerefMut for ApplyContext<'a, 'b> {
-    fn deref_mut(&mut self) -> &mut ApplyContextCore<'a> {
-        &mut self.core
+    fn deref_mut(&mut self) -> &mut ApplyContextCore<'b> {
+        self.core
     }
 }
 
@@ -1630,9 +1632,8 @@ impl Runner {
             delegate.term = apply.term;
 
             {
-                let mut ctx = ApplyContext::new(core, &mut self.delegates);
+                let mut ctx = ApplyContext::new(&mut core, &mut self.delegates);
                 delegate.handle_raft_committed_entries(&mut ctx, apply.entries);
-                core = ctx.core;
             }
 
             if delegate.pending_remove {
@@ -2114,10 +2115,10 @@ mod tests {
         let obs = ApplyObserver::default();
         host.registry
             .register_query_observer(1, Box::new(obs.clone()));
-        let core = ApplyContextCore::new(&host).use_delete_range(true);
-        let mut apply_ctx = ApplyContext::new(core, &mut delegates);
+        let mut core = ApplyContextCore::new(&host).use_delete_range(true);
+        let mut apply_ctx = ApplyContext::new(&mut core, &mut delegates);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.core.write_to_db(&db);
+        apply_ctx.write_to_db(&db);
         assert!(apply_ctx.core.apply_res.last().unwrap().exec_res.is_empty());
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
@@ -2139,10 +2140,8 @@ mod tests {
             .put_cf(CF_LOCK, b"k1", b"v1")
             .epoch(1, 3)
             .build();
-        let core = ApplyContextCore::new(&host).use_delete_range(true);
-        apply_ctx.core = core;
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.core.write_to_db(&db);
+        apply_ctx.write_to_db(&db);
         let lock_handle = db.cf_handle(CF_LOCK).unwrap();
         assert_eq!(db.get_cf(lock_handle, &dk_k1).unwrap().unwrap(), b"v1");
         assert_eq!(
@@ -2160,10 +2159,8 @@ mod tests {
             .epoch(1, 1)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let core = ApplyContextCore::new(&host).use_delete_range(true);
-        apply_ctx.core = core;
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.core.write_to_db(&db);
+        apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_stale_epoch());
         assert_eq!(delegate.applied_index_term, 2);
@@ -2175,10 +2172,8 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let core = ApplyContextCore::new(&host).use_delete_range(true);
-        apply_ctx.core = core;
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.core.write_to_db(&db);
+        apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         assert_eq!(delegate.applied_index_term, 2);
@@ -2199,10 +2194,8 @@ mod tests {
         let lock_written_bytes = delegate.metrics.lock_cf_written_bytes;
         let delete_keys_hint = delegate.metrics.delete_keys_hint;
         let size_diff_hint = delegate.metrics.size_diff_hint;
-        let core = ApplyContextCore::new(&host).use_delete_range(true);
-        apply_ctx.core = core;
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.core.write_to_db(&db);
+        apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         // stale command should be cleared.
         assert!(resp.get_header().get_error().has_stale_command());
@@ -2221,10 +2214,8 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let core = ApplyContextCore::new(&host).use_delete_range(true);
-        apply_ctx.core = core;
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_entry]);
-        apply_ctx.core.write_to_db(&db);
+        apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
 
@@ -2233,10 +2224,8 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let core = ApplyContextCore::new(&host).use_delete_range(true);
-        apply_ctx.core = core;
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
-        apply_ctx.core.write_to_db(&db);
+        apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         assert_eq!(db.get(&dk_k3).unwrap().unwrap(), b"v1");
@@ -2248,10 +2237,8 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let core = ApplyContextCore::new(&host).use_delete_range(true);
-        apply_ctx.core = core;
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
-        apply_ctx.core.write_to_db(&db);
+        apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         assert!(db.get(&dk_k1).unwrap().is_none());
@@ -2267,8 +2254,6 @@ mod tests {
                 .build();
             entries.push(put_entry);
         }
-        let core = ApplyContextCore::new(&host).use_delete_range(true);
-        apply_ctx.core = core;
         delegate.handle_raft_committed_entries(&mut apply_ctx, entries);
         apply_ctx.core.write_to_db(&db);
         for _ in 0..WRITE_BATCH_MAX_KEYS {
