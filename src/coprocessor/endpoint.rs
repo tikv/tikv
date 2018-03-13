@@ -485,15 +485,14 @@ impl Drop for RequestTracker {
             task_count.fetch_sub(1, Ordering::Release);
         }
 
-        let query_time = duration_to_sec(self.start.elapsed());
-        if query_time > SLOW_QUERY_LOWER_BOUND {
+        if self.total_handle_time > SLOW_QUERY_LOWER_BOUND {
             info!(
                 "[region {}] handle {:?} [{}] takes {:?} [keys: {}, hit: {}, \
                  ranges: {} ({:?})]",
                 self.region_id,
                 self.txn_start_ts,
                 self.scan_tag,
-                query_time,
+                self.total_handle_time,
                 self.exec_metrics.cf_stats.total_op_count(),
                 self.exec_metrics.cf_stats.total_processed(),
                 self.ranges_len,
@@ -523,7 +522,7 @@ impl Drop for RequestTracker {
             .basic_local_metrics
             .req_time
             .with_label_values(&[self.scan_tag])
-            .observe(query_time);
+            .observe(duration_to_sec(self.start.elapsed()));
         cop_ctx
             .basic_local_metrics
             .handle_time
