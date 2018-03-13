@@ -205,7 +205,7 @@ trait DebugExecutor {
 
     fn dump_metrics(&self, tag: &str) {
         let metrics = self.get_metrics(tag);
-        println!("{:?}", metrics);
+        println!("{}", metrics);
     }
 
     fn dump_mvccs_infos(
