@@ -927,8 +927,8 @@ fn main() {
                 ),
         )
         .subcommand(
-            SubCommand::with_name("consistent-check")
-                .about("force consistent-check for a specified region")
+            SubCommand::with_name("consistency-check")
+                .about("force consistency-check for a specified region")
                 .arg(
                     Arg::with_name("region")
                         .required(true)
@@ -1036,7 +1036,7 @@ fn main() {
             panic!("invalid pd configuration: {:?}", e);
         }
         debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
-    } else if let Some(matches) = matches.subcommand_matches("consistent-check") {
+    } else if let Some(matches) = matches.subcommand_matches("consistency-check") {
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
         debug_executor.check_region_consistency(region_id);
     } else if matches.subcommand_matches("bad-regions").is_some() {

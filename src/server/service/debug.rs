@@ -363,12 +363,12 @@ fn region_detail<T: RaftStoreRouter>(
             rx.map_err(|e| Error::Other(box e)).and_then(move |mut r| {
                 if r.response.get_header().has_error() {
                     let e = r.response.get_header().get_error();
-                    warn!("Debug::consistent-check got error: {:?}", e);
+                    warn!("region_detail got error: {:?}", e);
                     let msg = print_to_string(e);
                     return Err(Error::Other(msg.into()));
                 }
                 let detail = r.response.take_status_response().take_region_detail();
-                debug!("Debug::consistent-check got region detail: {:?}", detail);
+                debug!("region_detail got region detail: {:?}", detail);
                 let leader_store_id = detail.get_leader().get_store_id();
                 if leader_store_id != store_id {
                     let msg = format!("Leader is on store {}", leader_store_id);
@@ -379,10 +379,10 @@ fn region_detail<T: RaftStoreRouter>(
         })
 }
 
-fn consistency_check<T>(raft_router: T, mut detail: RegionDetailResponse) -> Result<(), Error>
-where
-    T: RaftStoreRouter,
-{
+fn consistency_check<T: RaftStoreRouter>(
+    raft_router: T,
+    mut detail: RegionDetailResponse,
+) -> impl Future<Item = (), Error = Error> {
     let mut header = RaftRequestHeader::new();
     header.set_region_id(detail.get_region().get_id());
     header.set_peer(detail.take_leader());
@@ -392,7 +392,19 @@ where
     raft_cmd.set_header(header);
     raft_cmd.set_admin_request(admin_request);
 
-    raft_router
-        .send_command(raft_cmd, Callback::None)
+    let (tx, rx) = oneshot::channel();
+    let cb = Callback::Read(box |resp| tx.send(resp).unwrap());
+    future::result(raft_router.send_command(raft_cmd, cb))
         .map_err(|e| Error::Other(box e))
+        .and_then(move |_| {
+            rx.map_err(|e| Error::Other(box e)).and_then(move |r| {
+                if r.response.get_header().has_error() {
+                    let e = r.response.get_header().get_error();
+                    warn!("consistency-check got error: {:?}", e);
+                    let msg = print_to_string(e);
+                    return Err(Error::Other(msg.into()));
+                }
+                Ok(())
+            })
+        })
 }
