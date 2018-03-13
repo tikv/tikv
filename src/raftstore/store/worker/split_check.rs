@@ -218,6 +218,10 @@ impl<C: Sender<Msg>> Runner<C> {
             });
         timer.observe_duration();
 
+        if split_key.is_none() {
+            split_key = split_ctx.split_key();
+        }
+
         if let Err(e) = res {
             error!("[region {}] failed to scan split key: {}", region_id, e);
             return;

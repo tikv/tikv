@@ -50,4 +50,12 @@ impl Status {
     pub fn skip(&self) -> bool {
         self.table.is_none() && self.size.is_none() && self.half.is_none()
     }
+
+    pub fn split_key(self) -> Option<Vec<u8>> {
+        if let Some(status) = self.half {
+            status.split_key()
+        } else {
+            None
+        }
+    }
 }

@@ -12,48 +12,61 @@
 // limitations under the License.
 
 use rocksdb::DB;
-use raftstore::store::util;
 
 use super::super::{Coprocessor, ObserverContext, SplitCheckObserver};
 use super::Status;
 
 #[derive(Default)]
 pub struct HalfStatus {
-    region_size: u64,
+    buckets: Vec<Vec<u8>>,
     current_size: u64,
 }
 
 impl HalfStatus {
-    pub fn should_split(&mut self, key: &[u8], value_size: u64) -> bool {
-        self.current_size += key.len() as u64 + value_size;
-        self.current_size > self.region_size / 2
+    pub fn push_data(&mut self, key: &[u8], value_size: u64, bucket_size: u64) {
+        let current_len = key.len() as u64 + value_size;
+        if self.buckets.is_empty() || self.current_size > bucket_size {
+            self.buckets.push(key.to_vec());
+            self.current_size = 0;
+        }
+        self.current_size += current_len;
+    }
+
+    pub fn split_key(self) -> Option<Vec<u8>> {
+        let mid = self.buckets.len() / 2;
+        if mid == 0 {
+            None
+        } else {
+            self.buckets.get(mid).cloned()
+        }
     }
 }
 
-#[derive(Default)]
-pub struct HalfCheckObserver;
+pub struct HalfCheckObserver {
+    half_split_bucket_size: u64,
+}
+
+impl HalfCheckObserver {
+    pub fn new(half_split_bucket_size: u64) -> HalfCheckObserver {
+        HalfCheckObserver {
+            half_split_bucket_size: half_split_bucket_size,
+        }
+    }
+}
 
 impl Coprocessor for HalfCheckObserver {}
 
 impl SplitCheckObserver for HalfCheckObserver {
-    fn new_split_check_status(&self, ctx: &mut ObserverContext, status: &mut Status, engine: &DB) {
+    fn new_split_check_status(
+        &self,
+        _ctx: &mut ObserverContext,
+        status: &mut Status,
+        _engine: &DB,
+    ) {
         if status.auto_split {
             return;
         }
-        let mut half_status = HalfStatus::default();
-        let region = ctx.region();
-        let region_id = region.get_id();
-        half_status.region_size = match util::get_region_approximate_size(engine, region) {
-            Ok(size) => size,
-            Err(e) => {
-                error!(
-                    "[region {}] failed to get approximate size: {}",
-                    region_id, e
-                );
-                return;
-            }
-        };
-        status.half = Some(half_status);
+        status.half = Some(HalfStatus::default());
     }
 
     fn on_split_check(
@@ -64,9 +77,7 @@ impl SplitCheckObserver for HalfCheckObserver {
         value_size: u64,
     ) -> Option<Vec<u8>> {
         if let Some(status) = status.half.as_mut() {
-            if status.should_split(key, value_size) {
-                return Some(key.to_vec());
-            }
+            status.push_data(key, value_size, self.half_split_bucket_size);
         }
         None
     }
@@ -89,6 +100,7 @@ mod tests {
     use util::worker::Runnable;
     use util::transport::RetryableSendCh;
     use util::properties::SizePropertiesCollectorFactory;
+    use util::config::ReadableSize;
 
     use raftstore::coprocessor::{Config, CoprocessorHost};
 
@@ -114,7 +126,8 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let ch = RetryableSendCh::new(tx, "test-split");
-        let cfg = Config::default();
+        let mut cfg = Config::default();
+        cfg.half_split_bucket_size = ReadableSize(1);
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
             ch.clone(),

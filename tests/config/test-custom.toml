@@ -91,6 +91,7 @@ use-delete-range = true
 split-region-on-table = true
 region-max-size = "12MB"
 region-split-size = "12MB"
+half-split-bucket-size = "1MB"
 
 [rocksdb]
 wal-recovery-mode = 1

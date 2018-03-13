@@ -27,10 +27,12 @@ pub struct Config {
     /// be region_split_size (or a little bit smaller).
     pub region_max_size: ReadableSize,
     pub region_split_size: ReadableSize,
+    pub half_split_bucket_size: ReadableSize,
 }
 
 /// Default region split size.
 pub const SPLIT_SIZE_MB: u64 = 96;
+pub const HALF_SPLIT_BUCKET_SIZE_MB: u64 = 1;
 
 impl Default for Config {
     fn default() -> Config {
@@ -39,6 +41,7 @@ impl Default for Config {
             split_region_on_table: true,
             region_split_size: split_size,
             region_max_size: split_size / 2 * 3,
+            half_split_bucket_size: ReadableSize::mb(HALF_SPLIT_BUCKET_SIZE_MB),
         }
     }
 }
