@@ -58,6 +58,8 @@ extern crate log;
 extern crate mio;
 extern crate murmur3;
 extern crate ordermap;
+#[cfg(target_os = "linux")]
+extern crate procinfo;
 #[macro_use]
 extern crate prometheus;
 extern crate protobuf;

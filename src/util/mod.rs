@@ -52,6 +52,7 @@ pub use self::rocksdb::stats as rocksdb_stats;
 
 #[cfg(target_os = "linux")]
 mod thread_metrics;
+mod memory_metrics;
 
 pub const NO_LIMIT: u64 = u64::MAX;
 
@@ -360,9 +361,15 @@ pub fn print_tikv_info() {
 
 #[cfg(target_os = "linux")]
 pub use self::thread_metrics::monitor_threads;
+pub use self::memory_metrics::monitor_memory;
 
 #[cfg(not(target_os = "linux"))]
 pub fn monitor_threads<S: Into<String>>(_: S) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn monitor_memory<S: Into<String>>(_: S) -> io::Result<()> {
     Ok(())
 }
 
