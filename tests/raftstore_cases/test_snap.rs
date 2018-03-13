@@ -21,7 +21,7 @@ use tikv::raftstore::Result;
 use tikv::raftstore::store::Msg;
 use tikv::util::HandyRwLock;
 use tikv::util::config::*;
-use kvproto::eraftpb::{Message, MessageType};
+use raft::eraftpb::{Message, MessageType};
 use kvproto::raft_serverpb::RaftMessage;
 
 use super::transport_simulate::*;

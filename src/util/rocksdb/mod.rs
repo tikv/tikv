@@ -15,6 +15,7 @@ pub mod properties;
 pub mod event_listener;
 pub mod engine_metrics;
 pub mod metrics_flusher;
+pub mod stats;
 
 pub use self::event_listener::{CompactedEvent, CompactionListener, EventListener};
 pub use self::metrics_flusher::MetricsFlusher;
