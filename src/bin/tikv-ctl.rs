@@ -59,6 +59,11 @@ use tikv::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::config::TiKvConfig;
 
+const METRICS_PROMETHEUS: &str = "prometheus";
+const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
+const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
+const METRICS_JEMALLOC: &str = "jemalloc";
+
 fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     eprintln!("{}: {}", prefix, e);
     process::exit(-1);
@@ -196,6 +201,11 @@ trait DebugExecutor {
                 println!("ConfChange.RaftCmdRequest: {:#?}", cmd);
             }
         }
+    }
+
+    fn dump_metrics(&self, tag: &str) {
+        let metrics = self.get_metrics(tag);
+        println!("{:?}", metrics);
     }
 
     fn dump_mvccs_infos(
@@ -419,6 +429,7 @@ trait DebugExecutor {
     fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>);
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
+    fn get_metrics(&self, tag: &str) -> String;
 }
 
 impl DebugExecutor for DebugClient {
@@ -511,6 +522,21 @@ impl DebugExecutor for DebugClient {
         println!("success!");
     }
 
+    fn get_metrics(&self, tag: &str) -> String {
+        let mut req = GetMetricsRequest::new();
+        if tag != "promethues" {
+            req.set_all(true);
+        }
+        let mut resp = self.get_metrics(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::metrics", e));
+        match tag {
+            METRICS_ROCKSDB_KV => resp.take_rocksdb_kv(),
+            METRICS_ROCKSDB_RAFT => resp.take_rocksdb_raft(),
+            METRICS_JEMALLOC => resp.take_jemalloc(),
+            _ => resp.take_prometheus(),
+        }
+    }
+
     fn set_region_tombstone(&self, _: Vec<Region>) {
         unimplemented!("only avaliable for local mode");
     }
@@ -592,6 +618,10 @@ impl DebugExecutor for Debugger {
             return;
         }
         println!("all regions are healthy")
+    }
+
+    fn get_metrics(&self, _tag: &str) -> String {
+        unimplemented!("only avaliable for online mode");
     }
 }
 
@@ -912,8 +942,20 @@ fn main() {
                         .help("PD endpoints"),
                 ),
         )
+        .subcommand(SubCommand::with_name("bad-regions").about("get all regions with corrupt raft"))
         .subcommand(
-            SubCommand::with_name("bad-regions").about("get all regions with corrupt raft"),
+            SubCommand::with_name("metrics")
+                .about("print the metrics")
+                .arg(
+                Arg::with_name("tag")
+                    .short("t")
+                    .long("tag")
+                    .takes_value(true)
+                    .default_value(METRICS_PROMETHEUS)
+                    .help(
+                        "set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv",
+                    ),
+            ),
         );
     let matches = app.clone().get_matches();
 
@@ -1013,6 +1055,9 @@ fn main() {
         debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
     } else if matches.subcommand_matches("bad-regions").is_some() {
         debug_executor.print_bad_regions();
+    } else if let Some(matches) = matches.subcommand_matches("metrics") {
+        let tag = matches.value_of("tag").unwrap();
+        debug_executor.dump_metrics(tag)
     } else {
         let _ = app.print_help();
     }
