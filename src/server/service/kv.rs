@@ -750,9 +750,25 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         &self,
         ctx: RpcContext,
         mut req: RawDeleteRangeRequest,
-        sink: UnarySink<RawDeleteResponse>,
+        sink: UnarySink<RawDeleteRangeResponse>,
     ) {
-        unimplemented!();
+//        const LABEL: &str = "raw_delete_range";
+////        let timer = self.metrics
+//
+//        let (cb, future) = make_callback();
+//        let res = self.storage
+//            .async_raw_delete_range(req.take_context(), req.take_start_key(), req.take_end_key(), cb);
+//        if let Err(e) = res {
+//            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted); //?
+//            return;
+//        }
+//
+//        let future = future
+//            .map_error(Error::from)
+//            .map(|v| {
+//                let mut reqp = RawDeleteRangeResponse::new();
+//                if )
+//            })
     }
 
     fn coprocessor(&self, ctx: RpcContext, req: Request, sink: UnarySink<Response>) {

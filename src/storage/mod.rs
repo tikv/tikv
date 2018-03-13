@@ -961,6 +961,36 @@ impl Storage {
         Ok(())
     }
 
+    pub fn async_raw_delete_range(
+        &self,
+        ctx: Context,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        for key in &[start_key, end_key] {
+            if key.len() > self.max_key_size {
+                callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
+                return Ok(());
+            }
+        }
+        self.engine.async_write(
+            &ctx,
+            vec![
+                Modify::DeleteRange(
+                    CF_DEFAULT,
+                    Key::from_encoded(start_key),
+                    Key::from_encoded(end_key),
+                ),
+            ],
+            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+        )?;
+        RAWKV_COMMAND_COUNTER_VEC
+            .with_label_values(&["raw_delete_range"])
+            .inc();
+        Ok(())
+    }
+
     fn raw_scan(
         snapshot: Box<Snapshot>,
         start_key: &Key,
