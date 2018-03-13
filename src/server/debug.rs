@@ -34,6 +34,7 @@ use raftstore::store::{clear_meta, init_apply_state, init_raft_state, write_init
                        write_initial_raft_state, write_peer_state};
 use raftstore::store::util as raftstore_util;
 use raftstore::store::engine::{IterOption, Mutable};
+use raftstore::errors::Error as RaftstoreError;
 use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use storage::types::{truncate_ts, Key};
 use storage::mvcc::{Lock, Write, WriteType};
@@ -410,6 +411,32 @@ impl Debugger {
         let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
         let kv_handle = box_try!(get_cf_handle(kv, CF_RAFT));
+
+        box_try!(self.engines.kv_engine.scan_cf(
+            CF_RAFT,
+            keys::REGION_META_MIN_KEY,
+            keys::REGION_META_MAX_KEY,
+            false,
+            &mut |key, value| {
+                let (_, suffix_type) = box_try!(keys::decode_region_meta_key(key));
+                if suffix_type != keys::REGION_STATE_SUFFIX {
+                    return Ok(true);
+                }
+
+                let mut region_state = RegionLocalState::new();
+                box_try!(region_state.merge_from_bytes(value));
+                if region_state.get_state() == PeerState::Tombstone {
+                    return Ok(true);
+                }
+                let exists_region = region_state.get_region();
+                if exists_region.get_start_key() >= region.get_end_key()
+                    || exists_region.get_end_key() <= region.get_start_key()
+                {
+                    return Ok(true);
+                }
+                return Err(RaftstoreError::Other("region overlay".into()));
+            },
+        ));
 
         // RegionLocalState.
         let mut region_state = RegionLocalState::new();
