@@ -85,6 +85,8 @@ extern crate url;
 extern crate utime;
 extern crate uuid;
 extern crate zipf;
+#[cfg(target_os = "linux")]
+extern crate procinfo;
 
 #[macro_use]
 pub mod util;
