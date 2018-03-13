@@ -316,81 +316,45 @@ struct PendingDeleteRanges {
 }
 
 impl PendingDeleteRanges {
-    // find out the ranges that need to be trimed or discarded
-    fn find_overlapped_ranges(&self, start_key: &[u8], end_key: &[u8]) -> Vec<(Vec<u8>, Vec<u8>)> {
-        let mut ranges = Vec::new();
-        // find the first range that may overlap with [start_key, end_key)
-        let sub_range = self.ranges.range((Unbounded, Excluded(start_key.to_vec())));
-        if let Some((s_key, peer_info)) = sub_range.last() {
-            if peer_info.end_key > start_key.to_vec() {
-                ranges.push((s_key.clone(), peer_info.end_key.clone()));
-            }
-        }
-
-        // find the rest ranges that overlap with [start_key, end_key)
-        for (s_key, peer_info) in self.ranges
-            .range((Included(start_key.to_vec()), Excluded(end_key.to_vec())))
-        {
-            ranges.push((s_key.clone(), peer_info.end_key.clone()));
-        }
-        ranges
-    }
-
-    // find any overlap range in [start_key, end_key),
-    // then trim the overlap ranges and return the non-overlap part in overlap ranges
-    pub fn trim_overlap_ranges(
+    // get ranges that overlap with [start_key, end_key)
+    pub fn drain_overlap_ranges(
         &mut self,
         start_key: &[u8],
         end_key: &[u8],
     ) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
-        if start_key >= end_key {
-            return Vec::new();
-        }
-        let mut to_destroy = Vec::new();
-        let overlapped_ranges = self.find_overlapped_ranges(start_key, end_key);
-        for (ref s_key, ref e_key) in overlapped_ranges {
-            let info = self.ranges.remove(s_key).unwrap();
-            if s_key < &start_key.to_vec() {
-                if e_key <= &end_key.to_vec() {
-                    // the right part of the range is trimed
-                    // s_key              e_key
-                    //   [_ _ _ _ _ _ _ _ _)                 before
-                    //            [_ _ _ _ _ _ _ _ _ _)
-                    //       start_key            end_key
-                    //   [_ _ _ _ )                          after
-                    to_destroy.push((info.region_id, s_key.clone(), start_key.to_vec()));
-                } else {
-                    // the middle part of the range is trimed
-                    // s_key                   e_key
-                    //   [_ _ _ _ _ _ _ _ _ _ _ _)        before
-                    //           [_ _ _ _)
-                    //      start_key   end_key
-                    //   [_ _ _ _)       [_ _ _ _)        after
-                    to_destroy.push((info.region_id, s_key.clone(), start_key.to_vec()));
-                    to_destroy.push((info.region_id, end_key.to_vec(), info.end_key.clone()));
+        let mut ranges = Vec::new();
+        {
+            // find the first range that may overlap with [start_key, end_key)
+            let sub_range = self.ranges.range((Unbounded, Excluded(start_key.to_vec())));
+            if let Some((s_key, peer_info)) = sub_range.last() {
+                if peer_info.end_key > start_key.to_vec() {
+                    ranges.push((
+                        peer_info.region_id,
+                        s_key.clone(),
+                        peer_info.end_key.clone(),
+                    ));
                 }
-            } else if e_key <= &end_key.to_vec() {
-                // the whole range is discarded, so do nothing
-                //     s_key    e_key
-                //       [_ _ _ _)             before
-                // start_key     end_key
-                //    [_ _ _ _ _ _ _)
-                //                             after
-            } else {
-                // the left part of the range is trimed
-                //         s_key         e_key
-                //           [_ _ _ _ _ _ _)      before
-                // start_key      end_key
-                //    [_ _ _ _ _ _ _)
-                //                  [_ _ _ )      after
-                to_destroy.push((info.region_id, end_key.to_vec(), info.end_key.clone()));
+            }
+
+            // find the rest ranges that overlap with [start_key, end_key)
+            for (s_key, peer_info) in self.ranges
+                .range((Included(start_key.to_vec()), Excluded(end_key.to_vec())))
+            {
+                ranges.push((
+                    peer_info.region_id,
+                    s_key.clone(),
+                    peer_info.end_key.clone(),
+                ));
             }
         }
 
-        to_destroy
+        for &(_, ref start_key, _) in &ranges {
+            self.ranges.remove(start_key).unwrap();
+        }
+        ranges
     }
 
-    // before an insert is called, must call trim_overlap_ranges to clean the overlap range
+    // before an insert is called, must call drain_overlap_ranges to clean the overlap range
     pub fn insert(
         &mut self,
         region_id: u64,
@@ -458,7 +422,7 @@ impl Runner {
 
     pub fn destroy_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) {
         let to_destroy = self.pending_delete_ranges
-            .trim_overlap_ranges(start_key, end_key);
+            .drain_overlap_ranges(start_key, end_key);
         for (region_id, s_key, e_key) in to_destroy {
             self.ctx
                 .handle_destroy(region_id, s_key, e_key, false /* use_delete_files */);
@@ -538,7 +502,6 @@ impl Runnable<Task> for Runner {
 
 #[cfg(test)]
 mod test {
-    use std::collections::BTreeMap;
     use std::thread;
     use std::time::Duration;
 
@@ -594,60 +557,15 @@ mod test {
         thread::sleep(delay / 2);
 
         let timeout = time::Instant::now() + delay;
-        let left = pending_delete_ranges.trim_overlap_ranges(&b"g".to_vec(), &b"q".to_vec());
+        let left = pending_delete_ranges.drain_overlap_ranges(&b"g".to_vec(), &b"q".to_vec());
         assert_eq!(
             left,
             [
-                (id + 1, b"f".to_vec(), b"g".to_vec()),
-                (id + 1, b"q".to_vec(), b"t".to_vec()),
+                (id + 1, b"f".to_vec(), b"i".to_vec()),
+                (id, b"m".to_vec(), b"n".to_vec()),
+                (id + 1, b"p".to_vec(), b"t".to_vec()),
             ]
         );
-        pending_delete_ranges.insert(id + 2, b"g".to_vec(), b"q".to_vec(), timeout);
-
-        thread::sleep(delay / 2);
-
-        let now = time::Instant::now();
-        let ranges = pending_delete_ranges.drain_timeout_ranges(now);
-        assert_eq!(
-            ranges,
-            [
-                (id, b"a".to_vec(), b"c".to_vec()),
-                (id, b"x".to_vec(), b"z".to_vec()),
-            ]
-        );
-
-        thread::sleep(delay / 2);
-
-        let now = time::Instant::now();
-        let ranges = pending_delete_ranges.drain_timeout_ranges(now);
-        assert_eq!(ranges, [(id + 2, b"g".to_vec(), b"q".to_vec())]);
-    }
-
-    #[test]
-    fn test_pending_delete_ranges_case3() {
-        let mut pending_delete_ranges = PendingDeleteRanges {
-            ranges: BTreeMap::new(),
-        };
-        let delay = Duration::from_millis(100);
-        let id = 0;
-
-        let timeout = time::Instant::now() + delay;
-        pending_delete_ranges.insert(id, b"a".to_vec(), b"c".to_vec(), timeout);
-        pending_delete_ranges.insert(id + 1, b"f".to_vec(), b"t".to_vec(), timeout);
-        pending_delete_ranges.insert(id, b"x".to_vec(), b"z".to_vec(), timeout);
-
-        thread::sleep(delay / 2);
-
-        let left = pending_delete_ranges.trim_overlap_ranges(&b"g".to_vec(), &b"q".to_vec());
-        assert_eq!(
-            left,
-            [
-                (id + 1, b"f".to_vec(), b"g".to_vec()),
-                (id + 1, b"q".to_vec(), b"t".to_vec()),
-            ]
-        );
-
-        let timeout = time::Instant::now() + delay;
         pending_delete_ranges.insert(id + 2, b"g".to_vec(), b"q".to_vec(), timeout);
 
         thread::sleep(delay / 2);
