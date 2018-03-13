@@ -109,7 +109,7 @@ impl CopContextPool {
     // Must be called in thread pool.
     fn get_context(&self) -> &CopContext {
         let thread_id = thread::current().id();
-        &self.cop_ctxs.get(&thread_id).unwrap()
+        self.cop_ctxs.get(&thread_id).unwrap()
     }
 }
 
@@ -254,7 +254,7 @@ impl Host {
             CommandPri::Normal => &mut self.pool,
         };
         let pool = &pool_and_ctx_pool.pool;
-        tracker.attach_ctx_pool(pool_and_ctx_pool.contexts.clone());
+        tracker.ctx_pool(pool_and_ctx_pool.contexts.clone());
 
         match cop_req {
             CopRequest::DAG(dag) => {
@@ -409,12 +409,12 @@ struct RequestTracker {
 }
 
 impl RequestTracker {
-    fn attach_task_count(&mut self, running_task_count: Arc<AtomicUsize>) {
+    fn task_count(&mut self, running_task_count: Arc<AtomicUsize>) {
         running_task_count.fetch_add(1, Ordering::Release);
         self.running_task_count = Some(running_task_count);
     }
 
-    fn attach_ctx_pool(&mut self, ctx_pool: CopContextPool) {
+    fn ctx_pool(&mut self, ctx_pool: CopContextPool) {
         self.ctx_pool = Some(ctx_pool);
     }
 
@@ -427,6 +427,10 @@ impl RequestTracker {
 
     // This function will be only called in thread pool.
     fn record_wait(&mut self) {
+        COPR_PENDING_REQS
+            .with_label_values(&[self.scan_tag, self.pri_str])
+            .dec();
+
         let stop_first_wait = self.wait_time.is_none();
         let wait_start = self.wait_start.take().unwrap();
         let now = Instant::now_coarse();
@@ -477,10 +481,6 @@ impl RequestTracker {
 
 impl Drop for RequestTracker {
     fn drop(&mut self) {
-        COPR_PENDING_REQS
-            .with_label_values(&[self.scan_tag, self.pri_str])
-            .dec();
-
         if let Some(task_count) = self.running_task_count.take() {
             task_count.fetch_sub(1, Ordering::Release);
         }
@@ -501,6 +501,10 @@ impl Drop for RequestTracker {
             );
         }
         if self.wait_time.is_none() {
+            COPR_PENDING_REQS
+                .with_label_values(&[self.scan_tag, self.pri_str])
+                .dec();
+
             // For the request is failed before enter into thread pool.
             let wait_start = self.wait_start.take().unwrap();
             let now = Instant::now_coarse();
@@ -711,7 +715,7 @@ impl Runnable<Task> for Host {
 
             for req in &mut reqs {
                 let task_count = Arc::clone(&self.running_task_count);
-                req.tracker.attach_task_count(task_count);
+                req.tracker.task_count(task_count);
             }
             self.last_req_id += 1;
             batch.push(reqs[0].req.get_context().clone());
