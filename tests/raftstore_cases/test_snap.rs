@@ -105,6 +105,7 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
+    cluster.cfg.raft_store.max_merge_log_gap = 1;
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(2);
 
@@ -262,6 +263,7 @@ fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
+    cluster.cfg.raft_store.max_merge_log_gap = 1;
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
 
     cluster.run();
@@ -435,6 +437,7 @@ fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
+    cluster.cfg.raft_store.max_merge_log_gap = 1;
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
 
     let pd_client = Arc::clone(&cluster.pd_client);

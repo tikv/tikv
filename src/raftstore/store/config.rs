@@ -95,6 +95,11 @@ pub struct Config {
 
     pub allow_remove_leader: bool,
 
+    /// Max log gap allowed to propose merge.
+    pub max_merge_log_gap: u64,
+    // Interval to repropose merge.
+    pub merge_check_tick_interval: ReadableDuration,
+
     pub use_delete_range: bool,
 
     // Deprecated! These two configuration has been moved to Coprocessor.
@@ -149,6 +154,8 @@ impl Default for Config {
             raft_store_max_leader_lease: ReadableDuration::secs(9),
             right_derive_when_split: true,
             allow_remove_leader: false,
+            max_merge_log_gap: 10,
+            merge_check_tick_interval: ReadableDuration::secs(10),
             use_delete_range: false,
 
             // They are preserved for compatibility check.
@@ -205,6 +212,18 @@ impl Config {
                 election_timeout,
                 lease
             ));
+        }
+
+        if self.max_merge_log_gap >= self.raft_log_gc_count_limit {
+            return Err(box_err!(
+                "merge log gap {} should be less than log gc limit {}.",
+                self.max_merge_log_gap,
+                self.raft_log_gc_count_limit
+            ));
+        }
+
+        if self.merge_check_tick_interval.as_millis() == 0 {
+            return Err(box_err!("raftstore.merge-check-tick-interval can't be 0."));
         }
 
         let abnormal_leader_missing = self.abnormal_leader_missing_duration.as_millis() as u64;
@@ -266,6 +285,14 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
+        cfg.raft_log_gc_count_limit = 100;
+        cfg.max_merge_log_gap = 110;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.merge_check_tick_interval = ReadableDuration::secs(0);
+        assert!(cfg.validate().is_err());
+
         cfg.raft_base_tick_interval = ReadableDuration::secs(1);
         cfg.raft_election_timeout_ticks = 10;
         cfg.abnormal_leader_missing_duration = ReadableDuration::secs(5);
