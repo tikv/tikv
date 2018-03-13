@@ -51,7 +51,7 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
                     ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
-                    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
+                    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask, SplitType};
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -1854,7 +1854,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             {
                 continue;
             }
-            let task = SplitCheckTask::new(peer.region());
+            let task = SplitCheckTask::new(peer.region(), SplitType::AutoSplit);
             if let Err(e) = self.split_check_worker.schedule(task) {
                 error!("{} failed to schedule split check: {}", self.tag, e);
             }
@@ -2526,6 +2526,39 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 region_size,
             } => self.on_approximate_region_size(region_id, region_size),
             Msg::CompactedEvent(event) => self.on_compaction_finished(event),
+            Msg::HalfSplitRegion {
+                region_id,
+                region_epoch,
+            } => {
+                let peer = match self.region_peers.get(&region_id) {
+                    Some(peer) => peer,
+                    None => {
+                        error!("{:?}", Error::RegionNotFound(region_id));
+                        return;
+                    }
+                };
+
+                if !peer.is_leader() {
+                    // region on this store is no longer leader, skipped.
+                    info!(
+                        "[region {}] region on {} is not leader, skip.",
+                        region_id,
+                        self.store_id()
+                    );
+                    return;
+                }
+
+                let region = peer.region();
+                if util::is_epoch_stale(&region_epoch, region.get_region_epoch()) {
+                    info!("[region {}] receive a stale halfsplit message", region_id);
+                    return;
+                }
+
+                let task = SplitCheckTask::new(region, SplitType::HalfSplit);
+                if let Err(e) = self.split_check_worker.schedule(task) {
+                    error!("{} failed to schedule split check: {}", self.tag, e);
+                }
+            }
         }
     }
 

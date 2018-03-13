@@ -730,3 +730,42 @@ fn test_server_quick_election_after_split() {
     let mut cluster = new_server_cluster(0, 3);
     test_quick_election_after_split(&mut cluster);
 }
+
+#[test]
+fn test_node_half_split_region() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_half_split_region(&mut cluster);
+}
+
+#[test]
+fn test_server_half_split_region() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_half_split_region(&mut cluster);
+}
+
+fn test_half_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
+    let mut range = 1..;
+    cluster.run();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"").unwrap();
+    let item_len = 74;
+    let mid_key = put_till_size(cluster, 11 * item_len, &mut range);
+    let max_key = put_till_size(cluster, 9 * item_len, &mut range);
+    let target = pd_client.get_region(&max_key).unwrap();
+    assert_eq!(region, target);
+    pd_client.half_split_region(target);
+    // it should be finished in millis if split.
+    thread::sleep(Duration::from_secs(1));
+
+    let left = pd_client.get_region(b"").unwrap();
+    let right = pd_client.get_region(&max_key).unwrap();
+    assert_ne!(left, right);
+    assert_eq!(region.get_start_key(), left.get_start_key());
+    assert_eq!(right.get_start_key(), left.get_end_key());
+    assert_eq!(region.get_end_key(), right.get_end_key());
+    assert_eq!(pd_client.get_region(&max_key).unwrap(), right);
+    assert_eq!(pd_client.get_region(left.get_end_key()).unwrap(), right);
+    assert_eq!(mid_key.as_slice(), right.get_start_key());
+}
