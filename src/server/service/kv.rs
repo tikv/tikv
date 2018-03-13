@@ -746,6 +746,15 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         ctx.spawn(future);
     }
 
+    fn raw_delete_range(
+        &self,
+        ctx: RpcContext,
+        mut req: RawDeleteRangeRequest,
+        sink: UnarySink<RawDeleteResponse>,
+    ) {
+        unimplemented!();
+    }
+
     fn coprocessor(&self, ctx: RpcContext, req: Request, sink: UnarySink<Response>) {
         const LABEL: &str = "coprocessor";
         let timer = self.metrics.coprocessor.start_coarse_timer();
