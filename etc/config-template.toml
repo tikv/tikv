@@ -10,7 +10,7 @@
 # file to store log, write to stderr if it's empty.
 # log-file = ""
 
-[readpool]
+[readpool.storage]
 # size of thread pool for high-priority read operations
 # high-concurrency = 8
 # size of thread pool for normal-priority read operations

@@ -54,7 +54,7 @@ impl<T: futurepool::Context + 'static> Clone for ReadPool<T> {
 impl<T: futurepool::Context + 'static> ReadPool<T> {
     // Rust does not support copying closures (RFC 2132) so that we need a closure builder.
     // TODO: Use a single closure once RFC 2132 is implemented.
-    pub fn new<F, CF>(config: &Config, context_factory_builder: F) -> Self
+    pub fn new<F, CF>(name_prefix: &str, config: &Config, context_factory_builder: F) -> Self
     where
         F: futurepool::Factory<CF>,
         CF: futurepool::Factory<T>,
@@ -65,21 +65,21 @@ impl<T: futurepool::Context + 'static> ReadPool<T> {
             pool_high: FuturePool::new(
                 config.high_concurrency,
                 config.stack_size.0 as usize,
-                "readpool-high",
+                &format!("{}-high", name_prefix),
                 tick_interval,
                 context_factory_builder.build(),
             ),
             pool_normal: FuturePool::new(
                 config.normal_concurrency,
                 config.stack_size.0 as usize,
-                "readpool-normal",
+                &format!("{}-normal", name_prefix),
                 tick_interval,
                 context_factory_builder.build(),
             ),
             pool_low: FuturePool::new(
                 config.low_concurrency,
                 config.stack_size.0 as usize,
-                "readpool-low",
+                &format!("{}-low", name_prefix),
                 tick_interval,
                 context_factory_builder.build(),
             ),
@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn test_future_execute() {
-        let read_pool = ReadPool::new(&Config::default_for_test(), || || Context {});
+        let read_pool = ReadPool::new("readpool", &Config::default_for_test(), || || Context {});
 
         expect_val(
             vec![1, 2, 4],
@@ -233,6 +233,7 @@ mod tests {
         let (tx, rx) = channel();
 
         let read_pool = ReadPool::new(
+            "readpool",
             &Config {
                 high_concurrency: 2,
                 max_tasks_high: 4,

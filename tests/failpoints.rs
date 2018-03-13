@@ -37,6 +37,7 @@ extern crate lazy_static;
 #[macro_use]
 extern crate log;
 extern crate protobuf;
+extern crate raft;
 extern crate rand;
 extern crate rocksdb;
 extern crate tempdir;
