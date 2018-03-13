@@ -13,7 +13,7 @@
 
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Mutex;
-use prometheus::{self, proto, Collector, Gauge, Desc, Opts};
+use prometheus::{self, proto, Collector, Desc, Gauge, Opts};
 use libc::{self, pid_t};
 use procinfo::pid;
 
@@ -39,10 +39,10 @@ struct MemoryColletcor {
 impl MemoryColletcor {
     fn new<S: Into<String>>(pid: pid_t, namespace: S) -> MemoryColletcor {
         let memory_total = Gauge::with_opts(
-        	Opts::new(
-          		"tikv_memory_usage_seconds_total",
-          		"Total memory usage in tikv",
-          	).namespace(namespace)
+            Opts::new(
+                "tikv_memory_usage_seconds_total",
+                "Total memory usage in tikv",
+            ).namespace(namespace),
         ).unwrap();
         let desc = memory_total.desc()[0].clone();
 
@@ -62,7 +62,7 @@ impl MemoryColletcor {
 
 impl Collector for MemoryColletcor {
     fn desc(&self) -> Vec<&Desc> {
-    	vec![&self.desc]
+        vec![&self.desc]
     }
 
     fn collect(&self) -> Vec<proto::MetricFamily> {
