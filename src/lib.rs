@@ -65,6 +65,7 @@ extern crate prometheus;
 extern crate protobuf;
 #[macro_use]
 extern crate quick_error;
+extern crate raft;
 extern crate rand;
 extern crate regex;
 extern crate rocksdb;
@@ -91,7 +92,6 @@ extern crate zipf;
 #[macro_use]
 pub mod util;
 pub mod config;
-pub mod raft;
 pub mod storage;
 pub mod raftstore;
 pub mod pd;

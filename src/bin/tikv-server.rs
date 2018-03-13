@@ -197,11 +197,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {:?}", s)),
     );
     let pd_sender = pd_worker.scheduler();
-    let read_pool = ReadPool::new(&cfg.readpool, || {
+    let storage_read_pool = ReadPool::new("store-read", &cfg.readpool.storage, || {
         let pd_sender = pd_sender.clone();
         move || storage::ReadPoolContext::new(Some(pd_sender.clone()))
     });
-    let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage, read_pool)
+    let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage, storage_read_pool)
         .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 
     // Create raft engine.

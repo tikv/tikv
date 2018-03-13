@@ -45,8 +45,10 @@ pub mod timer;
 pub mod sys;
 pub mod future;
 pub mod futurepool;
+pub mod jemalloc;
 
 pub use self::rocksdb::properties;
+pub use self::rocksdb::stats as rocksdb_stats;
 
 #[cfg(target_os = "linux")]
 mod thread_metrics;
@@ -475,7 +477,7 @@ mod tests {
     use std::rc::Rc;
     use std::*;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use kvproto::eraftpb::Entry;
+    use raft::eraftpb::Entry;
     use protobuf::Message;
     use super::*;
 
