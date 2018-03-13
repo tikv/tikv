@@ -22,7 +22,8 @@ use futures_cpupool::Builder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
-use tikv::pd::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
+use tikv::pd::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient,
+               KEEP_ALIVE_TIMEOUT_COUNTER};
 use tikv::util::security::{SecurityConfig, SecurityManager};
 
 use super::mock::mocker::*;
@@ -386,7 +387,9 @@ fn test_region_heartbeat_on_leader_change() {
         .collect();
     thread::sleep(Duration::from_secs(1));
 
-    let client = new_client(eps);
+    let cfg = new_config(eps);
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    let client = RpcClient::with_keep_alive_timeout(&cfg, mgr, Duration::from_millis(200)).unwrap();
     let poller = Builder::new()
         .pool_size(1)
         .name_prefix(thd_name!("poller"))
@@ -431,4 +434,10 @@ fn test_region_heartbeat_on_leader_change() {
 
     // Change PD leader twice without update the heartbeat sender, then heartbeat PD.
     heartbeat_on_leader_change(2);
+
+    // Test keep alive.
+    thread::sleep(Duration::from_secs(1));
+    // We did not not issue region heartbeats any more, so there
+    // are no responses. The client should update the metrics.
+    assert!(KEEP_ALIVE_TIMEOUT_COUNTER.get() > 0.0);
 }

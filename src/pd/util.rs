@@ -14,6 +14,7 @@
 use std::result;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use std::time::Duration;
 use std::collections::HashSet;
@@ -32,6 +33,7 @@ use kvproto::pdpb_grpc::PdClient;
 use util::{Either, HandyRwLock};
 use util::security::SecurityManager;
 use super::{Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
+use super::metrics::KEEP_ALIVE_TIMEOUT_COUNTER;
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -51,6 +53,8 @@ pub struct Inner {
 pub struct HeartbeatReceiver {
     receiver: Option<ClientDuplexReceiver<RegionHeartbeatResponse>>,
     inner: Arc<RwLock<Inner>>,
+
+    keep_alive_counter: Arc<AtomicUsize>,
 }
 
 impl Stream for HeartbeatReceiver {
@@ -61,7 +65,10 @@ impl Stream for HeartbeatReceiver {
         loop {
             if let Some(ref mut receiver) = self.receiver {
                 match receiver.poll() {
-                    Ok(Async::Ready(Some(item))) => return Ok(Async::Ready(Some(item))),
+                    Ok(Async::Ready(Some(item))) => {
+                        self.keep_alive_counter.fetch_add(1, Ordering::Release);
+                        return Ok(Async::Ready(Some(item)));
+                    }
                     Ok(Async::NotReady) => return Ok(Async::NotReady),
                     // If it's None or there's error, we need to update receiver.
                     _ => {}
@@ -87,9 +94,12 @@ impl Stream for HeartbeatReceiver {
 }
 
 /// A leader client doing requests asynchronous.
+#[derive(Clone)]
 pub struct LeaderClient {
     timer: Timer,
     inner: Arc<RwLock<Inner>>,
+
+    keep_alive_timeout: Duration,
 }
 
 impl LeaderClient {
@@ -98,9 +108,11 @@ impl LeaderClient {
         security_mgr: Arc<SecurityManager>,
         client: PdClient,
         members: GetMembersResponse,
+        keep_alive_timeout: Duration,
     ) -> LeaderClient {
         let (tx, rx) = client.region_heartbeat().unwrap();
         LeaderClient {
+            keep_alive_timeout: keep_alive_timeout,
             timer: Timer::default(),
             inner: Arc::new(RwLock::new(Inner {
                 env: env,
@@ -120,14 +132,33 @@ impl LeaderClient {
     where
         F: Fn(RegionHeartbeatResponse) + Send + 'static,
     {
+        let keep_alive_counter = Arc::new(AtomicUsize::new(0));
         let recv = HeartbeatReceiver {
             receiver: None,
             inner: Arc::clone(&self.inner),
-        };
-        Box::new(recv.for_each(move |resp| {
-            f(resp);
+            keep_alive_counter: Arc::clone(&keep_alive_counter),
+        }.map(Some)
+            .map_err(|e| panic!("unexpected error: {:?}", e));
+
+        let keep_alive_interval = self.timer.interval(self.keep_alive_timeout);
+        let keep_alive_future = keep_alive_interval
+            .map(|()| None)
+            .map_err(|e| panic!("unexpected error: {:?}", e));
+
+        let mut local_counter = keep_alive_counter.load(Ordering::Relaxed);
+        Box::new(recv.select(keep_alive_future).for_each(move |resp| {
+            if let Some(resp) = resp {
+                f(resp);
+            } else {
+                let alive_counter = keep_alive_counter.load(Ordering::Acquire);
+                if local_counter == alive_counter {
+                    warn!("reciver region heartbeats timeout");
+                    KEEP_ALIVE_TIMEOUT_COUNTER.inc();
+                }
+                local_counter = alive_counter;
+            }
             Ok(())
-        }).map_err(|e| panic!("unexpected error: {:?}", e)))
+        }))
     }
 
     pub fn on_reconnect(&self, f: Box<Fn() + Sync + Send + 'static>) {
@@ -143,10 +174,7 @@ impl LeaderClient {
         Request {
             reconnect_count: retry,
             request_sent: 0,
-            client: LeaderClient {
-                timer: self.timer.clone(),
-                inner: Arc::clone(&self.inner),
-            },
+            client: self.clone(),
             req: req,
             resp: None,
             func: f,

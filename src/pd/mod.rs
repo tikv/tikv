@@ -25,6 +25,9 @@ pub use self::pd::{Runner as PdRunner, Task as PdTask};
 pub use self::util::RECONNECT_INTERVAL_SEC;
 pub use self::config::Config;
 
+// Do not export it if we find a better way to test the keep alive.
+pub use self::metrics::KEEP_ALIVE_TIMEOUT_COUNTER;
+
 use std::ops::Deref;
 
 use kvproto::metapb;
