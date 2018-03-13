@@ -103,23 +103,27 @@ impl Scanner {
             _ => unreachable!(),
         };
 
-        let (key, value) = match kv {
-            Some((key, value)) => (box_try!(key.raw()), value),
-            None => {
-                self.no_more = true;
-                return Ok(None);
-            }
-        };
+        if kv.is_none() {
+            // For we can call `start_scan` and `stop_scan` as normal.
+            self.seek_key = match self.scan_mode {
+                ScanMode::Backward => self.range.get_start().to_owned(),
+                ScanMode::Forward => self.range.get_end().to_owned(),
+                _ => unreachable!(),
+            };
+            self.no_more = true;
+            return Ok(None);
+        }
+
+        let kv = kv.unwrap();
+        let (key, value) = (box_try!(kv.0.raw()), kv.1);
 
         if self.range.start > key || self.range.end <= key {
-            debug!(
+            panic!(
                 "key: {} out of range [{}, {})",
                 escape(&key),
                 escape(self.range.get_start()),
                 escape(self.range.get_end())
             );
-            self.no_more = true;
-            return Ok(None);
         }
 
         self.seek_key = match (self.scan_mode, self.scan_on) {
@@ -129,6 +133,24 @@ impl Scanner {
             _ => unreachable!(),
         };
         Ok(Some((key, value)))
+    }
+
+    pub fn start_scan(&self, range: &mut KeyRange) {
+        let cur_seek_key = self.seek_key.clone();
+        match self.scan_mode {
+            ScanMode::Forward => range.set_start(cur_seek_key),
+            ScanMode::Backward => range.set_end(cur_seek_key),
+            _ => unreachable!(),
+        };
+    }
+
+    pub fn stop_scan(&self, range: &mut KeyRange) {
+        let cur_seek_key = self.seek_key.clone();
+        match self.scan_mode {
+            ScanMode::Forward => range.set_end(cur_seek_key),
+            ScanMode::Backward => range.set_start(cur_seek_key),
+            _ => unreachable!(),
+        };
     }
 
     pub fn collect_statistics_into(&mut self, stats: &mut Statistics) {

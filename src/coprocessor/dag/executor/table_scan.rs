@@ -11,7 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::mem;
 use std::vec::IntoIter;
+use std::iter::Peekable;
 
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::TableScan;
@@ -29,9 +31,9 @@ pub struct TableScanExecutor {
     store: SnapshotStore,
     desc: bool,
     col_ids: HashSet<i64>,
-    key_ranges: IntoIter<KeyRange>,
+    key_ranges: Peekable<IntoIter<KeyRange>>,
+    scan_range: KeyRange,
     scanner: Option<Scanner>,
-    last_key: Option<Vec<u8>>,
     count: i64,
     metrics: ExecutorMetrics,
     first_collect: bool,
@@ -59,9 +61,9 @@ impl TableScanExecutor {
             store: store,
             desc: desc,
             col_ids: col_ids,
-            key_ranges: key_ranges.into_iter(),
+            key_ranges: key_ranges.into_iter().peekable(),
+            scan_range: KeyRange::default(),
             scanner: None,
-            last_key: None,
             count: 0,
             metrics: Default::default(),
             first_collect: true,
@@ -77,7 +79,6 @@ impl TableScanExecutor {
             };
             let row_data = box_try!(table::cut_row(value, &self.col_ids));
             let h = box_try!(table::decode_handle(&key));
-            self.last_key = Some(key);
             return Ok(Some(Row::new(h, row_data)));
         }
         Ok(None)
@@ -90,7 +91,6 @@ impl TableScanExecutor {
         if let Some(value) = value {
             let values = box_try!(table::cut_row(value, &self.col_ids));
             let h = box_try!(table::decode_handle(&key));
-            self.last_key = Some(key);
             return Ok(Some(Row::new(h, values)));
         }
         Ok(None)
@@ -137,8 +137,25 @@ impl Executor for TableScanExecutor {
         }
     }
 
-    fn take_last_key(&mut self) -> Option<Vec<u8>> {
-        self.last_key.take()
+    fn start_scan(&mut self) {
+        if let Some(scanner) = self.scanner.as_ref() {
+            scanner.start_scan(&mut self.scan_range);
+        } else if let Some(range) = self.key_ranges.peek() {
+            self.scan_range = range.clone();
+        }
+    }
+
+    fn stop_scan(&mut self) -> Option<KeyRange> {
+        if let Some(scanner) = self.scanner.as_ref() {
+            scanner.stop_scan(&mut self.scan_range);
+        } else if let Some(range) = self.key_ranges.peek() {
+            if self.desc {
+                self.scan_range.set_start(range.get_start().to_owned());
+            } else {
+                self.scan_range.set_end(range.get_end().to_owned());
+            }
+        }
+        Some(mem::replace(&mut self.scan_range, KeyRange::default()))
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {

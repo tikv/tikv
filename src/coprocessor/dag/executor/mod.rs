@@ -136,11 +136,14 @@ pub trait Executor {
     fn next(&mut self) -> Result<Option<Row>>;
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>);
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics);
-    /// Take the last key accessed by the executor.
+
+    /// Only `TableScan` and `IndexScan` need to implement `start_scan`.
+    fn start_scan(&mut self) {}
+
+    /// Only `TableScan` and `IndexScan` need to implement `stop_scan`.
     ///
-    /// If the executor doesn't support this, return None. Now all
-    /// executors don't support this except TableScan and IndexScan.
-    fn take_last_key(&mut self) -> Option<Vec<u8>> {
+    /// It returns a `KeyRange` the executor has scaned.
+    fn stop_scan(&mut self) -> Option<KeyRange> {
         None
     }
 }

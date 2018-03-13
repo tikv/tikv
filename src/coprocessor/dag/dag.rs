@@ -22,7 +22,7 @@ use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::dag::expr::EvalContext;
 use coprocessor::Result;
-use coprocessor::endpoint::{get_pk, prefix_next, ReqContext};
+use coprocessor::endpoint::{get_pk, ReqContext};
 use storage::{Snapshot, SnapshotStore};
 
 use super::executor::{build_exec, Executor, ExecutorMetrics, Row};
@@ -104,14 +104,11 @@ impl DAGContext {
     ) -> Result<(Option<Response>, bool)> {
         let (mut record_cnt, mut finished) = (0, false);
         let mut chunk = Chunk::new();
-        let mut start_key = None;
+        self.exec.start_scan();
         while record_cnt < batch_row_limit {
             match self.exec.next()? {
                 Some(row) => {
                     record_cnt += 1;
-                    if record_cnt == 1 {
-                        start_key = self.exec.take_last_key();
-                    }
                     if self.has_aggr {
                         chunk.mut_rows_data().extend_from_slice(&row.data.value);
                     } else {
@@ -126,19 +123,14 @@ impl DAGContext {
             }
         }
         if record_cnt > 0 {
-            let end_key = self.exec.take_last_key();
-            return self.make_stream_response(chunk, start_key, end_key)
+            let range = self.exec.stop_scan();
+            return self.make_stream_response(chunk, range)
                 .map(|r| (Some(r), finished));
         }
         Ok((None, true))
     }
 
-    fn make_stream_response(
-        &mut self,
-        chunk: Chunk,
-        start_key: Option<Vec<u8>>,
-        end_key: Option<Vec<u8>>,
-    ) -> Result<Response> {
+    fn make_stream_response(&mut self, chunk: Chunk, range: Option<KeyRange>) -> Result<Response> {
         let mut s_resp = StreamResponse::new();
         s_resp.set_encode_type(EncodeType::TypeDefault);
         s_resp.set_data(box_try!(chunk.write_to_bytes()));
@@ -146,28 +138,9 @@ impl DAGContext {
 
         let mut resp = Response::new();
         resp.set_data(box_try!(s_resp.write_to_bytes()));
-
-        // `start_key` and `end_key` indicates the key_range which has been scaned
-        // for generating the response. It's for TiDB can retry requests partially,
-        // but some `Executor`s (e.g. TopN and Aggr) don't support that, in which
-        // cases both `start_key` and `end_key` should be None.
-        let (start, end) = match (start_key, end_key) {
-            (Some(start_key), Some(end_key)) => if start_key > end_key {
-                (end_key, prefix_next(&start_key))
-            } else {
-                (start_key, prefix_next(&end_key))
-            },
-            (Some(start_key), None) => {
-                let end_key = prefix_next(&start_key);
-                (start_key, end_key)
-            }
-            (None, None) => return Ok(resp),
-            _ => unreachable!(),
-        };
-        let mut range = KeyRange::new();
-        range.set_start(start);
-        range.set_end(end);
-        resp.set_range(range);
+        if let Some(range) = range {
+            resp.set_range(range);
+        }
         Ok(resp)
     }
 
