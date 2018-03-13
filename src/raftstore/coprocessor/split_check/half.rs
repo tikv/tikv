@@ -24,7 +24,7 @@ pub struct HalfStatus {
 }
 
 impl HalfStatus {
-    pub fn on_split_check(&mut self, key: &[u8], value_size: u64) -> bool {
+    pub fn should_split(&mut self, key: &[u8], value_size: u64) -> bool {
         self.current_size += key.len() as u64 + value_size;
         self.current_size > self.region_size / 2
     }
@@ -64,7 +64,7 @@ impl SplitCheckObserver for HalfCheckObserver {
         value_size: u64,
     ) -> Option<Vec<u8>> {
         if let Some(status) = status.half.as_mut() {
-            if status.on_split_check(key, value_size) {
+            if status.should_split(key, value_size) {
                 return Some(key.to_vec());
             }
         }
@@ -84,7 +84,7 @@ mod tests {
     use kvproto::metapb::Region;
 
     use storage::ALL_CFS;
-    use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
+    use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask, SplitType};
     use util::rocksdb::{new_engine_opt, CFOptions};
     use util::worker::Runnable;
     use util::transport::RetryableSendCh;
@@ -130,7 +130,7 @@ mod tests {
         // we flush it to SST so we can use the size properties instead.
         engine.flush(true).unwrap();
 
-        runnable.run(SplitCheckTask::new(&region, false));
+        runnable.run(SplitCheckTask::new(&region, SplitType::HalfSplit));
         loop {
             match rx.try_recv() {
                 Ok(Msg::SplitRegion {

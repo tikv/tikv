@@ -123,14 +123,26 @@ impl<'a> MergedIterator<'a> {
 /// Split checking task.
 pub struct Task {
     region: Region,
-    auto_check: bool,
+    tp: SplitType,
+}
+
+#[derive(Debug)]
+pub enum SplitType {
+    AutoSplit,
+    HalfSplit,
 }
 
 impl Task {
-    pub fn new(region: &Region, auto: bool) -> Task {
+    pub fn new(region: &Region, tp: SplitType) -> Task {
         Task {
             region: region.clone(),
-            auto_check: auto,
+            tp: tp,
+        }
+    }
+    pub fn is_auto_split(&self) -> bool {
+        match self.tp {
+            SplitType::AutoSplit => true,
+            _ => false,
         }
     }
 }
@@ -139,9 +151,9 @@ impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
-            "Split Check Task for {}, auto_check: {}",
+            "Split Check Task for {}, tp: {:?}",
             self.region.get_id(),
-            self.auto_check
+            self.tp
         )
     }
 }
@@ -169,7 +181,7 @@ impl<C: Sender<Msg>> Runner<C> {
         let region = &task.region;
         let mut split_ctx =
             self.coprocessor
-                .new_split_check_status(region, &self.engine, task.auto_check);
+                .new_split_check_status(region, &self.engine, task.is_auto_split());
         if split_ctx.skip() {
             debug!("[region {}] skip split check", region.get_id());
             return;

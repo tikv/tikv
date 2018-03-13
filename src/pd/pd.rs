@@ -18,7 +18,7 @@ use futures::Future;
 use tokio_core::reactor::Handle;
 
 use kvproto::metapb;
-use kvproto::eraftpb::ConfChangeType;
+use raft::eraftpb::ConfChangeType;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::pdpb;

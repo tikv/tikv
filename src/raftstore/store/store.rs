@@ -29,7 +29,7 @@ use time::{self, Timespec};
 
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState,
                              RegionLocalState};
-use kvproto::eraftpb::{ConfChangeType, MessageType};
+use raft::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
 use util::{escape, rocksdb};
 use util::time::{duration_to_sec, SlowTimer};
@@ -51,7 +51,7 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
                     ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
-                    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
+                    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask, SplitType};
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -1854,7 +1854,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             {
                 continue;
             }
-            let task = SplitCheckTask::new(peer.region(), true);
+            let task = SplitCheckTask::new(peer.region(), SplitType::AutoSplit);
             if let Err(e) = self.split_check_worker.schedule(task) {
                 error!("{} failed to schedule split check: {}", self.tag, e);
             }
@@ -2554,7 +2554,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     return;
                 }
 
-                let task = SplitCheckTask::new(region, false);
+                let task = SplitCheckTask::new(region, SplitType::HalfSplit);
                 if let Err(e) = self.split_check_worker.schedule(task) {
                     error!("{} failed to schedule split check: {}", self.tag, e);
                 }

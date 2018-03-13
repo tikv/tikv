@@ -17,7 +17,7 @@ use std::thread;
 
 use tikv::raftstore::store::*;
 use tikv::storage::CF_RAFT;
-use kvproto::eraftpb::ConfChangeType;
+use raft::eraftpb::ConfChangeType;
 use kvproto::raft_cmdpb::RaftResponseHeader;
 use kvproto::raft_serverpb::*;
 use kvproto::metapb;

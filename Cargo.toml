@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "1.1.0-dev.2"
+version = "2.0.0-rc.1"
 keywords = ["KV", "distributed-systems", "raft"]
 build = "build.rs"
 
@@ -70,6 +70,7 @@ zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.4", features = [ "serde", "v4" ] }
+raft = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.4"

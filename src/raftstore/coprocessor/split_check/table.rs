@@ -229,7 +229,7 @@ mod test {
 
     use storage::ALL_CFS;
     use storage::types::Key;
-    use raftstore::store::{Msg, SplitCheckRunner, SplitCheckTask};
+    use raftstore::store::{Msg, SplitCheckRunner, SplitCheckTask, SplitType};
     use util::rocksdb::new_engine;
     use util::worker::Runnable;
     use util::transport::RetryableSendCh;
@@ -335,7 +335,7 @@ mod test {
             for (encoded_start_key, encoded_end_key, table_id) in cases {
                 region.set_start_key(encoded_start_key.unwrap_or_else(Vec::new));
                 region.set_end_key(encoded_end_key.unwrap_or_else(Vec::new));
-                runnable.run(SplitCheckTask::new(&region, true));
+                runnable.run(SplitCheckTask::new(&region, SplitType::AutoSplit));
 
                 if let Some(id) = table_id {
                     let key = Key::from_raw(&gen_table_prefix(id));

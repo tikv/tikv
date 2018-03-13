@@ -16,7 +16,7 @@ use tikv::util::HandyRwLock;
 use tikv::util::config::*;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::Result;
-use kvproto::eraftpb::MessageType;
+use raft::eraftpb::MessageType;
 use kvproto::raft_cmdpb::RaftCmdResponse;
 
 use super::util::*;

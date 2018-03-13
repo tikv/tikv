@@ -18,7 +18,7 @@ use std::sync::mpsc::channel;
 use rand::{self, Rng};
 
 use kvproto::metapb;
-use kvproto::eraftpb::MessageType;
+use raft::eraftpb::MessageType;
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;

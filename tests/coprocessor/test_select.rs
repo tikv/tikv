@@ -24,8 +24,9 @@ use kvproto::kvrpcpb::Context;
 use tikv::coprocessor::codec::{datum, table, Datum};
 use tikv::coprocessor::codec::datum::DatumDecoder;
 use tikv::util::codec::number::*;
-use tikv::storage::{Key, Mutation, ALL_CFS};
+use tikv::storage::{self, Key, Mutation, ALL_CFS};
 use tikv::server::Config;
+use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
 use kvproto::coprocessor::{KeyRange, Request, Response};
@@ -374,8 +375,11 @@ pub struct Store {
 
 impl Store {
     fn new(engine: Box<Engine>) -> Store {
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+            || storage::ReadPoolContext::new(None)
+        });
         Store {
-            store: SyncStorage::from_engine(engine, &Default::default()),
+            store: SyncStorage::from_engine(engine, &Default::default(), read_pool),
             current_ts: 1,
             handles: vec![],
         }
@@ -1413,7 +1417,7 @@ fn test_reverse() {
 
 pub fn handle_request(end_point: &Worker<EndPointTask>, req: Request) -> Response {
     let (tx, rx) = mpsc::channel();
-    let req = RequestTask::new(req, box move |r| tx.send(r).unwrap(), 100, 60);
+    let req = RequestTask::new(req, box move |r| tx.send(r).unwrap(), 100);
     end_point.schedule(EndPointTask::Request(req)).unwrap();
     rx.recv().unwrap()
 }
@@ -2005,7 +2009,7 @@ fn test_handle_truncate() {
             .where_expr(cond.clone())
             .build();
         let (tx, rx) = mpsc::channel();
-        let req = RequestTask::new(req, box move |r| tx.send(r).unwrap(), 100, 60);
+        let req = RequestTask::new(req, box move |r| tx.send(r).unwrap(), 100);
         end_point.schedule(EndPointTask::Request(req)).unwrap();
         let resp = rx.recv().unwrap();
         assert!(!resp.get_other_error().is_empty());
