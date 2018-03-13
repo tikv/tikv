@@ -1204,7 +1204,7 @@ mod tests {
 
     #[test]
     fn test_get_put() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             read_pool_context_factory
         });
         let config = Config::default();
@@ -1253,7 +1253,7 @@ mod tests {
 
     #[test]
     fn test_put_with_err() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             read_pool_context_factory
         });
         let config = Config::default();
@@ -1282,7 +1282,7 @@ mod tests {
 
     #[test]
     fn test_scan() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             read_pool_context_factory
         });
         let config = Config::default();
@@ -1335,7 +1335,7 @@ mod tests {
 
     #[test]
     fn test_batch_get() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             read_pool_context_factory
         });
         let config = Config::default();
@@ -1391,7 +1391,7 @@ mod tests {
 
     #[test]
     fn test_txn() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             read_pool_context_factory
         });
         let config = Config::default();
@@ -1468,7 +1468,7 @@ mod tests {
 
     #[test]
     fn test_sched_too_busy() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             read_pool_context_factory
         });
         let mut config = Config::default();
@@ -1519,7 +1519,7 @@ mod tests {
 
     #[test]
     fn test_cleanup() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             read_pool_context_factory
         });
         let config = Config::default();
@@ -1556,7 +1556,7 @@ mod tests {
 
     #[test]
     fn test_high_priority_get_put() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             read_pool_context_factory
         });
         let config = Config::default();
@@ -1605,7 +1605,7 @@ mod tests {
 
     #[test]
     fn test_high_priority_no_block() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             read_pool_context_factory
         });
         let mut config = Config::default();
@@ -1657,7 +1657,7 @@ mod tests {
 
     #[test]
     fn test_delete_range() {
-        let read_pool = ReadPool::new(&readpool::Config::default_for_test(), || {
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             read_pool_context_factory
         });
         let config = Config::default();

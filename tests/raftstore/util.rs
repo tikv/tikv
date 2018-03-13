@@ -25,17 +25,17 @@ use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse,
                           Request, StatusCmdType, StatusRequest};
 use kvproto::pdpb::{ChangePeer, RegionHeartbeatResponse, TransferLeader};
-use kvproto::eraftpb::ConfChangeType;
+use raft::eraftpb::ConfChangeType;
 
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Config as ServerConfig;
-use tikv::server::readpool::Config as ReadPoolConfig;
+use tikv::server::readpool::Config as ReadPoolInstanceConfig;
 use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
 use tikv::util::escape;
 use tikv::util::rocksdb::{self, CompactionListener};
 use tikv::util::config::*;
-use tikv::config::TiKvConfig;
+use tikv::config::{ReadPoolConfig, TiKvConfig};
 use tikv::util::transport::SendCh;
 use tikv::raftstore::store::Msg as StoreMsg;
 
@@ -125,7 +125,9 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
 }
 
 pub fn new_readpool_cfg() -> ReadPoolConfig {
-    ReadPoolConfig::default_for_test()
+    ReadPoolConfig {
+        storage: ReadPoolInstanceConfig::default_for_test(),
+    }
 }
 
 pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
