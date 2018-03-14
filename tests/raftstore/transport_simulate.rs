@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use kvproto::raft_serverpb::RaftMessage;
-use kvproto::eraftpb::MessageType;
+use raft::eraftpb::MessageType;
 use tikv::raftstore::{Error, Result};
 use tikv::raftstore::store::{Msg as StoreMsg, SignificantMsg, Transport};
 use tikv::server::transport::*;
