@@ -127,6 +127,8 @@ fn test_serde_custom_tikv_config() {
         raft_store_max_leader_lease: ReadableDuration::secs(12),
         right_derive_when_split: false,
         allow_remove_leader: true,
+        merge_max_log_gap: 3,
+        merge_check_tick_interval: ReadableDuration::secs(11),
         use_delete_range: true,
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),
