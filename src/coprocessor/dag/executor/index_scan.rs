@@ -35,6 +35,9 @@ pub struct IndexScanExecutor {
     col_ids: Vec<i64>,
     pk_col: Option<ColumnInfo>,
     key_ranges: Peekable<IntoIter<KeyRange>>,
+    // The current `KeyRange` scanning on, used to build `scan_range`.
+    current_range: Option<KeyRange>,
+    // The `KeyRange` scaned between `start_scan` and `stop_scan`.
     scan_range: KeyRange,
     scanner: Option<Scanner>,
     unique: bool,
@@ -68,6 +71,7 @@ impl IndexScanExecutor {
             col_ids: col_ids,
             pk_col: pk_col,
             key_ranges: key_ranges.into_iter().peekable(),
+            current_range: None,
             scan_range: KeyRange::default(),
             scanner: None,
             unique: unique,
@@ -90,6 +94,7 @@ impl IndexScanExecutor {
             col_ids: col_ids,
             pk_col: None,
             key_ranges: key_ranges.into_iter().peekable(),
+            current_range: None,
             scan_range: KeyRange::default(),
             scanner: None,
             unique: false,
@@ -165,6 +170,7 @@ impl Executor for IndexScanExecutor {
                 return Ok(Some(row));
             }
             if let Some(range) = self.key_ranges.next() {
+                self.current_range = Some(range.clone());
                 if self.is_point(&range) {
                     if let Some(row) = self.get_row_from_point(range)? {
                         self.count += 1;
@@ -186,24 +192,44 @@ impl Executor for IndexScanExecutor {
     }
 
     fn start_scan(&mut self) {
-        if let Some(scanner) = self.scanner.as_ref() {
-            scanner.start_scan(&mut self.scan_range);
-        } else if let Some(range) = self.key_ranges.peek() {
-            self.scan_range = range.clone();
+        if let Some(range) = self.current_range.as_ref() {
+            if !is_point(range) {
+                let scanner = self.scanner.as_mut().unwrap();
+                if scanner.start_scan(&mut self.scan_range) {
+                    return;
+                }
+            }
         }
-    }
+        self.current_range = None;
 
-    fn stop_scan(&mut self) -> Option<KeyRange> {
-        if let Some(scanner) = self.scanner.as_ref() {
-            scanner.stop_scan(&mut self.scan_range);
-        } else if let Some(range) = self.key_ranges.peek() {
-            if self.desc {
+        if let Some(range) = self.key_ranges.peek() {
+            if !self.desc {
                 self.scan_range.set_start(range.get_start().to_owned());
             } else {
                 self.scan_range.set_end(range.get_end().to_owned());
             }
         }
-        Some(mem::replace(&mut self.scan_range, KeyRange::default()))
+    }
+
+    fn stop_scan(&mut self) -> Option<KeyRange> {
+        let mut ret_range = mem::replace(&mut self.scan_range, KeyRange::default());
+        match self.current_range.as_ref() {
+            Some(range) => {
+                if !is_point(range) {
+                    let scanner = self.scanner.as_ref().unwrap();
+                    if scanner.stop_scan(&mut ret_range) {
+                        return Some(ret_range);
+                    }
+                }
+                if !self.desc {
+                    ret_range.set_end(range.get_end().to_owned());
+                } else {
+                    ret_range.set_start(range.get_start().to_owned());
+                }
+            }
+            None => unreachable!(),
+        }
+        Some(ret_range)
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
