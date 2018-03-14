@@ -1880,7 +1880,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_compact_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if self.compact_worker.is_busy() {
-            info!("compact worker is busy, check space redundancy next time");
+            debug!("compact worker is busy, check space redundancy next time");
         } else if self.region_ranges.is_empty() {
             debug!("there is no range need to check");
         } else {

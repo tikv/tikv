@@ -199,7 +199,7 @@ fn collect_ranges_need_compact(
     let mut ranges_need_compact = VecDeque::new();
     let cf = box_try!(rocksdb::get_cf_handle(engine, CF_WRITE));
     let mut compact_start = None;
-    let mut last_win_right = None;
+    let mut compact_end = None;
     for range in ranges.windows(2) {
         // Get total entries and total versions in this range and check if need compacting.
         if let Some((num_ent, num_ver)) =
@@ -210,24 +210,23 @@ fn collect_ranges_need_compact(
                     // The previous range doesn't need compacting.
                     compact_start = Some(range[0].clone());
                 }
-                last_win_right = Some(range[1].clone());
+                compact_end = Some(range[1].clone());
                 // Move to next range.
                 continue;
             }
         }
 
         // Current range doesn't need compacting, save previous range that need compacting.
-        if compact_start.is_some() && last_win_right.is_some() {
-            ranges_need_compact.push_back((compact_start.unwrap(), last_win_right.unwrap()));
+        if compact_start.is_some() {
+            ranges_need_compact.push_back((compact_start.unwrap(), compact_end.unwrap()));
             compact_start = None;
+            compact_end = None;
         }
-
-        last_win_right = Some(range[1].clone());
     }
 
     // Save the last range that need compacting.
-    if compact_start.is_some() && last_win_right.is_some() {
-        ranges_need_compact.push_back((compact_start.unwrap(), last_win_right.unwrap()));
+    if compact_start.is_some() {
+        ranges_need_compact.push_back((compact_start.unwrap(), compact_end.unwrap()));
     }
 
     Ok(ranges_need_compact)
