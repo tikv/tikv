@@ -21,6 +21,7 @@ extern crate futures;
 extern crate grpcio;
 extern crate kvproto;
 extern crate protobuf;
+extern crate raft;
 extern crate rocksdb;
 extern crate rustc_serialize;
 extern crate tikv;
@@ -44,7 +45,7 @@ use protobuf::RepeatedField;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::PeerState;
 use kvproto::metapb::Region;
-use kvproto::eraftpb::{ConfChange, Entry, EntryType};
+use raft::eraftpb::{ConfChange, Entry, EntryType};
 use kvproto::kvrpcpb::MvccInfo;
 use kvproto::debugpb::*;
 use kvproto::debugpb::DB as DBType;
@@ -399,6 +400,8 @@ trait DebugExecutor {
     /// Recover the cluster when given `store_ids` are failed.
     fn remove_fail_stores(&self, store_ids: Vec<u64>);
 
+    fn check_region_consistency(&self, _: u64);
+
     fn check_local_mode(&self);
 
     fn get_all_meta_regions(&self) -> Vec<u64>;
@@ -524,6 +527,14 @@ impl DebugExecutor for DebugClient {
     fn remove_fail_stores(&self, _: Vec<u64>) {
         self.check_local_mode();
     }
+
+    fn check_region_consistency(&self, region_id: u64) {
+        let mut req = RegionConsistencyCheckRequest::new();
+        req.set_region_id(region_id);
+        self.check_region_consistency(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::check_region_consistency", e));
+        println!("success!");
+    }
 }
 
 impl DebugExecutor for Debugger {
@@ -605,6 +616,11 @@ impl DebugExecutor for Debugger {
         self.remove_failed_stores(store_ids)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
         println!("success");
+    }
+
+    fn check_region_consistency(&self, _: u64) {
+        eprintln!("only support remote mode");
+        process::exit(-1);
     }
 }
 
@@ -942,6 +958,17 @@ fn main() {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("consistency-check")
+                .about("force consistency-check for a specified region")
+                .arg(
+                    Arg::with_name("region")
+                        .required(true)
+                        .short("r")
+                        .takes_value(true)
+                        .help("the target region"),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("bad-regions").about("get all regions with corrupt raft"),
         );
     let matches = app.clone().get_matches();
@@ -1048,6 +1075,9 @@ fn main() {
                 Err(e) => perror_and_exit("parse store id list", e),
             }
         }
+    } else if let Some(matches) = matches.subcommand_matches("consistency-check") {
+        let region_id = matches.value_of("region").unwrap().parse().unwrap();
+        debug_executor.check_region_consistency(region_id);
     } else if matches.subcommand_matches("bad-regions").is_some() {
         debug_executor.print_bad_regions();
     } else {
