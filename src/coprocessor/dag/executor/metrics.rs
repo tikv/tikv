@@ -98,7 +98,6 @@ impl ExecCounter {
         *other = ExecCounter::default();
     }
 
-    #[allow(dead_code)] // TODO: remove it.
     pub fn consume(self, metrics: &mut LocalCounterVec) {
         metrics
             .with_label_values(&["tblscan"])

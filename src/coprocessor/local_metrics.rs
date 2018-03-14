@@ -22,13 +22,11 @@ use util::worker::FutureScheduler;
 use pd::PdTask;
 
 /// `CopFlowStatistics` is for flow statistics, it would be reported to PD by flush.
-#[allow(dead_code)] // TODO: remove it.
 pub struct CopFlowStatistics {
     data: HashMap<u64, FlowStatistics>,
     sender: FutureScheduler<PdTask>,
 }
 
-#[allow(dead_code)] // TODO: remove it.
 impl CopFlowStatistics {
     pub fn new(sender: FutureScheduler<PdTask>) -> CopFlowStatistics {
         CopFlowStatistics {
@@ -58,7 +56,6 @@ impl CopFlowStatistics {
 }
 
 /// `ExecLocalMetrics` collects metrics for request with executors.
-#[allow(dead_code)] // TODO: remove it.
 pub struct ExecLocalMetrics {
     flow_stats: CopFlowStatistics,
     scan_details: LocalCounterVec,
@@ -66,7 +63,6 @@ pub struct ExecLocalMetrics {
     exec_counter: LocalCounterVec,
 }
 
-#[allow(dead_code)] // TODO: remove it.
 impl ExecLocalMetrics {
     pub fn new(sender: FutureScheduler<PdTask>) -> ExecLocalMetrics {
         ExecLocalMetrics {

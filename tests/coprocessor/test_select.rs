@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::collections::{BTreeMap, HashMap};
-use std::mem;
+use std::{cmp, mem};
 use std::sync::mpsc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::i64;
@@ -845,6 +845,7 @@ fn test_stream_batch_row_limit() {
         (2, Some("name:4"), 3),
         (4, Some("name:3"), 1),
         (5, Some("name:1"), 4),
+        (8, Some("name:2"), 4),
     ];
 
     let product = ProductTable::new();
@@ -857,12 +858,9 @@ fn test_stream_batch_row_limit() {
     };
 
     let req = DAGSelect::from(&product.table).build();
+    assert_eq!(req.get_ranges().len(), 1);
 
-    // Check the Response.range by check its last bytes.  We can know the last bytes
-    // because our query is a simple table scan, and row ids are 1, 2, 4, 5. And if
-    // the streaming contains at most 2 records in a chunk, the ranges of responses
-    // should be [(0x___1, 0x___3), (0x___4, 0x___6)].
-    let mut expected_ranges_last_byte = vec![(1, 3), (4, 6)];
+    let mut expected_ranges_last_byte = vec![(0, 3), (3, 6), (6, 255)];
     let check_range = move |resp: &Response| {
         let (start_last_byte, end_last_byte) = expected_ranges_last_byte.remove(0);
         let start = resp.get_range().get_start();
@@ -872,7 +870,7 @@ fn test_stream_batch_row_limit() {
     };
 
     let resps = handle_streaming_select(&end_point, req, check_range);
-    assert_eq!(resps.len(), 2);
+    assert_eq!(resps.len(), 3);
 
     for (i, resp) in resps.into_iter().enumerate() {
         // For now, we only support default encode type.
@@ -885,7 +883,8 @@ fn test_stream_batch_row_limit() {
         check_chunk_datum_count(&chunks, chunk_data_limit);
 
         let spliter = DAGChunkSpliter::new(chunks, 3);
-        let cur_data = &data[i * stream_row_limit..(i + 1) * stream_row_limit];
+        let j = cmp::min((i + 1) * stream_row_limit, data.len());
+        let cur_data = &data[i * stream_row_limit..j];
         for (row, &(id, name, cnt)) in spliter.zip(cur_data) {
             let name_datum = name.map(|s| s.as_bytes()).into();
             let expected_encoded =

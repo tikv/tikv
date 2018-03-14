@@ -104,7 +104,7 @@ impl Scanner {
         };
 
         let (key, value) = match kv {
-            Some((key, value)) => (box_try!(key.raw()), value),
+            Some((k, v)) => (box_try!(k.raw()), v),
             None => {
                 self.no_more = true;
                 return Ok(None);
@@ -112,14 +112,12 @@ impl Scanner {
         };
 
         if self.range.start > key || self.range.end <= key {
-            debug!(
+            panic!(
                 "key: {} out of range [{}, {})",
                 escape(&key),
                 escape(self.range.get_start()),
                 escape(self.range.get_end())
             );
-            self.no_more = true;
-            return Ok(None);
         }
 
         self.seek_key = match (self.scan_mode, self.scan_on) {
@@ -128,7 +126,34 @@ impl Scanner {
             (ScanMode::Backward, ScanOn::Index) => key.clone(),
             _ => unreachable!(),
         };
+
         Ok(Some((key, value)))
+    }
+
+    pub fn start_scan(&self, range: &mut KeyRange) -> bool {
+        if self.no_more {
+            return false;
+        }
+        let cur_seek_key = self.seek_key.clone();
+        match self.scan_mode {
+            ScanMode::Forward => range.set_start(cur_seek_key),
+            ScanMode::Backward => range.set_end(cur_seek_key),
+            _ => unreachable!(),
+        };
+        true
+    }
+
+    pub fn stop_scan(&self, range: &mut KeyRange) -> bool {
+        if self.no_more {
+            return false;
+        }
+        let cur_seek_key = self.seek_key.clone();
+        match self.scan_mode {
+            ScanMode::Forward => range.set_end(cur_seek_key),
+            ScanMode::Backward => range.set_start(cur_seek_key),
+            _ => unreachable!(),
+        };
+        true
     }
 
     pub fn collect_statistics_into(&mut self, stats: &mut Statistics) {

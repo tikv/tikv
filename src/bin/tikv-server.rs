@@ -54,7 +54,7 @@ use std::time::Duration;
 use clap::{App, Arg, ArgMatches};
 use fs2::FileExt;
 
-use tikv::config::{MetricConfig, TiKvConfig, LAST_CONFIG_FILE};
+use tikv::config::{check_and_persist_critical_config, MetricConfig, TiKvConfig};
 use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
@@ -358,24 +358,6 @@ fn configure_grpc_poll_strategy() {
     }
 }
 
-fn check_and_persist_critical_config(config: &TiKvConfig) {
-    // Check current critical configurations with last time, if there are some
-    // changes, user must guarantee relevant works have been done.
-    let store_path = Path::new(&config.storage.data_dir);
-    let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
-    if last_cfg_path.exists() {
-        let last_cfg = TiKvConfig::from_file(&last_cfg_path);
-        if let Err(e) = config.check_critical_cfg_with(&last_cfg) {
-            fatal!("check critical config failed, err {:?}", e);
-        }
-    }
-
-    // Persist current critical configurations to file.
-    if let Err(e) = config.write_to_file(&last_cfg_path) {
-        fatal!("persist critical config failed, err {:?}", e);
-    }
-}
-
 fn main() {
     let long_version: String = {
         let (hash, branch, time, rust_ver) = util::build_info();
@@ -503,7 +485,9 @@ fn main() {
 
     overwrite_config_with_cmd_args(&mut config, &matches);
 
-    check_and_persist_critical_config(&config);
+    if let Err(e) = check_and_persist_critical_config(&config) {
+        fatal!("check critical config failed, error {:?}", e);
+    }
 
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validata()`,

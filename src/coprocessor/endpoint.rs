@@ -100,8 +100,6 @@ impl CopContext {
     }
 }
 
-unsafe impl Sync for CopContext {}
-
 #[derive(Clone)]
 struct CopContextPool {
     cop_ctxs: Arc<HashMap<ThreadId, CopContext>>,
@@ -125,6 +123,9 @@ impl FromIterator<(ThreadId, CopContext)> for CopContextPool {
         CopContextPool { cop_ctxs: cop_ctxs }
     }
 }
+
+unsafe impl Sync for CopContextPool {}
+unsafe impl Send for CopContextPool {}
 
 impl Debug for CopContextPool {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -253,7 +254,7 @@ impl Host {
             CommandPri::Normal => &mut self.pool,
         };
         let pool = &pool_and_ctx_pool.pool;
-        tracker.attach_ctx_pool(pool_and_ctx_pool.contexts.clone());
+        tracker.ctx_pool(pool_and_ctx_pool.contexts.clone());
 
         match cop_req {
             CopRequest::DAG(dag) => {
@@ -408,12 +409,12 @@ struct RequestTracker {
 }
 
 impl RequestTracker {
-    fn attach_task_count(&mut self, running_task_count: Arc<AtomicUsize>) {
+    fn task_count(&mut self, running_task_count: Arc<AtomicUsize>) {
         running_task_count.fetch_add(1, Ordering::Release);
         self.running_task_count = Some(running_task_count);
     }
 
-    fn attach_ctx_pool(&mut self, ctx_pool: CopContextPool) {
+    fn ctx_pool(&mut self, ctx_pool: CopContextPool) {
         self.ctx_pool = Some(ctx_pool);
     }
 
@@ -433,6 +434,10 @@ impl RequestTracker {
         self.handle_start = Some(now);
 
         if stop_first_wait {
+            COPR_PENDING_REQS
+                .with_label_values(&[self.scan_tag, self.pri_str])
+                .dec();
+
             let ctx_pool = self.ctx_pool.as_ref().unwrap();
             let mut cop_ctx = ctx_pool.get_context().0.borrow_mut();
             cop_ctx
@@ -476,23 +481,18 @@ impl RequestTracker {
 
 impl Drop for RequestTracker {
     fn drop(&mut self) {
-        COPR_PENDING_REQS
-            .with_label_values(&[self.scan_tag, self.pri_str])
-            .dec();
-
         if let Some(task_count) = self.running_task_count.take() {
             task_count.fetch_sub(1, Ordering::Release);
         }
 
-        let query_time = duration_to_sec(self.start.elapsed());
-        if query_time > SLOW_QUERY_LOWER_BOUND {
+        if self.total_handle_time > SLOW_QUERY_LOWER_BOUND {
             info!(
                 "[region {}] handle {:?} [{}] takes {:?} [keys: {}, hit: {}, \
                  ranges: {} ({:?})]",
                 self.region_id,
                 self.txn_start_ts,
                 self.scan_tag,
-                query_time,
+                self.total_handle_time,
                 self.exec_metrics.cf_stats.total_op_count(),
                 self.exec_metrics.cf_stats.total_processed(),
                 self.ranges_len,
@@ -500,6 +500,10 @@ impl Drop for RequestTracker {
             );
         }
         if self.wait_time.is_none() {
+            COPR_PENDING_REQS
+                .with_label_values(&[self.scan_tag, self.pri_str])
+                .dec();
+
             // For the request is failed before enter into thread pool.
             let wait_start = self.wait_start.take().unwrap();
             let now = Instant::now_coarse();
@@ -518,7 +522,7 @@ impl Drop for RequestTracker {
             .basic_local_metrics
             .req_time
             .with_label_values(&[self.scan_tag])
-            .observe(query_time);
+            .observe(duration_to_sec(self.start.elapsed()));
         cop_ctx
             .basic_local_metrics
             .handle_time
@@ -710,7 +714,7 @@ impl Runnable<Task> for Host {
 
             for req in &mut reqs {
                 let task_count = Arc::clone(&self.running_task_count);
-                req.tracker.attach_task_count(task_count);
+                req.tracker.task_count(task_count);
             }
             self.last_req_id += 1;
             batch.push(reqs[0].req.get_context().clone());

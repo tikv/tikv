@@ -164,10 +164,13 @@ fn make_callback<T: Send + Debug + 'static>() -> (Box<FnBox(T) + Send>, oneshot:
     (box callback, rx)
 }
 
-pub fn make_stream_callback<T>(channel_size: usize) -> (OnResponse<T>, mpsc::Receiver<T>)
-where
-    T: Send + Debug + 'static,
-{
+#[allow(type_complexity)]
+pub fn make_stream_callback<T: Send + Debug + 'static>(
+    channel_size: usize,
+) -> (
+    Box<FnBox(CopStream<T>, Option<CpuPool>) + Send>,
+    mpsc::Receiver<T>,
+) {
     let (tx, rx) = mpsc::channel(channel_size);
     let callback = move |s: CopStream<T>, executor: Option<CpuPool>| {
         // We can run the callback in two place: Endpoint thread and Cpu pool threads.
@@ -179,7 +182,7 @@ where
         }
         f.wait().unwrap();
     };
-    (OnResponse::Streaming(box callback), rx)
+    (box callback, rx)
 }
 
 impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
@@ -827,7 +830,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        let (on_resp, stream) = make_stream_callback(self.stream_channel_size);
+        let (cb, stream) = make_stream_callback(self.stream_channel_size);
+        let on_resp = OnResponse::Streaming(cb);
         let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
             Ok(req_task) => req_task,
             Err(e) => {
