@@ -16,20 +16,42 @@ use rocksdb::DB;
 use super::super::{Coprocessor, ObserverContext, SplitCheckObserver};
 use super::Status;
 
+const BUCKET_NUMBER_LIMIT: usize = 1024;
 #[derive(Default)]
 pub struct HalfStatus {
     buckets: Vec<Vec<u8>>,
-    current_size: u64,
+    cur_bucket_size: u64,
+    each_bucket_size: u64,
 }
 
 impl HalfStatus {
-    pub fn push_data(&mut self, key: &[u8], value_size: u64, bucket_size: u64) {
-        let current_len = key.len() as u64 + value_size;
-        if self.buckets.is_empty() || self.current_size > bucket_size {
-            self.buckets.push(key.to_vec());
-            self.current_size = 0;
+    fn new(each_bucket_size: u64) -> HalfStatus {
+        HalfStatus {
+            each_bucket_size: each_bucket_size,
+            ..Default::default()
         }
-        self.current_size += current_len;
+    }
+
+    pub fn push_data(&mut self, key: &[u8], value_size: u64) {
+        let current_len = key.len() as u64 + value_size;
+        if self.buckets.is_empty() || self.cur_bucket_size >= self.each_bucket_size {
+            self.check_and_adjust_buckets_num();
+            self.buckets.push(key.to_vec());
+            self.cur_bucket_size = 0;
+        }
+        self.cur_bucket_size += current_len;
+    }
+
+    fn check_and_adjust_buckets_num(&mut self) {
+        if self.buckets.len() < BUCKET_NUMBER_LIMIT {
+            return;
+        }
+        let buckets_num = self.buckets.len() / 2;
+        for id in { 0..buckets_num } {
+            self.buckets.swap(id, id * 2 + 1);
+        }
+        self.buckets.truncate(buckets_num);
+        self.each_bucket_size *= 2;
     }
 
     pub fn split_key(self) -> Option<Vec<u8>> {
@@ -66,7 +88,7 @@ impl SplitCheckObserver for HalfCheckObserver {
         if status.auto_split {
             return;
         }
-        status.half = Some(HalfStatus::default());
+        status.half = Some(HalfStatus::new(self.half_split_bucket_size));
     }
 
     fn on_split_check(
@@ -77,7 +99,7 @@ impl SplitCheckObserver for HalfCheckObserver {
         value_size: u64,
     ) -> Option<Vec<u8>> {
         if let Some(status) = status.half.as_mut() {
-            status.push_data(key, value_size, self.half_split_bucket_size);
+            status.push_data(key, value_size);
         }
         None
     }
@@ -99,22 +121,19 @@ mod tests {
     use util::rocksdb::{new_engine_opt, CFOptions};
     use util::worker::Runnable;
     use util::transport::RetryableSendCh;
-    use util::properties::SizePropertiesCollectorFactory;
     use util::config::ReadableSize;
 
     use raftstore::coprocessor::{Config, CoprocessorHost};
+    use super::*;
 
     #[test]
     fn test_split_check() {
         let path = TempDir::new("test-raftstore").unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
-        let mut cf_opts = ColumnFamilyOptions::new();
-        let f = Box::new(SizePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
         let cfs_opts = ALL_CFS
             .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
             .collect();
         let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
@@ -144,26 +163,42 @@ mod tests {
         engine.flush(true).unwrap();
 
         runnable.run(SplitCheckTask::new(&region, SplitType::HalfSplit));
-        loop {
-            match rx.try_recv() {
-                Ok(Msg::SplitRegion {
-                    region_id,
-                    region_epoch,
-                    split_key,
-                    ..
-                }) => {
-                    assert_eq!(region_id, region.get_id());
-                    assert_eq!(&region_epoch, region.get_region_epoch());
-                    assert_eq!(split_key, b"0006");
-                    break;
-                }
-                // This may sent by SizeCheckObserver
-                Ok(Msg::ApproximateRegionSize { region_id, .. }) => {
-                    assert_eq!(region_id, region.get_id());
-                }
-                others => panic!("expect split check result, but got {:?}", others),
+        match rx.try_recv() {
+            Ok(Msg::SplitRegion {
+                region_id,
+                region_epoch,
+                split_key,
+                ..
+            }) => {
+                assert_eq!(region_id, region.get_id());
+                assert_eq!(&region_epoch, region.get_region_epoch());
+                assert_eq!(split_key, b"0006");
             }
+            others => panic!("expect split check result, but got {:?}", others),
         }
-        drop(rx);
     }
+
+    #[test]
+    fn test_too_many_buckets() {
+        let item_len = 100;
+        let mut status = HalfStatus::new(item_len);
+        for id in { 0..BUCKET_NUMBER_LIMIT } {
+            let key_str = format!("{:09}", id);
+            let key = key_str.into_bytes();
+            let value_size = item_len - key.len() as u64;
+            status.push_data(&key, value_size);
+        }
+        assert_eq!(status.buckets.len(), BUCKET_NUMBER_LIMIT);
+        assert_eq!(status.each_bucket_size, item_len);
+        // buckets number reach the upper limit
+        status.push_data(b"xxx", item_len);
+        // buckets merged
+        assert_eq!(status.buckets.len(), BUCKET_NUMBER_LIMIT / 2 + 1);
+        assert_eq!(status.each_bucket_size, item_len * 2);
+        // check split_key
+        let expect_key_id = BUCKET_NUMBER_LIMIT / 2 + 1;
+        let expect_key = format!("{:09}", expect_key_id);
+        assert_eq!(status.split_key(), Some(expect_key.into_bytes()));
+    }
+
 }

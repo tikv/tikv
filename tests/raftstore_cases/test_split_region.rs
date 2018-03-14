@@ -762,11 +762,8 @@ fn test_half_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();
-    assert_ne!(left, right);
     assert_eq!(region.get_start_key(), left.get_start_key());
+    assert_eq!(mid_key.as_slice(), right.get_start_key());
     assert_eq!(right.get_start_key(), left.get_end_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
-    assert_eq!(pd_client.get_region(&max_key).unwrap(), right);
-    assert_eq!(pd_client.get_region(left.get_end_key()).unwrap(), right);
-    assert_eq!(mid_key.as_slice(), right.get_start_key());
 }
