@@ -55,6 +55,7 @@ fn test_serde_custom_tikv_config() {
     let mut value = TiKvConfig::default();
     value.log_level = LogLevelFilter::Debug;
     value.log_file = "foo".to_owned();
+    value.log_rotate_size = ReadableSize::mb(100);
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
         addr: "example.com:443".to_owned(),

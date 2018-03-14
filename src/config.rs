@@ -672,6 +672,7 @@ impl Default for ReadPoolConfig {
 pub struct TiKvConfig {
     #[serde(with = "LogLevel")] pub log_level: LogLevelFilter,
     pub log_file: String,
+    pub log_rotate_size: ReadableSize,
     pub readpool: ReadPoolConfig,
     pub server: ServerConfig,
     pub storage: StorageConfig,
@@ -690,6 +691,7 @@ impl Default for TiKvConfig {
         TiKvConfig {
             log_level: LogLevelFilter::Info,
             log_file: "".to_owned(),
+            log_rotate_size: ReadableSize::mb(0),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
