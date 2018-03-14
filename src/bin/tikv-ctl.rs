@@ -522,7 +522,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn check_region_consistency(&self, region_id: u64) {
-        let mut req = RegionConsistentCheckRequest::new();
+        let mut req = RegionConsistencyCheckRequest::new();
         req.set_region_id(region_id);
         self.check_region_consistency(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::check_region_consistency", e));

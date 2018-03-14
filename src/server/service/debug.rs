@@ -329,8 +329,8 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
     fn check_region_consistency(
         &self,
         ctx: RpcContext,
-        req: RegionConsistentCheckRequest,
-        sink: UnarySink<RegionConsistentCheckResponse>,
+        req: RegionConsistencyCheckRequest,
+        sink: UnarySink<RegionConsistencyCheckResponse>,
     ) {
         let region_id = req.get_region_id();
         let debugger = self.debugger.clone();
@@ -342,7 +342,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
             .and_then(|detail| consistency_check(router1, detail));
         let f = self.pool
             .spawn(consistency_check)
-            .map(|_| RegionConsistentCheckResponse::new());
+            .map(|_| RegionConsistencyCheckResponse::new());
         self.handle_response(ctx, sink, f, "check_region_consistency");
     }
 }
