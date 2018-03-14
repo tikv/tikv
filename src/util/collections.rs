@@ -18,4 +18,5 @@ pub use std::collections::hash_map::Entry as HashMapEntry;
 
 pub use flat_map::FlatMap;
 pub use flat_map::flat_map::{Entry as FlatMapEntry, Values as FlatMapValues};
-pub use ordermap::{Entry as OrderMapEntry, OrderMap};
+pub use indexmap::map::Entry as OrderMapEntry;
+pub use indexmap::IndexMap as OrderMap;
