@@ -130,16 +130,10 @@ impl Scanner {
         Ok(Some((key, value)))
     }
 
-    // If the scanner has no more data, return false and leave `range` untouch.
-    pub fn start_scan(&mut self, range: &mut KeyRange) -> bool {
-        // We can know the scanner has more data or not by a simple compare.
-        if (self.seek_key >= self.range.end && self.scan_mode == ScanMode::Forward)
-            || (self.seek_key <= self.range.start && self.scan_mode == ScanMode::Backward)
-        {
-            self.no_more = true;
+    pub fn start_scan(&self, range: &mut KeyRange) -> bool {
+        if self.no_more {
             return false;
         }
-
         let cur_seek_key = self.seek_key.clone();
         match self.scan_mode {
             ScanMode::Forward => range.set_start(cur_seek_key),

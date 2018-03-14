@@ -145,13 +145,12 @@ impl Executor for TableScanExecutor {
     fn start_scan(&mut self) {
         if let Some(range) = self.current_range.as_ref() {
             if !is_point(range) {
-                let scanner = self.scanner.as_mut().unwrap();
+                let scanner = self.scanner.as_ref().unwrap();
                 if scanner.start_scan(&mut self.scan_range) {
                     return;
                 }
             }
         }
-        self.current_range = None;
 
         if let Some(range) = self.key_ranges.peek() {
             if !self.desc {
@@ -178,6 +177,8 @@ impl Executor for TableScanExecutor {
                     ret_range.set_start(range.get_start().to_owned());
                 }
             }
+            // `stop_scan` will be called only if we get some data from
+            // `current_range` so that it's unreachable.
             None => unreachable!(),
         }
         Some(ret_range)
