@@ -27,7 +27,7 @@ use raftstore::store::Engines;
 use raftstore::store::msg::Callback;
 use server::debug::{Debugger, Error};
 use server::transport::RaftStoreRouter;
-use util::metrics;
+use util::{jemalloc, metrics, rocksdb_stats};
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
@@ -305,15 +305,21 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
     fn get_metrics(
         &self,
         ctx: RpcContext,
-        _: GetMetricsRequest,
+        req: GetMetricsRequest,
         sink: UnarySink<GetMetricsResponse>,
     ) {
         const TAG: &str = "debug_get_metrics";
 
+        let debugger = self.debugger.clone();
         let f = self.pool.spawn_fn(move || {
-            let metrics_info = metrics::dump();
             let mut resp = GetMetricsResponse::new();
-            resp.set_metrics(metrics_info);
+            resp.set_prometheus(metrics::dump());
+            if req.get_all() {
+                let engines = debugger.get_engine();
+                resp.set_rocksdb_kv(box_try!(rocksdb_stats::dump(&engines.kv_engine)));
+                resp.set_rocksdb_raft(box_try!(rocksdb_stats::dump(&engines.raft_engine)));
+                resp.set_jemalloc(jemalloc::dump_stats());
+            }
             Ok(resp)
         });
 
