@@ -1786,4 +1786,99 @@ mod tests {
         );
         storage.stop().unwrap();
     }
+
+    #[test]
+    fn test_raw_delete_range() {
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+            read_pool_context_factory
+        });
+        let config = Config::default();
+        let mut storage = Storage::new(&config, read_pool).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+
+        // Write some key-value pairs to the db
+        for kv in &[
+            (b"a", b"001"),
+            (b"b", b"002"),
+            (b"c", b"003"),
+            (b"d", b"004"),
+            (b"e", b"005"),
+        ] {
+            storage
+                .async_raw_put(
+                    Context::new(),
+                    kv.0.to_vec(),
+                    kv.1.to_vec(),
+                    expect_ok(tx.clone(), 0),
+                )
+                .unwrap();
+        }
+
+        expect_get_val(
+            b"004".to_vec(),
+            storage.async_raw_get(Context::new(), b"d".to_vec()).wait(),
+        );
+
+        // Delete ["d", "e")
+        storage
+            .async_raw_delete_range(
+                Context::new(),
+                b"d".to_vec(),
+                b"e".to_vec(),
+                expect_ok(tx.clone(), 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Assert key "d" has gone
+        expect_get_val(
+            b"003".to_vec(),
+            storage.async_raw_get(Context::new(), b"c".to_vec()).wait(),
+        );
+        expect_get_none(storage.async_raw_get(Context::new(), b"d".to_vec()).wait());
+        expect_get_val(
+            b"005".to_vec(),
+            storage.async_raw_get(Context::new(), b"e".to_vec()).wait(),
+        );
+
+        // Delete ["aa", "ab")
+        storage
+            .async_raw_delete_range(
+                Context::new(),
+                b"aa".to_vec(),
+                b"ab".to_vec(),
+                expect_ok(tx.clone(), 2),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Assert nothing happened
+        expect_get_val(
+            b"001".to_vec(),
+            storage.async_raw_get(Context::new(), b"a".to_vec()).wait(),
+        );
+        expect_get_val(
+            b"002".to_vec(),
+            storage.async_raw_get(Context::new(), b"b".to_vec()).wait(),
+        );
+
+        // Delete all
+        storage
+            .async_raw_delete_range(
+                Context::new(),
+                b"a".to_vec(),
+                b"z".to_vec(),
+                expect_ok(tx, 3),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Assert now no key remains
+        for key in &[b"a", b"b", b"c", b"d", b"e"] {
+            expect_get_none(storage.async_raw_get(Context::new(), key.to_vec()).wait());
+        }
+
+        rx.recv().unwrap();
+    }
 }
