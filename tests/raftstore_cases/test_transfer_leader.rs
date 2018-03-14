@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::thread;
 
-use kvproto::eraftpb::MessageType;
+use raft::eraftpb::MessageType;
 use tikv::util::config::*;
 
 use super::util::*;
@@ -145,7 +145,7 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
     pd_client.disable_default_rule();
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
-    cluster.cfg.raft_store.max_merge_log_gap = 1;
+    cluster.cfg.raft_store.merge_max_log_gap = 1;
 
     let r1 = cluster.run_conf_change();
     pd_client.must_add_peer(r1, new_peer(2, 2));

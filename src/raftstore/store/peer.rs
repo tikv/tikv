@@ -23,7 +23,7 @@ use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::{self, Message};
 use kvproto::metapb;
-use kvproto::eraftpb::{self, ConfChangeType, EntryType, MessageType};
+use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
                           RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftMessage};
@@ -1355,7 +1355,7 @@ impl Peer {
         let last_index = self.raft_group.raft.raft_log.last_index();
         let min_progress = self.get_min_progress();
         let min_index = min_progress + 1;
-        if min_progress == 0 || last_index - min_progress > self.cfg.max_merge_log_gap {
+        if min_progress == 0 || last_index - min_progress > self.cfg.merge_max_log_gap {
             return Err(box_err!(
                 "log gap ({}, {}] is too large, skip merge",
                 min_progress,
@@ -1471,7 +1471,7 @@ impl Peer {
         if self.pending_merge.is_some() {
             return Err(box_err!("peer in merging mode, can't do proposal."));
         }
-        if self.raft_group.raft.pending_conf {
+        if self.raft_group.raft.pending_conf_index > self.get_store().applied_index() {
             info!("{} there is a pending conf change, try later", self.tag);
             return Err(box_err!(
                 "{} there is a pending conf change, try later",

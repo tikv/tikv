@@ -28,7 +28,7 @@ use time::{self, Timespec};
 
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftMessage, RaftSnapshotData,
                              RaftTruncatedState, RegionLocalState};
-use kvproto::eraftpb::{ConfChangeType, MessageType};
+use raft::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
 use util::{escape, rocksdb};
 use util::time::{duration_to_sec, SlowTimer};
