@@ -522,8 +522,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         box_try!(self.split_check_worker.start(split_check_runner));
 
-        if let Some(mut snap_event_loop) = self.snap_event_loop.take() {
-            let mut region_runner = RegionRunner::new(
+        if let Some(snap_event_loop) = self.snap_event_loop.take() {
+            let region_runner = RegionRunner::new(
                 Arc::clone(&self.kv_engine),
                 Arc::clone(&self.raft_engine),
                 self.snap_mgr.clone(),
@@ -531,11 +531,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 self.cfg.use_delete_range,
                 self.cfg.clean_stale_peer_delay.0,
             );
+            let tag = self.tag.clone();
             let h = ThreadBuilder::new()
                 .name(thd_name!("region worker"))
                 .spawn(move || {
                     if let Err(e) = snap_event_loop.run(&mut region_runner) {
-                        error!("{} failed to run region runner", self.tag);
+                        error!("{} failed to run region runner event loop", tag);
                     }
                 })?;
             self.snap_handle = Some(h);
