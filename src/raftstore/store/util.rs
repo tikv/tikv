@@ -15,7 +15,7 @@ use std::option::Option;
 use std::{fmt, u64};
 
 use kvproto::metapb;
-use kvproto::eraftpb::{self, ConfChangeType, MessageType};
+use raft::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_serverpb::RaftMessage;
 use protobuf::{self, Message, MessageStatic};
 use raftstore::{Error, Result};
@@ -374,7 +374,7 @@ mod tests {
 
     use kvproto::metapb;
     use kvproto::raft_serverpb::RaftMessage;
-    use kvproto::eraftpb::{ConfChangeType, Message, MessageType};
+    use raft::eraftpb::{ConfChangeType, Message, MessageType};
     use rocksdb::{ColumnFamilyOptions, DBOptions, SeekKey, Writable, WriteBatch, DB};
     use tempdir::TempDir;
     use time::Duration as TimeDuration;
