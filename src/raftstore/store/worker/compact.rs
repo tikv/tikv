@@ -49,24 +49,20 @@ impl Display for Task {
                 ref cf_name,
                 ref start_key,
                 ref end_key,
-            } => write!(
-                f,
-                "Compact CF[{}], range[{:?}, {:?}]",
-                cf_name,
-                start_key.as_ref().map(|k| escape(k)),
-                end_key.as_ref().map(|k| escape(k))
-            ),
+            } => f.debug_struct("Compact")
+                .field("cf_name", cf_name)
+                .field("start_key", &start_key.as_ref().map(|k| escape(k)))
+                .field("end_key", &end_key.as_ref().map(|k| escape(k)))
+                .finish(),
             Task::CheckAndCompact {
                 ref cf_names,
                 ref ranges,
                 tombstones_threshold,
-            } => write!(
-                f,
-                "CheckAndCompact cf names {:?}, ranges count {}, tombstones threshold {}",
-                cf_names,
-                ranges.len(),
-                tombstones_threshold
-            ),
+            } => f.debug_struct("CheckAndCompact")
+                .field("cf_names", cf_names)
+                .field("ranges", ranges)
+                .field("tombstones_threshold", &tombstones_threshold)
+                .finish(),
         }
     }
 }
@@ -108,14 +104,6 @@ impl Runner {
         compact_range_timer.observe_duration();
         Ok(())
     }
-
-    pub fn collect_ranges_need_compact(
-        &self,
-        ranges: Vec<Key>,
-        tombstones_threshold: u64,
-    ) -> Result<VecDeque<(Key, Key)>, Error> {
-        collect_ranges_need_compact(&self.engine, ranges, tombstones_threshold)
-    }
 }
 
 impl Runnable<Task> for Runner {
@@ -137,7 +125,7 @@ impl Runnable<Task> for Runner {
                 cf_names,
                 ranges,
                 tombstones_threshold,
-            } => match self.collect_ranges_need_compact(ranges, tombstones_threshold) {
+            } => match collect_ranges_need_compact(&self.engine, ranges, tombstones_threshold) {
                 Ok(mut ranges) => for (start, end) in ranges.drain(..) {
                     for cf in &cf_names {
                         if let Err(e) = self.compact_range_cf(
@@ -210,41 +198,36 @@ fn collect_ranges_need_compact(
     // that need compacting into a single range.
     let mut ranges_need_compact = VecDeque::new();
     let cf = box_try!(rocksdb::get_cf_handle(engine, CF_WRITE));
-    let mut last_key = None;
     let mut compact_start = None;
-    for key in ranges {
-        // First key.
-        if last_key.is_none() {
-            last_key = Some(key);
-            continue;
-        }
-
+    let mut last_win_right = None;
+    for range in ranges.windows(2) {
         // Get total entries and total versions in this range and check if need compacting.
-        if let Some((num_entries, num_versions)) =
-            get_range_entries_and_versions(engine, cf, last_key.as_ref().unwrap().as_slice(), &key)
+        if let Some((num_ent, num_ver)) =
+            get_range_entries_and_versions(engine, cf, &range[0], &range[1])
         {
-            if need_compact(num_entries, num_versions, tombstones_threshold) {
+            if need_compact(num_ent, num_ver, tombstones_threshold) {
                 if compact_start.is_none() {
                     // The previous range doesn't need compacting.
-                    compact_start = last_key.take();
+                    compact_start = Some(range[0].clone());
                 }
-                last_key = Some(key);
+                last_win_right = Some(range[1].clone());
                 // Move to next range.
                 continue;
             }
         }
 
         // Current range doesn't need compacting, save previous range that need compacting.
-        if compact_start.is_some() && last_key.is_some() {
-            ranges_need_compact.push_back((compact_start.unwrap(), last_key.unwrap()));
+        if compact_start.is_some() && last_win_right.is_some() {
+            ranges_need_compact.push_back((compact_start.unwrap(), last_win_right.unwrap()));
             compact_start = None;
         }
-        last_key = Some(key);
+
+        last_win_right = Some(range[1].clone());
     }
 
     // Save the last range that need compacting.
-    if compact_start.is_some() && last_key.is_some() {
-        ranges_need_compact.push_back((compact_start.unwrap(), last_key.unwrap()));
+    if compact_start.is_some() && last_win_right.is_some() {
+        ranges_need_compact.push_back((compact_start.unwrap(), last_win_right.unwrap()));
     }
 
     Ok(ranges_need_compact)
