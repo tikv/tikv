@@ -19,7 +19,7 @@ use log::LogLevelFilter;
 use rocksdb::{CompactionPriority, DBCompressionType, DBRecoveryMode};
 use tikv::pd::Config as PdConfig;
 use tikv::server::Config as ServerConfig;
-use tikv::server::readpool::Config as ReadPoolConfig;
+use tikv::server::readpool::Config as ReadPoolInstanceConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::config::*;
@@ -76,13 +76,15 @@ fn test_serde_custom_tikv_config() {
         snap_max_total_size: ReadableSize::gb(10),
     };
     value.readpool = ReadPoolConfig {
-        high_concurrency: 1,
-        normal_concurrency: 3,
-        low_concurrency: 7,
-        max_tasks_high: 10000,
-        max_tasks_normal: 20000,
-        max_tasks_low: 30000,
-        stack_size: ReadableSize::mb(20),
+        storage: ReadPoolInstanceConfig {
+            high_concurrency: 1,
+            normal_concurrency: 3,
+            low_concurrency: 7,
+            max_tasks_high: 10000,
+            max_tasks_normal: 20000,
+            max_tasks_low: 30000,
+            stack_size: ReadableSize::mb(20),
+        },
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),
@@ -124,6 +126,8 @@ fn test_serde_custom_tikv_config() {
         raft_store_max_leader_lease: ReadableDuration::secs(12),
         right_derive_when_split: false,
         allow_remove_leader: true,
+        merge_max_log_gap: 3,
+        merge_check_tick_interval: ReadableDuration::secs(11),
         use_delete_range: true,
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),

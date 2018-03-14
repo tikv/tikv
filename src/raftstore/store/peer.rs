@@ -23,7 +23,7 @@ use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::{self, Message};
 use kvproto::metapb;
-use kvproto::eraftpb::{self, ConfChangeType, MessageType};
+use raft::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
                           RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{PeerState, RaftMessage};
@@ -1413,7 +1413,7 @@ impl Peer {
         req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
     ) -> Result<u64> {
-        if self.raft_group.raft.pending_conf {
+        if self.raft_group.raft.pending_conf_index > self.get_store().applied_index() {
             info!("{} there is a pending conf change, try later", self.tag);
             return Err(box_err!(
                 "{} there is a pending conf change, try later",
@@ -1704,8 +1704,10 @@ fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderReques
 fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
     if msg.has_admin_request() {
         let req = msg.get_admin_request();
-        return req.get_cmd_type() == AdminCmdType::ChangePeer
-            || req.get_cmd_type() == AdminCmdType::Split;
+        return match req.get_cmd_type() {
+            AdminCmdType::ChangePeer | AdminCmdType::Split => true,
+            _ => false,
+        };
     }
 
     msg.get_header().get_sync_log()
@@ -1718,4 +1720,32 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
     let mut resp = RaftCmdResponse::new();
     resp.set_admin_response(response);
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use protobuf::ProtobufEnum;
+
+    use super::*;
+
+    #[test]
+    fn test_sync_log() {
+        let white_list = [
+            AdminCmdType::InvalidAdmin,
+            AdminCmdType::CompactLog,
+            AdminCmdType::TransferLeader,
+            AdminCmdType::ComputeHash,
+            AdminCmdType::VerifyHash,
+        ];
+        for tp in AdminCmdType::values() {
+            let mut msg = RaftCmdRequest::new();
+            msg.mut_admin_request().set_cmd_type(*tp);
+            assert_eq!(
+                get_sync_log_from_request(&msg),
+                !white_list.contains(tp),
+                "{:?}",
+                tp
+            );
+        }
+    }
 }

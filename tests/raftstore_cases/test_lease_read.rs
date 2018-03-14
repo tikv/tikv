@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::atomic::*;
 use std::time::*;
 
-use kvproto::eraftpb::{ConfChangeType, MessageType};
+use raft::eraftpb::{ConfChangeType, MessageType};
 use kvproto::raft_serverpb::RaftLocalState;
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::engine::Peekable;
