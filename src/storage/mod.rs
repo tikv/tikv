@@ -968,12 +968,16 @@ impl Storage {
         end_key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        for key in &[&start_key, &end_key] {
-            if key.len() > self.max_key_size {
-                callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
-                return Ok(());
-            }
+        if start_key.len() > self.max_key_size || end_key.len() > self.max_key_size {
+            let len = if start_key.len() > self.max_key_size {
+                start_key.len()
+            } else {
+                end_key.len()
+            };
+            callback(Err(Error::KeyTooLarge(len, self.max_key_size)));
+            return Ok(());
         }
+
         self.engine.async_write(
             &ctx,
             vec![
