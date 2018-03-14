@@ -524,7 +524,7 @@ impl DebugExecutor for DebugClient {
 
     fn get_metrics(&self, tag: &str) -> String {
         let mut req = GetMetricsRequest::new();
-        if tag != "promethues" {
+        if tag != METRICS_PROMETHEUS {
             req.set_all(true);
         }
         let mut resp = self.get_metrics(&req)
