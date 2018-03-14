@@ -30,7 +30,8 @@ use std::boxed::FnBox;
 
 use futures::{stream, Stream};
 use futures::sync::mpsc;
-use futures_cpupool::CpuPool;
+
+use util::futurepool::{self, FuturePool};
 
 pub use self::config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Error, Result};
@@ -42,12 +43,13 @@ pub use self::raft_client::RaftClient;
 
 pub type CopStream<T> = Box<Stream<Item = T, Error = mpsc::SendError<T>> + Send>;
 
-pub enum OnResponse<T> {
+#[allow(type_complexity)]
+pub enum OnResponse<T, C: futurepool::Context + 'static> {
     Unary(Box<FnBox(T) + Send>),
-    Streaming(Box<FnBox(CopStream<T>, Option<CpuPool>) + Send>),
+    Streaming(Box<FnBox(CopStream<T>, Option<FuturePool<C>>) + Send>),
 }
 
-impl<T: Send + Debug + 'static> OnResponse<T> {
+impl<T: Send + Debug + 'static, C: futurepool::Context + 'static> OnResponse<T, C> {
     pub fn is_streaming(&self) -> bool {
         match *self {
             OnResponse::Unary(_) => false,
@@ -62,7 +64,7 @@ impl<T: Send + Debug + 'static> OnResponse<T> {
         }
     }
 
-    pub fn respond_stream(self, s: CopStream<T>, executor: CpuPool) {
+    pub fn respond_stream(self, s: CopStream<T>, executor: FuturePool<C>) {
         match self {
             OnResponse::Streaming(cb) => cb(s, Some(executor)),
             OnResponse::Unary(_) => unreachable!(),
@@ -70,7 +72,7 @@ impl<T: Send + Debug + 'static> OnResponse<T> {
     }
 }
 
-impl<T> Debug for OnResponse<T> {
+impl<T, C: futurepool::Context + 'static> Debug for OnResponse<T, C> {
     fn fmt(&self, f: &mut Formatter) -> FormatResult {
         match *self {
             OnResponse::Unary(_) => write!(f, "Unary"),

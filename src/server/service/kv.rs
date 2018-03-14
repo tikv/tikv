@@ -22,7 +22,6 @@ use grpc::{ClientStreamingSink, Error as GrpcError, RequestStream, RpcContext, R
            RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
 use futures::{future, stream, Future, Sink, Stream};
 use futures::sync::{mpsc, oneshot};
-use futures_cpupool::CpuPool;
 use protobuf::RepeatedField;
 use kvproto::tikvpb_grpc;
 use kvproto::raft_serverpb::*;
@@ -34,6 +33,7 @@ use prometheus::Histogram;
 use util::worker::Scheduler;
 use util::collections::HashMap;
 use util::buf::PipeBuffer;
+use util::futurepool::{self, FuturePool};
 use storage::{self, Key, Mutation, Options, Storage, Value};
 use storage::txn::Error as TxnError;
 use storage::mvcc::{Error as MvccError, Write as MvccWrite, WriteType};
@@ -165,20 +165,20 @@ fn make_callback<T: Send + Debug + 'static>() -> (Box<FnBox(T) + Send>, oneshot:
 }
 
 #[allow(type_complexity)]
-pub fn make_stream_callback<T: Send + Debug + 'static>(
+pub fn make_stream_callback<T: Send + Debug + 'static, C: futurepool::Context>(
     channel_size: usize,
 ) -> (
-    Box<FnBox(CopStream<T>, Option<CpuPool>) + Send>,
+    Box<FnBox(CopStream<T>, Option<FuturePool<C>>) + Send>,
     mpsc::Receiver<T>,
 ) {
     let (tx, rx) = mpsc::channel(channel_size);
-    let callback = move |s: CopStream<T>, executor: Option<CpuPool>| {
+    let callback = move |s: CopStream<T>, executor: Option<FuturePool<C>>| {
         // We can run the callback in two place: Endpoint thread and Cpu pool threads.
         // In the first case the `executor` will be None so that we needs to wait the
         // future finish, oterwise we can just spawn it in the executor.
         let f = s.forward(tx);
         if let Some(executor) = executor {
-            return executor.spawn(f).forget();
+            return executor.spawn(|_| f).forget();
         }
         f.wait().unwrap();
     };

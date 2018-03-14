@@ -25,6 +25,15 @@ pub const DEFAULT_MAX_TASKS_PER_CORE: usize = 2 as usize * 1000;
 
 const DEFAULT_STACK_SIZE_MB: u64 = 10;
 
+quick_error!{
+    #[derive(Debug)]
+    pub enum Error {
+        ConfigInvalid(desc: String) {
+            description(desc)
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -65,5 +74,61 @@ impl Config {
             max_tasks_low: DEFAULT_MAX_TASKS_PER_CORE * 2,
             ..Config::default()
         }
+    }
+
+    pub fn validate(&mut self) -> Result<(), Error> {
+        if self.high_concurrency == 0 {
+            return Err(Error::ConfigInvalid(String::from(
+                "readpool.*.high-concurrency should not be 0.",
+            )));
+        }
+        if self.normal_concurrency == 0 {
+            return Err(Error::ConfigInvalid(String::from(
+                "readpool.*.normal-concurrency should not be 0.",
+            )));
+        }
+        if self.low_concurrency == 0 {
+            return Err(Error::ConfigInvalid(String::from(
+                "readpool.*.low-concurrency should not be 0.",
+            )));
+        }
+
+        // 2MB is the default stack size for threads in rust, but endpoints may occur
+        // very deep recursion, 2MB considered too small.
+        //
+        // See more: https://doc.rust-lang.org/std/thread/struct.Builder.html#method.stack_size
+        if self.stack_size.0 < ReadableSize::mb(2).0 {
+            return Err(Error::ConfigInvalid(String::from(
+                "readpool.*.stack-size is too small.",
+            )));
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_validate() {
+        let cfg = Config::default();
+
+        let mut invalid_cfg = cfg.clone();
+        invalid_cfg.high_concurrency = 0;
+        assert!(invalid_cfg.validate().is_err());
+
+        let mut invalid_cfg = cfg.clone();
+        invalid_cfg.normal_concurrency = 0;
+        assert!(invalid_cfg.validate().is_err());
+
+        let mut invalid_cfg = cfg.clone();
+        invalid_cfg.low_concurrency = 0;
+        assert!(invalid_cfg.validate().is_err());
+
+        let mut invalid_cfg = cfg.clone();
+        invalid_cfg.stack_size = ReadableSize::mb(1);
+        assert!(invalid_cfg.validate().is_err());
     }
 }

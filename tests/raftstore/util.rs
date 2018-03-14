@@ -118,7 +118,6 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
         // Considering connection selection algo is involved, maybe
         // use 2 or larger value here?
         grpc_raft_conn_num: 1,
-        end_point_concurrency: 1,
         ..ServerConfig::default()
     }
 }
@@ -126,6 +125,7 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
 pub fn new_readpool_cfg() -> ReadPoolConfig {
     ReadPoolConfig {
         storage: ReadPoolInstanceConfig::default_for_test(),
+        coprocessor: ReadPoolInstanceConfig::default_for_test(),
     }
 }
 

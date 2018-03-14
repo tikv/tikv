@@ -21,19 +21,19 @@ use kvproto::debugpb_grpc::create_debug;
 use kvproto::importpb_grpc::create_import_sst;
 
 use import::ImportSSTService;
-use util::worker::{Builder as WorkerBuilder, FutureScheduler, Worker};
+use util::worker::{Builder as WorkerBuilder, Worker};
 use util::security::SecurityManager;
 use storage::Storage;
 use raftstore::store::{Engines, SnapManager};
 
 use super::{Config, Result};
-use coprocessor::{EndPointHost, EndPointTask};
+use coprocessor::{self, EndPointHost, EndPointTask};
+use super::readpool::ReadPool;
 use super::service::*;
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::resolve::StoreAddrResolver;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
 use super::raft_client::RaftClient;
-use pd::PdTask;
 
 const DEFAULT_COPROCESSOR_BATCH: usize = 256;
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
@@ -53,7 +53,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
-    pd_scheduler: FutureScheduler<PdTask>,
+    cop_readpool: ReadPool<coprocessor::ReadPoolContext>,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
@@ -63,10 +63,11 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         security_mgr: &Arc<SecurityManager>,
         region_split_size: usize,
         storage: Storage,
+        // TODO: Remove once endpoint itself is passed to here.
+        cop_readpool: ReadPool<coprocessor::ReadPoolContext>,
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
-        pd_scheduler: FutureScheduler<PdTask>,
         debug_engines: Option<Engines>,
         import_service: Option<ImportSSTService>,
     ) -> Result<Server<T, S>> {
@@ -139,7 +140,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
-            pd_scheduler: pd_scheduler,
+            cop_readpool,
         };
 
         Ok(svr)
@@ -154,7 +155,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             self.storage.get_engine(),
             self.end_point_worker.scheduler(),
             &cfg,
-            self.pd_scheduler.clone(),
+            self.cop_readpool.clone(),
         );
         box_try!(self.end_point_worker.start(end_point));
         let snap_runner = SnapHandler::new(
@@ -204,7 +205,6 @@ mod tests {
     use raftstore::store::Msg as StoreMsg;
     use raftstore::store::*;
     use raftstore::store::transport::Transport;
-    use util::worker::FutureWorker;
     use util::security::SecurityConfig;
     use server::readpool::{self, ReadPool};
 
@@ -264,10 +264,12 @@ mod tests {
         let storage_cfg = StorageConfig::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(None)
-        });
-        let mut storage = Storage::new(&storage_cfg, read_pool).unwrap();
+        let storage_read_pool = ReadPool::new(
+            "storage-readpool",
+            &readpool::Config::default_for_test(),
+            || || storage::ReadPoolContext::new(None),
+        );
+        let mut storage = Storage::new(&storage_cfg, storage_read_pool).unwrap();
         storage.start(&storage_cfg).unwrap();
 
         let (tx, rx) = mpsc::channel();
@@ -279,21 +281,27 @@ mod tests {
 
         let addr = Arc::new(Mutex::new(None));
         let quick_fail = Arc::new(AtomicBool::new(false));
-        let pd_worker = FutureWorker::new("pd worker");
         let cfg = Arc::new(cfg);
         let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+
+        let cop_read_pool = ReadPool::new(
+            "cop-readpool",
+            &readpool::Config::default_for_test(),
+            || || coprocessor::ReadPoolContext::new(None),
+        );
+
         let mut server = Server::new(
             &cfg,
             &security_mgr,
             1024,
             storage,
+            cop_read_pool,
             router,
             MockResolver {
                 quick_fail: Arc::clone(&quick_fail),
                 addr: Arc::clone(&addr),
             },
             SnapManager::new("", None),
-            pd_worker.scheduler(),
             None,
             None,
         ).unwrap();
