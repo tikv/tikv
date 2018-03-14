@@ -25,8 +25,10 @@ use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
 use kvproto::debugpb::DB as DBType;
 use raft::eraftpb::Entry;
 use kvproto::raft_serverpb::*;
+use mio::EventLoop;
 
 use raft::{self, RawNode};
+use raftstore::store::RegionRunner;
 use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
 use raftstore::store::{init_apply_state, init_raft_state, write_peer_state};
 use raftstore::store::util as raftstore_util;
@@ -37,7 +39,7 @@ use storage::mvcc::{Lock, Write, WriteType};
 use util::escape;
 use util::config::ReadableSize;
 use util::rocksdb::{compact_range, get_cf_handle};
-use util::worker::Worker;
+use util::transport::SendCh;
 
 pub type Result<T> = result::Result<T, Error>;
 type DBIterator = ::rocksdb::DBIterator<Arc<DB>>;
@@ -265,8 +267,6 @@ impl Debugger {
         let mut iter = DBIterator::new_cf(Arc::clone(&self.engines.kv_engine), handle, readopts);
         iter.seek(SeekKey::from(from.as_ref()));
 
-        let fake_snap_worker = Worker::new("fake snap worker");
-
         let check_value = |value: Vec<u8>| -> Result<()> {
             let local_state = box_try!(protobuf::parse_from_bytes::<RegionLocalState>(&value));
             match local_state.get_state() {
@@ -289,12 +289,15 @@ impl Debugger {
                 return Err(Error::Other("last index < applied index".into()));
             }
 
+            let fake_event_loop: EventLoop<RegionRunner> = EventLoop::new().unwrap();
+            let snapch = SendCh::new(fake_event_loop.channel(), "fake snapch");
             let tag = format!("[region {}] {}", region.get_id(), peer_id);
+
             let peer_storage = box_try!(PeerStorage::new(
                 Arc::clone(&self.engines.kv_engine),
                 Arc::clone(&self.engines.raft_engine),
                 region,
-                fake_snap_worker.scheduler(),
+                snapch,
                 tag.clone(),
                 Rc::new(RefCell::new(CacheQueryStats::default())),
             ));

@@ -22,10 +22,10 @@ use rocksdb::{Writable, WriteBatch, DB};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use kvproto::metapb::Region;
 use raft::eraftpb::Snapshot as RaftSnapshot;
+use mio::{EventLoop, Handler};
 
 use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use util::time;
-use util::worker::Runnable;
 use util::{escape, rocksdb};
 use raftstore::store::engine::{Mutable, Snapshot};
 use raftstore::store::peer_storage::{JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING,
@@ -44,6 +44,7 @@ use std::collections::Bound::{Excluded, Included, Unbounded};
 const GENERATE_POOL_SIZE: usize = 2;
 
 /// region related task.
+#[derive(Debug)]
 pub enum Task {
     Gen {
         region_id: u64,
@@ -61,8 +62,7 @@ pub enum Task {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
     },
-    /// periodically clean stale peer
-    CleanStalePeer {},
+    Quit {},
 }
 
 impl Task {
@@ -91,7 +91,7 @@ impl Display for Task {
                 escape(start_key),
                 escape(end_key)
             ),
-            Task::CleanStalePeer {} => write!(f, "Clean stale peer"),
+            Task::Quit {} => write!(f, "quit region runner"),
         }
     }
 }
@@ -420,7 +420,7 @@ impl Runner {
         }
     }
 
-    pub fn destroy_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) {
+    fn destroy_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) {
         let to_destroy = self.pending_delete_ranges
             .drain_overlap_ranges(start_key, end_key);
         for (region_id, s_key, e_key) in to_destroy {
@@ -430,8 +430,11 @@ impl Runner {
     }
 }
 
-impl Runnable<Task> for Runner {
-    fn run(&mut self, task: Task) {
+impl Handler for Runner {
+    type Timeout = ();
+    type Message = Task;
+
+    fn notify(&mut self, event_loop: &mut EventLoop<Self>, task: Task) {
         match task {
             Task::Gen {
                 region_id,
@@ -476,26 +479,29 @@ impl Runnable<Task> for Runner {
                     );
                 }
             }
-            Task::CleanStalePeer {} => {
-                STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
-
-                let now = time::Instant::now();
-                let mut timeout_ranges = self.pending_delete_ranges.drain_timeout_ranges(now);
-                for (region_id, start_key, end_key) in timeout_ranges.drain(..) {
-                    self.ctx.handle_destroy(
-                        region_id,
-                        start_key,
-                        end_key,
-                        true, /* use_delete_files */
-                    );
+            Task::Quit {} => {
+                info!("region runner receive quit message");
+                event_loop.shutdown();
+                if let Err(e) = self.pool.stop() {
+                    warn!("Stop threadpool failed with {:?}", e);
                 }
             }
         }
     }
 
-    fn shutdown(&mut self) {
-        if let Err(e) = self.pool.stop() {
-            warn!("Stop threadpool failed with {:?}", e);
+    // since tick is done every STALE_PEER_CHECK_INTERVAL, so we can use it as a timeout
+    fn tick(&mut self, _: &mut EventLoop<Self>) {
+        STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
+
+        let now = time::Instant::now();
+        let mut timeout_ranges = self.pending_delete_ranges.drain_timeout_ranges(now);
+        for (region_id, start_key, end_key) in timeout_ranges.drain(..) {
+            self.ctx.handle_destroy(
+                region_id,
+                start_key,
+                end_key,
+                true, /* use_delete_files */
+            );
         }
     }
 }

@@ -27,8 +27,8 @@ use kvproto::metapb::{self, Region};
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData,
                              RegionLocalState};
-use util::worker::Scheduler;
 use util::{self, rocksdb};
+use util::transport::SendCh;
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 use raftstore::{Error, Result};
 use super::worker::RegionTask;
@@ -263,7 +263,7 @@ pub struct PeerStorage {
     pub last_term: u64,
 
     snap_state: RefCell<SnapState>,
-    region_sched: Scheduler<RegionTask>,
+    region_snapch: SendCh<RegionTask>,
     snap_tried_cnt: RefCell<usize>,
 
     cache: EntryCache,
@@ -462,7 +462,7 @@ impl PeerStorage {
         kv_engine: Arc<DB>,
         raft_engine: Arc<DB>,
         region: &metapb::Region,
-        region_sched: Scheduler<RegionTask>,
+        region_snapch: SendCh<RegionTask>,
         tag: String,
         stats: Rc<RefCell<CacheQueryStats>>,
     ) -> Result<PeerStorage> {
@@ -486,7 +486,7 @@ impl PeerStorage {
             raft_state: raft_state,
             apply_state: apply_state,
             snap_state: RefCell::new(SnapState::Relax),
-            region_sched: region_sched,
+            region_snapch: region_snapch,
             snap_tried_cnt: RefCell::new(0),
             tag: tag,
             applied_index_term: RAFT_INIT_LOG_TERM,
@@ -737,7 +737,7 @@ impl PeerStorage {
             region_id: self.get_region_id(),
             notifier: tx,
         };
-        if let Err(e) = self.region_sched.schedule(task) {
+        if let Err(e) = self.region_snapch.try_send(task) {
             error!(
                 "{} failed to schedule task snap generation: {:?}",
                 self.tag, e
@@ -875,8 +875,8 @@ impl PeerStorage {
         );
         let region_id = self.get_region_id();
         box_try!(
-            self.region_sched
-                .schedule(RegionTask::destroy(region_id, start_key, end_key))
+            self.region_snapch
+                .try_send(RegionTask::destroy(region_id, start_key, end_key))
         );
         Ok(())
     }
@@ -890,14 +890,14 @@ impl PeerStorage {
         let (new_start_key, new_end_key) = (enc_start_key(new_region), enc_end_key(new_region));
         let region_id = new_region.get_id();
         if old_start_key < new_start_key {
-            box_try!(self.region_sched.schedule(RegionTask::destroy(
+            box_try!(self.region_snapch.try_send(RegionTask::destroy(
                 region_id,
                 old_start_key,
                 new_start_key
             )));
         }
         if new_end_key < old_end_key {
-            box_try!(self.region_sched.schedule(RegionTask::destroy(
+            box_try!(self.region_snapch.try_send(RegionTask::destroy(
                 region_id,
                 new_end_key,
                 old_end_key
@@ -1005,8 +1005,8 @@ impl PeerStorage {
             status: status,
         };
         // TODO: gracefully remove region instead.
-        self.region_sched
-            .schedule(task)
+        self.region_snapch
+            .try_send(task)
             .expect("snap apply job should not fail");
     }
 

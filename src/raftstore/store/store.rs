@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::time::{Duration, Instant};
-use std::thread;
+use std::thread::{self, Builder as ThreadBuilder};
 use std::u64;
 
 use rocksdb::{CompactionJobInfo, WriteBatch, DB};
@@ -70,7 +70,7 @@ type Key = Vec<u8>;
 const MIO_TICK_RATIO: u64 = 10;
 const PENDING_VOTES_CAP: usize = 20;
 
-// used to periodically check whether we should delete a stale peer's range in snapshot worker
+// used to periodically check whether we should delete a stale peer's range in region runner
 const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // milliseconds
 
 #[derive(Clone)]
@@ -146,7 +146,9 @@ pub struct Store<T, C: 'static> {
     // the regions with pending snapshots between two mio ticks.
     pending_snapshot_regions: Vec<metapb::Region>,
     split_check_worker: Worker<SplitCheckTask>,
-    region_worker: Worker<RegionTask>,
+    snap_event_loop: Option<EventLoop<RegionRunner>>,
+    snapch: SendCh<RegionTask>,
+    snap_handle: Option<thread::JoinHandle<()>>,
     raftlog_gc_worker: Worker<RaftlogGcTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: FutureWorker<PdTask>,
@@ -188,6 +190,13 @@ where
     Ok(event_loop)
 }
 
+fn create_snap_event_loop() -> Result<EventLoop<RegionRunner>> {
+    let mut config = EventLoopConfig::new();
+    config.timer_tick_ms(STALE_PEER_CHECK_INTERVAL);
+    let event_loop = EventLoop::configured(config)?;
+    Ok(event_loop)
+}
+
 impl<T, C> Store<T, C> {
     #[allow(too_many_arguments)]
     pub fn new(
@@ -212,6 +221,9 @@ impl<T, C> Store<T, C> {
             .registry
             .register_admin_observer(100, box SplitObserver);
 
+        let snap_event_loop = create_snap_event_loop()?;
+        let snapch = SendCh::new(snap_event_loop.channel(), "snapshot");
+
         let mut s = Store {
             cfg: Rc::new(cfg),
             store: meta,
@@ -222,7 +234,9 @@ impl<T, C> Store<T, C> {
             region_peers: HashMap::default(),
             pending_raft_groups: HashSet::default(),
             split_check_worker: Worker::new("split check worker"),
-            region_worker: Worker::new("snapshot worker"),
+            snap_event_loop: Some(snap_event_loop),
+            snapch: snapch,
+            snap_handle: None,
             raftlog_gc_worker: Worker::new("raft gc worker"),
             compact_worker: Worker::new("compact worker"),
             pd_worker: pd_worker,
@@ -403,8 +417,8 @@ impl<T, C> Store<T, C> {
         self.snap_mgr.clone()
     }
 
-    pub fn snap_scheduler(&self) -> Scheduler<RegionTask> {
-        self.region_worker.scheduler()
+    pub fn get_snapch(&self) -> SendCh<RegionTask> {
+        self.snapch.clone()
     }
 
     pub fn apply_scheduler(&self) -> Scheduler<ApplyTask> {
@@ -499,7 +513,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_snap_mgr_gc_tick(event_loop);
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
-        self.register_clean_stale_peer_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&self.kv_engine),
@@ -509,15 +522,27 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         box_try!(self.split_check_worker.start(split_check_runner));
 
-        let runner = RegionRunner::new(
-            Arc::clone(&self.kv_engine),
-            Arc::clone(&self.raft_engine),
-            self.snap_mgr.clone(),
-            self.cfg.snap_apply_batch_size.0 as usize,
-            self.cfg.use_delete_range,
-            self.cfg.clean_stale_peer_delay.0,
-        );
-        box_try!(self.region_worker.start(runner));
+        if let Some(mut snap_event_loop) = self.snap_event_loop.take() {
+            let mut region_runner = RegionRunner::new(
+                Arc::clone(&self.kv_engine),
+                Arc::clone(&self.raft_engine),
+                self.snap_mgr.clone(),
+                self.cfg.snap_apply_batch_size.0 as usize,
+                self.cfg.use_delete_range,
+                self.cfg.clean_stale_peer_delay.0,
+            );
+            let h = ThreadBuilder::new()
+                .name(thd_name!("region worker"))
+                .spawn(move || {
+                    if let Err(e) = snap_event_loop.run(&mut region_runner) {
+                        error!("{} failed to run region runner", self.tag);
+                    }
+                })?;
+            self.snap_handle = Some(h);
+        } else {
+            info!("{} is already running", self.tag);
+            return Ok(());
+        }
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
         box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
@@ -560,10 +585,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             peer.stop();
         }
 
+        if let Err(e) = self.snapch.try_send(RegionTask::Quit {}) {
+            warn!("{} send region runner quit failed: {:?}", self.tag, e);
+        }
+        let h = self.snap_handle.take();
+        if let Some(h) = h {
+            h.join().unwrap();
+        }
+
         // Wait all workers finish.
         let mut handles: Vec<Option<thread::JoinHandle<()>>> = vec![];
         handles.push(self.split_check_worker.stop());
-        handles.push(self.region_worker.stop());
         handles.push(self.raftlog_gc_worker.stop());
         handles.push(self.compact_worker.stop());
         handles.push(self.pd_worker.stop());
@@ -2221,22 +2253,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
         }
     }
-
-    fn register_clean_stale_peer_tick(&self, event_loop: &mut EventLoop<Self>) {
-        if let Err(e) = register_timer(event_loop, Tick::CleanStalePeer, STALE_PEER_CHECK_INTERVAL)
-        {
-            error!("{} register delete range tick err: {:?}", self.tag, e);
-        }
-    }
-
-    fn on_clean_stale_peer_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        let task = RegionTask::CleanStalePeer {};
-        if let Err(e) = self.snap_scheduler().schedule(task) {
-            error!("{} failed to schedule task range clean: {:?}", self.tag, e);
-        }
-
-        self.register_clean_stale_peer_tick(event_loop);
-    }
 }
 
 // Consistency Check implementation.
@@ -2562,7 +2578,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
-            Tick::CleanStalePeer => self.on_clean_stale_peer_tick(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }

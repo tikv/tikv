@@ -273,7 +273,7 @@ impl Peer {
         let cfg = store.config();
 
         let store_id = store.store_id();
-        let sched = store.snap_scheduler();
+        let snapch = store.get_snapch();
         let peer_cache = FlatMap::default();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
 
@@ -281,7 +281,7 @@ impl Peer {
             store.kv_engine(),
             store.raft_engine(),
             region,
-            sched,
+            snapch,
             tag.clone(),
             Rc::clone(&store.entry_cache_metries),
         )?;
