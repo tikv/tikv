@@ -183,17 +183,6 @@ pub fn bytes_to_f64(ctx: &EvalContext, bytes: &[u8]) -> Result<f64> {
     bytes_to_f64_without_context(vs.as_bytes())
 }
 
-// #[inline]
-// pub fn handle_truncate_as_error(ctx: &EvalContext) -> bool {
-//     !(ctx.ignore_truncate || ctx.truncate_as_warning)
-// }
-
-// #[inline]
-// pub fn handle_truncate(ctx: &EvalContext, is_truncated: bool) -> Result<()> {
-//     box_try!(ctx.handle_truncate(is_truncated));
-//     Ok(())
-// }
-
 fn get_valid_int_prefix<'a>(ctx: &EvalContext, s: &'a str) -> Result<Cow<'a, str>> {
     let vs = get_valid_float_prefix(ctx, s)?;
     float_str_to_int_string(vs)
