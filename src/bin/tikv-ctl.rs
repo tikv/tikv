@@ -525,7 +525,7 @@ impl DebugExecutor for DebugClient {
         let mut req = RegionConsistentCheckRequest::new();
         req.set_region_id(region_id);
         self.check_region_consistency(&req)
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::region_check_region_consistency", e));
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::check_region_consistency", e));
         println!("success!");
     }
 }
