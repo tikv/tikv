@@ -17,6 +17,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::error;
 use std::io::Error as IoError;
 use std::u64;
+use std::cmp;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 use kvproto::errorpb;
 use util::collections::HashMap;
@@ -969,12 +970,10 @@ impl Storage {
         callback: Callback<()>,
     ) -> Result<()> {
         if start_key.len() > self.max_key_size || end_key.len() > self.max_key_size {
-            let len = if start_key.len() > self.max_key_size {
-                start_key.len()
-            } else {
-                end_key.len()
-            };
-            callback(Err(Error::KeyTooLarge(len, self.max_key_size)));
+            callback(Err(Error::KeyTooLarge(
+                cmp::max(start_key.len(), end_key.len()),
+                self.max_key_size,
+            )));
             return Ok(());
         }
 
