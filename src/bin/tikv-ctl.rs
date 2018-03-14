@@ -203,11 +203,6 @@ trait DebugExecutor {
         }
     }
 
-    fn dump_metrics(&self, tag: &str) {
-        let metrics = self.get_metrics(tag);
-        println!("{}", metrics);
-    }
-
     fn dump_mvccs_infos(
         &self,
         from: Vec<u8>,
@@ -429,7 +424,7 @@ trait DebugExecutor {
     fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>);
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
-    fn get_metrics(&self, tag: &str) -> String;
+    fn dump_metrics(&self, tags: Vec<&str>);
 }
 
 impl DebugExecutor for DebugClient {
@@ -522,18 +517,23 @@ impl DebugExecutor for DebugClient {
         println!("success!");
     }
 
-    fn get_metrics(&self, tag: &str) -> String {
+    fn dump_metrics(&self, tags: Vec<&str>) {
         let mut req = GetMetricsRequest::new();
-        if tag != METRICS_PROMETHEUS {
-            req.set_all(true);
+        req.set_all(true);
+        if tags.len() == 1 && tags[1] == METRICS_PROMETHEUS {
+            req.set_all(false);
         }
         let mut resp = self.get_metrics(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::metrics", e));
-        match tag {
-            METRICS_ROCKSDB_KV => resp.take_rocksdb_kv(),
-            METRICS_ROCKSDB_RAFT => resp.take_rocksdb_raft(),
-            METRICS_JEMALLOC => resp.take_jemalloc(),
-            _ => resp.take_prometheus(),
+        for tag in tags {
+            println!("tag:{}", tag);
+            let metrics = match tag {
+                METRICS_ROCKSDB_KV => resp.take_rocksdb_kv(),
+                METRICS_ROCKSDB_RAFT => resp.take_rocksdb_raft(),
+                METRICS_JEMALLOC => resp.take_jemalloc(),
+                _ => resp.take_prometheus(),
+            };
+            println!("{}", metrics);
         }
     }
 
@@ -620,7 +620,7 @@ impl DebugExecutor for Debugger {
         println!("all regions are healthy")
     }
 
-    fn get_metrics(&self, _tag: &str) -> String {
+    fn dump_metrics(&self, _tags: Vec<&str>) {
         unimplemented!("only avaliable for online mode");
     }
 }
@@ -951,9 +951,13 @@ fn main() {
                     .short("t")
                     .long("tag")
                     .takes_value(true)
-                    .default_value(METRICS_PROMETHEUS)
+                    .multiple(true)
+                    .use_delimiter(true)
+                    .require_delimiter(true)
+                    .value_delimiter(",")
+                    .default_value("prometheus,jemalloc,rocksdb_raft,rocksdb_kv")
                     .help(
-                        "set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv",
+                        "set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not specified, print all",
                     ),
             ),
         );
@@ -1056,8 +1060,8 @@ fn main() {
     } else if matches.subcommand_matches("bad-regions").is_some() {
         debug_executor.print_bad_regions();
     } else if let Some(matches) = matches.subcommand_matches("metrics") {
-        let tag = matches.value_of("tag").unwrap();
-        debug_executor.dump_metrics(tag)
+        let tags = Vec::from_iter(matches.values_of("tag").unwrap());
+        debug_executor.dump_metrics(tags)
     } else {
         let _ = app.print_help();
     }
