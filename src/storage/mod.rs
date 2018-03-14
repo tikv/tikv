@@ -968,7 +968,7 @@ impl Storage {
         end_key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        for key in &[start_key, end_key] {
+        for key in &[&start_key, &end_key] {
             if key.len() > self.max_key_size {
                 callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
                 return Ok(());

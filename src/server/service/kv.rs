@@ -78,6 +78,7 @@ struct Metrics {
     raw_scan: Histogram,
     raw_put: Histogram,
     raw_delete: Histogram,
+    raw_delete_range: Histogram,
     coprocessor: Histogram,
     mvcc_get_by_key: Histogram,
     mvcc_get_by_start_ts: Histogram,
@@ -102,6 +103,7 @@ impl Metrics {
             raw_scan: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["raw_scan"]),
             raw_put: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["raw_put"]),
             raw_delete: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["raw_delete"]),
+            raw_delete_range: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["raw_delete_range"]),
             coprocessor: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["coprocessor"]),
             mvcc_get_by_key: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["mvcc_get_by_key"]),
             mvcc_get_by_start_ts: GRPC_MSG_HISTOGRAM_VEC
@@ -752,23 +754,40 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         mut req: RawDeleteRangeRequest,
         sink: UnarySink<RawDeleteRangeResponse>,
     ) {
-//        const LABEL: &str = "raw_delete_range";
-////        let timer = self.metrics
-//
-//        let (cb, future) = make_callback();
-//        let res = self.storage
-//            .async_raw_delete_range(req.take_context(), req.take_start_key(), req.take_end_key(), cb);
-//        if let Err(e) = res {
-//            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted); //?
-//            return;
-//        }
-//
-//        let future = future
-//            .map_error(Error::from)
-//            .map(|v| {
-//                let mut reqp = RawDeleteRangeResponse::new();
-//                if )
-//            })
+        const LABEL: &str = "raw_delete_range";
+        let timer = self.metrics.raw_delete_range.start_coarse_timer();
+
+        let (cb, future) = make_callback();
+        let res = self.storage.async_raw_delete_range(
+            req.take_context(),
+            req.take_start_key(),
+            req.take_end_key(),
+            cb,
+        );
+        if let Err(e) = res {
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted); //???korewa
+            return;
+        }
+
+        let future = future
+            .map_err(Error::from)
+            .map(|v| {
+                let mut resp = RawDeleteRangeResponse::new();
+                if let Some(err) = extract_region_error(&v) {
+                    resp.set_region_error(err);
+                } else if let Err(e) = v {
+                    resp.set_error(format!("{}", e));
+                }
+                resp
+            })
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed: {:?}", LABEL, e);
+                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
+            });
+
+        ctx.spawn(future);
     }
 
     fn coprocessor(&self, ctx: RpcContext, req: Request, sink: UnarySink<Response>) {
