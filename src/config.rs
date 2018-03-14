@@ -11,8 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+extern crate toml;
+
 use std::error::Error;
 use std::usize;
+use std::fs;
+use std::io::{Read, Write};
+use std::io::Error as IoError;
+use std::path::Path;
+use std::fmt;
 
 use log::LogLevelFilter;
 use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompressionType,
@@ -21,7 +28,7 @@ use sys_info;
 
 use import::Config as ImportConfig;
 use server::Config as ServerConfig;
-use server::readpool::Config as ReadPoolConfig;
+use server::readpool::Config as ReadPoolInstanceConfig;
 use pd::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
@@ -38,6 +45,7 @@ const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
+pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = sys_info::mem_info().unwrap().total * KB;
@@ -646,6 +654,21 @@ pub enum LogLevel {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
+pub struct ReadPoolConfig {
+    pub storage: ReadPoolInstanceConfig,
+}
+
+impl Default for ReadPoolConfig {
+    fn default() -> ReadPoolConfig {
+        ReadPoolConfig {
+            storage: ReadPoolInstanceConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
     #[serde(with = "LogLevel")] pub log_level: LogLevelFilter,
     pub log_file: String,
@@ -747,5 +770,178 @@ impl TiKvConfig {
             }
             self.raft_store.region_split_size = default_raft_store.region_split_size;
         }
+    }
+
+    pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), Box<Error>> {
+        if last_cfg.rocksdb.wal_dir != self.rocksdb.wal_dir {
+            return Err(format!(
+                "db wal_dir have been changed, former db wal_dir is {}, \
+                 current db wal_dir is {}, please guarantee all data wal log \
+                 have been moved to destination directory.",
+                last_cfg.rocksdb.wal_dir, self.rocksdb.wal_dir
+            ).into());
+        }
+
+        if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir {
+            return Err(format!(
+                "raftdb wal_dir have been changed, former raftdb wal_dir is {}, \
+                 current raftdb wal_dir is {}, please guarantee all raft wal log \
+                 have been moved to destination directory.",
+                last_cfg.raftdb.wal_dir, self.rocksdb.wal_dir
+            ).into());
+        }
+
+        if last_cfg.storage.data_dir != self.storage.data_dir {
+            return Err(format!(
+                "storage data dir have been changed, former data dir is {}, \
+                 current data dir is {}, please check if it is expected.",
+                last_cfg.storage.data_dir, self.storage.data_dir
+            ).into());
+        }
+
+        if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path {
+            return Err(format!(
+                "raft dir have been changed, former raft dir is {}, \
+                 current raft dir is {}, please check if it is expected.",
+                last_cfg.raft_store.raftdb_path, self.raft_store.raftdb_path
+            ).into());
+        }
+
+        Ok(())
+    }
+
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Self
+    where
+        P: fmt::Debug,
+    {
+        fs::File::open(&path)
+            .map_err::<Box<Error>, _>(|e| Box::new(e))
+            .and_then(|mut f| {
+                let mut s = String::new();
+                f.read_to_string(&mut s)?;
+                let c = toml::from_str(&s)?;
+                Ok(c)
+            })
+            .unwrap_or_else(|e| {
+                panic!(
+                    "invalid auto generated configuration file {:?}, err {}",
+                    path, e
+                );
+            })
+    }
+
+    pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), IoError> {
+        let content = toml::to_string(&self).unwrap();
+        let mut f = fs::File::create(&path)?;
+        f.write_all(content.as_bytes())?;
+        f.sync_all()?;
+
+        Ok(())
+    }
+}
+
+pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
+    // Check current critical configurations with last time, if there are some
+    // changes, user must guarantee relevant works have been done.
+    let store_path = Path::new(&config.storage.data_dir);
+    let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
+    if last_cfg_path.exists() {
+        let last_cfg = TiKvConfig::from_file(&last_cfg_path);
+        if let Err(e) = config.check_critical_cfg_with(&last_cfg) {
+            return Err(format!("check critical config failed, err {:?}", e));
+        }
+    }
+
+    // Create parent directory if missing.
+    if let Err(e) = fs::create_dir_all(&store_path) {
+        return Err(format!(
+            "create parent directory {} failed, err {:?}",
+            store_path.to_str().unwrap(),
+            e
+        ));
+    }
+
+    // Persist current critical configurations to file.
+    if let Err(e) = config.write_to_file(&last_cfg_path) {
+        return Err(format!(
+            "persist critical config to {} failed, err {:?}",
+            last_cfg_path.to_str().unwrap(),
+            e
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use tempdir::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn test_check_critical_cfg_with() {
+        let mut tikv_cfg = TiKvConfig::default();
+        let mut last_cfg = TiKvConfig::default();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+
+        tikv_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+
+        last_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+
+        tikv_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+
+        last_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+
+        tikv_cfg.storage.data_dir = "/data1".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+
+        last_cfg.storage.data_dir = "/data1".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+
+        tikv_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+
+        last_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+    }
+
+    #[test]
+    fn test_persist_cfg() {
+        let dir = TempDir::new("test_persist_cfg").unwrap();
+        let path_buf = dir.path().join(LAST_CONFIG_FILE);
+        let file = path_buf.as_path().to_str().unwrap();
+        let (s1, s2) = ("/xxx/wal_dir".to_owned(), "/yyy/wal_dir".to_owned());
+
+        let mut tikv_cfg = TiKvConfig::default();
+
+        tikv_cfg.rocksdb.wal_dir = s1.clone();
+        tikv_cfg.raftdb.wal_dir = s2.clone();
+        tikv_cfg.write_to_file(file).unwrap();
+        let cfg_from_file = TiKvConfig::from_file(file);
+        assert_eq!(cfg_from_file.rocksdb.wal_dir, s1.clone());
+        assert_eq!(cfg_from_file.raftdb.wal_dir, s2.clone());
+
+        // write critical config when exist.
+        tikv_cfg.rocksdb.wal_dir = s2.clone();
+        tikv_cfg.raftdb.wal_dir = s1.clone();
+        tikv_cfg.write_to_file(file).unwrap();
+        let cfg_from_file = TiKvConfig::from_file(file);
+        assert_eq!(cfg_from_file.rocksdb.wal_dir, s2.clone());
+        assert_eq!(cfg_from_file.raftdb.wal_dir, s1.clone());
+    }
+
+    #[test]
+    fn test_create_parent_dir_if_missing() {
+        let tmp_path = TempDir::new("test_create_parent_dir_if_missing").unwrap();
+        let pathbuf = tmp_path.into_path().join("not_exist_dir");
+
+        let mut tikv_cfg = TiKvConfig::default();
+        tikv_cfg.storage.data_dir = pathbuf.as_path().to_str().unwrap().to_owned();
+        assert!(check_and_persist_critical_config(&tikv_cfg).is_ok());
     }
 }

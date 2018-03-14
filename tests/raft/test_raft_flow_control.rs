@@ -26,7 +26,7 @@
 // limitations under the License.
 
 use super::test_raft::*;
-use kvproto::eraftpb::*;
+use raft::eraftpb::*;
 
 // test_msg_app_flow_control_full ensures:
 // 1. msgApp can fill the sending window until full

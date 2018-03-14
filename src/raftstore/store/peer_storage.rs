@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{self, Arc};
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::rc::Rc;
@@ -24,7 +24,7 @@ use rocksdb::{Writable, WriteBatch, DB};
 use protobuf::Message;
 
 use kvproto::metapb::{self, Region};
-use kvproto::eraftpb::{ConfState, Entry, HardState, Snapshot};
+use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData,
                              RegionLocalState};
 use util::worker::Scheduler;
@@ -282,12 +282,6 @@ where
 impl From<Error> for RaftError {
     fn from(err: Error) -> RaftError {
         storage_error(err)
-    }
-}
-
-impl<T> From<sync::PoisonError<T>> for RaftError {
-    fn from(_: sync::PoisonError<T>) -> RaftError {
-        storage_error("lock failed")
     }
 }
 
@@ -559,16 +553,24 @@ impl PeerStorage {
             return Ok(ents);
         }
         let cache_low = self.cache.first_index();
+        let region_id = self.get_region_id();
         if high <= cache_low {
             // not overlap
             self.stats.borrow_mut().miss += 1;
-            self.fetch_entries_to(low, high, max_size, &mut ents)?;
+            fetch_entries_to(&self.raft_engine, region_id, low, high, max_size, &mut ents)?;
             return Ok(ents);
         }
         let mut fetched_size = 0;
         let begin_idx = if low < cache_low {
             self.stats.borrow_mut().miss += 1;
-            fetched_size = self.fetch_entries_to(low, cache_low, max_size, &mut ents)?;
+            fetched_size = fetch_entries_to(
+                &self.raft_engine,
+                region_id,
+                low,
+                cache_low,
+                max_size,
+                &mut ents,
+            )?;
             if fetched_size > max_size {
                 // max_size exceed.
                 return Ok(ents);
@@ -582,75 +584,6 @@ impl PeerStorage {
         self.cache
             .fetch_entries_to(begin_idx, high, fetched_size, max_size, &mut ents);
         Ok(ents)
-    }
-
-    fn fetch_entries_to(
-        &self,
-        low: u64,
-        high: u64,
-        max_size: u64,
-        buf: &mut Vec<Entry>,
-    ) -> raft::Result<u64> {
-        let mut total_size: u64 = 0;
-        let mut next_index = low;
-        let mut exceeded_max_size = false;
-        if high - low <= RAFT_LOG_MULTI_GET_CNT {
-            // If election happens in inactive regions, they will just try
-            // to fetch one empty log.
-            for i in low..high {
-                let key = keys::raft_log_key(self.get_region_id(), i);
-                match box_try!(self.raft_engine.get(&key)) {
-                    None => return Err(RaftError::Store(StorageError::Unavailable)),
-                    Some(v) => {
-                        let mut entry = Entry::new();
-                        box_try!(entry.merge_from_bytes(&v));
-                        assert_eq!(entry.get_index(), i);
-                        total_size += v.len() as u64;
-                        if buf.is_empty() || total_size <= max_size {
-                            buf.push(entry);
-                        }
-                        if total_size > max_size {
-                            break;
-                        }
-                    }
-                }
-            }
-            return Ok(total_size);
-        }
-
-        let start_key = keys::raft_log_key(self.get_region_id(), low);
-        let end_key = keys::raft_log_key(self.get_region_id(), high);
-        self.raft_engine.scan(
-            &start_key,
-            &end_key,
-            true, // fill_cache
-            &mut |_, value| {
-                let mut entry = Entry::new();
-                entry.merge_from_bytes(value)?;
-
-                // May meet gap or has been compacted.
-                if entry.get_index() != next_index {
-                    return Ok(false);
-                }
-                next_index += 1;
-
-                total_size += value.len() as u64;
-                exceeded_max_size = total_size > max_size;
-                if !exceeded_max_size || buf.is_empty() {
-                    buf.push(entry);
-                }
-                Ok(!exceeded_max_size)
-            },
-        )?;
-
-        // If we get the correct number of entries, returns,
-        // or the total size almost exceeds max_size, returns.
-        if buf.len() == (high - low) as usize || exceeded_max_size {
-            return Ok(total_size);
-        }
-
-        // Here means we don't fetch enough entries.
-        Err(RaftError::Store(StorageError::Unavailable))
     }
 
     pub fn term(&self, idx: u64) -> raft::Result<u64> {
@@ -1179,6 +1112,77 @@ impl PeerStorage {
     }
 }
 
+pub fn fetch_entries_to(
+    engine: &DB,
+    region_id: u64,
+    low: u64,
+    high: u64,
+    max_size: u64,
+    buf: &mut Vec<Entry>,
+) -> raft::Result<u64> {
+    let mut total_size: u64 = 0;
+    let mut next_index = low;
+    let mut exceeded_max_size = false;
+    if high - low <= RAFT_LOG_MULTI_GET_CNT {
+        // If election happens in inactive regions, they will just try
+        // to fetch one empty log.
+        for i in low..high {
+            let key = keys::raft_log_key(region_id, i);
+            match engine.get(&key) {
+                Ok(None) => return Err(RaftError::Store(StorageError::Unavailable)),
+                Ok(Some(v)) => {
+                    let mut entry = Entry::new();
+                    entry.merge_from_bytes(&v)?;
+                    assert_eq!(entry.get_index(), i);
+                    total_size += v.len() as u64;
+                    if buf.is_empty() || total_size <= max_size {
+                        buf.push(entry);
+                    }
+                    if total_size > max_size {
+                        break;
+                    }
+                }
+                Err(e) => return Err(storage_error(e)),
+            }
+        }
+        return Ok(total_size);
+    }
+
+    let start_key = keys::raft_log_key(region_id, low);
+    let end_key = keys::raft_log_key(region_id, high);
+    engine.scan(
+        &start_key,
+        &end_key,
+        true, // fill_cache
+        &mut |_, value| {
+            let mut entry = Entry::new();
+            entry.merge_from_bytes(value)?;
+
+            // May meet gap or has been compacted.
+            if entry.get_index() != next_index {
+                return Ok(false);
+            }
+            next_index += 1;
+
+            total_size += value.len() as u64;
+            exceeded_max_size = total_size > max_size;
+            if !exceeded_max_size || buf.is_empty() {
+                buf.push(entry);
+            }
+            Ok(!exceeded_max_size)
+        },
+    )?;
+
+    // If we get the correct number of entries, returns,
+    // or the total size almost exceeds max_size, returns.
+    if buf.len() == (high - low) as usize || exceeded_max_size {
+        return Ok(total_size);
+    }
+
+    // Here means we don't fetch enough entries.
+    Err(RaftError::Store(StorageError::Unavailable))
+}
+
 /// Delete all meta belong to the region. Results are stored in `wb`.
 pub fn clear_meta(
     kv_engine: &DB,
@@ -1226,10 +1230,10 @@ pub fn do_snapshot(
     let apply_state: RaftApplyState =
         match snap.get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))? {
             None => {
-                return Err(box_err!(
+                return Err(storage_error(format!(
                     "could not load raft state of region {}",
                     region_id
-                ))
+                )))
             }
             Some(state) => state,
         };
@@ -1239,7 +1243,12 @@ pub fn do_snapshot(
         apply_state.get_truncated_state().get_term()
     } else {
         match raft_db.get_msg::<Entry>(&keys::raft_log_key(region_id, idx))? {
-            None => return Err(box_err!("entry {} of {} not found.", idx, region_id)),
+            None => {
+                return Err(storage_error(format!(
+                    "entry {} of {} not found.",
+                    idx, region_id
+                )))
+            }
             Some(entry) => entry.get_term(),
         }
     };
@@ -1256,7 +1265,10 @@ pub fn do_snapshot(
         })?;
 
     if state.get_state() != PeerState::Normal {
-        return Err(box_err!("snap job for {} seems stale, skip.", region_id));
+        return Err(storage_error(format!(
+            "snap job for {} seems stale, skip.",
+            region_id
+        )));
     }
 
     let mut snapshot = Snapshot::new();
@@ -1285,7 +1297,7 @@ pub fn do_snapshot(
         Box::new(mgr.clone()),
     )?;
     let mut v = vec![];
-    box_try!(snap_data.write_to_vec(&mut v));
+    snap_data.write_to_vec(&mut v)?;
     snapshot.set_data(v);
 
     SNAPSHOT_KV_COUNT_HISTOGRAM.observe(stat.kv_count as f64);
@@ -1376,7 +1388,7 @@ mod test {
     use std::cell::RefCell;
     use std::time::Duration;
     use std::path::Path;
-    use kvproto::eraftpb::{ConfState, Entry};
+    use raft::eraftpb::{ConfState, Entry};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::{Error as RaftError, StorageError};
     use tempdir::*;
@@ -1388,7 +1400,7 @@ mod test {
     use util::worker::{Scheduler, Worker};
     use util::rocksdb::new_engine;
     use storage::{ALL_CFS, CF_DEFAULT};
-    use kvproto::eraftpb::HardState;
+    use raft::eraftpb::HardState;
     use rocksdb::WriteBatch;
 
     use super::*;
