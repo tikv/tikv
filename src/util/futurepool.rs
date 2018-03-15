@@ -189,7 +189,7 @@ impl<T: Context + 'static> FuturePool<T> {
         self.running_task_count.load(Ordering::Acquire)
     }
 
-    #[deprecated(note = "Please avoid accessing context delegators from outside")]
+    /// TODO: Remove this interface to avoid accessing context delegators from outside.
     #[inline]
     pub fn get_context_delegators(&self) -> ContextDelegators<T> {
         self.context_delegators.clone()
