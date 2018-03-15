@@ -155,6 +155,8 @@ pub struct Store<T, C: 'static> {
     pub apply_worker: Worker<ApplyTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
 
+    last_compact_checked_key: Key,
+
     trans: T,
     pd_client: Arc<C>,
 
@@ -234,6 +236,7 @@ impl<T, C> Store<T, C> {
             cleanup_sst_worker: Worker::new("cleanup sst worker"),
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
+            last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
             region_ranges: BTreeMap::new(),
             pending_snapshot_regions: vec![],
             trans: trans,
@@ -1890,24 +1893,52 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_compact_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        for peer in self.region_peers.values_mut() {
-            if peer.delete_keys_hint < self.cfg.region_compact_delete_keys_count {
-                continue;
-            }
-            for &cf in &[CF_DEFAULT, CF_WRITE] {
-                let task = CompactTask {
-                    cf_name: String::from(cf),
-                    start_key: Some(keys::enc_start_key(peer.region())),
-                    end_key: Some(keys::enc_end_key(peer.region())),
-                };
-                if let Err(e) = self.compact_worker.schedule(task) {
-                    error!("{} failed to schedule compact task: {}", self.tag, e);
+        if self.compact_worker.is_busy() {
+            debug!("compact worker is busy, check space redundancy next time");
+        } else if self.region_ranges.is_empty() {
+            debug!("there is no range need to check");
+        } else {
+            // Start from last checked key.
+            let mut ranges_need_check =
+                Vec::with_capacity(self.cfg.region_compact_check_step as usize + 1);
+            ranges_need_check.push(self.last_compact_checked_key.clone());
+
+            // Collect continuous ranges.
+            let left_ranges = self.region_ranges.range((
+                Excluded(self.last_compact_checked_key.clone()),
+                Unbounded::<Key>,
+            ));
+            ranges_need_check.extend(
+                left_ranges
+                    .take(self.cfg.region_compact_check_step as usize)
+                    .map(|(k, _)| k.to_owned()),
+            );
+
+            // Update last_compact_checked_key.
+            let largest_key = self.region_ranges.keys().last().unwrap().to_vec();
+            let last_key = ranges_need_check.last().unwrap().clone();
+            if last_key == largest_key {
+                // Range [largest key, DATA_MAX_KEY) also need to check.
+                if last_key != keys::DATA_MAX_KEY.to_vec() {
+                    ranges_need_check.push(keys::DATA_MAX_KEY.to_vec());
                 }
+                // Next task will start from the very beginning.
+                self.last_compact_checked_key = keys::DATA_MIN_KEY.to_vec();
+            } else {
+                self.last_compact_checked_key = last_key;
             }
-            peer.delete_keys_hint = 0;
-            // Compact only 1 region each check in case compact task accumulates.
-            break;
+
+            // Schedule the task.
+            let cf_names = vec![CF_DEFAULT.to_owned(), CF_WRITE.to_owned()];
+            if let Err(e) = self.compact_worker.schedule(CompactTask::CheckAndCompact {
+                cf_names: cf_names,
+                ranges: ranges_need_check,
+                tombstones_threshold: self.cfg.region_compact_min_tombstones,
+            }) {
+                error!("{} failed to schedule space check task: {}", self.tag, e);
+            }
         }
+
         self.register_compact_check_tick(event_loop);
     }
 
@@ -2185,7 +2216,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // Create a compact lock cf task(compact whole range) and schedule directly.
         if self.store_stat.lock_cf_bytes_written > self.cfg.lock_cf_compact_bytes_threshold.0 {
             self.store_stat.lock_cf_bytes_written = 0;
-            let task = CompactTask {
+            let task = CompactTask::Compact {
                 cf_name: String::from(CF_LOCK),
                 start_key: None,
                 end_key: None,
