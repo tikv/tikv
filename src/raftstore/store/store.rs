@@ -1915,8 +1915,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             );
 
             // Update last_compact_checked_key.
-            let largest_key = self.region_ranges.keys().next_back().unwrap().to_vec();
-            let last_key = ranges_need_check[ranges_need_check.len() - 1].clone();
+            let largest_key = self.region_ranges.keys().last().unwrap().to_vec();
+            let last_key = ranges_need_check.last().unwrap().clone();
             if last_key == largest_key {
                 // Range [largest key, DATA_MAX_KEY) also need to check.
                 if last_key != keys::DATA_MAX_KEY.to_vec() {
