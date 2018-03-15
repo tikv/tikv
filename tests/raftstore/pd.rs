@@ -53,7 +53,7 @@ impl Default for Store {
 
 #[derive(Debug, Clone, PartialEq)]
 enum SchedulePolicy {
-    /// Repeat a Operator.
+    /// Repeat an Operator.
     Repeat(isize),
     /// Repeat till succcess.
     TillSuccess,
