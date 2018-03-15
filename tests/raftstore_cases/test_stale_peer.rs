@@ -44,7 +44,7 @@ use super::util::*;
 fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
     pd_client.must_add_peer(r1, new_peer(2, 2));
@@ -124,7 +124,7 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, right_de
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
