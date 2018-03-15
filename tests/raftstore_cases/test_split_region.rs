@@ -498,7 +498,7 @@ fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
 

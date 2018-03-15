@@ -41,6 +41,7 @@ extern crate test;
 #[macro_use]
 extern crate tikv;
 extern crate tipb;
+extern crate tokio_timer;
 extern crate toml;
 extern crate uuid;
 
