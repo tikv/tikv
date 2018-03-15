@@ -14,43 +14,50 @@
 use std::sync::Arc;
 
 use grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
-use futures::{Future, Stream};
+use futures::{future, Future, Stream};
 use futures::sync::mpsc;
 use futures_cpupool::{Builder, CpuPool};
 use kvproto::importpb::*;
 use kvproto::importpb_grpc::*;
+use kvproto::raft_cmdpb::*;
 
-use storage::Storage;
+use util::future::paired_future_callback;
 use util::time::Instant;
+use raftstore::store::Callback;
+use server::transport::RaftStoreRouter;
 
 use super::service::*;
 use super::metrics::*;
 use super::{Config, Error, SSTImporter};
 
 #[derive(Clone)]
-pub struct ImportSSTService {
+pub struct ImportSSTService<Router> {
     cfg: Config,
+    router: Router,
     threads: CpuPool,
-    storage: Storage,
     importer: Arc<SSTImporter>,
 }
 
-impl ImportSSTService {
-    pub fn new(cfg: Config, storage: Storage, importer: Arc<SSTImporter>) -> ImportSSTService {
+impl<Router: RaftStoreRouter> ImportSSTService<Router> {
+    pub fn new(
+        cfg: Config,
+        router: Router,
+        importer: Arc<SSTImporter>,
+    ) -> ImportSSTService<Router> {
         let threads = Builder::new()
             .name_prefix("sst-importer")
             .pool_size(cfg.num_threads)
             .create();
         ImportSSTService {
             cfg: cfg,
+            router: router,
             threads: threads,
-            storage: storage,
             importer: importer,
         }
     }
 }
 
-impl ImportSst for ImportSSTService {
+impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
     fn upload(
         &self,
         ctx: RpcContext,
@@ -61,18 +68,15 @@ impl ImportSst for ImportSSTService {
         let timer = Instant::now_coarse();
 
         let token = self.importer.token();
-        let thread1 = self.threads.clone();
-        let thread2 = self.threads.clone();
         let import1 = Arc::clone(&self.importer);
         let import2 = Arc::clone(&self.importer);
         let bounded_stream = mpsc::spawn(stream, &self.threads, self.cfg.stream_channel_window);
 
         ctx.spawn(
-            bounded_stream
-                .map_err(Error::from)
-                .for_each(move |chunk| {
-                    let import1 = Arc::clone(&import1);
-                    thread1.spawn_fn(move || {
+            self.threads.spawn(
+                bounded_stream
+                    .map_err(Error::from)
+                    .for_each(move |chunk| {
                         let start = Instant::now_coarse();
                         if chunk.has_meta() {
                             import1.create(token, chunk.get_meta())?;
@@ -85,9 +89,7 @@ impl ImportSst for ImportSSTService {
                         IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
                         Ok(())
                     })
-                })
-                .then(move |res| {
-                    thread2.spawn_fn(move || match res {
+                    .then(move |res| match res {
                         Ok(_) => import2.finish(token),
                         Err(e) => {
                             if let Some(f) = import2.remove(token) {
@@ -96,13 +98,49 @@ impl ImportSst for ImportSSTService {
                             Err(e)
                         }
                     })
-                })
-                .map(|_| UploadResponse::new())
-                .then(move |res| send_rpc_response!(res, sink, label, timer)),
+                    .map(|_| UploadResponse::new())
+                    .then(move |res| send_rpc_response!(res, sink, label, timer)),
+            ),
         )
     }
 
-    fn ingest(&self, _: RpcContext, _: IngestRequest, _: UnarySink<IngestResponse>) {
-        unimplemented!();
+    fn ingest(&self, ctx: RpcContext, mut req: IngestRequest, sink: UnarySink<IngestResponse>) {
+        let label = "ingest";
+        let timer = Instant::now_coarse();
+
+        // Make ingest command.
+        let mut ingest = Request::new();
+        ingest.set_cmd_type(CmdType::IngestSST);
+        ingest.mut_ingest_sst().set_sst(req.take_sst());
+        let mut context = req.take_context();
+        let mut header = RaftRequestHeader::new();
+        header.set_peer(context.take_peer());
+        header.set_region_id(context.get_region_id());
+        header.set_region_epoch(context.take_region_epoch());
+        let mut cmd = RaftCmdRequest::new();
+        cmd.set_header(header);
+        cmd.mut_requests().push(ingest);
+
+        let (cb, future) = paired_future_callback();
+        if let Err(e) = self.router.send_command(cmd, Callback::Write(cb)) {
+            return send_rpc_error(ctx, sink, e);
+        }
+
+        ctx.spawn(
+            future
+                .map_err(Error::from)
+                .then(|res| match res {
+                    Ok(mut res) => {
+                        let mut resp = IngestResponse::new();
+                        let mut header = res.response.take_header();
+                        if header.has_error() {
+                            resp.set_error(header.take_error());
+                        }
+                        future::ok(resp)
+                    }
+                    Err(e) => future::err(e),
+                })
+                .then(move |res| send_rpc_response!(res, sink, label, timer)),
+        )
     }
 }
