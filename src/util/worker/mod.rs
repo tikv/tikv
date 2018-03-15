@@ -345,6 +345,8 @@ impl<T: Display + Send + 'static> Worker<T> {
         self.start_with_timer(runner, timer)
     }
 
+    // Don't set timer when using this function util
+    // https://github.com/rust-lang/rust/issues/39364 is fixed.
     pub fn start_with_timer<R, U>(&mut self, runner: R, timer: Timer<U>) -> Result<(), io::Error>
     where
         R: RunnableWithTimer<T, U> + Send + 'static,
