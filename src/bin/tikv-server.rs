@@ -194,11 +194,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {:?}", s)),
     );
     let pd_sender = pd_worker.scheduler();
-    let read_pool = ReadPool::new(&cfg.readpool, || {
+    let storage_read_pool = ReadPool::new("store-read", &cfg.readpool.storage, || {
         let pd_sender = pd_sender.clone();
         move || storage::ReadPoolContext::new(Some(pd_sender.clone()))
     });
-    let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage, read_pool)
+    let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage, storage_read_pool)
         .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 
     // Create raft engine.
@@ -223,7 +223,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         );
 
     let importer = Arc::new(SSTImporter::new(import_path).unwrap());
-    let import_service = ImportSSTService::new(cfg.import.clone(), storage.clone(), importer);
+    let import_service = ImportSSTService::new(
+        cfg.import.clone(),
+        raft_router.clone(),
+        Arc::clone(&importer),
+    );
 
     let server_cfg = Arc::new(cfg.server.clone());
     // Create server
@@ -255,6 +259,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         significant_msg_receiver,
         pd_worker,
         coprocessor_host,
+        importer,
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));
 
