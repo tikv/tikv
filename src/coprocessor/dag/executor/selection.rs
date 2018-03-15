@@ -26,7 +26,7 @@ pub struct SelectionExecutor {
     cols: Arc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
     ctx: Arc<EvalContext>,
-    src: Box<Executor>,
+    src: Box<Executor + Send>,
     count: i64,
     first_collect: bool,
 }
@@ -36,7 +36,7 @@ impl SelectionExecutor {
         mut meta: Selection,
         ctx: Arc<EvalContext>,
         columns_info: Arc<Vec<ColumnInfo>>,
-        src: Box<Executor>,
+        src: Box<Executor + Send>,
     ) -> Result<SelectionExecutor> {
         let conditions = meta.take_conditions().into_vec();
         let mut visitor = ExprColumnRefVisitor::new(columns_info.len());
