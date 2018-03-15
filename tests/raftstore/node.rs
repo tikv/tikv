@@ -14,6 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, RwLock};
 use std::ops::Deref;
+use std::path::Path;
 
 use tempdir::TempDir;
 
@@ -32,6 +33,7 @@ use tikv::util::worker::FutureWorker;
 use tikv::util::transport::SendCh;
 use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use raft::SnapshotStatus;
+use tikv::import::SSTImporter;
 use super::pd::TestPdClient;
 use super::transport_simulate::*;
 use super::util::create_test_engine;
@@ -187,6 +189,11 @@ impl Simulator for NodeCluster {
         // Create coprocessor.
         let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
 
+        let importer = {
+            let dir = Path::new(engines.kv_engine.path()).join("import-sst");
+            Arc::new(SSTImporter::new(dir).unwrap())
+        };
+
         node.start(
             event_loop,
             engines.clone(),
@@ -195,6 +202,7 @@ impl Simulator for NodeCluster {
             snap_status_receiver,
             pd_worker,
             coprocessor_host,
+            importer,
         ).unwrap();
         assert!(
             Arc::clone(&engines.kv_engine)

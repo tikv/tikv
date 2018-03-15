@@ -68,7 +68,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         snap_mgr: SnapManager,
         pd_scheduler: FutureScheduler<PdTask>,
         debug_engines: Option<Engines>,
-        import_service: Option<ImportSSTService>,
+        import_service: Option<ImportSSTService<T>>,
     ) -> Result<Server<T, S>> {
         let env = Arc::new(
             EnvBuilder::new()

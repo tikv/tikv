@@ -23,18 +23,20 @@ use std::collections::VecDeque;
 use rocksdb::{Writable, WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::RepeatedField;
+use uuid::Uuid;
 
 use kvproto::metapb::{Peer as PeerMeta, Region};
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftTruncatedState};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType,
                           RaftCmdRequest, RaftCmdResponse, Request, Response};
+use kvproto::importpb::SSTMeta;
 
 use util::worker::Runnable;
 use util::{escape, rocksdb, MustConsumeVec};
 use util::time::{duration_to_sec, Instant, SlowTimer};
 use util::collections::HashMap;
-use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT};
+use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{cmd_resp, keys, util, Store};
@@ -44,6 +46,7 @@ use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply
                                      write_peer_state};
 use raftstore::store::peer::{check_epoch, Peer};
 use raftstore::store::metrics::*;
+use import::SSTImporter;
 
 use super::metrics::*;
 
@@ -170,6 +173,9 @@ pub enum ExecResult {
     DeleteRange {
         ranges: Vec<Range>,
     },
+    IngestSST {
+        ssts: Vec<SSTMeta>,
+    },
 }
 
 struct ApplyCallback {
@@ -205,6 +211,7 @@ struct Stash {
 
 struct ApplyContextCore<'a> {
     host: &'a CoprocessorHost,
+    importer: &'a SSTImporter,
     wb: Option<WriteBatch>,
     cbs: MustConsumeVec<ApplyCallback>,
     apply_res: Vec<ApplyRes>,
@@ -222,9 +229,10 @@ struct ApplyContextCore<'a> {
 }
 
 impl<'a> ApplyContextCore<'a> {
-    pub fn new(host: &CoprocessorHost) -> ApplyContextCore {
+    pub fn new(host: &'a CoprocessorHost, importer: &'a SSTImporter) -> ApplyContextCore<'a> {
         ApplyContextCore {
             host: host,
+            importer: importer,
             wb: None,
             cbs: MustConsumeVec::new("callback of apply context"),
             apply_res: vec![],
@@ -436,10 +444,13 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
         return true;
     }
 
-    // When encounter DeleteRange command, we must write current write batch to engine first,
-    // because current write batch may contains keys are covered by DeleteRange.
+    // Some commands may modify keys covered by the current write batch, so we
+    // must write the current write batch to the engine first.
     for req in cmd.get_requests() {
         if req.has_delete_range() {
+            return true;
+        }
+        if req.has_ingest_sst() {
             return true;
         }
     }
@@ -727,7 +738,8 @@ impl ApplyDelegate {
                 ExecResult::ComputeHash { .. }
                 | ExecResult::VerifyHash { .. }
                 | ExecResult::CompactLog { .. }
-                | ExecResult::DeleteRange { .. } => {}
+                | ExecResult::DeleteRange { .. }
+                | ExecResult::IngestSST { .. } => {}
                 ExecResult::SplitRegion {
                     ref left,
                     ref right,
@@ -1152,6 +1164,7 @@ impl ApplyDelegate {
         let mut responses = Vec::with_capacity(requests.len());
 
         let mut ranges = vec![];
+        let mut ssts = vec![];
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
@@ -1160,6 +1173,7 @@ impl ApplyDelegate {
                 CmdType::DeleteRange => {
                     self.handle_delete_range(req, &mut ranges, ctx.use_delete_range)
                 }
+                CmdType::IngestSST => self.handle_ingest_sst(ctx, req, &mut ssts),
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
                 // It's also safe to skip them here, because a restart must have happened,
@@ -1189,10 +1203,13 @@ impl ApplyDelegate {
         resp.mut_header().set_uuid(uuid);
         resp.set_responses(RepeatedField::from_vec(responses));
 
-        let exec_res = if ranges.is_empty() {
-            None
-        } else {
+        assert!(ranges.is_empty() || ssts.is_empty());
+        let exec_res = if !ranges.is_empty() {
             Some(ExecResult::DeleteRange { ranges: ranges })
+        } else if !ssts.is_empty() {
+            Some(ExecResult::IngestSST { ssts: ssts })
+        } else {
+            None
         };
 
         Ok((resp, exec_res))
@@ -1337,6 +1354,31 @@ impl ApplyDelegate {
 
         Ok(resp)
     }
+
+    fn handle_ingest_sst(
+        &mut self,
+        ctx: &ApplyContext,
+        req: &Request,
+        ssts: &mut Vec<SSTMeta>,
+    ) -> Result<Response> {
+        let sst = req.get_ingest_sst().get_sst();
+
+        if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
+            error!("ingest {:?} to region {:?}: {:?}", sst, self.region, e);
+            // This file is not valid, we can delete it here.
+            let _ = ctx.importer.delete(sst);
+            return Err(e);
+        }
+
+        ctx.importer.ingest(sst, &self.engine).unwrap_or_else(|e| {
+            // If this failed, it means that the file is corrupted or something
+            // is wrong with the engine, but we can do nothing about that.
+            panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
+        });
+
+        ssts.push(sst.clone());
+        Ok(Response::new())
+    }
 }
 
 pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
@@ -1354,6 +1396,38 @@ pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
 fn check_data_key(key: &[u8], region: &Region) -> Result<()> {
     // region key range has no data prefix, so we must use origin key to check.
     util::check_key_in_region(key, region)?;
+
+    Ok(())
+}
+
+fn check_sst_for_ingestion(sst: &SSTMeta, region: &Region) -> Result<()> {
+    let uuid = sst.get_uuid();
+    if let Err(e) = Uuid::from_bytes(uuid) {
+        return Err(box_err!("invalid uuid {:?}: {:?}", uuid, e));
+    }
+
+    let cf_name = sst.get_cf_name();
+    if cf_name != CF_DEFAULT && cf_name != CF_WRITE {
+        return Err(box_err!("invalid cf name {}", cf_name));
+    }
+
+    let region_id = sst.get_region_id();
+    if region_id != region.get_id() {
+        return Err(Error::RegionNotFound(region_id));
+    }
+
+    let epoch = sst.get_region_epoch();
+    let region_epoch = region.get_region_epoch();
+    if epoch.get_conf_ver() != region_epoch.get_conf_ver()
+        || epoch.get_version() != region_epoch.get_version()
+    {
+        let error = format!("{:?} != {:?}", epoch, region_epoch);
+        return Err(Error::StaleEpoch(error, vec![region.clone()]));
+    }
+
+    let range = sst.get_range();
+    util::check_key_in_region(range.get_start(), region)?;
+    util::check_key_in_region(range.get_end(), region)?;
 
     Ok(())
 }
@@ -1580,6 +1654,7 @@ pub enum TaskRes {
 pub struct Runner {
     db: Arc<DB>,
     host: Arc<CoprocessorHost>,
+    importer: Arc<SSTImporter>,
     delegates: HashMap<u64, Option<ApplyDelegate>>,
     notifier: Sender<TaskRes>,
     sync_log: bool,
@@ -1602,6 +1677,7 @@ impl Runner {
         Runner {
             db: store.kv_engine(),
             host: Arc::clone(&store.coprocessor_host),
+            importer: Arc::clone(&store.importer),
             delegates: delegates,
             notifier: notifier,
             sync_log: sync_log,
@@ -1613,7 +1689,7 @@ impl Runner {
     fn handle_applies(&mut self, applys: Vec<Apply>) {
         let t = SlowTimer::new();
 
-        let mut core = ApplyContextCore::new(self.host.as_ref())
+        let mut core = ApplyContextCore::new(self.host.as_ref(), self.importer.as_ref())
             .apply_res_capacity(applys.len())
             .use_delete_range(self.use_delete_range)
             .enable_sync_log(self.sync_log);
@@ -1763,14 +1839,13 @@ mod tests {
     use rocksdb::{Writable, WriteBatch, DB};
     use protobuf::Message;
     use kvproto::metapb::RegionEpoch;
-    use kvproto::raft_cmdpb::CmdType;
-
+    use kvproto::raft_cmdpb::*;
     use raftstore::coprocessor::*;
     use raftstore::store::msg::WriteResponse;
-    use storage::{ALL_CFS, CF_WRITE};
-    use util::collections::HashMap;
 
     use super::*;
+    use import::test_helpers::*;
+    use util::collections::HashMap;
 
     pub fn create_tmp_engine(path: &str) -> (TempDir, Arc<DB>) {
         let path = TempDir::new(path).unwrap();
@@ -1779,10 +1854,22 @@ mod tests {
         (path, db)
     }
 
-    fn new_runner(db: Arc<DB>, host: Arc<CoprocessorHost>, tx: Sender<TaskRes>) -> Runner {
+    pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
+        let dir = TempDir::new(path).unwrap();
+        let importer = Arc::new(SSTImporter::new(dir.path()).unwrap());
+        (dir, importer)
+    }
+
+    fn new_runner(
+        db: Arc<DB>,
+        host: Arc<CoprocessorHost>,
+        importer: Arc<SSTImporter>,
+        tx: Sender<TaskRes>,
+    ) -> Runner {
         Runner {
             db: db,
             host: host,
+            importer: importer,
             delegates: HashMap::default(),
             notifier: tx,
             sync_log: false,
@@ -1808,6 +1895,15 @@ mod tests {
         let wb = WriteBatch::new();
         assert_eq!(should_write_to_engine(&req, wb.count()), true);
 
+        // IngestSST command
+        let mut req = Request::new();
+        req.set_cmd_type(CmdType::IngestSST);
+        req.set_ingest_sst(IngestSSTRequest::new());
+        let mut cmd = RaftCmdRequest::new();
+        cmd.mut_requests().push(req);
+        let wb = WriteBatch::new();
+        assert_eq!(should_write_to_engine(&cmd, wb.count()), true);
+
         // Write batch keys reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::new();
         let wb = WriteBatch::new();
@@ -1832,7 +1928,13 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let (_tmp, db) = create_tmp_engine("apply-basic");
         let host = Arc::new(CoprocessorHost::default());
-        let mut runner = new_runner(Arc::clone(&db), host, tx);
+        let (_dir, importer) = create_tmp_importer("apply-basic");
+        let mut runner = new_runner(
+            Arc::clone(&db),
+            Arc::clone(&host),
+            Arc::clone(&importer),
+            tx,
+        );
 
         let mut reg = Registration::default();
         reg.id = 1;
@@ -2068,6 +2170,14 @@ mod tests {
             self
         }
 
+        fn ingest_sst(mut self, meta: &SSTMeta) -> EntryBuilder {
+            let mut cmd = Request::new();
+            cmd.set_cmd_type(CmdType::IngestSST);
+            cmd.mut_ingest_sst().set_sst(meta.clone());
+            self.req.mut_requests().push(cmd);
+            self
+        }
+
         fn build(mut self) -> Entry {
             self.entry.set_data(self.req.write_to_bytes().unwrap());
             self.entry
@@ -2097,6 +2207,7 @@ mod tests {
     #[test]
     fn test_handle_raft_committed_entries() {
         let (_path, db) = create_tmp_engine("test-delegate");
+        let (import_dir, importer) = create_tmp_importer("test-delegate");
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
@@ -2115,7 +2226,7 @@ mod tests {
         let obs = ApplyObserver::default();
         host.registry
             .register_query_observer(1, Box::new(obs.clone()));
-        let mut core = ApplyContextCore::new(&host).use_delete_range(true);
+        let mut core = ApplyContextCore::new(&host, &importer).use_delete_range(true);
         let mut apply_ctx = ApplyContext::new(&mut core, &mut delegates);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         apply_ctx.write_to_db(&db);
@@ -2245,9 +2356,54 @@ mod tests {
         assert!(db.get(&dk_k2).unwrap().is_none());
         assert!(db.get(&dk_k3).unwrap().is_none());
 
+        // UploadSST
+        let sst_path = import_dir.path().join("test.sst");
+        let sst_epoch = delegate.region.get_region_epoch().clone();
+        let sst_range = (0, 100);
+        let (mut meta1, data1) = gen_sst_file(&sst_path, sst_range);
+        meta1.set_region_epoch(sst_epoch);
+        importer.create(1, &meta1).unwrap();
+        importer.append(1, &data1).unwrap();
+        importer.finish(1).unwrap();
+        let (mut meta2, data2) = gen_sst_file(&sst_path, sst_range);
+        meta2.mut_region_epoch().set_version(1234);
+        importer.create(2, &meta2).unwrap();
+        importer.append(2, &data2).unwrap();
+        importer.finish(2).unwrap();
+
+        // IngestSST
+        let put_ok = EntryBuilder::new(9, 3)
+            .capture_resp(&mut delegate, tx.clone())
+            .put(&[sst_range.0], &[sst_range.1])
+            .epoch(0, 3)
+            .build();
+        // Add a put above to test flush before ingestion.
+        let ingest_ok = EntryBuilder::new(10, 3)
+            .capture_resp(&mut delegate, tx.clone())
+            .ingest_sst(&meta1)
+            .epoch(0, 3)
+            .build();
+        let ingest_stale_epoch = EntryBuilder::new(11, 3)
+            .capture_resp(&mut delegate, tx.clone())
+            .ingest_sst(&meta2)
+            .epoch(0, 3)
+            .build();
+        let entries = vec![put_ok, ingest_ok, ingest_stale_epoch];
+        delegate.handle_raft_committed_entries(&mut apply_ctx, entries);
+        apply_ctx.write_to_db(&db);
+        let resp = rx.try_recv().unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+        let resp = rx.try_recv().unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+        check_db_range(&db, sst_range);
+        let resp = rx.try_recv().unwrap();
+        assert!(resp.get_header().has_error());
+        assert_eq!(delegate.applied_index_term, 3);
+        assert_eq!(delegate.apply_state.get_applied_index(), 11);
+
         let mut entries = vec![];
         for i in 0..WRITE_BATCH_MAX_KEYS {
-            let put_entry = EntryBuilder::new(i as u64 + 9, 2)
+            let put_entry = EntryBuilder::new(i as u64 + 12, 3)
                 .put(b"k", b"v")
                 .epoch(1, 3)
                 .capture_resp(&mut delegate, tx.clone())
@@ -2259,24 +2415,60 @@ mod tests {
         for _ in 0..WRITE_BATCH_MAX_KEYS {
             rx.try_recv().unwrap();
         }
-        assert_eq!(
-            delegate.apply_state.get_applied_index(),
-            WRITE_BATCH_MAX_KEYS as u64 + 8
-        );
+        let index = WRITE_BATCH_MAX_KEYS + 11;
+        assert_eq!(delegate.apply_state.get_applied_index(), index as u64);
+        assert_eq!(obs.pre_query_count.load(Ordering::SeqCst), index);
+        assert_eq!(obs.post_query_count.load(Ordering::SeqCst), index);
+    }
 
-        assert_eq!(
-            obs.pre_query_count.load(Ordering::SeqCst),
-            8 + WRITE_BATCH_MAX_KEYS
-        );
-        assert_eq!(
-            obs.post_query_count.load(Ordering::SeqCst),
-            8 + WRITE_BATCH_MAX_KEYS
-        );
+    #[test]
+    fn test_check_sst_for_ingestion() {
+        let mut sst = SSTMeta::new();
+        let mut region = Region::new();
+
+        // Check uuid and cf name
+        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        sst.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+        sst.set_cf_name(CF_DEFAULT.to_owned());
+        check_sst_for_ingestion(&sst, &region).unwrap();
+        sst.set_cf_name("test".to_owned());
+        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        sst.set_cf_name(CF_WRITE.to_owned());
+        check_sst_for_ingestion(&sst, &region).unwrap();
+
+        // Check region id
+        region.set_id(1);
+        sst.set_region_id(2);
+        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        sst.set_region_id(1);
+        check_sst_for_ingestion(&sst, &region).unwrap();
+
+        // Check region epoch
+        region.mut_region_epoch().set_conf_ver(1);
+        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        sst.mut_region_epoch().set_conf_ver(1);
+        check_sst_for_ingestion(&sst, &region).unwrap();
+        region.mut_region_epoch().set_version(1);
+        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        sst.mut_region_epoch().set_version(1);
+        check_sst_for_ingestion(&sst, &region).unwrap();
+
+        // Check region range
+        region.set_start_key(vec![2]);
+        region.set_end_key(vec![8]);
+        sst.mut_range().set_start(vec![1]);
+        sst.mut_range().set_end(vec![8]);
+        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        sst.mut_range().set_start(vec![2]);
+        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        sst.mut_range().set_end(vec![7]);
+        check_sst_for_ingestion(&sst, &region).unwrap();
     }
 
     #[test]
     fn test_stash() {
         let (_path, db) = create_tmp_engine("test-delegate");
+        let (_import_dir, importer) = create_tmp_importer("test-delegate");
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
@@ -2289,7 +2481,7 @@ mod tests {
         delegate2.apply_state.set_applied_index(1);
 
         let host = CoprocessorHost::default();
-        let mut core = ApplyContextCore::new(&host);
+        let mut core = ApplyContextCore::new(&host, &importer);
         let (tx, rx) = mpsc::channel();
         core.prepare_for(&delegate1);
         assert_eq!(core.last_applied_index, 3);
