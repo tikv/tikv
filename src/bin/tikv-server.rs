@@ -224,7 +224,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         );
 
     let importer = Arc::new(SSTImporter::new(import_path).unwrap());
-    let import_service = ImportSSTService::new(cfg.import.clone(), storage.clone(), importer);
+    let import_service = ImportSSTService::new(
+        cfg.import.clone(),
+        raft_router.clone(),
+        Arc::clone(&importer),
+    );
 
     let server_cfg = Arc::new(cfg.server.clone());
     // Create server
@@ -260,6 +264,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         significant_msg_receiver,
         pd_worker,
         coprocessor_host,
+        importer,
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));
 
