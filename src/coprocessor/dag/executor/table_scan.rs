@@ -146,9 +146,7 @@ impl Executor for TableScanExecutor {
         if let Some(range) = self.current_range.as_ref() {
             if !is_point(range) {
                 let scanner = self.scanner.as_ref().unwrap();
-                if scanner.start_scan(&mut self.scan_range) {
-                    return;
-                }
+                return scanner.start_scan(&mut self.scan_range);
             }
         }
 

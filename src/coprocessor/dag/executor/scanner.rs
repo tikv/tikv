@@ -130,17 +130,14 @@ impl Scanner {
         Ok(Some((key, value)))
     }
 
-    pub fn start_scan(&self, range: &mut KeyRange) -> bool {
-        if self.no_more {
-            return false;
-        }
+    pub fn start_scan(&self, range: &mut KeyRange) {
+        assert!(!self.no_more);
         let cur_seek_key = self.seek_key.clone();
         match self.scan_mode {
             ScanMode::Forward => range.set_start(cur_seek_key),
             ScanMode::Backward => range.set_end(cur_seek_key),
             _ => unreachable!(),
         };
-        true
     }
 
     pub fn stop_scan(&self, range: &mut KeyRange) -> bool {
