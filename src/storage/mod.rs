@@ -1209,7 +1209,7 @@ mod tests {
     }
 
     fn new_read_pool() -> ReadPool<ReadPoolContext> {
-        ReadPool::new(&readpool::Config::default_for_test(), || {
+        ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || ReadPoolContext::new(None)
         })
     }
