@@ -55,9 +55,10 @@ pub struct Config {
     pub region_split_check_diff: ReadableSize,
     /// Interval (ms) to check whether start compaction for a region.
     pub region_compact_check_interval: ReadableDuration,
-    /// When delete keys of a region exceeds the size, a compaction will
-    /// be started.
-    pub region_compact_delete_keys_count: u64,
+    /// Number of regions for each time checking.
+    pub region_compact_check_step: u64,
+    /// Minimum number of tombstones to trigger manual compaction.
+    pub region_compact_min_tombstones: u64,
     pub pd_heartbeat_tick_interval: ReadableDuration,
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
     pub snap_mgr_gc_tick_interval: ReadableDuration,
@@ -95,6 +96,11 @@ pub struct Config {
 
     pub allow_remove_leader: bool,
 
+    /// Max log gap allowed to propose merge.
+    pub merge_max_log_gap: u64,
+    /// Interval to repropose merge.
+    pub merge_check_tick_interval: ReadableDuration,
+
     pub use_delete_range: bool,
 
     // Deprecated! These two configuration has been moved to Coprocessor.
@@ -127,9 +133,9 @@ impl Default for Config {
             raft_log_gc_size_limit: split_size * 3 / 4,
             split_region_check_tick_interval: ReadableDuration::secs(10),
             region_split_check_diff: split_size / 16,
-            // Disable manual compaction by default.
-            region_compact_check_interval: ReadableDuration::secs(0),
-            region_compact_delete_keys_count: 1_000_000,
+            region_compact_check_interval: ReadableDuration::minutes(5),
+            region_compact_check_step: 100,
+            region_compact_min_tombstones: 10000,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             notify_capacity: 40960,
@@ -149,6 +155,8 @@ impl Default for Config {
             raft_store_max_leader_lease: ReadableDuration::secs(9),
             right_derive_when_split: true,
             allow_remove_leader: false,
+            merge_max_log_gap: 10,
+            merge_check_tick_interval: ReadableDuration::secs(10),
             use_delete_range: false,
 
             // They are preserved for compatibility check.
@@ -205,6 +213,18 @@ impl Config {
                 election_timeout,
                 lease
             ));
+        }
+
+        if self.merge_max_log_gap >= self.raft_log_gc_count_limit {
+            return Err(box_err!(
+                "merge log gap {} should be less than log gc limit {}.",
+                self.merge_max_log_gap,
+                self.raft_log_gc_count_limit
+            ));
+        }
+
+        if self.merge_check_tick_interval.as_millis() == 0 {
+            return Err(box_err!("raftstore.merge-check-tick-interval can't be 0."));
         }
 
         let abnormal_leader_missing = self.abnormal_leader_missing_duration.as_millis() as u64;
@@ -266,6 +286,14 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
+        cfg.raft_log_gc_count_limit = 100;
+        cfg.merge_max_log_gap = 110;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.merge_check_tick_interval = ReadableDuration::secs(0);
+        assert!(cfg.validate().is_err());
+
         cfg.raft_base_tick_interval = ReadableDuration::secs(1);
         cfg.raft_election_timeout_ticks = 10;
         cfg.abnormal_leader_missing_duration = ReadableDuration::secs(5);
