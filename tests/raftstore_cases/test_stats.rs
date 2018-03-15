@@ -109,7 +109,7 @@ fn test_server_store_snap_stats() {
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
 

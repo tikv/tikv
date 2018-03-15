@@ -104,13 +104,13 @@ where
     match resp {
         Some(Ok(resp)) => ctx.spawn(
             sink.success(resp)
-                .map_err(move |err| panic!("failed to reply: {:?}", err)),
+                .map_err(move |err| error!("failed to reply: {:?}", err)),
         ),
         Some(Err(err)) => {
             let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", err)));
             ctx.spawn(
                 sink.fail(status)
-                    .map_err(move |err| panic!("failed to reply: {:?}", err)),
+                    .map_err(move |err| error!("failed to reply: {:?}", err)),
             );
         }
         _ => {
@@ -120,7 +120,7 @@ where
             );
             ctx.spawn(
                 sink.fail(status)
-                    .map_err(move |err| panic!("failed to reply: {:?}", err)),
+                    .map_err(move |err| error!("failed to reply: {:?}", err)),
             );
         }
     }

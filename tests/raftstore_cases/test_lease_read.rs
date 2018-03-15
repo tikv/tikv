@@ -61,7 +61,7 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     let node_id = 1u64;
     let store_id = 1u64;
     let peer = new_peer(store_id, node_id);
-    cluster.pd_client.disable_default_rule();
+    cluster.pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
     for id in 2..cluster.engines.len() as u64 + 1 {
         cluster.pd_client.must_add_peer(region_id, new_peer(id, id));
@@ -139,7 +139,7 @@ fn test_node_renew_lease() {
 fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
