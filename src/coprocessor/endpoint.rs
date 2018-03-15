@@ -315,6 +315,20 @@ impl Host {
                 };
                 pool.spawn_fn(do_request).forget();
             }
+            CopRequest::Checksum(checksum) => {
+                let ctx = ChecksumContext::new(checksum, ranges, snap, &req_ctx);
+                let mut exec_metrics = ExecutorMetrics::default();
+                let do_request = move || {
+                    tracker.record_wait();
+                    let mut resp = ctx.handle_request(&mut exec_metrics).unwrap_or_else(|e| {
+                        let mut metrics = tracker.get_basic_metrics();
+                        err_resp(e, &mut metrics)
+                    });
+                    tracker.record_handle(Some(&mut resp), exec_metrics);
+                    future::ok::<_, ()>(on_resp.respond(resp))
+                };
+                pool.spawn_fn(do_request).forget();
+            }
         }
     }
 

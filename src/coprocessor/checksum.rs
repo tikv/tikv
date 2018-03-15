@@ -22,7 +22,7 @@ use storage::{Snapshot, SnapshotStore};
 
 use super::{Error, Result};
 use super::endpoint::ReqContext;
-use super::dag::executor::{ScanOn, Scanner};
+use super::dag::executor::{ExecutorMetrics, ScanOn, Scanner};
 
 // `ChecksumContext` is used to handle `ChecksumRequest`
 pub struct ChecksumContext {
@@ -53,7 +53,7 @@ impl ChecksumContext {
         }
     }
 
-    pub fn handle_request(mut self) -> Result<Response> {
+    pub fn handle_request(mut self, metrics: &mut ExecutorMetrics) -> Result<Response> {
         let algorithm = self.req.get_algorithm();
         if algorithm != ChecksumAlgorithm::Crc64_Xor {
             return Err(box_err!("unknown checksum algorithm {:?}", algorithm));
@@ -62,7 +62,7 @@ impl ChecksumContext {
         let mut checksum = 0;
         let mut total_kvs = 0;
         let mut total_bytes = 0;
-        while let Some((k, v)) = self.next_row()? {
+        while let Some((k, v)) = self.next_row(metrics)? {
             checksum = checksum_crc64_xor(checksum, &k, &v);
             total_kvs += 1;
             total_bytes += k.len() + v.len();
@@ -79,19 +79,13 @@ impl ChecksumContext {
         Ok(resp)
     }
 
-    fn new_scanner(&self, range: KeyRange) -> Result<Scanner> {
-        let scan_on = match self.req.get_scan_on() {
-            ChecksumScanOn::Table => ScanOn::Table,
-            ChecksumScanOn::Index => ScanOn::Index,
-        };
-        Scanner::new(&self.store, scan_on, false, false, range).map_err(Error::from)
-    }
-
-    fn next_row(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+    fn next_row(&mut self, metrics: &mut ExecutorMetrics) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         loop {
             if let Some(scanner) = self.scanner.as_mut() {
-                if let Some(row) = scanner.next_row()? {
-                    return Ok(Some(row));
+                metrics.scan_counter.inc_range();
+                match scanner.next_row()? {
+                    Some(row) => return Ok(Some(row)),
+                    None => scanner.collect_statistics_into(&mut metrics.cf_stats),
                 }
             }
 
@@ -108,6 +102,14 @@ impl ChecksumContext {
 
             return Ok(None);
         }
+    }
+
+    fn new_scanner(&self, range: KeyRange) -> Result<Scanner> {
+        let scan_on = match self.req.get_scan_on() {
+            ChecksumScanOn::Table => ScanOn::Table,
+            ChecksumScanOn::Index => ScanOn::Index,
+        };
+        Scanner::new(&self.store, scan_on, false, false, range).map_err(Error::from)
     }
 }
 
