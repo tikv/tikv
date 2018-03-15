@@ -29,8 +29,9 @@ use time::{self, Timespec};
 
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState,
                              RegionLocalState};
-use kvproto::eraftpb::{ConfChangeType, MessageType};
+use raft::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
+use kvproto::importpb::SSTMeta;
 use util::{escape, rocksdb};
 use util::time::{duration_to_sec, SlowTimer};
 use pd::{PdClient, PdRunner, PdTask};
@@ -49,9 +50,11 @@ use util::sys as util_sys;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
-use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
-                    ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
-                    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
+use import::SSTImporter;
+use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, CleanupSSTTask,
+                    CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
+                    RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
+                    SplitCheckTask};
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -148,13 +151,18 @@ pub struct Store<T, C: 'static> {
     compact_worker: Worker<CompactTask>,
     pd_worker: FutureWorker<PdTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
+    cleanup_sst_worker: Worker<CleanupSSTTask>,
     pub apply_worker: Worker<ApplyTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
+
+    last_compact_checked_key: Key,
 
     trans: T,
     pd_client: Arc<C>,
 
     pub coprocessor_host: Arc<CoprocessorHost>,
+
+    pub importer: Arc<SSTImporter>,
 
     snap_mgr: SnapManager,
 
@@ -197,6 +205,7 @@ impl<T, C> Store<T, C> {
         mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
         mut coprocessor_host: CoprocessorHost,
+        importer: Arc<SSTImporter>,
     ) -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
         cfg.validate()?;
@@ -224,13 +233,16 @@ impl<T, C> Store<T, C> {
             compact_worker: Worker::new("compact worker"),
             pd_worker: pd_worker,
             consistency_check_worker: Worker::new("consistency check worker"),
+            cleanup_sst_worker: Worker::new("cleanup sst worker"),
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
+            last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
             region_ranges: BTreeMap::new(),
             pending_snapshot_regions: vec![],
             trans: trans,
             pd_client: pd_client,
             coprocessor_host: Arc::new(coprocessor_host),
+            importer: importer,
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
             entry_cache_metries: Rc::new(RefCell::new(CacheQueryStats::default())),
@@ -534,6 +546,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .start(consistency_check_runner)
         );
 
+        let cleanup_sst_runner = CleanupSSTRunner::new(Arc::clone(&self.importer));
+        box_try!(self.cleanup_sst_worker.start(cleanup_sst_runner));
+
         let (tx, rx) = mpsc::channel();
         let apply_runner = ApplyRunner::new(self, tx, self.cfg.sync_log, self.cfg.use_delete_range);
         self.apply_res_receiver = Some(rx);
@@ -563,6 +578,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         handles.push(self.compact_worker.stop());
         handles.push(self.pd_worker.stop());
         handles.push(self.consistency_check_worker.stop());
+        handles.push(self.cleanup_sst_worker.stop());
         handles.push(self.apply_worker.stop());
 
         for h in handles {
@@ -1534,6 +1550,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::DeleteRange { .. } => {
                     // TODO: clean user properties?
                 }
+                ExecResult::IngestSST { ssts } => self.on_ingest_sst_result(ssts),
             }
         }
     }
@@ -1876,24 +1893,52 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_compact_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        for peer in self.region_peers.values_mut() {
-            if peer.delete_keys_hint < self.cfg.region_compact_delete_keys_count {
-                continue;
-            }
-            for &cf in &[CF_DEFAULT, CF_WRITE] {
-                let task = CompactTask {
-                    cf_name: String::from(cf),
-                    start_key: Some(keys::enc_start_key(peer.region())),
-                    end_key: Some(keys::enc_end_key(peer.region())),
-                };
-                if let Err(e) = self.compact_worker.schedule(task) {
-                    error!("{} failed to schedule compact task: {}", self.tag, e);
+        if self.compact_worker.is_busy() {
+            debug!("compact worker is busy, check space redundancy next time");
+        } else if self.region_ranges.is_empty() {
+            debug!("there is no range need to check");
+        } else {
+            // Start from last checked key.
+            let mut ranges_need_check =
+                Vec::with_capacity(self.cfg.region_compact_check_step as usize + 1);
+            ranges_need_check.push(self.last_compact_checked_key.clone());
+
+            // Collect continuous ranges.
+            let left_ranges = self.region_ranges.range((
+                Excluded(self.last_compact_checked_key.clone()),
+                Unbounded::<Key>,
+            ));
+            ranges_need_check.extend(
+                left_ranges
+                    .take(self.cfg.region_compact_check_step as usize)
+                    .map(|(k, _)| k.to_owned()),
+            );
+
+            // Update last_compact_checked_key.
+            let largest_key = self.region_ranges.keys().last().unwrap().to_vec();
+            let last_key = ranges_need_check.last().unwrap().clone();
+            if last_key == largest_key {
+                // Range [largest key, DATA_MAX_KEY) also need to check.
+                if last_key != keys::DATA_MAX_KEY.to_vec() {
+                    ranges_need_check.push(keys::DATA_MAX_KEY.to_vec());
                 }
+                // Next task will start from the very beginning.
+                self.last_compact_checked_key = keys::DATA_MIN_KEY.to_vec();
+            } else {
+                self.last_compact_checked_key = last_key;
             }
-            peer.delete_keys_hint = 0;
-            // Compact only 1 region each check in case compact task accumulates.
-            break;
+
+            // Schedule the task.
+            let cf_names = vec![CF_DEFAULT.to_owned(), CF_WRITE.to_owned()];
+            if let Err(e) = self.compact_worker.schedule(CompactTask::CheckAndCompact {
+                cf_names: cf_names,
+                ranges: ranges_need_check,
+                tombstones_threshold: self.cfg.region_compact_min_tombstones,
+            }) {
+                error!("{} failed to schedule space check task: {}", self.tag, e);
+            }
         }
+
         self.register_compact_check_tick(event_loop);
     }
 
@@ -2171,7 +2216,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // Create a compact lock cf task(compact whole range) and schedule directly.
         if self.store_stat.lock_cf_bytes_written > self.cfg.lock_cf_compact_bytes_threshold.0 {
             self.store_stat.lock_cf_bytes_written = 0;
-            let task = CompactTask {
+            let task = CompactTask::Compact {
                 cf_name: String::from(CF_LOCK),
                 start_key: None,
                 end_key: None,
@@ -2392,6 +2437,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 "[region {}] failed to schedule verify command for index {}: {:?}",
                 region_id, index, e
             );
+        }
+    }
+
+    fn on_ingest_sst_result(&mut self, ssts: Vec<SSTMeta>) {
+        for sst in ssts {
+            let region_id = sst.get_region_id();
+            if let Some(region) = self.region_peers.get_mut(&region_id) {
+                region.size_diff_hint += sst.get_length();
+            }
+            let task = CleanupSSTTask::DeleteSST { sst };
+            if let Err(e) = self.cleanup_sst_worker.schedule(task) {
+                error!("[region {}] schedule delete sst: {:?}", region_id, e);
+            }
         }
     }
 }

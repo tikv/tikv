@@ -15,7 +15,7 @@ use std::sync::{Arc, RwLock};
 use std::sync::mpsc::Sender;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::eraftpb::MessageType;
+use raft::eraftpb::MessageType;
 
 use util::transport::SendCh;
 use util::HandyRwLock;

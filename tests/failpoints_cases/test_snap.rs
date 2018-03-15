@@ -20,7 +20,7 @@ use std::sync::mpsc::{self, Sender};
 use fail;
 use tikv::util::config::*;
 use tikv::raftstore::Result;
-use kvproto::eraftpb::MessageType;
+use raft::eraftpb::MessageType;
 use kvproto::raft_serverpb::RaftMessage;
 
 use raftstore::cluster::Simulator;
@@ -40,7 +40,7 @@ fn test_overlap_cleanup() {
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     let region_id = cluster.run_conf_change();
     pd_client.must_add_peer(region_id, new_peer(2, 2));
@@ -123,17 +123,14 @@ impl Filter<RaftMessage> for SnapshotNotifier {
 fn test_server_snapshot_on_reslove_failure() {
     let _guard = ::setup();
     let mut cluster = new_server_cluster(1, 4);
-    // truncate the log quickly so that we can force sending snapshot.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
-    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+    configure_for_snapshot(&mut cluster);
 
     let on_resolve_fp = "transport_snapshot_on_resolve";
     let on_send_store_fp = "transport_on_send_store";
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
     cluster.run();
 
     cluster.must_transfer_leader(1, new_peer(1, 1));

@@ -54,7 +54,7 @@ use std::time::Duration;
 use clap::{App, Arg, ArgMatches};
 use fs2::FileExt;
 
-use tikv::config::{MetricConfig, TiKvConfig, LAST_CONFIG_FILE};
+use tikv::config::{check_and_persist_critical_config, MetricConfig, TiKvConfig};
 use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
@@ -194,11 +194,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {:?}", s)),
     );
     let pd_sender = pd_worker.scheduler();
-    let read_pool = ReadPool::new(&cfg.readpool, || {
+    let storage_read_pool = ReadPool::new("store-read", &cfg.readpool.storage, || {
         let pd_sender = pd_sender.clone();
         move || storage::ReadPoolContext::new(Some(pd_sender.clone()))
     });
-    let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage, read_pool)
+    let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage, storage_read_pool)
         .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 
     // Create raft engine.
@@ -223,7 +223,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         );
 
     let importer = Arc::new(SSTImporter::new(import_path).unwrap());
-    let import_service = ImportSSTService::new(cfg.import.clone(), storage.clone(), importer);
+    let import_service = ImportSSTService::new(
+        cfg.import.clone(),
+        raft_router.clone(),
+        Arc::clone(&importer),
+    );
 
     let server_cfg = Arc::new(cfg.server.clone());
     // Create server
@@ -255,6 +259,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         significant_msg_receiver,
         pd_worker,
         coprocessor_host,
+        importer,
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));
 
@@ -355,24 +360,6 @@ fn configure_grpc_poll_strategy() {
     if cfg!(target_os = "linux") && env::var(GRPC_POLL_STRATEGY).is_err() {
         // Set to epollsig if it is not specified.
         env::set_var(GRPC_POLL_STRATEGY, DEFAULT_ENGINE);
-    }
-}
-
-fn check_and_persist_critical_config(config: &TiKvConfig) {
-    // Check current critical configurations with last time, if there are some
-    // changes, user must guarantee relevant works have been done.
-    let store_path = Path::new(&config.storage.data_dir);
-    let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
-    if last_cfg_path.exists() {
-        let last_cfg = TiKvConfig::from_file(&last_cfg_path);
-        if let Err(e) = config.check_critical_cfg_with(&last_cfg) {
-            fatal!("check critical config failed, err {:?}", e);
-        }
-    }
-
-    // Persist current critical configurations to file.
-    if let Err(e) = config.write_to_file(&last_cfg_path) {
-        fatal!("persist critical config failed, err {:?}", e);
     }
 }
 
@@ -503,7 +490,9 @@ fn main() {
 
     overwrite_config_with_cmd_args(&mut config, &matches);
 
-    check_and_persist_critical_config(&config);
+    if let Err(e) = check_and_persist_critical_config(&config) {
+        fatal!("check critical config failed, error {:?}", e);
+    }
 
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validata()`,

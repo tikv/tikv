@@ -23,7 +23,7 @@ use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::{self, Message};
 use kvproto::metapb;
-use kvproto::eraftpb::{self, ConfChangeType, MessageType};
+use raft::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
                           RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{PeerState, RaftMessage};
@@ -1091,7 +1091,9 @@ impl Peer {
         for r in req.get_requests() {
             match r.get_cmd_type() {
                 CmdType::Get | CmdType::Snap => is_read = true,
-                CmdType::Delete | CmdType::Put | CmdType::DeleteRange => is_write = true,
+                CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSST => {
+                    is_write = true
+                }
                 CmdType::Prewrite | CmdType::Invalid => {
                     return Err(box_err!(
                         "invalid cmd type {:?}, message maybe currupted",
@@ -1382,7 +1384,7 @@ impl Peer {
         req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
     ) -> Result<u64> {
-        if self.raft_group.raft.pending_conf {
+        if self.raft_group.raft.pending_conf_index > self.get_store().applied_index() {
             info!("{} there is a pending conf change, try later", self.tag);
             return Err(box_err!(
                 "{} there is a pending conf change, try later",
@@ -1638,6 +1640,7 @@ impl Peer {
                 | CmdType::Put
                 | CmdType::Delete
                 | CmdType::DeleteRange
+                | CmdType::IngestSST
                 | CmdType::Invalid => unreachable!(),
             };
             resp.set_cmd_type(cmd_type);
