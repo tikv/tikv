@@ -239,7 +239,7 @@ impl Snapshot for RocksSnapshot {
     }
 }
 
-impl<D: Deref<Target = DB>> EngineIterator for DBIterator<D> {
+impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {
     fn next(&mut self) -> bool {
         DBIterator::next(self)
     }
