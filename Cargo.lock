@@ -574,7 +574,7 @@ dependencies = [
 [[package]]
 name = "murmur3"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+source = "git+https://github.com/pingcap/murmur3.git#4af9e1a8f2d4206d90d81f11e513fb03c87208bf"
 dependencies = [
  "byteorder 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -1014,7 +1014,7 @@ dependencies = [
  "libc 0.2.36 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "mio 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "murmur3 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "murmur3 0.4.0 (git+https://github.com/pingcap/murmur3.git)",
  "nix 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "ordermap 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "prometheus 0.3.11 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1318,7 +1318,7 @@ dependencies = [
 "checksum mio 0.6.6 (registry+https://github.com/rust-lang/crates.io-index)" = "f27d38f824a0d267d55b29b171e9e99269a53812e385fa75c1fe700ae254a6a4"
 "checksum miow 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)" = "3e690c5df6b2f60acd45d56378981e827ff8295562fc8d34f573deb267a59cd1"
 "checksum miow 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "8c1f2f3b1cf331de6896aabf6e9d55dca90356cc9960cca7eaaf408a355ae919"
-"checksum murmur3 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "a9fbfc749b3a5d9c313c5e0cd61788f1f219ebd2f22de25996df0481c08949e4"
+"checksum murmur3 0.4.0 (git+https://github.com/pingcap/murmur3.git)" = "<none>"
 "checksum net2 0.2.23 (registry+https://github.com/rust-lang/crates.io-index)" = "6a816012ca11cb47009693c1e0c6130e26d39e4d97ee2a13c50e868ec83e3204"
 "checksum nix 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)" = "bfb3ddedaa14746434a02041940495bf11325c22f6d36125d3bdd56090d50a79"
 "checksum nix 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)" = "a2c5afeb0198ec7be8569d666644b574345aad2e95a53baf3a532da3e0f3fb32"
