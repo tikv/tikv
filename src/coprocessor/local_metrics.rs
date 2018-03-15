@@ -73,7 +73,7 @@ impl ExecLocalMetrics {
         }
     }
 
-    pub fn collect(&mut self, type_str: &'static str, region_id: u64, metrics: ExecutorMetrics) {
+    pub fn collect(&mut self, type_str: &str, region_id: u64, metrics: ExecutorMetrics) {
         let stats = &metrics.cf_stats;
         // cf statistics group by type
         for (cf, details) in stats.details() {
