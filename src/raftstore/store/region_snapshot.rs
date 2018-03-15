@@ -328,9 +328,12 @@ mod tests {
     use raftstore::Result;
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
+    use raftstore::store::worker::RegionRunner;
     use raftstore::store::{CacheQueryStats, PeerStorage};
     use storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS, CF_DEFAULT};
-    use util::{escape, rocksdb, worker};
+    use util::{escape, rocksdb};
+    use mio::EventLoop;
+    use util::transport::SendCh;
 
     use super::*;
 
@@ -348,11 +351,12 @@ mod tests {
 
     fn new_peer_storage(engine: Arc<DB>, raft_engine: Arc<DB>, r: &Region) -> PeerStorage {
         let metrics = Rc::new(RefCell::new(CacheQueryStats::default()));
+        let event_loop: EventLoop<RegionRunner> = EventLoop::new().unwrap();
         PeerStorage::new(
             engine,
             raft_engine,
             r,
-            worker::dummy_scheduler(),
+            SendCh::new(event_loop.channel(), "dummy"),
             "".to_owned(),
             metrics,
         ).unwrap()

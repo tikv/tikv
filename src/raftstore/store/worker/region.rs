@@ -11,22 +11,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::io;
 use std::collections::BTreeMap;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+use std::thread::{self, Builder as ThreadBuilder};
 
 use rocksdb::{Writable, WriteBatch, DB};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use kvproto::metapb::Region;
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use mio::{EventLoop, Handler};
+use mio::{EventLoop, EventLoopConfig, Handler};
 
 use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use util::time;
 use util::{escape, rocksdb};
+use util::transport::SendCh;
 use raftstore::store::engine::{Mutable, Snapshot};
 use raftstore::store::peer_storage::{JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING,
                                      JOB_STATUS_FAILED, JOB_STATUS_FINISHED, JOB_STATUS_PENDING,
@@ -42,6 +45,9 @@ use super::super::util;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 
 const GENERATE_POOL_SIZE: usize = 2;
+
+// used to periodically check whether we should delete a stale peer's range in region runner
+const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // milliseconds
 
 /// region related task.
 #[derive(Debug)]
@@ -503,6 +509,58 @@ impl Handler for Runner {
                 true, /* use_delete_files */
             );
         }
+    }
+}
+
+pub struct Worker {
+    event_loop: Option<EventLoop<Runner>>,
+    sendch: SendCh<Task>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Worker {
+    pub fn new() -> io::Result<Worker> {
+        let mut config = EventLoopConfig::new();
+        config.timer_tick_ms(STALE_PEER_CHECK_INTERVAL);
+        let event_loop = EventLoop::configured(config)?;
+        let sendch = SendCh::new(event_loop.channel(), "region");
+        Ok(Worker {
+            event_loop: Some(event_loop),
+            sendch: sendch,
+            handle: None,
+        })
+    }
+
+    pub fn start(&mut self, mut runner: Runner) -> io::Result<()> {
+        info!("starting region worker...");
+        if let Some(mut event_loop) = self.event_loop.take() {
+            let h = ThreadBuilder::new()
+                .name(thd_name!("region worker"))
+                .spawn(move || {
+                    if let Err(e) = event_loop.run(&mut runner) {
+                        error!("failed to run region worker event loop: {:?}", e);
+                    }
+                })?;
+            self.handle = Some(h);
+        } else {
+            info!("region worker has started.");
+        }
+        Ok(())
+    }
+
+    pub fn stop(&mut self) -> Option<thread::JoinHandle<()>> {
+        info!("stop region worker...");
+        if self.handle.is_none() {
+            return None;
+        }
+        if let Err(e) = self.sendch.try_send(Task::Quit {}) {
+            warn!("failed to stop region worker: {:?}", e);
+        }
+        self.handle.take()
+    }
+
+    pub fn sendch(&self) -> SendCh<Task> {
+        self.sendch.clone()
     }
 }
 
