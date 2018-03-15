@@ -182,7 +182,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
 
     fn send_store(&self, store_id: u64, msg: RaftMessage) {
         // Wrapping the fail point in a closure, so we can modify
-        // local variables with out return,
+        // local variables without return,
         let transport_on_send_store_fp = || {
             fail_point!("transport_on_send_store", |sid| if let Some(sid) = sid {
                 let sid: u64 = sid.parse().unwrap();

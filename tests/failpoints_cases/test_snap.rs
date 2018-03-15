@@ -114,6 +114,11 @@ impl Filter<RaftMessage> for SnapshotNotifier {
     }
 }
 
+// When resolving remote address, all messages will be dropped and
+// report unreachable. However unreachable won't reset follower's
+// progress if it's in Snapshot state. So trying to send a snapshot
+// when the address is being resolved will leave follower's progress
+// stay in Snapshot forever.
 #[test]
 fn test_server_snapshot_on_reslove_failure() {
     let _guard = ::setup();
