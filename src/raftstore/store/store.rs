@@ -799,7 +799,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         peer.insert_peer_cache(msg.take_from_peer());
         peer.step(msg.take_message())?;
 
-        if peer.peer_catch_up(from_peer_id) {
+        if peer.any_new_peer_catch_up(from_peer_id) {
             peer.heartbeat_pd(&self.pd_worker);
         }
 

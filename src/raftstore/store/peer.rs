@@ -320,7 +320,7 @@ impl Peer {
             pending_reads: Default::default(),
             peer_cache: RefCell::new(peer_cache),
             peer_heartbeats: FlatMap::default(),
-            peer_pending_after: Vec::with_capacity(5),
+            peer_pending_after: vec![],
             coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
             delete_keys_hint: 0,
@@ -595,7 +595,7 @@ impl Peer {
         pending_peers
     }
 
-    pub fn peer_catch_up(&mut self, peer_id: u64) -> bool {
+    pub fn any_new_peer_catch_up(&mut self, peer_id: u64) -> bool {
         if self.peer_pending_after.is_empty() {
             return false;
         }
@@ -612,7 +612,10 @@ impl Peer {
                 if progress.matched >= truncated_idx {
                     let (_, pending_after) = self.peer_pending_after.swap_remove(i);
                     let elapsed = duration_to_sec(pending_after.elapsed());
-                    info!("peer {} has caugth up logs, elapsed: {}", peer_id, elapsed);
+                    info!(
+                        "{} peer {} has caugth up logs, elapsed: {}",
+                        self.tag, peer_id, elapsed
+                    );
                     return true;
                 }
             }
