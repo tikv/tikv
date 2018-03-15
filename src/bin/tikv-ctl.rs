@@ -531,7 +531,8 @@ impl DebugExecutor for DebugClient {
                 METRICS_ROCKSDB_KV => resp.take_rocksdb_kv(),
                 METRICS_ROCKSDB_RAFT => resp.take_rocksdb_raft(),
                 METRICS_JEMALLOC => resp.take_jemalloc(),
-                _ => resp.take_prometheus(),
+                METRICS_PROMETHEUS => resp.take_prometheus(),
+                _ => unreachable!(),
             };
             println!("{}", metrics);
         }
@@ -955,7 +956,7 @@ fn main() {
                     .use_delimiter(true)
                     .require_delimiter(true)
                     .value_delimiter(",")
-                    .default_value("prometheus,jemalloc,rocksdb_raft,rocksdb_kv")
+                    .default_value(METRICS_PROMETHEUS)
                     .help(
                         "set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not specified, print all",
                     ),
