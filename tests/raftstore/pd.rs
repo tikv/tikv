@@ -23,7 +23,7 @@ use futures::{Future, Stream};
 use futures::future::{err, ok};
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
-use kvproto::metapb;
+use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
 use raft::eraftpb;
 use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
@@ -81,6 +81,10 @@ enum Operator {
         peer: Either<metapb::Peer, metapb::Peer>,
         policy: SchedulePolicy,
     },
+    AddLearnerNode {
+        peer: Either<metapb::Peer, metapb::Peer>,
+        policy: SchedulePolicy,
+    },
     RemovePeer {
         peer: metapb::Peer,
         policy: SchedulePolicy,
@@ -101,6 +105,13 @@ impl Operator {
                     pdpb::RegionHeartbeatResponse::new()
                 }
             }
+            Operator::AddLearnerNode { ref peer, .. } => {
+                if let Either::Left(ref peer) = *peer {
+                    new_pd_change_peer(eraftpb::ConfChangeType::AddLearnerNode, peer.clone())
+                } else {
+                    pdpb::RegionHeartbeatResponse::new()
+                }
+            }
             Operator::RemovePeer { ref peer, .. } => {
                 new_pd_change_peer(eraftpb::ConfChangeType::RemoveNode, peer.clone())
             }
@@ -116,6 +127,10 @@ impl Operator {
     ) -> bool {
         match *self {
             Operator::AddPeer {
+                ref mut peer,
+                ref mut policy,
+            }
+            | Operator::AddLearnerNode {
                 ref mut peer,
                 ref mut policy,
             } => {
@@ -353,10 +368,12 @@ impl Cluster {
 
         if conf_ver > cur_conf_ver {
             if region_peer_len == cur_region_peer_len {
-                // For AddLearner.
-                let region_learner_len = region.get_learners().len();
-                let cur_region_learner_len = cur_region.get_learners().len();
-                assert!(region_learner_len != cur_region_learner_len);
+                // For promote learner to voter.
+                let get_learners =
+                    |r: &Region| r.get_peers().iter().filter(|p| p.get_is_learner()).count();
+                let region_learner_len = get_learners(&region);
+                let cur_region_learner_len = get_learners(&cur_region);
+                assert_eq!(cur_region_learner_len + 1, region_learner_len);
             } else if cur_region_peer_len > region_peer_len {
                 // If ConfVer changed, TiKV has added/removed one peer already.
                 // So pd and TiKV can't have same peer count and can only have
@@ -728,16 +745,11 @@ impl TestPdClient {
     }
 
     pub fn add_learner(&self, region_id: u64, peer: metapb::Peer) {
-        self.set_rule(box move |region: &metapb::Region, _: &metapb::Peer| {
-            debug!(
-                "[region {}] trying add learner {:?} to {:?}",
-                region_id, peer, region
-            );
-            if region.get_id() != region_id {
-                return None;
-            }
-            new_pd_add_learner_change_peer(region, peer.clone())
-        });
+        let op = Operator::AddLearnerNode {
+            peer: Either::Left(peer),
+            policy: SchedulePolicy::TillSuccess,
+        };
+        self.schedule_operator(region_id, op);
     }
 
     pub fn must_add_learner(&self, region_id: u64, peer: metapb::Peer) {

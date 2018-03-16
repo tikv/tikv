@@ -534,38 +534,28 @@ impl Peer {
         Ok(())
     }
 
-    pub fn check_voters(&mut self) {
+    pub fn check_peers(&mut self) {
         if !self.is_leader() {
             self.peer_heartbeats.clear();
             return;
         }
-        let voters_count = self.region().get_peers().len();
-        let learners_count = self.region().get_learners().len();
-        if self.peer_heartbeats.len() == voters_count + learners_count {
+        let peers_count = self.region().get_peers().len();
+        if self.peer_heartbeats.len() == peers_count {
             return;
         }
+
         // Insert heartbeats in case that some peers never response heartbeats.
-        for peer in self.region()
-            .get_peers()
-            .to_owned()
-            .into_iter()
-            .chain(self.region().get_learners().to_owned())
-        {
+        let region = self.raft_group.get_store().get_region();
+        for peer in region.get_peers() {
             self.peer_heartbeats
                 .entry(peer.get_id())
                 .or_insert_with(Instant::now);
         }
     }
 
-    pub fn collect_down_peers(&self, max_duration: Duration, is_learner: bool) -> Vec<PeerStats> {
+    pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<PeerStats> {
         let mut down_peers = Vec::new();
-        let peers = if !is_learner {
-            self.region().get_peers()
-        } else {
-            self.region().get_learners()
-        };
-
-        for p in peers {
+        for p in self.region().get_peers() {
             if p.get_id() == self.peer.get_id() {
                 continue;
             }
@@ -581,18 +571,13 @@ impl Peer {
         down_peers
     }
 
-    pub fn collect_pending_peers(&self, is_learner: bool) -> Vec<metapb::Peer> {
+    pub fn collect_pending_peers(&self) -> Vec<metapb::Peer> {
         let truncated_idx = self.get_store().truncated_index();
         let status = self.raft_group.status();
-        let (progresses, mut pending_peers) = if is_learner {
-            let len = self.region().get_learners().len();
-            (status.learner_progress, Vec::with_capacity(len))
-        } else {
-            let len = self.region().get_peers().len();
-            (status.progress, Vec::with_capacity(len))
-        };
+        let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
 
-        for (id, progress) in progresses {
+        let progresses = status.progress.iter().chain(&status.learner_progress);
+        for (&id, progress) in progresses {
             if id == self.peer.get_id() {
                 continue;
             }
@@ -1555,7 +1540,7 @@ impl Peer {
         }
         // Try to find in region, if found, set in cache.
         let region = self.get_store().get_region();
-        for peer in region.get_peers().iter().chain(region.get_learners()) {
+        for peer in region.get_peers() {
             if peer.get_id() == peer_id {
                 self.peer_cache.borrow_mut().insert(peer_id, peer.clone());
                 return Some(peer.clone());
@@ -1568,10 +1553,8 @@ impl Peer {
         let task = PdTask::Heartbeat {
             region: self.region().clone(),
             peer: self.peer.clone(),
-            down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration.0, false),
-            pending_peers: self.collect_pending_peers(false),
-            down_learners: self.collect_down_peers(self.cfg.max_peer_down_duration.0, true),
-            pending_learners: self.collect_pending_peers(true),
+            down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration.0),
+            pending_peers: self.collect_pending_peers(),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
             region_size: self.approximate_size,

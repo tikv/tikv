@@ -1074,6 +1074,15 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         ctx.spawn(future);
     }
+
+    fn raw_delete_range(
+        &self,
+        _: RpcContext,
+        _: RawDeleteRangeRequest,
+        _: UnarySink<RawDeleteRangeResponse>,
+    ) {
+        unimplemented!();
+    }
 }
 
 fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {

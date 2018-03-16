@@ -23,14 +23,15 @@ use std::collections::VecDeque;
 use rocksdb::{Writable, WriteBatch, DB};
 use protobuf::Message;
 
-use kvproto::metapb::{self, Region};
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
+use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
+use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData,
                              RegionLocalState};
 use util::worker::Scheduler;
 use util::{self, rocksdb};
-use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 use raftstore::{Error, Result};
+use raftstore::store::util::conf_state_from_region;
 use super::worker::RegionTask;
 use super::keys::{self, enc_end_key, enc_start_key};
 use super::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
@@ -516,13 +517,9 @@ impl PeerStorage {
                 conf_state: ConfState::default(),
             });
         }
-
-        let mut conf_state = ConfState::new();
-        let conf_state = ConfState::from_region(&self.region);
-
         Ok(RaftState {
             hard_state: hard_state,
-            conf_state: conf_state,
+            conf_state: conf_state_from_region(&self.region),
         })
     }
 
@@ -1275,7 +1272,7 @@ pub fn do_snapshot(
     snapshot.mut_metadata().set_index(key.idx);
     snapshot.mut_metadata().set_term(key.term);
 
-    let conf_state = ConfState::from_region(state.get_region());
+    let conf_state = conf_state_from_region(state.get_region());
     snapshot.mut_metadata().set_conf_state(conf_state);
 
     let mut s = mgr.get_snapshot_for_building(&key, snap)?;

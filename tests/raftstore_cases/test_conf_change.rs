@@ -593,7 +593,7 @@ fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
 
 fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
     assert_eq!(cluster.get(b"k1"), Some(b"v1".to_vec()));

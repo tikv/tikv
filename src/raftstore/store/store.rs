@@ -1044,7 +1044,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if snap_region
             .get_peers()
             .iter()
-            .chain(snap_region.get_learners())
             .all(|p| p.get_id() != peer_id)
         {
             info!(
@@ -2048,7 +2047,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for peer in self.region_peers.values_mut() {
-            peer.check_voters();
+            peer.check_peers();
         }
         let mut leader_count = 0;
         for peer in self.region_peers.values() {

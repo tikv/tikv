@@ -32,12 +32,12 @@ use super::engine::{IterOption, Iterable};
 use super::peer_storage;
 
 pub fn find_voter(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
-    let voters = region.get_peers().iter().filter(|&p| !p.get_is_learner());
+    let mut voters = region.get_peers().iter().filter(|&p| !p.get_is_learner());
     voters.find(|p| p.get_store_id() == store_id)
 }
 
 pub fn find_learner(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
-    let learners = region.get_peers().iter().filter(|&p| p.get_is_learner());
+    let mut learners = region.get_peers().iter().filter(|&p| p.get_is_learner());
     learners.find(|p| p.get_store_id() == store_id)
 }
 
@@ -51,28 +51,17 @@ pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer
 pub fn find_mut_peer(region: &mut metapb::Region, store_id: u64) -> Option<&mut metapb::Peer> {
     region
         .mut_peers()
-        .iter()
-        .find(|&p| p.get_store_id() == store_id)
+        .iter_mut()
+        .find(|p| p.get_store_id() == store_id)
 }
 
-/**************
-pub fn remove_voter(region: &mut metapb::Region, store_id: u64) -> Option<metapb::Peer> {
-    region.get_peers().iter().position(|x| x.get_store_id() == store_id && )
+pub fn remove_peer(region: &mut metapb::Region, store_id: u64) -> Option<metapb::Peer> {
     region
         .get_peers()
         .iter()
         .position(|x| x.get_store_id() == store_id)
         .map(|i| region.mut_peers().remove(i))
 }
-
-pub fn remove_learner(region: &mut metapb::Region, store_id: u64) -> Option<metapb::Peer> {
-    region
-        .get_learners()
-        .iter()
-        .position(|x| x.get_store_id() == store_id)
-        .map(|i| region.mut_learners().remove(i))
-}
-**************/
 
 // a helper function to create peer easily.
 pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
@@ -393,18 +382,16 @@ pub fn is_sibling_regions(lhs: &metapb::Region, rhs: &metapb::Region) -> bool {
     false
 }
 
-impl ConfState {
-    pub fn from_region(region: &metapb::Region) -> ConfState {
-        let mut conf_state = ConfState::new();
-        for p in region.get_peers() {
-            if p.get_is_learner() {
-                conf_state.mut_learners().push(p.get_id());
-            } else {
-                conf_state.mut_nodes().push(p.get_id());
-            }
+pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
+    let mut conf_state = ConfState::new();
+    for p in region.get_peers() {
+        if p.get_is_learner() {
+            conf_state.mut_learners().push(p.get_id());
+        } else {
+            conf_state.mut_nodes().push(p.get_id());
         }
-        conf_state
     }
+    conf_state
 }
 
 #[cfg(test)]

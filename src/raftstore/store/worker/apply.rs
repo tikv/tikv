@@ -906,8 +906,10 @@ impl ApplyDelegate {
                     .with_label_values(&["add_peer", "all"])
                     .inc();
 
-                match util::find_mut_peer(&mut region, store_id) {
-                    Some(p) => if !p.get_is_learner() {
+                let mut exists = false;
+                if let Some(p) = util::find_mut_peer(&mut region, store_id) {
+                    exists = true;
+                    if !p.get_is_learner() {
                         error!(
                             "{} can't add duplicated peer {:?} to region {:?}",
                             self.tag, peer, self.region
@@ -919,8 +921,10 @@ impl ApplyDelegate {
                         ));
                     } else {
                         p.set_is_learner(false);
-                    },
-                    None => region.mut_peers().push(peer.clone()),
+                    }
+                }
+                if !exists {
+                    region.mut_peers().push(peer.clone());
                 }
 
                 PEER_ADMIN_CMD_COUNTER_VEC
@@ -936,7 +940,13 @@ impl ApplyDelegate {
                     .with_label_values(&["remove_peer", "all"])
                     .inc();
 
-                if !peer_exists && !learner_exists {
+                if let Some(peer) = util::remove_peer(&mut region, store_id) {
+                    if self.id == peer.get_id() {
+                        // Remove ourself, we will destroy all region data later.
+                        // So we need not to apply following logs.
+                        self.pending_remove = true;
+                    }
+                } else {
                     error!(
                         "{} remove missing peer {:?} from region {:?}",
                         self.tag, peer, self.region
@@ -946,18 +956,6 @@ impl ApplyDelegate {
                         peer,
                         self.region
                     ));
-                }
-
-                if self.id == peer.get_id() {
-                    // Remove ourself, we will destroy all region data later.
-                    // So we need not to apply following logs.
-                    self.pending_remove = true;
-                }
-
-                if peer_exists {
-                    util::remove_peer(&mut region, store_id).unwrap();
-                } else {
-                    util::remove_learner(&mut region, store_id).unwrap();
                 }
 
                 PEER_ADMIN_CMD_COUNTER_VEC
@@ -976,7 +974,8 @@ impl ApplyDelegate {
                     .with_label_values(&["add_learner", "all"])
                     .inc();
 
-                if peer_exists || learner_exists {
+                assert!(peer.get_is_learner());
+                if util::find_peer(&region, store_id).is_some() {
                     error!(
                         "{} can't add duplicated learner {:?} to region {:?}",
                         self.tag, peer, self.region
@@ -987,7 +986,7 @@ impl ApplyDelegate {
                         self.region
                     ));
                 }
-                region.mut_learners().push(peer.clone());
+                region.mut_peers().push(peer.clone());
 
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["add_learner", "success"])
