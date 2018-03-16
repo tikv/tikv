@@ -445,7 +445,7 @@ fn build_row_key(table_id: i64, id: i64) -> Vec<u8> {
 
 /// An example table for test purpose.
 pub struct ProductTable {
-    pub id: Column,
+    id: Column,
     pub name: Column,
     pub count: Column,
     pub table: Table,

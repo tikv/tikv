@@ -346,6 +346,7 @@ impl RaftCfConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
     #[serde(with = "config::recovery_mode_serde")] pub wal_recovery_mode: DBRecoveryMode,
+    pub import_mode: bool,
     pub wal_dir: String,
     pub wal_ttl_seconds: u64,
     pub wal_size_limit: ReadableSize,
@@ -367,7 +368,6 @@ pub struct DbConfig {
     pub writable_file_max_buffer_size: ReadableSize,
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
-    pub import_mode: bool,
     pub defaultcf: DefaultCfConfig,
     pub writecf: WriteCfConfig,
     pub lockcf: LockCfConfig,
@@ -377,6 +377,7 @@ pub struct DbConfig {
 impl Default for DbConfig {
     fn default() -> DbConfig {
         DbConfig {
+            import_mode: false,
             wal_recovery_mode: DBRecoveryMode::PointInTime,
             wal_dir: "".to_owned(),
             wal_ttl_seconds: 0,
@@ -399,7 +400,6 @@ impl Default for DbConfig {
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
-            import_mode: false,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
@@ -471,8 +471,8 @@ impl DbConfig {
             const DISABLED: i32 = i32::MAX;
             for opt in &mut opts {
                 // Disable compaction and rate limit.
-                opt.set_disable_auto_compactions(true);
                 opt.set_compaction_style(DBCompactionStyle::Universal);
+                opt.set_disable_auto_compactions(true);
                 opt.set_soft_pending_compaction_bytes_limit(0);
                 opt.set_hard_pending_compaction_bytes_limit(0);
                 opt.set_level_zero_stop_writes_trigger(DISABLED);
@@ -808,7 +808,7 @@ impl TiKvConfig {
         // Increate the number of threads.
         let cpu_num = sys_info::cpu_num().unwrap() as usize;
         self.import.num_threads = cmp::max(self.import.num_threads, cpu_num / 2);
-        self.import.max_import_jobs = cmp::min(cpu_num, 16);
+        self.import.max_import_jobs = cmp::max(self.import.max_import_jobs, cpu_num / 2);
         self.server.grpc_concurrency = cmp::max(self.server.grpc_concurrency, cpu_num / 2);
     }
 
