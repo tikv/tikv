@@ -29,19 +29,25 @@ use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::store::{self, keys, Config as StoreConfig, Engines, Msg, Peekable, SignificantMsg,
                        SnapManager, Store, StoreChannel, Transport};
 use super::Result;
+use import::SSTImporter;
 use server::Config as ServerConfig;
-use storage::{Config as StorageConfig, RaftKv, Storage};
+use storage::{self, Config as StorageConfig, RaftKv, Storage};
 use super::transport::RaftStoreRouter;
+use server::readpool::ReadPool;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
-pub fn create_raft_storage<S>(router: S, cfg: &StorageConfig) -> Result<Storage>
+pub fn create_raft_storage<S>(
+    router: S,
+    cfg: &StorageConfig,
+    read_pool: ReadPool<storage::ReadPoolContext>,
+) -> Result<Storage>
 where
     S: RaftStoreRouter + 'static,
 {
     let engine = Box::new(RaftKv::new(router));
-    let store = Storage::from_engine(engine, cfg)?;
+    let store = Storage::from_engine(engine, cfg, read_pool)?;
     Ok(store)
 }
 
@@ -128,6 +134,7 @@ where
         significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
         coprocessor_host: CoprocessorHost,
+        importer: Arc<SSTImporter>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -167,6 +174,7 @@ where
             significant_msg_receiver,
             pd_worker,
             coprocessor_host,
+            importer,
         )?;
         Ok(())
     }
@@ -318,6 +326,7 @@ where
         significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
         coprocessor_host: CoprocessorHost,
+        importer: Arc<SSTImporter>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -350,6 +359,7 @@ where
                 snap_mgr,
                 pd_worker,
                 coprocessor_host,
+                importer,
             ) {
                 Err(e) => panic!("construct store {} err {:?}", store_id, e),
                 Ok(s) => s,

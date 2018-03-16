@@ -1,7 +1,6 @@
 log-level = "debug"
 log-file = "foo"
-
-[readpool]
+[readpool.storage]
 high-concurrency = 1
 normal-concurrency = 3
 low-concurrency = 7
@@ -23,7 +22,9 @@ end-point-concurrency = 12
 end-point-max-tasks = 12
 end-point-stack-size = "12MB"
 end-point-recursion-limit = 100
+end-point-stream-channel-size = 16
 end-point-batch-row-limit = 64
+end-point-stream-batch-row-limit = 4096
 end-point-request-max-handle-duration = "12s"
 snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
@@ -68,7 +69,8 @@ raft-log-gc-size-limit = "1KB"
 split-region-check-tick-interval = "12s"
 region-split-check-diff = "6MB"
 region-compact-check-interval = "12s"
-region-compact-delete-keys-count = 1234
+region-compact-check-step = 1234
+region-compact-min-tombstones = 999
 pd-heartbeat-tick-interval = "12m"
 pd-store-heartbeat-tick-interval = "12s"
 snap-mgr-gc-tick-interval = "12m"
@@ -86,6 +88,8 @@ report-region-flow-interval = "12m"
 raft-store-max-leader-lease = "12s"
 right-derive-when-split = false
 allow-remove-leader = true
+merge-max-log-gap = 3
+merge-check-tick-interval = "11s"
 use-delete-range = true
 
 [coprocessor]

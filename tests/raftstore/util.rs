@@ -25,16 +25,17 @@ use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse,
                           Request, StatusCmdType, StatusRequest};
 use kvproto::pdpb::{ChangePeer, RegionHeartbeatResponse, TransferLeader};
-use kvproto::eraftpb::ConfChangeType;
+use raft::eraftpb::ConfChangeType;
 
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Config as ServerConfig;
+use tikv::server::readpool::Config as ReadPoolInstanceConfig;
 use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
 use tikv::util::escape;
 use tikv::util::rocksdb::{self, CompactionListener};
 use tikv::util::config::*;
-use tikv::config::TiKvConfig;
+use tikv::config::{ReadPoolConfig, TiKvConfig};
 use tikv::util::transport::SendCh;
 use tikv::raftstore::store::Msg as StoreMsg;
 
@@ -122,6 +123,12 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
     }
 }
 
+pub fn new_readpool_cfg() -> ReadPoolConfig {
+    ReadPoolConfig {
+        storage: ReadPoolInstanceConfig::default_for_test(),
+    }
+}
+
 pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
     TiKvConfig {
         storage: StorageConfig {
@@ -130,6 +137,7 @@ pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
         },
         server: new_server_config(cluster_id),
         raft_store: new_store_cfg(),
+        readpool: new_readpool_cfg(),
         ..TiKvConfig::default()
     }
 }
@@ -310,13 +318,13 @@ pub fn new_pd_add_learner_change_peer(
     Some(new_pd_change_peer(ConfChangeType::AddLearnerNode, peer))
 }
 
-pub fn new_pd_transfer_leader(peer: metapb::Peer) -> Option<RegionHeartbeatResponse> {
+pub fn new_pd_transfer_leader(peer: metapb::Peer) -> RegionHeartbeatResponse {
     let mut transfer_leader = TransferLeader::new();
     transfer_leader.set_peer(peer);
 
     let mut resp = RegionHeartbeatResponse::new();
     resp.set_transfer_leader(transfer_leader);
-    Some(resp)
+    resp
 }
 
 pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdResponse>) {
@@ -327,7 +335,9 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdRespons
     for req in cmd.get_requests() {
         match req.get_cmd_type() {
             CmdType::Get | CmdType::Snap => is_read = true,
-            CmdType::Put | CmdType::Delete | CmdType::DeleteRange => is_write = true,
+            CmdType::Put | CmdType::Delete | CmdType::DeleteRange | CmdType::IngestSST => {
+                is_write = true
+            }
             CmdType::Invalid | CmdType::Prewrite => panic!("Invalid RaftCmdRequest: {:?}", cmd),
         }
     }

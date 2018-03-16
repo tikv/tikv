@@ -17,7 +17,7 @@ use std::thread;
 
 use tikv::raftstore::store::*;
 use tikv::storage::CF_RAFT;
-use kvproto::eraftpb::ConfChangeType;
+use raft::eraftpb::ConfChangeType;
 use kvproto::raft_cmdpb::RaftResponseHeader;
 use kvproto::raft_serverpb::*;
 use kvproto::metapb;
@@ -35,7 +35,7 @@ use super::pd::TestPdClient;
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
 
@@ -156,7 +156,7 @@ fn new_conf_change_peer(store: &metapb::Store, pd_client: &Arc<TestPdClient>) ->
 fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     cluster.start();
 
@@ -329,7 +329,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     wait_till_reach_count(Arc::clone(&pd_client), region_id, 6);
 
     // it should remove extra replica.
-    pd_client.reset_rule();
+    pd_client.enable_default_operator();
     wait_till_reach_count(Arc::clone(&pd_client), region_id, 5);
 
     region = pd_client
@@ -342,7 +342,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     wait_till_reach_count(Arc::clone(&pd_client), region_id, 4);
 
     // it should add missing replica.
-    pd_client.reset_rule();
+    pd_client.enable_default_operator();
     wait_till_reach_count(Arc::clone(&pd_client), region_id, 5);
 }
 
@@ -363,7 +363,7 @@ fn test_server_auto_adjust_replica() {
 fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     // disable auto compact log.
     cluster.cfg.raft_store.raft_log_gc_threshold = 10000;
@@ -391,7 +391,7 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.stop_node(3);
 
-    pd_client.set_rule(box move |region, _| new_pd_remove_change_peer(region, new_peer(1, 1)));
+    pd_client.remove_peer(1, new_peer(1, 1));
 
     let epoch = cluster
         .pd_client
@@ -449,7 +449,7 @@ fn test_server_after_remove_itself() {
 fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
 
@@ -534,7 +534,7 @@ fn test_node_split_brain() {
 fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     let region_id = cluster.run_conf_change();
 
@@ -650,7 +650,7 @@ fn test_conf_change_remove_leader() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.allow_remove_leader = false;
     let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
     pd_client.must_add_peer(r1, new_peer(2, 2));
     pd_client.must_add_peer(r1, new_peer(3, 3));

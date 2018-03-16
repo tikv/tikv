@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt;
 use kvproto::kvrpcpb;
 
 #[derive(Debug, Copy, Clone)]
@@ -26,6 +27,16 @@ impl From<kvrpcpb::CommandPri> for Priority {
             kvrpcpb::CommandPri::High => Priority::High,
             kvrpcpb::CommandPri::Normal => Priority::Normal,
             kvrpcpb::CommandPri::Low => Priority::Low,
+        }
+    }
+}
+
+impl fmt::Display for Priority {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Priority::High => write!(f, "high"),
+            Priority::Normal => write!(f, "normal"),
+            Priority::Low => write!(f, "low"),
         }
     }
 }
