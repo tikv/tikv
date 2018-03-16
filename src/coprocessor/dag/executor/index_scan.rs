@@ -11,7 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::mem;
 use std::vec::IntoIter;
+use std::iter::Peekable;
 use byteorder::{BigEndian, ReadBytesExt};
 
 use kvproto::coprocessor::KeyRange;
@@ -32,7 +34,11 @@ pub struct IndexScanExecutor {
     desc: bool,
     col_ids: Vec<i64>,
     pk_col: Option<ColumnInfo>,
-    key_ranges: IntoIter<KeyRange>,
+    key_ranges: Peekable<IntoIter<KeyRange>>,
+    // The current `KeyRange` scanning on, used to build `scan_range`.
+    current_range: Option<KeyRange>,
+    // The `KeyRange` scaned between `start_scan` and `stop_scan`.
+    scan_range: KeyRange,
     scanner: Option<Scanner>,
     unique: bool,
     count: i64,
@@ -64,7 +70,9 @@ impl IndexScanExecutor {
             desc: desc,
             col_ids: col_ids,
             pk_col: pk_col,
-            key_ranges: key_ranges.into_iter(),
+            key_ranges: key_ranges.into_iter().peekable(),
+            current_range: None,
+            scan_range: KeyRange::default(),
             scanner: None,
             unique: unique,
             count: 0,
@@ -85,7 +93,9 @@ impl IndexScanExecutor {
             desc: false,
             col_ids: col_ids,
             pk_col: None,
-            key_ranges: key_ranges.into_iter(),
+            key_ranges: key_ranges.into_iter().peekable(),
+            current_range: None,
+            scan_range: KeyRange::default(),
             scanner: None,
             unique: false,
             count: 0,
@@ -130,13 +140,13 @@ impl IndexScanExecutor {
         Ok(Some(Row::new(handle, values)))
     }
 
-    fn get_row_from_point(&mut self, range: KeyRange) -> Result<Option<Row>> {
+    fn get_row_from_point(&mut self, mut range: KeyRange) -> Result<Option<Row>> {
         self.metrics.scan_counter.inc_point();
-        let key = range.get_start();
+        let key = range.take_start();
         let value = self.store
-            .get(&Key::from_raw(key), &mut self.metrics.cf_stats)?;
+            .get(&Key::from_raw(&key), &mut self.metrics.cf_stats)?;
         if let Some(value) = value {
-            return self.decode_index_key_value(key.to_vec(), value);
+            return self.decode_index_key_value(key, value);
         }
         Ok(None)
     }
@@ -160,6 +170,7 @@ impl Executor for IndexScanExecutor {
                 return Ok(Some(row));
             }
             if let Some(range) = self.key_ranges.next() {
+                self.current_range = Some(range.clone());
                 if self.is_point(&range) {
                     if let Some(row) = self.get_row_from_point(range)? {
                         self.count += 1;
@@ -180,6 +191,46 @@ impl Executor for IndexScanExecutor {
         }
     }
 
+    fn start_scan(&mut self) {
+        if let Some(range) = self.current_range.as_ref() {
+            if !is_point(range) {
+                let scanner = self.scanner.as_ref().unwrap();
+                return scanner.start_scan(&mut self.scan_range);
+            }
+        }
+
+        if let Some(range) = self.key_ranges.peek() {
+            if !self.desc {
+                self.scan_range.set_start(range.get_start().to_owned());
+            } else {
+                self.scan_range.set_end(range.get_end().to_owned());
+            }
+        }
+    }
+
+    fn stop_scan(&mut self) -> Option<KeyRange> {
+        let mut ret_range = mem::replace(&mut self.scan_range, KeyRange::default());
+        match self.current_range.as_ref() {
+            Some(range) => {
+                if !is_point(range) {
+                    let scanner = self.scanner.as_ref().unwrap();
+                    if scanner.stop_scan(&mut ret_range) {
+                        return Some(ret_range);
+                    }
+                }
+                if !self.desc {
+                    ret_range.set_end(range.get_end().to_owned());
+                } else {
+                    ret_range.set_start(range.get_start().to_owned());
+                }
+            }
+            // `stop_scan` will be called only if we get some data from
+            // `current_range` so that it's unreachable.
+            None => unreachable!(),
+        }
+        Some(ret_range)
+    }
+
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
         counts.push(self.count);
         self.count = 0;
@@ -187,8 +238,8 @@ impl Executor for IndexScanExecutor {
 
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         metrics.merge(&mut self.metrics);
-        if let Some(scanner) = self.scanner.take() {
-            scanner.collect_statistics_into(&mut metrics.cf_stats);
+        if let Some(scanner) = self.scanner.as_mut() {
+            scanner.collect_statistics_into(&mut self.metrics.cf_stats);
         }
         if self.first_collect {
             metrics.executor_count.index_scan += 1;
