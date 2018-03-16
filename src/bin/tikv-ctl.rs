@@ -958,7 +958,6 @@ fn main() {
                         .help("PD endpoints"),
                 ),
         )
-        .subcommand(SubCommand::with_name("bad-regions").about("get all regions with corrupt raft"))
         .subcommand(
             SubCommand::with_name("metrics")
                 .about("print the metrics")
