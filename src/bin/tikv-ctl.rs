@@ -522,7 +522,7 @@ impl DebugExecutor for DebugClient {
     fn dump_metrics(&self, tags: Vec<&str>) {
         let mut req = GetMetricsRequest::new();
         req.set_all(true);
-        if tags.len() == 1 && tags[1] == METRICS_PROMETHEUS {
+        if tags.len() == 1 && tags[0] == METRICS_PROMETHEUS {
             req.set_all(false);
         }
         let mut resp = self.get_metrics(&req)
