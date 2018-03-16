@@ -17,6 +17,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::error;
 use std::io::Error as IoError;
 use std::u64;
+use std::cmp;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 use kvproto::errorpb;
 use util::collections::HashMap;
@@ -961,6 +962,38 @@ impl Storage {
         Ok(())
     }
 
+    pub fn async_raw_delete_range(
+        &self,
+        ctx: Context,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        if start_key.len() > self.max_key_size || end_key.len() > self.max_key_size {
+            callback(Err(Error::KeyTooLarge(
+                cmp::max(start_key.len(), end_key.len()),
+                self.max_key_size,
+            )));
+            return Ok(());
+        }
+
+        self.engine.async_write(
+            &ctx,
+            vec![
+                Modify::DeleteRange(
+                    CF_DEFAULT,
+                    Key::from_encoded(start_key),
+                    Key::from_encoded(end_key),
+                ),
+            ],
+            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+        )?;
+        RAWKV_COMMAND_COUNTER_VEC
+            .with_label_values(&["raw_delete_range"])
+            .inc();
+        Ok(())
+    }
+
     fn raw_scan(
         snapshot: Box<Snapshot>,
         start_key: &Key,
@@ -1801,5 +1834,100 @@ mod tests {
                 .wait(),
         );
         storage.stop().unwrap();
+    }
+
+    #[test]
+    fn test_raw_delete_range() {
+        let read_pool = new_read_pool();
+        let config = Config::default();
+        let mut storage = Storage::new(&config, read_pool).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+
+        let test_data = [
+            (b"a", b"001"),
+            (b"b", b"002"),
+            (b"c", b"003"),
+            (b"d", b"004"),
+            (b"e", b"005"),
+        ];
+
+        // Write some key-value pairs to the db
+        for kv in &test_data {
+            storage
+                .async_raw_put(
+                    Context::new(),
+                    kv.0.to_vec(),
+                    kv.1.to_vec(),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+        }
+
+        expect_value(
+            b"004".to_vec(),
+            storage.async_raw_get(Context::new(), b"d".to_vec()).wait(),
+        );
+
+        // Delete ["d", "e")
+        storage
+            .async_raw_delete_range(
+                Context::new(),
+                b"d".to_vec(),
+                b"e".to_vec(),
+                expect_ok_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Assert key "d" has gone
+        expect_value(
+            b"003".to_vec(),
+            storage.async_raw_get(Context::new(), b"c".to_vec()).wait(),
+        );
+        expect_none(storage.async_raw_get(Context::new(), b"d".to_vec()).wait());
+        expect_value(
+            b"005".to_vec(),
+            storage.async_raw_get(Context::new(), b"e".to_vec()).wait(),
+        );
+
+        // Delete ["aa", "ab")
+        storage
+            .async_raw_delete_range(
+                Context::new(),
+                b"aa".to_vec(),
+                b"ab".to_vec(),
+                expect_ok_callback(tx.clone(), 2),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Assert nothing happened
+        expect_value(
+            b"001".to_vec(),
+            storage.async_raw_get(Context::new(), b"a".to_vec()).wait(),
+        );
+        expect_value(
+            b"002".to_vec(),
+            storage.async_raw_get(Context::new(), b"b".to_vec()).wait(),
+        );
+
+        // Delete all
+        storage
+            .async_raw_delete_range(
+                Context::new(),
+                b"a".to_vec(),
+                b"z".to_vec(),
+                expect_ok_callback(tx, 3),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Assert now no key remains
+        for kv in &test_data {
+            expect_none(storage.async_raw_get(Context::new(), kv.0.to_vec()).wait());
+        }
+
+        rx.recv().unwrap();
     }
 }
