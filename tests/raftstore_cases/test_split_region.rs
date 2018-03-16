@@ -747,8 +747,10 @@ fn test_server_half_split_region() {
 }
 
 fn test_half_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
+    // length of each key+value
     let item_len = 74;
-    cluster.cfg.coprocessor.half_split_bucket_size = ReadableSize(item_len);
+    // make bucket's size to item_len, which means one row one bucket
+    cluster.cfg.coprocessor.region_max_size = ReadableSize(item_len) * 1024;
     let mut range = 1..;
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);

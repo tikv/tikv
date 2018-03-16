@@ -35,7 +35,7 @@ pub struct Status {
     table: Option<TableStatus>,
     // For SizeCheckObserver
     size: Option<SizeStatus>,
-    // For HalfCheckObserver TODO:
+    // For HalfCheckObserver
     half: Option<HalfStatus>,
     // Whether it's called by auto_split
     auto_split: bool,
@@ -47,6 +47,7 @@ impl Status {
         status.auto_split = auto_split;
         status
     }
+
     pub fn skip(&self) -> bool {
         self.table.is_none() && self.size.is_none() && self.half.is_none()
     }

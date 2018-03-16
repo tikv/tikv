@@ -367,7 +367,6 @@ fn test_serde_custom_tikv_config() {
         split_region_on_table: true,
         region_max_size: ReadableSize::mb(12),
         region_split_size: ReadableSize::mb(12),
-        half_split_bucket_size: ReadableSize::mb(1),
     };
     value.security = SecurityConfig {
         ca_path: "invalid path".to_owned(),

@@ -135,7 +135,7 @@ impl CoprocessorHost {
 
         registry.register_split_check_observer(
             HALF_SPLIT_OBSERVER_PRIORITY,
-            Box::new(HalfCheckObserver::new(cfg.half_split_bucket_size.0)),
+            Box::new(HalfCheckObserver::new(cfg.region_max_size.0)),
         );
         if cfg.split_region_on_table {
             registry.register_split_check_observer(

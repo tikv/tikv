@@ -171,8 +171,6 @@
 # bit smaller.
 # region-max-size = "144MB"
 # region-split-size = "96MB"
-# Bucket's size in half split check
-# half-split-bucket-size = "1MB"
 
 [rocksdb]
 # Maximum number of concurrent background jobs (compactions and flushes)

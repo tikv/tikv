@@ -13,10 +13,14 @@
 
 use rocksdb::DB;
 
+use util::config::ReadableSize;
+
 use super::super::{Coprocessor, ObserverContext, SplitCheckObserver};
 use super::Status;
 
 const BUCKET_NUMBER_LIMIT: usize = 1024;
+const BUCKET_SIZE_LIMIT_MB: u64 = 512;
+
 #[derive(Default)]
 pub struct HalfStatus {
     buckets: Vec<Vec<u8>>,
@@ -69,7 +73,14 @@ pub struct HalfCheckObserver {
 }
 
 impl HalfCheckObserver {
-    pub fn new(half_split_bucket_size: u64) -> HalfCheckObserver {
+    pub fn new(region_size_limit: u64) -> HalfCheckObserver {
+        let mut half_split_bucket_size = region_size_limit / BUCKET_NUMBER_LIMIT as u64;
+        let bucket_size_limit = ReadableSize::mb(BUCKET_SIZE_LIMIT_MB).0;
+        if half_split_bucket_size == 0 {
+            half_split_bucket_size = 1;
+        } else if half_split_bucket_size > bucket_size_limit {
+            half_split_bucket_size = bucket_size_limit;
+        }
         HalfCheckObserver {
             half_split_bucket_size: half_split_bucket_size,
         }
@@ -146,7 +157,7 @@ mod tests {
         let (tx, rx) = mpsc::sync_channel(100);
         let ch = RetryableSendCh::new(tx, "test-split");
         let mut cfg = Config::default();
-        cfg.half_split_bucket_size = ReadableSize(1);
+        cfg.region_max_size = ReadableSize(BUCKET_NUMBER_LIMIT as u64);
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
             ch.clone(),
