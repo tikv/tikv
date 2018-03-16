@@ -27,16 +27,14 @@ use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 
 use kvproto::metapb;
+use kvproto::pdpb::StoreStats;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState,
                              RegionLocalState};
-use kvproto::importpb::SSTMeta;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse,
                           StatusCmdType, StatusResponse};
+use kvproto::importpb::SSTMeta;
+use raft::{self, SnapshotStatus, INVALID_INDEX};
 use raft::eraftpb::{ConfChangeType, MessageType};
-use kvproto::pdpb::StoreStats;
-use util::{escape, rocksdb};
-use util::time::{duration_to_sec, SlowTimer};
-use pd::{PdClient, PdRunner, PdTask};
 
 use util::{escape, rocksdb};
 use util::time::{duration_to_sec, SlowTimer};
@@ -48,14 +46,10 @@ use util::rocksdb::{CompactedEvent, CompactionListener};
 use util::sys as util_sys;
 use pd::{PdClient, PdRunner, PdTask};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use raft::{self, SnapshotStatus, INVALID_INDEX};
 use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 
-use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
-                    ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
-                    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
 use import::SSTImporter;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, CleanupSSTTask,
                     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,

@@ -502,7 +502,6 @@ impl PeerStorage {
 
     pub fn initial_state(&self) -> raft::Result<RaftState> {
         let hard_state = self.raft_state.get_hard_state().clone();
-        let mut conf_state = ConfState::new();
         if hard_state == HardState::new() {
             assert!(
                 !self.is_initialized(),
@@ -514,16 +513,12 @@ impl PeerStorage {
 
             return Ok(RaftState {
                 hard_state: hard_state,
-                conf_state: conf_state,
+                conf_state: ConfState::default(),
             });
         }
 
-        for p in self.region.get_peers() {
-            conf_state.mut_nodes().push(p.get_id());
-        }
-        for p in self.region.get_learners() {
-            conf_state.mut_learners().push(p.get_id());
-        }
+        let mut conf_state = ConfState::new();
+        let conf_state = ConfState::from_region(&self.region);
 
         Ok(RaftState {
             hard_state: hard_state,
@@ -1280,14 +1275,7 @@ pub fn do_snapshot(
     snapshot.mut_metadata().set_index(key.idx);
     snapshot.mut_metadata().set_term(key.term);
 
-    let mut conf_state = ConfState::new();
-    for p in state.get_region().get_peers() {
-        conf_state.mut_nodes().push(p.get_id());
-    }
-    for p in state.get_region().get_learners() {
-        conf_state.mut_learners().push(p.get_id());
-    }
-
+    let conf_state = ConfState::from_region(state.get_region());
     snapshot.mut_metadata().set_conf_state(conf_state);
 
     let mut s = mgr.get_snapshot_for_building(&key, snap)?;

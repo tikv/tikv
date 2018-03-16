@@ -897,8 +897,6 @@ impl ApplyDelegate {
         );
 
         // TODO: we should need more check, like peer validation, duplicated id, etc.
-        let peer_exists = util::find_voter(&region, store_id).is_some();
-        let learner_exists = util::find_learner(&region, store_id).is_some();
         let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
         region.mut_region_epoch().set_conf_ver(conf_ver);
 
@@ -908,22 +906,21 @@ impl ApplyDelegate {
                     .with_label_values(&["add_peer", "all"])
                     .inc();
 
-                if peer_exists {
-                    error!(
-                        "{} can't add duplicated peer {:?} to region {:?}",
-                        self.tag, peer, self.region
-                    );
-                    return Err(box_err!(
-                        "can't add duplicated peer {:?} to region {:?}",
-                        peer,
-                        self.region
-                    ));
-                }
-
-                // TODO: Do we allow adding peer in same node?
-                region.mut_peers().push(peer.clone());
-                if learner_exists {
-                    util::remove_learner(&mut region, store_id).unwrap();
+                match util::find_mut_peer(&mut region, store_id) {
+                    Some(p) => if !p.get_is_learner() {
+                        error!(
+                            "{} can't add duplicated peer {:?} to region {:?}",
+                            self.tag, peer, self.region
+                        );
+                        return Err(box_err!(
+                            "can't add duplicated peer {:?} to region {:?}",
+                            peer,
+                            self.region
+                        ));
+                    } else {
+                        p.set_is_learner(false);
+                    },
+                    None => region.mut_peers().push(peer.clone()),
                 }
 
                 PEER_ADMIN_CMD_COUNTER_VEC
