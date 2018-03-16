@@ -57,7 +57,7 @@ pub struct TopNExecutor {
     related_cols_offset: Vec<usize>, // offset of related columns
     iter: Option<IntoIter<SortRow>>,
     ctx: Arc<EvalContext>,
-    src: Box<Executor>,
+    src: Box<Executor + Send>,
     limit: usize,
     count: i64,
     first_collect: bool,
@@ -68,7 +68,7 @@ impl TopNExecutor {
         mut meta: TopN,
         ctx: Arc<EvalContext>,
         columns_info: Arc<Vec<ColumnInfo>>,
-        src: Box<Executor>,
+        src: Box<Executor + Send>,
     ) -> Result<TopNExecutor> {
         let order_by = meta.take_order_by().into_vec();
 

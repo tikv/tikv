@@ -23,12 +23,12 @@ use super::ExecutorMetrics;
 pub struct LimitExecutor<'a> {
     limit: u64,
     cursor: u64,
-    src: Box<Executor + 'a>,
+    src: Box<Executor + Send + 'a>,
     first_collect: bool,
 }
 
 impl<'a> LimitExecutor<'a> {
-    pub fn new(limit: Limit, src: Box<Executor + 'a>) -> LimitExecutor {
+    pub fn new(limit: Limit, src: Box<Executor + Send + 'a>) -> LimitExecutor {
         LimitExecutor {
             limit: limit.get_limit(),
             cursor: 0,

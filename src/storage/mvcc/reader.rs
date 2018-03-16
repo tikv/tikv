@@ -68,6 +68,11 @@ impl MvccReader {
         &self.statistics
     }
 
+    pub fn collect_statistics_into(&mut self, stats: &mut Statistics) {
+        stats.add(&self.statistics);
+        self.statistics = Statistics::default();
+    }
+
     pub fn set_key_only(&mut self, key_only: bool) {
         self.key_only = key_only;
     }
@@ -598,7 +603,6 @@ mod tests {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(Box::new(snap), start_ts, None, IsolationLevel::SI, true);
             txn.prewrite(m, pk, &Options::default()).unwrap();
-
             self.write(txn.into_modifies());
         }
 
