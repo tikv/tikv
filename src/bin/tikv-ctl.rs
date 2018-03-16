@@ -534,7 +534,9 @@ impl DebugExecutor for DebugClient {
                 METRICS_ROCKSDB_RAFT => resp.take_rocksdb_raft(),
                 METRICS_JEMALLOC => resp.take_jemalloc(),
                 METRICS_PROMETHEUS => resp.take_prometheus(),
-                _ => unreachable!(),
+                _ => String::from(
+                    "unsupported tag, should be one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv",
+                ),
             };
             println!("{}", metrics);
         }
@@ -972,7 +974,7 @@ fn main() {
                     .value_delimiter(",")
                     .default_value(METRICS_PROMETHEUS)
                     .help(
-                        "set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not specified, print all",
+                        "set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not specified, print prometheus",
                     ),
             ),)
             .subcommand(
