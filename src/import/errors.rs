@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::io::Error as IoError;
+use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::result;
 
@@ -19,6 +20,7 @@ use futures::sync::oneshot::Canceled;
 use grpc::Error as GrpcError;
 use uuid::ParseError;
 
+use raftstore::errors::Error as RaftStoreError;
 use util::codec::Error as CodecError;
 
 quick_error! {
@@ -52,6 +54,16 @@ quick_error! {
             from()
             display("RocksDB {}", msg)
         }
+        RaftStore(err: RaftStoreError) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        ParseIntError(err: ParseIntError) {
+            from()
+            cause(err)
+            description(err.description())
+        }
         FileExists(path: PathBuf) {
             display("File {:?} exists", path)
         }
@@ -60,6 +72,9 @@ quick_error! {
         }
         FileCorrupted(path: PathBuf, reason: String) {
             display("File {:?} corrupted: {}", path, reason)
+        }
+        InvalidSSTPath(path: PathBuf) {
+            display("Invalid SST path {:?}", path)
         }
         TokenExists(token: usize) {
             display("Token {} exists", token)
