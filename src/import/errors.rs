@@ -18,8 +18,11 @@ use std::result;
 
 use futures::sync::oneshot::Canceled;
 use grpc::Error as GrpcError;
-use uuid::ParseError;
+use uuid::{ParseError, Uuid};
+use kvproto::errorpb;
+use kvproto::metapb::*;
 
+use pd::{Error as PdError, RegionInfo};
 use raftstore::errors::Error as RaftStoreError;
 use util::codec::Error as CodecError;
 
@@ -64,6 +67,17 @@ quick_error! {
             cause(err)
             description(err.description())
         }
+        PdRPC(err: PdError) {
+            from()
+                cause(err)
+                description(err.description())
+        }
+        TikvRPC(err: errorpb::Error) {
+            display("TikvRPC {:?}", err)
+        }
+        NotLeader(new_leader: Option<Peer>) {}
+        StaleEpoch(new_regions: Vec<Region>) {}
+        UpdateRegion(new_region: RegionInfo) {}
         FileExists(path: PathBuf) {
             display("File {:?} exists", path)
         }
@@ -81,6 +95,39 @@ quick_error! {
         }
         TokenNotFound(token: usize) {
             display("Token {} not found", token)
+        }
+        EngineInUse(uuid: Uuid) {
+            display("Engine {} is in use", uuid)
+        }
+        EngineNotFound(uuid: Uuid) {
+            display("Engine {} not found", uuid)
+        }
+        ImportJobFailed(tag: String) {
+            display("{}", tag)
+        }
+        ImportSSTJobFailed(tag: String) {
+            display("{}", tag)
+        }
+        PrepareRangeJobFailed(tag: String) {
+            display("{}", tag)
+        }
+    }
+}
+
+impl From<errorpb::Error> for Error {
+    fn from(mut err: errorpb::Error) -> Self {
+        if err.has_not_leader() {
+            let mut error = err.take_not_leader();
+            if error.has_leader() {
+                Error::NotLeader(Some(error.take_leader()))
+            } else {
+                Error::NotLeader(None)
+            }
+        } else if err.has_stale_epoch() {
+            let mut error = err.take_stale_epoch();
+            Error::StaleEpoch(error.take_new_regions().to_vec())
+        } else {
+            Error::TikvRPC(err)
         }
     }
 }

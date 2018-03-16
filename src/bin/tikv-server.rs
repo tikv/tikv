@@ -72,7 +72,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
-use tikv::import::{ImportSSTService, SSTImporter};
+use tikv::import::{ImportSSTService, ImportServer, SSTImporter};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -283,7 +283,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     server
         .start(server_cfg, security_mgr)
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
-    signal_handler::handle_signal(engines);
+    signal_handler::handle_signal(Some(engines));
 
     // Stop.
     server
@@ -297,6 +297,15 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     if let Some(Err(e)) = worker.stop().map(|j| j.join()) {
         info!("ignore failure when stopping resolver: {:?}", e);
     }
+}
+
+fn run_import_server(cfg: &TiKvConfig, client: RpcClient) {
+    let mut server = ImportServer::new(cfg, Arc::new(client));
+    server.start();
+    info!("import server started");
+    signal_handler::handle_signal(None);
+    server.shutdown();
+    info!("import server shutdown");
 }
 
 fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches) {
@@ -348,6 +357,10 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
             fatal!("invalid capacity: {}", e);
         });
         config.raft_store.capacity = capacity;
+    }
+
+    if matches.is_present("import-mode") || matches.is_present("import-server") {
+        config.tune_for_import_mode();
     }
 }
 
@@ -476,6 +489,16 @@ fn main() {
                 .long("print-sample-config")
                 .help("Print a sample config to stdout"),
         )
+        .arg(
+            Arg::with_name("import-mode")
+                .long("import-mode")
+                .help("Run in import mode"),
+        )
+        .arg(
+            Arg::with_name("import-server")
+                .long("import-server")
+                .help("Run as an import server"),
+        )
         .get_matches();
 
     if matches.is_present("print-sample-config") {
@@ -532,6 +555,12 @@ fn main() {
     }
     config.server.cluster_id = cluster_id;
     info!("connect to PD cluster {}", cluster_id);
+
+    // Run as an import server.
+    if matches.is_present("import-server") {
+        run_import_server(&config, pd_client);
+        return;
+    }
 
     let _m = Monitor::default();
     run_raft_server(pd_client, &config, security_mgr);

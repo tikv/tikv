@@ -67,7 +67,7 @@ impl RegionStat {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RegionInfo {
     pub region: metapb::Region,
     pub leader: Option<metapb::Peer>,
