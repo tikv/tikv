@@ -194,7 +194,7 @@ pub struct Peer {
 
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
-    pub peer_pending_after: Vec<(u64, Instant)>,
+    pub peer_pending_after: RefCell<Vec<(u64, Instant)>>,
 
     coprocessor_host: Arc<CoprocessorHost>,
     /// an inaccurate difference in region size since last reset.
@@ -320,7 +320,7 @@ impl Peer {
             pending_reads: Default::default(),
             peer_cache: RefCell::new(peer_cache),
             peer_heartbeats: FlatMap::default(),
-            peer_pending_after: vec![],
+            peer_pending_after: RefCell::new(vec![]),
             coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
             delete_keys_hint: 0,
@@ -582,6 +582,7 @@ impl Peer {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
         let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
+        let mut peer_pending_after = self.peer_pending_after.borrow_mut();
         for (id, progress) in status.progress {
             if id == self.peer.get_id() {
                 continue;
@@ -589,6 +590,9 @@ impl Peer {
             if progress.matched < truncated_idx {
                 if let Some(p) = self.get_peer_from_cache(id) {
                     pending_peers.push(p);
+                    if !peer_pending_after.iter().any(|&(pid, _)| pid == id) {
+                        peer_pending_after.push((id, Instant::now()));
+                    }
                 }
             }
         }
@@ -596,21 +600,22 @@ impl Peer {
     }
 
     pub fn any_new_peer_catch_up(&mut self, peer_id: u64) -> bool {
-        if self.peer_pending_after.is_empty() {
+        let mut peer_pending_after = self.peer_pending_after.borrow_mut();
+        if peer_pending_after.is_empty() {
             return false;
         }
         if !self.is_leader() {
-            self.peer_pending_after.clear();
+            peer_pending_after.clear();
             return false;
         }
-        for i in 0..self.peer_pending_after.len() {
-            if self.peer_pending_after[i].0 != peer_id {
+        for i in 0..peer_pending_after.len() {
+            if peer_pending_after[i].0 != peer_id {
                 continue;
             }
             let truncated_idx = self.raft_group.get_store().truncated_index();
             if let Some(progress) = self.raft_group.raft.prs().get(peer_id) {
                 if progress.matched >= truncated_idx {
-                    let (_, pending_after) = self.peer_pending_after.swap_remove(i);
+                    let (_, pending_after) = peer_pending_after.swap_remove(i);
                     let elapsed = duration_to_sec(pending_after.elapsed());
                     info!(
                         "{} peer {} has caugth up logs, elapsed: {}",
