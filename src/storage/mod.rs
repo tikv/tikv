@@ -1797,14 +1797,16 @@ mod tests {
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
 
-        // Write some key-value pairs to the db
-        for kv in &[
+        let test_data = [
             (b"a", b"001"),
             (b"b", b"002"),
             (b"c", b"003"),
             (b"d", b"004"),
             (b"e", b"005"),
-        ] {
+        ];
+
+        // Write some key-value pairs to the db
+        for kv in &test_data {
             storage
                 .async_raw_put(
                     Context::new(),
@@ -1875,8 +1877,8 @@ mod tests {
         rx.recv().unwrap();
 
         // Assert now no key remains
-        for key in &[b"a", b"b", b"c", b"d", b"e"] {
-            expect_get_none(storage.async_raw_get(Context::new(), key.to_vec()).wait());
+        for kv in &test_data {
+            expect_get_none(storage.async_raw_get(Context::new(), kv.0.to_vec()).wait());
         }
 
         rx.recv().unwrap();
