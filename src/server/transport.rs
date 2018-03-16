@@ -221,6 +221,10 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         self.resolve(store_id, msg);
     }
 
+    // TODO: remove allow unused mut.
+    // Compiler warns `mut addr ` and `mut transport_on_resolve_fp`, when we enable
+    // the `no-fail` feature.
+    #[allow(unused_mut)]
     fn resolve(&self, store_id: u64, msg: RaftMessage) {
         let trans = self.clone();
         let msg1 = msg.clone();
