@@ -85,8 +85,7 @@ git = "https://github.com/huachaohuang/kvproto.git"
 branch = "import-kv"
 
 [dependencies.tipb]
-git = "https://github.com/huachaohuang/tipb.git"
-branch = "checksum"
+git = "https://github.com/pingcap/tipb.git"
 
 [dependencies.prometheus]
 version = "0.3"
