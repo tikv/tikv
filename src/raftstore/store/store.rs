@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::time::{Duration, Instant};
-use std::{cmp, mem, thread, u64};
+use std::{cmp, thread, u64};
 
 use rocksdb::{CompactionJobInfo, WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
@@ -136,7 +136,7 @@ pub struct Store<T, C: 'static> {
 
     // region_id -> peers
     region_peers: HashMap<u64, Peer>,
-    merge_states: Vec<metapb::Region>,
+    merging_regions: Option<Vec<metapb::Region>>,
     pending_raft_groups: HashSet<u64>,
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
@@ -222,7 +222,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             sendch: sendch,
             significant_msg_receiver: ch.significant_msg_receiver,
             region_peers: HashMap::default(),
-            merge_states: vec![],
+            merging_regions: Some(vec![]),
             pending_raft_groups: HashSet::default(),
             split_check_worker: Worker::new("split check worker"),
             region_worker: Worker::new("snapshot worker"),
@@ -1433,7 +1433,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 self.store_id()
             );
         }
-        self.merge_states
+        self.merging_regions
+            .as_mut()
+            .unwrap()
             .retain(|r| r.get_id() != p.region().get_id());
     }
 
@@ -1759,8 +1761,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_check_merge(&mut self, event_loop: &mut EventLoop<Self>) {
-        let merge_states = mem::replace(&mut self.merge_states, vec![]);
-        for region in &merge_states {
+        let merging_regions = self.merging_regions.take().unwrap();
+        for region in &merging_regions {
             if let Err(e) = self.schedule_merge(region) {
                 info!(
                     "[region {}] failed to schedule merge, rollback: {:?}",
@@ -1770,7 +1772,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 self.rollback_merge(region);
             }
         }
-        self.merge_states = merge_states;
+        self.merging_regions = Some(merging_regions);
         self.register_merge_check_tick(event_loop);
     }
 
@@ -1789,7 +1791,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             );
             self.rollback_merge(&region);
         }
-        self.merge_states.push(region);
+        self.merging_regions.as_mut().unwrap().push(region);
     }
 
     fn on_ready_commit_merge(&mut self, region: metapb::Region, source: metapb::Region) {
@@ -1834,7 +1836,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     ) {
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         let pending_commit = peer.pending_merge.as_ref().unwrap().get_commit();
-        self.merge_states.retain(|r| {
+        self.merging_regions.as_mut().unwrap().retain(|r| {
             if r.get_id() != region_id {
                 return true;
             }
@@ -1981,7 +1983,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if !util::is_sibling_regions(target_region, region) {
                 return Err(box_err!("regions are not sibling, skip proposing."));
             }
-            if !util::region_on_same_store(target_region, region) {
+            if !util::region_on_same_stores(target_region, region) {
                 return Err(box_err!(
                     "peers doesn't match {:?} != {:?}, reject merge",
                     region.get_peers(),
@@ -2006,7 +2008,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 region
             );
             assert!(
-                util::region_on_same_store(source_region, region),
+                util::region_on_same_stores(source_region, region),
                 "peers not matched: {:?} {:?}",
                 source_region,
                 region

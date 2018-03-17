@@ -1382,6 +1382,7 @@ impl Peer {
                 | AdminCmdType::InvalidAdmin => continue,
                 _ => {}
             }
+            // Any command that can change epoch or log gap should be rejected.
             return Err(box_err!(
                 "log gap contains admin request {:?}, skip merging.",
                 cmd_type
