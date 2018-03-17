@@ -311,7 +311,7 @@ mod test {
     }
 
     #[test]
-    fn test_snapshot_store_get_multiple_versions() {
+    fn test_snapshot_store_get_with_multi_rollback() {
         let mut store = TestStore::new(1);
         let k = b"k";
         let (v1, v2, v3, v4) = (b"v1", b"v2", b"v3", b"v4");
