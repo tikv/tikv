@@ -458,6 +458,7 @@ fn process_read(
                 None,
                 None,
                 ctx.get_isolation_level(),
+                true,
             );
             let res = match find_mvcc_infos_by_key(&mut reader, key, u64::MAX) {
                 Ok((lock, writes, values)) => ProcessResult::MvccKey {
@@ -480,6 +481,7 @@ fn process_read(
                 None,
                 None,
                 ctx.get_isolation_level(),
+                false,
             );
             let res = match reader.seek_ts(start_ts).map_err(StorageError::from) {
                 Err(e) => ProcessResult::Failed { err: e },
@@ -518,6 +520,7 @@ fn process_read(
                 None,
                 None,
                 ctx.get_isolation_level(),
+                false,
             );
             let res = reader
                 .scan_lock(start_key.take(), |lock| lock.ts <= max_ts, limit)
@@ -556,6 +559,7 @@ fn process_read(
                 None,
                 None,
                 ctx.get_isolation_level(),
+                false,
             );
             let res = reader
                 .scan_lock(
@@ -603,6 +607,7 @@ fn process_read(
                 None,
                 None,
                 ctx.get_isolation_level(),
+                false,
             );
             // scan_key is used as start_key here,and Range start gc with scan_key=none.
             let is_range_start_gc = scan_key.is_none();

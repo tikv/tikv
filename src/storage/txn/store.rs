@@ -46,6 +46,7 @@ impl SnapshotStore {
             None,
             None,
             self.isolation_level,
+            true,
         );
         let v = reader.get(key, self.start_ts)?;
         statistics.add(reader.get_statistics());
@@ -65,6 +66,7 @@ impl SnapshotStore {
             None,
             None,
             self.isolation_level,
+            false,
         );
         let mut results = Vec::with_capacity(keys.len());
         for k in keys {
@@ -90,6 +92,7 @@ impl SnapshotStore {
             lower_bound,
             upper_bound,
             self.isolation_level,
+            false,
         );
         reader.set_key_only(key_only);
         Ok(StoreScanner {
