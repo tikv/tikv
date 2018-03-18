@@ -12,6 +12,8 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::time::Duration;
+use std::thread;
 
 use uuid::Uuid;
 use futures::{stream, Future, Stream};
@@ -29,9 +31,13 @@ use tikv::import::test_helpers::*;
 use raftstore::server::*;
 use raftstore::cluster::Cluster;
 
+const CLEANUP_SST_MILLIS: u64 = 10;
+
 fn new_cluster() -> (Cluster<ServerCluster>, Context) {
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
+    let cleanup_interval = Duration::from_millis(CLEANUP_SST_MILLIS);
+    cluster.cfg.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
     cluster.run();
 
     let region_id = 1;
@@ -135,6 +141,36 @@ fn test_ingest_sst() {
     }
 
     // Upload the same file again to check if the ingested file has been deleted.
+    send_upload_sst(&import, &upload).unwrap();
+}
+
+#[test]
+fn test_cleanup_sst() {
+    let (mut cluster, ctx, _, import) = new_cluster_and_tikv_import_client();
+
+    let temp_dir = TempDir::new("test_cleanup_sst").unwrap();
+
+    let sst_path = temp_dir.path().join("test.sst");
+    let sst_range = (0, 100);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+
+    let mut upload = UploadRequest::new();
+    upload.set_meta(meta);
+    upload.set_data(data);
+    send_upload_sst(&import, &upload).unwrap();
+
+    // Can not upload the same file when it exists.
+    assert!(send_upload_sst(&import, &upload).is_err());
+
+    // The uploaded SST should be deleted if the region split.
+    let region = cluster.get_region(b"a");
+    cluster.must_split(&region, b"b");
+
+    thread::sleep(Duration::from_millis(CLEANUP_SST_MILLIS * 2));
+
+    // If we can upload the same file, it means the previous file has been deleted.
     send_upload_sst(&import, &upload).unwrap();
 }
 
