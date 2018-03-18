@@ -339,6 +339,26 @@ impl Debugger {
                 None => Err(Error::NotFound("No store ident key".to_owned())),
             })
     }
+
+    pub fn modify_rocksdb_config(
+        &self,
+        db: DBType,
+        cf: &str,
+        config_name: &str,
+        config_value: &str,
+    ) -> Result<()> {
+        let rocksdb = self.get_db_from_type(db)?;
+        let mut opt = Vec::new();
+        opt.push((config_name, config_value));
+        if cf.len() > 0 {
+            validate_db_and_cf(db, cf)?;
+            let handle = box_try!(get_cf_handle(rocksdb, cf));
+            box_try!(rocksdb.set_options_cf(handle, &opt));
+        } else {
+            box_try!(rocksdb.set_db_options(&opt));
+        }
+        Ok(())
+    }
 }
 
 pub struct MvccInfoIterator {
@@ -959,5 +979,28 @@ mod tests {
         for (i, (region_id, _)) in bad_regions.into_iter().enumerate() {
             assert_eq!(region_id, (10 + i) as u64);
         }
+    }
+
+    #[test]
+    fn test_modify_rocksdb_config() {
+        let debugger = new_debugger();
+        let engine = &debugger.engines.kv_engine;
+
+        let db_opts = engine.get_db_options();
+        assert_eq!(db_opts.get_max_background_jobs(), 2);
+        debugger
+            .modify_rocksdb_config(DBType::KV, &"", &"max_background_jobs", &"8")
+            .unwrap();
+        let db_opts = engine.get_db_options();
+        assert_eq!(db_opts.get_max_background_jobs(), 8);
+
+        let cf = engine.cf_handle(CF_DEFAULT).unwrap();
+        let cf_opts = engine.get_options_cf(cf);
+        assert_eq!(cf_opts.get_disable_auto_compactions(), false);
+        debugger
+            .modify_rocksdb_config(DBType::KV, CF_DEFAULT, &"disable_auto_compactions", &"true")
+            .unwrap();
+        let cf_opts = engine.get_options_cf(cf);
+        assert_eq!(cf_opts.get_disable_auto_compactions(), true);
     }
 }

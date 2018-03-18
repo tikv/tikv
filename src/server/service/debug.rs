@@ -345,6 +345,28 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
             .map(|_| RegionConsistencyCheckResponse::new());
         self.handle_response(ctx, sink, f, "check_region_consistency");
     }
+
+    fn modify_rocksdb_config(
+        &self,
+        ctx: RpcContext,
+        mut req: ModifyRocksDBConfigRequest,
+        sink: UnarySink<ModifyRocksDBConfigResponse>,
+    ) {
+        const TAG: &str = "modify_rocksdb_config";
+
+        let db = req.get_db();
+        let cf = req.take_cf();
+        let config_name = req.take_config_name();
+        let config_value = req.take_config_value();
+
+        let f = self.pool
+            .spawn(future::ok(self.debugger.clone()).and_then(move |debugger| {
+                debugger.modify_rocksdb_config(db, &cf, &config_name, &config_value)
+            }))
+            .map(|_| ModifyRocksDBConfigResponse::new());
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
 }
 
 fn region_detail<T: RaftStoreRouter>(
