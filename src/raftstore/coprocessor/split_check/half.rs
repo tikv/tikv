@@ -39,23 +39,10 @@ impl HalfStatus {
     pub fn push_data(&mut self, key: &[u8], value_size: u64) {
         let current_len = key.len() as u64 + value_size;
         if self.buckets.is_empty() || self.cur_bucket_size >= self.each_bucket_size {
-            self.check_and_adjust_buckets_num();
             self.buckets.push(key.to_vec());
             self.cur_bucket_size = 0;
         }
         self.cur_bucket_size += current_len;
-    }
-
-    fn check_and_adjust_buckets_num(&mut self) {
-        if self.buckets.len() < BUCKET_NUMBER_LIMIT {
-            return;
-        }
-        let buckets_num = self.buckets.len() / 2;
-        for id in { 0..buckets_num } {
-            self.buckets.swap(id, id * 2 + 1);
-        }
-        self.buckets.truncate(buckets_num);
-        self.each_bucket_size *= 2;
     }
 
     pub fn split_key(self) -> Option<Vec<u8>> {
@@ -188,28 +175,4 @@ mod tests {
             others => panic!("expect split check result, but got {:?}", others),
         }
     }
-
-    #[test]
-    fn test_too_many_buckets() {
-        let item_len = 100;
-        let mut status = HalfStatus::new(item_len);
-        for id in { 0..BUCKET_NUMBER_LIMIT } {
-            let key_str = format!("{:09}", id);
-            let key = key_str.into_bytes();
-            let value_size = item_len - key.len() as u64;
-            status.push_data(&key, value_size);
-        }
-        assert_eq!(status.buckets.len(), BUCKET_NUMBER_LIMIT);
-        assert_eq!(status.each_bucket_size, item_len);
-        // buckets number reach the upper limit
-        status.push_data(b"xxx", item_len);
-        // buckets merged
-        assert_eq!(status.buckets.len(), BUCKET_NUMBER_LIMIT / 2 + 1);
-        assert_eq!(status.each_bucket_size, item_len * 2);
-        // check split_key
-        let expect_key_id = BUCKET_NUMBER_LIMIT / 2 + 1;
-        let expect_key = format!("{:09}", expect_key_id);
-        assert_eq!(status.split_key(), Some(expect_key.into_bytes()));
-    }
-
 }
