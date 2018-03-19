@@ -340,22 +340,39 @@ impl Debugger {
             })
     }
 
-    pub fn modify_rocksdb_config(
+    pub fn modify_tikv_config(
         &self,
-        db: DBType,
-        cf: &str,
+        module: &str,
         config_name: &str,
         config_value: &str,
     ) -> Result<()> {
-        let rocksdb = self.get_db_from_type(db)?;
-        let mut opt = Vec::new();
-        opt.push((config_name, config_value));
-        if cf.len() > 0 {
-            validate_db_and_cf(db, cf)?;
-            let handle = box_try!(get_cf_handle(rocksdb, cf));
-            box_try!(rocksdb.set_options_cf(handle, &opt));
-        } else {
-            box_try!(rocksdb.set_db_options(&opt));
+        match module {
+            "rocksdb" | "raftdb" => {
+                let db = if module == "rocksdb" {
+                    DBType::KV
+                } else {
+                    DBType::RAFT
+                };
+                let rocksdb = self.get_db_from_type(db)?;
+                let vec: Vec<&str> = config_name.split('.').collect();
+                if vec.len() == 1 {
+                    box_try!(rocksdb.set_db_options(&[(config_name, config_value)]));
+                } else if vec.len() == 2 {
+                    let cf = vec[0];
+                    let config_name = vec[1];
+                    validate_db_and_cf(db, cf)?;
+                    let handle = box_try!(get_cf_handle(rocksdb, cf));
+                    let mut opt = Vec::new();
+                    opt.push((config_name, config_value));
+                    box_try!(rocksdb.set_options_cf(handle, &opt));
+                } else {
+                    return Err(Error::InvalidArgument(format!(
+                        "bad argument: {}",
+                        config_name
+                    )));
+                }
+            }
+            _ => return Err(Error::NotFound(format!("unsupported module: {}", module))),
         }
         Ok(())
     }
@@ -982,14 +999,14 @@ mod tests {
     }
 
     #[test]
-    fn test_modify_rocksdb_config() {
+    fn test_modify_tikv_config() {
         let debugger = new_debugger();
         let engine = &debugger.engines.kv_engine;
 
         let db_opts = engine.get_db_options();
         assert_eq!(db_opts.get_max_background_jobs(), 2);
         debugger
-            .modify_rocksdb_config(DBType::KV, &"", &"max_background_jobs", &"8")
+            .modify_tikv_config(&"rocksdb", &"max_background_jobs", &"8")
             .unwrap();
         let db_opts = engine.get_db_options();
         assert_eq!(db_opts.get_max_background_jobs(), 8);
@@ -998,7 +1015,7 @@ mod tests {
         let cf_opts = engine.get_options_cf(cf);
         assert_eq!(cf_opts.get_disable_auto_compactions(), false);
         debugger
-            .modify_rocksdb_config(DBType::KV, CF_DEFAULT, &"disable_auto_compactions", &"true")
+            .modify_tikv_config(&"rocksdb", &"default.disable_auto_compactions", &"true")
             .unwrap();
         let cf_opts = engine.get_options_cf(cf);
         assert_eq!(cf_opts.get_disable_auto_compactions(), true);

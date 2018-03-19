@@ -422,7 +422,7 @@ trait DebugExecutor {
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
 
-    fn modify_rocksdb_config(&self, db: DBType, cf: &str, config_name: &str, config_value: &str);
+    fn modify_tikv_config(&self, module: &str, config_name: &str, config_value: &str);
 }
 
 impl DebugExecutor for DebugClient {
@@ -531,14 +531,13 @@ impl DebugExecutor for DebugClient {
         println!("success!");
     }
 
-    fn modify_rocksdb_config(&self, db: DBType, cf: &str, config_name: &str, config_value: &str) {
-        let mut req = ModifyRocksDBConfigRequest::new();
-        req.set_db(db);
-        req.set_cf(cf.to_owned());
+    fn modify_tikv_config(&self, module: &str, config_name: &str, config_value: &str) {
+        let mut req = ModifyTikvConfigRequest::new();
+        req.set_module(module.to_owned());
         req.set_config_name(config_name.to_owned());
         req.set_config_value(config_value.to_owned());
-        self.modify_rocksdb_config(&req)
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::modify_rocksdb_config", e));
+        self.modify_tikv_config(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::modify_tikv_config", e));
         println!("success");
     }
 }
@@ -622,7 +621,7 @@ impl DebugExecutor for Debugger {
         process::exit(-1);
     }
 
-    fn modify_rocksdb_config(&self, _: DBType, _: &str, _: &str, _: &str) {
+    fn modify_tikv_config(&self, _: &str, _: &str, _: &str) {
         eprintln!("only support remote mode");
         process::exit(-1);
     }
@@ -958,33 +957,25 @@ fn main() {
         )
         .subcommand(SubCommand::with_name("bad-regions").about("get all regions with corrupt raft"))
         .subcommand(
-            SubCommand::with_name("modify-rocksdb-config")
-                .about("modify certain rocksdb config")
+            SubCommand::with_name("modify-tikv-config")
+                .about("modify tikv config")
                 .arg(
-                    Arg::with_name("db")
-                        .short("d")
+                    Arg::with_name("module")
+                        .short("m")
                         .takes_value(true)
-                        .default_value("kv")
-                        .help("kv or raft"),
-                )
-                .arg(
-                    Arg::with_name("cf")
-                        .short("c")
-                        .takes_value(true)
-                        .default_value("")
-                        .help("column family name, only can be default/lock/write"),
+                        .help("module of the tikv, eg. rocksdb or raftdb"),
                 )
                 .arg(
                     Arg::with_name("config_name")
                         .short("n")
                         .takes_value(true)
-                        .help("config name of the db or the column family"),
+                        .help("config name of the module"),
                 )
                 .arg(
                     Arg::with_name("config_value")
                         .short("v")
                         .takes_value(true)
-                        .help("config name of the db or the column family"),
+                        .help("config value of the module"),
                 ),
         );
     let matches = app.clone().get_matches();
@@ -1088,16 +1079,11 @@ fn main() {
         debug_executor.check_region_consistency(region_id);
     } else if matches.subcommand_matches("bad-regions").is_some() {
         debug_executor.print_bad_regions();
-    } else if let Some(matches) = matches.subcommand_matches("modify-rocksdb-config") {
-        let db = matches.value_of("db").unwrap();
-        let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
+    } else if let Some(matches) = matches.subcommand_matches("modify-tikv-config") {
+        let module = matches.value_of("module").unwrap();
         let config_name = matches.value_of("config_name").unwrap();
         let config_value = matches.value_of("config_value").unwrap();
-        if let Some(cf) = matches.value_of("cf") {
-            debug_executor.modify_rocksdb_config(db_type, cf, config_name, config_value);
-        } else {
-            debug_executor.modify_rocksdb_config(db_type, &"", config_name, config_value);
-        }
+        debug_executor.modify_tikv_config(module, config_name, config_value);
     } else {
         let _ = app.print_help();
     }
