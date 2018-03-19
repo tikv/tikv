@@ -202,7 +202,7 @@ impl Host {
             CopRequest::Checksum(checksum) => {
                 let ctx = ChecksumContext::new(checksum, ranges, snap, &req_ctx);
                 let mut exec_metrics = ExecutorMetrics::default();
-                let do_request = move || {
+                let do_request = move |_| {
                     tracker.record_wait();
                     let mut resp = ctx.handle_request(&mut exec_metrics).unwrap_or_else(|e| {
                         let mut metrics = tracker.get_basic_metrics();
