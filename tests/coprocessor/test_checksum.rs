@@ -62,7 +62,7 @@ fn test_checksum() {
             (range, ChecksumScanOn::Index)
         };
         let request = new_checksum_request(range.clone(), scan_on);
-        let expected = checksum_crc64_xor(&store, range, scan_on);
+        let expected = reversed_checksum_crc64_xor(&store, range, scan_on);
 
         let response = handle_request(&end_point, request);
         let mut resp = ChecksumResponse::new();
@@ -72,7 +72,7 @@ fn test_checksum() {
     }
 }
 
-fn checksum_crc64_xor(store: &Store, range: KeyRange, scan_on: ChecksumScanOn) -> u64 {
+fn reversed_checksum_crc64_xor(store: &Store, range: KeyRange, scan_on: ChecksumScanOn) -> u64 {
     use crc::crc64::{self, Digest, Hasher64};
 
     let ctx = Context::new();
