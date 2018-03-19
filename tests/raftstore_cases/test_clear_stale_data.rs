@@ -114,7 +114,7 @@ fn test_clear_stale_data<T: Simulator>(cluster: &mut Cluster<T>) {
             continue;
         }
         let region = cluster.get_region(&[i]);
-        let peer = find_voter(&region, node_id).unwrap().clone();
+        let peer = find_peer(&region, node_id).unwrap().clone();
         cluster.pd_client.must_remove_peer(region.get_id(), peer);
     }
 

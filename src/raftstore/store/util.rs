@@ -31,16 +31,6 @@ use util::time::monotonic_raw_now;
 use super::engine::{IterOption, Iterable};
 use super::peer_storage;
 
-pub fn find_voter(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
-    let mut voters = region.get_peers().iter().filter(|&p| !p.get_is_learner());
-    voters.find(|p| p.get_store_id() == store_id)
-}
-
-pub fn find_learner(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
-    let mut learners = region.get_peers().iter().filter(|&p| p.get_is_learner());
-    learners.find(|p| p.get_store_id() == store_id)
-}
-
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
     region
         .get_peers()
@@ -69,6 +59,12 @@ pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     peer.set_store_id(store_id);
     peer.set_id(peer_id);
     peer
+}
+
+// a helper function to create learner peer easily.
+pub fn new_learner_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
+    let mut peer = new_peer(store_id, peer_id);
+    peer.set_is_learner(true);
 }
 
 /// Check if key in region range [`start_key`, `end_key`].
@@ -494,9 +490,10 @@ mod tests {
         let mut region = metapb::Region::new();
         region.set_id(1);
         region.mut_peers().push(new_peer(1, 1));
+        region.mut_peers().push(new_learner_peer(2, 2));
 
-        assert!(find_voter(&region, 1).is_some());
-        assert!(find_voter(&region, 10).is_none());
+        assert!(find_peer(&region, 1).unwrap().get_is_learner(), false);
+        assert!(find_peer(&region, 2).unwrap().get_is_learner(), true);
 
         assert!(remove_peer(&mut region, 1).is_some());
         assert!(remove_peer(&mut region, 1).is_none());

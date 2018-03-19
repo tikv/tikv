@@ -277,7 +277,7 @@ impl Debugger {
             let region = local_state.get_region();
             let store_id = self.get_store_id()?;
 
-            let peer_id = raftstore_util::find_voter(region, store_id)
+            let peer_id = raftstore_util::find_peer(region, store_id)
                 .map(|peer| peer.get_id())
                 .ok_or_else(|| {
                     Error::Other("RegionLocalState doesn't contains peer itself".into())

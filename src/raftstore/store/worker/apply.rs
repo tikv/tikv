@@ -930,6 +930,7 @@ impl ApplyDelegate {
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["add_peer", "success"])
                     .inc();
+
                 info!(
                     "{} add peer {:?} to region {:?}",
                     self.tag, peer, self.region

@@ -546,8 +546,9 @@ fn check_stale_region(region: &metapb::Region, check_region: &metapb::Region) ->
 fn must_same_peers(left: &metapb::Region, right: &metapb::Region) {
     assert_eq!(left.get_peers().len(), right.get_peers().len());
     for peer in left.get_peers() {
-        let p = find_voter(right, peer.get_store_id()).unwrap();
+        let p = find_peer(right, peer.get_store_id()).unwrap();
         assert_eq!(p.get_id(), peer.get_id());
+        assert_eq!(p.get_is_learner(), peer.get_is_learner());
     }
 }
 
@@ -555,7 +556,7 @@ fn must_same_peers(left: &metapb::Region, right: &metapb::Region) {
 fn setdiff_peers(left: &metapb::Region, right: &metapb::Region) -> Vec<metapb::Peer> {
     let mut peers = vec![];
     for peer in left.get_peers() {
-        if let Some(p) = find_voter(right, peer.get_store_id()) {
+        if let Some(p) = find_peer(right, peer.get_store_id()) {
             assert_eq!(p.get_id(), peer.get_id());
             continue;
         }
@@ -651,63 +652,41 @@ impl TestPdClient {
         self.cluster.wl().enable_peer_count_check = true;
     }
 
-    fn must_have(&self, region_id: u64, peer: metapb::Peer, is_learner: bool) {
-        for _ in 1..500 {
-            sleep_ms(10);
-            let region = match self.get_region_by_id(region_id).wait().unwrap() {
-                Some(region) => region,
-                None => continue,
-            };
-            let have = if is_learner {
-                find_learner(&region, peer.get_store_id())
-            } else {
-                find_voter(&region, peer.get_store_id())
-            };
-            match have {
-                Some(p) if p.get_id() == peer.get_id() => return,
-                _ => {}
-            }
-        }
-        let region = self.get_region_by_id(region_id).wait().unwrap();
-        let peer_role = if is_learner { "learner" } else { "peer" };
-        panic!("region {:?} has no {} {:?}", region, peer_role, peer);
-    }
-
-    fn must_none(&self, region_id: u64, peer: metapb::Peer, is_learner: bool) {
-        for _ in 1..500 {
-            sleep_ms(10);
-            let region = match self.get_region_by_id(region_id).wait().unwrap() {
-                Some(region) => region,
-                None => continue,
-            };
-            let have = if is_learner {
-                find_learner(&region, peer.get_store_id())
-            } else {
-                find_voter(&region, peer.get_store_id())
-            };
-            if have.is_none() {
-                return;
-            }
-        }
-        let region = self.get_region_by_id(region_id).wait().unwrap();
-        let peer_role = if is_learner { "learner" } else { "peer" };
-        panic!("region {:?} has {} {:?}", region, peer_role, peer);
-    }
-
     pub fn must_have_peer(&self, region_id: u64, peer: metapb::Peer) {
-        self.must_have(region_id, peer, false)
-    }
+        for _ in 1..500 {
+            sleep_ms(10);
+            let region = match self.get_region_by_id(region_id).wait().unwrap() {
+                Some(region) => region,
+                None => continue,
+            };
 
-    pub fn must_have_learner(&self, region_id: u64, peer: metapb::Peer) {
-        self.must_have(region_id, peer, true)
+            if let Some(p) = find_peer(&region, peer.get_store_id()) {
+                if p == peer {
+                    return;
+                }
+                break;
+            }
+        }
+        let region = self.get_region_by_id(region_id).wait().unwrap();
+        panic!("region {:?} has no peer {:?}", region, peer);
     }
 
     pub fn must_none_peer(&self, region_id: u64, peer: metapb::Peer) {
-        self.must_none(region_id, peer, false);
-    }
-
-    pub fn must_none_learner(&self, region_id: u64, peer: metapb::Peer) {
-        self.must_none(region_id, peer, true);
+        for _ in 1..500 {
+            sleep_ms(10);
+            let region = match self.get_region_by_id(region_id).wait().unwrap() {
+                Some(region) => region,
+                None => continue,
+            };
+            match find_peer(&region, peer.get_store_id()) {
+                None | Some(p) if p != peer {
+                    return;
+                }
+                _ => break;
+            }
+        }
+        let region = self.get_region_by_id(region_id).wait().unwrap();
+        panic!("region {:?} has peer {:?}", region, peer);
     }
 
     pub fn add_region(&self, region: &metapb::Region) {
@@ -723,6 +702,7 @@ impl TestPdClient {
     }
 
     pub fn add_peer(&self, region_id: u64, peer: metapb::Peer) {
+        assert!(!peer.get_is_learner());
         let op = Operator::AddPeer {
             peer: Either::Left(peer),
             policy: SchedulePolicy::TillSuccess,
@@ -741,10 +721,10 @@ impl TestPdClient {
     pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.add_peer(region_id, peer.clone());
         self.must_have_peer(region_id, peer.clone());
-        self.must_none_learner(region_id, peer);
     }
 
     pub fn add_learner(&self, region_id: u64, peer: metapb::Peer) {
+        assert!(peer.get_is_learner());
         let op = Operator::AddLearnerNode {
             peer: Either::Left(peer),
             policy: SchedulePolicy::TillSuccess,
@@ -754,7 +734,7 @@ impl TestPdClient {
 
     pub fn must_add_learner(&self, region_id: u64, peer: metapb::Peer) {
         self.add_learner(region_id, peer.clone());
-        self.must_have_learner(region_id, peer);
+        self.must_have_peer(region_id, peer);
     }
 
     pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {

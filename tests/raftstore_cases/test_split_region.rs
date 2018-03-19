@@ -531,7 +531,7 @@ fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     let region2 = pd_client.get_region(b"k2").unwrap();
 
     // remove peer3 in region 2.
-    let peer3 = util::find_voter(&region2, 3).unwrap();
+    let peer3 = util::find_peer(&region2, 3).unwrap();
     pd_client.must_remove_peer(region2.get_id(), peer3.clone());
 
     // clear isolation so node 3 can split region 1.
@@ -548,7 +548,7 @@ fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     let region3 = pd_client.get_region(b"k3").unwrap();
     // region 3 can't contain node 3.
     assert_eq!(region3.get_peers().len(), 2);
-    assert!(util::find_voter(&region3, 3).is_none());
+    assert!(util::find_peer(&region3, 3).is_none());
 
     let new_peer_id = pd_client.alloc_id().unwrap();
     // add peer (3, new_peer_id) to region 3

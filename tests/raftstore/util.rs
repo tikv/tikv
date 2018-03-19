@@ -41,7 +41,7 @@ use tikv::raftstore::store::Msg as StoreMsg;
 
 use super::cluster::{Cluster, Simulator};
 
-pub use tikv::raftstore::store::util::{find_learner, find_peer, find_voter};
+pub use tikv::raftstore::store::util::find_peer;
 
 pub const MAX_LEADER_LEASE: u64 = 250; // 250ms
 

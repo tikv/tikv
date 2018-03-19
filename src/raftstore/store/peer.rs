@@ -182,7 +182,6 @@ pub struct Peer {
     kv_engine: Arc<DB>,
     raft_engine: Arc<DB>,
     cfg: Rc<Config>,
-    // Cache the `metapb::Peer`s for voters and learners, index by id.
     peer_cache: RefCell<FlatMap<u64, metapb::Peer>>,
     pub peer: metapb::Peer,
     region_id: u64,
@@ -539,8 +538,8 @@ impl Peer {
             self.peer_heartbeats.clear();
             return;
         }
-        let peers_count = self.region().get_peers().len();
-        if self.peer_heartbeats.len() == peers_count {
+
+        if self.peer_heartbeats.len() == self.region().get_peers().len() {
             return;
         }
 
@@ -572,9 +571,9 @@ impl Peer {
     }
 
     pub fn collect_pending_peers(&self) -> Vec<metapb::Peer> {
-        let truncated_idx = self.get_store().truncated_index();
-        let status = self.raft_group.status();
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
+        let status = self.raft_group.status();
+        let truncated_idx = self.get_store().truncated_index();
 
         let progresses = status.progress.iter().chain(&status.learner_progress);
         for (&id, progress) in progresses {
@@ -1523,29 +1522,27 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
 }
 
 impl Peer {
-    /// Insert the voter or learner into cache.
     pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
     }
 
-    /// Remove the voter or learner by its id from cache.
     pub fn remove_peer_from_cache(&mut self, peer_id: u64) {
         self.peer_cache.borrow_mut().remove(&peer_id);
     }
 
-    /// Get the voter or learner by its id from cache.
     pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
         if let Some(peer) = self.peer_cache.borrow().get(&peer_id) {
             return Some(peer.clone());
         }
+
         // Try to find in region, if found, set in cache.
-        let region = self.get_store().get_region();
-        for peer in region.get_peers() {
+        for peer in self.get_store().get_region().get_peers() {
             if peer.get_id() == peer_id {
                 self.peer_cache.borrow_mut().insert(peer_id, peer.clone());
                 return Some(peer.clone());
             }
         }
+
         None
     }
 
