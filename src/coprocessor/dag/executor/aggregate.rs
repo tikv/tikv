@@ -41,7 +41,7 @@ pub fn build_aggr_func(tp: ExprType) -> Result<Box<AggrFunc>> {
 }
 
 /// `AggrFunc` is used to execute aggregate operations.
-pub trait AggrFunc {
+pub trait AggrFunc: Send {
     /// `update` is used for update aggregate context.
     fn update(&mut self, ctx: &EvalContext, args: Vec<Datum>) -> Result<()>;
     /// `calc` calculates the aggregated result and push it to collector.

@@ -15,6 +15,7 @@ use std::sync::{Arc, RwLock};
 use std::sync::mpsc::Sender;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::RaftCmdRequest;
+use raft::eraftpb::MessageType;
 
 use util::transport::SendCh;
 use util::HandyRwLock;
@@ -180,6 +181,17 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
     }
 
     fn send_store(&self, store_id: u64, msg: RaftMessage) {
+        // Wrapping the fail point in a closure, so we can modify
+        // local variables without return,
+        let transport_on_send_store_fp = || {
+            fail_point!("transport_on_send_store", |sid| if let Some(sid) = sid {
+                let sid: u64 = sid.parse().unwrap();
+                if sid == store_id {
+                    self.raft_client.wl().addrs.remove(&store_id);
+                }
+            })
+        };
+        transport_on_send_store_fp();
         // check the corresponding token for store.
         // TODO: avoid clone
         let addr = self.raft_client.rl().addrs.get(&store_id).cloned();
@@ -209,16 +221,38 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         self.resolve(store_id, msg);
     }
 
+    // TODO: remove allow unused mut.
+    // Compiler warns `mut addr ` and `mut transport_on_resolve_fp`, when we enable
+    // the `no-fail` feature.
+    #[allow(unused_mut)]
     fn resolve(&self, store_id: u64, msg: RaftMessage) {
         let trans = self.clone();
         let msg1 = msg.clone();
-        let cb = box move |addr: Result<String>| {
+        let cb = box move |mut addr: Result<String>| {
+            {
+                // Wrapping the fail point in a closure, so we can modify
+                // local variables without return.
+                let mut transport_on_resolve_fp = || {
+                    fail_point!(
+                        "transport_snapshot_on_resolve",
+                        msg.get_message().get_msg_type() == MessageType::MsgSnapshot,
+                        |sid| if let Some(sid) = sid {
+                            use std::mem;
+                            let sid: u64 = sid.parse().unwrap();
+                            if sid == store_id {
+                                mem::swap(&mut addr, &mut Err(box_err!("injected failure")));
+                            }
+                        }
+                    )
+                };
+                transport_on_resolve_fp();
+            }
+
             // clear resolving.
             trans.resolving.wl().remove(&store_id);
-
             if let Err(e) = addr {
                 RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
-                debug!("resolve store {} address failed {:?}", store_id, e);
+                error!("resolve store {} address failed {:?}", store_id, e);
                 trans.report_unreachable(msg);
                 return;
             }
@@ -232,10 +266,9 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
             trans.raft_client.wl().flush();
         };
         if let Err(e) = self.resolver.resolve(store_id, cb) {
-            error!("try to resolve err {:?}", e);
+            error!("resolve store {} address failed {:?}", store_id, e);
             self.resolving.wl().remove(&store_id);
             RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
-            debug!("resolve store {} address failed {:?}", store_id, e);
             self.report_unreachable(msg1);
         }
     }
@@ -290,6 +323,12 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         let region_id = msg.get_region_id();
         let to_peer_id = msg.get_to_peer().get_id();
         let store_id = msg.get_to_peer().get_store_id();
+
+        // Report snapshot failure.
+        if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
+            self.new_snapshot_reporter(&msg)
+                .report(SnapshotStatus::Failure);
+        }
 
         if let Err(e) = self.raft_router.report_unreachable(region_id, to_peer_id) {
             error!(

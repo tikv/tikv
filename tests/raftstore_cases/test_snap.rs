@@ -30,21 +30,13 @@ use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::util::*;
 
-fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
-    // truncate the log quickly so that we can force sending snapshot.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
-    cluster.cfg.raft_store.merge_max_log_gap = 1;
-    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
-}
-
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(500);
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
 
@@ -115,7 +107,7 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
     pd_client.must_add_peer(r1, new_peer(2, 2));
@@ -216,7 +208,7 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
@@ -354,7 +346,7 @@ fn test_node_stale_snap() {
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
     // add peer (2,2) to region 1.
@@ -438,7 +430,7 @@ fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
     cluster.run();
 
     pd_client.must_remove_peer(1, new_peer(4, 4));
