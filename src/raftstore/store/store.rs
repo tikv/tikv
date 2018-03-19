@@ -666,8 +666,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
         self.raft_metrics.leader_missing = leader_missing;
 
-        self.poll_significant_msg();
-
         timer.observe_duration();
 
         self.raft_metrics.flush();
@@ -2612,6 +2610,8 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         if !self.pending_raft_groups.is_empty() {
             self.on_raft_ready();
         }
+
+        self.poll_significant_msg();
 
         self.poll_apply();
 
