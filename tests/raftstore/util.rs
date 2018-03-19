@@ -295,45 +295,22 @@ pub fn new_pd_change_peer(
     resp
 }
 
-pub fn new_pd_add_change_peer(
-    region: &metapb::Region,
-    peer: metapb::Peer,
-) -> Option<RegionHeartbeatResponse> {
-    if let Some(p) = find_peer(region, peer.get_store_id()) {
-        assert_eq!(p.get_id(), peer.get_id());
-        return None;
-    }
-
-    Some(new_pd_change_peer(ConfChangeType::AddNode, peer))
-}
-
-pub fn new_pd_remove_change_peer(
-    region: &metapb::Region,
-    peer: metapb::Peer,
-) -> Option<RegionHeartbeatResponse> {
-    if find_peer(region, peer.get_store_id()).is_none() {
-        return None;
-    }
-
-    Some(new_pd_change_peer(ConfChangeType::RemoveNode, peer))
-}
-
-pub fn new_pd_transfer_leader(peer: metapb::Peer) -> Option<RegionHeartbeatResponse> {
+pub fn new_pd_transfer_leader(peer: metapb::Peer) -> RegionHeartbeatResponse {
     let mut transfer_leader = TransferLeader::new();
     transfer_leader.set_peer(peer);
 
     let mut resp = RegionHeartbeatResponse::new();
     resp.set_transfer_leader(transfer_leader);
-    Some(resp)
+    resp
 }
 
-pub fn new_pd_merge_region(target_region: metapb::Region) -> Option<RegionHeartbeatResponse> {
+pub fn new_pd_merge_region(target_region: metapb::Region) -> RegionHeartbeatResponse {
     let mut merge = Merge::new();
     merge.set_target(target_region);
 
     let mut resp = RegionHeartbeatResponse::new();
     resp.set_merge(merge);
-    Some(resp)
+    resp
 }
 
 pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdResponse>) {
@@ -344,7 +321,9 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdRespons
     for req in cmd.get_requests() {
         match req.get_cmd_type() {
             CmdType::Get | CmdType::Snap => is_read = true,
-            CmdType::Put | CmdType::Delete | CmdType::DeleteRange => is_write = true,
+            CmdType::Put | CmdType::Delete | CmdType::DeleteRange | CmdType::IngestSST => {
+                is_write = true
+            }
             CmdType::Invalid | CmdType::Prewrite => panic!("Invalid RaftCmdRequest: {:?}", cmd),
         }
     }
@@ -468,4 +447,12 @@ pub fn create_test_engine(
         }
     };
     (engines, path)
+}
+
+pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+    // truncate the log quickly so that we can force sending snapshot.
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
+    cluster.cfg.raft_store.merge_max_log_gap = 1;
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
 }

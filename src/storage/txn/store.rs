@@ -165,6 +165,10 @@ impl StoreScanner {
     pub fn get_statistics(&self) -> &Statistics {
         self.reader.get_statistics()
     }
+
+    pub fn collect_statistics_into(&mut self, stats: &mut Statistics) {
+        self.reader.collect_statistics_into(stats);
+    }
 }
 
 #[cfg(test)]
@@ -375,5 +379,41 @@ mod test {
         let expect_value = expect_key.clone().into_bytes();
         let expect = Some((make_key(expect_key.as_bytes()), expect_value as Value));
         assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
+    }
+
+    #[test]
+    fn test_seek_with_bound() {
+        let key_num = 100;
+        let store = TestStore::new(key_num);
+        let snapshot_store = store.store();
+
+        let lower_bound = format!("{}{}", KEY_PREFIX, START_ID).into_bytes();
+        let upper_bound = format!("{}{}", KEY_PREFIX, START_ID + 10).into_bytes();
+
+        let mut scanner = snapshot_store
+            .scanner(
+                ScanMode::Forward,
+                false,
+                Some(lower_bound.clone()),
+                Some(upper_bound.clone()),
+            )
+            .unwrap();
+
+        // Seek with upper bound should returns None.
+        let result = scanner.seek(make_key(&upper_bound)).unwrap();
+        assert!(result.is_none());
+
+        let mut scanner = snapshot_store
+            .scanner(
+                ScanMode::Backward,
+                false,
+                Some(lower_bound.clone()),
+                Some(upper_bound.clone()),
+            )
+            .unwrap();
+
+        // Reverse seek with lower bound should returns None.
+        let result = scanner.reverse_seek(make_key(&lower_bound)).unwrap();
+        assert!(result.is_none());
     }
 }

@@ -1110,7 +1110,9 @@ impl Peer {
         for r in req.get_requests() {
             match r.get_cmd_type() {
                 CmdType::Get | CmdType::Snap => is_read = true,
-                CmdType::Delete | CmdType::Put | CmdType::DeleteRange => is_write = true,
+                CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSST => {
+                    is_write = true
+                }
                 CmdType::Prewrite | CmdType::Invalid => {
                     return Err(box_err!(
                         "invalid cmd type {:?}, message maybe currupted",
@@ -1731,6 +1733,7 @@ impl Peer {
                 | CmdType::Put
                 | CmdType::Delete
                 | CmdType::DeleteRange
+                | CmdType::IngestSST
                 | CmdType::Invalid => unreachable!(),
             };
             resp.set_cmd_type(cmd_type);

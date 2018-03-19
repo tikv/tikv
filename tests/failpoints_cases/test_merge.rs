@@ -33,7 +33,7 @@ fn test_node_merge_rollback() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
     let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     cluster.run_conf_change();
 
@@ -175,7 +175,7 @@ fn test_node_merge_recover_snapshot() {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
     let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     cluster.run();
 

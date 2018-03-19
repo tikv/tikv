@@ -61,7 +61,7 @@ fn test_node_base_merge() {
         resp
     );
 
-    pd_client.must_merge(left.get_id(), right.clone());
+    pd_client.must_merge(left.get_id(), right.get_id());
 
     let region = pd_client.get_region(b"k1").unwrap();
     assert_eq!(region.get_id(), right.get_id());
@@ -115,7 +115,7 @@ fn test_node_base_merge() {
 fn test_node_merge_with_admin_entries() {
     let mut cluster = new_node_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     cluster.run_conf_change();
 
@@ -130,8 +130,7 @@ fn test_node_merge_with_admin_entries() {
     pd_client.must_add_peer(left.get_id(), new_peer(2, 2));
     pd_client.must_add_peer(right.get_id(), new_peer(2, 4));
 
-    let right = pd_client.get_region(b"k2").unwrap();
-    pd_client.must_merge(left.get_id(), right.clone());
+    pd_client.must_merge(left.get_id(), right.get_id());
 
     let region = pd_client.get_region(b"k1").unwrap();
     assert_eq!(region.get_id(), right.get_id());
@@ -159,7 +158,7 @@ fn test_node_check_merged_message() {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 100;
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
     let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     cluster.run_conf_change();
 
@@ -180,8 +179,7 @@ fn test_node_check_merged_message() {
     pd_client.must_add_peer(right.get_id(), new_peer(3, 10));
     let left_on_store1 = find_peer(&left, 1).unwrap().to_owned();
     cluster.must_transfer_leader(left.get_id(), left_on_store1);
-    right = pd_client.get_region(b"k2").unwrap();
-    pd_client.must_merge(left.get_id(), right.clone());
+    pd_client.must_merge(left.get_id(), right.get_id());
     region = pd_client.get_region(b"k2").unwrap();
     util::must_get_none(&cluster.get_engine(3), b"k3");
     util::must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
@@ -200,7 +198,7 @@ fn test_node_check_merged_message() {
     util::must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
     cluster.add_send_filter(IsolationFilterFactory::new(4));
     pd_client.must_remove_peer(left.get_id(), new_peer(4, 4));
-    pd_client.must_merge(left.get_id(), right.clone());
+    pd_client.must_merge(left.get_id(), right.get_id());
     cluster.clear_send_filters();
     util::must_get_none(&cluster.get_engine(4), b"k1");
 
@@ -220,9 +218,8 @@ fn test_node_check_merged_message() {
     left = pd_client.get_region(b"k1").unwrap();
     pd_client.must_add_peer(left.get_id(), new_peer(3, 5));
     left = pd_client.get_region(b"k1").unwrap();
-    pd_client.must_merge(middle.get_id(), left);
-    left = pd_client.get_region(b"k1").unwrap();
-    pd_client.must_merge(right.get_id(), left);
+    pd_client.must_merge(middle.get_id(), left.get_id());
+    pd_client.must_merge(right.get_id(), left.get_id());
     cluster.must_delete(b"k3");
     cluster.must_delete(b"k5");
     cluster.must_put(b"k4", b"v4");
@@ -241,7 +238,7 @@ fn test_node_merge_dist_isolation() {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
     let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     cluster.run();
 
@@ -267,7 +264,7 @@ fn test_node_merge_dist_isolation() {
     // right region: 1(leader) I 2 3
     // I means isolation.
     cluster.add_send_filter(IsolationFilterFactory::new(1));
-    pd_client.must_merge(left.get_id(), right.clone());
+    pd_client.must_merge(left.get_id(), right.get_id());
     cluster.must_put(b"k4", b"v4");
     cluster.clear_send_filters();
     util::must_get_equal(&cluster.get_engine(1), b"k4", b"v4");
@@ -305,7 +302,7 @@ fn test_node_merge_dist_isolation() {
         .unwrap()
         .clone();
     cluster.must_transfer_leader(left.get_id(), target_leader);
-    pd_client.must_merge(left.get_id(), right.clone());
+    pd_client.must_merge(left.get_id(), right.get_id());
     cluster.must_put(b"k4", b"v4");
 
     cluster.clear_send_filters();
@@ -334,7 +331,7 @@ fn test_node_merge_brain_split() {
     util::must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
     cluster.add_send_filter(IsolationFilterFactory::new(3));
     let right = pd_client.get_region(b"k3").unwrap();
-    pd_client.must_merge(left.get_id(), right);
+    pd_client.must_merge(left.get_id(), right.get_id());
 
     for i in 0..100 {
         cluster.must_put(format!("k4{}", i).as_bytes(), b"v4");
