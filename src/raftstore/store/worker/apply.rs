@@ -924,13 +924,13 @@ impl ApplyDelegate {
                     }
                 }
                 if !exists {
+                    // TODO: Do we allow adding peer in same node?
                     region.mut_peers().push(peer.clone());
                 }
 
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["add_peer", "success"])
                     .inc();
-
                 info!(
                     "{} add peer {:?} to region {:?}",
                     self.tag, peer, self.region
@@ -941,7 +941,18 @@ impl ApplyDelegate {
                     .with_label_values(&["remove_peer", "all"])
                     .inc();
 
-                if let Some(peer) = util::remove_peer(&mut region, store_id) {
+                if let Some(p) = util::remove_peer(&mut region, store_id) {
+                    if &p != peer {
+                        error!(
+                            "{} remove unmatched peer: expect: {:?}, get {:?}, ignore",
+                            self.tag, peer, p
+                        );
+                        return Err(box_err!(
+                            "remove unmatched peer: expect: {:?}, get {:?}, ignore",
+                            peer,
+                            p
+                        ));
+                    }
                     if self.id == peer.get_id() {
                         // Remove ourself, we will destroy all region data later.
                         // So we need not to apply following logs.
@@ -962,7 +973,6 @@ impl ApplyDelegate {
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["remove_peer", "success"])
                     .inc();
-
                 info!(
                     "{} remove {} from region:{:?}",
                     self.tag,
@@ -975,7 +985,6 @@ impl ApplyDelegate {
                     .with_label_values(&["add_learner", "all"])
                     .inc();
 
-                assert!(peer.get_is_learner());
                 if util::find_peer(&region, store_id).is_some() {
                     error!(
                         "{} can't add duplicated learner {:?} to region {:?}",

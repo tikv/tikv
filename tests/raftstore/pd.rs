@@ -81,10 +81,6 @@ enum Operator {
         peer: Either<metapb::Peer, metapb::Peer>,
         policy: SchedulePolicy,
     },
-    AddLearnerNode {
-        peer: Either<metapb::Peer, metapb::Peer>,
-        policy: SchedulePolicy,
-    },
     RemovePeer {
         peer: metapb::Peer,
         policy: SchedulePolicy,
@@ -100,14 +96,12 @@ impl Operator {
         match *self {
             Operator::AddPeer { ref peer, .. } => {
                 if let Either::Left(ref peer) = *peer {
-                    new_pd_change_peer(eraftpb::ConfChangeType::AddNode, peer.clone())
-                } else {
-                    pdpb::RegionHeartbeatResponse::new()
-                }
-            }
-            Operator::AddLearnerNode { ref peer, .. } => {
-                if let Either::Left(ref peer) = *peer {
-                    new_pd_change_peer(eraftpb::ConfChangeType::AddLearnerNode, peer.clone())
+                    let conf_change_type = if peer.get_is_learner() {
+                        eraftpb::ConfChangeType::AddLearnerNode
+                    } else {
+                        eraftpb::ConfChangeType::AddNode
+                    };
+                    new_pd_change_peer(conf_change_type, peer.clone())
                 } else {
                     pdpb::RegionHeartbeatResponse::new()
                 }
@@ -127,10 +121,6 @@ impl Operator {
     ) -> bool {
         match *self {
             Operator::AddPeer {
-                ref mut peer,
-                ref mut policy,
-            }
-            | Operator::AddLearnerNode {
                 ref mut peer,
                 ref mut policy,
             } => {
@@ -373,7 +363,7 @@ impl Cluster {
                     |r: &Region| r.get_peers().iter().filter(|p| p.get_is_learner()).count();
                 let region_learner_len = get_learners(&region);
                 let cur_region_learner_len = get_learners(&cur_region);
-                assert_eq!(cur_region_learner_len + 1, region_learner_len);
+                assert_eq!(cur_region_learner_len, region_learner_len + 1);
             } else if cur_region_peer_len > region_peer_len {
                 // If ConfVer changed, TiKV has added/removed one peer already.
                 // So pd and TiKV can't have same peer count and can only have
@@ -664,7 +654,7 @@ impl TestPdClient {
                 if p == &peer {
                     return;
                 }
-                break;
+                continue;
             }
         }
         let region = self.get_region_by_id(region_id).wait().unwrap();
@@ -681,7 +671,7 @@ impl TestPdClient {
             match find_peer(&region, peer.get_store_id()) {
                 None => return,
                 Some(p) if p != &peer => return,
-                _ => break,
+                _ => continue,
             }
         }
         let region = self.get_region_by_id(region_id).wait().unwrap();
@@ -701,7 +691,6 @@ impl TestPdClient {
     }
 
     pub fn add_peer(&self, region_id: u64, peer: metapb::Peer) {
-        assert!(!peer.get_is_learner());
         let op = Operator::AddPeer {
             peer: Either::Left(peer),
             policy: SchedulePolicy::TillSuccess,
@@ -720,20 +709,6 @@ impl TestPdClient {
     pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.add_peer(region_id, peer.clone());
         self.must_have_peer(region_id, peer.clone());
-    }
-
-    pub fn add_learner(&self, region_id: u64, peer: metapb::Peer) {
-        assert!(peer.get_is_learner());
-        let op = Operator::AddLearnerNode {
-            peer: Either::Left(peer),
-            policy: SchedulePolicy::TillSuccess,
-        };
-        self.schedule_operator(region_id, op);
-    }
-
-    pub fn must_add_learner(&self, region_id: u64, peer: metapb::Peer) {
-        self.add_learner(region_id, peer.clone());
-        self.must_have_peer(region_id, peer);
     }
 
     pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {

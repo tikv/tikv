@@ -1158,7 +1158,8 @@ impl Peer {
         healthy
     }
 
-    /// Check whether it's safe to propose the specified conf change request.
+    /// Validate the `ConfChange` request and check whether it's safe to
+    /// propose the specified conf change request.
     /// It's safe iff at least the quorum of the Raft group is still healthy
     /// right after that conf change is applied.
     /// Define the total number of nodes in current Raft cluster to be `total`.
@@ -1171,9 +1172,19 @@ impl Peer {
     ///    the peer to be removed should not be the leader.
     fn check_conf_change(&self, cmd: &RaftCmdRequest) -> Result<()> {
         let change_peer = apply::get_change_peer_cmd(cmd).unwrap();
-
         let change_type = change_peer.get_change_type();
         let peer = change_peer.get_peer();
+
+        match (change_type, peer.get_is_learner()) {
+            (ConfChangeType::AddNode, true) | (ConfChangeType::AddLearnerNode, false) => {
+                warn!(
+                    "{} conf change type: {:?}, but got peer {:?}",
+                    self.tag, change_type, peer
+                );
+                return Err(box_err!("invalid conf change request"));
+            }
+            _ => {}
+        }
 
         if change_type == ConfChangeType::RemoveNode && !self.cfg.allow_remove_leader
             && peer.get_id() == self.peer_id()
@@ -1203,7 +1214,7 @@ impl Peer {
                 }
             }
             ConfChangeType::RemoveNode => {
-                if status.learner_progress.remove(&peer.get_id()).is_some() {
+                if peer.get_is_learner() {
                     // If the node is a learner, we can return directly.
                     return Ok(());
                 }
