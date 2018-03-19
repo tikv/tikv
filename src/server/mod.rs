@@ -29,8 +29,6 @@ use std::fmt::{Debug, Formatter, Result as FormatResult};
 use std::boxed::FnBox;
 
 use futures::{stream, Stream};
-use futures::sync::mpsc;
-use futures_cpupool::CpuPool;
 
 pub use self::config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Error, Result};
@@ -40,11 +38,11 @@ pub use self::node::{create_raft_storage, Node};
 pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::raft_client::RaftClient;
 
-pub type CopStream<T> = Box<Stream<Item = T, Error = mpsc::SendError<T>> + Send>;
+type StreamResponse<T> = Box<Stream<Item = T, Error = ()> + Send>;
 
 pub enum OnResponse<T> {
     Unary(Box<FnBox(T) + Send>),
-    Streaming(Box<FnBox(CopStream<T>, Option<CpuPool>) + Send>),
+    Streaming(Box<FnBox(StreamResponse<T>) + Send>),
 }
 
 impl<T: Send + Debug + 'static> OnResponse<T> {
@@ -58,14 +56,14 @@ impl<T: Send + Debug + 'static> OnResponse<T> {
     pub fn respond(self, resp: T) {
         match self {
             OnResponse::Unary(cb) => cb(resp),
-            OnResponse::Streaming(cb) => cb(box stream::once(Ok(resp)), None),
+            OnResponse::Streaming(cb) => cb(box stream::once(Ok(resp))),
         }
     }
 
-    pub fn respond_stream(self, s: CopStream<T>, executor: CpuPool) {
+    pub fn respond_stream(self, s: StreamResponse<T>) {
         match self {
-            OnResponse::Streaming(cb) => cb(s, Some(executor)),
             OnResponse::Unary(_) => unreachable!(),
+            OnResponse::Streaming(cb) => cb(s),
         }
     }
 }

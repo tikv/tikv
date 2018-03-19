@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Debug, Display, Formatter};
 
 use protobuf::{CodedInputStream, Message as PbMsg};
-use futures::{future, stream};
+use futures::{future, stream, Stream};
 use futures::sync::mpsc as futures_mpsc;
 use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 
@@ -296,7 +296,10 @@ impl Host {
                         future::ok::<_, futures_mpsc::SendError<_>>((resp, (ctx, finished)))
                     })
                 });
-                on_resp.respond_stream(box s, pool.clone());
+
+                let (tx, rx) = futures_mpsc::unbounded();
+                pool.spawn(s.forward(tx)).forget();
+                on_resp.respond_stream(box rx);
             }
             CopRequest::Analyze(analyze) => {
                 let ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx);
