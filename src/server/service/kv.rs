@@ -60,7 +60,6 @@ pub struct Service<T: RaftStoreRouter + 'static> {
     snap_scheduler: Scheduler<SnapTask>,
     token: Arc<AtomicUsize>, // TODO: remove it.
     recursion_limit: u32,
-    stream_channel_size: usize,
     metrics: Metrics,
 }
 
@@ -123,7 +122,6 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         recursion_limit: u32,
-        stream_channel_size: usize,
     ) -> Service<T> {
         Service {
             storage: storage,
@@ -132,7 +130,6 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
             snap_scheduler: snap_scheduler,
             token: Arc::new(AtomicUsize::new(1)),
             recursion_limit: recursion_limit,
-            stream_channel_size: stream_channel_size,
             metrics: Metrics::new(),
         }
     }

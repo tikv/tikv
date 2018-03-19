@@ -151,6 +151,7 @@ pub struct Host {
     running_task_count: Arc<AtomicUsize>,
     batch_row_limit: usize,
     stream_batch_row_limit: usize,
+    stream_channel_size: usize,
     request_max_handle_duration: Duration,
 }
 
@@ -188,6 +189,7 @@ impl Host {
             max_running_task_count: cfg.end_point_max_tasks,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
+            stream_channel_size: cfg.end_point_stream_channel_size,
             request_max_handle_duration: cfg.end_point_request_max_handle_duration.0,
             running_task_count: Arc::new(AtomicUsize::new(0)),
         }
@@ -297,7 +299,8 @@ impl Host {
                     })
                 });
 
-                let (tx, rx) = futures_mpsc::unbounded();
+                // TODO: Add test to ensure back pressure works.
+                let (tx, rx) = futures_mpsc::channel(self.stream_channel_size);
                 pool.spawn(s.forward(tx)).forget();
                 on_resp.respond_stream(box rx);
             }
