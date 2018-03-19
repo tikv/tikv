@@ -31,7 +31,6 @@ use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::{self, Key, Mutation, ALL_CFS};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tikv::util::worker::{Builder as WorkerBuilder, Worker};
-use tikv::util::futurepool::FuturePool;
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 use tipb::executor::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
