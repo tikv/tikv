@@ -24,6 +24,7 @@ use futures::sync::mpsc as futures_mpsc;
 
 use tipb::select::DAGRequest;
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
+use tipb::checksum::{ChecksumRequest, ChecksumScanOn};
 use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
 use kvproto::coprocessor::{KeyRange, Request, Response};
@@ -43,6 +44,7 @@ use super::codec::mysql;
 use super::codec::datum::Datum;
 use super::dag::DAGContext;
 use super::statistics::analyze::AnalyzeContext;
+use super::checksum::ChecksumContext;
 use super::metrics::*;
 use super::local_metrics::BasicLocalMetrics;
 use super::dag::executor::ExecutorMetrics;
@@ -50,6 +52,7 @@ use super::{Error, ReadPoolContext, Result};
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
+pub const REQ_TYPE_CHECKSUM: i64 = 105;
 
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.
@@ -74,6 +77,7 @@ pub struct Host {
     running_task_count: Arc<AtomicUsize>,
     batch_row_limit: usize,
     stream_batch_row_limit: usize,
+    stream_channel_size: usize,
     request_max_handle_duration: Duration,
 }
 
@@ -94,6 +98,7 @@ impl Host {
             max_running_task_count: cfg.end_point_max_tasks,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
+            stream_channel_size: cfg.end_point_stream_channel_size,
             request_max_handle_duration: cfg.end_point_request_max_handle_duration.0,
             running_task_count: Arc::new(AtomicUsize::new(0)),
         }
@@ -176,7 +181,7 @@ impl Host {
                     })
                 });
 
-                let (tx, rx) = futures_mpsc::unbounded();
+                let (tx, rx) = futures_mpsc::channel(self.stream_channel_size);
                 pool.spawn(|_| s.forward(tx)).forget();
                 on_resp.respond_stream(box rx);
             }
@@ -184,6 +189,20 @@ impl Host {
                 let ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx);
                 let mut exec_metrics = ExecutorMetrics::default();
                 let do_request = move |_| {
+                    tracker.record_wait();
+                    let mut resp = ctx.handle_request(&mut exec_metrics).unwrap_or_else(|e| {
+                        let mut metrics = tracker.get_basic_metrics();
+                        err_resp(e, &mut metrics)
+                    });
+                    tracker.record_handle(Some(&mut resp), exec_metrics);
+                    future::ok::<_, ()>(on_resp.respond(resp))
+                };
+                pool.spawn(do_request).forget();
+            }
+            CopRequest::Checksum(checksum) => {
+                let ctx = ChecksumContext::new(checksum, ranges, snap, &req_ctx);
+                let mut exec_metrics = ExecutorMetrics::default();
+                let do_request = move || {
                     tracker.record_wait();
                     let mut resp = ctx.handle_request(&mut exec_metrics).unwrap_or_else(|e| {
                         let mut metrics = tracker.get_basic_metrics();
@@ -230,6 +249,7 @@ impl Display for Task {
 enum CopRequest {
     DAG(DAGRequest),
     Analyze(AnalyzeReq),
+    Checksum(ChecksumRequest),
 }
 
 #[derive(Debug)]
@@ -455,6 +475,14 @@ impl RequestTask {
                 box_try!(analyze.merge_from(&mut is));
                 table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
                 (analyze.get_start_ts(), CopRequest::Analyze(analyze))
+            }
+            REQ_TYPE_CHECKSUM => {
+                let mut is = CodedInputStream::from_bytes(req.get_data());
+                is.set_recursion_limit(recursion_limit);
+                let mut checksum = ChecksumRequest::new();
+                box_try!(checksum.merge_from(&mut is));
+                table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
+                (checksum.get_start_ts(), CopRequest::Checksum(checksum))
             }
             tp => return Err(box_err!("unsupported tp {}", tp)),
         };
