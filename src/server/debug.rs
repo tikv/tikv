@@ -942,7 +942,7 @@ mod tests {
         debugger.set_store_id(100);
         let engine = debugger.engines.kv_engine.as_ref();
 
-        // region 1 with peers at stores 11, 12, 13.
+        // region 1 with peers at stores 11, 12, 13 and 14.
         init_region_state(engine, 1, &[11, 12, 13, 14]);
         // region 2 with peers at stores 21, 22, 23.
         init_region_state(engine, 2, &[21, 22, 23]);
