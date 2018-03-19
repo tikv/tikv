@@ -146,7 +146,7 @@ impl fmt::Display for Full {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         write!(
             fmt,
-            "read pool is full, current = {}, max = {}",
+            "read pool is full, current task count = {}, max task count = {}",
             self.current_tasks, self.max_tasks
         )
     }
@@ -249,7 +249,7 @@ mod tests {
             &Config {
                 high_concurrency: 2,
                 max_tasks_high: 4,
-                ..Config::default()
+                ..Config::default_for_test()
             },
             || || Context {},
         );

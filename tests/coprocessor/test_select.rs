@@ -19,14 +19,14 @@ use std::i64;
 use std::thread;
 use std::time::Duration;
 use futures::{Future, Stream};
-use futures::sync::mpsc as futures_mpsc;
 
 use tikv::coprocessor::*;
 use kvproto::kvrpcpb::Context;
 use tikv::coprocessor::codec::{datum, table, Datum};
 use tikv::coprocessor::codec::datum::DatumDecoder;
+use tikv::util;
 use tikv::util::codec::number::*;
-use tikv::server::{Config, CopStream, OnResponse};
+use tikv::server::{Config, OnResponse};
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::{self, Key, Mutation, ALL_CFS};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
@@ -1498,20 +1498,13 @@ fn handle_streaming_select<F>(
 where
     F: FnMut(&Response) + Send + 'static,
 {
-    let (ftx, frx) = futures_mpsc::channel(16);
-    let callback = box move |s: CopStream<Response>,
-                             executor: Option<FuturePool<ReadPoolContext>>| {
-        let f = s.forward(ftx);
-        if let Some(executor) = executor {
-            return executor.spawn(|_| f).forget();
-        }
-        f.wait().unwrap();
-    };
+    let (callback, stream_future) = util::future::paired_future_callback();
     let req = RequestTask::new(req, OnResponse::Streaming(callback), 100).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();
 
     let (tx, rx) = mpsc::channel();
-    for resp in frx.wait() {
+    let stream = stream_future.wait().unwrap();
+    for resp in stream.wait() {
         let resp = resp.unwrap();
         check_range(&resp);
         assert!(!resp.get_data().is_empty());

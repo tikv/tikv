@@ -11,11 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use sys_info;
+
 use util::config::ReadableSize;
 
-const DEFAULT_HIGH_CONCURRENCY: usize = 8;
-const DEFAULT_NORMAL_CONCURRENCY: usize = 8;
-const DEFAULT_LOW_CONCURRENCY: usize = 8;
+const DEFAULT_HIGH_CONCURRENCY: usize = 4;
+const DEFAULT_NORMAL_CONCURRENCY: usize = 4;
+const DEFAULT_LOW_CONCURRENCY: usize = 4;
 
 // Assume a request can be finished in 1ms, a request at position x will wait about
 // 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
@@ -62,6 +64,28 @@ impl Default for Config {
 }
 
 impl Config {
+    pub fn default_for_coprocessor() -> Config {
+        let cpu_num = sys_info::cpu_num().unwrap();
+        let concurrency = if cpu_num > 8 {
+            (f64::from(cpu_num) * 0.8) as usize
+        } else {
+            DEFAULT_HIGH_CONCURRENCY
+        };
+        Config {
+            high_concurrency: concurrency,
+            normal_concurrency: concurrency,
+            low_concurrency: concurrency,
+            max_tasks_high: DEFAULT_MAX_TASKS_PER_CORE * concurrency,
+            max_tasks_normal: DEFAULT_MAX_TASKS_PER_CORE * concurrency,
+            max_tasks_low: DEFAULT_MAX_TASKS_PER_CORE * concurrency,
+            stack_size: ReadableSize::mb(DEFAULT_STACK_SIZE_MB),
+        }
+    }
+
+    pub fn default_for_storage() -> Config {
+        Config::default()
+    }
+
     /// Tests are run in parallel so that we need a lower concurrency
     /// to prevent resource exhausting.
     pub fn default_for_test() -> Config {

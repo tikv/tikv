@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Debug, Display, Formatter};
 
 use protobuf::{CodedInputStream, Message as PbMsg};
-use futures::{future, stream};
+use futures::{future, stream, Stream};
 use futures::sync::mpsc as futures_mpsc;
 
 use tipb::select::DAGRequest;
@@ -175,7 +175,10 @@ impl Host {
                         future::ok::<_, futures_mpsc::SendError<_>>((resp, (ctx, finished)))
                     })
                 });
-                on_resp.respond_stream(box s, pool.clone());
+
+                let (tx, rx) = futures_mpsc::unbounded();
+                pool.spawn(|_| s.forward(tx)).forget();
+                on_resp.respond_stream(box rx);
             }
             CopRequest::Analyze(analyze) => {
                 let ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx);
@@ -423,14 +426,14 @@ pub struct RequestTask {
     req: Request,
     cop_req: CopRequest,
     ctx: ReqContext,
-    on_resp: OnResponse<Response, ReadPoolContext>,
+    on_resp: OnResponse<Response>,
     tracker: RequestTracker,
 }
 
 impl RequestTask {
     pub fn new(
         req: Request,
-        on_resp: OnResponse<Response, ReadPoolContext>,
+        on_resp: OnResponse<Response>,
         recursion_limit: u32,
     ) -> Result<RequestTask> {
         let mut table_scan = false;
@@ -784,7 +787,7 @@ mod tests {
                 high_concurrency: 1,
                 normal_concurrency: 1,
                 low_concurrency: 1,
-                ..readpool::Config::default()
+                ..readpool::Config::default_for_test()
             },
             || || ReadPoolContext::new(None),
         );
@@ -815,7 +818,7 @@ mod tests {
                 high_concurrency: 1,
                 normal_concurrency: 1,
                 low_concurrency: 1,
-                ..readpool::Config::default()
+                ..readpool::Config::default_for_test()
             },
             || || ReadPoolContext::new(None),
         );

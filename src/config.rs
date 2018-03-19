@@ -390,8 +390,8 @@ impl Default for DbConfig {
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_dir: "".to_owned(),
             rate_bytes_per_sec: ReadableSize::kb(0),
-            bytes_per_sync: ReadableSize::mb(0),
-            wal_bytes_per_sync: ReadableSize::kb(0),
+            bytes_per_sync: ReadableSize::mb(1),
+            wal_bytes_per_sync: ReadableSize::kb(512),
             max_sub_compactions: 1,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
@@ -567,8 +567,8 @@ impl Default for RaftDbConfig {
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
             allow_concurrent_memtable_write: false,
-            bytes_per_sync: ReadableSize::mb(0),
-            wal_bytes_per_sync: ReadableSize::kb(0),
+            bytes_per_sync: ReadableSize::mb(1),
+            wal_bytes_per_sync: ReadableSize::kb(512),
             defaultcf: RaftDefaultCfConfig::default(),
         }
     }
@@ -662,8 +662,8 @@ pub struct ReadPoolConfig {
 impl Default for ReadPoolConfig {
     fn default() -> ReadPoolConfig {
         ReadPoolConfig {
-            storage: ReadPoolInstanceConfig::default(),
-            coprocessor: ReadPoolInstanceConfig::default(),
+            storage: ReadPoolInstanceConfig::default_for_storage(),
+            coprocessor: ReadPoolInstanceConfig::default_for_coprocessor(),
         }
     }
 }
