@@ -65,6 +65,7 @@ pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
 pub fn new_learner_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     let mut peer = new_peer(store_id, peer_id);
     peer.set_is_learner(true);
+    peer
 }
 
 /// Check if key in region range [`start_key`, `end_key`].
@@ -492,12 +493,12 @@ mod tests {
         region.mut_peers().push(new_peer(1, 1));
         region.mut_peers().push(new_learner_peer(2, 2));
 
-        assert!(find_peer(&region, 1).unwrap().get_is_learner(), false);
-        assert!(find_peer(&region, 2).unwrap().get_is_learner(), true);
+        assert!(!find_peer(&region, 1).unwrap().get_is_learner());
+        assert!(find_peer(&region, 2).unwrap().get_is_learner());
 
         assert!(remove_peer(&mut region, 1).is_some());
         assert!(remove_peer(&mut region, 1).is_none());
-        assert!(find_voter(&region, 1).is_none());
+        assert!(find_peer(&region, 1).is_none());
     }
 
     #[test]

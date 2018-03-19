@@ -661,7 +661,7 @@ impl TestPdClient {
             };
 
             if let Some(p) = find_peer(&region, peer.get_store_id()) {
-                if p == peer {
+                if p == &peer {
                     return;
                 }
                 break;
@@ -679,10 +679,9 @@ impl TestPdClient {
                 None => continue,
             };
             match find_peer(&region, peer.get_store_id()) {
-                None | Some(p) if p != peer {
-                    return;
-                }
-                _ => break;
+                None => return,
+                Some(p) if p != &peer => return,
+                _ => break,
             }
         }
         let region = self.get_region_by_id(region_id).wait().unwrap();
@@ -740,7 +739,6 @@ impl TestPdClient {
     pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.remove_peer(region_id, peer.clone());
         self.must_none_peer(region_id, peer.clone());
-        self.must_none_learner(region_id, peer);
     }
 
     // check whether region is split by split_key or not.
