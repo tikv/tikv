@@ -113,11 +113,14 @@ fn test_node_base_merge() {
 
 #[test]
 fn test_node_merge_with_admin_entries() {
+    // ::util::init_log();
     let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 100;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 500;
+    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
     let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
 
-    cluster.run_conf_change();
+    cluster.run();
 
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
@@ -126,29 +129,40 @@ fn test_node_merge_with_admin_entries() {
     cluster.must_split(&region, b"k2");
     let left = pd_client.get_region(b"k1").unwrap();
     let right = pd_client.get_region(b"k2").unwrap();
+    let left_on_store1 = find_peer(&left, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(left.get_id(), left_on_store1);
+    let right_on_store1 = find_peer(&right, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(right.get_id(), right_on_store1);
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(
+        left.get_id(),
+        3,
+    )));
+    cluster.must_split(&left, b"k11");
+    let res = cluster.try_merge(left.get_id(), right.get_id());
+    // log gap contains admin entries.
+    assert!(res.get_header().has_error(), "{:?}", res);
+    cluster.clear_send_filters();
+    cluster.must_put(b"k22", b"v22");
+    util::must_get_equal(&cluster.get_engine(3), b"k22", b"v22");
 
-    pd_client.must_add_peer(left.get_id(), new_peer(2, 2));
-    pd_client.must_add_peer(right.get_id(), new_peer(2, 4));
-
-    pd_client.must_merge(left.get_id(), right.get_id());
-
-    let region = pd_client.get_region(b"k1").unwrap();
-    assert_eq!(region.get_id(), right.get_id());
-    assert_eq!(region.get_start_key(), left.get_start_key());
-    assert_eq!(region.get_end_key(), right.get_end_key());
-    let new_epoch = region.get_region_epoch();
-    let get = util::new_request(
-        region.get_id(),
-        new_epoch.to_owned(),
-        vec![util::new_get_cmd(b"k1")],
-        false,
-    );
-    debug!("requesting {:?}", get);
-    let resp = cluster
-        .call_command_on_leader(get, Duration::from_secs(5))
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(
+        right.get_id(),
+        3,
+    )));
+    // It doesn't matter if the index and term is correct.
+    let compact_log = util::new_compact_log_request(100, 10);
+    let req = util::new_admin_request(right.get_id(), right.get_region_epoch(), compact_log);
+    debug!("requesting {:?}", req);
+    let res = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
-    assert!(!resp.get_header().has_error(), "{:?}", resp);
-    assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
+    assert!(res.get_header().has_error(), "{:?}", res);
+    let res = cluster.try_merge(right.get_id(), left.get_id());
+    // log gap contains admin entries.
+    assert!(res.get_header().has_error(), "{:?}", res);
+    cluster.clear_send_filters();
+    cluster.must_put(b"k23", b"v23");
+    util::must_get_equal(&cluster.get_engine(3), b"k23", b"v23");
 }
 
 #[test]
@@ -287,12 +301,7 @@ fn test_node_merge_dist_isolation() {
     //  left region: 1         2   3(leader)
     // right region: 1(leader) 2  [3]
     // [x] means a replica exists logically but is not created on the store x yet.
-    let prepare_merge = util::new_prepare_merge(right.clone());
-    let req = util::new_admin_request(region.get_id(), left.get_region_epoch(), prepare_merge);
-    // The callback will be called when pre-merge is applied.
-    let res = cluster
-        .call_command_on_leader(req, Duration::from_secs(3))
-        .unwrap();
+    let res = cluster.try_merge(region.get_id(), right.get_id());
     // Leader can't find replica 3 of right region, so it fails.
     assert!(res.get_header().has_error(), "{:?}", res);
 

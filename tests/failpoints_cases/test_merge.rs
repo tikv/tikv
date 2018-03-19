@@ -49,17 +49,13 @@ fn test_node_merge_rollback() {
     cluster.must_put(b"k3", b"v3");
 
     let region = pd_client.get_region(b"k1").unwrap();
-    let epoch = region.get_region_epoch();
     let target_region = pd_client.get_region(b"k3").unwrap();
 
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
-    let prepare_merge = util::new_prepare_merge(target_region);
-    let req = util::new_admin_request(region.get_id(), epoch, prepare_merge);
-    // The callback will be called when pre-merge is applied.
-    let res = cluster.call_command_on_leader(req, Duration::from_secs(3));
-    assert!(res.is_ok(), "{:?}", res);
+    // The call is finished when pre-merge is applied.
+    cluster.try_merge(region.get_id(), target_region.get_id());
 
     // Add a peer to trigger rollback.
     pd_client.must_add_peer(right.get_id(), new_peer(3, 5));
@@ -76,6 +72,32 @@ fn test_node_merge_rollback() {
     cluster.must_put(b"k11", b"v11");
 
     // After rollback, version becomes 3 + 1 = 4;
+    region.mut_region_epoch().set_version(4);
+    for i in 1..3 {
+        let state_key = keys::region_state_key(region.get_id());
+        let state: RegionLocalState = cluster
+            .get_engine(i)
+            .get_msg_cf(CF_RAFT, &state_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.get_state(), PeerState::Normal);
+        assert_eq!(*state.get_region(), region);
+    }
+
+    pd_client.must_remove_peer(right.get_id(), new_peer(3, 5));
+    fail::cfg(schedule_merge_fp, "return()").unwrap();
+
+    let target_region = pd_client.get_region(b"k1").unwrap();
+    cluster.try_merge(region.get_id(), target_region.get_id());
+    let mut region = pd_client.get_region(b"k1").unwrap();
+
+    // Split to trigger rollback.
+    cluster.must_split(&right, b"k3");
+    fail::remove(schedule_merge_fp);
+    // Wait till rollback.
+    cluster.must_put(b"k12", b"v12");
+
+    // After premerge and rollback, version becomes 4 + 2 = 6;
     region.mut_region_epoch().set_version(4);
     for i in 1..3 {
         let state_key = keys::region_state_key(region.get_id());
@@ -108,13 +130,8 @@ fn test_node_merge_restart() {
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
-    let prepare_merge = util::new_prepare_merge(right.clone());
-    let epoch = left.get_region_epoch();
-    let req = util::new_admin_request(left.get_id(), epoch, prepare_merge);
-    // The callback will be called when pre-merge is applied.
-    let res = cluster.call_command_on_leader(req, Duration::from_secs(3));
+    cluster.try_merge(left.get_id(), right.get_id());
     let leader = cluster.leader_of_region(left.get_id()).unwrap();
-    assert!(res.is_ok(), "{:?}", res);
 
     cluster.shutdown();
     let engine = cluster.get_engine(leader.get_store_id());
@@ -187,17 +204,12 @@ fn test_node_merge_recover_snapshot() {
     cluster.must_put(b"k3", b"v3");
 
     let region = pd_client.get_region(b"k3").unwrap();
-    let epoch = region.get_region_epoch();
     let target_region = pd_client.get_region(b"k1").unwrap();
 
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
-    let prepare_merge = util::new_prepare_merge(target_region);
-    let req = util::new_admin_request(region.get_id(), epoch, prepare_merge);
-    // The callback will be called when pre-merge is applied.
-    let res = cluster.call_command_on_leader(req, Duration::from_secs(3));
-    assert!(res.is_ok(), "{:?}", res);
+    cluster.try_merge(region.get_id(), target_region.get_id());
 
     // Add a peer to trigger rollback.
     pd_client.must_remove_peer(left.get_id(), left.get_peers()[0].to_owned());

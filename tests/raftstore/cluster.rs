@@ -833,6 +833,23 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn try_merge(&mut self, source: u64, target: u64) -> RaftCmdResponse {
+        let region = self.pd_client
+            .get_region_by_id(target)
+            .wait()
+            .unwrap()
+            .unwrap();
+        let prepare_merge = new_prepare_merge(region);
+        let source = self.pd_client
+            .get_region_by_id(source)
+            .wait()
+            .unwrap()
+            .unwrap();
+        let req = new_admin_request(source.get_id(), source.get_region_epoch(), prepare_merge);
+        self.call_command_on_leader(req, Duration::from_secs(3))
+            .unwrap()
+    }
+
     /// Make sure region exists on that store.
     pub fn must_region_exist(&mut self, region_id: u64, store_id: u64) {
         let mut try_cnt = 0;
