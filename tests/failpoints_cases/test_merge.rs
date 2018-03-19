@@ -27,6 +27,7 @@ use raftstore::node::new_node_cluster;
 use raftstore::util;
 use raftstore::util::*;
 
+/// Test if merge is rollback as expected.
 #[test]
 fn test_node_merge_rollback() {
     let _guard = ::setup();
@@ -111,6 +112,7 @@ fn test_node_merge_rollback() {
     }
 }
 
+/// Test if merge is still working when restart a cluster during merge.
 #[test]
 fn test_node_merge_restart() {
     let _guard = ::setup();
@@ -185,6 +187,7 @@ fn test_node_merge_restart() {
     }
 }
 
+/// Test if merging state will beremoved after accepting a snapshot.
 #[test]
 fn test_node_merge_recover_snapshot() {
     let _guard = ::setup();
@@ -211,7 +214,7 @@ fn test_node_merge_recover_snapshot() {
 
     cluster.try_merge(region.get_id(), target_region.get_id());
 
-    // Add a peer to trigger rollback.
+    // Remove a peer to trigger rollback.
     pd_client.must_remove_peer(left.get_id(), left.get_peers()[0].to_owned());
     util::must_get_none(&cluster.get_engine(3), b"k4");
 

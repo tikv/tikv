@@ -27,6 +27,7 @@ use super::util;
 use raftstore::util::*;
 use raftstore::transport_simulate::*;
 
+/// Test if merge is working as expected in a general condition.
 #[test]
 fn test_node_base_merge() {
     let mut cluster = new_node_cluster(0, 3);
@@ -111,6 +112,8 @@ fn test_node_base_merge() {
     cluster.must_put(b"k4", b"v4");
 }
 
+/// Test whether merge will be aborted if log gap contains admin entries
+/// that can changes epoch or shrinking log gap.
 #[test]
 fn test_node_merge_with_admin_entries() {
     // ::util::init_log();
@@ -165,6 +168,7 @@ fn test_node_merge_with_admin_entries() {
     util::must_get_equal(&cluster.get_engine(3), b"k23", b"v23");
 }
 
+/// Test if stale peer will be handled properly after merge.
 #[test]
 fn test_node_check_merged_message() {
     // ::util::init_log();
@@ -245,6 +249,7 @@ fn test_node_check_merged_message() {
     util::must_get_none(&engine3, b"v5");
 }
 
+/// Test various cases that a store is isolated during merge.
 #[test]
 fn test_node_merge_dist_isolation() {
     // ::util::init_log();
@@ -318,6 +323,8 @@ fn test_node_merge_dist_isolation() {
     util::must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 }
 
+/// Similiar to `test_node_merge_dist_isolation`, but make the isolated store
+/// way behind others so others have to send it a snapshot.
 #[test]
 fn test_node_merge_brain_split() {
     // ::util::init_log();
