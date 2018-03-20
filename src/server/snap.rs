@@ -151,7 +151,7 @@ fn send_snap(
         future_try!(SnapKey::from_snap(snap).map_err(Error::from))
     };
 
-    let chunks = future_try!(get_snap_stream_for_send(mgr.clone(), key, msg));
+    let chunks = future_try!(get_snap_stream_for_send(mgr.clone(), key.clone(), msg));
     let total_size = chunks.remain_bytes;
 
     let channel_builder = ChannelBuilder::new(env);
@@ -180,7 +180,7 @@ fn send_snap(
 }
 
 fn get_snap_stream_for_send(mgr: SnapManager, key: SnapKey, msg: RaftMessage) -> Result<SnapChunk> {
-    mgr.register(key, SnapEntry::Sending);
+    mgr.register(key.clone(), SnapEntry::Sending);
 
     // snapshot file has been validated when created, so no need to validate again.
     let s = match mgr.get_snapshot_for_sending(&key) {

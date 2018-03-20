@@ -95,7 +95,7 @@ pub fn check_abort(status: &AtomicUsize) -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Debug, Copy)]
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct SnapKey {
     pub region_id: u64,
     pub term: u64,
