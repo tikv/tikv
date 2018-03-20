@@ -43,7 +43,7 @@ use grpcio::{ChannelBuilder, Environment};
 use protobuf::RepeatedField;
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::raft_serverpb::PeerState;
+use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::metapb::Region;
 use raft::eraftpb::{ConfChange, Entry, EntryType};
 use kvproto::kvrpcpb::MvccInfo;
@@ -990,6 +990,13 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("bad-regions").about("get all regions with corrupt raft"),
+        )
+        .subcommand(
+            SubCommand::with_name("dump-snap-meta").about("dump snapshot meta file")
+            .arg(Arg::with_name("file")
+                 .short("f").long("file")
+                 .takes_value(true)
+                 .help("meta file path"))
         );
     let matches = app.clone().get_matches();
 
@@ -1007,6 +1014,11 @@ fn main() {
         (None, None) => {}
         _ => unreachable!(),
     };
+
+    if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
+        let path = matches.value_of("file").unwrap();
+        return dump_snap_meta_file(path);
+    }
 
     let db = matches.value_of("db");
     let raft_db = matches.value_of("raftdb");
@@ -1148,4 +1160,22 @@ fn new_security_mgr(matches: &ArgMatches) -> Arc<SecurityManager> {
     cfg.cert_path = cert_path.unwrap().to_owned();
     cfg.key_path = key_path.unwrap().to_owned();
     Arc::new(SecurityManager::new(&cfg).expect("failed to initialize security manager"))
+}
+
+fn dump_snap_meta_file(path: &str) {
+    let mut f =
+        File::open(path).unwrap_or_else(|e| panic!("open file {} failed, error {:?}", path, e));
+    let mut content = Vec::new();
+    f.read_to_end(&mut content)
+        .unwrap_or_else(|e| panic!("read meta file error {:?}", e));
+
+    let mut meta = SnapshotMeta::new();
+    meta.merge_from_bytes(&content)
+        .unwrap_or_else(|e| panic!("parse from bytes errro {:?}", e));
+    for cf_file in meta.get_cf_files() {
+        println!(
+            "cf {}, size {}, checksum: {}",
+            cf_file.cf, cf_file.size, cf_file.checksum
+        );
+    }
 }
