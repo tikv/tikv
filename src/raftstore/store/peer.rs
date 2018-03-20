@@ -1364,7 +1364,9 @@ impl Peer {
                 last_index
             ));
         }
+        let mut entry_size = 0;
         for entry in self.raft_group.raft.raft_log.entries(min_index, NO_LIMIT)? {
+            entry_size += entry.get_data().len();
             if entry.get_entry_type() == EntryType::EntryConfChange {
                 return Err(box_err!("log gap contains conf change, skip merging."));
             }
@@ -1388,6 +1390,11 @@ impl Peer {
             return Err(box_err!(
                 "log gap contains admin request {:?}, skip merging.",
                 cmd_type
+            ));
+        }
+        if entry_size as f64 > self.cfg.raft_entry_max_size.0 as f64 * 0.9 {
+            return Err(box_err!(
+                "log gap size exceed entry size limit, skip merging."
             ));
         }
         req.mut_admin_request()

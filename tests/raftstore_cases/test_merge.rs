@@ -14,6 +14,7 @@
 use std::time::Duration;
 use std::sync::Arc;
 use std::thread;
+use std::iter::*;
 
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use tikv::pd::PdClient;
@@ -112,10 +113,9 @@ fn test_node_base_merge() {
     cluster.must_put(b"k4", b"v4");
 }
 
-/// Test whether merge will be aborted if log gap contains admin entries
-/// that can changes epoch or shrinking log gap.
+/// Test whether merge will be aborted if prerequisites is not met.
 #[test]
-fn test_node_merge_with_admin_entries() {
+fn test_node_merge_prerequisites_check() {
     // ::util::init_log();
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 100;
@@ -166,6 +166,23 @@ fn test_node_merge_with_admin_entries() {
     cluster.clear_send_filters();
     cluster.must_put(b"k23", b"v23");
     util::must_get_equal(&cluster.get_engine(3), b"k23", b"v23");
+
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(
+        right.get_id(),
+        3,
+    )));
+    let mut large_bytes = vec![b'k', b'3'];
+    // 3M
+    large_bytes.extend(repeat(b'0').take(1024 * 1024 * 3));
+    cluster.must_put(&large_bytes, &large_bytes);
+    cluster.must_put(&large_bytes, &large_bytes);
+    // So log gap now contains 12M data, which exceeds the default max entry size.
+    let res = cluster.try_merge(right.get_id(), left.get_id());
+    // log gap contains admin entries.
+    assert!(res.get_header().has_error(), "{:?}", res);
+    cluster.clear_send_filters();
+    cluster.must_put(b"k24", b"v24");
+    util::must_get_equal(&cluster.get_engine(3), b"k24", b"v24");
 }
 
 /// Test if stale peer will be handled properly after merge.
