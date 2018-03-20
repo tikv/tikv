@@ -1028,23 +1028,27 @@ fn main() {
                         .require_delimiter(true)
                         .value_delimiter(",")
                         .help("PD endpoints"),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("metrics")
                 .about("print the metrics")
                 .arg(
-                Arg::with_name("tag")
-                    .short("t")
-                    .long("tag")
-                    .takes_value(true)
-                    .multiple(true)
-                    .use_delimiter(true)
-                    .require_delimiter(true)
-                    .value_delimiter(",")
-                    .default_value(METRICS_PROMETHEUS)
-                    .help(
-                        "set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not specified, print prometheus",
-                    ),
-            ),)
-            .subcommand(
+                    Arg::with_name("tag")
+                        .short("t")
+                        .long("tag")
+                        .takes_value(true)
+                        .multiple(true)
+                        .use_delimiter(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
+                        .default_value(METRICS_PROMETHEUS)
+                        .help(
+                            "set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not specified, print prometheus",
+                        ),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("consistency-check")
                 .about("force consistency-check for a specified region")
                 .arg(
