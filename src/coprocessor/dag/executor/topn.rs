@@ -19,6 +19,7 @@ use std::vec::IntoIter;
 use tipb::executor::TopN;
 use tipb::schema::ColumnInfo;
 use tipb::expression::ByItem;
+use tipb::select;
 
 use coprocessor::codec::datum::Datum;
 use coprocessor::Result;
@@ -34,12 +35,11 @@ struct OrderBy {
 
 impl OrderBy {
     fn new(ctx: &mut EvalContext, mut order_by: Vec<ByItem>) -> Result<OrderBy> {
-        let exprs: Vec<Expression> = box_try!(
-            order_by
-                .iter_mut()
-                .map(|v| Expression::build(ctx, v.take_expr()))
-                .collect()
-        );
+        let mut exprs = Vec::with_capacity(order_by.len());
+        for v in &mut order_by {
+            let expr = Expression::build(ctx, v.take_expr())?;
+            exprs.push(expr);
+        }
         Ok(OrderBy {
             items: Arc::new(order_by),
             exprs: exprs,
@@ -47,7 +47,10 @@ impl OrderBy {
     }
 
     fn eval(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Vec<Datum>> {
-        let res: Vec<Datum> = box_try!(self.exprs.iter().map(|v| v.eval(ctx, row)).collect());
+        let mut res = Vec::with_capacity(self.exprs.len());
+        for v in &self.exprs {
+            res.push(v.eval(ctx, row)?);
+        }
         Ok(res)
     }
 }
@@ -58,7 +61,7 @@ pub struct TopNExecutor {
     related_cols_offset: Vec<usize>, // offset of related columns
     iter: Option<IntoIter<Row>>,
     ctx: EvalContext,
-    heap_warnings: Vec<String>,
+    heap_warnings: Vec<select::Error>,
     src: Box<Executor + Send>,
     limit: usize,
     count: i64,
@@ -161,11 +164,12 @@ impl Executor for TopNExecutor {
         }
     }
 
-    fn collect_eval_warnings(&mut self, warnings: &mut Vec<String>) {
-        self.src.collect_eval_warnings(warnings);
+    fn take_eval_warnings(&mut self) -> Vec<select::Error> {
+        let mut warnings = self.src.take_eval_warnings();
         warnings.append(&mut self.ctx.take_warnings());
         let mut heap_warnings = mem::replace(&mut self.heap_warnings, Vec::new());
         warnings.append(&mut heap_warnings);
+        warnings
     }
 }
 

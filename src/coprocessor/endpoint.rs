@@ -818,7 +818,7 @@ fn err_multi_resp(e: Error, count: usize, metrics: &mut BasicLocalMetrics) -> Re
             resp.set_region_error(errorpb);
             "full"
         }
-        Error::Other(_) => {
+        Error::Other(_) | Error::EvalError(_) => {
             resp.set_other_error(format!("{}", e));
             "other"
         }

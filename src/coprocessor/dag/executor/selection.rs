@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use tipb::executor::Selection;
 use tipb::schema::ColumnInfo;
+use tipb::select;
 
 use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 use coprocessor::Result;
@@ -43,7 +44,7 @@ impl SelectionExecutor {
         visitor.batch_visit(&conditions)?;
         let mut ctx = EvalContext::new(eval_cfg);
         Ok(SelectionExecutor {
-            conditions: box_try!(Expression::batch_build(&mut ctx, conditions)),
+            conditions: Expression::batch_build(&mut ctx, conditions)?,
             cols: columns_info,
             related_cols_offset: visitor.column_offsets(),
             ctx: ctx,
@@ -66,8 +67,8 @@ impl Executor for SelectionExecutor {
                 row.handle,
             )?;
             for filter in &self.conditions {
-                let val = box_try!(filter.eval(&mut self.ctx, &cols));
-                if !box_try!(val.into_bool(&mut self.ctx)).unwrap_or(false) {
+                let val = filter.eval(&mut self.ctx, &cols)?;
+                if !(val.into_bool(&mut self.ctx)?).unwrap_or(false) {
                     continue 'next;
                 }
             }
@@ -91,9 +92,10 @@ impl Executor for SelectionExecutor {
         }
     }
 
-    fn collect_eval_warnings(&mut self, warnings: &mut Vec<String>) {
-        self.src.collect_eval_warnings(warnings);
+    fn take_eval_warnings(&mut self) -> Vec<select::Error> {
+        let mut warnings = self.src.take_eval_warnings();
         warnings.append(&mut self.ctx.take_warnings());
+        warnings
     }
 }
 

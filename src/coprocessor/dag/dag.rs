@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use tipb::schema::ColumnInfo;
-use tipb::select::{self, Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
+use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message as PbMsg, RepeatedField};
 
@@ -90,16 +90,14 @@ impl DAGContext {
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
                     self.exec
                         .collect_output_counts(sel_resp.mut_output_counts());
-                    sel_resp.set_warnings(RepeatedField::from_vec(self.take_eval_warnings()));
+                    sel_resp.set_warnings(RepeatedField::from_vec(self.exec.take_eval_warnings()));
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);
                     return Ok(resp);
                 }
-                Err(e) => if let Error::Other(_) = e {
+                Err(e) => if let Error::EvalError(err) = e {
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
-                    let mut err = select::Error::new();
-                    err.set_msg(format!("{}", e));
                     sel_resp.set_error(err);
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);
@@ -109,19 +107,6 @@ impl DAGContext {
                 },
             }
         }
-    }
-
-    fn take_eval_warnings(&mut self) -> Vec<select::Error> {
-        let mut warnings = Vec::default();
-        self.exec.collect_eval_warnings(&mut warnings);
-        warnings
-            .into_iter()
-            .map(|w| {
-                let mut warn = select::Error::new();
-                warn.set_msg(w);
-                warn
-            })
-            .collect()
     }
 
     pub fn handle_streaming_request(
@@ -161,7 +146,7 @@ impl DAGContext {
         let mut s_resp = StreamResponse::new();
         s_resp.set_encode_type(EncodeType::TypeDefault);
         s_resp.set_data(box_try!(chunk.write_to_bytes()));
-        s_resp.set_warnings(RepeatedField::from_vec(self.take_eval_warnings()));
+        s_resp.set_warnings(RepeatedField::from_vec(self.exec.take_eval_warnings()));
         self.exec.collect_output_counts(s_resp.mut_output_counts());
 
         let mut resp = Response::new();

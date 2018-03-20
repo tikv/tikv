@@ -31,6 +31,7 @@ use std::sync::Arc;
 
 use chrono::FixedOffset;
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
+use tipb::select;
 
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Res, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
@@ -94,7 +95,7 @@ impl EvalConfig {
 /// Some global variables needed in an evaluation.
 pub struct EvalContext {
     pub cfg: Arc<EvalConfig>,
-    warnings: Vec<String>,
+    warnings: Vec<select::Error>,
 }
 
 const ONE_DAY: i64 = 3600 * 24;
@@ -108,7 +109,7 @@ impl EvalContext {
     }
 
     pub fn append_warning(&mut self, err: Error) -> Result<()> {
-        self.warnings.push(format!("{}", err));
+        self.warnings.push(err.into());
         Ok(())
     }
 
@@ -129,7 +130,7 @@ impl EvalContext {
         Err(err)
     }
 
-    pub fn take_warnings(&mut self) -> Vec<String> {
+    pub fn take_warnings(&mut self) -> Vec<select::Error> {
         mem::replace(&mut self.warnings, Vec::default())
     }
 }
@@ -179,6 +180,14 @@ quick_error! {
             description(err.description())
             display("unknown error {:?}", err)
         }
+    }
+}
+
+impl Into<select::Error> for Error {
+    fn into(self) -> select::Error {
+        let mut err = select::Error::new();
+        err.set_msg(format!("{:?}", self));
+        err
     }
 }
 

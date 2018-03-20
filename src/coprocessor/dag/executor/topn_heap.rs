@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::cmp::{self, Ordering};
 use std::cell::RefCell;
 use tipb::expression::ByItem;
+use tipb::select;
 
 use coprocessor::codec::table::RowColsDict;
 use coprocessor::codec::datum::Datum;
@@ -31,7 +32,7 @@ pub struct SortRow {
     pub key: Vec<Datum>,
     order_cols: Arc<Vec<ByItem>>,
     eval_cfg: Arc<EvalConfig>,
-    eval_warnings: Arc<RefCell<Vec<String>>>,
+    eval_warnings: Arc<RefCell<Vec<select::Error>>>,
     err: Arc<RefCell<Option<String>>>,
 }
 
@@ -95,7 +96,7 @@ impl SortRow {
         *self.err.borrow_mut() = Some(err_msg);
     }
 
-    pub fn take_warnings(&self) -> Vec<String> {
+    pub fn take_warnings(&self) -> Vec<select::Error> {
         self.eval_warnings.replace(Vec::new())
     }
 }
