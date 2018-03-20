@@ -381,7 +381,7 @@ impl RegionVerifier {
     fn new(db: Arc<DB>, reg: Region) -> Result<Self> {
         let region = reg.clone();
         let start_key = keys::data_key(region.get_start_key());
-        let end_key = keys::data_key(region.get_end_key());
+        let end_key = keys::data_end_key(region.get_end_key());
         let gen_iter = |cf: &str| -> Result<_> {
             let from = start_key.clone();
             let to = end_key.clone();
@@ -394,34 +394,33 @@ impl RegionVerifier {
 
         Ok(RegionVerifier {
             db: Arc::clone(&db),
+            write_iter: gen_iter(CF_WRITE)?,
             lock_iter: gen_iter(CF_LOCK)?,
             //            default_iter: gen_iter(CF_DEFAULT)?,
-            write_iter: gen_iter(CF_WRITE)?,
         })
     }
 
     pub fn verify_write_by_default(&mut self, wb: &WriteBatch) -> Result<()> {
         let iter = &mut self.write_iter;
-        if !iter.valid() {
-            return Err(box_err!("write iter is not valid"));
-        }
 
         let write_handle = box_try!(get_cf_handle(&self.db, CF_WRITE));
         let default_handle = box_try!(get_cf_handle(&self.db, CF_DEFAULT));
 
-        loop {
-            let key = iter.key().to_vec();
-            let value = iter.value().to_vec();
-            let write = box_try!(Write::parse(&value));
-            if write.short_value == None {
-                if let Ok(None) = self.db.get_cf(default_handle, key.as_ref()) {
-                    println!("delete key {:?} in write cf", key.clone());
-                    box_try!(wb.delete_cf(write_handle, key.as_ref()));
+        if iter.valid() {
+            loop {
+                let key = iter.key().to_vec();
+                let value = iter.value().to_vec();
+                let write = box_try!(Write::parse(&value));
+                if write.short_value == None {
+                    if let Ok(None) = self.db.get_cf(default_handle, key.as_ref()) {
+                        println!("delete key {:?} in write cf", key.clone());
+                        box_try!(wb.delete_cf(write_handle, key.as_ref()));
+                    }
                 }
-            }
 
-            if !iter.next() {
-                break;
+                if !iter.next() {
+                    break;
+                }
             }
         }
 
@@ -430,25 +429,24 @@ impl RegionVerifier {
 
     pub fn verify_lock_by_default(&mut self, wb: &WriteBatch) -> Result<()> {
         let iter = &mut self.lock_iter;
-        if !iter.valid() {
-            return Err(box_err!("lock iter is not valid"));
-        }
 
         let lock_handle = box_try!(get_cf_handle(&self.db, CF_LOCK));
         let default_handle = box_try!(get_cf_handle(&self.db, CF_DEFAULT));
-        loop {
-            let key = iter.key().to_vec();
-            let value = iter.value().to_vec();
-            let lock = box_try!(Lock::parse(&value));
-            if lock.short_value == None {
-                if let Ok(None) = self.db.get_cf(default_handle, key.as_ref()) {
-                    println!("delete key {:?} in lock cf", key.clone());
-                    box_try!(wb.delete_cf(lock_handle, key.as_ref()));
+        if !iter.valid() {
+            loop {
+                let key = iter.key().to_vec();
+                let value = iter.value().to_vec();
+                let lock = box_try!(Lock::parse(&value));
+                if lock.short_value == None {
+                    if let Ok(None) = self.db.get_cf(default_handle, key.as_ref()) {
+                        println!("delete key {:?} in lock cf", key.clone());
+                        box_try!(wb.delete_cf(lock_handle, key.as_ref()));
+                    }
                 }
-            }
 
-            if !iter.next() {
-                break;
+                if !iter.next() {
+                    break;
+                }
             }
         }
 
