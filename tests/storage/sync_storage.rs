@@ -163,25 +163,26 @@ impl SyncStorage {
         wait_op!(|cb| self.store.async_gc(ctx, safe_point, cb)).unwrap()
     }
 
-    pub fn raw_get(&self, ctx: Context, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
-        self.store.async_raw_get(ctx, key).wait()
+    pub fn raw_get(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
+        self.store.async_raw_get(ctx, cf, key).wait()
     }
 
-    pub fn raw_put(&self, ctx: Context, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
-        wait_op!(|cb| self.store.async_raw_put(ctx, key, value, cb)).unwrap()
+    pub fn raw_put(&self, ctx: Context, cf: String, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
+        wait_op!(|cb| self.store.async_raw_put(ctx, cf, key, value, cb)).unwrap()
     }
 
-    pub fn raw_delete(&self, ctx: Context, key: Vec<u8>) -> Result<()> {
-        wait_op!(|cb| self.store.async_raw_delete(ctx, key, cb)).unwrap()
+    pub fn raw_delete(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<()> {
+        wait_op!(|cb| self.store.async_raw_delete(ctx, cf, key, cb)).unwrap()
     }
 
     pub fn raw_scan(
         &self,
         ctx: Context,
+        cf: String,
         start_key: Vec<u8>,
         limit: usize,
     ) -> Result<Vec<Result<KvPair>>> {
-        self.store.async_raw_scan(ctx, start_key, limit).wait()
+        self.store.async_raw_scan(ctx, cf, start_key, limit).wait()
     }
 }
 

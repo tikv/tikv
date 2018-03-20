@@ -19,7 +19,7 @@ use std::thread;
 use rand::random;
 use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::{Context, LockInfo};
-use tikv::storage::{self, make_key, Key, Mutation, ALL_CFS};
+use tikv::storage::{self, make_key, Key, Mutation, ALL_CFS, CF_DEFAULT, CF_LOCK};
 use tikv::storage::engine::{Engine, EngineRocksdb, TEMP_DIR};
 use tikv::storage::txn::{GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
@@ -570,38 +570,67 @@ fn test_txn_store_gc3() {
 #[test]
 fn test_txn_store_rawkv() {
     let store = AssertionStorage::default();
-    store.raw_get_ok(b"key".to_vec(), None);
-    store.raw_put_ok(b"key".to_vec(), b"value".to_vec());
-    store.raw_get_ok(b"key".to_vec(), Some(b"value".to_vec()));
-    store.raw_put_ok(b"key".to_vec(), b"v2".to_vec());
-    store.raw_get_ok(b"key".to_vec(), Some(b"v2".to_vec()));
-    store.raw_delete_ok(b"key".to_vec());
-    store.raw_get_ok(b"key".to_vec(), None);
+    store.raw_get_ok("".to_string(), b"key".to_vec(), None);
+    store.raw_put_ok("".to_string(), b"key".to_vec(), b"value".to_vec());
+    store.raw_get_ok("".to_string(), b"key".to_vec(), Some(b"value".to_vec()));
+    store.raw_put_ok("".to_string(), b"key".to_vec(), b"v2".to_vec());
+    store.raw_get_ok("".to_string(), b"key".to_vec(), Some(b"v2".to_vec()));
+    store.raw_delete_ok("".to_string(), b"key".to_vec());
+    store.raw_get_ok("".to_string(), b"key".to_vec(), None);
 
-    store.raw_put_ok(b"k1".to_vec(), b"v1".to_vec());
-    store.raw_put_ok(b"k2".to_vec(), b"v2".to_vec());
-    store.raw_put_ok(b"k3".to_vec(), b"v3".to_vec());
-    store.raw_scan_ok(b"".to_vec(), 1, vec![(b"k1", b"v1")]);
-    store.raw_scan_ok(b"k1".to_vec(), 1, vec![(b"k1", b"v1")]);
-    store.raw_scan_ok(b"k10".to_vec(), 1, vec![(b"k2", b"v2")]);
-    store.raw_scan_ok(b"".to_vec(), 2, vec![(b"k1", b"v1"), (b"k2", b"v2")]);
+    store.raw_put_ok("".to_string(), b"k1".to_vec(), b"v1".to_vec());
+    store.raw_put_ok("".to_string(), b"k2".to_vec(), b"v2".to_vec());
+    store.raw_put_ok("".to_string(), b"k3".to_vec(), b"v3".to_vec());
+    store.raw_scan_ok("".to_string(), b"".to_vec(), 1, vec![(b"k1", b"v1")]);
+    store.raw_scan_ok("".to_string(), b"k1".to_vec(), 1, vec![(b"k1", b"v1")]);
+    store.raw_scan_ok("".to_string(), b"k10".to_vec(), 1, vec![(b"k2", b"v2")]);
     store.raw_scan_ok(
+        "".to_string(),
+        b"".to_vec(),
+        2,
+        vec![(b"k1", b"v1"), (b"k2", b"v2")],
+    );
+    store.raw_scan_ok(
+        "".to_string(),
         b"k1".to_vec(),
         5,
         vec![(b"k1", b"v1"), (b"k2", b"v2"), (b"k3", b"v3")],
     );
-    store.raw_scan_ok(b"".to_vec(), 0, vec![]);
-    store.raw_scan_ok(b"k5".to_vec(), 1, vec![]);
+    store.raw_scan_ok("".to_string(), b"".to_vec(), 0, vec![]);
+    store.raw_scan_ok("".to_string(), b"k5".to_vec(), 1, vec![]);
+}
+
+#[test]
+fn test_txn_store_rawkv_cf() {
+    let store = AssertionStorage::default();
+    store.raw_put_ok(CF_DEFAULT.to_string(), b"k1".to_vec(), b"v1".to_vec());
+    store.raw_get_ok(CF_DEFAULT.to_string(), b"k1".to_vec(), Some(b"v1".to_vec()));
+    store.raw_get_ok("".to_string(), b"k1".to_vec(), Some(b"v1".to_vec()));
+    store.raw_get_ok(CF_LOCK.to_string(), b"k1".to_vec(), None);
+
+    store.raw_put_ok("".to_string(), b"k2".to_vec(), b"v2".to_vec());
+    store.raw_put_ok(CF_LOCK.to_string(), b"k3".to_vec(), b"v3".to_vec());
+    store.raw_get_ok(CF_DEFAULT.to_string(), b"k2".to_vec(), Some(b"v2".to_vec()));
+    store.raw_get_ok(CF_LOCK.to_string(), b"k3".to_vec(), Some(b"v3".to_vec()));
+    store.raw_get_ok(CF_DEFAULT.to_string(), b"k3".to_vec(), None);
+    store.raw_scan_ok(
+        CF_DEFAULT.to_string(),
+        b"".to_vec(),
+        3,
+        vec![(b"k1", b"v1"), (b"k2", b"v2")],
+    );
+
+    store.raw_put_err("foobar".to_string(), b"key".to_vec(), b"value".to_vec());
 }
 
 #[test]
 fn test_txn_storage_keysize() {
     let store = AssertionStorage::default();
     let long_key = vec![b'x'; 10240];
-    store.raw_put_ok(b"short_key".to_vec(), b"v".to_vec());
-    store.raw_put_err(long_key.clone(), b"v".to_vec());
-    store.raw_delete_ok(b"short_key".to_vec());
-    store.raw_delete_err(long_key.clone());
+    store.raw_put_ok("".to_string(), b"short_key".to_vec(), b"v".to_vec());
+    store.raw_put_err("".to_string(), long_key.clone(), b"v".to_vec());
+    store.raw_delete_ok("".to_string(), b"short_key".to_vec());
+    store.raw_delete_err("".to_string(), long_key.clone());
     store.prewrite_ok(
         vec![Mutation::Put((make_key(b"short_key"), b"v".to_vec()))],
         b"short_key",

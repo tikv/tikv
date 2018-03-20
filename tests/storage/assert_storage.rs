@@ -447,31 +447,44 @@ impl AssertionStorage {
         panic!("failed with 3 retry!");
     }
 
-    pub fn raw_get_ok(&self, key: Vec<u8>, value: Option<Vec<u8>>) {
-        assert_eq!(self.store.raw_get(self.ctx.clone(), key).unwrap(), value);
+    pub fn raw_get_ok(&self, cf: String, key: Vec<u8>, value: Option<Vec<u8>>) {
+        assert_eq!(
+            self.store.raw_get(self.ctx.clone(), cf, key).unwrap(),
+            value
+        );
     }
 
-    pub fn raw_put_ok(&self, key: Vec<u8>, value: Vec<u8>) {
-        self.store.raw_put(self.ctx.clone(), key, value).unwrap();
-    }
-
-    pub fn raw_put_err(&self, key: Vec<u8>, value: Vec<u8>) {
+    pub fn raw_put_ok(&self, cf: String, key: Vec<u8>, value: Vec<u8>) {
         self.store
-            .raw_put(self.ctx.clone(), key, value)
+            .raw_put(self.ctx.clone(), cf, key, value)
+            .unwrap();
+    }
+
+    pub fn raw_put_err(&self, cf: String, key: Vec<u8>, value: Vec<u8>) {
+        self.store
+            .raw_put(self.ctx.clone(), cf, key, value)
             .unwrap_err();
     }
 
-    pub fn raw_delete_ok(&self, key: Vec<u8>) {
-        self.store.raw_delete(self.ctx.clone(), key).unwrap()
+    pub fn raw_delete_ok(&self, cf: String, key: Vec<u8>) {
+        self.store.raw_delete(self.ctx.clone(), cf, key).unwrap()
     }
 
-    pub fn raw_delete_err(&self, key: Vec<u8>) {
-        self.store.raw_delete(self.ctx.clone(), key).unwrap_err();
+    pub fn raw_delete_err(&self, cf: String, key: Vec<u8>) {
+        self.store
+            .raw_delete(self.ctx.clone(), cf, key)
+            .unwrap_err();
     }
 
-    pub fn raw_scan_ok(&self, start_key: Vec<u8>, limit: usize, expect: Vec<(&[u8], &[u8])>) {
+    pub fn raw_scan_ok(
+        &self,
+        cf: String,
+        start_key: Vec<u8>,
+        limit: usize,
+        expect: Vec<(&[u8], &[u8])>,
+    ) {
         let result: Vec<KvPair> = self.store
-            .raw_scan(self.ctx.clone(), start_key, limit)
+            .raw_scan(self.ctx.clone(), cf, start_key, limit)
             .unwrap()
             .into_iter()
             .map(|x| x.unwrap())

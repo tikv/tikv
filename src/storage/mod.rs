@@ -873,6 +873,7 @@ impl Storage {
     pub fn async_raw_get(
         &self,
         ctx: Context,
+        cf: String,
         key: Vec<u8>,
     ) -> impl Future<Item = Option<Vec<u8>>, Error = Error> {
         const CMD: &str = "raw_get";
@@ -890,11 +891,11 @@ impl Storage {
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-
+                    let cf = Storage::rawkv_cf(cf)?;
                     // no scan_count for this kind of op.
 
                     let key_len = key.len();
-                    snapshot.get(&Key::from_encoded(key))
+                    snapshot.get_cf(cf, &Key::from_encoded(key))
                         // map storage::engine::Error -> storage::Error
                         .map_err(Error::from)
                         .map(|r| {
@@ -922,6 +923,7 @@ impl Storage {
     pub fn async_raw_put(
         &self,
         ctx: Context,
+        cf: String,
         key: Vec<u8>,
         value: Vec<u8>,
         callback: Callback<()>,
@@ -932,7 +934,9 @@ impl Storage {
         }
         self.engine.async_write(
             &ctx,
-            vec![Modify::Put(CF_DEFAULT, Key::from_encoded(key), value)],
+            vec![
+                Modify::Put(Storage::rawkv_cf(cf)?, Key::from_encoded(key), value),
+            ],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
         RAWKV_COMMAND_COUNTER_VEC
@@ -944,6 +948,7 @@ impl Storage {
     pub fn async_raw_delete(
         &self,
         ctx: Context,
+        cf: String,
         key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
@@ -953,7 +958,9 @@ impl Storage {
         }
         self.engine.async_write(
             &ctx,
-            vec![Modify::Delete(CF_DEFAULT, Key::from_encoded(key))],
+            vec![
+                Modify::Delete(Storage::rawkv_cf(cf)?, Key::from_encoded(key)),
+            ],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
         RAWKV_COMMAND_COUNTER_VEC
@@ -965,6 +972,7 @@ impl Storage {
     pub fn async_raw_delete_range(
         &self,
         ctx: Context,
+        cf: String,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
         callback: Callback<()>,
@@ -981,7 +989,7 @@ impl Storage {
             &ctx,
             vec![
                 Modify::DeleteRange(
-                    CF_DEFAULT,
+                    Storage::rawkv_cf(cf)?,
                     Key::from_encoded(start_key),
                     Key::from_encoded(end_key),
                 ),
@@ -996,11 +1004,16 @@ impl Storage {
 
     fn raw_scan(
         snapshot: Box<Snapshot>,
+        cf: String,
         start_key: &Key,
         limit: usize,
         stats: &mut Statistics,
-    ) -> engine::Result<Vec<Result<KvPair>>> {
-        let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Forward)?;
+    ) -> Result<Vec<Result<KvPair>>> {
+        let mut cursor = snapshot.iter_cf(
+            Storage::rawkv_cf(cf)?,
+            IterOption::default(),
+            ScanMode::Forward,
+        )?;
         if !cursor.seek(start_key, &mut stats.data)? {
             return Ok(vec![]);
         }
@@ -1015,6 +1028,7 @@ impl Storage {
     pub fn async_raw_scan(
         &self,
         ctx: Context,
+        cf: String,
         key: Vec<u8>,
         limit: usize,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
@@ -1037,6 +1051,7 @@ impl Storage {
                     let mut statistics = Statistics::default();
                     let result = Storage::raw_scan(
                         snapshot,
+                        cf,
                         &Key::from_encoded(key),
                         limit,
                         &mut statistics,
@@ -1071,6 +1086,18 @@ impl Storage {
         future::result(res)
             .map_err(|_| Error::SchedTooBusy)
             .flatten()
+    }
+
+    fn rawkv_cf(cf: String) -> Result<CfName> {
+        if cf.is_empty() {
+            return Ok(CF_DEFAULT);
+        }
+        for c in DATA_CFS {
+            if &cf == c {
+                return Ok(c);
+            }
+        }
+        Err(Error::InvalidCf(cf))
     }
 
     pub fn async_mvcc_by_key(
@@ -1153,6 +1180,10 @@ quick_error! {
         KeyTooLarge(size: usize, limit: usize) {
             description("max key size exceeded")
             display("max key size exceeded, size: {}, limit: {}", size, limit)
+        }
+        InvalidCf (cf_name: String) {
+            description("invalid cf name")
+            display("invalid cf name: {}", cf_name)
         }
     }
 }
@@ -1857,6 +1888,7 @@ mod tests {
             storage
                 .async_raw_put(
                     Context::new(),
+                    "".to_string(),
                     kv.0.to_vec(),
                     kv.1.to_vec(),
                     expect_ok_callback(tx.clone(), 0),
@@ -1866,13 +1898,16 @@ mod tests {
 
         expect_value(
             b"004".to_vec(),
-            storage.async_raw_get(Context::new(), b"d".to_vec()).wait(),
+            storage
+                .async_raw_get(Context::new(), "".to_string(), b"d".to_vec())
+                .wait(),
         );
 
         // Delete ["d", "e")
         storage
             .async_raw_delete_range(
                 Context::new(),
+                "".to_string(),
                 b"d".to_vec(),
                 b"e".to_vec(),
                 expect_ok_callback(tx.clone(), 1),
@@ -1883,18 +1918,27 @@ mod tests {
         // Assert key "d" has gone
         expect_value(
             b"003".to_vec(),
-            storage.async_raw_get(Context::new(), b"c".to_vec()).wait(),
+            storage
+                .async_raw_get(Context::new(), "".to_string(), b"c".to_vec())
+                .wait(),
         );
-        expect_none(storage.async_raw_get(Context::new(), b"d".to_vec()).wait());
+        expect_none(
+            storage
+                .async_raw_get(Context::new(), "".to_string(), b"d".to_vec())
+                .wait(),
+        );
         expect_value(
             b"005".to_vec(),
-            storage.async_raw_get(Context::new(), b"e".to_vec()).wait(),
+            storage
+                .async_raw_get(Context::new(), "".to_string(), b"e".to_vec())
+                .wait(),
         );
 
         // Delete ["aa", "ab")
         storage
             .async_raw_delete_range(
                 Context::new(),
+                "".to_string(),
                 b"aa".to_vec(),
                 b"ab".to_vec(),
                 expect_ok_callback(tx.clone(), 2),
@@ -1905,17 +1949,22 @@ mod tests {
         // Assert nothing happened
         expect_value(
             b"001".to_vec(),
-            storage.async_raw_get(Context::new(), b"a".to_vec()).wait(),
+            storage
+                .async_raw_get(Context::new(), "".to_string(), b"a".to_vec())
+                .wait(),
         );
         expect_value(
             b"002".to_vec(),
-            storage.async_raw_get(Context::new(), b"b".to_vec()).wait(),
+            storage
+                .async_raw_get(Context::new(), "".to_string(), b"b".to_vec())
+                .wait(),
         );
 
         // Delete all
         storage
             .async_raw_delete_range(
                 Context::new(),
+                "".to_string(),
                 b"a".to_vec(),
                 b"z".to_vec(),
                 expect_ok_callback(tx, 3),
@@ -1925,7 +1974,11 @@ mod tests {
 
         // Assert now no key remains
         for kv in &test_data {
-            expect_none(storage.async_raw_get(Context::new(), kv.0.to_vec()).wait());
+            expect_none(
+                storage
+                    .async_raw_get(Context::new(), "".to_string(), kv.0.to_vec())
+                    .wait(),
+            );
         }
 
         rx.recv().unwrap();

@@ -658,7 +658,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let timer = self.metrics.raw_get.start_coarse_timer();
 
         let future = self.storage
-            .async_raw_get(req.take_context(), req.take_key())
+            .async_raw_get(req.take_context(), req.take_cf(), req.take_key())
             .then(|v| {
                 let mut resp = RawGetResponse::new();
                 if let Some(err) = extract_region_error(&v) {
@@ -689,6 +689,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let future = self.storage
             .async_raw_scan(
                 req.take_context(),
+                req.take_cf(),
                 req.take_start_key(),
                 req.get_limit() as usize,
             )
@@ -716,9 +717,13 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let timer = self.metrics.raw_put.start_coarse_timer();
 
         let (cb, future) = make_callback();
-        let res =
-            self.storage
-                .async_raw_put(req.take_context(), req.take_key(), req.take_value(), cb);
+        let res = self.storage.async_raw_put(
+            req.take_context(),
+            req.take_cf(),
+            req.take_key(),
+            req.take_value(),
+            cb,
+        );
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -755,8 +760,9 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let timer = self.metrics.raw_delete.start_coarse_timer();
 
         let (cb, future) = make_callback();
-        let res = self.storage
-            .async_raw_delete(req.take_context(), req.take_key(), cb);
+        let res =
+            self.storage
+                .async_raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -795,6 +801,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let (cb, future) = make_callback();
         let res = self.storage.async_raw_delete_range(
             req.take_context(),
+            req.take_cf(),
             req.take_start_key(),
             req.take_end_key(),
             cb,
