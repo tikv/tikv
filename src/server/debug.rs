@@ -269,7 +269,7 @@ impl Debugger {
     fn verify_region(&self, db: &Arc<DB>, region: Region) -> Result<()> {
         let wb = WriteBatch::new();
 
-        let mut region_verifier = box_try!(RegionVerifier::new(Arc::clone(&db), region));
+        let mut region_verifier = box_try!(RegionVerifier::new(Arc::clone(db), region));
         if let Err(e) = region_verifier.verify_write_by_default(&wb) {
             return Err(e);
         }
@@ -384,7 +384,7 @@ impl RegionVerifier {
             let from = keys::data_key(region.get_start_key());
             let to = keys::data_key(region.get_end_key().clone());
             let readopts = IterOption::new(Some(from.clone()), Some(to), false).build_read_opts();
-            let handle = box_try!(get_cf_handle(&db.as_ref(), cf));
+            let handle = box_try!(get_cf_handle(db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(Arc::clone(&db), handle, readopts);
             iter.seek(SeekKey::from(from.as_ref()));
             Ok(iter)
@@ -412,9 +412,8 @@ impl RegionVerifier {
             let value = iter.value().to_vec();
             let write = box_try!(Write::parse(&value));
             if write.short_value == None {
-                match self.db.get_cf(&default_handle, key.as_ref()) {
-                    Ok(None) => box_try!(wb.delete_cf(&write_handle, key.as_ref())),
-                    _ => {}
+                if let Ok(None) = self.db.get_cf(default_handle, key.as_ref()) {
+                    box_try!(wb.delete_cf(write_handle, key.as_ref()));
                 }
             }
 
@@ -439,9 +438,8 @@ impl RegionVerifier {
             let value = iter.value().to_vec();
             let lock = box_try!(Lock::parse(&value));
             if lock.short_value == None {
-                match self.db.get_cf(&default_handle, key.as_ref()) {
-                    Ok(None) => box_try!(wb.delete_cf(&lock_handle, key.as_ref())),
-                    _ => {}
+                if let Ok(None) = self.db.get_cf(default_handle, key.as_ref()) {
+                    box_try!(wb.delete_cf(lock_handle, key.as_ref()));
                 }
             }
 
