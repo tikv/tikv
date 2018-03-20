@@ -18,19 +18,19 @@ use kvproto::raft_serverpb::*;
 use protobuf::{self, RepeatedField};
 use raft::{self, RawNode};
 use raft::eraftpb::Entry;
-use raftstore::store::{CacheQueryStats, Engines, Iterable, keys, Peekable, PeerStorage};
+use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
 use raftstore::store::{init_apply_state, init_raft_state, write_peer_state};
 use raftstore::store::engine::IterOption;
 use raftstore::store::util as raftstore_util;
-use rocksdb::{DB, Kv, SeekKey, Writable, WriteBatch, WriteOptions};
+use rocksdb::{Kv, SeekKey, Writable, WriteBatch, WriteOptions, DB};
 use std::{error, result};
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::rc::Rc;
 use std::sync::Arc;
-use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, is_short_value};
+use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use storage::mvcc::{Lock, Write, WriteType};
-use storage::types::{Key, truncate_ts};
+use storage::types::{truncate_ts, Key};
 use util::config::ReadableSize;
 use util::escape;
 use util::rocksdb::{compact_range, get_cf_handle};
@@ -184,15 +184,15 @@ impl Debugger {
         match self.engines
             .kv_engine
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-            {
-                Ok(Some(region_state)) => {
-                    let region = region_state.get_region();
-                    let start_key = &keys::data_key(region.get_start_key());
-                    let end_key = &keys::data_end_key(region.get_end_key());
-                    let mut sizes = vec![];
-                    for cf in cfs {
-                        let mut size = 0;
-                        box_try!(self.engines.kv_engine.scan_cf(
+        {
+            Ok(Some(region_state)) => {
+                let region = region_state.get_region();
+                let start_key = &keys::data_key(region.get_start_key());
+                let end_key = &keys::data_end_key(region.get_end_key());
+                let mut sizes = vec![];
+                for cf in cfs {
+                    let mut size = 0;
+                    box_try!(self.engines.kv_engine.scan_cf(
                         cf.as_ref(),
                         start_key,
                         end_key,
@@ -202,13 +202,13 @@ impl Debugger {
                             Ok(true)
                         }
                     ));
-                        sizes.push((cf, size));
-                    }
-                    Ok(sizes)
+                    sizes.push((cf, size));
                 }
-                Ok(None) => Err(Error::NotFound(format!("none region {:?}", region_id))),
-                Err(e) => Err(box_err!(e)),
+                Ok(sizes)
             }
+            Ok(None) => Err(Error::NotFound(format!("none region {:?}", region_id))),
+            Err(e) => Err(box_err!(e)),
+        }
     }
 
     pub fn scan_mvcc(&self, start: &[u8], end: &[u8], limit: u64) -> Result<MvccInfoIterator> {
@@ -265,7 +265,6 @@ impl Debugger {
 
         Ok(errors)
     }
-
 
     fn verify_region(&self, db: &Arc<DB>, region: Region) -> Result<()> {
         let wb = WriteBatch::new();
@@ -394,15 +393,15 @@ impl RegionVerifier {
         Ok(RegionVerifier {
             db: Arc::clone(&db),
             lock_iter: gen_iter(CF_LOCK)?,
-//            default_iter: gen_iter(CF_DEFAULT)?,
+            //            default_iter: gen_iter(CF_DEFAULT)?,
             write_iter: gen_iter(CF_WRITE)?,
         })
     }
 
     pub fn verify_write_by_default(&mut self, wb: &WriteBatch) -> Result<()> {
         let iter = &mut self.write_iter;
-        if iter.valid() {
-            Err(())
+        if !iter.valid() {
+            Err(box_err!("write iter is not valid"))
         }
 
         let write_handle = box_try!(get_cf_handle(&self.db, CF_WRITE));
@@ -429,8 +428,8 @@ impl RegionVerifier {
 
     pub fn verify_lock_by_default(&mut self, wb: &WriteBatch) -> Result<()> {
         let iter = &mut self.lock_iter;
-        if iter.valid() {
-            Err(())
+        if !iter.valid() {
+            Err(box_err!("lock iter is not valid"))
         }
 
         let lock_handle = box_try!(get_cf_handle(&self.db, CF_LOCK));

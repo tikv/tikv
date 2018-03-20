@@ -28,7 +28,7 @@ extern crate tikv;
 extern crate toml;
 
 use clap::{App, Arg, ArgMatches, SubCommand};
-use futures::{future, Future, stream, Stream};
+use futures::{future, stream, Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::debugpb::*;
 use kvproto::debugpb::DB as DBType;
@@ -50,7 +50,7 @@ use std::iter::FromIterator;
 use std::sync::Arc;
 use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
-use tikv::raftstore::store::{Engines, keys};
+use tikv::raftstore::store::{keys, Engines};
 use tikv::server::debug::{Debugger, RegionInfo};
 use tikv::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::util::{escape, unescape};
@@ -241,10 +241,10 @@ trait DebugExecutor {
                     for write_info in mvcc.get_writes() {
                         if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts)
                             && commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
-                            {
-                                // FIXME: short_value is lost in kvproto.
-                                println!("\t write cf value: {:?}", write_info);
-                            }
+                        {
+                            // FIXME: short_value is lost in kvproto.
+                            println!("\t write cf value: {:?}", write_info);
+                        }
                     }
                 }
                 println!();
@@ -390,9 +390,9 @@ trait DebugExecutor {
                     .get_region_by_id(region_id)
                     .wait()
                     .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
-                    {
-                        return region;
-                    }
+                {
+                    return region;
+                }
                 eprintln!("no such region in pd: {}", region_id);
                 process::exit(-1);
             })
@@ -404,12 +404,7 @@ trait DebugExecutor {
 
     fn check_local_mode(&self);
 
-    fn verify_all_regions(
-        &self,
-        mgr: Arc<SecurityManager>,
-        cfg: &PdConfig,
-        region_ids: Vec<u64>,
-    ) {
+    fn verify_all_regions(&self, mgr: Arc<SecurityManager>, cfg: &PdConfig, region_ids: Vec<u64>) {
         self.check_local_mode();
         let rpc_client =
             RpcClient::new(cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
@@ -421,9 +416,9 @@ trait DebugExecutor {
                     .get_region_by_id(region_id)
                     .wait()
                     .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
-                    {
-                        return region;
-                    }
+                {
+                    return region;
+                }
                 eprintln!("no such region in pd: {}", region_id);
                 process::exit(-1);
             })
@@ -446,7 +441,7 @@ trait DebugExecutor {
         from: Vec<u8>,
         to: Vec<u8>,
         limit: u64,
-    ) -> Box<Stream<Item=(Vec<u8>, MvccInfo), Error=String>>;
+    ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
 
     fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>);
 
@@ -523,7 +518,7 @@ impl DebugExecutor for DebugClient {
         from: Vec<u8>,
         to: Vec<u8>,
         limit: u64,
-    ) -> Box<Stream<Item=(Vec<u8>, MvccInfo), Error=String>> {
+    ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
         let mut req = ScanMvccRequest::new();
         req.set_from_key(from);
         req.set_to_key(to);
@@ -533,7 +528,7 @@ impl DebugExecutor for DebugClient {
                 .unwrap()
                 .map_err(|e| e.to_string())
                 .map(|mut resp| (resp.take_key(), resp.take_info())),
-        ) as Box<Stream<Item=(Vec<u8>, MvccInfo), Error=String>>
+        ) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
     fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>) {
@@ -627,12 +622,12 @@ impl DebugExecutor for Debugger {
         from: Vec<u8>,
         to: Vec<u8>,
         limit: u64,
-    ) -> Box<Stream<Item=(Vec<u8>, MvccInfo), Error=String>> {
+    ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
         let iter = self.scan_mvcc(&from, &to, limit)
             .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
         #[allow(deprecated)]
         let stream = stream::iter(iter).map_err(|e| e.to_string());
-        Box::new(stream) as Box<Stream<Item=(Vec<u8>, MvccInfo), Error=String>>
+        Box::new(stream) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
     fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>) {
