@@ -389,7 +389,7 @@ impl Store {
         }
     }
 
-    fn get_engine(&self) -> Box<Engine> {
+    pub fn get_engine(&self) -> Box<Engine> {
         self.store.get_engine()
     }
 
@@ -446,7 +446,7 @@ fn build_row_key(table_id: i64, id: i64) -> Vec<u8> {
 
 /// An example table for test purpose.
 pub struct ProductTable {
-    id: Column,
+    pub id: Column,
     pub name: Column,
     pub count: Column,
     pub table: Table,
