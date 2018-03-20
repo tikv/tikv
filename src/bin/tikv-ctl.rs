@@ -57,6 +57,11 @@ use tikv::util::{escape, unescape};
 use tikv::util::rocksdb as rocksdb_util;
 use tikv::util::security::{SecurityConfig, SecurityManager};
 
+const METRICS_PROMETHEUS: &str = "prometheus";
+const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
+const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
+const METRICS_JEMALLOC: &str = "jemalloc";
+
 fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     eprintln!("{}: {}", prefix, e);
     process::exit(-1);
@@ -395,6 +400,8 @@ trait DebugExecutor {
         self.set_region_tombstone(regions);
     }
 
+    fn check_region_consistency(&self, _: u64);
+
     fn check_local_mode(&self);
 
     fn verify_all_regions(
@@ -446,6 +453,8 @@ trait DebugExecutor {
     fn set_region_tombstone(&self, regions: Vec<Region>);
 
     fn verify_regions(&self, regions: Vec<Region>);
+
+    fn dump_metrics(&self, tags: Vec<&str>);
 }
 
 impl DebugExecutor for DebugClient {
@@ -538,6 +547,29 @@ impl DebugExecutor for DebugClient {
         println!("success!");
     }
 
+    fn dump_metrics(&self, tags: Vec<&str>) {
+        let mut req = GetMetricsRequest::new();
+        req.set_all(true);
+        if tags.len() == 1 && tags[0] == METRICS_PROMETHEUS {
+            req.set_all(false);
+        }
+        let mut resp = self.get_metrics(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::metrics", e));
+        for tag in tags {
+            println!("tag:{}", tag);
+            let metrics = match tag {
+                METRICS_ROCKSDB_KV => resp.take_rocksdb_kv(),
+                METRICS_ROCKSDB_RAFT => resp.take_rocksdb_raft(),
+                METRICS_JEMALLOC => resp.take_jemalloc(),
+                METRICS_PROMETHEUS => resp.take_prometheus(),
+                _ => String::from(
+                    "unsupported tag, should be one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv",
+                ),
+            };
+            println!("{}", metrics);
+        }
+    }
+
     fn set_region_tombstone(&self, _: Vec<Region>) {
         unimplemented!("only avaliable for local mode");
     }
@@ -548,6 +580,14 @@ impl DebugExecutor for DebugClient {
 
     fn print_bad_regions(&self) {
         unimplemented!("only avaliable for local mode");
+    }
+
+    fn check_region_consistency(&self, region_id: u64) {
+        let mut req = RegionConsistencyCheckRequest::new();
+        req.set_region_id(region_id);
+        self.check_region_consistency(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::check_region_consistency", e));
+        println!("success!");
     }
 }
 
@@ -635,6 +675,15 @@ impl DebugExecutor for Debugger {
             return;
         }
         println!("all regions are healthy")
+    }
+
+    fn dump_metrics(&self, _tags: Vec<&str>) {
+        unimplemented!("only avaliable for online mode");
+    }
+
+    fn check_region_consistency(&self, _: u64) {
+        eprintln!("only support remote mode");
+        process::exit(-1);
     }
 }
 
@@ -979,6 +1028,31 @@ fn main() {
                         .require_delimiter(true)
                         .value_delimiter(",")
                         .help("PD endpoints"),
+            SubCommand::with_name("metrics")
+                .about("print the metrics")
+                .arg(
+                Arg::with_name("tag")
+                    .short("t")
+                    .long("tag")
+                    .takes_value(true)
+                    .multiple(true)
+                    .use_delimiter(true)
+                    .require_delimiter(true)
+                    .value_delimiter(",")
+                    .default_value(METRICS_PROMETHEUS)
+                    .help(
+                        "set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not specified, print prometheus",
+                    ),
+            ),)
+            .subcommand(
+            SubCommand::with_name("consistency-check")
+                .about("force consistency-check for a specified region")
+                .arg(
+                    Arg::with_name("region")
+                        .required(true)
+                        .short("r")
+                        .takes_value(true)
+                        .help("the target region"),
                 ),
         )
         .subcommand(
@@ -1094,8 +1168,14 @@ fn main() {
             panic!("invalid pd configuration: {:?}", e);
         }
         debug_executor.verify_all_regions(mgr, &cfg, regions);
+    } else if let Some(matches) = matches.subcommand_matches("consistency-check") {
+        let region_id = matches.value_of("region").unwrap().parse().unwrap();
+        debug_executor.check_region_consistency(region_id);
     } else if matches.subcommand_matches("bad-regions").is_some() {
         debug_executor.print_bad_regions();
+    } else if let Some(matches) = matches.subcommand_matches("metrics") {
+        let tags = Vec::from_iter(matches.values_of("tag").unwrap());
+        debug_executor.dump_metrics(tags)
     } else {
         let _ = app.print_help();
     }

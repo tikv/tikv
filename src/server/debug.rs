@@ -360,7 +360,7 @@ impl Debugger {
         Ok(res)
     }
 
-    fn get_store_id(&self) -> Result<u64> {
+    pub fn get_store_id(&self) -> Result<u64> {
         let db = &self.engines.kv_engine;
         db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
             .map_err(|e| box_err!(e))
