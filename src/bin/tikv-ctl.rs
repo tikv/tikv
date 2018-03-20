@@ -645,6 +645,7 @@ impl DebugExecutor for Debugger {
         self.remove_failed_stores(store_ids)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
         println!("success");
+    }
 
     fn dump_metrics(&self, _tags: Vec<&str>) {
         unimplemented!("only avaliable for online mode");
