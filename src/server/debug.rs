@@ -381,8 +381,8 @@ impl RegionVerifier {
     fn new(db: Arc<DB>, reg: Region) -> Result<Self> {
         let region = reg.clone();
         let gen_iter = |cf: &str| -> Result<_> {
-            let from = region.start_key.clone();
-            let to = region.end_key.clone();
+            let from = keys::data_key(region.get_start_key());
+            let to = keys::data_key(region.get_end_key().clone());
             let readopts = IterOption::new(Some(from.clone()), Some(to), false).build_read_opts();
             let handle = box_try!(get_cf_handle(&db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(Arc::clone(&db), handle, readopts);
@@ -401,7 +401,7 @@ impl RegionVerifier {
     pub fn verify_write_by_default(&mut self, wb: &WriteBatch) -> Result<()> {
         let iter = &mut self.write_iter;
         if !iter.valid() {
-            Err(box_err!("write iter is not valid"))
+            return Err(box_err!("write iter is not valid"));
         }
 
         let write_handle = box_try!(get_cf_handle(&self.db, CF_WRITE));
@@ -429,7 +429,7 @@ impl RegionVerifier {
     pub fn verify_lock_by_default(&mut self, wb: &WriteBatch) -> Result<()> {
         let iter = &mut self.lock_iter;
         if !iter.valid() {
-            Err(box_err!("lock iter is not valid"))
+            return Err(box_err!("lock iter is not valid"));
         }
 
         let lock_handle = box_try!(get_cf_handle(&self.db, CF_LOCK));
