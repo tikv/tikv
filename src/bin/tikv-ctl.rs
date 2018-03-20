@@ -59,6 +59,11 @@ use tikv::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::config::TiKvConfig;
 
+const METRICS_PROMETHEUS: &str = "prometheus";
+const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
+const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
+const METRICS_JEMALLOC: &str = "jemalloc";
+
 fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     eprintln!("{}: {}", prefix, e);
     process::exit(-1);
@@ -423,6 +428,8 @@ trait DebugExecutor {
     fn set_region_tombstone(&self, regions: Vec<Region>);
 
     fn modify_tikv_config(&self, module: &str, config_name: &str, config_value: &str);
+
+    fn dump_metrics(&self, tags: Vec<&str>);
 }
 
 impl DebugExecutor for DebugClient {
@@ -513,6 +520,29 @@ impl DebugExecutor for DebugClient {
         self.compact(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::compact", e));
         println!("success!");
+    }
+
+    fn dump_metrics(&self, tags: Vec<&str>) {
+        let mut req = GetMetricsRequest::new();
+        req.set_all(true);
+        if tags.len() == 1 && tags[0] == METRICS_PROMETHEUS {
+            req.set_all(false);
+        }
+        let mut resp = self.get_metrics(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::metrics", e));
+        for tag in tags {
+            println!("tag:{}", tag);
+            let metrics = match tag {
+                METRICS_ROCKSDB_KV => resp.take_rocksdb_kv(),
+                METRICS_ROCKSDB_RAFT => resp.take_rocksdb_raft(),
+                METRICS_JEMALLOC => resp.take_jemalloc(),
+                METRICS_PROMETHEUS => resp.take_prometheus(),
+                _ => String::from(
+                    "unsupported tag, should be one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv",
+                ),
+            };
+            println!("{}", metrics);
+        }
     }
 
     fn set_region_tombstone(&self, _: Vec<Region>) {
@@ -614,6 +644,10 @@ impl DebugExecutor for Debugger {
             return;
         }
         println!("all regions are healthy")
+    }
+
+    fn dump_metrics(&self, _tags: Vec<&str>) {
+        unimplemented!("only avaliable for online mode");
     }
 
     fn check_region_consistency(&self, _: u64) {
@@ -945,6 +979,23 @@ fn main() {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("metrics")
+                .about("print the metrics")
+                .arg(
+                Arg::with_name("tag")
+                    .short("t")
+                    .long("tag")
+                    .takes_value(true)
+                    .multiple(true)
+                    .use_delimiter(true)
+                    .require_delimiter(true)
+                    .value_delimiter(",")
+                    .default_value(METRICS_PROMETHEUS)
+                    .help(
+                        "set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not specified, print prometheus",
+                    ),
+            ),)
+            .subcommand(
             SubCommand::with_name("consistency-check")
                 .about("force consistency-check for a specified region")
                 .arg(
@@ -1084,6 +1135,9 @@ fn main() {
         let config_name = matches.value_of("config_name").unwrap();
         let config_value = matches.value_of("config_value").unwrap();
         debug_executor.modify_tikv_config(module, config_name, config_value);
+    } else if let Some(matches) = matches.subcommand_matches("metrics") {
+        let tags = Vec::from_iter(matches.values_of("tag").unwrap());
+        debug_executor.dump_metrics(tags)
     } else {
         let _ = app.print_help();
     }

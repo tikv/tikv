@@ -1030,7 +1030,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "2.0.0-rc.1"
+version = "2.0.0-rc.2"
 dependencies = [
  "backtrace 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "bitflags 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1094,7 +1094,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#b7be7b8a36454b0361b5b2ffc539a0b8f11cde07"
+source = "git+https://github.com/pingcap/tipb.git#a4cb837b2f797f54d3b2bbb3da47dd15af14de7d"
 dependencies = [
  "protobuf 1.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]

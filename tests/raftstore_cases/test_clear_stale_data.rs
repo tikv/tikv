@@ -108,7 +108,7 @@ fn test_clear_stale_data<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 
     // Remove some peers from the node.
-    cluster.pd_client.disable_default_rule();
+    cluster.pd_client.disable_default_operator();
     for i in 0..n {
         if i % 2 == 0 {
             continue;
