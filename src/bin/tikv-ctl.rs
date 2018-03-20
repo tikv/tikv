@@ -574,7 +574,7 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only avaliable for local mode");
     }
 
-    fn verify_regions(&self, region_ids: Vec<Region>) {
+    fn verify_regions(&self, _: Vec<Region>) {
         unimplemented!("only avaliable for local mode");
     }
 

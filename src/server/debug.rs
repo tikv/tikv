@@ -400,9 +400,13 @@ impl RegionVerifier {
     }
 
     pub fn verify_write_by_default(&mut self, wb: &WriteBatch) -> Result<()> {
+        let iter = &mut self.write_iter;
+        if iter.valid() {
+            Err(())
+        }
+
         let write_handle = box_try!(get_cf_handle(&self.db, CF_WRITE));
         let default_handle = box_try!(get_cf_handle(&self.db, CF_DEFAULT));
-        let iter = &mut self.write_iter;
 
         loop {
             let key = iter.key().to_vec();
@@ -424,10 +428,13 @@ impl RegionVerifier {
     }
 
     pub fn verify_lock_by_default(&mut self, wb: &WriteBatch)  -> Result<()> {
+        let iter = &mut self.lock_iter;
+        if iter.valid() {
+            Err(())
+        }
+
         let lock_handle = box_try!(get_cf_handle(&self.db, CF_LOCK));
         let default_handle = box_try!(get_cf_handle(&self.db, CF_DEFAULT));
-        let iter = &mut self.lock_iter;
-
         loop {
             let key = iter.key().to_vec();
             let value = iter.value().to_vec();
