@@ -22,11 +22,11 @@ use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_u
 use super::{Error, EvalContext, FnCall, Result};
 
 impl FnCall {
-    pub fn cast_int_as_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn cast_int_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
     }
 
-    pub fn cast_real_as_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn cast_real_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         if mysql::has_unsigned_flag(u64::from(self.tp.get_flag())) {
             let uval = convert_float_to_uint(val, u64::MAX, types::DOUBLE)?;
@@ -37,7 +37,7 @@ impl FnCall {
         }
     }
 
-    pub fn cast_decimal_as_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn cast_decimal_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let val = val.into_owned().round(0, RoundMode::HalfEven).unwrap();
         if mysql::has_unsigned_flag(u64::from(self.tp.get_flag())) {
@@ -51,7 +51,7 @@ impl FnCall {
         }
     }
 
-    pub fn cast_str_as_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn cast_str_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         if self.children[0].is_hybrid_type() {
             return self.children[0].eval_int(ctx, row);
         }
@@ -72,7 +72,7 @@ impl FnCall {
         }
     }
 
-    pub fn cast_time_as_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn cast_time_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
         let dec = val.to_decimal()?;
         let dec = dec.round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
@@ -81,7 +81,11 @@ impl FnCall {
         Ok(Some(res))
     }
 
-    pub fn cast_duration_as_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn cast_duration_as_int(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let dec = val.to_decimal()?;
         let dec = dec.round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
@@ -90,13 +94,13 @@ impl FnCall {
         Ok(Some(res))
     }
 
-    pub fn cast_json_as_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn cast_json_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
         let res = val.cast_to_int();
         Ok(Some(res))
     }
 
-    pub fn cast_int_as_real(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn cast_int_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
         if !mysql::has_unsigned_flag(u64::from(self.children[0].get_tp().get_flag())) {
             Ok(Some(self.produce_float_with_specified_tp(ctx, val as f64)?))
@@ -109,18 +113,22 @@ impl FnCall {
         }
     }
 
-    pub fn cast_real_as_real(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn cast_real_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(self.produce_float_with_specified_tp(ctx, val)?))
     }
 
-    pub fn cast_decimal_as_real(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn cast_decimal_as_real(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let res = val.as_f64()?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
 
-    pub fn cast_str_as_real(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn cast_str_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         if self.children[0].is_hybrid_type() {
             return self.children[0].eval_real(ctx, row);
         }
@@ -129,21 +137,25 @@ impl FnCall {
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
 
-    pub fn cast_time_as_real(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn cast_time_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
         let val = val.to_decimal()?;
         let res = val.as_f64()?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
 
-    pub fn cast_duration_as_real(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn cast_duration_as_real(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let val = val.to_decimal()?;
         let res = val.as_f64()?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
 
-    pub fn cast_json_as_real(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn cast_json_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
         let val = val.cast_to_real();
         Ok(Some(self.produce_float_with_specified_tp(ctx, val)?))
@@ -151,7 +163,7 @@ impl FnCall {
 
     pub fn cast_int_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &[Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
@@ -167,7 +179,7 @@ impl FnCall {
 
     pub fn cast_real_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
@@ -178,7 +190,7 @@ impl FnCall {
 
     pub fn cast_decimal_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
@@ -187,7 +199,7 @@ impl FnCall {
 
     pub fn cast_str_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let dec = if self.children[0].is_hybrid_type() {
@@ -207,7 +219,7 @@ impl FnCall {
 
     pub fn cast_time_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
@@ -218,7 +230,7 @@ impl FnCall {
 
     pub fn cast_duration_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
@@ -229,7 +241,7 @@ impl FnCall {
 
     pub fn cast_json_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
@@ -241,7 +253,7 @@ impl FnCall {
 
     pub fn cast_int_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
@@ -257,7 +269,7 @@ impl FnCall {
 
     pub fn cast_real_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
@@ -268,7 +280,7 @@ impl FnCall {
 
     pub fn cast_decimal_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
@@ -279,7 +291,7 @@ impl FnCall {
 
     pub fn cast_str_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
@@ -288,7 +300,7 @@ impl FnCall {
 
     pub fn cast_time_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
@@ -299,7 +311,7 @@ impl FnCall {
 
     pub fn cast_duration_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
@@ -310,7 +322,7 @@ impl FnCall {
 
     pub fn cast_json_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
@@ -321,7 +333,7 @@ impl FnCall {
 
     pub fn cast_int_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
@@ -331,7 +343,7 @@ impl FnCall {
 
     pub fn cast_real_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
@@ -341,7 +353,7 @@ impl FnCall {
 
     pub fn cast_decimal_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
@@ -351,7 +363,7 @@ impl FnCall {
 
     pub fn cast_str_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
@@ -361,7 +373,7 @@ impl FnCall {
 
     pub fn cast_time_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
@@ -374,18 +386,18 @@ impl FnCall {
 
     pub fn cast_duration_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let mut val = Time::from_duration(&ctx.tz, self.tp.get_tp() as u8, val.as_ref())?;
+        let mut val = Time::from_duration(&ctx.cfg.tz, self.tp.get_tp() as u8, val.as_ref())?;
         val.round_frac(self.tp.get_decimal() as i8)?;
         Ok(Some(Cow::Owned(val)))
     }
 
     pub fn cast_json_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
@@ -395,7 +407,7 @@ impl FnCall {
 
     pub fn cast_int_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
@@ -406,7 +418,7 @@ impl FnCall {
 
     pub fn cast_real_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
@@ -417,7 +429,7 @@ impl FnCall {
 
     pub fn cast_decimal_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
@@ -428,7 +440,7 @@ impl FnCall {
 
     pub fn cast_str_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
@@ -438,7 +450,7 @@ impl FnCall {
 
     pub fn cast_time_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
@@ -449,7 +461,7 @@ impl FnCall {
 
     pub fn cast_duration_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
@@ -460,7 +472,7 @@ impl FnCall {
 
     pub fn cast_json_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
@@ -472,7 +484,7 @@ impl FnCall {
 
     pub fn cast_int_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
@@ -489,7 +501,7 @@ impl FnCall {
 
     pub fn cast_real_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
@@ -499,7 +511,7 @@ impl FnCall {
 
     pub fn cast_decimal_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
@@ -510,7 +522,7 @@ impl FnCall {
 
     pub fn cast_str_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
@@ -525,7 +537,7 @@ impl FnCall {
 
     pub fn cast_time_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
@@ -539,7 +551,7 @@ impl FnCall {
 
     pub fn cast_duration_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
@@ -551,7 +563,7 @@ impl FnCall {
 
     pub fn cast_json_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         self.children[0].eval_json(ctx, row)
@@ -559,7 +571,7 @@ impl FnCall {
 
     fn produce_dec_with_specified_tp<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         val: Cow<'a, Decimal>,
     ) -> Result<Cow<'a, Decimal>> {
         let flen = self.tp.get_flen();
@@ -575,7 +587,7 @@ impl FnCall {
     /// a new string according to `flen` and `chs`.
     fn produce_str_with_specified_tp<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         s: Cow<'a, [u8]>,
     ) -> Result<Cow<'a, [u8]>> {
         let flen = self.tp.get_flen();
@@ -630,8 +642,8 @@ impl FnCall {
         Ok(s)
     }
 
-    fn produce_time_with_str(&self, ctx: &EvalContext, s: String) -> Result<Cow<Time>> {
-        let mut t = Time::parse_datetime(s.as_ref(), self.tp.get_decimal() as i8, &ctx.tz)?;
+    fn produce_time_with_str(&self, ctx: &mut EvalContext, s: String) -> Result<Cow<Time>> {
+        let mut t = Time::parse_datetime(s.as_ref(), self.tp.get_decimal() as i8, &ctx.cfg.tz)?;
         t.set_tp(self.tp.get_tp() as u8)?;
         Ok(Cow::Owned(t))
     }
@@ -639,7 +651,7 @@ impl FnCall {
     /// `produce_float_with_specified_tp`(`ProduceFloatWithSpecifiedTp` in tidb) produces
     /// a new float64 according to `flen` and `decimal` in `self.tp`.
     /// TODO port tests from tidb(tidb haven't implemented now)
-    fn produce_float_with_specified_tp(&self, ctx: &EvalContext, f: f64) -> Result<f64> {
+    fn produce_float_with_specified_tp(&self, ctx: &mut EvalContext, f: f64) -> Result<f64> {
         let flen = self.tp.get_flen();
         let decimal = self.tp.get_decimal();
         if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
@@ -658,6 +670,7 @@ impl FnCall {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
     use std::u64;
 
     use tipb::expression::{Expr, FieldType, ScalarFuncSig};
@@ -666,7 +679,7 @@ mod test {
 
     use coprocessor::codec::{convert, Datum};
     use coprocessor::codec::mysql::{self, charset, types, Decimal, Duration, Json, Time};
-    use coprocessor::dag::expr::{EvalContext, Expression};
+    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
     use coprocessor::dag::expr::test::{col_expr as base_col_expr, fncall_expr};
 
     pub fn col_expr(col_id: i64, tp: i32) -> Expr {
@@ -679,8 +692,7 @@ mod test {
 
     #[test]
     fn test_cast_as_int() {
-        let mut ctx = EvalContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
         #[allow(inconsistent_digit_grouping)]
         let time_int = 2012_12_12_12_00_23i64;
@@ -779,19 +791,18 @@ mod test {
             if flag.is_some() {
                 exp.mut_field_type().set_flag(flag.unwrap() as u32);
             }
-            let e = Expression::build(&ctx, exp).unwrap();
-            let res = e.eval_int(&ctx, &col).unwrap();
+            let e = Expression::build(&mut ctx, exp).unwrap();
+            let res = e.eval_int(&mut ctx, &col).unwrap();
             assert_eq!(res.unwrap(), expect);
             // test None
-            let res = e.eval_int(&ctx, &null_cols).unwrap();
+            let res = e.eval_int(&mut ctx, &null_cols).unwrap();
             assert!(res.is_none());
         }
     }
 
     #[test]
     fn test_cast_as_real() {
-        let mut ctx = EvalContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
         #[allow(inconsistent_digit_grouping)]
         let int_t = 2012_12_12_12_00_23u64;
@@ -917,19 +928,18 @@ mod test {
             let mut exp = fncall_expr(sig, &[col_expr]);
             exp.mut_field_type().set_flen(flen as i32);
             exp.mut_field_type().set_decimal(decimal as i32);
-            let e = Expression::build(&ctx, exp).unwrap();
-            let res = e.eval_real(&ctx, &col).unwrap();
+            let e = Expression::build(&mut ctx, exp).unwrap();
+            let res = e.eval_real(&mut ctx, &col).unwrap();
             assert_eq!(format!("{}", res.unwrap()), format!("{}", expect));
             // test None
-            let res = e.eval_real(&ctx, &null_cols).unwrap();
+            let res = e.eval_real(&mut ctx, &null_cols).unwrap();
             assert!(res.is_none());
         }
     }
 
     #[test]
     fn test_cast_as_decimal() {
-        let mut ctx = EvalContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
         let int_t = 20121212120023u64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
@@ -1054,19 +1064,18 @@ mod test {
             let mut exp = fncall_expr(sig, &[col_expr]);
             exp.mut_field_type().set_flen(flen as i32);
             exp.mut_field_type().set_decimal(decimal as i32);
-            let e = Expression::build(&ctx, exp).unwrap();
-            let res = e.eval_decimal(&ctx, &col).unwrap();
+            let e = Expression::build(&mut ctx, exp).unwrap();
+            let res = e.eval_decimal(&mut ctx, &col).unwrap();
             assert_eq!(res.unwrap().into_owned(), expect);
             // test None
-            let res = e.eval_decimal(&ctx, &null_cols).unwrap();
+            let res = e.eval_decimal(&mut ctx, &null_cols).unwrap();
             assert!(res.is_none());
         }
     }
 
     #[test]
     fn test_cast_as_str() {
-        let mut ctx = EvalContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         let t_str = "2012-12-12 12:00:23";
         let t = Time::parse_utc_datetime(t_str, 0).unwrap();
         let dur_str = b"12:00:23";
@@ -1212,8 +1221,8 @@ mod test {
                 ex.mut_field_type().set_tp(to_tp.unwrap());
             }
             ex.mut_field_type().set_charset(String::from(charset));
-            let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval_string(&ctx, &col).unwrap();
+            let e = Expression::build(&mut ctx, ex).unwrap();
+            let res = e.eval_string(&mut ctx, &col).unwrap();
             assert_eq!(
                 res.unwrap().into_owned(),
                 exp,
@@ -1222,15 +1231,14 @@ mod test {
                 flen
             );
             // test None
-            let res = e.eval_string(&ctx, &null_cols).unwrap();
+            let res = e.eval_string(&mut ctx, &null_cols).unwrap();
             assert!(res.is_none());
         }
     }
 
     #[test]
     fn test_cast_as_time() {
-        let mut ctx = EvalContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         let today = Utc::now();
         let t_date_str = format!("{}", today.format("%Y-%m-%d"));
         let t_time_str = format!("{}", today.format("%Y-%m-%d %H:%M:%S"));
@@ -1387,9 +1395,9 @@ mod test {
             let mut ex = fncall_expr(sig, &[col_expr]);
             ex.mut_field_type().set_decimal(i32::from(to_fsp));
             ex.mut_field_type().set_tp(i32::from(to_tp));
-            let e = Expression::build(&ctx, ex).unwrap();
+            let e = Expression::build(&mut ctx, ex).unwrap();
 
-            let res = e.eval_time(&ctx, col).unwrap();
+            let res = e.eval_time(&mut ctx, col).unwrap();
             let data = res.unwrap().into_owned();
             let mut expt = exp.clone();
             if to_fsp != mysql::UN_SPECIFIED_FSP {
@@ -1404,15 +1412,14 @@ mod test {
                 to_fsp,
             );
             // test None
-            let res = e.eval_time(&ctx, &null_cols).unwrap();
+            let res = e.eval_time(&mut ctx, &null_cols).unwrap();
             assert!(res.is_none());
         }
     }
 
     #[test]
     fn test_cast_as_duration() {
-        let mut ctx = EvalContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         let today = Utc::now();
         let t_date_str = format!("{}", today.format("%Y-%m-%d"));
 
@@ -1550,8 +1557,8 @@ mod test {
             let col_expr = col_expr(0, i32::from(tp));
             let mut ex = fncall_expr(sig, &[col_expr]);
             ex.mut_field_type().set_decimal(i32::from(to_fsp));
-            let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval_duration(&ctx, col).unwrap();
+            let e = Expression::build(&mut ctx, ex).unwrap();
+            let res = e.eval_duration(&mut ctx, col).unwrap();
             let data = res.unwrap().into_owned();
             let mut expt = exp.clone();
             if to_fsp != mysql::UN_SPECIFIED_FSP {
@@ -1565,15 +1572,14 @@ mod test {
                 to_fsp,
             );
             // test None
-            let res = e.eval_duration(&ctx, &null_cols).unwrap();
+            let res = e.eval_duration(&mut ctx, &null_cols).unwrap();
             assert!(res.is_none());
         }
     }
 
     #[test]
     fn test_cast_int_as_json() {
-        let mut ctx = EvalContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         let cases = vec![
             (
                 Some(types::UNSIGNED_FLAG),
@@ -1599,8 +1605,8 @@ mod test {
                 col_expr.mut_field_type().set_flag(flag.unwrap() as u32);
             }
             let ex = fncall_expr(ScalarFuncSig::CastIntAsJson, &[col_expr]);
-            let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval_json(&ctx, &cols).unwrap();
+            let e = Expression::build(&mut ctx, ex).unwrap();
+            let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1611,8 +1617,7 @@ mod test {
 
     #[test]
     fn test_cast_real_as_json() {
-        let mut ctx = EvalContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         let cases = vec![
             (vec![Datum::F64(32.0001)], Some(Json::Double(32.0001))),
             (vec![Datum::Null], None),
@@ -1620,8 +1625,8 @@ mod test {
         for (cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(types::DOUBLE));
             let ex = fncall_expr(ScalarFuncSig::CastRealAsJson, &[col_expr]);
-            let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval_json(&ctx, &cols).unwrap();
+            let e = Expression::build(&mut ctx, ex).unwrap();
+            let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1632,8 +1637,7 @@ mod test {
 
     #[test]
     fn test_cast_decimal_as_json() {
-        let mut ctx = EvalContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         let cases = vec![
             (
                 vec![Datum::Dec(Decimal::from_f64(32.0001).unwrap())],
@@ -1645,8 +1649,8 @@ mod test {
             let col_expr = col_expr(0, i32::from(types::NEW_DECIMAL));
             let ex = fncall_expr(ScalarFuncSig::CastDecimalAsJson, &[col_expr]);
 
-            let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval_json(&ctx, &cols).unwrap();
+            let e = Expression::build(&mut ctx, ex).unwrap();
+            let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1657,8 +1661,7 @@ mod test {
 
     #[test]
     fn test_cast_str_as_json() {
-        let mut ctx = EvalContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         let cases = vec![
             (
                 false,
@@ -1681,8 +1684,8 @@ mod test {
                 flag |= types::PARSE_TO_JSON_FLAG as u32;
                 ex.mut_field_type().set_flag(flag);
             }
-            let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval_json(&ctx, &cols).unwrap();
+            let e = Expression::build(&mut ctx, ex).unwrap();
+            let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1693,8 +1696,9 @@ mod test {
 
     #[test]
     fn test_cast_time_as_json() {
-        let mut ctx = EvalContext::default();
-        ctx.ignore_truncate = true;
+        let mut cfg = EvalConfig::default();
+        cfg.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(cfg));
         let time_str = "2012-12-12 11:11:11";
         let date_str = "2012-12-12";
         let tz = FixedOffset::east(0);
@@ -1730,8 +1734,8 @@ mod test {
         for (tp, cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(tp));
             let ex = fncall_expr(ScalarFuncSig::CastTimeAsJson, &[col_expr]);
-            let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval_json(&ctx, &cols).unwrap();
+            let e = Expression::build(&mut ctx, ex).unwrap();
+            let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1742,8 +1746,7 @@ mod test {
 
     #[test]
     fn test_cast_duration_as_json() {
-        let mut ctx = EvalContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         let dur_str = "11:12:08";
         let dur_str_expect = "11:12:08.000000";
 
@@ -1757,8 +1760,8 @@ mod test {
         for (cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(types::STRING));
             let ex = fncall_expr(ScalarFuncSig::CastDurationAsJson, &[col_expr]);
-            let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval_json(&ctx, &cols).unwrap();
+            let e = Expression::build(&mut ctx, ex).unwrap();
+            let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1769,8 +1772,7 @@ mod test {
 
     #[test]
     fn test_cast_json_as_json() {
-        let mut ctx = EvalContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         let cases = vec![
             (
                 vec![Datum::Json(Json::Boolean(true))],
@@ -1781,8 +1783,8 @@ mod test {
         for (cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(types::STRING));
             let ex = fncall_expr(ScalarFuncSig::CastJsonAsJson, &[col_expr]);
-            let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval_json(&ctx, &cols).unwrap();
+            let e = Expression::build(&mut ctx, ex).unwrap();
+            let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;

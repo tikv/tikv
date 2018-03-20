@@ -144,7 +144,7 @@ pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
 
 /// `bytes_to_int` converts a byte arrays to an i64 in best effort.
 /// TODO: handle overflow properly.
-pub fn bytes_to_int(ctx: &EvalContext, bytes: &[u8]) -> Result<i64> {
+pub fn bytes_to_int(ctx: &mut EvalContext, bytes: &[u8]) -> Result<i64> {
     let s = str::from_utf8(bytes)?.trim();
     let vs = get_valid_int_prefix(ctx, s)?;
     bytes_to_int_without_context(vs.as_bytes())
@@ -152,7 +152,7 @@ pub fn bytes_to_int(ctx: &EvalContext, bytes: &[u8]) -> Result<i64> {
 
 /// `bytes_to_uint` converts a byte arrays to an u64 in best effort.
 /// TODO: handle overflow properly.
-pub fn bytes_to_uint(ctx: &EvalContext, bytes: &[u8]) -> Result<u64> {
+pub fn bytes_to_uint(ctx: &mut EvalContext, bytes: &[u8]) -> Result<u64> {
     let s = str::from_utf8(bytes)?.trim();
     let vs = get_valid_int_prefix(ctx, s)?;
     bytes_to_uint_without_context(vs.as_bytes())
@@ -176,19 +176,19 @@ fn bytes_to_f64_without_context(bytes: &[u8]) -> Result<f64> {
 }
 
 /// `bytes_to_f64` converts a byte array to a float64 in best effort.
-pub fn bytes_to_f64(ctx: &EvalContext, bytes: &[u8]) -> Result<f64> {
+pub fn bytes_to_f64(ctx: &mut EvalContext, bytes: &[u8]) -> Result<f64> {
     let s = str::from_utf8(bytes)?.trim();
     let vs = get_valid_float_prefix(ctx, s)?;
 
     bytes_to_f64_without_context(vs.as_bytes())
 }
 
-fn get_valid_int_prefix<'a>(ctx: &EvalContext, s: &'a str) -> Result<Cow<'a, str>> {
+fn get_valid_int_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<Cow<'a, str>> {
     let vs = get_valid_float_prefix(ctx, s)?;
     float_str_to_int_string(vs)
 }
 
-fn get_valid_float_prefix<'a>(ctx: &EvalContext, s: &'a str) -> Result<&'a str> {
+fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&'a str> {
     let mut saw_dot = false;
     let mut saw_digit = false;
     let mut valid_len = 0;
@@ -309,8 +309,9 @@ const MAX_ZERO_COUNT: i64 = 20;
 mod test {
     use std::f64::EPSILON;
     use std::{isize, f64, i64, u64};
+    use std::sync::Arc;
 
-    use coprocessor::dag::expr::{EvalContext, FLAG_IGNORE_TRUNCATE};
+    use coprocessor::dag::expr::{EvalConfig, EvalContext, FLAG_IGNORE_TRUNCATE};
     use coprocessor::codec::mysql::types;
 
     use super::*;
@@ -406,9 +407,10 @@ mod test {
             ("123.e", "123."),
         ];
 
-        let ctx = EvalContext::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
+        let cfg = EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
+        let mut ctx = EvalContext::new(Arc::new(cfg));
         for (i, o) in cases {
-            assert_eq!(super::get_valid_float_prefix(&ctx, i).unwrap(), o);
+            assert_eq!(super::get_valid_float_prefix(&mut ctx, i).unwrap(), o);
         }
     }
 
