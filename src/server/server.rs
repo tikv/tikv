@@ -31,7 +31,7 @@ use coprocessor::{EndPointHost, EndPointTask};
 use super::service::*;
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::resolve::StoreAddrResolver;
-use super::snap::{Runner as SnapHandler, Task as SnapTask};
+use super::snap::{Runner as SnapHandler, Task as SnapTask, TaskHandler as SnapSendTaskHandler};
 use super::raft_client::RaftClient;
 use pd::PdTask;
 
@@ -54,6 +54,8 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
     pd_scheduler: FutureScheduler<PdTask>,
+
+    snap_send_handler: SnapSendTaskHandler,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
@@ -123,12 +125,11 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             SocketAddr::new(IpAddr::from_str(host)?, port as u16)
         };
 
-        let trans = ServerTransport::new(
-            raft_client,
-            snap_worker.scheduler(),
-            raft_router.clone(),
-            resolver,
-        );
+        let snap_send_handler = SnapSendTaskHandler::new();
+        let snap_send_sink = snap_send_handler.get_send_task_sink();
+
+        let trans =
+            ServerTransport::new(raft_client, snap_send_sink, raft_router.clone(), resolver);
 
         let svr = Server {
             env: Arc::clone(&env),
@@ -141,6 +142,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
             pd_scheduler: pd_scheduler,
+            snap_send_handler: snap_send_handler,
         };
 
         Ok(svr)
@@ -158,13 +160,14 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             self.pd_scheduler.clone(),
         );
         box_try!(self.end_point_worker.start(end_point));
-        let snap_runner = SnapHandler::new(
-            Arc::clone(&self.env),
-            self.snap_mgr.clone(),
-            self.raft_router.clone(),
-            security_mgr,
-        );
+
+        let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.raft_router.clone());
         box_try!(self.snap_worker.start(snap_runner));
+
+        let env = self.env.clone();
+        let snap_mgr = self.snap_mgr.clone();
+        self.snap_send_handler.start(env, security_mgr, snap_mgr);
+
         self.grpc_server.start();
         info!("TiKV is ready to serve");
         Ok(())
