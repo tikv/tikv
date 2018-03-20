@@ -1551,7 +1551,11 @@ impl Peer {
     }
 }
 
-pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> {
+pub fn check_epoch(
+    region: &metapb::Region,
+    req: &RaftCmdRequest,
+    include_region: bool,
+) -> Result<()> {
     let (mut check_ver, mut check_conf_ver) = (false, false);
     if !req.has_admin_request() {
         // for get/set/delete, we don't care conf_version.
@@ -1595,6 +1599,11 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
             from_epoch,
             latest_epoch
         );
+        let regions = if include_region {
+            vec![region.to_owned()]
+        } else {
+            vec![]
+        };
         return Err(Error::StaleEpoch(
             format!(
                 "latest_epoch of region {} is {:?}, but you \
@@ -1603,7 +1612,7 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
                 latest_epoch,
                 from_epoch
             ),
-            vec![region.to_owned()],
+            regions,
         ));
     }
 
@@ -1722,7 +1731,7 @@ impl Peer {
     }
 
     fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<ReadResponse> {
-        check_epoch(self.region(), req)?;
+        check_epoch(self.region(), req, true)?;
         let mut need_snapshot = false;
         let snapshot = Snapshot::new(Arc::clone(&self.kv_engine));
         let requests = req.get_requests();

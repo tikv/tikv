@@ -2158,7 +2158,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Err(Error::StaleCommand);
         }
 
-        let res = peer::check_epoch(peer.region(), msg);
+        let res = peer::check_epoch(peer.region(), msg, true);
         if let Err(Error::StaleEpoch(msg, mut new_regions)) = res {
             // Attach the region which might be split from the current region. But it doesn't
             // matter if the region is not split from the current region. If the region meta

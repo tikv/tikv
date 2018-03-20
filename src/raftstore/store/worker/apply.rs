@@ -502,6 +502,7 @@ pub struct ApplyDelegate {
     is_merging: bool,
     pending_cmds: PendingCmdQueue,
     metrics: ApplyMetrics,
+    last_merge_version: u64,
 }
 
 impl ApplyDelegate {
@@ -524,6 +525,7 @@ impl ApplyDelegate {
             is_merging: false,
             pending_cmds: Default::default(),
             metrics: Default::default(),
+            last_merge_version: 0,
         }
     }
 
@@ -789,6 +791,7 @@ impl ApplyDelegate {
                     ref source,
                 } => {
                     self.region = region.clone();
+                    self.last_merge_version = region.get_region_epoch().get_version();
                     ctx.merged_regions.push(source.get_id());
                 }
                 ExecResult::RollbackMerge { ref region, .. } => {
@@ -874,7 +877,10 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext,
     ) -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         let req = Rc::clone(&ctx.exec_ctx.as_ref().unwrap().req);
-        check_epoch(&self.region, &req)?;
+        // Include region for stale epoch after merge may cause key not in range.
+        let include_region =
+            req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
+        check_epoch(&self.region, &req, include_region)?;
         if req.has_admin_request() {
             self.exec_admin_cmd(ctx, req.get_admin_request())
         } else {
