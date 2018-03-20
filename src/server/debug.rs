@@ -432,7 +432,7 @@ impl RegionVerifier {
 
         let lock_handle = box_try!(get_cf_handle(&self.db, CF_LOCK));
         let default_handle = box_try!(get_cf_handle(&self.db, CF_DEFAULT));
-        if !iter.valid() {
+        if iter.valid() {
             loop {
                 let key = iter.key().to_vec();
                 let value = iter.value().to_vec();
