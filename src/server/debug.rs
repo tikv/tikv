@@ -22,7 +22,7 @@ use raftstore::store::{CacheQueryStats, Engines, Iterable, keys, Peekable, PeerS
 use raftstore::store::{init_apply_state, init_raft_state, write_peer_state};
 use raftstore::store::engine::IterOption;
 use raftstore::store::util as raftstore_util;
-use rocksdb::{DB, Kv, SeekKey, WriteBatch, Writable, WriteOptions};
+use rocksdb::{DB, Kv, SeekKey, Writable, WriteBatch, WriteOptions};
 use std::{error, result};
 use std::cell::RefCell;
 use std::cmp::Ordering;
@@ -39,7 +39,7 @@ use util::worker::Worker;
 pub type Result<T> = result::Result<T, Error>;
 type DBIterator = ::rocksdb::DBIterator<Arc<DB>>;
 
-quick_error!{
+quick_error! {
     #[derive(Debug)]
     pub enum Error {
         InvalidArgument(msg: String) {
@@ -184,15 +184,15 @@ impl Debugger {
         match self.engines
             .kv_engine
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-        {
-            Ok(Some(region_state)) => {
-                let region = region_state.get_region();
-                let start_key = &keys::data_key(region.get_start_key());
-                let end_key = &keys::data_end_key(region.get_end_key());
-                let mut sizes = vec![];
-                for cf in cfs {
-                    let mut size = 0;
-                    box_try!(self.engines.kv_engine.scan_cf(
+            {
+                Ok(Some(region_state)) => {
+                    let region = region_state.get_region();
+                    let start_key = &keys::data_key(region.get_start_key());
+                    let end_key = &keys::data_end_key(region.get_end_key());
+                    let mut sizes = vec![];
+                    for cf in cfs {
+                        let mut size = 0;
+                        box_try!(self.engines.kv_engine.scan_cf(
                         cf.as_ref(),
                         start_key,
                         end_key,
@@ -202,13 +202,13 @@ impl Debugger {
                             Ok(true)
                         }
                     ));
-                    sizes.push((cf, size));
+                        sizes.push((cf, size));
+                    }
+                    Ok(sizes)
                 }
-                Ok(sizes)
+                Ok(None) => Err(Error::NotFound(format!("none region {:?}", region_id))),
+                Err(e) => Err(box_err!(e)),
             }
-            Ok(None) => Err(Error::NotFound(format!("none region {:?}", region_id))),
-            Err(e) => Err(box_err!(e)),
-        }
     }
 
     pub fn scan_mvcc(&self, start: &[u8], end: &[u8], limit: u64) -> Result<MvccInfoIterator> {
@@ -272,11 +272,11 @@ impl Debugger {
 
         let mut region_verifier = box_try!(RegionVerifier::new(Arc::clone(&db), region));
         if let Err(e) = region_verifier.verify_write_by_default(&wb) {
-            return Err(e)
+            return Err(e);
         }
 
         if let Err(e) = region_verifier.verify_lock_by_default(&wb) {
-            return Err(e)
+            return Err(e);
         }
 
         let mut write_opts = WriteOptions::new();
@@ -374,7 +374,7 @@ impl Debugger {
 pub struct RegionVerifier {
     db: Arc<DB>,
     lock_iter: DBIterator,
-//    default_iter: DBIterator,
+    //    default_iter: DBIterator,
     write_iter: DBIterator,
 }
 
@@ -415,7 +415,7 @@ impl RegionVerifier {
             if write.short_value == None {
                 match self.db.get_cf(&default_handle, key.as_ref()) {
                     Ok(None) => box_try!(wb.delete_cf(&write_handle, key.as_ref())),
-                    _ => {},
+                    _ => {}
                 }
             }
 
@@ -427,7 +427,7 @@ impl RegionVerifier {
         Ok(())
     }
 
-    pub fn verify_lock_by_default(&mut self, wb: &WriteBatch)  -> Result<()> {
+    pub fn verify_lock_by_default(&mut self, wb: &WriteBatch) -> Result<()> {
         let iter = &mut self.lock_iter;
         if iter.valid() {
             Err(())
@@ -442,7 +442,7 @@ impl RegionVerifier {
             if lock.short_value == None {
                 match self.db.get_cf(&default_handle, key.as_ref()) {
                     Ok(None) => box_try!(wb.delete_cf(&lock_handle, key.as_ref())),
-                    _ => {},
+                    _ => {}
                 }
             }
 
