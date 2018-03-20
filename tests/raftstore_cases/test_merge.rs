@@ -346,6 +346,7 @@ fn test_node_merge_dist_isolation() {
 fn test_node_merge_brain_split() {
     // ::util::init_log();
     let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 12;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
 
@@ -388,4 +389,39 @@ fn test_node_merge_brain_split() {
     for i in 1..100 {
         util::must_get_equal(&cluster.get_engine(3), format!("k4{}", i).as_bytes(), b"v4");
     }
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let region = pd_client.get_region(b"k2").unwrap();
+    cluster.must_split(&region, b"k3");
+    let middle = pd_client.get_region(b"k2").unwrap();
+    let peer_on_store1 = find_peer(&middle, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(middle.get_id(), peer_on_store1);
+    cluster.must_put(b"k22", b"v22");
+    cluster.must_put(b"k33", b"v33");
+    must_get_equal(&cluster.get_engine(3), b"k33", b"v33");
+    let left = pd_client.get_region(b"k1").unwrap();
+    pd_client.disable_default_operator();
+    let peer_on_left = find_peer(&left, 3).unwrap().to_owned();
+    pd_client.must_remove_peer(left.get_id(), peer_on_left);
+    let right = pd_client.get_region(b"k3").unwrap();
+    let peer_on_right = find_peer(&right, 3).unwrap().to_owned();
+    pd_client.must_remove_peer(right.get_id(), peer_on_right);
+    must_get_none(&cluster.get_engine(3), b"k11");
+    must_get_equal(&cluster.get_engine(3), b"k22", b"v22");
+    must_get_none(&cluster.get_engine(3), b"k33");
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    pd_client.must_add_peer(left.get_id(), new_peer(3, 11));
+    pd_client.must_merge(middle.get_id(), left.get_id());
+    pd_client.must_remove_peer(left.get_id(), new_peer(3, 11));
+    pd_client.must_merge(right.get_id(), left.get_id());
+    pd_client.must_add_peer(left.get_id(), new_peer(3, 12));
+    let region = pd_client.get_region(b"k1").unwrap();
+    // So cluster becomes
+    // store   3: k2 [middle] k3
+    // store 1/2: [  new_left ] k4 [left]
+    cluster.must_split(&region, b"k4");
+    cluster.must_put(b"k12", b"v12");
+    cluster.clear_send_filters();
+    must_get_equal(&cluster.get_engine(3), b"k12", b"v12");
 }

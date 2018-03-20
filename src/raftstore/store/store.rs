@@ -1064,19 +1064,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let merge_target = msg.get_merge_target();
         let target_region_id = merge_target.get_id();
 
-        if let Some(epoch) = self.pending_cross_snap.get(&target_region_id) {
+        if let Some(epoch) = self.pending_cross_snap.get(&target_region_id).or_else(|| {
+            self.region_peers
+                .get(&target_region_id)
+                .map(|p| p.region().get_region_epoch())
+        }) {
             info!(
-                "[region {}] checking cross snap: {:?}",
+                "[region {}] checking target {} epoch: {:?}",
                 msg.get_region_id(),
+                target_region_id,
                 epoch
             );
             // So the target peer has moved on, we should let it go.
             if epoch.get_version() > merge_target.get_region_epoch().get_version() {
                 return Ok(true);
             }
-        }
-
-        if self.region_peers.contains_key(&target_region_id) {
             // Wait till it catching up logs.
             return Ok(false);
         }
@@ -1215,6 +1217,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
         if let Some(r) = self.pending_cross_snap.get(&region_id) {
+            // Check it to avoid epoch moves backward.
             if util::is_epoch_stale(snap_region.get_region_epoch(), r) {
                 info!(
                     "[region {}] snapshot epoch is stale, drop: {:?} < {:?}",
