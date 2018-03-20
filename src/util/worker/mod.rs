@@ -21,14 +21,14 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SendError, Sender, SyncSender,
-                      TryRecvError, TrySendError};
 use std::error::Error;
 use std::time::Duration;
 
 use util::time::{Instant, SlowTimer};
 use util::timer::Timer;
 use self::metrics::*;
+use crossbeam_channel::{self, Receiver, RecvTimeoutError, SendError, Sender, TryRecvError,
+                        TrySendError};
 
 pub use self::future::Runnable as FutureRunnable;
 pub use self::future::Scheduler as FutureScheduler;
@@ -120,29 +120,15 @@ impl<T: Display, R: Runnable<T>> RunnableWithTimer<T, ()> for DefaultRunnerWithT
     fn on_timeout(&mut self, _: &mut Timer<()>, _: ()) {}
 }
 
-enum TaskSender<T> {
-    Bounded(SyncSender<Option<T>>),
-    Unbounded(Sender<Option<T>>),
-}
-
-impl<T> Clone for TaskSender<T> {
-    fn clone(&self) -> TaskSender<T> {
-        match *self {
-            TaskSender::Bounded(ref tx) => TaskSender::Bounded(tx.clone()),
-            TaskSender::Unbounded(ref tx) => TaskSender::Unbounded(tx.clone()),
-        }
-    }
-}
-
 /// Scheduler provides interface to schedule task to underlying workers.
 pub struct Scheduler<T> {
     name: Arc<String>,
     counter: Arc<AtomicUsize>,
-    sender: TaskSender<T>,
+    sender: Sender<Option<T>>,
 }
 
 impl<T: Display> Scheduler<T> {
-    fn new<S>(name: S, counter: AtomicUsize, sender: TaskSender<T>) -> Scheduler<T>
+    fn new<S>(name: S, counter: AtomicUsize, sender: Sender<Option<T>>) -> Scheduler<T>
     where
         S: Into<String>,
     {
@@ -158,18 +144,18 @@ impl<T: Display> Scheduler<T> {
     /// If the worker is stopped or number pending tasks exceeds capacity, an error will return.
     pub fn schedule(&self, task: T) -> Result<(), ScheduleError<T>> {
         debug!("scheduling task {}", task);
-        match self.sender {
-            TaskSender::Unbounded(ref tx) => if let Err(SendError(Some(t))) = tx.send(Some(task)) {
+        // whether sender is bounded or not
+        if self.sender.capacity().is_none() {
+            if let Err(SendError(Some(t))) = self.sender.send(Some(task)) {
                 return Err(ScheduleError::Stopped(t));
-            },
-            TaskSender::Bounded(ref tx) => if let Err(e) = tx.try_send(Some(task)) {
-                match e {
-                    TrySendError::Disconnected(Some(t)) => return Err(ScheduleError::Stopped(t)),
-                    TrySendError::Full(Some(t)) => return Err(ScheduleError::Full(t)),
-                    _ => unreachable!(),
-                }
-            },
-        };
+            }
+        } else if let Err(e) = self.sender.try_send(Some(task)) {
+            match e {
+                TrySendError::Disconnected(Some(t)) => return Err(ScheduleError::Stopped(t)),
+                TrySendError::Full(Some(t)) => return Err(ScheduleError::Full(t)),
+                _ => unreachable!(),
+            }
+        }
         self.counter.fetch_add(1, Ordering::SeqCst);
         WORKER_PENDING_TASK_VEC
             .with_label_values(&[&self.name])
@@ -198,9 +184,8 @@ impl<T> Clone for Scheduler<T> {
 /// Useful for test purpose.
 #[cfg(test)]
 pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
-    let (tx, _) = mpsc::channel();
-    let sender = TaskSender::Unbounded(tx);
-    Scheduler::new("dummy scheduler", AtomicUsize::new(0), sender)
+    let (tx, _) = crossbeam_channel::unbounded::<Option<T>>();
+    Scheduler::new("dummy scheduler", AtomicUsize::new(0), tx)
 }
 
 #[derive(Copy, Clone)]
@@ -232,13 +217,11 @@ impl<S: Into<String>> Builder<S> {
 
     pub fn create<T: Display>(self) -> Worker<T> {
         let (scheduler, rx) = if self.pending_capacity == usize::MAX {
-            let (tx, rx) = mpsc::channel::<Option<T>>();
-            let sender = TaskSender::Unbounded(tx);
-            (Scheduler::new(self.name, AtomicUsize::new(0), sender), rx)
+            let (tx, rx) = crossbeam_channel::unbounded::<Option<T>>();
+            (Scheduler::new(self.name, AtomicUsize::new(0), tx), rx)
         } else {
-            let (tx, rx) = mpsc::sync_channel::<Option<T>>(self.pending_capacity);
-            let sender = TaskSender::Bounded(tx);
-            (Scheduler::new(self.name, AtomicUsize::new(0), sender), rx)
+            let (tx, rx) = crossbeam_channel::bounded::<Option<T>>(self.pending_capacity);
+            (Scheduler::new(self.name, AtomicUsize::new(0), tx), rx)
         };
 
         Worker {
@@ -395,11 +378,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         if self.handle.is_none() {
             return None;
         }
-        let send_result = match self.scheduler.sender {
-            TaskSender::Unbounded(ref tx) => tx.send(None),
-            TaskSender::Bounded(ref tx) => tx.send(None),
-        };
-        if let Err(e) = send_result {
+        if let Err(e) = self.scheduler.sender.send(None) {
             warn!("failed to stop worker thread: {:?}", e);
         }
         self.handle.take()
@@ -409,14 +388,13 @@ impl<T: Display + Send + 'static> Worker<T> {
 #[cfg(test)]
 mod test {
     use std::thread;
-    use std::sync::*;
-    use std::sync::mpsc::*;
+    use std::sync::mpsc;
     use std::time::Duration;
 
     use super::*;
 
     struct StepRunner {
-        ch: Sender<u64>,
+        ch: mpsc::Sender<u64>,
     }
 
     impl Runnable<u64> for StepRunner {
@@ -431,7 +409,7 @@ mod test {
     }
 
     struct BatchRunner {
-        ch: Sender<Vec<u64>>,
+        ch: mpsc::Sender<Vec<u64>>,
     }
 
     impl Runnable<u64> for BatchRunner {
@@ -449,7 +427,7 @@ mod test {
     }
 
     struct TickRunner {
-        ch: Sender<&'static str>,
+        ch: mpsc::Sender<&'static str>,
     }
 
     impl Runnable<&'static str> for TickRunner {
