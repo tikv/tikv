@@ -1006,7 +1006,7 @@ mod tests {
         let db_opts = engine.get_db_options();
         assert_eq!(db_opts.get_max_background_jobs(), 2);
         debugger
-            .modify_tikv_config(&"rocksdb", &"max_background_jobs", &"8")
+            .modify_tikv_config("rocksdb", "max_background_jobs", "8")
             .unwrap();
         let db_opts = engine.get_db_options();
         assert_eq!(db_opts.get_max_background_jobs(), 8);
@@ -1015,7 +1015,7 @@ mod tests {
         let cf_opts = engine.get_options_cf(cf);
         assert_eq!(cf_opts.get_disable_auto_compactions(), false);
         debugger
-            .modify_tikv_config(&"rocksdb", &"default.disable_auto_compactions", &"true")
+            .modify_tikv_config("rocksdb", "default.disable_auto_compactions", "true")
             .unwrap();
         let cf_opts = engine.get_options_cf(cf);
         assert_eq!(cf_opts.get_disable_auto_compactions(), true);
