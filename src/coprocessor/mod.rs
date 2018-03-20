@@ -16,19 +16,19 @@ mod metrics;
 mod dag;
 mod statistics;
 mod checksum;
+mod service;
+mod util;
 mod readpool_context;
 pub mod local_metrics;
 pub mod codec;
 
-pub use self::endpoint::err_resp;
 pub use self::readpool_context::Context as ReadPoolContext;
 
 use std::result;
 use std::error;
 use std::time::Duration;
 
-use kvproto::kvrpcpb::LockInfo;
-use kvproto::errorpb;
+use kvproto::{kvrpcpb, errorpb, coprocessor as coppb};
 
 use storage::{engine, mvcc, txn};
 
@@ -39,7 +39,7 @@ quick_error! {
             description("region related failure")
             display("region {:?}", err)
         }
-        Locked(l: LockInfo) {
+        Locked(l: kvrpcpb::LockInfo) {
             description("key is locked")
             display("locked {:?}", l)
         }
@@ -78,7 +78,7 @@ impl From<txn::Error> for Error {
                 key,
                 ttl,
             }) => {
-                let mut info = LockInfo::new();
+                let mut info = kvrpcpb::LockInfo::new();
                 info.set_primary_lock(primary);
                 info.set_lock_version(ts);
                 info.set_key(key);
@@ -90,7 +90,19 @@ impl From<txn::Error> for Error {
     }
 }
 
-pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask,
-                         DEFAULT_REQUEST_MAX_HANDLE_SECS, REQ_TYPE_CHECKSUM, REQ_TYPE_DAG,
-                         SINGLE_GROUP};
-pub use self::dag::{ScanOn, Scanner};
+trait RequestHandler {
+    fn handle_request(&mut self, batch_row_limit: usize) -> Result<coppb::Response> {
+        panic!("unsupported operation");
+    }
+
+    fn handle_streaming_request(
+        &mut self,
+        batch_row_limit: usize,
+    ) -> Result<(Option<coppb::Response>, bool)> {
+        panic!("unsupported operation");
+    }
+
+    fn collect_metrics_into(&mut self, metrics: &mut self::dag::executor::ExecutorMetrics) {
+        // Do nothing
+    }
+}
