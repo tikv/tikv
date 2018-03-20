@@ -155,7 +155,7 @@ fn send_snap(
     let total_size = chunks.remain_bytes;
 
     let channel_builder = ChannelBuilder::new(env);
-    let channel = security_mgr.connect(channel_builder, &addr);
+    let channel = security_mgr.connect(channel_builder, addr);
     let client = TikvClient::new(channel);
     let (sink, receiver) = future_try!(client.snapshot().map_err(Error::from));
 
@@ -174,7 +174,7 @@ fn send_snap(
                     );
                     Ok(())
                 }
-                Err(e) => Err(Error::from(e)),
+                Err(e) => Err(e),
             }
         })
 }
@@ -222,8 +222,8 @@ pub struct TaskHandler {
     send_task_stream: Option<UnboundedReceiver<SendTask>>,
 }
 
-impl TaskHandler {
-    pub fn new() -> TaskHandler {
+impl Default for TaskHandler {
+    fn default() -> TaskHandler {
         let pool = CpuPoolBuilder::new()
             .name_prefix(thd_name!("snap sender"))
             .pool_size(DEFAULT_SENDER_POOL_SIZE)
@@ -237,7 +237,9 @@ impl TaskHandler {
             send_task_stream: Some(rx),
         }
     }
+}
 
+impl TaskHandler {
     pub fn start(
         &mut self,
         env: Arc<Environment>,
@@ -248,7 +250,11 @@ impl TaskHandler {
             let pool = self.pool.clone();
             let deal_task = Arc::new(move |task: SendTask| {
                 let SendTask { addr, msg, cb } = task;
-                let (e, sec, snp) = (env.clone(), security_mgr.clone(), snap_mgr.clone());
+                let (e, sec, snp) = (
+                    Arc::clone(&env),
+                    Arc::clone(&security_mgr),
+                    snap_mgr.clone(),
+                );
                 send_snap(&addr, msg, e, sec, snp).then(move |r| {
                     if r.is_err() {
                         error!("failed to send snap to {}: {:?}", addr, r);
@@ -394,7 +400,7 @@ where
     let inner_pool = pool.clone();
     let future = rx.zip(tasks).for_each(move |(token, task)| {
         let tx = tx.clone();
-        let f_inner = f.clone();
+        let f_inner = Arc::clone(&f);
         let ff = move || {
             let release_token = tx.send(token);
             f_inner(task).then(|_| release_token)

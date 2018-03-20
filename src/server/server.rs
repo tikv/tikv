@@ -125,7 +125,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             SocketAddr::new(IpAddr::from_str(host)?, port as u16)
         };
 
-        let snap_send_handler = SnapSendTaskHandler::new();
+        let snap_send_handler = SnapSendTaskHandler::default();
         let snap_send_sink = snap_send_handler.get_send_task_sink();
 
         let trans =
@@ -164,7 +164,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.raft_router.clone());
         box_try!(self.snap_worker.start(snap_runner));
 
-        let env = self.env.clone();
+        let env = Arc::clone(&self.env);
         let snap_mgr = self.snap_mgr.clone();
         self.snap_send_handler.start(env, security_mgr, snap_mgr);
 
