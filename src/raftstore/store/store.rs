@@ -41,6 +41,7 @@ use protobuf::Message;
 use raft::{self, SnapshotStatus, INVALID_INDEX};
 use raftstore::{Error, Result};
 use kvproto::metapb;
+use util::timer::Timer;
 use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
 use util::transport::SendCh;
 use util::RingQueue;
@@ -53,8 +54,8 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use import::SSTImporter;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, CleanupSSTTask,
                     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
-                    RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, RegionWorker,
-                    SplitCheckRunner, SplitCheckTask};
+                    RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
+                    SplitCheckTask, STALE_PEER_CHECK_INTERVAL};
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -147,7 +148,7 @@ pub struct Store<T, C: 'static> {
     pending_snapshot_regions: Vec<metapb::Region>,
     split_check_worker: Worker<SplitCheckTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask>,
-    region_worker: RegionWorker,
+    region_worker: Worker<RegionTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: FutureWorker<PdTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
@@ -218,8 +219,6 @@ impl<T, C> Store<T, C> {
             .registry
             .register_admin_observer(100, box SplitObserver);
 
-        let region_worker = RegionWorker::new()?;
-
         let mut s = Store {
             cfg: Rc::new(cfg),
             store: meta,
@@ -230,7 +229,7 @@ impl<T, C> Store<T, C> {
             region_peers: HashMap::default(),
             pending_raft_groups: HashSet::default(),
             split_check_worker: Worker::new("split check worker"),
-            region_worker: region_worker,
+            region_worker: Worker::new("snapshot worker"),
             raftlog_gc_worker: Worker::new("raft gc worker"),
             compact_worker: Worker::new("compact worker"),
             pd_worker: pd_worker,
@@ -414,8 +413,8 @@ impl<T, C> Store<T, C> {
         self.snap_mgr.clone()
     }
 
-    pub fn get_snapch(&self) -> SendCh<RegionTask> {
-        self.region_worker.sendch()
+    pub fn snap_scheduler(&self) -> Scheduler<RegionTask> {
+        self.region_worker.scheduler()
     }
 
     pub fn apply_scheduler(&self) -> Scheduler<ApplyTask> {
@@ -527,7 +526,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.cfg.use_delete_range,
             self.cfg.clean_stale_peer_delay.0,
         );
-        box_try!(self.region_worker.start(region_runner));
+        let mut timer = Timer::new(1);
+        timer.add_task(Duration::from_millis(STALE_PEER_CHECK_INTERVAL), 0);
+        box_try!(self.region_worker.start_with_timer(region_runner, timer));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
         box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
@@ -576,8 +577,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // Wait all workers finish.
         let mut handles: Vec<Option<thread::JoinHandle<()>>> = vec![];
         handles.push(self.split_check_worker.stop());
-        handles.push(self.raftlog_gc_worker.stop());
         handles.push(self.region_worker.stop());
+        handles.push(self.raftlog_gc_worker.stop());
         handles.push(self.compact_worker.stop());
         handles.push(self.pd_worker.stop());
         handles.push(self.consistency_check_worker.stop());

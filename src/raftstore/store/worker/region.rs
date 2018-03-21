@@ -11,25 +11,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io;
 use std::collections::BTreeMap;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
-use std::thread::{self, Builder as ThreadBuilder};
 
 use rocksdb::{Writable, WriteBatch, DB};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
-use kvproto::metapb::Region;
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use mio::{EventLoop, EventLoopConfig, Handler};
 
 use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use util::time;
+use util::timer::Timer;
 use util::{escape, rocksdb};
-use util::transport::SendCh;
+use util::worker::{Runnable, RunnableWithTimer};
 use raftstore::store::engine::{Mutable, Snapshot};
 use raftstore::store::peer_storage::{JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING,
                                      JOB_STATUS_FAILED, JOB_STATUS_FINISHED, JOB_STATUS_PENDING,
@@ -47,7 +44,7 @@ use std::collections::Bound::{Excluded, Included, Unbounded};
 const GENERATE_POOL_SIZE: usize = 2;
 
 // used to periodically check whether we should delete a stale peer's range in region runner
-const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // milliseconds
+pub const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // milliseconds
 
 /// region related task.
 #[derive(Debug)]
@@ -68,7 +65,6 @@ pub enum Task {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
     },
-    Quit {},
 }
 
 impl Task {
@@ -97,8 +93,95 @@ impl Display for Task {
                 escape(start_key),
                 escape(end_key)
             ),
-            Task::Quit {} => write!(f, "quit region runner"),
         }
+    }
+}
+
+#[derive(Clone)]
+struct StalePeerInfo {
+    // the start_key is stored as a key in PendingDeleteRanges
+    // below are stored as a value in PendingDeleteRanges
+    pub region_id: u64,
+    pub end_key: Vec<u8>,
+    pub timeout: time::Instant,
+}
+
+#[derive(Clone, Default)]
+struct PendingDeleteRanges {
+    ranges: BTreeMap<Vec<u8>, StalePeerInfo>, // start_key -> StalePeerInfo
+}
+
+impl PendingDeleteRanges {
+    // get ranges that overlap with [start_key, end_key)
+    pub fn drain_overlap_ranges(
+        &mut self,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
+        let mut ranges = Vec::new();
+        {
+            // find the first range that may overlap with [start_key, end_key)
+            let sub_range = self.ranges.range((Unbounded, Excluded(start_key.to_vec())));
+            if let Some((s_key, peer_info)) = sub_range.last() {
+                if peer_info.end_key > start_key.to_vec() {
+                    ranges.push((
+                        peer_info.region_id,
+                        s_key.clone(),
+                        peer_info.end_key.clone(),
+                    ));
+                }
+            }
+
+            // find the rest ranges that overlap with [start_key, end_key)
+            for (s_key, peer_info) in self.ranges
+                .range((Included(start_key.to_vec()), Excluded(end_key.to_vec())))
+            {
+                ranges.push((
+                    peer_info.region_id,
+                    s_key.clone(),
+                    peer_info.end_key.clone(),
+                ));
+            }
+        }
+
+        for &(_, ref start_key, _) in &ranges {
+            self.ranges.remove(start_key).unwrap();
+        }
+        ranges
+    }
+
+    // before an insert is called, must call drain_overlap_ranges to clean the overlap range
+    pub fn insert(
+        &mut self,
+        region_id: u64,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+        timeout: time::Instant,
+    ) {
+        assert!(self.drain_overlap_ranges(&start_key, &end_key).is_empty());
+        let info = StalePeerInfo {
+            region_id: region_id,
+            end_key: end_key,
+            timeout: timeout,
+        };
+        self.ranges.insert(start_key, info);
+    }
+
+    pub fn drain_timeout_ranges(&mut self, now: time::Instant) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
+        let mut ranges = Vec::new();
+        for (start_key, info) in &self.ranges {
+            if info.timeout <= now {
+                ranges.push((info.region_id, start_key.clone(), info.end_key.clone()));
+            }
+        }
+        for &(_, ref start_key, _) in &ranges {
+            self.ranges.remove(start_key).unwrap();
+        }
+        ranges
+    }
+
+    pub fn len(&self) -> usize {
+        self.ranges.len()
     }
 }
 
@@ -109,6 +192,8 @@ struct SnapContext {
     batch_size: usize,
     mgr: SnapManager,
     use_delete_range: bool,
+    clean_stale_peer_delay: Duration,
+    pending_delete_ranges: PendingDeleteRanges,
 }
 
 impl SnapContext {
@@ -154,7 +239,7 @@ impl SnapContext {
         timer.observe_duration();
     }
 
-    fn apply_snap(&self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<Region> {
+    fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
         info!("[region {}] begin apply snap data", region_id);
         fail_point!("region_apply_snap");
         check_abort(&abort)?;
@@ -175,6 +260,7 @@ impl SnapContext {
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
+        self.destroy_overlap_ranges(&start_key, &end_key);
         box_try!(util::delete_all_in_range(
             &self.kv_db,
             &start_key,
@@ -228,19 +314,17 @@ impl SnapContext {
             region_id,
             timer.elapsed()
         );
-        Ok(region)
+        Ok(())
     }
 
-    fn handle_apply(&self, region_id: u64, status: Arc<AtomicUsize>) -> Option<Region> {
+    fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
         status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
         SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
         let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
         let timer = apply_histogram.start_coarse_timer();
 
-        let mut region = None;
         match self.apply_snap(region_id, Arc::clone(&status)) {
-            Ok(r) => {
-                region = Some(r);
+            Ok(()) => {
                 status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
                 SNAP_COUNTER_VEC
                     .with_label_values(&["apply", "success"])
@@ -264,7 +348,6 @@ impl SnapContext {
         }
 
         timer.observe_duration();
-        region
     }
 
     fn handle_destroy(
@@ -305,100 +388,54 @@ impl SnapContext {
             );
         }
     }
-}
 
-#[derive(Clone)]
-struct StalePeerInfo {
-    // the start_key is stored as a key in PendingDeleteRanges
-    // below are stored as a value in PendingDeleteRanges
-    pub region_id: u64,
-    pub end_key: Vec<u8>,
-    pub timeout: time::Instant,
-}
-
-#[derive(Default)]
-struct PendingDeleteRanges {
-    ranges: BTreeMap<Vec<u8>, StalePeerInfo>, // start_key -> StalePeerInfo
-}
-
-impl PendingDeleteRanges {
-    // get ranges that overlap with [start_key, end_key)
-    pub fn drain_overlap_ranges(
-        &mut self,
-        start_key: &[u8],
-        end_key: &[u8],
-    ) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
-        let mut ranges = Vec::new();
-        {
-            // find the first range that may overlap with [start_key, end_key)
-            let sub_range = self.ranges.range((Unbounded, Excluded(start_key.to_vec())));
-            if let Some((s_key, peer_info)) = sub_range.last() {
-                if peer_info.end_key > start_key.to_vec() {
-                    ranges.push((
-                        peer_info.region_id,
-                        s_key.clone(),
-                        peer_info.end_key.clone(),
-                    ));
-                }
+    fn destroy_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) -> bool {
+        let to_destroy = self.pending_delete_ranges
+            .drain_overlap_ranges(start_key, end_key);
+        if to_destroy.len() > 0 {
+            for (region_id, s_key, e_key) in to_destroy {
+                self.handle_destroy(region_id, s_key, e_key, false /* use_delete_files */);
             }
-
-            // find the rest ranges that overlap with [start_key, end_key)
-            for (s_key, peer_info) in self.ranges
-                .range((Included(start_key.to_vec()), Excluded(end_key.to_vec())))
-            {
-                ranges.push((
-                    peer_info.region_id,
-                    s_key.clone(),
-                    peer_info.end_key.clone(),
-                ));
-            }
+            return true;
+        } else {
+            return false;
         }
-
-        for &(_, ref start_key, _) in &ranges {
-            self.ranges.remove(start_key).unwrap();
-        }
-        ranges
     }
 
-    // before an insert is called, must call drain_overlap_ranges to clean the overlap range
-    pub fn insert(
+    fn get_delay_secs(&self) -> u64 {
+        self.clean_stale_peer_delay.as_secs()
+    }
+
+    fn insert_pending_delete_range(
         &mut self,
         region_id: u64,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-        timeout: time::Instant,
     ) {
-        let info = StalePeerInfo {
-            region_id: region_id,
-            end_key: end_key,
-            timeout: timeout,
-        };
-        self.ranges.insert(start_key, info);
+        let timeout = time::Instant::now() + self.clean_stale_peer_delay;
+        self.pending_delete_ranges
+            .insert(region_id, start_key, end_key, timeout);
     }
 
-    pub fn drain_timeout_ranges(&mut self, now: time::Instant) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
-        let mut ranges = Vec::new();
-        for (start_key, info) in &self.ranges {
-            if info.timeout <= now {
-                ranges.push((info.region_id, start_key.clone(), info.end_key.clone()));
-            }
-        }
-        for &(_, ref start_key, _) in &ranges {
-            self.ranges.remove(start_key).unwrap();
-        }
-        ranges
-    }
+    fn clean_timeout_ranges(&mut self) {
+        STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
 
-    pub fn len(&self) -> usize {
-        self.ranges.len()
+        let now = time::Instant::now();
+        let mut timeout_ranges = self.pending_delete_ranges.drain_timeout_ranges(now);
+        for (region_id, start_key, end_key) in timeout_ranges.drain(..) {
+            self.handle_destroy(
+                region_id,
+                start_key,
+                end_key,
+                true, /* use_delete_files */
+            );
+        }
     }
 }
 
 pub struct Runner {
     pool: ThreadPool<DefaultContext>,
     ctx: SnapContext,
-    clean_stale_peer_delay: Duration,
-    pending_delete_ranges: PendingDeleteRanges,
 }
 
 impl Runner {
@@ -420,27 +457,15 @@ impl Runner {
                 mgr: mgr,
                 batch_size: batch_size,
                 use_delete_range: use_delete_range,
+                clean_stale_peer_delay: clean_stale_peer_delay,
+                pending_delete_ranges: PendingDeleteRanges::default(),
             },
-            clean_stale_peer_delay: clean_stale_peer_delay,
-            pending_delete_ranges: PendingDeleteRanges::default(),
-        }
-    }
-
-    fn destroy_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) {
-        let to_destroy = self.pending_delete_ranges
-            .drain_overlap_ranges(start_key, end_key);
-        for (region_id, s_key, e_key) in to_destroy {
-            self.ctx
-                .handle_destroy(region_id, s_key, e_key, false /* use_delete_files */);
         }
     }
 }
 
-impl Handler for Runner {
-    type Timeout = ();
-    type Message = Task;
-
-    fn notify(&mut self, event_loop: &mut EventLoop<Self>, task: Task) {
+impl Runnable<Task> for Runner {
+    fn run(&mut self, task: Task) {
         match task {
             Task::Gen {
                 region_id,
@@ -452,115 +477,51 @@ impl Handler for Runner {
                 self.pool
                     .execute(move |_| ctx.handle_gen(region_id, notifier))
             }
-            Task::Apply { region_id, status } => {
-                if let Some(region) = self.ctx.handle_apply(region_id, status) {
-                    let start_key = keys::enc_start_key(&region);
-                    let end_key = keys::enc_end_key(&region);
-                    self.destroy_overlap_ranges(&start_key, &end_key);
-                }
-            }
+            Task::Apply { region_id, status } => self.ctx.handle_apply(region_id, status),
             Task::Destroy {
                 region_id,
                 start_key,
                 end_key,
             } => {
-                if self.clean_stale_peer_delay.as_secs() > 0 {
+                if self.ctx.get_delay_secs() > 0
+                    && !self.ctx.destroy_overlap_ranges(&start_key, &end_key)
+                {
+                    // if we don't find any overlap ranges to delete,
+                    // we use delete_files_in_range for this range,
+                    // and delay the range deletion because
+                    // there might be a coprocessor request related to this range
                     info!(
                         "[region {}] register deleting data in [{}, {})",
                         region_id,
                         escape(&start_key),
                         escape(&end_key)
                     );
-                    // delay the range deletion because there might be a coprocessor request related to this range
-                    let timeout = time::Instant::now() + self.clean_stale_peer_delay;
-                    self.destroy_overlap_ranges(&start_key, &end_key);
-                    self.pending_delete_ranges
-                        .insert(region_id, start_key, end_key, timeout);
+                    self.ctx
+                        .insert_pending_delete_range(region_id, start_key, end_key);
                 } else {
+                    // use the normal delete_in_range
                     self.ctx.handle_destroy(
                         region_id,
                         start_key,
                         end_key,
-                        true, /* use_delete_files */
+                        false, /* use_delete_files */
                     );
                 }
             }
-            Task::Quit {} => {
-                info!("region runner receive quit message");
-                event_loop.shutdown();
-                if let Err(e) = self.pool.stop() {
-                    warn!("Stop threadpool failed with {:?}", e);
-                }
-            }
         }
     }
 
-    // since tick is done every STALE_PEER_CHECK_INTERVAL, so we can use it as a timeout
-    fn tick(&mut self, _: &mut EventLoop<Self>) {
-        STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
-
-        let now = time::Instant::now();
-        let mut timeout_ranges = self.pending_delete_ranges.drain_timeout_ranges(now);
-        for (region_id, start_key, end_key) in timeout_ranges.drain(..) {
-            self.ctx.handle_destroy(
-                region_id,
-                start_key,
-                end_key,
-                true, /* use_delete_files */
-            );
+    fn shutdown(&mut self) {
+        if let Err(e) = self.pool.stop() {
+            warn!("Stop threadpool failed with {:?}", e);
         }
     }
 }
 
-pub struct Worker {
-    event_loop: Option<EventLoop<Runner>>,
-    sendch: SendCh<Task>,
-    handle: Option<thread::JoinHandle<()>>,
-}
-
-impl Worker {
-    pub fn new() -> io::Result<Worker> {
-        let mut config = EventLoopConfig::new();
-        config.timer_tick_ms(STALE_PEER_CHECK_INTERVAL);
-        let event_loop = EventLoop::configured(config)?;
-        let sendch = SendCh::new(event_loop.channel(), "region");
-        Ok(Worker {
-            event_loop: Some(event_loop),
-            sendch: sendch,
-            handle: None,
-        })
-    }
-
-    pub fn start(&mut self, mut runner: Runner) -> io::Result<()> {
-        info!("starting region worker...");
-        if let Some(mut event_loop) = self.event_loop.take() {
-            let h = ThreadBuilder::new()
-                .name(thd_name!("region worker"))
-                .spawn(move || {
-                    if let Err(e) = event_loop.run(&mut runner) {
-                        error!("failed to run region worker event loop: {:?}", e);
-                    }
-                })?;
-            self.handle = Some(h);
-        } else {
-            info!("region worker has started.");
-        }
-        Ok(())
-    }
-
-    pub fn stop(&mut self) -> Option<thread::JoinHandle<()>> {
-        info!("stop region worker...");
-        if self.handle.is_none() {
-            return None;
-        }
-        if let Err(e) = self.sendch.try_send(Task::Quit {}) {
-            warn!("failed to stop region worker: {:?}", e);
-        }
-        self.handle.take()
-    }
-
-    pub fn sendch(&self) -> SendCh<Task> {
-        self.sendch.clone()
+impl RunnableWithTimer<Task, u32> for Runner {
+    fn on_timeout(&mut self, timer: &mut Timer<u32>, _: u32) {
+        self.ctx.clean_timeout_ranges();
+        timer.add_task(Duration::from_millis(STALE_PEER_CHECK_INTERVAL), 0);
     }
 }
 

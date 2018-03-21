@@ -46,7 +46,6 @@ pub use self::snap::{check_abort, copy_snapshot, ApplyOptions, Error as SnapErro
                      SnapKey, SnapManager, SnapManagerBuilder, Snapshot, SnapshotDeleter,
                      SnapshotStatistics};
 pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
-pub use self::worker::RegionRunner;
 
 // Only used in tests
 #[cfg(test)]

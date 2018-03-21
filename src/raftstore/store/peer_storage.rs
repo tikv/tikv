@@ -27,8 +27,8 @@ use kvproto::metapb::{self, Region};
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData,
                              RegionLocalState};
+use util::worker::Scheduler;
 use util::{self, rocksdb};
-use util::transport::SendCh;
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 use raftstore::{Error, Result};
 use super::worker::RegionTask;
@@ -263,7 +263,7 @@ pub struct PeerStorage {
     pub last_term: u64,
 
     snap_state: RefCell<SnapState>,
-    region_snapch: SendCh<RegionTask>,
+    region_sched: Scheduler<RegionTask>,
     snap_tried_cnt: RefCell<usize>,
 
     cache: EntryCache,
@@ -462,7 +462,7 @@ impl PeerStorage {
         kv_engine: Arc<DB>,
         raft_engine: Arc<DB>,
         region: &metapb::Region,
-        region_snapch: SendCh<RegionTask>,
+        region_sched: Scheduler<RegionTask>,
         tag: String,
         stats: Rc<RefCell<CacheQueryStats>>,
     ) -> Result<PeerStorage> {
@@ -486,7 +486,7 @@ impl PeerStorage {
             raft_state: raft_state,
             apply_state: apply_state,
             snap_state: RefCell::new(SnapState::Relax),
-            region_snapch: region_snapch,
+            region_sched: region_sched,
             snap_tried_cnt: RefCell::new(0),
             tag: tag,
             applied_index_term: RAFT_INIT_LOG_TERM,
@@ -737,7 +737,7 @@ impl PeerStorage {
             region_id: self.get_region_id(),
             notifier: tx,
         };
-        if let Err(e) = self.region_snapch.try_send(task) {
+        if let Err(e) = self.region_sched.schedule(task) {
             error!(
                 "{} failed to schedule task snap generation: {:?}",
                 self.tag, e
@@ -875,8 +875,8 @@ impl PeerStorage {
         );
         let region_id = self.get_region_id();
         box_try!(
-            self.region_snapch
-                .try_send(RegionTask::destroy(region_id, start_key, end_key))
+            self.region_sched
+                .schedule(RegionTask::destroy(region_id, start_key, end_key))
         );
         Ok(())
     }
@@ -890,14 +890,14 @@ impl PeerStorage {
         let (new_start_key, new_end_key) = (enc_start_key(new_region), enc_end_key(new_region));
         let region_id = new_region.get_id();
         if old_start_key < new_start_key {
-            box_try!(self.region_snapch.try_send(RegionTask::destroy(
+            box_try!(self.region_sched.schedule(RegionTask::destroy(
                 region_id,
                 old_start_key,
                 new_start_key
             )));
         }
         if new_end_key < old_end_key {
-            box_try!(self.region_snapch.try_send(RegionTask::destroy(
+            box_try!(self.region_sched.schedule(RegionTask::destroy(
                 region_id,
                 new_end_key,
                 old_end_key
@@ -1005,8 +1005,8 @@ impl PeerStorage {
             status: status,
         };
         // TODO: gracefully remove region instead.
-        self.region_snapch
-            .try_send(task)
+        self.region_sched
+            .schedule(task)
             .expect("snap apply job should not fail");
     }
 
@@ -1394,17 +1394,17 @@ mod test {
     use tempdir::*;
     use protobuf;
     use raftstore::store::{bootstrap, Engines};
-    use raftstore::store::worker::{RegionRunner, RegionTask, RegionWorker};
+    use raftstore::store::worker::{RegionRunner, RegionTask};
     use raftstore::store::local_metrics::RaftMetrics;
+    use util::worker::{Scheduler, Worker};
     use util::rocksdb::new_engine;
     use storage::{ALL_CFS, CF_DEFAULT};
     use raft::eraftpb::HardState;
     use rocksdb::WriteBatch;
-    use util::transport::SendCh;
 
     use super::*;
 
-    fn new_storage(sendch: SendCh<RegionTask>, path: &TempDir) -> PeerStorage {
+    fn new_storage(sched: Scheduler<RegionTask>, path: &TempDir) -> PeerStorage {
         let kv_db = Arc::new(new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap());
         let raft_path = path.path().join(Path::new("raft"));
         let raft_db =
@@ -1413,15 +1413,15 @@ mod test {
         bootstrap::bootstrap_store(&engines, 1, 1).expect("");
         let region = bootstrap::prepare_bootstrap(&engines, 1, 1, 1).expect("");
         let metrics = Rc::new(RefCell::new(CacheQueryStats::default()));
-        PeerStorage::new(kv_db, raft_db, &region, sendch, "".to_owned(), metrics).unwrap()
+        PeerStorage::new(kv_db, raft_db, &region, sched, "".to_owned(), metrics).unwrap()
     }
 
     fn new_storage_from_ents(
-        sendch: SendCh<RegionTask>,
+        sched: Scheduler<RegionTask>,
         path: &TempDir,
         ents: &[Entry],
     ) -> PeerStorage {
-        let mut store = new_storage(sendch, path);
+        let mut store = new_storage(sched, path);
         let mut kv_wb = WriteBatch::new();
         let mut ctx = InvokeContext::new(&store);
         let mut metrics = RaftMetrics::default();
@@ -1492,9 +1492,9 @@ mod test {
         ];
         for (i, (idx, wterm)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
-            let worker = RegionWorker::new().unwrap();
-            let sendch = worker.sendch();
-            let store = new_storage_from_ents(sendch, &td, &ents);
+            let worker = Worker::new("snap_manager");
+            let sched = worker.scheduler();
+            let store = new_storage_from_ents(sched, &td, &ents);
             let t = store.term(idx);
             if wterm != t {
                 panic!("#{}: expect res {:?}, got {:?}", i, wterm, t);
@@ -1543,9 +1543,9 @@ mod test {
     #[test]
     fn test_storage_clear_meta() {
         let td = TempDir::new("tikv-store").unwrap();
-        let worker = RegionWorker::new().unwrap();
-        let sendch = worker.sendch();
-        let mut store = new_storage_from_ents(sendch, &td, &[new_entry(3, 3), new_entry(4, 4)]);
+        let worker = Worker::new("snap_manager");
+        let sched = worker.scheduler();
+        let mut store = new_storage_from_ents(sched, &td, &[new_entry(3, 3), new_entry(4, 4)]);
         append_ents(&mut store, &[new_entry(5, 5), new_entry(6, 6)]);
 
         assert_eq!(6, get_meta_key_count(&store));
@@ -1621,9 +1621,9 @@ mod test {
 
         for (i, (lo, hi, maxsize, wentries)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
-            let worker = RegionWorker::new().unwrap();
-            let sendch = worker.sendch();
-            let store = new_storage_from_ents(sendch, &td, &ents);
+            let worker = Worker::new("snap_manager");
+            let sched = worker.scheduler();
+            let store = new_storage_from_ents(sched, &td, &ents);
             let e = store.entries(lo, hi, maxsize);
             if e != wentries {
                 panic!("#{}: expect entries {:?}, got {:?}", i, wentries, e);
@@ -1645,9 +1645,9 @@ mod test {
         ];
         for (i, (idx, werr)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
-            let worker = RegionWorker::new().unwrap();
-            let sendch = worker.sendch();
-            let store = new_storage_from_ents(sendch, &td, &ents);
+            let worker = Worker::new("snap_manager");
+            let sched = worker.scheduler();
+            let store = new_storage_from_ents(sched, &td, &ents);
             let mut ctx = InvokeContext::new(&store);
             let res = store
                 .term(idx)
@@ -1675,9 +1675,9 @@ mod test {
         let td = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap_dir").unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
-        let mut worker = RegionWorker::new().unwrap();
-        let sendch = worker.sendch();
-        let mut s = new_storage_from_ents(sendch, &td, &ents);
+        let mut worker = Worker::new("snap_manager");
+        let sched = worker.scheduler();
+        let mut s = new_storage_from_ents(sched, &td, &ents);
         let runner = RegionRunner::new(
             Arc::clone(&s.kv_engine),
             Arc::clone(&s.raft_engine),
@@ -1816,9 +1816,9 @@ mod test {
         ];
         for (i, (entries, wentries)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
-            let worker = RegionWorker::new().unwrap();
-            let sendch = worker.sendch();
-            let mut store = new_storage_from_ents(sendch, &td, &ents);
+            let worker = Worker::new("snap_manager");
+            let sched = worker.scheduler();
+            let mut store = new_storage_from_ents(sched, &td, &ents);
             append_ents(&mut store, &entries);
             let li = store.last_index();
             let actual_entries = store.entries(4, li + 1, u64::max_value()).expect("");
@@ -1832,9 +1832,9 @@ mod test {
     fn test_storage_cache_fetch() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
         let td = TempDir::new("tikv-store-test").unwrap();
-        let worker = RegionWorker::new().unwrap();
-        let sendch = worker.sendch();
-        let mut store = new_storage_from_ents(sendch, &td, &ents);
+        let worker = Worker::new("snap_manager");
+        let sched = worker.scheduler();
+        let mut store = new_storage_from_ents(sched, &td, &ents);
         store.cache.cache.clear();
         // empty cache should fetch data from rocksdb directly.
         let mut res = store.entries(4, 6, u64::max_value()).unwrap();
@@ -1875,9 +1875,9 @@ mod test {
     fn test_storage_cache_update() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
         let td = TempDir::new("tikv-store-test").unwrap();
-        let worker = RegionWorker::new().unwrap();
-        let sendch = worker.sendch();
-        let mut store = new_storage_from_ents(sendch, &td, &ents);
+        let worker = Worker::new("snap_manager");
+        let sched = worker.scheduler();
+        let mut store = new_storage_from_ents(sched, &td, &ents);
         store.cache.cache.clear();
 
         // initial cache
@@ -1965,9 +1965,9 @@ mod test {
         let td1 = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap").unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
-        let mut worker = RegionWorker::new().unwrap();
-        let sendch = worker.sendch();
-        let s1 = new_storage_from_ents(sendch.clone(), &td1, &ents);
+        let mut worker = Worker::new("snap_manager");
+        let sched = worker.scheduler();
+        let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
         let runner = RegionRunner::new(
             Arc::clone(&s1.kv_engine),
             Arc::clone(&s1.raft_engine),
@@ -1986,7 +1986,7 @@ mod test {
         assert_eq!(s1.truncated_term(), 3);
 
         let td2 = TempDir::new("tikv-store-test").unwrap();
-        let mut s2 = new_storage(sendch.clone(), &td2);
+        let mut s2 = new_storage(sched.clone(), &td2);
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
@@ -2004,7 +2004,7 @@ mod test {
 
         let td3 = TempDir::new("tikv-store-test").unwrap();
         let ents = &[new_entry(3, 3), new_entry(4, 3)];
-        let mut s3 = new_storage_from_ents(sendch, &td3, ents);
+        let mut s3 = new_storage_from_ents(sched, &td3, ents);
         validate_cache(&s3, &ents[1..]);
         let mut ctx = InvokeContext::new(&s3);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
@@ -2023,9 +2023,9 @@ mod test {
     #[test]
     fn test_canceling_snapshot() {
         let td = TempDir::new("tikv-store-test").unwrap();
-        let worker = RegionWorker::new().unwrap();
-        let sendch = worker.sendch();
-        let mut s = new_storage(sendch, &td);
+        let worker = Worker::new("snap_manager");
+        let sched = worker.scheduler();
+        let mut s = new_storage(sched, &td);
 
         // PENDING can be canceled directly.
         s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
@@ -2069,9 +2069,9 @@ mod test {
     #[test]
     fn test_try_finish_snapshot() {
         let td = TempDir::new("tikv-store-test").unwrap();
-        let worker = RegionWorker::new().unwrap();
-        let sendch = worker.sendch();
-        let mut s = new_storage(sendch, &td);
+        let worker = Worker::new("snap_manager");
+        let sched = worker.scheduler();
+        let mut s = new_storage(sched, &td);
 
         // PENDING can be finished.
         let mut snap_state = SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_PENDING)));

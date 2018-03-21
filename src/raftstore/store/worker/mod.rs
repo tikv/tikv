@@ -53,7 +53,7 @@ mod consistency_check;
 mod cleanup_sst;
 pub mod apply;
 
-pub use self::region::{Runner as RegionRunner, Task as RegionTask, Worker as RegionWorker};
+pub use self::region::{Runner as RegionRunner, Task as RegionTask, STALE_PEER_CHECK_INTERVAL};
 pub use self::split_check::{Runner as SplitCheckRunner, Task as SplitCheckTask};
 pub use self::compact::{Runner as CompactRunner, Task as CompactTask};
 pub use self::raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask};
