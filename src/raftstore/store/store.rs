@@ -809,8 +809,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         let peer = self.region_peers.get_mut(&region_id).unwrap();
+        let from_peer_id = msg.get_from_peer().get_id();
         peer.insert_peer_cache(msg.take_from_peer());
         peer.step(msg.take_message())?;
+
+        if peer.any_new_peer_catch_up(from_peer_id) {
+            peer.heartbeat_pd(&self.pd_worker);
+        }
 
         // Add into pending raft groups for later handling ready.
         peer.mark_to_be_checked(&mut self.pending_raft_groups);
@@ -1314,13 +1319,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ConfChangeType::AddNode => {
                     // Add this peer to cache.
                     let peer = cp.peer.clone();
-                    p.peer_heartbeats.insert(peer.get_id(), Instant::now());
+                    let now = Instant::now();
+                    p.peer_heartbeats.insert(peer.get_id(), now);
+                    if p.is_leader() {
+                        p.peers_start_pending_time.push((peer.get_id(), now));
+                    }
                     p.insert_peer_cache(peer);
                 }
                 ConfChangeType::RemoveNode => {
                     // Remove this peer from cache.
-                    p.peer_heartbeats.remove(&cp.peer.get_id());
-                    p.remove_peer_from_cache(cp.peer.get_id());
+                    let peer_id = cp.peer.get_id();
+                    p.peer_heartbeats.remove(&peer_id);
+                    if p.is_leader() {
+                        p.peers_start_pending_time.retain(|&(p, _)| p != peer_id);
+                    }
+                    p.remove_peer_from_cache(peer_id);
                 }
                 ConfChangeType::AddLearnerNode => unimplemented!(),
             }
@@ -1411,7 +1424,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     new_peer.insert_peer_cache(peer.clone());
                 }
                 peer = new_peer.peer.clone();
-                if let Some(origin_peer) = self.region_peers.get(&region_id) {
+                if let Some(origin_peer) = self.region_peers.get_mut(&region_id) {
                     // New peer derive write flow from parent region,
                     // this will be used by balance write flow.
                     new_peer.peer_stat = origin_peer.peer_stat.clone();
@@ -1421,10 +1434,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
                     if origin_peer.is_leader() {
                         // Notify pd immediately to let it update the region meta.
-                        if right_derive {
-                            self.report_split_pd(&new_peer, origin_peer);
+                        if let Err(e) = if right_derive {
+                            report_split_pd(&mut new_peer, origin_peer, &self.pd_worker)
                         } else {
-                            self.report_split_pd(origin_peer, &new_peer);
+                            report_split_pd(origin_peer, &mut new_peer, &self.pd_worker)
+                        } {
+                            error!("{} failed to notify pd: {}", self.tag, e);
                         }
                     }
                 }
@@ -1467,29 +1482,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             {
                 let _ = self.on_raft_message(msg);
             }
-        }
-    }
-
-    fn report_split_pd(&self, left: &Peer, right: &Peer) {
-        let left_region = left.region();
-        let right_region = right.region();
-
-        info!(
-            "notify pd with split left {:?}, right {:?}",
-            left_region, right_region
-        );
-        right.heartbeat_pd(&self.pd_worker);
-        left.heartbeat_pd(&self.pd_worker);
-
-        // Now pd only uses ReportSplit for history operation show,
-        // so we send it independently here.
-        let task = PdTask::ReportSplit {
-            left: left_region.clone(),
-            right: right_region.clone(),
-        };
-
-        if let Err(e) = self.pd_worker.schedule(task) {
-            error!("{} failed to notify pd: {}", self.tag, e);
         }
     }
 
@@ -2050,7 +2042,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             peer.check_peers();
         }
         let mut leader_count = 0;
-        for peer in self.region_peers.values() {
+        for peer in self.region_peers.values_mut() {
             if peer.is_leader() {
                 leader_count += 1;
                 peer.heartbeat_pd(&self.pd_worker);
@@ -2259,6 +2251,29 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
         }
     }
+}
+
+fn report_split_pd(
+    left: &mut Peer,
+    right: &mut Peer,
+    pd_worker: &FutureWorker<PdTask>,
+) -> ::std::result::Result<(), Stopped<PdTask>> {
+    info!(
+        "notify pd with split left {:?}, right {:?}",
+        left.region(),
+        right.region()
+    );
+    right.heartbeat_pd(pd_worker);
+    left.heartbeat_pd(pd_worker);
+
+    // Now pd only uses ReportSplit for history operation show,
+    // so we send it independently here.
+    let task = PdTask::ReportSplit {
+        left: left.region().clone(),
+        right: right.region().clone(),
+    };
+
+    pd_worker.schedule(task)
 }
 
 // Consistency Check implementation.
