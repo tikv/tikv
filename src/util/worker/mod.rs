@@ -144,17 +144,10 @@ impl<T: Display> Scheduler<T> {
     /// If the worker is stopped or number pending tasks exceeds capacity, an error will return.
     pub fn schedule(&self, task: T) -> Result<(), ScheduleError<T>> {
         debug!("scheduling task {}", task);
-        // whether sender is bounded or not
-        if self.sender.capacity().is_none() {
-            if let Err(SendError(Some(t))) = self.sender.send(Some(task)) {
-                return Err(ScheduleError::Stopped(t));
-            }
-        } else if let Err(e) = self.sender.try_send(Some(task)) {
-            match e {
-                TrySendError::Disconnected(Some(t)) => return Err(ScheduleError::Stopped(t)),
-                TrySendError::Full(Some(t)) => return Err(ScheduleError::Full(t)),
-                _ => unreachable!(),
-            }
+        if let Err(e) = self.sender.try_send(Some(task)) {
+            TrySendError::Disconnected(Some(t)) => return Err(ScheduleError::Stopped(t)),
+            TrySendError::Full(Some(t)) => return Err(ScheduleError::Full(t)),
+            _ => unreachable!(),
         }
         self.counter.fetch_add(1, Ordering::SeqCst);
         WORKER_PENDING_TASK_VEC
