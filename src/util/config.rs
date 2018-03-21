@@ -766,16 +766,18 @@ mod check_data_dir {
         lazy_static! {
             // According `man 3 getmntent`, The pointer returned by `getmntent` points
             // to a static area of memory which is overwritten by subsequent calls.
-            // So we use a lock to protect it.
+            // So we use a lock to protect it in order to avoid `make dev` fail.
             static ref GETMNTENT_LOCK: Mutex<()> = Mutex::new(());
         }
+
         unsafe {
+            let _lock = GETMNTENT_LOCK.lock().unwrap();
+
             let profile = CString::new(mnt_file).unwrap();
             let retype = CString::new("r").unwrap();
             let afile = libc::setmntent(profile.as_ptr(), retype.as_ptr());
             let mut fs = FsInfo::default();
             loop {
-                let _ = GETMNTENT_LOCK.lock().unwrap();
                 let ent = libc::getmntent(afile);
                 if ent.is_null() {
                     break;
