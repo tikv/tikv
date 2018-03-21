@@ -11,38 +11,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{error, result};
-use std::cmp::Ordering;
-use std::sync::Arc;
-use std::rc::Rc;
-use std::cell::RefCell;
-
-use protobuf::{self, RepeatedField};
-
-use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
-use kvproto::metapb::Region;
-use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
 use kvproto::debugpb::DB as DBType;
-use raft::eraftpb::Entry;
+use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
+use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
-
+use protobuf::{self, RepeatedField};
 use raft::{self, RawNode};
+use raft::eraftpb::Entry;
 use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
 use raftstore::store::{init_apply_state, init_raft_state, write_peer_state};
-use raftstore::store::util as raftstore_util;
 use raftstore::store::engine::IterOption;
+use raftstore::store::util as raftstore_util;
+use rocksdb::{Kv, SeekKey, Writable, WriteBatch, WriteOptions, DB};
+use std::{error, result};
+use std::cell::RefCell;
+use std::cmp::Ordering;
+use std::rc::Rc;
+use std::sync::Arc;
 use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use storage::types::{truncate_ts, Key};
 use storage::mvcc::{Lock, Write, WriteType};
-use util::escape;
+use storage::types::{truncate_ts, Key};
 use util::config::ReadableSize;
+use util::escape;
 use util::rocksdb::{compact_range, get_cf_handle};
 use util::worker::Worker;
 
 pub type Result<T> = result::Result<T, Error>;
 type DBIterator = ::rocksdb::DBIterator<Arc<DB>>;
 
-quick_error!{
+quick_error! {
     #[derive(Debug)]
     pub enum Error {
         InvalidArgument(msg: String) {
@@ -255,6 +252,38 @@ impl Debugger {
         Ok(errors)
     }
 
+    pub fn verify_regions(&self, regions: Vec<Region>) -> Result<Vec<(u64, Error)>> {
+        let db = &self.engines.kv_engine;
+
+        let mut errors = Vec::with_capacity(regions.len());
+        for region in regions {
+            let region_id = region.get_id();
+            if let Err(e) = self.verify_region(db, region) {
+                errors.push((region_id, e));
+            }
+        }
+
+        Ok(errors)
+    }
+
+    fn verify_region(&self, db: &Arc<DB>, region: Region) -> Result<()> {
+        let wb = WriteBatch::new();
+
+        let mut region_verifier = box_try!(RegionVerifier::new(Arc::clone(db), region));
+        if let Err(e) = region_verifier.verify_write_by_default(&wb) {
+            return Err(e);
+        }
+
+        if let Err(e) = region_verifier.verify_lock_by_default(&wb) {
+            return Err(e);
+        }
+
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        box_try!(db.write_opt(wb, &write_opts));
+        Ok(())
+    }
+
     pub fn bad_regions(&self) -> Result<Vec<(u64, Error)>> {
         let mut res = Vec::new();
 
@@ -338,6 +367,90 @@ impl Debugger {
                 Some(ident) => Ok(ident.get_store_id()),
                 None => Err(Error::NotFound("No store ident key".to_owned())),
             })
+    }
+}
+
+pub struct RegionVerifier {
+    db: Arc<DB>,
+    lock_iter: DBIterator,
+    //    default_iter: DBIterator,
+    write_iter: DBIterator,
+}
+
+impl RegionVerifier {
+    fn new(db: Arc<DB>, reg: Region) -> Result<Self> {
+        let region = reg.clone();
+        let start_key = keys::data_key(region.get_start_key());
+        let end_key = keys::data_end_key(region.get_end_key());
+        let gen_iter = |cf: &str| -> Result<_> {
+            let from = start_key.clone();
+            let to = end_key.clone();
+            let readopts = IterOption::new(Some(from.clone()), Some(to), false).build_read_opts();
+            let handle = box_try!(get_cf_handle(db.as_ref(), cf));
+            let mut iter = DBIterator::new_cf(Arc::clone(&db), handle, readopts);
+            iter.seek(SeekKey::from(from.as_ref()));
+            Ok(iter)
+        };
+
+        Ok(RegionVerifier {
+            db: Arc::clone(&db),
+            write_iter: gen_iter(CF_WRITE)?,
+            lock_iter: gen_iter(CF_LOCK)?,
+            //            default_iter: gen_iter(CF_DEFAULT)?,
+        })
+    }
+
+    pub fn verify_write_by_default(&mut self, wb: &WriteBatch) -> Result<()> {
+        let iter = &mut self.write_iter;
+
+        let write_handle = box_try!(get_cf_handle(&self.db, CF_WRITE));
+        let default_handle = box_try!(get_cf_handle(&self.db, CF_DEFAULT));
+
+        if iter.valid() {
+            loop {
+                let key = iter.key().to_vec();
+                let value = iter.value().to_vec();
+                let write = box_try!(Write::parse(&value));
+                if write.short_value == None {
+                    if let Ok(None) = self.db.get_cf(default_handle, key.as_ref()) {
+                        println!("delete key {:?} in write cf", key.clone());
+                        box_try!(wb.delete_cf(write_handle, key.as_ref()));
+                    }
+                }
+
+                if !iter.next() {
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn verify_lock_by_default(&mut self, wb: &WriteBatch) -> Result<()> {
+        let iter = &mut self.lock_iter;
+
+        let lock_handle = box_try!(get_cf_handle(&self.db, CF_LOCK));
+        let default_handle = box_try!(get_cf_handle(&self.db, CF_DEFAULT));
+        if iter.valid() {
+            loop {
+                let key = iter.key().to_vec();
+                let value = iter.value().to_vec();
+                let lock = box_try!(Lock::parse(&value));
+                if lock.short_value == None {
+                    if let Ok(None) = self.db.get_cf(default_handle, key.as_ref()) {
+                        println!("delete key {:?} in lock cf", key.clone());
+                        box_try!(wb.delete_cf(lock_handle, key.as_ref()));
+                    }
+                }
+
+                if !iter.next() {
+                    break;
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -562,20 +675,6 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch)
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::iter::FromIterator;
-
-    use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
-    use kvproto::metapb::{self, Peer};
-    use raft::eraftpb::EntryType;
-    use tempdir::TempDir;
-
-    use raftstore::store::engine::Mutable;
-    use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use storage::mvcc::{Lock, LockType};
-    use util::rocksdb::{self as rocksdb_util, CFOptions};
-    use super::*;
-
     fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
         let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
         let mut region = Region::new();
