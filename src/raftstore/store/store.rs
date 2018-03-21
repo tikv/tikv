@@ -1324,7 +1324,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     let now = Instant::now();
                     p.peer_heartbeats.insert(peer.get_id(), now);
                     if p.is_leader() {
-                        p.peer_pending_after.push((peer.get_id(), now));
+                        p.peers_start_pending_time.push((peer.get_id(), now));
                     }
                     p.insert_peer_cache(peer);
                 }
@@ -1333,7 +1333,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     let peer_id = cp.peer.get_id();
                     p.peer_heartbeats.remove(&peer_id);
                     if p.is_leader() {
-                        p.peer_pending_after.retain(|&(p, _)| p != peer_id);
+                        p.peers_start_pending_time.retain(|&(p, _)| p != peer_id);
                     }
                     p.remove_peer_from_cache(peer_id);
                 }
