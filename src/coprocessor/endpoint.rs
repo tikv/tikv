@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Debug, Display, Formatter};
 
 use protobuf::{CodedInputStream, Message as PbMsg};
-use futures::{future, stream, Stream};
+use futures::{future, stream, Future};
 use futures::sync::mpsc as futures_mpsc;
 use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 
@@ -154,7 +154,6 @@ pub struct Host {
     running_task_count: Arc<AtomicUsize>,
     batch_row_limit: usize,
     stream_batch_row_limit: usize,
-    stream_channel_size: usize,
     request_max_handle_duration: Duration,
 }
 
@@ -192,7 +191,6 @@ impl Host {
             max_running_task_count: cfg.end_point_max_tasks,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
-            stream_channel_size: cfg.end_point_stream_channel_size,
             request_max_handle_duration: cfg.end_point_request_max_handle_duration.0,
             running_task_count: Arc::new(AtomicUsize::new(0)),
         }
@@ -232,7 +230,7 @@ impl Host {
         debug!("failed to handle batch request: {:?}", e);
         let resp = err_multi_resp(e.into(), reqs.len(), &mut self.basic_local_metrics);
         for t in reqs {
-            t.on_resp.respond(resp.clone());
+            let _ = t.on_resp.respond(resp.clone()).wait();
         }
     }
 
@@ -246,7 +244,8 @@ impl Host {
         let metrics = &mut self.basic_local_metrics;
         if let Err(e) = t.check_outdated() {
             let resp = err_resp(e, metrics);
-            return t.on_resp.respond(resp);
+            let _ = t.on_resp.respond(resp).wait();
+            return;
         }
 
         let (mut req, cop_req, req_ctx, on_resp) = (t.req, t.cop_req, t.ctx, t.on_resp);
@@ -265,7 +264,10 @@ impl Host {
             CopRequest::DAG(dag) => {
                 let mut ctx = match DAGContext::new(dag, ranges, snap, req_ctx) {
                     Ok(ctx) => ctx,
-                    Err(e) => return on_resp.respond(err_resp(e, metrics)),
+                    Err(e) => {
+                        let _ = on_resp.respond(err_resp(e, metrics)).wait();
+                        return;
+                    }
                 };
                 if !on_resp.is_streaming() {
                     let batch_row_limit = self.batch_row_limit;
@@ -278,7 +280,7 @@ impl Host {
                         let mut exec_metrics = ExecutorMetrics::default();
                         ctx.collect_metrics_into(&mut exec_metrics);
                         tracker.record_handle(Some(&mut resp), exec_metrics);
-                        future::ok::<_, ()>(on_resp.respond(resp))
+                        on_resp.respond(resp)
                     };
                     return pool.spawn_fn(do_request).forget();
                 }
@@ -301,11 +303,7 @@ impl Host {
                         future::ok::<_, futures_mpsc::SendError<_>>((resp, (ctx, finished)))
                     })
                 });
-
-                // TODO: Add test to ensure back pressure works.
-                let (tx, rx) = futures_mpsc::channel(self.stream_channel_size);
-                pool.spawn(s.forward(tx)).forget();
-                on_resp.respond_stream(box rx);
+                pool.spawn(on_resp.respond_stream(s)).forget();
             }
             CopRequest::Analyze(analyze) => {
                 let ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx);
@@ -317,7 +315,7 @@ impl Host {
                         err_resp(e, &mut metrics)
                     });
                     tracker.record_handle(Some(&mut resp), exec_metrics);
-                    future::ok::<_, ()>(on_resp.respond(resp))
+                    on_resp.respond(resp)
                 };
                 pool.spawn_fn(do_request).forget();
             }
@@ -331,7 +329,7 @@ impl Host {
                         err_resp(e, &mut metrics)
                     });
                     tracker.record_handle(Some(&mut resp), exec_metrics);
-                    future::ok::<_, ()>(on_resp.respond(resp))
+                    on_resp.respond(resp)
                 };
                 pool.spawn_fn(do_request).forget();
             }
@@ -705,7 +703,7 @@ impl Runnable<Task> for Host {
                     req.set_max_handle_duration(self.request_max_handle_duration);
                     if let Err(e) = req.check_outdated() {
                         let resp = err_resp(e, &mut self.basic_local_metrics);
-                        req.on_resp.respond(resp);
+                        let _ = req.on_resp.respond(resp).wait();
                         continue;
                     }
                     let key = req.get_request_key();
@@ -900,7 +898,7 @@ mod tests {
     use storage::engine::{self, TEMP_DIR};
     use std::thread;
     use std::time::Duration;
-    use std::sync::mpsc;
+    use futures::{Future, Sink, Stream};
 
     use kvproto::coprocessor::Request;
     use tipb::select::DAGRequest;
@@ -938,12 +936,12 @@ mod tests {
 
         let mut req = Request::new();
         req.set_tp(REQ_TYPE_DAG);
-        let (tx, rx) = mpsc::channel();
-        let on_resp = OnResponse::Unary(box move |msg| tx.send(msg).unwrap());
+        let (tx, rx) = futures_mpsc::channel(1);
+        let on_resp = OnResponse::Unary(tx);
         let task = RequestTask::new(req, on_resp, 1000).unwrap();
 
         worker.schedule(Task::Request(task)).unwrap();
-        let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let resp = rx.wait().next().unwrap().unwrap();
         assert!(!resp.get_other_error().is_empty());
         assert_eq!(resp.get_other_error(), super::OUTDATED_ERROR_MSG);
         worker.stop();
@@ -959,9 +957,21 @@ mod tests {
         let mut end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
         end_point.max_running_task_count = 1;
         worker.start(end_point).unwrap();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = futures_mpsc::channel(150);
         for pos in 0..30 * 4 {
+            let (delayed_tx, delayed_rx) = futures_mpsc::channel(1);
             let tx = tx.clone();
+            thread::spawn(move || {
+                tx.send_all(
+                    delayed_rx
+                        .map_err(|_| unreachable!() /* See futures-rs #401 */)
+                        .map(|v| {
+                            thread::sleep(Duration::from_millis(100));
+                            v
+                        }),
+                ).wait()
+                    .unwrap();
+            });
             let mut req = Request::new();
             req.set_tp(REQ_TYPE_DAG);
             if pos % 3 == 0 {
@@ -971,16 +981,13 @@ mod tests {
             } else {
                 req.mut_context().set_priority(CommandPri::High);
             }
-            let on_resp = OnResponse::Unary(box move |msg| {
-                thread::sleep(Duration::from_millis(100));
-                let _ = tx.send(msg); // To avoid panic if rx is closed.
-            });
-
+            let on_resp = OnResponse::Unary(delayed_tx);
             let task = RequestTask::new(req, on_resp, 1000).unwrap();
             worker.schedule(Task::Request(task)).unwrap();
         }
+        let mut rx_iter = rx.wait();
         for _ in 0..120 {
-            let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            let resp = rx_iter.next().unwrap().unwrap();
             if !resp.has_region_error() {
                 continue;
             }
@@ -1006,7 +1013,8 @@ mod tests {
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(dag.write_to_bytes().unwrap());
 
-        let err = RequestTask::new(req, OnResponse::Unary(box |_| ()), 5).unwrap_err();
+        let (tx, _rx) = futures_mpsc::channel(1);
+        let err = RequestTask::new(req, OnResponse::Unary(tx), 5).unwrap_err();
         let s = format!("{:?}", err);
         assert!(
             s.contains("Recursion"),

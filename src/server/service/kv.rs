@@ -22,6 +22,7 @@ use grpc::{ClientStreamingSink, Error as GrpcError, RequestStream, RpcContext, R
            RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
 use futures::{future, stream, Future, Sink, Stream};
 use futures::sync::oneshot;
+use futures::sync::mpsc as futures_mpsc;
 use protobuf::RepeatedField;
 use kvproto::tikvpb_grpc;
 use kvproto::raft_serverpb::*;
@@ -30,7 +31,6 @@ use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use prometheus::Histogram;
 
-use util;
 use util::worker::Scheduler;
 use util::collections::HashMap;
 use util::buf::PipeBuffer;
@@ -61,6 +61,7 @@ pub struct Service<T: RaftStoreRouter + 'static> {
     token: Arc<AtomicUsize>, // TODO: remove it.
     recursion_limit: u32,
     metrics: Metrics,
+    stream_channel_size: usize,
 }
 
 #[derive(Clone)]
@@ -122,6 +123,7 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         recursion_limit: u32,
+        stream_channel_size: usize,
     ) -> Service<T> {
         Service {
             storage: storage,
@@ -131,6 +133,7 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
             token: Arc::new(AtomicUsize::new(1)),
             recursion_limit: recursion_limit,
             metrics: Metrics::new(),
+            stream_channel_size,
         }
     }
 
@@ -805,8 +808,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         const LABEL: &str = "coprocessor";
         let timer = self.metrics.coprocessor.start_coarse_timer();
 
-        let (cb, future) = make_callback();
-        let on_resp = OnResponse::Unary(cb);
+        let (tx, rx) = futures_mpsc::channel(1);
+        let on_resp = OnResponse::Unary(tx);
         let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
             Ok(req_task) => req_task,
             Err(e) => {
@@ -828,8 +831,13 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             return self.send_fail_status(ctx, sink, error, code);
         }
 
-        let future = future
-            .map_err(Error::from)
+        let future = rx.take(1)
+            .fold(None, |_, v| future::ok::<_, ()>(Some(v)))
+            .and_then(|opt_v| match opt_v {
+                None => Err(()),
+                Some(v) => Ok(v),
+            })
+            .map_err(|_| Error::Sink)
             .and_then(|resp| sink.success(resp).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
@@ -850,8 +858,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        let (cb, stream_future) = util::future::paired_future_callback();
-        let on_resp = OnResponse::Streaming(cb);
+        let (tx, rx) = futures_mpsc::channel(self.stream_channel_size);
+        let on_resp = OnResponse::Streaming(tx);
         let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
             Ok(req_task) => req_task,
             Err(e) => {
@@ -875,25 +883,21 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             return self.send_fail_status_to_stream(ctx, sink, error, code);
         }
 
-        let future = stream_future
-            .map_err(Error::from)
-            .and_then(|stream| {
-                let stream = stream
-                    .map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
-                    .map_err(|e| {
-                        let code = RpcStatusCode::Unknown;
-                        let msg = Some(format!("{:?}", e));
-                        GrpcError::RpcFailure(RpcStatus::new(code, msg))
-                    });
+        let stream = rx.map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
+            .map_err(|e| {
+                let code = RpcStatusCode::Unknown;
+                let msg = Some(format!("{:?}", e));
+                GrpcError::RpcFailure(RpcStatus::new(code, msg))
+            });
 
-                sink.send_all(stream)
-                    .map(|_| timer.observe_duration())
-                    .map_err(Error::from)
-            })
+        let future = sink.send_all(stream)
+            .map(|_| timer.observe_duration())
+            .map_err(Error::from)
             .map_err(move |e| {
                 debug!("{} failed: {:?}", label, e);
                 GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
             });
+
         ctx.spawn(future);
     }
 

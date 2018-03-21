@@ -26,9 +26,9 @@ pub mod snap;
 pub mod debug;
 
 use std::fmt::{Debug, Formatter, Result as FormatResult};
-use std::boxed::FnBox;
 
-use futures::{stream, Stream};
+use futures::{stream, Future, Sink, Stream};
+use futures::sync::mpsc;
 
 pub use self::config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Error, Result};
@@ -38,11 +38,9 @@ pub use self::node::{create_raft_storage, Node};
 pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::raft_client::RaftClient;
 
-type StreamResponse<T> = Box<Stream<Item = T, Error = ()> + Send>;
-
 pub enum OnResponse<T> {
-    Unary(Box<FnBox(T) + Send>),
-    Streaming(Box<FnBox(StreamResponse<T>) + Send>),
+    Unary(mpsc::Sender<T>),
+    Streaming(mpsc::Sender<T>),
 }
 
 impl<T: Send + Debug + 'static> OnResponse<T> {
@@ -53,17 +51,20 @@ impl<T: Send + Debug + 'static> OnResponse<T> {
         }
     }
 
-    pub fn respond(self, resp: T) {
-        match self {
-            OnResponse::Unary(cb) => cb(resp),
-            OnResponse::Streaming(cb) => cb(box stream::once(Ok(resp))),
-        }
+    pub fn respond(self, resp: T) -> impl Future<Item = (), Error = mpsc::SendError<T>> {
+        let sender = match self {
+            OnResponse::Unary(sender) | OnResponse::Streaming(sender) => sender,
+        };
+        sender.send_all(stream::once(Ok(resp))).map(|_| ())
     }
 
-    pub fn respond_stream(self, s: StreamResponse<T>) {
+    pub fn respond_stream<S>(self, s: S) -> impl Future<Item = (), Error = mpsc::SendError<T>>
+    where
+        S: Stream<Item = T, Error = mpsc::SendError<T>>,
+    {
         match self {
             OnResponse::Unary(_) => unreachable!(),
-            OnResponse::Streaming(cb) => cb(s),
+            OnResponse::Streaming(sender) => sender.send_all(s).map(|_| ()),
         }
     }
 }
