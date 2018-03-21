@@ -347,7 +347,7 @@ impl Debugger {
         config_value: &str,
     ) -> Result<()> {
         let db = match module {
-            MODULE::ROCKSDB => DBType::KV,
+            MODULE::KVDB => DBType::KV,
             MODULE::RAFTDB => DBType::RAFT,
             _ => return Err(Error::NotFound(format!("unsupported module: {:?}", module))),
         };

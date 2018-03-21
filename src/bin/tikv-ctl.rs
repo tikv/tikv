@@ -1014,7 +1014,7 @@ fn main() {
                     Arg::with_name("module")
                         .short("m")
                         .takes_value(true)
-                        .help("module of the tikv, eg. rocksdb or raftdb"),
+                        .help("module of the tikv, eg. kvdb or raftdb"),
                 )
                 .arg(
                     Arg::with_name("config_name")
@@ -1144,8 +1144,8 @@ fn main() {
 }
 
 fn get_module_type(module: &str) -> MODULE {
-    let module_type = match module {
-        "rocksdb" => MODULE::ROCKSDB,
+    match module {
+        "kvdb" => MODULE::KVDB,
         "raftdb" => MODULE::RAFTDB,
         "readpool" => MODULE::READPOOL,
         "server" => MODULE::SERVER,
@@ -1156,8 +1156,7 @@ fn get_module_type(module: &str) -> MODULE {
         "security" => MODULE::SECURITY,
         "import" => MODULE::IMPORT,
         _ => MODULE::UNUSED,
-    };
-    module_type
+    }
 }
 
 fn from_hex(key: &str) -> Vec<u8> {
