@@ -27,8 +27,7 @@ use std::time::Duration;
 use util::time::{Instant, SlowTimer};
 use util::timer::Timer;
 use self::metrics::*;
-use crossbeam_channel::{self, Receiver, RecvTimeoutError, SendError, Sender, TryRecvError,
-                        TrySendError};
+use crossbeam_channel::{self, Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError};
 
 pub use self::future::Runnable as FutureRunnable;
 pub use self::future::Scheduler as FutureScheduler;
@@ -145,9 +144,11 @@ impl<T: Display> Scheduler<T> {
     pub fn schedule(&self, task: T) -> Result<(), ScheduleError<T>> {
         debug!("scheduling task {}", task);
         if let Err(e) = self.sender.try_send(Some(task)) {
-            TrySendError::Disconnected(Some(t)) => return Err(ScheduleError::Stopped(t)),
-            TrySendError::Full(Some(t)) => return Err(ScheduleError::Full(t)),
-            _ => unreachable!(),
+            match e {
+                TrySendError::Disconnected(Some(t)) => return Err(ScheduleError::Stopped(t)),
+                TrySendError::Full(Some(t)) => return Err(ScheduleError::Full(t)),
+                _ => unreachable!(),
+            }
         }
         self.counter.fetch_add(1, Ordering::SeqCst);
         WORKER_PENDING_TASK_VEC
