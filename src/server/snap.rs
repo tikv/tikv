@@ -87,6 +87,7 @@ impl Display for SendTask {
 }
 
 struct SnapChunk {
+    _client: TikvClient, // Keep the channel alive during stream sending.
     mgr: SnapManager,
     key: SnapKey,
     snap: Box<Snapshot>,
@@ -151,13 +152,18 @@ fn send_snap(
         future_try!(SnapKey::from_snap(snap).map_err(Error::from))
     };
 
-    let chunks = future_try!(get_snap_stream_for_send(mgr.clone(), key.clone(), msg));
-    let total_size = chunks.remain_bytes;
-
     let channel_builder = ChannelBuilder::new(env);
     let channel = security_mgr.connect(channel_builder, addr);
     let client = TikvClient::new(channel);
     let (sink, receiver) = future_try!(client.snapshot().map_err(Error::from));
+
+    let chunks = future_try!(get_snap_stream_for_send(
+        mgr.clone(),
+        key.clone(),
+        msg,
+        client
+    ));
+    let total_size = chunks.remain_bytes;
 
     let send = chunks.forward(sink);
     box send.and_then(|_| receiver.map_err(Error::from))
@@ -179,7 +185,12 @@ fn send_snap(
         })
 }
 
-fn get_snap_stream_for_send(mgr: SnapManager, key: SnapKey, msg: RaftMessage) -> Result<SnapChunk> {
+fn get_snap_stream_for_send(
+    mgr: SnapManager,
+    key: SnapKey,
+    msg: RaftMessage,
+    client: TikvClient,
+) -> Result<SnapChunk> {
     mgr.register(key.clone(), SnapEntry::Sending);
 
     // snapshot file has been validated when created, so no need to validate again.
@@ -207,6 +218,7 @@ fn get_snap_stream_for_send(mgr: SnapManager, key: SnapKey, msg: RaftMessage) ->
     first.set_message(msg);
 
     Ok(SnapChunk {
+        _client: client,
         mgr: mgr,
         key: key,
         snap: s,
