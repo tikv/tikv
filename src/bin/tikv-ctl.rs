@@ -427,7 +427,7 @@ trait DebugExecutor {
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
 
-    fn modify_tikv_config(&self, module: &str, config_name: &str, config_value: &str);
+    fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str);
 
     fn dump_metrics(&self, tags: Vec<&str>);
 }
@@ -561,9 +561,9 @@ impl DebugExecutor for DebugClient {
         println!("success!");
     }
 
-    fn modify_tikv_config(&self, module: &str, config_name: &str, config_value: &str) {
+    fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str) {
         let mut req = ModifyTikvConfigRequest::new();
-        req.set_module(module.to_owned());
+        req.set_module(module);
         req.set_config_name(config_name.to_owned());
         req.set_config_value(config_value.to_owned());
         self.modify_tikv_config(&req)
@@ -655,7 +655,7 @@ impl DebugExecutor for Debugger {
         process::exit(-1);
     }
 
-    fn modify_tikv_config(&self, _: &str, _: &str, _: &str) {
+    fn modify_tikv_config(&self, _: MODULE, _: &str, _: &str) {
         eprintln!("only support remote mode");
         process::exit(-1);
     }
@@ -1134,13 +1134,30 @@ fn main() {
         let module = matches.value_of("module").unwrap();
         let config_name = matches.value_of("config_name").unwrap();
         let config_value = matches.value_of("config_value").unwrap();
-        debug_executor.modify_tikv_config(module, config_name, config_value);
+        debug_executor.modify_tikv_config(get_module_type(module), config_name, config_value);
     } else if let Some(matches) = matches.subcommand_matches("metrics") {
         let tags = Vec::from_iter(matches.values_of("tag").unwrap());
         debug_executor.dump_metrics(tags)
     } else {
         let _ = app.print_help();
     }
+}
+
+fn get_module_type(module: &str) -> MODULE {
+    let module_type = match module {
+        "rocksdb" => MODULE::ROCKSDB,
+        "raftdb" => MODULE::RAFTDB,
+        "readpool" => MODULE::READPOOL,
+        "server" => MODULE::SERVER,
+        "storage" => MODULE::STORAGE,
+        "ps" => MODULE::PD,
+        "metric" => MODULE::METRIC,
+        "coprocessor" => MODULE::COPROCESSOR,
+        "security" => MODULE::SECURITY,
+        "import" => MODULE::IMPORT,
+        _ => MODULE::UNUSED,
+    };
+    module_type
 }
 
 fn from_hex(key: &str) -> Vec<u8> {

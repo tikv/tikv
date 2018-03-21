@@ -22,7 +22,7 @@ use protobuf::{self, RepeatedField};
 use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
 use kvproto::metapb::Region;
 use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
-use kvproto::debugpb::DB as DBType;
+use kvproto::debugpb::{DB as DBType, MODULE};
 use raft::eraftpb::Entry;
 use kvproto::raft_serverpb::*;
 
@@ -342,37 +342,32 @@ impl Debugger {
 
     pub fn modify_tikv_config(
         &self,
-        module: &str,
+        module: MODULE,
         config_name: &str,
         config_value: &str,
     ) -> Result<()> {
-        match module {
-            "rocksdb" | "raftdb" => {
-                let db = if module == "rocksdb" {
-                    DBType::KV
-                } else {
-                    DBType::RAFT
-                };
-                let rocksdb = self.get_db_from_type(db)?;
-                let vec: Vec<&str> = config_name.split('.').collect();
-                if vec.len() == 1 {
-                    box_try!(rocksdb.set_db_options(&[(config_name, config_value)]));
-                } else if vec.len() == 2 {
-                    let cf = vec[0];
-                    let config_name = vec[1];
-                    validate_db_and_cf(db, cf)?;
-                    let handle = box_try!(get_cf_handle(rocksdb, cf));
-                    let mut opt = Vec::new();
-                    opt.push((config_name, config_value));
-                    box_try!(rocksdb.set_options_cf(handle, &opt));
-                } else {
-                    return Err(Error::InvalidArgument(format!(
-                        "bad argument: {}",
-                        config_name
-                    )));
-                }
-            }
-            _ => return Err(Error::NotFound(format!("unsupported module: {}", module))),
+        let db = match module {
+            MODULE::ROCKSDB => DBType::KV,
+            MODULE::RAFTDB => DBType::RAFT,
+            _ => return Err(Error::NotFound(format!("unsupported module: {:?}", module))),
+        };
+        let rocksdb = self.get_db_from_type(db)?;
+        let vec: Vec<&str> = config_name.split('.').collect();
+        if vec.len() == 1 {
+            box_try!(rocksdb.set_db_options(&[(config_name, config_value)]));
+        } else if vec.len() == 2 {
+            let cf = vec[0];
+            let config_name = vec[1];
+            validate_db_and_cf(db, cf)?;
+            let handle = box_try!(get_cf_handle(rocksdb, cf));
+            let mut opt = Vec::new();
+            opt.push((config_name, config_value));
+            box_try!(rocksdb.set_options_cf(handle, &opt));
+        } else {
+            return Err(Error::InvalidArgument(format!(
+                "bad argument: {}",
+                config_name
+            )));
         }
         Ok(())
     }
@@ -1006,7 +1001,7 @@ mod tests {
         let db_opts = engine.get_db_options();
         assert_eq!(db_opts.get_max_background_jobs(), 2);
         debugger
-            .modify_tikv_config("rocksdb", "max_background_jobs", "8")
+            .modify_tikv_config(MODULE::ROCKSDB, "max_background_jobs", "8")
             .unwrap();
         let db_opts = engine.get_db_options();
         assert_eq!(db_opts.get_max_background_jobs(), 8);
@@ -1015,7 +1010,7 @@ mod tests {
         let cf_opts = engine.get_options_cf(cf);
         assert_eq!(cf_opts.get_disable_auto_compactions(), false);
         debugger
-            .modify_tikv_config("rocksdb", "default.disable_auto_compactions", "true")
+            .modify_tikv_config(MODULE::ROCKSDB, "default.disable_auto_compactions", "true")
             .unwrap();
         let cf_opts = engine.get_options_cf(cf);
         assert_eq!(cf_opts.get_disable_auto_compactions(), true);
