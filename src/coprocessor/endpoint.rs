@@ -962,15 +962,14 @@ mod tests {
             let (delayed_tx, delayed_rx) = futures_mpsc::channel(1);
             let tx = tx.clone();
             thread::spawn(move || {
-                tx.send_all(
+                let _ = tx.send_all(
                     delayed_rx
                         .map_err(|_| unreachable!() /* See futures-rs #401 */)
                         .map(|v| {
                             thread::sleep(Duration::from_millis(100));
                             v
                         }),
-                ).wait()
-                    .unwrap();
+                ).wait();
             });
             let mut req = Request::new();
             req.set_tp(REQ_TYPE_DAG);
