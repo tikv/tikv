@@ -422,7 +422,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git#5d41f201048b3fecbf953f267d64a739398e0b13"
+source = "git+https://github.com/pingcap/kvproto.git#187ef904091a0381594224b321d284b0cee3a4f4"
 dependencies = [
  "futures 0.1.17 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1094,7 +1094,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#b7be7b8a36454b0361b5b2ffc539a0b8f11cde07"
+source = "git+https://github.com/pingcap/tipb.git#a4cb837b2f797f54d3b2bbb3da47dd15af14de7d"
 dependencies = [
  "protobuf 1.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
