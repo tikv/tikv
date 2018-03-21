@@ -245,6 +245,8 @@ fn test_node_check_merged_message() {
     cluster.must_split(&region, b"k4");
     left = pd_client.get_region(b"k1").unwrap();
     let middle = pd_client.get_region(b"k3").unwrap();
+    let middle_on_store1 = find_peer(&middle, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(middle.get_id(), middle_on_store1);
     right = pd_client.get_region(b"k5").unwrap();
     let left_on_store3 = find_peer(&left, 3).unwrap().to_owned();
     pd_client.must_remove_peer(left.get_id(), left_on_store3);
