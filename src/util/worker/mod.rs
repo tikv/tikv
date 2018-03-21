@@ -216,16 +216,14 @@ impl<S: Into<String>> Builder<S> {
     }
 
     pub fn create<T: Display>(self) -> Worker<T> {
-        let (scheduler, rx) = if self.pending_capacity == usize::MAX {
-            let (tx, rx) = crossbeam_channel::unbounded::<Option<T>>();
-            (Scheduler::new(self.name, AtomicUsize::new(0), tx), rx)
+        let (tx, rx) = if self.pending_capacity == usize::MAX {
+            crossbeam_channel::unbounded::<Option<T>>()
         } else {
-            let (tx, rx) = crossbeam_channel::bounded::<Option<T>>(self.pending_capacity);
-            (Scheduler::new(self.name, AtomicUsize::new(0), tx), rx)
+            crossbeam_channel::bounded::<Option<T>>(self.pending_capacity)
         };
 
         Worker {
-            scheduler: scheduler,
+            scheduler: Scheduler::new(self.name, AtomicUsize::new(0), tx),
             receiver: Mutex::new(Some(rx)),
             handle: None,
             batch_size: self.batch_size,
