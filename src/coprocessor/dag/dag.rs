@@ -117,9 +117,8 @@ impl DAGContext {
         let mut chunk = Chunk::new();
         self.exec.start_scan();
         while record_cnt < batch_row_limit {
-            match self.exec.next()? {
-                //TODO: should we processor eval error for streaming?
-                Some(row) => {
+            match self.exec.next() {
+                Ok(Some(row)) => {
                     record_cnt += 1;
                     if self.has_aggr {
                         chunk.mut_rows_data().extend_from_slice(&row.data.value);
@@ -128,10 +127,20 @@ impl DAGContext {
                         chunk.mut_rows_data().extend_from_slice(&value);
                     }
                 }
-                None => {
+                Ok(None) => {
                     finished = true;
                     break;
                 }
+                Err(e) => if let Error::EvalError(err) = e {
+                    let mut resp = Response::new();
+                    let mut sel_resp = StreamResponse::new();
+                    sel_resp.set_error(err);
+                    let data = box_try!(sel_resp.write_to_bytes());
+                    resp.set_data(data);
+                    return Ok((Some(resp), true));
+                } else {
+                    return Err(e);
+                },
             }
         }
         if record_cnt > 0 {
