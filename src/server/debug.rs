@@ -366,7 +366,7 @@ impl Debugger {
                 if new_peers_len < quorum(old_peers_len) {
                     let region_id = region_state.get_region().get_id();
                     let old_peers = region_state.mut_region().take_peers();
-                    println!(
+                    info!(
                         "region {} change peers from {:?}, to {:?}",
                         region_id, old_peers, new_peers
                     );
