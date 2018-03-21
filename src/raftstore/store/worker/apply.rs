@@ -1400,6 +1400,7 @@ impl ApplyDelegate {
         );
         let mut region = self.region.clone();
         let version = region.get_region_epoch().get_version();
+        // Update version to avoid duplicated rollback requests.
         region.mut_region_epoch().set_version(version + 1);
         write_peer_state(&self.engine, ctx.wb(), &region, PeerState::Normal).unwrap_or_else(|e| {
             panic!(

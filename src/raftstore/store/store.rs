@@ -1315,7 +1315,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 )
             };
             if is_merging && res.is_some() {
-                // After applying a snapshot, merge is rollback implicitly.
+                // After applying a snapshot, merge is rollbacked implicitly.
                 self.on_ready_rollback_merge(region_id, 0, None);
             }
             ready_results.push((region_id, ready, res));
@@ -1840,10 +1840,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    /// Handle rollback Merge result.
+    /// Handle rollbacking Merge result.
     ///
-    /// If commit is 0, it means that Merge is rollback by a snapshot; otherwise
-    /// it's rollback by a proposal, and its value should be equal to the commit
+    /// If commit is 0, it means that Merge is rollbacked by a snapshot; otherwise
+    /// it's rollbacked by a proposal, and its value should be equal to the commit
     /// index of previous PrepareMerge.
     fn on_ready_rollback_merge(
         &mut self,
@@ -1859,7 +1859,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             if commit != 0 && pending_commit != commit {
                 panic!(
-                    "{} rollback a wrong merge: {} != {}",
+                    "{} rollbacks a wrong merge: {} != {}",
                     peer.tag, pending_commit, commit
                 );
             }
