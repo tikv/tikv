@@ -351,7 +351,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_peers.insert(region.get_id(), peer);
         }
 
-        // recover pre-merge
+        // recover prepare_merge
         let merging_count = prepare_merge.len();
         for (region, state) in prepare_merge {
             info!(
@@ -972,7 +972,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     // itself.
                     Some(local_state.get_merge_state().get_target().to_owned())
                 } else {
-                    // If a peer is isolated before pre-merge and conf remove, it should just
+                    // If a peer is isolated before prepare_merge and conf remove, it should just
                     // remove itself.
                     None
                 };

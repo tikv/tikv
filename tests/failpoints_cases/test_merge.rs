@@ -55,7 +55,7 @@ fn test_node_merge_rollback() {
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
-    // The call is finished when pre-merge is applied.
+    // The call is finished when prepare_merge is applied.
     cluster.try_merge(region.get_id(), target_region.get_id());
 
     // Add a peer to trigger rollback.
@@ -64,9 +64,9 @@ fn test_node_merge_rollback() {
     util::must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 
     let mut region = pd_client.get_region(b"k1").unwrap();
-    // After split and pre-merge, version becomes 1 + 2 = 3;
+    // After split and prepare_merge, version becomes 1 + 2 = 3;
     assert_eq!(region.get_region_epoch().get_version(), 3);
-    // After ConfChange and pre-merge, conf version becomes 1 + 2 = 3;
+    // After ConfChange and prepare_merge, conf version becomes 1 + 2 = 3;
     assert_eq!(region.get_region_epoch().get_conf_ver(), 3);
     fail::remove(schedule_merge_fp);
     // Wait till rollback.
@@ -187,7 +187,7 @@ fn test_node_merge_restart() {
     }
 }
 
-/// Test if merging state will beremoved after accepting a snapshot.
+/// Test if merging state will be removed after accepting a snapshot.
 #[test]
 fn test_node_merge_recover_snapshot() {
     let _guard = ::setup();

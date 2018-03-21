@@ -1180,9 +1180,9 @@ impl ApplyDelegate {
         let mut region = self.region.clone();
         let region_version = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_version);
-        // In theory conf version should not be increased when executing pre-merge.
-        // However, we don't want to do conf change after pre-merge is committed.
-        // This can also be done by iterating all proposal to find if pre-merge is
+        // In theory conf version should not be increased when executing prepare_merge.
+        // However, we don't want to do conf change after prepare_merge is committed.
+        // This can also be done by iterating all proposal to find if prepare_merge is
         // proposed before proposing conf change, but it make things complicated.
         // Another way is make conf change also check region version, but this is not
         // backward compatible.
