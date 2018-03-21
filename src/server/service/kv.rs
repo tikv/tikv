@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::boxed::FnBox;
-use std::fmt::Debug;
 use std::io::Write;
 use std::iter::{self, FromIterator};
 use std::sync::Arc;
