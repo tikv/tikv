@@ -43,7 +43,7 @@ fn build_info() -> String {
 
 fn utc_time() -> String {
     let utc = time::now_utc();
-    format!("{}", utc.strftime("%Y-%m-%d %I:%M:%S").unwrap())
+    format!("{}", utc.strftime("%Y-%m-%d %H:%M:%S").unwrap())
 }
 
 fn commit_hash() -> String {
