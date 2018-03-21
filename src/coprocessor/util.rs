@@ -11,10 +11,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error::Error;
+
 use super::*;
 
 pub struct ErrorRequestHandler {
 
+}
+
+impl ErrorRequestHandler {
+    pub fn new(msg: &str) -> ErrorRequestHandler {
+
+    }
+
+    pub fn from_error<T: Error>(err: T) -> ErrorRequestHandler {
+        ErrorRequestHandler::new(err.description())
+    }
 }
 
 impl RequestHandler for ErrorRequestHandler {

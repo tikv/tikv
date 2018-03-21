@@ -30,6 +30,7 @@ use std::time::Duration;
 
 use kvproto::{kvrpcpb, errorpb, coprocessor as coppb};
 
+use util::time::Instant;
 use storage::{engine, mvcc, txn};
 
 quick_error! {
@@ -104,5 +105,50 @@ trait RequestHandler {
 
     fn collect_metrics_into(&mut self, metrics: &mut self::dag::executor::ExecutorMetrics) {
         // Do nothing
+    }
+}
+
+#[derive(Debug)]
+struct ReqContext {
+    pub start_time: Instant,
+    pub deadline: Instant,
+    pub isolation_level: kvrpcpb::IsolationLevel,
+    pub fill_cache: bool,
+    pub table_scan: bool, // Whether is a table scan request.
+}
+
+impl ReqContext {
+    pub fn new(
+        ctx: &kvrpcpb::Context,
+        table_scan: bool,
+        max_handle_duration: Duration,
+    ) -> ReqContext {
+        let start_time = Instant::now_coarse();
+        let deadline = start_time + max_handle_duration;
+        ReqContext {
+            start_time,
+            deadline,
+            isolation_level: ctx.get_isolation_level(),
+            fill_cache: !ctx.get_not_fill_cache(),
+            table_scan,
+        }
+    }
+
+    #[inline]
+    pub fn get_scan_tag(&self) -> &'static str {
+        if self.table_scan {
+            "select"
+        } else {
+            "index"
+        }
+    }
+
+    pub fn check_if_outdated(&self) -> Result<()> {
+        let now = Instant::now_coarse();
+        if self.deadline <= now {
+            let elapsed = now.duration_since(self.start_time);
+            return Err(Error::Outdated(elapsed, self.get_scan_tag()));
+        }
+        Ok(())
     }
 }

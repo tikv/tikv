@@ -253,39 +253,6 @@ enum CopRequest {
 }
 
 #[derive(Debug)]
-pub struct ReqContext {
-    pub start_time: Instant,
-    pub deadline: Instant,
-    pub isolation_level: IsolationLevel,
-    pub fill_cache: bool,
-    pub table_scan: bool, // Whether is a table scan request.
-}
-
-impl ReqContext {
-    #[inline]
-    fn get_scan_tag(&self) -> &'static str {
-        if self.table_scan {
-            STR_REQ_TYPE_SELECT
-        } else {
-            STR_REQ_TYPE_INDEX
-        }
-    }
-
-    pub fn check_if_outdated(&self) -> Result<()> {
-        let now = Instant::now_coarse();
-        if self.deadline <= now {
-            let elapsed = now.duration_since(self.start_time);
-            return Err(Error::Outdated(elapsed, self.get_scan_tag()));
-        }
-        Ok(())
-    }
-
-    pub fn set_max_handle_duration(&mut self, request_max_handle_duration: Duration) {
-        self.deadline = self.start_time + request_max_handle_duration;
-    }
-}
-
-#[derive(Debug)]
 struct RequestTracker {
     running_task_count: Option<Arc<AtomicUsize>>,
     ctx_pool: Option<futurepool::ContextDelegators<ReadPoolContext>>,
