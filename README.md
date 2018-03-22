@@ -45,7 +45,7 @@ When a node starts, the metadata of the Node, Store and Region are registered in
 
 ### Build
 
-TiKV is a component in the TiDB project, to run TiDB you must build and run it with TiDB and PD together.
+TiKV is a component in the TiDB project. To run TiKV you must build and run it with TiDB and PD together.
 Currently the only interface to TiKV is the [TiDB go cllient](https://github.com/pingcap/tidb/tree/master/store/tikv) and the [TiSpark java client](https://github.com/pingcap/tispark/tree/master/tikv-client/src/main/java/com/pingcap/tikv).
 You are welcome to develop drivers in other languages.
 

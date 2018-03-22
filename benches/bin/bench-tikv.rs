@@ -38,6 +38,7 @@ extern crate tempdir;
 extern crate test;
 #[macro_use]
 extern crate tikv;
+extern crate tokio_timer;
 
 #[allow(dead_code)]
 #[path = "../../tests/util/mod.rs"]

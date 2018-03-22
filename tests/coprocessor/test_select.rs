@@ -12,25 +12,28 @@
 // limitations under the License.
 
 use std::collections::{BTreeMap, HashMap};
-use std::mem;
+use std::{cmp, mem};
 use std::sync::mpsc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::i64;
 use std::thread;
 use std::time::Duration;
+use futures::{Future, Stream};
+use futures::sync::mpsc as futures_mpsc;
+use futures_cpupool::CpuPool;
 
 use tikv::coprocessor::*;
 use kvproto::kvrpcpb::Context;
 use tikv::coprocessor::codec::{datum, table, Datum};
 use tikv::coprocessor::codec::datum::DatumDecoder;
 use tikv::util::codec::number::*;
-use tikv::storage::{self, Key, Mutation, ALL_CFS};
-use tikv::server::Config;
+use tikv::server::{Config, CopStream, OnResponse};
 use tikv::server::readpool::{self, ReadPool};
+use tikv::storage::{self, Key, Mutation, ALL_CFS};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
 use kvproto::coprocessor::{KeyRange, Request, Response};
-use tipb::select::{Chunk, DAGRequest, SelectResponse};
+use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 use tipb::executor::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
 use tipb::schema::{self, ColumnInfo};
 use tipb::expression::{ByItem, Expr, ExprType, ScalarFuncSig};
@@ -385,7 +388,7 @@ impl Store {
         }
     }
 
-    fn get_engine(&self) -> Box<Engine> {
+    pub fn get_engine(&self) -> Box<Engine> {
         self.store.get_engine()
     }
 
@@ -442,7 +445,7 @@ fn build_row_key(table_id: i64, id: i64) -> Vec<u8> {
 
 /// An example table for test purpose.
 pub struct ProductTable {
-    id: Column,
+    pub id: Column,
     pub name: Column,
     pub count: Column,
     pub table: Table,
@@ -810,7 +813,7 @@ fn test_batch_row_limit() {
         (5, Some("name:1"), 4),
     ];
     let batch_row_limit = 3;
-    let chunk_datum_limit = batch_row_limit * 3;
+    let chunk_datum_limit = batch_row_limit * 3; // we have 3 fields.
     let product = ProductTable::new();
     let (_, mut end_point) = {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
@@ -830,6 +833,65 @@ fn test_batch_row_limit() {
             datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()]).unwrap();
         let result_encoded = datum::encode_value(&row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
+    }
+
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
+fn test_stream_batch_row_limit() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+        (8, Some("name:2"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let stream_row_limit = 2;
+    let (_, mut end_point) = {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let mut cfg = Config::default();
+        cfg.end_point_stream_batch_row_limit = stream_row_limit;
+        init_data_with_details(Context::new(), engine, &product, &data, true, cfg)
+    };
+
+    let req = DAGSelect::from(&product.table).build();
+    assert_eq!(req.get_ranges().len(), 1);
+
+    let mut expected_ranges_last_byte = vec![(0, 3), (3, 6), (6, 255)];
+    let check_range = move |resp: &Response| {
+        let (start_last_byte, end_last_byte) = expected_ranges_last_byte.remove(0);
+        let start = resp.get_range().get_start();
+        let end = resp.get_range().get_end();
+        assert_eq!(start[start.len() - 1], start_last_byte);
+        assert_eq!(end[end.len() - 1], end_last_byte);
+    };
+
+    let resps = handle_streaming_select(&end_point, req, check_range);
+    assert_eq!(resps.len(), 3);
+
+    for (i, resp) in resps.into_iter().enumerate() {
+        // For now, we only support default encode type.
+        assert_eq!(resp.get_encode_type(), EncodeType::TypeDefault);
+        let mut chunk = Chunk::new();
+        chunk.merge_from_bytes(resp.get_data()).unwrap();
+
+        let chunks = vec![chunk];
+        let chunk_data_limit = stream_row_limit * 3; // we have 3 fields.
+        check_chunk_datum_count(&chunks, chunk_data_limit);
+
+        let spliter = DAGChunkSpliter::new(chunks, 3);
+        let j = cmp::min((i + 1) * stream_row_limit, data.len());
+        let cur_data = &data[i * stream_row_limit..j];
+        for (row, &(id, name, cnt)) in spliter.zip(cur_data) {
+            let name_datum = name.map(|s| s.as_bytes()).into();
+            let expected_encoded =
+                datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()]).unwrap();
+            let result_encoded = datum::encode_value(&row).unwrap();
+            assert_eq!(result_encoded, &*expected_encoded);
+        }
     }
 
     end_point.stop().unwrap().join().unwrap();
@@ -1417,7 +1479,8 @@ fn test_reverse() {
 
 pub fn handle_request(end_point: &Worker<EndPointTask>, req: Request) -> Response {
     let (tx, rx) = mpsc::channel();
-    let req = RequestTask::new(req, box move |r| tx.send(r).unwrap(), 100);
+    let on_resp = OnResponse::Unary(box move |r| tx.send(r).unwrap());
+    let req = RequestTask::new(req, on_resp, 100).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();
     rx.recv().unwrap()
 }
@@ -1428,6 +1491,38 @@ fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectRespon
     let mut sel_resp = SelectResponse::new();
     sel_resp.merge_from_bytes(resp.get_data()).unwrap();
     sel_resp
+}
+
+fn handle_streaming_select<F>(
+    end_point: &Worker<EndPointTask>,
+    req: Request,
+    mut check_range: F,
+) -> Vec<StreamResponse>
+where
+    F: FnMut(&Response) + Send + 'static,
+{
+    let (ftx, frx) = futures_mpsc::channel(16);
+    let callback = box move |s: CopStream<Response>, executor: Option<CpuPool>| {
+        let f = s.forward(ftx);
+        if let Some(executor) = executor {
+            return executor.spawn(f).forget();
+        }
+        f.wait().unwrap();
+    };
+    let req = RequestTask::new(req, OnResponse::Streaming(callback), 100).unwrap();
+    end_point.schedule(EndPointTask::Request(req)).unwrap();
+
+    let (tx, rx) = mpsc::channel();
+    for resp in frx.wait() {
+        let resp = resp.unwrap();
+        check_range(&resp);
+        assert!(!resp.get_data().is_empty());
+        let mut stream_resp = StreamResponse::new();
+        stream_resp.merge_from_bytes(resp.get_data()).unwrap();
+        tx.send(stream_resp).unwrap();
+    }
+    drop(tx);
+    rx.into_iter().collect()
 }
 
 #[test]
@@ -2009,7 +2104,8 @@ fn test_handle_truncate() {
             .where_expr(cond.clone())
             .build();
         let (tx, rx) = mpsc::channel();
-        let req = RequestTask::new(req, box move |r| tx.send(r).unwrap(), 100);
+        let on_resp = OnResponse::Unary(box move |r| tx.send(r).unwrap());
+        let req = RequestTask::new(req, on_resp, 100).unwrap();
         end_point.schedule(EndPointTask::Request(req)).unwrap();
         let resp = rx.recv().unwrap();
         assert!(!resp.get_other_error().is_empty());

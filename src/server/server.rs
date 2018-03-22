@@ -68,7 +68,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         snap_mgr: SnapManager,
         pd_scheduler: FutureScheduler<PdTask>,
         debug_engines: Option<Engines>,
-        import_service: Option<ImportSSTService>,
+        import_service: Option<ImportSSTService<T>>,
     ) -> Result<Server<T, S>> {
         let env = Arc::new(
             EnvBuilder::new()
@@ -92,6 +92,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             raft_router.clone(),
             snap_worker.scheduler(),
             cfg.end_point_recursion_limit,
+            cfg.end_point_stream_channel_size,
         );
         let addr = SocketAddr::from_str(&cfg.addr)?;
         info!("listening on {}", addr);
@@ -108,7 +109,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                 .register_service(create_tikv(kv_service));
             sb = security_mgr.bind(sb, &ip, addr.port());
             if let Some(engines) = debug_engines {
-                sb = sb.register_service(create_debug(DebugService::new(engines)));
+                let debug_service = DebugService::new(engines, raft_router.clone());
+                sb = sb.register_service(create_debug(debug_service));
             }
             if let Some(service) = import_service {
                 sb = sb.register_service(create_import_sst(service));

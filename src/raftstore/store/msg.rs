@@ -106,6 +106,7 @@ pub enum Tick {
     SnapGc,
     CompactLockCf,
     ConsistencyCheck,
+    CheckMerge,
 }
 
 #[derive(Debug, PartialEq)]
@@ -170,6 +171,9 @@ pub enum Msg {
         region_id: u64,
         region_epoch: RegionEpoch,
     },
+    MergeFail {
+        region_id: u64,
+    },
 }
 
 impl fmt::Debug for Msg {
@@ -208,6 +212,7 @@ impl fmt::Debug for Msg {
             Msg::HalfSplitRegion { ref region_id, .. } => {
                 write!(fmt, "Half Split region {}", region_id)
             }
+            Msg::MergeFail { region_id } => write!(fmt, "MergeFail region_id {}", region_id),
         }
     }
 }

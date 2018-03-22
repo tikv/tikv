@@ -16,8 +16,10 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::iter::FromIterator;
+use std::collections::HashSet;
 
-use protobuf::{self, RepeatedField};
+use protobuf::{self, Message, RepeatedField};
 
 use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
 use kvproto::metapb::Region;
@@ -26,11 +28,11 @@ use kvproto::debugpb::DB as DBType;
 use raft::eraftpb::Entry;
 use kvproto::raft_serverpb::*;
 
-use raft::{self, RawNode};
+use raft::{self, quorum, RawNode};
 use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
 use raftstore::store::{init_apply_state, init_raft_state, write_peer_state};
 use raftstore::store::util as raftstore_util;
-use raftstore::store::engine::IterOption;
+use raftstore::store::engine::{IterOption, Mutable};
 use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use storage::types::{truncate_ts, Key};
 use storage::mvcc::{Lock, Write, WriteType};
@@ -330,7 +332,61 @@ impl Debugger {
         Ok(res)
     }
 
-    fn get_store_id(&self) -> Result<u64> {
+    pub fn remove_failed_stores(&self, store_ids: Vec<u64>) -> Result<()> {
+        let store_id = self.get_store_id()?;
+        if store_ids.iter().any(|&s| s == store_id) {
+            let msg = format!("Store {} in the failed list", store_id);
+            return Err(Error::Other(msg.into()));
+        }
+        let wb = WriteBatch::new();
+        let handle = box_try!(get_cf_handle(self.engines.kv_engine.as_ref(), CF_RAFT));
+        let store_ids = HashSet::<u64>::from_iter(store_ids);
+        box_try!(self.engines.kv_engine.scan_cf(
+            CF_RAFT,
+            keys::REGION_META_MIN_KEY,
+            keys::REGION_META_MAX_KEY,
+            false,
+            &mut |key, value| {
+                let (_, suffix_type) = box_try!(keys::decode_region_meta_key(key));
+                if suffix_type != keys::REGION_STATE_SUFFIX {
+                    return Ok(true);
+                }
+
+                let mut region_state = RegionLocalState::new();
+                box_try!(region_state.merge_from_bytes(value));
+                if region_state.get_state() == PeerState::Tombstone {
+                    return Ok(true);
+                }
+
+                let mut new_peers = region_state.get_region().get_peers().to_owned();
+                new_peers.retain(|peer| !store_ids.contains(&peer.get_store_id()));
+                let new_peers_len = new_peers.len();
+                let old_peers_len = region_state.get_region().get_peers().len();
+
+                if new_peers_len < quorum(old_peers_len) {
+                    let region_id = region_state.get_region().get_id();
+                    let old_peers = region_state.mut_region().take_peers();
+                    info!(
+                        "region {} change peers from {:?}, to {:?}",
+                        region_id, old_peers, new_peers
+                    );
+                    // We need to leave epoch untouched to avoid inconsistency.
+                    region_state
+                        .mut_region()
+                        .set_peers(RepeatedField::from_vec(new_peers));
+                    box_try!(wb.put_msg_cf(handle, key, &region_state));
+                }
+                Ok(true)
+            },
+        ));
+
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        box_try!(self.engines.kv_engine.write_opt(wb, &write_opts));
+        Ok(())
+    }
+
+    pub fn get_store_id(&self) -> Result<u64> {
         let db = &self.engines.kv_engine;
         db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
             .map_err(|e| box_err!(e))
@@ -565,9 +621,9 @@ mod tests {
     use std::sync::Arc;
     use std::iter::FromIterator;
 
-    use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
-    use kvproto::metapb::{self, Peer};
     use raft::eraftpb::EntryType;
+    use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
+    use kvproto::metapb::{Peer, Region};
     use tempdir::TempDir;
 
     use raftstore::store::engine::Mutable;
@@ -759,7 +815,7 @@ mod tests {
 
         let region_id = 1;
         let region_state_key = keys::region_state_key(region_id);
-        let mut region = metapb::Region::new();
+        let mut region = Region::new();
         region.set_id(region_id);
         region.set_start_key(b"a".to_vec());
         region.set_end_key(b"zz".to_vec());
@@ -887,6 +943,28 @@ mod tests {
     }
 
     #[test]
+    fn test_remove_failed_stores() {
+        let debugger = new_debugger();
+        debugger.set_store_id(100);
+        let engine = debugger.engines.kv_engine.as_ref();
+
+        // region 1 with peers at stores 11, 12, 13 and 14.
+        init_region_state(engine, 1, &[11, 12, 13, 14]);
+        // region 2 with peers at stores 21, 22, 23.
+        init_region_state(engine, 2, &[21, 22, 23]);
+
+        assert!(debugger.remove_failed_stores(vec![13, 14, 23]).is_ok());
+        let region_state = get_region_state(engine, 1);
+        assert_eq!(region_state.get_region().get_peers().len(), 2);
+        let region_state = get_region_state(engine, 2);
+        assert_eq!(region_state.get_region().get_peers().len(), 3);
+
+        // Should fail when the store itself is in the failed list.
+        init_region_state(engine, 3, &[100, 31, 32, 33]);
+        assert!(debugger.remove_failed_stores(vec![100]).is_err());
+    }
+
+    #[test]
     fn test_bad_regions() {
         let debugger = new_debugger();
         let kv_engine = debugger.engines.kv_engine.as_ref();
@@ -908,7 +986,7 @@ mod tests {
                     let region = region_state.mut_region();
                     region.set_id(region_id);
                     let peers = peers.iter().enumerate().map(|(i, &sid)| {
-                        let mut peer = metapb::Peer::new();
+                        let mut peer = Peer::new();
                         peer.id = i as u64;
                         peer.store_id = sid;
                         peer
