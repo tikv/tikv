@@ -39,7 +39,7 @@ use raftstore::store::worker::{Apply, ApplyRes, ApplyTask};
 
 use util::MustConsumeVec;
 use util::worker::{FutureWorker, Scheduler};
-use util::time::monotonic_raw_now;
+use util::time::{duration_to_sec, monotonic_raw_now};
 use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
 
 use pd::{PdTask, INVALID_ID};
@@ -191,6 +191,11 @@ pub struct Peer {
     pending_reads: ReadIndexQueue,
     // Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: FlatMap<u64, Instant>,
+
+    /// Record the instants of peers being added into the configuration.
+    /// Remove them after they are not pending any more.
+    pub peers_start_pending_time: Vec<(u64, Instant)>,
+
     coprocessor_host: Arc<CoprocessorHost>,
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
@@ -315,6 +320,7 @@ impl Peer {
             pending_reads: Default::default(),
             peer_cache: RefCell::new(peer_cache),
             peer_heartbeats: FlatMap::default(),
+            peers_start_pending_time: vec![],
             coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
             delete_keys_hint: 0,
@@ -572,7 +578,7 @@ impl Peer {
         down_peers
     }
 
-    pub fn collect_pending_peers(&self) -> Vec<metapb::Peer> {
+    pub fn collect_pending_peers(&mut self) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
         let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
@@ -583,10 +589,44 @@ impl Peer {
             if progress.matched < truncated_idx {
                 if let Some(p) = self.get_peer_from_cache(id) {
                     pending_peers.push(p);
+                    if !self.peers_start_pending_time
+                        .iter()
+                        .any(|&(pid, _)| pid == id)
+                    {
+                        self.peers_start_pending_time.push((id, Instant::now()));
+                    }
                 }
             }
         }
         pending_peers
+    }
+
+    pub fn any_new_peer_catch_up(&mut self, peer_id: u64) -> bool {
+        if self.peers_start_pending_time.is_empty() {
+            return false;
+        }
+        if !self.is_leader() {
+            self.peers_start_pending_time = vec![];
+            return false;
+        }
+        for i in 0..self.peers_start_pending_time.len() {
+            if self.peers_start_pending_time[i].0 != peer_id {
+                continue;
+            }
+            let truncated_idx = self.raft_group.get_store().truncated_index();
+            if let Some(progress) = self.raft_group.raft.prs().get(peer_id) {
+                if progress.matched >= truncated_idx {
+                    let (_, pending_after) = self.peers_start_pending_time.swap_remove(i);
+                    let elapsed = duration_to_sec(pending_after.elapsed());
+                    info!(
+                        "{} peer {} has caugth up logs, elapsed: {}",
+                        self.tag, peer_id, elapsed
+                    );
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     pub fn check_stale_state(&mut self) -> StaleState {
@@ -1535,7 +1575,7 @@ impl Peer {
         None
     }
 
-    pub fn heartbeat_pd(&self, worker: &FutureWorker<PdTask>) {
+    pub fn heartbeat_pd(&mut self, worker: &FutureWorker<PdTask>) {
         let task = PdTask::Heartbeat {
             region: self.region().clone(),
             peer: self.peer.clone(),
