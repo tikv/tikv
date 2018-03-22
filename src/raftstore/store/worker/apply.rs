@@ -45,8 +45,9 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{cmd_resp, keys, util, Store};
 use raftstore::store::msg::Callback;
 use raftstore::store::engine::{Mutable, Peekable, Snapshot};
-use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply_state,
-                                     write_merge_state, write_peer_state};
+use raftstore::store::peer_storage::{self, compact_raft_log, mark_merge_done,
+                                     write_initial_apply_state, write_merge_state,
+                                     write_peer_state};
 use raftstore::store::peer::{check_epoch, Peer};
 use raftstore::store::metrics::*;
 use import::SSTImporter;
@@ -1221,7 +1222,7 @@ impl ApplyDelegate {
     fn load_entries_for_merge(&self, merge: &CommitMergeRequest, apply_index: u64) -> Vec<Entry> {
         // Entries from [first_index, last_index) need to be loaded.
         let first_index = apply_index + 1;
-        let last_index = merge.get_commit();
+        let last_index = merge.get_commit() + 1;
         if first_index >= last_index {
             return vec![];
         }
@@ -1259,25 +1260,18 @@ impl ApplyDelegate {
         &mut self,
         ctx: &mut ApplyContext,
         merge: &CommitMergeRequest,
-        exist_region: &Region,
+        exist_region: &mut Region,
     ) {
-        let source_region = merge.get_source();
-        let apply_state_key = keys::apply_state_key(source_region.get_id());
+        let apply_state_key = keys::apply_state_key(exist_region.get_id());
         let apply_state: RaftApplyState = match self.engine.get_msg_cf(CF_RAFT, &apply_state_key) {
             Ok(Some(s)) => s,
             e => panic!(
                 "{} failed to get apply state of {:?}: {:?}",
-                self.tag, source_region, e
+                self.tag, exist_region, e
             ),
         };
         let apply_index = apply_state.get_applied_index();
         if apply_index >= merge.get_commit() {
-            if source_region.get_region_epoch() != exist_region.get_region_epoch() {
-                panic!(
-                    "{} source region {:?} not match exist region {:?}",
-                    self.tag, source_region, exist_region
-                );
-            }
             return;
         }
 
@@ -1286,17 +1280,18 @@ impl ApplyDelegate {
             return;
         }
         let stash = ctx.stash(self);
-        let mut delegate = match ctx.delegates.get_mut(&source_region.get_id()) {
-            None => panic!("{} source region {:?} not exist", self.tag, source_region),
+        let mut delegate = match ctx.delegates.get_mut(&exist_region.get_id()) {
+            None => panic!("{} source region {:?} not exist", self.tag, exist_region),
             Some(e) => e.take().unwrap_or_else(|| {
                 panic!(
                     "{} unexpected circle dependency of region {:?}",
-                    self.tag, source_region
+                    self.tag, exist_region
                 )
             }),
         };
         delegate.handle_raft_committed_entries(ctx, entries);
-        *ctx.delegates.get_mut(&source_region.get_id()).unwrap() = Some(delegate);
+        *exist_region = delegate.region.clone();
+        *ctx.delegates.get_mut(&exist_region.get_id()).unwrap() = Some(delegate);
         ctx.apply_res.last_mut().unwrap().merged = true;
         ctx.restore_stash(stash);
     }
@@ -1327,17 +1322,14 @@ impl ApplyDelegate {
                 self.tag, state
             ),
         }
-        let exist_region = state.get_region();
-        if source_region.get_start_key() != exist_region.get_start_key()
-            || source_region.get_end_key() != exist_region.get_end_key()
-        {
+        let mut exist_region = state.get_region().to_owned();
+        self.catch_up_log_for_merge(ctx, merge, &mut exist_region);
+        if *source_region != exist_region {
             panic!(
                 "{} source_region {:?} not match exist region {:?}",
                 self.tag, source_region, exist_region
             );
         }
-
-        self.catch_up_log_for_merge(ctx, merge, exist_region);
 
         let mut region = self.region.clone();
         // Use a max value so that pd can ensure overlapped region has a priority.
@@ -1352,10 +1344,7 @@ impl ApplyDelegate {
             region.set_start_key(source_region.get_start_key().to_vec());
         }
         write_peer_state(&self.engine, ctx.wb(), &region, PeerState::Normal)
-            .and_then(|_| {
-                // Should source_region be used?
-                write_peer_state(&self.engine, ctx.wb(), exist_region, PeerState::Tombstone)
-            })
+            .and_then(|_| mark_merge_done(&self.engine, ctx.wb(), source_region, &self.region))
             .unwrap_or_else(|e| {
                 panic!(
                     "{} failed to save merge region {:?}: {:?}",

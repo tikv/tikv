@@ -359,7 +359,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 region,
                 self.store_id()
             );
-            self.on_ready_prepare_merge(region, state);
+            self.on_ready_prepare_merge(region, state, false);
         }
 
         info!(
@@ -1745,12 +1745,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let min_index = peer.get_min_progress() + 1;
             let low = cmp::max(min_index, state.get_min_index());
             // TODO: move this into raft module.
-            let entries = if low >= state.get_commit() {
+            let entries = if low >= state.get_commit() + 1 {
                 vec![]
             } else {
                 self.region_peers[&region.get_id()]
                     .get_store()
-                    .entries(low, state.get_commit(), NO_LIMIT)
+                    .entries(low, state.get_commit() + 1, NO_LIMIT)
                     .unwrap()
             };
 
@@ -1808,11 +1808,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_merge_check_tick(event_loop);
     }
 
-    fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState) {
+    fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState, merged: bool) {
         {
             let peer = self.region_peers.get_mut(&region.get_id()).unwrap();
             peer.pending_merge = Some(state);
             peer.mut_store().region = region.clone();
+        }
+
+        if merged {
+            // PrepareMerge is executed by CommitMerge.
+            return;
         }
 
         if let Err(e) = self.schedule_merge(&region) {
@@ -1945,7 +1950,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     right_derive,
                 } => self.on_ready_split_region(region_id, left, right, right_derive),
                 ExecResult::PrepareMerge { region, state } => {
-                    self.on_ready_prepare_merge(region, state);
+                    self.on_ready_prepare_merge(region, state, merged);
                 }
                 ExecResult::CommitMerge { region, source } => {
                     self.on_ready_commit_merge(region, source);
