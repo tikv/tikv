@@ -47,10 +47,6 @@ use super::metrics::*;
 use super::local_metrics::BasicLocalMetrics;
 use super::dag::executor::ExecutorMetrics;
 
-pub const REQ_TYPE_DAG: i64 = 103;
-pub const REQ_TYPE_ANALYZE: i64 = 104;
-pub const REQ_TYPE_CHECKSUM: i64 = 105;
-
 // If handle time is larger than the lower bound, the query is considered as slow query.
 const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
 

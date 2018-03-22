@@ -34,6 +34,10 @@ use storage;
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::service::Service;
 
+const REQ_TYPE_DAG: i64 = 103;
+const REQ_TYPE_ANALYZE: i64 = 104;
+const REQ_TYPE_CHECKSUM: i64 = 105;
+
 const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
 quick_error! {
@@ -95,19 +99,16 @@ impl From<storage::txn::Error> for Error {
 }
 
 trait RequestHandler: Send {
-    fn handle_request(&mut self, batch_row_limit: usize) -> Result<coppb::Response> {
+    fn handle_request(&mut self) -> Result<coppb::Response> {
         panic!("unsupported operation");
     }
 
-    fn handle_streaming_request(
-        &mut self,
-        batch_row_limit: usize,
-    ) -> Result<(Option<coppb::Response>, bool)> {
+    fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
         panic!("unsupported operation");
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut self::dag::executor::ExecutorMetrics) {
-        // Do nothing
+    fn collect_metrics_into(&mut self, _metrics: &mut self::dag::executor::ExecutorMetrics) {
+        // Do nothing by default
     }
 
     fn check_if_outdated(&self) -> Result<()>;
@@ -121,10 +122,11 @@ trait RequestHandler: Send {
 }
 
 /// `RequestHandlerBuilder` accepts a `Box<Snapshot>` and builds a `RequestHandler`.
-type RequestHandlerBuilder = Box<FnBox(Box<storage::Snapshot>) -> Result<Box<RequestHandler>>>;
+type RequestHandlerBuilder =
+    Box<FnBox(Box<storage::Snapshot + 'static>) -> Result<Box<RequestHandler>> + Send>;
 
 #[derive(Debug)]
-struct ReqContext {
+pub struct ReqContext {
     pub start_time: Instant,
     pub deadline: Instant,
     pub isolation_level: kvrpcpb::IsolationLevel,

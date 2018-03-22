@@ -140,7 +140,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         self.trans.clone()
     }
 
-    pub fn start(&mut self, cfg: Arc<Config>, security_mgr: Arc<SecurityManager>) -> Result<()> {
+    pub fn start(&mut self, security_mgr: Arc<SecurityManager>) -> Result<()> {
         let snap_runner = SnapHandler::new(
             Arc::clone(&self.env),
             self.snap_mgr.clone(),
@@ -289,7 +289,7 @@ mod tests {
             None,
         ).unwrap();
 
-        server.start(cfg, security_mgr).unwrap();
+        server.start(security_mgr).unwrap();
 
         let mut trans = server.transport();
         trans.report_unreachable(RaftMessage::new());

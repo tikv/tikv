@@ -33,23 +33,16 @@ impl ErrorRequestHandler {
 }
 
 impl RequestHandler for ErrorRequestHandler {
-    fn handle_request(&mut self, batch_row_limit: usize) -> Result<coppb::Response> {
+    fn handle_request(&mut self) -> Result<coppb::Response> {
         unimplemented!()
     }
 
-    fn handle_streaming_request(
-        &mut self,
-        batch_row_limit: usize,
-    ) -> Result<(Option<coppb::Response>, bool)> {
+    fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
         unimplemented!()
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut self::dag::executor::ExecutorMetrics) {
-        unimplemented!()
-    }
-
+    /// `ErrorRequestHandler` is never outdated.
     fn check_if_outdated(&self) -> Result<()> {
-        // ErrorRequestHandler is never outdated.
         Ok(())
     }
 }

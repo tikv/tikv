@@ -76,6 +76,7 @@ impl Service {
     fn try_new_request_handler_builder(
         &self,
         req: &coppb::Request,
+        is_streaming: bool,
     ) -> Result<RequestHandlerBuilder> {
         let mut is = CodedInputStream::from_bytes(req.get_data());
         is.set_recursion_limit(self.recursion_limit);
@@ -90,18 +91,24 @@ impl Service {
                 if let Some(scan) = dag.get_executors().iter().next() {
                     table_scan = scan.get_tp() == ExecType::TypeTableScan;
                 }
-                let start_ts = dag.get_start_ts();
+                // let start_ts = dag.get_start_ts();
                 let req_ctx =
                     ReqContext::new(req.get_context(), table_scan, self.max_handle_duration);
                 box move |snap| {
-                    DAGContext::new(dag, ranges, snap, req_ctx).map(|ctx| ctx.into_boxed())
+                    DAGContext::new(
+                        dag,
+                        ranges,
+                        snap,
+                        req_ctx,
+                        self.get_batch_row_limit(is_streaming),
+                    ).map(|ctx| ctx.into_boxed())
                 }
             }
             REQ_TYPE_ANALYZE => {
                 let mut analyze = AnalyzeReq::new();
                 box_try!(analyze.merge_from(&mut is));
                 let table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
-                let start_ts = analyze.get_start_ts();
+                // let start_ts = analyze.get_start_ts();
                 let req_ctx =
                     ReqContext::new(req.get_context(), table_scan, self.max_handle_duration);
                 box move |snap| {
@@ -112,7 +119,7 @@ impl Service {
                 let mut checksum = ChecksumRequest::new();
                 box_try!(checksum.merge_from(&mut is));
                 let table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
-                let start_ts = checksum.get_start_ts();
+                // let start_ts = checksum.get_start_ts();
                 let req_ctx =
                     ReqContext::new(req.get_context(), table_scan, self.max_handle_duration);
                 box move |snap| {
@@ -126,8 +133,12 @@ impl Service {
     }
 
     /// Creates a `RequestHandlerBuilder`.
-    fn new_request_handler_builder(&self, req: &coppb::Request) -> RequestHandlerBuilder {
-        self.try_new_request_handler_builder(req)
+    fn new_request_handler_builder(
+        &self,
+        req: &coppb::Request,
+        is_streaming: bool,
+    ) -> RequestHandlerBuilder {
+        self.try_new_request_handler_builder(req, is_streaming)
             .unwrap_or_else(|e| {
                 box move |_| Ok(cop_util::ErrorRequestHandler::from_error(e).into_boxed())
             })
@@ -144,11 +155,11 @@ impl Service {
     fn async_snapshot(
         engine: Box<storage::Engine>,
         ctx: &kvrpcpb::Context,
-    ) -> impl Future<Item = Box<storage::Snapshot>, Error = Error> {
+    ) -> impl Future<Item = Box<storage::Snapshot + 'static>, Error = Error> {
         let (callback, future) = util::future::paired_future_callback();
         let val = engine.async_snapshot(ctx, callback);
         future::result(val)
-            .and_then(|_| future.map_err(|cancel| storage::Engine::Error::Other(box_err!(cancel))))
+            .and_then(|_| future.map_err(|cancel| storage::engine::Error::Other(box_err!(cancel))))
             .and_then(|(_ctx, result)| result)
             // map engine::Error -> coprocessor::Error
             .map_err(Error::from)
@@ -157,28 +168,26 @@ impl Service {
     fn handle_request(
         &self,
         req: coppb::Request,
-        use_streaming_interface: bool,
+        is_streaming: bool,
     ) -> impl Stream<Item = coppb::Response, Error = ()> {
-        let batch_row_limit = self.get_batch_row_limit(use_streaming_interface);
-        let request_handler_builder = self.new_request_handler_builder(&req);
+        let batch_row_limit = self.get_batch_row_limit(is_streaming);
+        let request_handler_builder = self.new_request_handler_builder(&req, is_streaming);
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(req.get_context().get_priority());
         let result = self.read_pool.future_execute(priority, move |_ctxd| {
-            Service::async_snapshot(engine, req.get_context()).and_then(|snapshot| {
-                let mut handler: Box<RequestHandler> = match request_handler_builder(snapshot) {
+            Service::async_snapshot(engine, req.get_context()).and_then(move |snapshot| {
+                let mut handler = match request_handler_builder(snapshot) {
                     Ok(handler) => handler,
                     Err(e) => cop_util::ErrorRequestHandler::from_error(e).into_boxed(),
                 };
                 handler.check_if_outdated()?;
-                let resp_stream: Box<Stream<Item = _, Error = _> + Send> =
-                    if use_streaming_interface {
-                        box stream::once(handler.handle_request(batch_row_limit))
-                    } else {
-                        box stream::unfold((handler, false), move |(mut handler, finished)| {
-                            if finished {
-                                return None;
-                            }
-                            match handler.handle_streaming_request(batch_row_limit) {
+                let resp_stream =
+                    stream::unfold((handler, false), move |(mut handler, finished)| {
+                        if finished {
+                            return None;
+                        }
+                        if is_streaming {
+                            match handler.handle_streaming_request() {
                                 Ok((None, _)) => None,
                                 Ok((Some(resp), finished)) => {
                                     let yielded = resp;
@@ -187,18 +196,27 @@ impl Service {
                                 }
                                 Err(e) => Some(Err(e)),
                             }
-                        })
-                    };
+                        } else {
+                            match handler.handle_request() {
+                                Ok(resp) => {
+                                    let yielded = resp;
+                                    let next_state = (handler, true);
+                                    Some(Ok((yielded, next_state)))
+                                }
+                                Err(e) => Some(Err(e)),
+                            }
+                        }
+                    });
                 Ok(resp_stream)
             })
         });
         let future_of_stream = future::result(result).map_err(|_| Error::Full).flatten();
-        stream::unfold(true, move |is_initial| {
+        stream::unfold(Some(future_of_stream), |some_future_of_stream| {
             // TODO: Can be simplified using `stream::once(future_of_stream)` in futures 0.2.
-            if !is_initial {
-                return None;
+            match some_future_of_stream {
+                None => None,
+                Some(future_of_stream) => Some(future_of_stream.map(|stream| (stream, None))),
             }
-            Some(future_of_stream.map(|stream| (stream, false)))
         }).flatten()
             .then(|result| {
                 // TODO: Can be simplified using `recover()` in futures 0.2.
@@ -226,12 +244,12 @@ impl Service {
     ) -> impl Future<Item = coppb::Response, Error = ()> {
         self.handle_request(req, false)
             .take(1)
-            .fold(None, |_, resp| Ok(Some(resp)))
+            .fold(None, |_, resp| Ok::<_, ()>(Some(resp)))
             .then(|result| {
                 let resp = match result {
                     Ok(Some(resp)) => resp,
-                    Ok(None) => (), // TODO
-                    Err(e) => (),   // TODO
+                    Ok(None) => unreachable!(),
+                    Err(_) => unreachable!(),
                 };
                 Ok::<_, ()>(resp)
             })

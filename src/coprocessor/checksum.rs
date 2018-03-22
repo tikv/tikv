@@ -30,6 +30,7 @@ pub struct ChecksumContext {
     ranges: IntoIter<KeyRange>,
     scanner: Option<Scanner>,
     req_ctx: ReqContext,
+    metrics: ExecutorMetrics,
 }
 
 impl ChecksumContext {
@@ -51,33 +52,8 @@ impl ChecksumContext {
             ranges: ranges.into_iter(),
             scanner: None,
             req_ctx,
+            metrics: ExecutorMetrics::default(),
         })
-    }
-
-    pub fn handle_request(mut self, metrics: &mut ExecutorMetrics) -> Result<Response> {
-        let algorithm = self.req.get_algorithm();
-        if algorithm != ChecksumAlgorithm::Crc64_Xor {
-            return Err(box_err!("unknown checksum algorithm {:?}", algorithm));
-        }
-
-        let mut checksum = 0;
-        let mut total_kvs = 0;
-        let mut total_bytes = 0;
-        while let Some((k, v)) = self.next_row(metrics)? {
-            checksum = checksum_crc64_xor(checksum, &k, &v);
-            total_kvs += 1;
-            total_bytes += k.len() + v.len();
-        }
-
-        let mut resp = ChecksumResponse::new();
-        resp.set_checksum(checksum);
-        resp.set_total_kvs(total_kvs);
-        resp.set_total_bytes(total_bytes as u64);
-        let data = box_try!(resp.write_to_bytes());
-
-        let mut resp = Response::new();
-        resp.set_data(data);
-        Ok(resp)
     }
 
     fn next_row(&mut self, metrics: &mut ExecutorMetrics) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
@@ -115,6 +91,36 @@ impl ChecksumContext {
 }
 
 impl RequestHandler for ChecksumContext {
+    fn handle_request(&mut self) -> Result<Response> {
+        let algorithm = self.req.get_algorithm();
+        if algorithm != ChecksumAlgorithm::Crc64_Xor {
+            return Err(box_err!("unknown checksum algorithm {:?}", algorithm));
+        }
+
+        let mut checksum = 0;
+        let mut total_kvs = 0;
+        let mut total_bytes = 0;
+        while let Some((k, v)) = self.next_row(&mut self.metrics)? {
+            checksum = checksum_crc64_xor(checksum, &k, &v);
+            total_kvs += 1;
+            total_bytes += k.len() + v.len();
+        }
+
+        let mut resp = ChecksumResponse::new();
+        resp.set_checksum(checksum);
+        resp.set_total_kvs(total_kvs);
+        resp.set_total_bytes(total_bytes as u64);
+        let data = box_try!(resp.write_to_bytes());
+
+        let mut resp = Response::new();
+        resp.set_data(data);
+        Ok(resp)
+    }
+
+    fn collect_metrics_into(&mut self, metrics: &mut self::dag::executor::ExecutorMetrics) {
+        metrics.merge(&mut self.metrics);
+    }
+
     fn check_if_outdated(&self) -> Result<()> {
         self.req_ctx.check_if_outdated()
     }

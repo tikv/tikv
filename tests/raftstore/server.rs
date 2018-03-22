@@ -151,13 +151,14 @@ impl Simulator for ServerCluster {
         let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor, || {
             || coprocessor::ReadPoolContext::new(None)
         });
+        let cop_service = coprocessor::Service::new(&server_cfg, store.get_engine(), cop_read_pool);
 
         let mut server = Server::new(
             &server_cfg,
             &security_mgr,
             cfg.coprocessor.region_split_size.0 as usize,
             store.clone(),
-            cop_read_pool,
+            cop_service,
             sim_router.clone(),
             resolver,
             snap_mgr.clone(),
@@ -197,7 +198,7 @@ impl Simulator for ServerCluster {
             self.snap_paths.insert(node_id, tmp);
         }
 
-        server.start(server_cfg, security_mgr).unwrap();
+        server.start(security_mgr).unwrap();
 
         self.metas.insert(
             node_id,

@@ -34,6 +34,7 @@ pub struct AnalyzeContext {
     snap: Option<SnapshotStore>,
     ranges: Vec<KeyRange>,
     req_ctx: ReqContext,
+    metrics: ExecutorMetrics,
 }
 
 impl AnalyzeContext {
@@ -54,46 +55,8 @@ impl AnalyzeContext {
             snap: Some(snap),
             ranges: ranges,
             req_ctx,
+            metrics: ExecutorMetrics::default(),
         })
-    }
-
-    pub fn handle_request(mut self, stats: &mut ExecutorMetrics) -> Result<Response> {
-        let ret = match self.req.get_tp() {
-            AnalyzeType::TypeIndex => {
-                let req = self.req.take_idx_req();
-                let mut scanner = IndexScanExecutor::new_with_cols_len(
-                    i64::from(req.get_num_columns()),
-                    mem::replace(&mut self.ranges, Vec::new()),
-                    self.snap.take().unwrap(),
-                )?;
-                let res = AnalyzeContext::handle_index(req, &mut scanner);
-                scanner.collect_metrics_into(stats);
-                res
-            }
-
-            AnalyzeType::TypeColumn => {
-                let col_req = self.req.take_col_req();
-                let snap = self.snap.take().unwrap();
-                let ranges = mem::replace(&mut self.ranges, Vec::new());
-                let mut builder = SampleBuilder::new(col_req, snap, ranges)?;
-                let res = AnalyzeContext::handle_column(&mut builder);
-                builder.data.collect_metrics_into(stats);
-                res
-            }
-        };
-        match ret {
-            Ok(data) => {
-                let mut resp = Response::new();
-                resp.set_data(data);
-                Ok(resp)
-            }
-            Err(Error::Other(e)) => {
-                let mut resp = Response::new();
-                resp.set_other_error(format!("{}", e));
-                Ok(resp)
-            }
-            Err(e) => Err(e),
-        }
     }
 
     // handle_column is used to process `AnalyzeColumnsReq`
@@ -141,6 +104,49 @@ impl AnalyzeContext {
 }
 
 impl RequestHandler for AnalyzeContext {
+    fn handle_request(&mut self) -> Result<Response> {
+        let ret = match self.req.get_tp() {
+            AnalyzeType::TypeIndex => {
+                let req = self.req.take_idx_req();
+                let mut scanner = IndexScanExecutor::new_with_cols_len(
+                    i64::from(req.get_num_columns()),
+                    mem::replace(&mut self.ranges, Vec::new()),
+                    self.snap.take().unwrap(),
+                )?;
+                let res = AnalyzeContext::handle_index(req, &mut scanner);
+                scanner.collect_metrics_into(&mut self.metrics);
+                res
+            }
+
+            AnalyzeType::TypeColumn => {
+                let col_req = self.req.take_col_req();
+                let snap = self.snap.take().unwrap();
+                let ranges = mem::replace(&mut self.ranges, Vec::new());
+                let mut builder = SampleBuilder::new(col_req, snap, ranges)?;
+                let res = AnalyzeContext::handle_column(&mut builder);
+                builder.data.collect_metrics_into(&mut self.metrics);
+                res
+            }
+        };
+        match ret {
+            Ok(data) => {
+                let mut resp = Response::new();
+                resp.set_data(data);
+                Ok(resp)
+            }
+            Err(Error::Other(e)) => {
+                let mut resp = Response::new();
+                resp.set_other_error(format!("{}", e));
+                Ok(resp)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn collect_metrics_into(&mut self, metrics: &mut self::dag::executor::ExecutorMetrics) {
+        metrics.merge(&mut self.metrics);
+    }
+
     fn check_if_outdated(&self) -> Result<()> {
         self.req_ctx.check_if_outdated()
     }

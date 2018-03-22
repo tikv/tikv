@@ -236,12 +236,13 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         let pd_sender = pd_sender.clone();
         move || coprocessor::ReadPoolContext::new(Some(pd_sender.clone()))
     });
+    let cop_service = coprocessor::Service::new(&server_cfg, storage.get_engine(), cop_read_pool);
     let mut server = Server::new(
         &server_cfg,
         &security_mgr,
         cfg.coprocessor.region_split_size.0 as usize,
         storage.clone(),
-        cop_read_pool,
+        cop_service,
         raft_router,
         resolver,
         snap_mgr.clone(),
@@ -286,7 +287,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Run server.
     server
-        .start(server_cfg, security_mgr)
+        .start(security_mgr)
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
     signal_handler::handle_signal(engines);
 
