@@ -18,12 +18,13 @@ use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message as PbMsg, RepeatedField};
 
+use storage::{Snapshot, SnapshotStore};
+
+use coprocessor::*;
+use coprocessor::util;
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::dag::expr::EvalContext;
-use coprocessor::Result;
-use coprocessor::endpoint::{get_pk, ReqContext};
-use storage::{Snapshot, SnapshotStore};
 
 use super::executor::{build_exec, Executor, ExecutorMetrics, Row};
 
@@ -41,7 +42,7 @@ impl DAGContext {
         ranges: Vec<KeyRange>,
         snap: Box<Snapshot>,
         req_ctx: ReqContext,
-    ) -> Result<DAGContext> {
+    ) -> Result<Box<RequestHandler>> {
         let eval_ctx = Arc::new(box_try!(EvalContext::new(
             req.get_time_zone_offset(),
             req.get_flags()
@@ -54,7 +55,7 @@ impl DAGContext {
         );
 
         let dag_executor = build_exec(req.take_executors().into_vec(), store, ranges, eval_ctx)?;
-        Ok(DAGContext {
+        Ok(box DAGContext {
             columns: dag_executor.columns,
             has_aggr: dag_executor.has_aggr,
             req_ctx: req_ctx,
@@ -160,7 +161,7 @@ fn inflate_cols(row: &Row, cols: &[ColumnInfo], output_offsets: &[u32]) -> Resul
         match data.get(col_id) {
             Some(value) => values.extend_from_slice(value),
             None if col.get_pk_handle() => {
-                let pk = get_pk(col, row.handle);
+                let pk = util::get_pk(col, row.handle);
                 box_try!(values.encode(&[pk], false));
             }
             None if col.has_default_val() => {

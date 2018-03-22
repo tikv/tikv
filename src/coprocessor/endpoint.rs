@@ -40,15 +40,13 @@ use server::readpool::{self, ReadPool};
 use storage::{self, engine, Engine, Snapshot};
 use storage::engine::Error as EngineError;
 
-use super::codec::mysql;
-use super::codec::datum::Datum;
+use super::*;
 use super::dag::DAGContext;
 use super::statistics::analyze::AnalyzeContext;
 use super::checksum::ChecksumContext;
 use super::metrics::*;
 use super::local_metrics::BasicLocalMetrics;
 use super::dag::executor::ExecutorMetrics;
-use super::{Error, ReadPoolContext, Result};
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
@@ -684,44 +682,6 @@ fn err_multi_resp(e: Error, count: usize, metrics: &mut BasicLocalMetrics) -> Re
 
 pub fn err_resp(e: Error, metrics: &mut BasicLocalMetrics) -> Response {
     err_multi_resp(e, 1, metrics)
-}
-
-pub fn prefix_next(key: &[u8]) -> Vec<u8> {
-    let mut nk = key.to_vec();
-    if nk.is_empty() {
-        nk.push(0);
-        return nk;
-    }
-    let mut i = nk.len() - 1;
-    loop {
-        if nk[i] == 255 {
-            nk[i] = 0;
-        } else {
-            nk[i] += 1;
-            return nk;
-        }
-        if i == 0 {
-            nk = key.to_vec();
-            nk.push(0);
-            return nk;
-        }
-        i -= 1;
-    }
-}
-
-/// `is_point` checks if the key range represents a point.
-pub fn is_point(range: &KeyRange) -> bool {
-    range.get_end() == &*prefix_next(range.get_start())
-}
-
-#[inline]
-pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
-    if mysql::has_unsigned_flag(col.get_flag() as u64) {
-        // PK column is unsigned
-        Datum::U64(h as u64)
-    } else {
-        Datum::I64(h)
-    }
 }
 
 pub const STR_REQ_TYPE_SELECT: &str = "select";

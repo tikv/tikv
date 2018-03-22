@@ -13,7 +13,7 @@
 
 use kvproto::coprocessor::KeyRange;
 
-use coprocessor::endpoint::prefix_next;
+use coprocessor::util;
 use coprocessor::codec::table::truncate_as_row_key;
 use storage::{Key, ScanMode, SnapshotStore, Statistics, StoreScanner, Value};
 use storage::txn::Result;
@@ -121,7 +121,7 @@ impl Scanner {
         }
 
         self.seek_key = match (self.scan_mode, self.scan_on) {
-            (ScanMode::Forward, _) => prefix_next(&key),
+            (ScanMode::Forward, _) => util::prefix_next(&key),
             (ScanMode::Backward, ScanOn::Table) => box_try!(truncate_as_row_key(&key)).to_vec(),
             (ScanMode::Backward, ScanOn::Index) => key.clone(),
             _ => unreachable!(),
@@ -170,7 +170,7 @@ pub mod test {
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::datum::{self, Datum};
     use coprocessor::codec::table;
-    use coprocessor::endpoint::prefix_next;
+    use coprocessor::util;
     use util::collections::HashMap;
     use util::codec::number::NumberEncoder;
     use storage::mvcc::MvccTxn;
@@ -348,7 +348,7 @@ pub mod test {
         let mut start_buf = Vec::with_capacity(8);
         start_buf.encode_i64(handle).unwrap();
         let start_key = table::encode_row_key(table_id, &start_buf);
-        let end = prefix_next(&start_key);
+        let end = util::prefix_next(&start_key);
         let mut key_range = KeyRange::new();
         key_range.set_start(start_key);
         key_range.set_end(end);

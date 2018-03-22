@@ -16,6 +16,7 @@ use std::fmt::Debug;
 use std::cmp::Ordering;
 use std::boxed::FnBox;
 use std::time::Duration;
+use futures::{future, Future};
 
 pub use self::rocksdb::EngineRocksdb;
 use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
@@ -25,6 +26,7 @@ use kvproto::errorpb::Error as ErrorHeader;
 
 use config;
 
+use util;
 use util::rocksdb::CFOptions;
 
 mod rocksdb;
@@ -119,6 +121,23 @@ pub trait Engine: Send + Debug {
 
     /// Create a share Engine pointer.
     fn clone(&self) -> Box<Engine + 'static>;
+}
+
+impl Engine {
+    pub fn async_snapshot_future(
+        engine: Box<Engine>,
+        ctx: &Context,
+    ) -> impl Future<Item = Box<Snapshot + 'static>, Error = Error> {
+        let (callback, future) = util::future::paired_future_callback();
+        let val = engine.async_snapshot(ctx, callback);
+
+        future::result(val)
+            .and_then(|_| future.map_err(|cancel| Error::Other(box_err!(cancel))))
+            .and_then(|(_ctx, result)| result)
+            // map storage::engine::Error -> storage::txn::Error -> storage::Error
+//            .map_err(txn::Error::from)
+//            .map_err(Error::from)
+    }
 }
 
 pub trait Snapshot: Send + Debug {

@@ -28,10 +28,10 @@ use std::result;
 use std::error;
 use std::time::Duration;
 
-use kvproto::{kvrpcpb, errorpb, coprocessor as coppb};
+use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 
 use util::time::Instant;
-use storage::{engine, mvcc, txn};
+use storage::{self, engine, mvcc, txn};
 
 quick_error! {
     #[derive(Debug)]
@@ -91,7 +91,7 @@ impl From<txn::Error> for Error {
     }
 }
 
-trait RequestHandler {
+trait RequestHandler: Send {
     fn handle_request(&mut self, batch_row_limit: usize) -> Result<coppb::Response> {
         panic!("unsupported operation");
     }
@@ -107,6 +107,9 @@ trait RequestHandler {
         // Do nothing
     }
 }
+
+/// `RequestHandlerBuilder` accepts a `Box<Snapshot>` and builds a `RequestHandler`.
+type RequestHandlerBuilder = FnOnce(Box<storage::Snapshot + Send>) -> Result<Box<RequestHandler>>;
 
 #[derive(Debug)]
 struct ReqContext {
