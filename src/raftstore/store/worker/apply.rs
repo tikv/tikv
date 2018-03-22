@@ -45,8 +45,7 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{cmd_resp, keys, util, Store};
 use raftstore::store::msg::Callback;
 use raftstore::store::engine::{Mutable, Peekable, Snapshot};
-use raftstore::store::peer_storage::{self, compact_raft_log, mark_merge_done,
-                                     write_initial_apply_state, write_merge_state,
+use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply_state,
                                      write_peer_state};
 use raftstore::store::peer::{check_epoch, Peer};
 use raftstore::store::metrics::*;
@@ -1030,7 +1029,7 @@ impl ApplyDelegate {
         } else {
             PeerState::Normal
         };
-        if let Err(e) = write_peer_state(&self.engine, ctx.wb_mut(), &region, state) {
+        if let Err(e) = write_peer_state(&self.engine, ctx.wb_mut(), &region, state, None) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
@@ -1110,9 +1109,15 @@ impl ApplyDelegate {
         let region_ver = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_ver);
         new_region.mut_region_epoch().set_version(region_ver);
-        write_peer_state(&self.engine, ctx.wb_mut(), &region, PeerState::Normal)
+        write_peer_state(&self.engine, ctx.wb_mut(), &region, PeerState::Normal, None)
             .and_then(|_| {
-                write_peer_state(&self.engine, ctx.wb_mut(), &new_region, PeerState::Normal)
+                write_peer_state(
+                    &self.engine,
+                    ctx.wb_mut(),
+                    &new_region,
+                    PeerState::Normal,
+                    None,
+                )
             })
             .and_then(|_| {
                 write_initial_apply_state(&self.engine, ctx.wb_mut(), new_region.get_id())
@@ -1193,12 +1198,12 @@ impl ApplyDelegate {
         merging_state.set_min_index(index);
         merging_state.set_target(prepare_merge.get_target().to_owned());
         merging_state.set_commit(exec_ctx.index);
-        write_merge_state(
+        write_peer_state(
             &self.engine,
             ctx.wb(),
             &region,
             PeerState::Merging,
-            merging_state.clone(),
+            Some(merging_state.clone()),
         ).unwrap_or_else(|e| {
             panic!(
                 "{} failed to save merging state {:?} for region {:?}: {:?}",
@@ -1331,7 +1336,6 @@ impl ApplyDelegate {
                 self.tag, source_region, exist_region
             );
         }
-
         let mut region = self.region.clone();
         // Use a max value so that pd can ensure overlapped region has a priority.
         let version = cmp::max(
@@ -1344,8 +1348,19 @@ impl ApplyDelegate {
         } else {
             region.set_start_key(source_region.get_start_key().to_vec());
         }
-        write_peer_state(&self.engine, ctx.wb(), &region, PeerState::Normal)
-            .and_then(|_| mark_merge_done(&self.engine, ctx.wb(), source_region, &self.region))
+        write_peer_state(&self.engine, ctx.wb(), &region, PeerState::Normal, None)
+            .and_then(|_| {
+                // TODO: maybe all information needs to be filled?
+                let mut merging_state = MergeState::new();
+                merging_state.set_target(self.region.clone());
+                write_peer_state(
+                    &self.engine,
+                    ctx.wb(),
+                    source_region,
+                    PeerState::Tombstone,
+                    Some(merging_state),
+                )
+            })
             .unwrap_or_else(|e| {
                 panic!(
                     "{} failed to save merge region {:?}: {:?}",
@@ -1392,12 +1407,14 @@ impl ApplyDelegate {
         let version = region.get_region_epoch().get_version();
         // Update version to avoid duplicated rollback requests.
         region.mut_region_epoch().set_version(version + 1);
-        write_peer_state(&self.engine, ctx.wb(), &region, PeerState::Normal).unwrap_or_else(|e| {
-            panic!(
-                "{} failed to rollback merge {:?}: {:?}",
-                self.tag, rollback, e
-            )
-        });
+        write_peer_state(&self.engine, ctx.wb(), &region, PeerState::Normal, None).unwrap_or_else(
+            |e| {
+                panic!(
+                    "{} failed to rollback merge {:?}: {:?}",
+                    self.tag, rollback, e
+                )
+            },
+        );
 
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["rollback_merge", "success"])

@@ -612,7 +612,13 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch)
         return Err(box_err!("The peer is still in target peers"));
     }
 
-    box_try!(write_peer_state(db, wb, &region, PeerState::Tombstone));
+    box_try!(write_peer_state(
+        db,
+        wb,
+        &region,
+        PeerState::Tombstone,
+        None
+    ));
     Ok(())
 }
 
