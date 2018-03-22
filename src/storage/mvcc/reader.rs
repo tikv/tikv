@@ -163,7 +163,7 @@ impl MvccReader {
         if self.scan_mode.is_some() {
             if self.write_cursor.is_none() {
                 let iter_opt = if self.use_prefix_seek {
-                    IterOption::default()
+                    IterOption::new(None, None, self.fill_cache)
                         .use_prefix_seek()
                         .set_prefix_same_as_start(true)
                 } else {
