@@ -18,17 +18,16 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::time::{Duration, Instant};
-use std::thread;
-use std::u64;
+use std::{cmp, thread, u64};
 
 use rocksdb::{CompactionJobInfo, WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
-use protobuf;
+use protobuf::{self, RepeatedField};
 use time::{self, Timespec};
 
-use kvproto::raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState,
-                             RegionLocalState};
+use kvproto::raft_serverpb::{MergeState, PeerState, RaftMessage, RaftSnapshotData,
+                             RaftTruncatedState, RegionLocalState};
 use raft::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
 use kvproto::importpb::SSTMeta;
@@ -38,7 +37,7 @@ use pd::{PdClient, PdRunner, PdTask};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse,
                           StatusCmdType, StatusResponse};
 use protobuf::Message;
-use raft::{self, SnapshotStatus, INVALID_INDEX};
+use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raftstore::{Error, Result};
 use kvproto::metapb;
 use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
@@ -140,11 +139,17 @@ pub struct Store<T, C: 'static> {
 
     // region_id -> peers
     region_peers: HashMap<u64, Peer>,
+    merging_regions: Option<Vec<metapb::Region>>,
     pending_raft_groups: HashSet<u64>,
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
     // the regions with pending snapshots between two mio ticks.
     pending_snapshot_regions: Vec<metapb::Region>,
+    // A marker used to indicate if the peer of a region is going to apply a snapshot
+    // with different range.
+    // It assumes that when a peer is going to accept snapshot, it can never
+    // captch up by normal log replication.
+    pending_cross_snap: HashMap<u64, metapb::RegionEpoch>,
     split_check_worker: Worker<SplitCheckTask>,
     region_worker: Worker<RegionTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask>,
@@ -193,7 +198,7 @@ where
     Ok(event_loop)
 }
 
-impl<T, C> Store<T, C> {
+impl<T: Transport, C: PdClient> Store<T, C> {
     #[allow(too_many_arguments)]
     pub fn new(
         ch: StoreChannel,
@@ -226,6 +231,7 @@ impl<T, C> Store<T, C> {
             sendch: sendch,
             significant_msg_receiver: ch.significant_msg_receiver,
             region_peers: HashMap::default(),
+            merging_regions: Some(vec![]),
             pending_raft_groups: HashSet::default(),
             split_check_worker: Worker::new("split check worker"),
             region_worker: Worker::new("snapshot worker"),
@@ -239,6 +245,7 @@ impl<T, C> Store<T, C> {
             last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
             region_ranges: BTreeMap::new(),
             pending_snapshot_regions: vec![],
+            pending_cross_snap: HashMap::default(),
             trans: trans,
             pd_client: pd_client,
             coprocessor_host: Arc::new(coprocessor_host),
@@ -272,6 +279,7 @@ impl<T, C> Store<T, C> {
         let mut kv_wb = WriteBatch::new();
         let mut raft_wb = WriteBatch::new();
         let mut applying_regions = vec![];
+        let mut prepare_merge = vec![];
         kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, &mut |key, value| {
             let (region_id, suffix) = keys::decode_region_meta_key(key)?;
             if suffix != keys::REGION_STATE_SUFFIX {
@@ -305,6 +313,12 @@ impl<T, C> Store<T, C> {
                 applying_regions.push(region.clone());
                 return Ok(true);
             }
+            if local_state.get_state() == PeerState::Merging {
+                prepare_merge.push((
+                    local_state.get_region().to_owned(),
+                    local_state.get_merge_state().to_owned(),
+                ));
+            }
 
             let peer = Peer::create(self, region)?;
             self.region_ranges.insert(enc_end_key(region), region_id);
@@ -337,13 +351,25 @@ impl<T, C> Store<T, C> {
             self.region_peers.insert(region.get_id(), peer);
         }
 
+        // recover prepare_merge
+        let merging_count = prepare_merge.len();
+        for (region, state) in prepare_merge {
+            info!(
+                "region {:?} is merging in store {}",
+                region,
+                self.store_id()
+            );
+            self.on_ready_prepare_merge(region, state);
+        }
+
         info!(
-            "{} starts with {} regions, including {} tombstones and {} applying \
-             regions, takes {:?}",
+            "{} starts with {} regions, including {} tombstones, {} applying \
+             regions and {} merging regions, takes {:?}",
             self.tag,
             total_count,
             tomebstone_count,
             applying_count,
+            merging_count,
             t.elapsed()
         );
 
@@ -351,7 +377,9 @@ impl<T, C> Store<T, C> {
 
         Ok(())
     }
+}
 
+impl<T, C> Store<T, C> {
     fn clear_stale_meta(
         &mut self,
         kv_wb: &mut WriteBatch,
@@ -508,6 +536,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_snap_mgr_gc_tick(event_loop);
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
+        self.register_merge_check_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&self.kv_engine),
@@ -658,6 +687,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     let task = PdTask::ValidatePeer {
                         peer: peer.peer.clone(),
                         region: peer.region().clone(),
+                        merge_source: None,
                     };
                     if let Err(e) = self.pd_worker.schedule(task) {
                         error!("{} failed to notify pd: {}", peer.tag, e)
@@ -684,11 +714,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         p.post_apply(&res, &mut self.pending_raft_groups, &mut self.store_stat);
                     }
                     self.store_stat.lock_cf_bytes_written += res.metrics.lock_cf_written_bytes;
-                    self.on_ready_result(res.region_id, res.exec_res);
+                    self.on_ready_result(res.region_id, res.merged, res.exec_res);
                 },
                 Ok(ApplyTaskRes::Destroy(p)) => {
                     let store_id = self.store_id();
-                    self.destroy_peer(p.region_id(), util::new_peer(store_id, p.id()));
+                    self.destroy_peer(p.region_id(), util::new_peer(store_id, p.id()), false);
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(e) => panic!("unexpected error {:?}", e),
@@ -767,6 +797,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     self.pending_votes.push(msg.to_owned());
                 }
                 self.raft_metrics.message_dropped.region_overlap += 1;
+                self.pending_cross_snap
+                    .insert(region_id, msg.get_region_epoch().to_owned());
                 return Ok(false);
             }
         }
@@ -787,6 +819,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if msg.get_is_tombstone() {
             // we receive a message tells us to remove ourself.
             self.handle_gc_peer_msg(&msg);
+            return Ok(());
+        }
+
+        if msg.has_merge_target() {
+            if self.need_gc_merge(&msg)? {
+                self.on_merge_fail(region_id);
+            }
             return Ok(());
         }
 
@@ -895,7 +934,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 && util::find_peer(region, from_store_id).is_none()
             {
                 // The message is stale and not in current region.
-                Self::handle_stale_msg(trans, msg, epoch, is_vote_msg, raft_metrics);
+                Self::handle_stale_msg(trans, msg, epoch, is_vote_msg, None, raft_metrics);
                 return Ok(true);
             }
 
@@ -926,6 +965,25 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             let region = local_state.get_region();
             let region_epoch = region.get_region_epoch();
+            if local_state.has_merge_state() {
+                info!(
+                    "[region {}] merged peer [epoch: {:?}] receive a stale message {:?}",
+                    region_id, region_epoch, msg_type
+                );
+
+                let merge_target = if let Some(peer) = util::find_peer(region, from_store_id) {
+                    assert_eq!(peer, msg.get_from_peer());
+                    // Let stale peer decides whether it should wait for merging or just remove
+                    // itself.
+                    Some(local_state.get_merge_state().get_target().to_owned())
+                } else {
+                    // If a peer is isolated before prepare_merge and conf remove, it should just
+                    // remove itself.
+                    None
+                };
+                Self::handle_stale_msg(trans, msg, region_epoch, true, merge_target, raft_metrics);
+                return Ok(true);
+            }
             // The region in this peer is already destroyed
             if util::is_epoch_stale(from_epoch, region_epoch) {
                 info!(
@@ -940,6 +998,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     msg,
                     region_epoch,
                     is_vote_msg && not_exist,
+                    None,
                     raft_metrics,
                 );
 
@@ -965,6 +1024,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         msg: &RaftMessage,
         cur_epoch: &metapb::RegionEpoch,
         need_gc: bool,
+        target_region: Option<metapb::Region>,
         raft_metrics: &mut RaftMetrics,
     ) {
         let region_id = msg.get_region_id();
@@ -991,10 +1051,91 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         gc_msg.set_from_peer(to_peer.clone());
         gc_msg.set_to_peer(from_peer.clone());
         gc_msg.set_region_epoch(cur_epoch.clone());
-        gc_msg.set_is_tombstone(true);
+        if let Some(r) = target_region {
+            gc_msg.set_merge_target(r);
+        } else {
+            gc_msg.set_is_tombstone(true);
+        }
         if let Err(e) = trans.send(gc_msg) {
             error!("[region {}] send gc message failed {:?}", region_id, e);
         }
+    }
+
+    /// Check if it's necessary to gc the source merge peer.
+    ///
+    /// If the target merge peer won't be created on this store,
+    /// then it's appropriate to destroy it immediately.
+    fn need_gc_merge(&mut self, msg: &RaftMessage) -> Result<bool> {
+        let merge_target = msg.get_merge_target();
+        let target_region_id = merge_target.get_id();
+
+        if let Some(epoch) = self.pending_cross_snap.get(&target_region_id).or_else(|| {
+            self.region_peers
+                .get(&target_region_id)
+                .map(|p| p.region().get_region_epoch())
+        }) {
+            info!(
+                "[region {}] checking target {} epoch: {:?}",
+                msg.get_region_id(),
+                target_region_id,
+                epoch
+            );
+            // So the target peer has moved on, we should let it go.
+            if epoch.get_version() > merge_target.get_region_epoch().get_version() {
+                return Ok(true);
+            }
+            // Wait till it catching up logs.
+            return Ok(false);
+        }
+
+        let state_key = keys::region_state_key(target_region_id);
+        if let Some(state) = self.kv_engine()
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)?
+        {
+            debug!(
+                "[region {}] check local state {:?}",
+                target_region_id, state
+            );
+            if state.get_state() == PeerState::Tombstone
+                && state.get_region().get_region_epoch().get_conf_ver()
+                    >= merge_target.get_region_epoch().get_conf_ver()
+            {
+                // Replica was destroyed.
+                return Ok(true);
+            }
+        }
+
+        info!(
+            "[region {}] no replica of region {} exist, check pd.",
+            msg.get_region_id(),
+            target_region_id
+        );
+        // We can't know whether the peer is destroyed or not for sure locally, ask
+        // pd for help.
+        let merge_source = match self.region_peers.get(&msg.get_region_id()) {
+            // It has been gc.
+            None => return Ok(false),
+            Some(p) => p,
+        };
+        let target_peer = merge_target
+            .get_peers()
+            .iter()
+            .find(|p| p.get_store_id() == self.store_id())
+            .unwrap();
+        let task = PdTask::ValidatePeer {
+            peer: target_peer.to_owned(),
+            region: merge_target.to_owned(),
+            merge_source: Some(merge_source.region().get_id()),
+        };
+        if let Err(e) = self.pd_worker.schedule(task) {
+            error!(
+                "[region {}] failed to validate target peer {:?}: {}",
+                msg.get_region_id(),
+                target_peer,
+                e
+            );
+        }
+        Ok(false)
     }
 
     fn handle_gc_peer_msg(&mut self, msg: &RaftMessage) {
@@ -1029,15 +1170,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn check_snapshot(&mut self, msg: &RaftMessage) -> Result<Option<SnapKey>> {
-        let region_id = msg.get_region_id();
-
-        // Check if we can accept the snapshot
-        if self.region_peers[&region_id].get_store().is_initialized()
-            || !msg.get_message().has_snapshot()
-        {
+        if !msg.get_message().has_snapshot() {
             return Ok(None);
         }
 
+        let region_id = msg.get_region_id();
         let snap = msg.get_message().get_snapshot();
         let key = SnapKey::from_region_snap(region_id, snap);
         let mut snap_data = RaftSnapshotData::new();
@@ -1058,16 +1195,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.raft_metrics.message_dropped.region_no_peer += 1;
             return Ok(Some(key));
         }
-        if let Some((_, &exist_region_id)) = self.region_ranges
+
+        let r = self.region_ranges
             .range((Excluded(enc_start_key(&snap_region)), Unbounded::<Key>))
+            .map(|(_, &region_id)| self.region_peers[&region_id].region())
+            .take_while(|r| enc_start_key(r) < enc_end_key(&snap_region))
+            .skip_while(|r| r.get_id() == region_id)
             .next()
-        {
-            let exist_region = self.region_peers[&exist_region_id].region();
-            if enc_start_key(exist_region) < enc_end_key(&snap_region) {
-                info!("region overlapped {:?}, {:?}", exist_region, snap_region);
-                self.raft_metrics.message_dropped.region_overlap += 1;
-                return Ok(Some(key));
-            }
+            .map(|r| r.to_owned());
+        if let Some(exist_region) = r {
+            info!("region overlapped {:?}, {:?}", exist_region, snap_region);
+            self.pending_cross_snap
+                .insert(region_id, snap_region.get_region_epoch().to_owned());
+            self.raft_metrics.message_dropped.region_overlap += 1;
+            return Ok(Some(key));
         }
         for region in &self.pending_snapshot_regions {
             if enc_start_key(region) < enc_end_key(&snap_region) &&
@@ -1080,10 +1221,24 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return Ok(Some(key));
             }
         }
+        if let Some(r) = self.pending_cross_snap.get(&region_id) {
+            // Check it to avoid epoch moves backward.
+            if util::is_epoch_stale(snap_region.get_region_epoch(), r) {
+                info!(
+                    "[region {}] snapshot epoch is stale, drop: {:?} < {:?}",
+                    snap_region.get_id(),
+                    snap_region.get_region_epoch(),
+                    r
+                );
+                self.raft_metrics.message_dropped.stale_msg += 1;
+                return Ok(Some(key));
+            }
+        }
         // check if snapshot file exists.
         self.snap_mgr.get_snapshot_for_applying(&key)?;
 
         self.pending_snapshot_regions.push(snap_region);
+        self.pending_cross_snap.remove(&region_id);
 
         Ok(None)
     }
@@ -1153,15 +1308,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut ready_results = Vec::with_capacity(append_res.len());
         for (mut ready, invoke_ctx) in append_res {
             let region_id = invoke_ctx.region_id;
-            let res = self.region_peers
-                .get_mut(&region_id)
-                .unwrap()
-                .post_raft_ready_append(
+            let mut is_merging;
+            let res = {
+                let peer = self.region_peers.get_mut(&region_id).unwrap();
+                is_merging = peer.pending_merge.is_some();
+                peer.post_raft_ready_append(
                     &mut self.raft_metrics,
                     &self.trans,
                     &mut ready,
                     invoke_ctx,
-                );
+                )
+            };
+            if is_merging && res.is_some() {
+                // After applying a snapshot, merge is rollbacked implicitly.
+                self.on_ready_rollback_merge(region_id, 0, None);
+            }
             ready_results.push((region_id, ready, res));
         }
 
@@ -1231,12 +1392,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             );
             false
         } else {
-            self.destroy_peer(job.region_id, job.peer);
+            self.destroy_peer(job.region_id, job.peer, false);
             true
         }
     }
 
-    pub fn destroy_peer(&mut self, region_id: u64, peer: metapb::Peer) {
+    pub fn destroy_peer(&mut self, region_id: u64, peer: metapb::Peer, keep_data: bool) {
         // Can we destroy it in another thread later?
 
         // Suppose cluster removes peer a from store and then add a new
@@ -1260,6 +1421,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         info!("[region {}] destroy peer {:?}", region_id, peer);
         // We can't destroy a peer which is applying snapshot.
         assert!(!p.is_applying_snapshot());
+        self.pending_cross_snap.remove(&region_id);
         let task = PdTask::DestroyPeer {
             region_id: region_id,
         };
@@ -1267,7 +1429,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             error!("{} failed to notify pd: {}", self.tag, e);
         }
         let is_initialized = p.is_initialized();
-        if let Err(e) = p.destroy() {
+        if let Err(e) = p.destroy(keep_data) {
             // If not panic here, the peer will be recreated in the next restart,
             // then it will be gc again. But if some overlap region is created
             // before restarting, the gc action will delete the overlap region's
@@ -1293,6 +1455,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 self.store_id()
             );
         }
+        self.merging_regions
+            .as_mut()
+            .unwrap()
+            .retain(|r| r.get_id() != p.region().get_id());
     }
 
     fn on_ready_change_peer(&mut self, region_id: u64, cp: ChangePeer) {
@@ -1348,7 +1514,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // We only care remove itself now.
         if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
             if my_peer_id == peer.get_id() {
-                self.destroy_peer(region_id, peer)
+                self.destroy_peer(region_id, peer, false)
             } else {
                 panic!("{} trying to remove unknown peer {:?}", self.tag, peer);
             }
@@ -1485,6 +1651,255 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
+    fn register_merge_check_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(
+            event_loop,
+            Tick::CheckMerge,
+            self.cfg.merge_check_tick_interval.as_millis(),
+        ) {
+            error!("{} register split region check tick err: {:?}", self.tag, e);
+        };
+    }
+
+    fn get_merge_peer(&self, tag: &str, target_region: &metapb::Region) -> Result<Option<&Peer>> {
+        let region_id = target_region.get_id();
+        if let Some(p) = self.region_peers.get(&region_id) {
+            let exist_epoch = p.region().get_region_epoch();
+            let expect_epoch = target_region.get_region_epoch();
+            // exist_epoch > expect_epoch
+            if util::is_epoch_stale(expect_epoch, exist_epoch) {
+                return Err(box_err!(
+                    "target region changed {:?} -> {:?}",
+                    target_region,
+                    p.region()
+                ));
+            }
+            // exist_epoch < expect_epoch
+            if util::is_epoch_stale(exist_epoch, expect_epoch) {
+                info!(
+                    "{} target region still not catch up: {:?} vs {:?}, skip.",
+                    tag,
+                    target_region,
+                    p.region()
+                );
+                return Ok(None);
+            }
+            return Ok(Some(p));
+        }
+
+        let state_key = keys::region_state_key(region_id);
+        let state: RegionLocalState = match self.kv_engine().get_msg_cf(CF_RAFT, &state_key) {
+            Err(e) => {
+                error!(
+                    "{} failed to load region state of {}, ignore: {}",
+                    tag, region_id, e
+                );
+                return Ok(None);
+            }
+            Ok(None) => {
+                info!(
+                    "{} seems to merge into a new replica of region {}, let's wait.",
+                    tag, region_id
+                );
+                return Ok(None);
+            }
+            Ok(Some(state)) => state,
+        };
+        if state.get_state() != PeerState::Tombstone {
+            info!("{} wait for region {} split.", tag, region_id);
+            return Ok(None);
+        }
+
+        let tombstone_region = state.get_region();
+        if tombstone_region.get_region_epoch().get_conf_ver()
+            < target_region.get_region_epoch().get_conf_ver()
+        {
+            info!(
+                "{} seems to merge into a new replica of region {}, let's wait.",
+                tag, region_id
+            );
+            return Ok(None);
+        }
+
+        Err(box_err!("region {} is destroyed", region_id))
+    }
+
+    fn schedule_merge(&mut self, region: &metapb::Region) -> Result<()> {
+        fail_point!("on_schedule_merge", |_| Ok(()));
+        let req = {
+            let peer = &self.region_peers[&region.get_id()];
+            let state = peer.pending_merge.as_ref().unwrap();
+            let expect_region = state.get_target();
+            let sibling_peer = match self.get_merge_peer(&peer.tag, expect_region)? {
+                // Wait till next round.
+                None => return Ok(()),
+                Some(p) => p,
+            };
+            if !sibling_peer.is_leader() {
+                info!("{} merge target peer is not leader, skip.", self.tag);
+                // skip early.
+                return Ok(());
+            }
+            let sibling_region = sibling_peer.region();
+
+            let min_index = peer.get_min_progress() + 1;
+            let low = cmp::max(min_index, state.get_min_index());
+            // TODO: move this into raft module.
+            let entries = if low >= state.get_commit() {
+                vec![]
+            } else {
+                self.region_peers[&region.get_id()]
+                    .get_store()
+                    .entries(low, state.get_commit(), NO_LIMIT)
+                    .unwrap()
+            };
+
+            let mut request = new_admin_request(sibling_region.get_id(), sibling_peer.peer.clone());
+            request
+                .mut_header()
+                .set_region_epoch(sibling_region.get_region_epoch().clone());
+            let mut admin = AdminRequest::new();
+            admin.set_cmd_type(AdminCmdType::CommitMerge);
+            admin.mut_commit_merge().set_source(region.clone());
+            admin.mut_commit_merge().set_commit(state.get_commit());
+            admin
+                .mut_commit_merge()
+                .set_entries(RepeatedField::from_vec(entries));
+            request.set_admin_request(admin);
+            request
+        };
+        // Please note that, here assumes that the unit of network isolation is store rather than
+        // peer. So a quorum stores of souce region should also be the quorum stores of target
+        // region. Otherwise we need to enable proposal forwarding.
+        self.propose_raft_command(req, Callback::None);
+        Ok(())
+    }
+
+    fn rollback_merge(&mut self, region: &metapb::Region) {
+        let req = {
+            let peer = &self.region_peers[&region.get_id()];
+            let state = peer.pending_merge.as_ref().unwrap();
+            let mut request = new_admin_request(region.get_id(), peer.peer.clone());
+            request
+                .mut_header()
+                .set_region_epoch(peer.region().get_region_epoch().clone());
+            let mut admin = AdminRequest::new();
+            admin.set_cmd_type(AdminCmdType::RollbackMerge);
+            admin.mut_rollback_merge().set_commit(state.get_commit());
+            request.set_admin_request(admin);
+            request
+        };
+        self.propose_raft_command(req, Callback::None);
+    }
+
+    fn on_check_merge(&mut self, event_loop: &mut EventLoop<Self>) {
+        let merging_regions = self.merging_regions.take().unwrap();
+        for region in &merging_regions {
+            if let Err(e) = self.schedule_merge(region) {
+                info!(
+                    "[region {}] failed to schedule merge, rollback: {:?}",
+                    region.get_id(),
+                    e
+                );
+                self.rollback_merge(region);
+            }
+        }
+        self.merging_regions = Some(merging_regions);
+        self.register_merge_check_tick(event_loop);
+    }
+
+    fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState) {
+        {
+            let peer = self.region_peers.get_mut(&region.get_id()).unwrap();
+            peer.pending_merge = Some(state);
+            peer.mut_store().region = region.clone();
+        }
+
+        if let Err(e) = self.schedule_merge(&region) {
+            info!(
+                "[region {}] failed to schedule merge, rollback: {:?}",
+                region.get_id(),
+                e
+            );
+            self.rollback_merge(&region);
+        }
+        self.merging_regions.as_mut().unwrap().push(region);
+    }
+
+    fn on_ready_commit_merge(&mut self, region: metapb::Region, source: metapb::Region) {
+        let source_peer = {
+            let peer = self.region_peers.get_mut(&source.get_id()).unwrap();
+            // In some case, PrepareMerge entry may be carried by the dst region. So
+            // the peer is not in merging mode.
+            if peer.pending_merge.is_none() {
+                let mut state = MergeState::new();
+                state.set_target(region.clone());
+                peer.pending_merge = Some(state);
+            }
+            peer.peer.clone()
+        };
+        self.destroy_peer(source.get_id(), source_peer, true);
+        // If merge backward, then stale meta is clear when source region is destroyed.
+        // So only forward needs to be considered.
+        if region.get_end_key() == source.get_end_key() {
+            self.region_ranges.remove(&keys::enc_start_key(&source));
+            self.region_ranges
+                .insert(keys::enc_end_key(&region), region.get_id());
+        }
+        let region_id = region.get_id();
+        let peer = self.region_peers.get_mut(&region_id).unwrap();
+        peer.mut_store().region = region;
+        if peer.is_leader() {
+            info!("notify pd with merge {:?} into {:?}", source, peer.region());
+            peer.heartbeat_pd(&self.pd_worker);
+        }
+    }
+
+    /// Handle rollbacking Merge result.
+    ///
+    /// If commit is 0, it means that Merge is rollbacked by a snapshot; otherwise
+    /// it's rollbacked by a proposal, and its value should be equal to the commit
+    /// index of previous PrepareMerge.
+    fn on_ready_rollback_merge(
+        &mut self,
+        region_id: u64,
+        commit: u64,
+        region: Option<metapb::Region>,
+    ) {
+        let peer = self.region_peers.get_mut(&region_id).unwrap();
+        let pending_commit = peer.pending_merge.as_ref().unwrap().get_commit();
+        self.merging_regions.as_mut().unwrap().retain(|r| {
+            if r.get_id() != region_id {
+                return true;
+            }
+            if commit != 0 && pending_commit != commit {
+                panic!(
+                    "{} rollbacks a wrong merge: {} != {}",
+                    peer.tag, pending_commit, commit
+                );
+            }
+            false
+        });
+        peer.pending_merge = None;
+        if let Some(r) = region {
+            peer.mut_store().region = r;
+        }
+        if peer.is_leader() {
+            info!("{} notify pd with rollback merge {}", peer.tag, commit);
+            peer.heartbeat_pd(&self.pd_worker);
+        }
+    }
+
+    fn on_merge_fail(&mut self, region_id: u64) {
+        info!("[region {}] merge fail, try gc stale peer.", region_id);
+        if let Some(job) = self.region_peers
+            .get_mut(&region_id)
+            .and_then(|p| p.maybe_destroy())
+        {
+            self.handle_destroy_peer(job);
+        }
+    }
+
     fn on_ready_apply_snapshot(&mut self, apply_result: ApplySnapResult) {
         let prev_region = apply_result.prev_region;
         let region = apply_result.region;
@@ -1516,19 +1931,28 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .insert(enc_end_key(&region), region.get_id());
     }
 
-    fn on_ready_result(&mut self, region_id: u64, exec_results: Vec<ExecResult>) {
+    fn on_ready_result(&mut self, region_id: u64, merged: bool, exec_results: Vec<ExecResult>) {
         // handle executing committed log results
         for result in exec_results {
             match result {
                 ExecResult::ChangePeer(cp) => self.on_ready_change_peer(region_id, cp),
-                ExecResult::CompactLog { first_index, state } => {
+                ExecResult::CompactLog { first_index, state } => if !merged {
                     self.on_ready_compact_log(region_id, first_index, state)
-                }
+                },
                 ExecResult::SplitRegion {
                     left,
                     right,
                     right_derive,
                 } => self.on_ready_split_region(region_id, left, right, right_derive),
+                ExecResult::PrepareMerge { region, state } => {
+                    self.on_ready_prepare_merge(region, state);
+                }
+                ExecResult::CommitMerge { region, source } => {
+                    self.on_ready_commit_merge(region, source);
+                }
+                ExecResult::RollbackMerge { region, commit } => {
+                    self.on_ready_rollback_merge(region.get_id(), commit, Some(region))
+                }
                 ExecResult::ComputeHash {
                     region,
                     index,
@@ -1545,6 +1969,65 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
+    /// Check if a request is valid if it has valid prepare_merge/commit_merge proposal.
+    fn check_merge_proposal(&self, msg: &mut RaftCmdRequest) -> Result<()> {
+        if !msg.get_admin_request().has_prepare_merge()
+            && !msg.get_admin_request().has_commit_merge()
+        {
+            return Ok(());
+        }
+
+        let region_id = msg.get_header().get_region_id();
+        let peer = &self.region_peers[&region_id];
+        let region = peer.region();
+
+        if msg.get_admin_request().has_prepare_merge() {
+            let target_region = msg.get_admin_request().get_prepare_merge().get_target();
+            let peer = match self.region_peers.get(&target_region.get_id()) {
+                None => return Err(box_err!("target region doesn't exist.")),
+                Some(p) => p,
+            };
+            if peer.region() != target_region {
+                return Err(box_err!("target region not matched, skip proposing."));
+            }
+            if !util::is_sibling_regions(target_region, region) {
+                return Err(box_err!("regions are not sibling, skip proposing."));
+            }
+            if !util::region_on_same_stores(target_region, region) {
+                return Err(box_err!(
+                    "peers doesn't match {:?} != {:?}, reject merge",
+                    region.get_peers(),
+                    target_region.get_peers()
+                ));
+            }
+        } else {
+            let source_region = msg.get_admin_request().get_commit_merge().get_source();
+            let source_peer = &self.region_peers[&source_region.get_id()];
+            // only merging peer can propose merge request.
+            assert!(
+                source_peer.pending_merge.is_some(),
+                "{} {} should be in merging state",
+                peer.tag,
+                source_peer.tag
+            );
+            assert_eq!(source_region, source_peer.region());
+            assert!(
+                util::is_sibling_regions(source_region, region),
+                "{:?} {:?} should be sibling",
+                source_region,
+                region
+            );
+            assert!(
+                util::region_on_same_stores(source_region, region),
+                "peers not matched: {:?} {:?}",
+                source_region,
+                region
+            );
+        };
+
+        Ok(())
+    }
+
     fn pre_propose_raft_command(
         &mut self,
         msg: &RaftCmdRequest,
@@ -1559,17 +2042,24 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(None)
     }
 
-    fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
+    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
                 cb.invoke_with_response(resp);
                 return;
             }
             Err(e) => {
+                debug!("{} failed to propose {:?}: {:?}", self.tag, msg, e);
                 cb.invoke_with_response(new_error(e));
                 return;
             }
             _ => (),
+        }
+
+        if let Err(e) = self.check_merge_proposal(&mut msg) {
+            warn!("{} failed to propose merge: {:?}: {}", self.tag, msg, e);
+            cb.invoke_with_response(new_error(e));
+            return;
         }
 
         // Note:
@@ -1663,7 +2153,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Err(Error::StaleCommand);
         }
 
-        let res = peer::check_epoch(peer.region(), msg);
+        let res = peer::check_epoch(peer.region(), msg, true);
         if let Err(Error::StaleEpoch(msg, mut new_regions)) = res {
             // Attach the region which might be split from the current region. But it doesn't
             // matter if the region is not split from the current region. If the region meta
@@ -2597,6 +3087,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 region_size,
             } => self.on_approximate_region_size(region_id, region_size),
             Msg::CompactedEvent(event) => self.on_compaction_finished(event),
+            Msg::MergeFail { region_id } => self.on_merge_fail(region_id),
         }
     }
 
@@ -2612,6 +3103,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
+            Tick::CheckMerge => self.on_check_merge(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }
