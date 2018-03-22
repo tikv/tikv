@@ -1262,7 +1262,8 @@ impl ApplyDelegate {
         merge: &CommitMergeRequest,
         exist_region: &mut Region,
     ) {
-        let apply_state_key = keys::apply_state_key(exist_region.get_id());
+        let region_id = exist_region.get_id();
+        let apply_state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState = match self.engine.get_msg_cf(CF_RAFT, &apply_state_key) {
             Ok(Some(s)) => s,
             e => panic!(
@@ -1280,8 +1281,8 @@ impl ApplyDelegate {
             return;
         }
         let stash = ctx.stash(self);
-        let mut delegate = match ctx.delegates.get_mut(&exist_region.get_id()) {
-            None => panic!("{} source region {:?} not exist", self.tag, exist_region),
+        let mut delegate = match ctx.delegates.get_mut(&region_id) {
+            None => panic!("{} source region {} not exist", self.tag, region_id),
             Some(e) => e.take().unwrap_or_else(|| {
                 panic!(
                     "{} unexpected circle dependency of region {:?}",
@@ -1291,7 +1292,7 @@ impl ApplyDelegate {
         };
         delegate.handle_raft_committed_entries(ctx, entries);
         *exist_region = delegate.region.clone();
-        *ctx.delegates.get_mut(&exist_region.get_id()).unwrap() = Some(delegate);
+        *ctx.delegates.get_mut(&region_id).unwrap() = Some(delegate);
         ctx.apply_res.last_mut().unwrap().merged = true;
         ctx.restore_stash(stash);
     }
