@@ -33,6 +33,7 @@ pub struct AnalyzeContext {
     req: AnalyzeReq,
     snap: Option<SnapshotStore>,
     ranges: Vec<KeyRange>,
+    req_ctx: ReqContext,
 }
 
 impl AnalyzeContext {
@@ -40,7 +41,7 @@ impl AnalyzeContext {
         req: AnalyzeReq,
         ranges: Vec<KeyRange>,
         snap: Box<Snapshot>,
-        req_ctx: &ReqContext,
+        req_ctx: ReqContext,
     ) -> Result<Box<RequestHandler>> {
         let snap = SnapshotStore::new(
             snap,
@@ -52,6 +53,7 @@ impl AnalyzeContext {
             req: req,
             snap: Some(snap),
             ranges: ranges,
+            req_ctx,
         })
     }
 
@@ -135,6 +137,12 @@ impl AnalyzeContext {
         }
         let dt = box_try!(res.write_to_bytes());
         Ok(dt)
+    }
+}
+
+impl RequestHandler for AnalyzeContext {
+    fn check_if_outdated(&self) -> Result<()> {
+        self.req_ctx.check_if_outdated()
     }
 }
 

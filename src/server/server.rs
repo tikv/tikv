@@ -21,14 +21,13 @@ use kvproto::debugpb_grpc::create_debug;
 use kvproto::importpb_grpc::create_import_sst;
 
 use import::ImportSSTService;
-use util::worker::{Builder as WorkerBuilder, Worker};
+use util::worker::Worker;
 use util::security::SecurityManager;
 use storage::Storage;
 use raftstore::store::{Engines, SnapManager};
+use coprocessor;
 
 use super::{Config, Result};
-use coprocessor::{self, EndPointHost, EndPointTask};
-use super::readpool::ReadPool;
 use super::service::*;
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::resolve::StoreAddrResolver;
@@ -48,12 +47,9 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     raft_router: T,
     // The kv storage.
     storage: Storage,
-    // For handling coprocessor requests.
-    end_point_worker: Worker<EndPointTask>,
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
-    cop_readpool: ReadPool<coprocessor::ReadPoolContext>,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
@@ -63,8 +59,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         security_mgr: &Arc<SecurityManager>,
         region_split_size: usize,
         storage: Storage,
-        // TODO: Remove once endpoint itself is passed to here.
-        cop_readpool: ReadPool<coprocessor::ReadPoolContext>,
+        cop_service: coprocessor::Service,
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
@@ -82,17 +77,14 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             Arc::clone(cfg),
             Arc::clone(security_mgr),
         )));
-        let end_point_worker = WorkerBuilder::new("end-point-worker")
-            .batch_size(DEFAULT_COPROCESSOR_BATCH)
-            .create();
+
         let snap_worker = Worker::new("snap-handler");
 
         let kv_service = KvService::new(
             storage.clone(),
-            end_point_worker.scheduler(),
+            cop_service,
             raft_router.clone(),
             snap_worker.scheduler(),
-            cfg.end_point_recursion_limit,
         );
         let addr = SocketAddr::from_str(&cfg.addr)?;
         info!("listening on {}", addr);
@@ -137,10 +129,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             trans: trans,
             raft_router: raft_router,
             storage: storage,
-            end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
-            cop_readpool,
         };
 
         Ok(svr)
@@ -151,13 +141,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     }
 
     pub fn start(&mut self, cfg: Arc<Config>, security_mgr: Arc<SecurityManager>) -> Result<()> {
-        let end_point = EndPointHost::new(
-            self.storage.get_engine(),
-            self.end_point_worker.scheduler(),
-            &cfg,
-            self.cop_readpool.clone(),
-        );
-        box_try!(self.end_point_worker.start(end_point));
         let snap_runner = SnapHandler::new(
             Arc::clone(&self.env),
             self.snap_mgr.clone(),
@@ -171,7 +154,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     }
 
     pub fn stop(&mut self) -> Result<()> {
-        self.end_point_worker.stop();
         self.snap_worker.stop();
         if let Err(e) = self.storage.stop() {
             error!("failed to stop store: {:?}", e);

@@ -26,10 +26,9 @@ use tipb::select::DAGRequest;
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::checksum::{ChecksumRequest, ChecksumScanOn};
 use tipb::executor::ExecType;
-use tipb::schema::ColumnInfo;
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use kvproto::errorpb::{self, ServerIsBusy};
-use kvproto::kvrpcpb::{CommandPri, HandleTime, IsolationLevel};
+use kvproto::kvrpcpb::{CommandPri, HandleTime};
 
 use util::time::{duration_to_sec, Instant};
 use util::worker::{Runnable, Scheduler};
@@ -52,13 +51,8 @@ pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 pub const REQ_TYPE_CHECKSUM: i64 = 105;
 
-// If a request has been handled for more than 60 seconds, the client should
-// be timeout already, so it can be safely aborted.
-pub const DEFAULT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 // If handle time is larger than the lower bound, the query is considered as slow query.
 const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
-
-pub const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
 const OUTDATED_ERROR_MSG: &str = "request outdated.";
 
@@ -658,9 +652,9 @@ fn err_multi_resp(e: Error, count: usize, metrics: &mut BasicLocalMetrics) -> Re
             resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
             "outdated"
         }
-        Error::Full(allow) => {
+        Error::Full => {
             let mut errorpb = errorpb::Error::new();
-            errorpb.set_message(format!("running batches reach limit {}", allow));
+            errorpb.set_message(format!("running batches reach limit"));
             let mut server_is_busy_err = ServerIsBusy::new();
             server_is_busy_err.set_reason(ENDPOINT_IS_BUSY.to_owned());
             errorpb.set_server_is_busy(server_is_busy_err);
@@ -708,6 +702,7 @@ mod tests {
     use std::sync::mpsc;
 
     use kvproto::coprocessor::Request;
+    use kvproto::kvrpcpb::IsolationLevel;
     use tipb::select::DAGRequest;
     use tipb::expression::Expr;
     use tipb::executor::Executor;

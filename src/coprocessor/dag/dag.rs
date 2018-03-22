@@ -150,6 +150,12 @@ impl DAGContext {
     }
 }
 
+impl RequestHandler for DAGContext {
+    fn check_if_outdated(&self) -> Result<()> {
+        self.req_ctx.check_if_outdated()
+    }
+}
+
 #[inline]
 fn inflate_cols(row: &Row, cols: &[ColumnInfo], output_offsets: &[u32]) -> Result<Vec<u8>> {
     let data = &row.data;

@@ -45,6 +45,11 @@ impl RequestHandler for ErrorRequestHandler {
     fn collect_metrics_into(&mut self, metrics: &mut self::dag::executor::ExecutorMetrics) {
         unimplemented!()
     }
+
+    fn check_if_outdated(&self) -> Result<()> {
+        // ErrorRequestHandler is never outdated.
+        Ok(())
+    }
 }
 
 pub fn prefix_next(key: &[u8]) -> Vec<u8> {

@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use futures::{Future, Stream, stream};
+use futures::{future, stream, Future, Stream};
 use protobuf::{CodedInputStream, Message};
 
-use kvproto::{coprocessor as coppb, kvrpcpb};
+use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 use tipb::executor::ExecType;
 use tipb::select::DAGRequest;
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
@@ -30,6 +30,10 @@ use super::util as cop_util;
 use super::dag::DAGContext;
 use super::statistics::analyze::AnalyzeContext;
 use super::checksum::ChecksumContext;
+use super::local_metrics::BasicLocalMetrics;
+
+const OUTDATED_ERROR_MSG: &str = "request outdated.";
+const ENDPOINT_IS_BUSY: &str = "endpoint is busy";
 
 #[derive(Clone)]
 pub struct Service {
@@ -59,41 +63,15 @@ impl Service {
         }
     }
 
-    fn get_batch_row_limit(&self, is_streaming: bool) -> usize {
-        if is_streaming {
-            self.stream_batch_row_limit
-        } else {
-            self.batch_row_limit
-        }
-    }
-
-    fn handle_request(
-        &self,
-        req: coppb::Request,
-        use_streaming_interface: bool,
-    ) -> Box<Stream<Item = coppb::Response, Error = ()>> {
-        let request_handler_builder = match self.new_request_handler_builder(req) {
-            Ok(builder) => builder,
-            Err(e) => return box stream::once::<_, ()>(make_error_response(e)),
-        };
-        let engine = self.engine.clone();
-        let priority = readpool::Priority::from(req.get_context().get_priority());
-        box stream::once::<_, ()>(
-            self.read_pool.future_execute(priority, move |ctxd| {
-                engine.async_snapshot()
-            })
-        )
-    }
-
     /// Create a `RequestHandlerBuilder` and returns `Err` if fails.
-    fn new_request_handler_builder(
+    fn try_new_request_handler_builder(
         &self,
-        mut req: coppb::Request,
-    ) -> Result<Box<RequestHandlerBuilder>> {
+        req: &coppb::Request,
+    ) -> Result<RequestHandlerBuilder> {
         let mut is = CodedInputStream::from_bytes(req.get_data());
         is.set_recursion_limit(self.recursion_limit);
 
-        let ranges = req.take_ranges().into_vec();
+        let ranges = req.get_ranges().to_vec();
 
         let builder = match req.get_tp() {
             REQ_TYPE_DAG => {
@@ -115,7 +93,7 @@ impl Service {
                 let start_ts = analyze.get_start_ts();
                 let req_ctx =
                     ReqContext::new(req.get_context(), table_scan, self.max_handle_duration);
-                box move |snap| AnalyzeContext::new(analyze, ranges, snap, &req_ctx)
+                box move |snap| AnalyzeContext::new(analyze, ranges, snap, req_ctx)
             }
             REQ_TYPE_CHECKSUM => {
                 let mut checksum = ChecksumRequest::new();
@@ -124,18 +102,95 @@ impl Service {
                 let start_ts = checksum.get_start_ts();
                 let req_ctx =
                     ReqContext::new(req.get_context(), table_scan, self.max_handle_duration);
-                box move |snap| ChecksumContext::new(checksum, ranges, snap, &req_ctx)
+                box move |snap| ChecksumContext::new(checksum, ranges, snap, req_ctx)
             }
             tp => return Err(box_err!("unsupported tp {}", tp)),
         };
         Ok(builder)
     }
-//
-//    /// Creates a `RequestHandlerBuilder`.
-//    fn new_request_handler_builder(&self, req: coppb::Request) -> Box<RequestHandlerBuilder> {
-//        self.try_new_request_handler_builder(req)
-//            .unwrap_or_else(|e| box move |_| Ok(cop_util::ErrorRequestHandler::from_error(e)))
-//    }
+
+    /// Creates a `RequestHandlerBuilder`.
+    fn new_request_handler_builder(&self, req: &coppb::Request) -> RequestHandlerBuilder {
+        self.try_new_request_handler_builder(req)
+            .unwrap_or_else(|e| box move |_| Ok(cop_util::ErrorRequestHandler::from_error(e)))
+    }
+
+    fn get_batch_row_limit(&self, is_streaming: bool) -> usize {
+        if is_streaming {
+            self.stream_batch_row_limit
+        } else {
+            self.batch_row_limit
+        }
+    }
+
+    fn async_snapshot(
+        engine: Box<storage::Engine>,
+        ctx: &kvrpcpb::Context,
+    ) -> impl Future<Item = Box<storage::Snapshot + 'static>, Error = Error> {
+        let (callback, future) = util::future::paired_future_callback();
+        let val = engine.async_snapshot(ctx, callback);
+        future::result(val)
+            .and_then(|_| future.map_err(|cancel| storage::Engine::Error::Other(box_err!(cancel))))
+            .and_then(|(_ctx, result)| result)
+    }
+
+    fn handle_request(
+        &self,
+        req: coppb::Request,
+        use_streaming_interface: bool,
+    ) -> impl Stream<Item = coppb::Response, Error = ()> {
+        let batch_row_limit = self.get_batch_row_limit(use_streaming_interface);
+        let request_handler_builder = self.new_request_handler_builder(&req);
+        let engine = self.engine.clone();
+        let priority = readpool::Priority::from(req.get_context().get_priority());
+        let result = self.read_pool.future_execute(priority, move |_ctxd| {
+            Service::async_snapshot(engine, req.get_context())
+                // map engine::Error -> coprocessor::Error
+                .map_err(Error::from)
+                .and_then(|snapshot| {
+                    let mut handler: Box<RequestHandler> = match request_handler_builder(snapshot) {
+                        Ok(handler) => handler,
+                        Err(e) => cop_util::ErrorRequestHandler::from_error(e),
+                    };
+                    handler.check_if_outdated()?;
+                    let resp_stream: Box<_> = if use_streaming_interface {
+                        box stream::once(handler.handle_request(batch_row_limit))
+                    } else {
+                        box stream::unfold((handler, false), move |(mut handler, finished)| {
+                            if finished {
+                                return None;
+                            }
+                            match handler.handle_streaming_request(batch_row_limit) {
+                                Ok((None, _)) => {
+                                    None
+                                }
+                                Ok((Some(resp), finished)) => {
+                                    let yielded = resp;
+                                    let next_state = (handler, finished);
+                                    Some(Ok((yielded, next_state)))
+                                },
+                                Err(e) => {
+                                    Some(Err(e))
+                                }
+                            }
+                        })
+                    };
+                    Ok(resp_stream)
+                })
+        });
+        let future_of_stream = future::result(result).map_err(|_| Error::Full).flatten();
+        stream::once(future_of_stream).flatten().then(|result| {
+            // TODO: Can be simplified using recover() in futures 0.2.
+            let resp = match result {
+                Ok(resp) => resp,
+                Err(e) => {
+                    let mut metrics = BasicLocalMetrics::default();
+                    make_error_response(e, &mut metrics)
+                }
+            };
+            Ok::<_, ()>(resp)
+        })
+    }
 
     pub fn handle_stream_request(
         &self,
@@ -160,4 +215,42 @@ impl Service {
                 Ok::<_, ()>(resp)
             })
     }
+}
+
+fn make_error_response(e: Error, metrics: &mut BasicLocalMetrics) -> coppb::Response {
+    let mut resp = coppb::Response::new();
+    let tag = match e {
+        Error::Region(e) => {
+            let tag = storage::get_tag_from_header(&e);
+            resp.set_region_error(e);
+            tag
+        }
+        Error::Locked(info) => {
+            resp.set_locked(info);
+            "lock"
+        }
+        Error::Outdated(elapsed, scan_tag) => {
+            metrics
+                .outdate_time
+                .with_label_values(&[scan_tag])
+                .observe(elapsed.as_secs() as f64);
+            resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
+            "outdated"
+        }
+        Error::Full => {
+            let mut errorpb = errorpb::Error::new();
+            errorpb.set_message(format!("running batches reach limit"));
+            let mut server_is_busy_err = errorpb::ServerIsBusy::new();
+            server_is_busy_err.set_reason(ENDPOINT_IS_BUSY.to_owned());
+            errorpb.set_server_is_busy(server_is_busy_err);
+            resp.set_region_error(errorpb);
+            "full"
+        }
+        Error::Other(_) => {
+            resp.set_other_error(format!("{}", e));
+            "other"
+        }
+    };
+    metrics.error_cnt.with_label_values(&[tag]).inc();
+    resp
 }

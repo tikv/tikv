@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod endpoint;
 mod metrics;
 mod dag;
 mod statistics;
@@ -22,8 +21,7 @@ mod readpool_context;
 pub mod local_metrics;
 pub mod codec;
 
-pub use self::readpool_context::Context as ReadPoolContext;
-
+use std::boxed::FnBox;
 use std::result;
 use std::error;
 use std::time::Duration;
@@ -32,6 +30,11 @@ use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 
 use util::time::Instant;
 use storage::{self, engine, mvcc, txn};
+
+pub use self::readpool_context::Context as ReadPoolContext;
+pub use self::service::Service;
+
+const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
 quick_error! {
     #[derive(Debug)]
@@ -47,7 +50,7 @@ quick_error! {
         Outdated(elapsed: Duration, tag: &'static str) {
             description("request is outdated")
         }
-        Full(allow: usize) {
+        Full {
             description("running queue is full")
         }
         Other(err: Box<error::Error + Send + Sync>) {
@@ -106,10 +109,13 @@ trait RequestHandler: Send {
     fn collect_metrics_into(&mut self, metrics: &mut self::dag::executor::ExecutorMetrics) {
         // Do nothing
     }
+
+    fn check_if_outdated(&self) -> Result<()>;
 }
 
 /// `RequestHandlerBuilder` accepts a `Box<Snapshot>` and builds a `RequestHandler`.
-type RequestHandlerBuilder = FnOnce(Box<storage::Snapshot + Send>) -> Result<Box<RequestHandler>>;
+type RequestHandlerBuilder =
+    Box<FnBox(Box<storage::Snapshot + Send>) -> Result<Box<RequestHandler>>>;
 
 #[derive(Debug)]
 struct ReqContext {

@@ -29,6 +29,7 @@ pub struct ChecksumContext {
     store: SnapshotStore,
     ranges: IntoIter<KeyRange>,
     scanner: Option<Scanner>,
+    req_ctx: ReqContext,
 }
 
 impl ChecksumContext {
@@ -36,19 +37,20 @@ impl ChecksumContext {
         req: ChecksumRequest,
         ranges: Vec<KeyRange>,
         snap: Box<Snapshot>,
-        ctx: &ReqContext,
+        req_ctx: ReqContext,
     ) -> Result<Box<RequestHandler>> {
         let store = SnapshotStore::new(
             snap,
             req.get_start_ts(),
-            ctx.isolation_level,
-            ctx.fill_cache,
+            req_ctx.isolation_level,
+            req_ctx.fill_cache,
         );
         Ok(box ChecksumContext {
             req: req,
             store: store,
             ranges: ranges.into_iter(),
             scanner: None,
+            req_ctx,
         })
     }
 
@@ -109,6 +111,12 @@ impl ChecksumContext {
             ChecksumScanOn::Index => ScanOn::Index,
         };
         Scanner::new(&self.store, scan_on, false, false, range).map_err(Error::from)
+    }
+}
+
+impl RequestHandler for ChecksumContext {
+    fn check_if_outdated(&self) -> Result<()> {
+        self.req_ctx.check_if_outdated()
     }
 }
 

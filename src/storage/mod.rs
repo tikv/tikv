@@ -494,7 +494,6 @@ impl Storage {
         engine: Box<Engine>,
         ctx: &Context,
     ) -> impl Future<Item = Box<Snapshot + 'static>, Error = Error> {
-        let future = Engine::async_snapshot_future()
         let (callback, future) = util::future::paired_future_callback();
         let val = engine.async_snapshot(ctx, callback);
 
