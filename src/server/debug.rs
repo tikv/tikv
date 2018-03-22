@@ -335,6 +335,11 @@ impl Debugger {
     }
 
     pub fn remove_failed_stores(&self, store_ids: Vec<u64>) -> Result<()> {
+        let store_id = self.get_store_id()?;
+        if store_ids.iter().any(|&s| s == store_id) {
+            let msg = format!("Store {} in the failed list", store_id);
+            return Err(Error::Other(msg.into()));
+        }
         let wb = WriteBatch::new();
         let handle = box_try!(get_cf_handle(self.engines.kv_engine.as_ref(), CF_RAFT));
         let store_ids = HashSet::<u64>::from_iter(store_ids);
@@ -361,13 +366,16 @@ impl Debugger {
                 let old_peers_len = region_state.get_region().get_peers().len();
 
                 if new_peers_len < quorum(old_peers_len) {
-                    {
-                        let region = region_state.mut_region();
-                        region.set_peers(RepeatedField::from_vec(new_peers));
-                        let old_conf_ver = region.get_region_epoch().get_conf_ver();
-                        let new_conf_ver = old_conf_ver + (old_peers_len - new_peers_len) as u64;
-                        region.mut_region_epoch().set_conf_ver(new_conf_ver);
-                    }
+                    let region_id = region_state.get_region().get_id();
+                    let old_peers = region_state.mut_region().take_peers();
+                    info!(
+                        "region {} change peers from {:?}, to {:?}",
+                        region_id, old_peers, new_peers
+                    );
+                    // We need to leave epoch untouched to avoid inconsistency.
+                    region_state
+                        .mut_region()
+                        .set_peers(RepeatedField::from_vec(new_peers));
                     box_try!(wb.put_msg_cf(handle, key, &region_state));
                 }
                 Ok(true)
@@ -438,7 +446,7 @@ impl Debugger {
                 {
                     return Ok(true);
                 }
-                return Err(RaftstoreError::Other("region overlay".into()));
+                Err(RaftstoreError::Other("region overlay".into()))
             },
         ));
 
@@ -710,9 +718,9 @@ mod tests {
     use std::sync::Arc;
     use std::iter::FromIterator;
 
+    use raft::eraftpb::EntryType;
     use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
     use kvproto::metapb::{Peer, Region};
-    use raft::eraftpb::EntryType;
     use tempdir::TempDir;
 
     use raftstore::store::engine::Mutable;
@@ -1034,9 +1042,10 @@ mod tests {
     #[test]
     fn test_remove_failed_stores() {
         let debugger = new_debugger();
+        debugger.set_store_id(100);
         let engine = debugger.engines.kv_engine.as_ref();
 
-        // region 1 with peers at stores 11, 12, 13.
+        // region 1 with peers at stores 11, 12, 13 and 14.
         init_region_state(engine, 1, &[11, 12, 13, 14]);
         // region 2 with peers at stores 21, 22, 23.
         init_region_state(engine, 2, &[21, 22, 23]);
@@ -1046,6 +1055,10 @@ mod tests {
         assert_eq!(region_state.get_region().get_peers().len(), 2);
         let region_state = get_region_state(engine, 2);
         assert_eq!(region_state.get_region().get_peers().len(), 3);
+
+        // Should fail when the store itself is in the failed list.
+        init_region_state(engine, 3, &[100, 31, 32, 33]);
+        assert!(debugger.remove_failed_stores(vec![100]).is_err());
     }
 
     #[test]

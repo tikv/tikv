@@ -1065,7 +1065,7 @@ impl Decimal {
 
     /// convert_to(ProduceDecWithSpecifiedTp in tidb)
     /// produces a new decimal according to `flen` and `decimal`.
-    pub fn convert_to(self, ctx: &EvalContext, flen: u8, decimal: u8) -> Result<Decimal> {
+    pub fn convert_to(self, ctx: &mut EvalContext, flen: u8, decimal: u8) -> Result<Decimal> {
         let (prec, frac) = self.prec_and_frac();
         if !self.is_zero() && prec - frac > flen - decimal {
             return Ok(max_or_min_dec(self.negative, flen, decimal));
@@ -1081,7 +1081,7 @@ impl Decimal {
         // TODO: process over_flow
         if !ret.is_zero() && frac > decimal && ret != tmp {
             // TODO handle InInsertStmt in ctx
-            convert::handle_truncate(ctx, true)?;
+            box_try!(ctx.handle_truncate(true));
         }
         Ok(ret)
     }
@@ -1455,9 +1455,9 @@ impl Decimal {
     }
 
     /// `as_i64_with_ctx` returns int part of the decimal.
-    pub fn as_i64_with_ctx(&self, ctx: &EvalContext) -> ::std::result::Result<i64, ExprError> {
+    pub fn as_i64_with_ctx(&self, ctx: &mut EvalContext) -> ::std::result::Result<i64, ExprError> {
         let res = self.as_i64();
-        convert::handle_truncate(ctx, res.is_truncated())?;
+        box_try!(ctx.handle_truncate(res.is_truncated()));
         res.into()
     }
 
