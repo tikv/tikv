@@ -429,6 +429,9 @@ trait DebugExecutor {
     fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>);
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
+
+    fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str);
+
     fn dump_metrics(&self, tags: Vec<&str>);
 }
 
@@ -564,6 +567,16 @@ impl DebugExecutor for DebugClient {
             .unwrap_or_else(|e| perror_and_exit("DebugClient::check_region_consistency", e));
         println!("success!");
     }
+
+    fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str) {
+        let mut req = ModifyTikvConfigRequest::new();
+        req.set_module(module);
+        req.set_config_name(config_name.to_owned());
+        req.set_config_value(config_value.to_owned());
+        self.modify_tikv_config(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::modify_tikv_config", e));
+        println!("success");
+    }
 }
 
 impl DebugExecutor for Debugger {
@@ -652,6 +665,11 @@ impl DebugExecutor for Debugger {
     }
 
     fn check_region_consistency(&self, _: u64) {
+        eprintln!("only support remote mode");
+        process::exit(-1);
+    }
+
+    fn modify_tikv_config(&self, _: MODULE, _: &str, _: &str) {
         eprintln!("only support remote mode");
         process::exit(-1);
     }
@@ -1019,8 +1037,31 @@ fn main() {
                         .help("the target region"),
                 ),
         )
+        .subcommand(SubCommand::with_name("bad-regions").about("get all regions with corrupt raft"))
         .subcommand(
-            SubCommand::with_name("bad-regions").about("get all regions with corrupt raft"),
+            SubCommand::with_name("modify-tikv-config")
+                .about("modify tikv config, eg. ./tikv-ctl -h ip:port -m kvdb -n default.disable_auto_compactions -v true")
+                .arg(
+                    Arg::with_name("module")
+                        .short("m")
+                        .takes_value(true)
+                        .help("module of the tikv, eg. kvdb or raftdb"),
+                )
+                .arg(
+                    Arg::with_name("config_name")
+                        .short("n")
+                        .takes_value(true)
+                        .help("config name of the module, for kvdb or raftdb, you can choose \
+                            max_background_jobs to modify db options or default.disable_auto_compactions to modify column family(cf) options, \
+                            and so on, default stands for default cf, \
+                            for kvdb, default|write|lock|raft can be chosen, for raftdb, default can be chosen"),
+                )
+                .arg(
+                    Arg::with_name("config_value")
+                        .short("v")
+                        .takes_value(true)
+                        .help("config value of the module, eg. 8 for max_background_jobs or true for disable_auto_compactions"),
+                ),
         )
         .subcommand(
             SubCommand::with_name("dump-snap-meta").about("dump snapshot meta file")
@@ -1143,11 +1184,32 @@ fn main() {
         debug_executor.check_region_consistency(region_id);
     } else if matches.subcommand_matches("bad-regions").is_some() {
         debug_executor.print_bad_regions();
+    } else if let Some(matches) = matches.subcommand_matches("modify-tikv-config") {
+        let module = matches.value_of("module").unwrap();
+        let config_name = matches.value_of("config_name").unwrap();
+        let config_value = matches.value_of("config_value").unwrap();
+        debug_executor.modify_tikv_config(get_module_type(module), config_name, config_value);
     } else if let Some(matches) = matches.subcommand_matches("metrics") {
         let tags = Vec::from_iter(matches.values_of("tag").unwrap());
         debug_executor.dump_metrics(tags)
     } else {
         let _ = app.print_help();
+    }
+}
+
+fn get_module_type(module: &str) -> MODULE {
+    match module {
+        "kvdb" => MODULE::KVDB,
+        "raftdb" => MODULE::RAFTDB,
+        "readpool" => MODULE::READPOOL,
+        "server" => MODULE::SERVER,
+        "storage" => MODULE::STORAGE,
+        "ps" => MODULE::PD,
+        "metric" => MODULE::METRIC,
+        "coprocessor" => MODULE::COPROCESSOR,
+        "security" => MODULE::SECURITY,
+        "import" => MODULE::IMPORT,
+        _ => MODULE::UNUSED,
     }
 }
 
