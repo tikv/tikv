@@ -16,13 +16,14 @@ use std::sync::Arc;
 use tipb::executor::{self, ExecType};
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
+use tipb::select;
 use kvproto::coprocessor::KeyRange;
 
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{self, Datum};
 use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::endpoint::get_pk;
-use coprocessor::dag::expr::EvalContext;
+use coprocessor::dag::expr::{EvalConfig, EvalContext};
 use coprocessor::{Error, Result};
 use storage::SnapshotStore;
 use util::codec::number::NumberDecoder;
@@ -136,6 +137,9 @@ pub trait Executor {
     fn next(&mut self) -> Result<Option<Row>>;
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>);
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics);
+    fn take_eval_warnings(&mut self) -> Vec<select::Error> {
+        Vec::default()
+    }
 
     /// Only `TableScan` and `IndexScan` need to implement `start_scan`.
     fn start_scan(&mut self) {}
@@ -158,7 +162,7 @@ pub fn build_exec(
     execs: Vec<executor::Executor>,
     store: SnapshotStore,
     ranges: Vec<KeyRange>,
-    ctx: Arc<EvalContext>,
+    ctx: Arc<EvalConfig>,
 ) -> Result<DAGExecutor> {
     let mut execs = execs.into_iter();
     let first = execs
@@ -244,7 +248,7 @@ fn build_first_executor(
 }
 
 pub fn inflate_with_col_for_dag(
-    ctx: &EvalContext,
+    ctx: &mut EvalContext,
     values: &RowColsDict,
     columns: &[ColumnInfo],
     offsets: &[usize],

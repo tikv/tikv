@@ -252,14 +252,14 @@ macro_rules! dispatch_call {
         JSON_CALLS {$($j_sig:ident => $j_func:ident $($j_arg:expr)*,)*}
     ) => {
         impl FnCall {
-            pub fn eval_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+            pub fn eval_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
                 match self.sig {
                     $(ScalarFuncSig::$i_sig => self.$i_func(ctx, row, $($i_arg),*)),*,
                     _ => Err(Error::UnknownSignature(self.sig))
                 }
             }
 
-            pub fn eval_real(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+            pub fn eval_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
                 match self.sig {
                     $(ScalarFuncSig::$r_sig => self.$r_func(ctx, row, $($r_arg),*),)*
                     _ => Err(Error::UnknownSignature(self.sig))
@@ -267,7 +267,7 @@ macro_rules! dispatch_call {
             }
 
             pub fn eval_decimal<'a, 'b: 'a>(
-                &'b self, ctx: &EvalContext,
+                &'b self, ctx: &mut EvalContext,
                 row: &'a [Datum]
             ) -> Result<Option<Cow<'a, Decimal>>> {
                 match self.sig {
@@ -278,7 +278,7 @@ macro_rules! dispatch_call {
 
             pub fn eval_bytes<'a, 'b: 'a>(
                 &'b self,
-                ctx: &EvalContext,
+                ctx: &mut EvalContext,
                 row: &'a [Datum]
             ) -> Result<Option<Cow<'a, [u8]>>> {
                 match self.sig {
@@ -289,7 +289,7 @@ macro_rules! dispatch_call {
 
             pub fn eval_time<'a, 'b: 'a>(
                 &'b self,
-                ctx: &EvalContext,
+                ctx: &mut EvalContext,
                 row: &'a [Datum]
             ) -> Result<Option<Cow<'a, Time>>> {
                 match self.sig {
@@ -300,7 +300,7 @@ macro_rules! dispatch_call {
 
             pub fn eval_duration<'a, 'b: 'a>(
                 &'b self,
-                ctx: &EvalContext,
+                ctx: &mut EvalContext,
                 row: &'a [Datum]
             ) -> Result<Option<Cow<'a, Duration>>> {
                 match self.sig {
@@ -311,7 +311,7 @@ macro_rules! dispatch_call {
 
             pub fn eval_json<'a, 'b: 'a>(
                 &'b self,
-                ctx: &EvalContext,
+                ctx: &mut EvalContext,
                 row: &'a [Datum]
             ) -> Result<Option<Cow<'a, Json>>> {
                 match self.sig {
@@ -320,7 +320,7 @@ macro_rules! dispatch_call {
                 }
             }
 
-            pub fn eval(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Datum> {
+            pub fn eval(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Datum> {
                 match self.sig {
                     $(ScalarFuncSig::$i_sig => {
                         match self.$i_func(ctx, row, $($i_arg)*) {

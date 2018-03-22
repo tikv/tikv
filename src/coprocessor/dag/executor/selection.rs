@@ -15,8 +15,9 @@ use std::sync::Arc;
 
 use tipb::executor::Selection;
 use tipb::schema::ColumnInfo;
+use tipb::select;
 
-use coprocessor::dag::expr::{EvalContext, Expression};
+use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 use coprocessor::Result;
 
 use super::{inflate_with_col_for_dag, Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
@@ -25,7 +26,7 @@ pub struct SelectionExecutor {
     conditions: Vec<Expression>,
     cols: Arc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
-    ctx: Arc<EvalContext>,
+    ctx: EvalContext,
     src: Box<Executor + Send>,
     count: i64,
     first_collect: bool,
@@ -34,15 +35,16 @@ pub struct SelectionExecutor {
 impl SelectionExecutor {
     pub fn new(
         mut meta: Selection,
-        ctx: Arc<EvalContext>,
+        eval_cfg: Arc<EvalConfig>,
         columns_info: Arc<Vec<ColumnInfo>>,
         src: Box<Executor + Send>,
     ) -> Result<SelectionExecutor> {
         let conditions = meta.take_conditions().into_vec();
         let mut visitor = ExprColumnRefVisitor::new(columns_info.len());
         visitor.batch_visit(&conditions)?;
+        let mut ctx = EvalContext::new(eval_cfg);
         Ok(SelectionExecutor {
-            conditions: box_try!(Expression::batch_build(ctx.as_ref(), conditions)),
+            conditions: Expression::batch_build(&mut ctx, conditions)?,
             cols: columns_info,
             related_cols_offset: visitor.column_offsets(),
             ctx: ctx,
@@ -58,15 +60,15 @@ impl Executor for SelectionExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = self.src.next()? {
             let cols = inflate_with_col_for_dag(
-                &self.ctx,
+                &mut self.ctx,
                 &row.data,
                 self.cols.as_ref(),
                 &self.related_cols_offset,
                 row.handle,
             )?;
             for filter in &self.conditions {
-                let val = box_try!(filter.eval(&self.ctx, &cols));
-                if !box_try!(val.into_bool(&self.ctx)).unwrap_or(false) {
+                let val = filter.eval(&mut self.ctx, &cols)?;
+                if !(val.into_bool(&mut self.ctx)?).unwrap_or(false) {
                     continue 'next;
                 }
             }
@@ -88,6 +90,12 @@ impl Executor for SelectionExecutor {
             metrics.executor_count.selection += 1;
             self.first_collect = false;
         }
+    }
+
+    fn take_eval_warnings(&mut self) -> Vec<select::Error> {
+        let mut warnings = self.src.take_eval_warnings();
+        warnings.append(&mut self.ctx.take_warnings());
+        warnings
     }
 }
 
@@ -214,7 +222,7 @@ mod tests {
 
         let mut selection_executor = SelectionExecutor::new(
             selection,
-            Arc::new(EvalContext::default()),
+            Arc::new(EvalConfig::default()),
             Arc::new(cis),
             Box::new(inner_table_scan),
         ).unwrap();
@@ -268,7 +276,7 @@ mod tests {
 
         let mut selection_executor = SelectionExecutor::new(
             selection,
-            Arc::new(EvalContext::default()),
+            Arc::new(EvalConfig::default()),
             Arc::new(cis),
             Box::new(inner_table_scan),
         ).unwrap();
