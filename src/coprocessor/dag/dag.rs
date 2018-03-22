@@ -24,7 +24,7 @@ use coprocessor::*;
 use coprocessor::util;
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
-use coprocessor::dag::expr::EvalContext;
+use coprocessor::dag::expr::EvalConfig;
 
 use super::executor::{build_exec, Executor, ExecutorMetrics, Row};
 
@@ -45,7 +45,7 @@ impl DAGContext {
         req_ctx: ReqContext,
         batch_row_limit: usize,
     ) -> Result<DAGContext> {
-        let eval_ctx = Arc::new(box_try!(EvalContext::new(
+        let eval_cfg = Arc::new(box_try!(EvalConfig::new(
             req.get_time_zone_offset(),
             req.get_flags()
         )));
@@ -56,7 +56,7 @@ impl DAGContext {
             req_ctx.fill_cache,
         );
 
-        let dag_executor = build_exec(req.take_executors().into_vec(), store, ranges, eval_ctx)?;
+        let dag_executor = build_exec(req.take_executors().into_vec(), store, ranges, eval_cfg)?;
         Ok(DAGContext {
             columns: dag_executor.columns,
             has_aggr: dag_executor.has_aggr,

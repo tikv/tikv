@@ -43,7 +43,7 @@ use grpcio::{ChannelBuilder, Environment};
 use protobuf::RepeatedField;
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::raft_serverpb::PeerState;
+use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::metapb::Region;
 use raft::eraftpb::{ConfChange, Entry, EntryType};
 use kvproto::kvrpcpb::MvccInfo;
@@ -402,6 +402,9 @@ trait DebugExecutor {
         self.set_region_tombstone(regions);
     }
 
+    /// Recover the cluster when given `store_ids` are failed.
+    fn remove_fail_stores(&self, store_ids: Vec<u64>);
+
     fn check_region_consistency(&self, _: u64);
 
     fn check_local_mode(&self);
@@ -550,6 +553,10 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only avaliable for local mode");
     }
 
+    fn remove_fail_stores(&self, _: Vec<u64>) {
+        self.check_local_mode();
+    }
+
     fn check_region_consistency(&self, region_id: u64) {
         let mut req = RegionConsistencyCheckRequest::new();
         req.set_region_id(region_id);
@@ -631,6 +638,13 @@ impl DebugExecutor for Debugger {
             return;
         }
         println!("all regions are healthy")
+    }
+
+    fn remove_fail_stores(&self, store_ids: Vec<u64>) {
+        println!("removing stores {:?} from configrations...", store_ids);
+        self.remove_failed_stores(store_ids)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
+        println!("success");
     }
 
     fn dump_metrics(&self, _tags: Vec<&str>) {
@@ -961,22 +975,39 @@ fn main() {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("unsafe-recover")
+                .about("unsafe recover the cluster when majority replicas are failed")
+                .subcommand(
+                    SubCommand::with_name("remove-fail-stores").arg(
+                        Arg::with_name("stores")
+                            .required(true)
+                            .takes_value(true)
+                            .multiple(true)
+                            .use_delimiter(true)
+                            .require_delimiter(true)
+                            .value_delimiter(",")
+                            .help("failed store id list"),
+                    ),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("metrics")
                 .about("print the metrics")
                 .arg(
-                Arg::with_name("tag")
-                    .short("t")
-                    .long("tag")
-                    .takes_value(true)
-                    .multiple(true)
-                    .use_delimiter(true)
-                    .require_delimiter(true)
-                    .value_delimiter(",")
-                    .default_value(METRICS_PROMETHEUS)
-                    .help(
-                        "set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not specified, print prometheus",
-                    ),
-            ),)
+                    Arg::with_name("tag")
+                        .short("t")
+                        .long("tag")
+                        .takes_value(true)
+                        .multiple(true)
+                        .use_delimiter(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
+                        .default_value(METRICS_PROMETHEUS)
+                        .help(
+                            "set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not specified, print prometheus",
+                        ),
+                ),
+            )
             .subcommand(
             SubCommand::with_name("consistency-check")
                 .about("force consistency-check for a specified region")
@@ -990,6 +1021,13 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("bad-regions").about("get all regions with corrupt raft"),
+        )
+        .subcommand(
+            SubCommand::with_name("dump-snap-meta").about("dump snapshot meta file")
+            .arg(Arg::with_name("file")
+                 .short("f").long("file")
+                 .takes_value(true)
+                 .help("meta file path"))
         );
     let matches = app.clone().get_matches();
 
@@ -1007,6 +1045,11 @@ fn main() {
         (None, None) => {}
         _ => unreachable!(),
     };
+
+    if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
+        let path = matches.value_of("file").unwrap();
+        return dump_snap_meta_file(path);
+    }
 
     let db = matches.value_of("db");
     let raft_db = matches.value_of("raftdb");
@@ -1087,6 +1130,14 @@ fn main() {
             panic!("invalid pd configuration: {:?}", e);
         }
         debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
+    } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
+        if let Some(matches) = matches.subcommand_matches("remove-fail-stores") {
+            let stores = matches.values_of("stores").unwrap();
+            match stores.map(|s| s.parse()).collect::<Result<Vec<u64>, _>>() {
+                Ok(store_ids) => debug_executor.remove_fail_stores(store_ids),
+                Err(e) => perror_and_exit("parse store id list", e),
+            }
+        }
     } else if let Some(matches) = matches.subcommand_matches("consistency-check") {
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
         debug_executor.check_region_consistency(region_id);
@@ -1148,4 +1199,22 @@ fn new_security_mgr(matches: &ArgMatches) -> Arc<SecurityManager> {
     cfg.cert_path = cert_path.unwrap().to_owned();
     cfg.key_path = key_path.unwrap().to_owned();
     Arc::new(SecurityManager::new(&cfg).expect("failed to initialize security manager"))
+}
+
+fn dump_snap_meta_file(path: &str) {
+    let mut f =
+        File::open(path).unwrap_or_else(|e| panic!("open file {} failed, error {:?}", path, e));
+    let mut content = Vec::new();
+    f.read_to_end(&mut content)
+        .unwrap_or_else(|e| panic!("read meta file error {:?}", e));
+
+    let mut meta = SnapshotMeta::new();
+    meta.merge_from_bytes(&content)
+        .unwrap_or_else(|e| panic!("parse from bytes error {:?}", e));
+    for cf_file in meta.get_cf_files() {
+        println!(
+            "cf {}, size {}, checksum: {}",
+            cf_file.cf, cf_file.size, cf_file.checksum
+        );
+    }
 }

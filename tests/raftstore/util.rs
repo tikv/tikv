@@ -22,9 +22,9 @@ use rocksdb::{CompactionJobInfo, DB};
 use protobuf;
 
 use kvproto::metapb::{self, RegionEpoch};
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse,
-                          Request, StatusCmdType, StatusRequest};
-use kvproto::pdpb::{ChangePeer, RegionHeartbeatResponse, TransferLeader};
+use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
+use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
+use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, TransferLeader};
 use raft::eraftpb::ConfChangeType;
 
 use tikv::raftstore::store::*;
@@ -244,10 +244,26 @@ pub fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) 
     req
 }
 
+pub fn new_compact_log_request(index: u64, term: u64) -> AdminRequest {
+    let mut req = AdminRequest::new();
+    req.set_cmd_type(AdminCmdType::CompactLog);
+    req.mut_compact_log().set_compact_index(index);
+    req.mut_compact_log().set_compact_term(term);
+    req
+}
+
 pub fn new_transfer_leader_cmd(peer: metapb::Peer) -> AdminRequest {
     let mut cmd = AdminRequest::new();
     cmd.set_cmd_type(AdminCmdType::TransferLeader);
     cmd.mut_transfer_leader().set_peer(peer);
+    cmd
+}
+
+#[allow(dead_code)]
+pub fn new_prepare_merge(target_region: metapb::Region) -> AdminRequest {
+    let mut cmd = AdminRequest::new();
+    cmd.set_cmd_type(AdminCmdType::PrepareMerge);
+    cmd.mut_prepare_merge().set_target(target_region);
     cmd
 }
 
@@ -293,6 +309,15 @@ pub fn new_pd_transfer_leader(peer: metapb::Peer) -> RegionHeartbeatResponse {
 
     let mut resp = RegionHeartbeatResponse::new();
     resp.set_transfer_leader(transfer_leader);
+    resp
+}
+
+pub fn new_pd_merge_region(target_region: metapb::Region) -> RegionHeartbeatResponse {
+    let mut merge = Merge::new();
+    merge.set_target(target_region);
+
+    let mut resp = RegionHeartbeatResponse::new();
+    resp.set_merge(merge);
     resp
 }
 

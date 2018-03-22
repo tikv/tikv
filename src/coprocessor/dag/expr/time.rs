@@ -19,7 +19,7 @@ impl FnCall {
     #[inline]
     pub fn date_format<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let t = try_opt!(self.children[0].eval_time(ctx, row));
@@ -81,13 +81,13 @@ mod test {
                 2012 2012 12 %",
             ),
         ];
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
         for (arg1, arg2, exp) in tests {
             let arg1 = datum_expr(Datum::Time(Time::parse_utc_datetime(arg1, 6).unwrap()));
             let arg2 = datum_expr(Datum::Bytes(arg2.to_string().into_bytes()));
             let f = fncall_expr(ScalarFuncSig::DateFormatSig, &[arg1, arg2]);
-            let op = Expression::build(&ctx, f).unwrap();
-            let got = op.eval(&ctx, &[]).unwrap();
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, Datum::Bytes(exp.to_string().into_bytes()));
         }
     }
