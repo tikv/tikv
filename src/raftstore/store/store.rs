@@ -1748,6 +1748,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let min_index = peer.get_min_progress() + 1;
             let low = cmp::max(min_index, state.get_min_index());
             // TODO: move this into raft module.
+            // +1 to include the PrepareMerge proposal.
             let entries = if low >= state.get_commit() + 1 {
                 vec![]
             } else {
@@ -1819,7 +1820,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         if merged {
-            // PrepareMerge is executed by CommitMerge.
+            // CommitMerge will try to catch up log for source region. If PrepareMerge is executed
+            // in the progress of catching up, there is no need to schedule merge again.
             return;
         }
 
