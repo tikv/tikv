@@ -139,17 +139,6 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
         let status = RpcStatus::new(code, Some(format!("{}", err)));
         ctx.spawn(sink.fail(status).map_err(|_| ()));
     }
-
-    fn send_fail_status_to_stream<M>(
-        &self,
-        ctx: RpcContext,
-        sink: ServerStreamingSink<M>,
-        err: Error,
-        code: RpcStatusCode,
-    ) {
-        let status = RpcStatus::new(code, Some(format!("{}", err)));
-        ctx.spawn(sink.fail(status).map_err(|_| ()));
-    }
 }
 
 fn make_callback<T: Send + Debug + 'static>() -> (Box<FnBox(T) + Send>, oneshot::Receiver<T>) {

@@ -33,7 +33,7 @@ use super::checksum::ChecksumContext;
 use super::local_metrics::BasicLocalMetrics;
 
 const OUTDATED_ERROR_MSG: &str = "request outdated.";
-const ENDPOINT_IS_BUSY: &str = "endpoint is busy";
+const COPROCESSOR_BUSY_ERROR_MSG: &str = "coprocessor is busy";
 
 pub struct Service {
     engine: Box<storage::Engine>,
@@ -94,14 +94,10 @@ impl Service {
                 // let start_ts = dag.get_start_ts();
                 let req_ctx =
                     ReqContext::new(req.get_context(), table_scan, self.max_handle_duration);
+                let batch_row_limit = self.get_batch_row_limit(is_streaming);
                 box move |snap| {
-                    DAGContext::new(
-                        dag,
-                        ranges,
-                        snap,
-                        req_ctx,
-                        self.get_batch_row_limit(is_streaming),
-                    ).map(|ctx| ctx.into_boxed())
+                    DAGContext::new(dag, ranges, snap, req_ctx, batch_row_limit)
+                        .map(|ctx| ctx.into_boxed())
                 }
             }
             REQ_TYPE_ANALYZE => {
@@ -139,9 +135,7 @@ impl Service {
         is_streaming: bool,
     ) -> RequestHandlerBuilder {
         self.try_new_request_handler_builder(req, is_streaming)
-            .unwrap_or_else(|e| {
-                box move |_| Ok(cop_util::ErrorRequestHandler::from_error(e).into_boxed())
-            })
+            .unwrap_or_else(|e| box move |_| Ok(cop_util::ErrorRequestHandler::new(e).into_boxed()))
     }
 
     fn get_batch_row_limit(&self, is_streaming: bool) -> usize {
@@ -170,15 +164,14 @@ impl Service {
         req: coppb::Request,
         is_streaming: bool,
     ) -> impl Stream<Item = coppb::Response, Error = ()> {
-        let batch_row_limit = self.get_batch_row_limit(is_streaming);
         let request_handler_builder = self.new_request_handler_builder(&req, is_streaming);
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(req.get_context().get_priority());
         let result = self.read_pool.future_execute(priority, move |_ctxd| {
             Service::async_snapshot(engine, req.get_context()).and_then(move |snapshot| {
-                let mut handler = match request_handler_builder(snapshot) {
+                let handler = match request_handler_builder(snapshot) {
                     Ok(handler) => handler,
-                    Err(e) => cop_util::ErrorRequestHandler::from_error(e).into_boxed(),
+                    Err(e) => cop_util::ErrorRequestHandler::new(e).into_boxed(),
                 };
                 handler.check_if_outdated()?;
                 let resp_stream =
@@ -278,9 +271,8 @@ fn make_error_response(e: Error, metrics: &mut BasicLocalMetrics) -> coppb::Resp
         }
         Error::Full => {
             let mut errorpb = errorpb::Error::new();
-            errorpb.set_message(format!("running batches reach limit"));
             let mut server_is_busy_err = errorpb::ServerIsBusy::new();
-            server_is_busy_err.set_reason(ENDPOINT_IS_BUSY.to_owned());
+            server_is_busy_err.set_reason(COPROCESSOR_BUSY_ERROR_MSG.to_owned());
             errorpb.set_server_is_busy(server_is_busy_err);
             resp.set_region_error(errorpb);
             "full"

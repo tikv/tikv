@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error;
-
 use tipb::schema::ColumnInfo;
 use kvproto::coprocessor as coppb;
 
@@ -20,25 +18,23 @@ use super::*;
 use super::codec::mysql;
 use super::codec::datum::Datum;
 
-pub struct ErrorRequestHandler {}
+pub struct ErrorRequestHandler {
+    error: Option<Error>,
+}
 
 impl ErrorRequestHandler {
-    pub fn new(msg: &str) -> ErrorRequestHandler {
-        ErrorRequestHandler {}
-    }
-
-    pub fn from_error<T: Error>(err: T) -> ErrorRequestHandler {
-        ErrorRequestHandler::new(err.description())
+    pub fn new(error: Error) -> ErrorRequestHandler {
+        ErrorRequestHandler { error: Some(error) }
     }
 }
 
 impl RequestHandler for ErrorRequestHandler {
     fn handle_request(&mut self) -> Result<coppb::Response> {
-        unimplemented!()
+        Err(self.error.take().unwrap())
     }
 
     fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
-        unimplemented!()
+        Err(self.error.take().unwrap())
     }
 
     /// `ErrorRequestHandler` is never outdated.

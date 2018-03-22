@@ -56,13 +56,13 @@ impl ChecksumContext {
         })
     }
 
-    fn next_row(&mut self, metrics: &mut ExecutorMetrics) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+    fn next_row(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         loop {
             if let Some(scanner) = self.scanner.as_mut() {
-                metrics.scan_counter.inc_range();
+                self.metrics.scan_counter.inc_range();
                 match scanner.next_row()? {
                     Some(row) => return Ok(Some(row)),
-                    None => scanner.collect_statistics_into(&mut metrics.cf_stats),
+                    None => scanner.collect_statistics_into(&mut self.metrics.cf_stats),
                 }
             }
 
@@ -100,7 +100,7 @@ impl RequestHandler for ChecksumContext {
         let mut checksum = 0;
         let mut total_kvs = 0;
         let mut total_bytes = 0;
-        while let Some((k, v)) = self.next_row(&mut self.metrics)? {
+        while let Some((k, v)) = self.next_row()? {
             checksum = checksum_crc64_xor(checksum, &k, &v);
             total_kvs += 1;
             total_bytes += k.len() + v.len();

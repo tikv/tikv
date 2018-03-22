@@ -34,7 +34,6 @@ use super::resolve::StoreAddrResolver;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
 use super::raft_client::RaftClient;
 
-const DEFAULT_COPROCESSOR_BATCH: usize = 256;
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {

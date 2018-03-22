@@ -34,9 +34,9 @@ use storage;
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::service::Service;
 
-const REQ_TYPE_DAG: i64 = 103;
-const REQ_TYPE_ANALYZE: i64 = 104;
-const REQ_TYPE_CHECKSUM: i64 = 105;
+pub const REQ_TYPE_DAG: i64 = 103;
+pub const REQ_TYPE_ANALYZE: i64 = 104;
+pub const REQ_TYPE_CHECKSUM: i64 = 105;
 
 const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
