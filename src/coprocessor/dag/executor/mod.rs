@@ -22,7 +22,7 @@ use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{self, Datum};
 use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::endpoint::get_pk;
-use coprocessor::dag::expr::EvalContext;
+use coprocessor::dag::expr::{EvalConfig, EvalContext};
 use coprocessor::{Error, Result};
 use storage::SnapshotStore;
 use util::codec::number::NumberDecoder;
@@ -136,10 +136,20 @@ pub trait Executor {
     fn next(&mut self) -> Result<Option<Row>>;
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>);
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics);
+
+    /// Only `TableScan` and `IndexScan` need to implement `start_scan`.
+    fn start_scan(&mut self) {}
+
+    /// Only `TableScan` and `IndexScan` need to implement `stop_scan`.
+    ///
+    /// It returns a `KeyRange` the executor has scaned.
+    fn stop_scan(&mut self) -> Option<KeyRange> {
+        None
+    }
 }
 
 pub struct DAGExecutor {
-    pub exec: Box<Executor>,
+    pub exec: Box<Executor + Send>,
     pub columns: Arc<Vec<ColumnInfo>>,
     pub has_aggr: bool,
 }
@@ -148,7 +158,7 @@ pub fn build_exec(
     execs: Vec<executor::Executor>,
     store: SnapshotStore,
     ranges: Vec<KeyRange>,
-    ctx: Arc<EvalContext>,
+    ctx: Arc<EvalConfig>,
 ) -> Result<DAGExecutor> {
     let mut execs = execs.into_iter();
     let first = execs
@@ -157,7 +167,7 @@ pub fn build_exec(
     let (mut src, columns) = build_first_executor(first, store, ranges)?;
     let mut has_aggr = false;
     for mut exec in execs {
-        let curr: Box<Executor> = match exec.get_tp() {
+        let curr: Box<Executor + Send> = match exec.get_tp() {
             ExecType::TypeTableScan | ExecType::TypeIndexScan => {
                 return Err(box_err!("got too much *scan exec, should be only one"))
             }
@@ -202,7 +212,7 @@ pub fn build_exec(
     })
 }
 
-type FirstExecutor = (Box<Executor>, Arc<Vec<ColumnInfo>>);
+type FirstExecutor = (Box<Executor + Send>, Arc<Vec<ColumnInfo>>);
 
 fn build_first_executor(
     mut first: executor::Executor,
@@ -234,7 +244,7 @@ fn build_first_executor(
 }
 
 pub fn inflate_with_col_for_dag(
-    ctx: &EvalContext,
+    ctx: &mut EvalContext,
     values: &RowColsDict,
     columns: &[ColumnInfo],
     offsets: &[usize],

@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use rocksdb::{Writable, WriteBatch, DB};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
-use kvproto::eraftpb::Snapshot as RaftSnapshot;
+use raft::eraftpb::Snapshot as RaftSnapshot;
 
 use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use util::worker::Runnable;

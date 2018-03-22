@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::thread;
 
-use kvproto::eraftpb::MessageType;
+use raft::eraftpb::MessageType;
 use tikv::util::config::*;
 
 use super::util::*;
@@ -79,7 +79,7 @@ fn test_node_basic_transfer_leader() {
 
 fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     cluster.run();
 
@@ -96,12 +96,7 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for id in 1..4 {
         // select a new leader to transfer
-        pd_client.set_rule(box move |_, peer| {
-            if peer.get_id() == id {
-                return None;
-            }
-            new_pd_transfer_leader(new_peer(id, id))
-        });
+        pd_client.transfer_leader(region.get_id(), new_peer(id, id));
 
         for _ in 0..100 {
             // reset leader and wait transfer successfully.
@@ -142,9 +137,10 @@ fn test_node_pd_transfer_leader() {
 fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
+    cluster.cfg.raft_store.merge_max_log_gap = 1;
 
     let r1 = cluster.run_conf_change();
     pd_client.must_add_peer(r1, new_peer(2, 2));

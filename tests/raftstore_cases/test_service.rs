@@ -17,13 +17,15 @@ use tikv::util::HandyRwLock;
 use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT};
 use tikv::storage::mvcc::{Lock, LockType};
 use tikv::raftstore::store::{keys, Mutable, Peekable};
+use tikv::coprocessor::REQ_TYPE_DAG;
 
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::*;
 use kvproto::coprocessor::*;
-use kvproto::{debugpb, eraftpb, metapb, raft_serverpb};
+use kvproto::{debugpb, metapb, raft_serverpb};
 use kvproto::tikvpb_grpc::TikvClient;
 use kvproto::debugpb_grpc::DebugClient;
+use raft::eraftpb;
 use rocksdb::Writable;
 use futures::{future, Future, Sink, Stream};
 use grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
@@ -483,9 +485,10 @@ fn test_raft() {
 #[test]
 fn test_coprocessor() {
     let (_cluster, client, _) = must_new_cluster_and_kv_client();
-
     // SQL push down commands
-    client.coprocessor(&Request::new()).unwrap();
+    let mut req = Request::new();
+    req.set_tp(REQ_TYPE_DAG);
+    client.coprocessor(&req).unwrap();
 }
 
 #[test]

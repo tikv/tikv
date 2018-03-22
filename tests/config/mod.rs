@@ -19,7 +19,7 @@ use log::LogLevelFilter;
 use rocksdb::{CompactionPriority, DBCompressionType, DBRecoveryMode};
 use tikv::pd::Config as PdConfig;
 use tikv::server::Config as ServerConfig;
-use tikv::server::readpool::Config as ReadPoolConfig;
+use tikv::server::readpool::Config as ReadPoolInstanceConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::config::*;
@@ -70,19 +70,23 @@ fn test_serde_custom_tikv_config() {
         end_point_max_tasks: 12,
         end_point_stack_size: ReadableSize::mb(12),
         end_point_recursion_limit: 100,
+        end_point_stream_channel_size: 16,
         end_point_batch_row_limit: 64,
+        end_point_stream_batch_row_limit: 4096,
         end_point_request_max_handle_duration: ReadableDuration::secs(12),
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
         snap_max_total_size: ReadableSize::gb(10),
     };
     value.readpool = ReadPoolConfig {
-        high_concurrency: 1,
-        normal_concurrency: 3,
-        low_concurrency: 7,
-        max_tasks_high: 10000,
-        max_tasks_normal: 20000,
-        max_tasks_low: 30000,
-        stack_size: ReadableSize::mb(20),
+        storage: ReadPoolInstanceConfig {
+            high_concurrency: 1,
+            normal_concurrency: 3,
+            low_concurrency: 7,
+            max_tasks_high: 10000,
+            max_tasks_normal: 20000,
+            max_tasks_low: 30000,
+            stack_size: ReadableSize::mb(20),
+        },
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),
@@ -106,7 +110,8 @@ fn test_serde_custom_tikv_config() {
         split_region_check_tick_interval: ReadableDuration::secs(12),
         region_split_check_diff: ReadableSize::mb(6),
         region_compact_check_interval: ReadableDuration::secs(12),
-        region_compact_delete_keys_count: 1_234,
+        region_compact_check_step: 1_234,
+        region_compact_min_tombstones: 999,
         pd_heartbeat_tick_interval: ReadableDuration::minutes(12),
         pd_store_heartbeat_tick_interval: ReadableDuration::secs(12),
         notify_capacity: 12_345,
@@ -124,6 +129,8 @@ fn test_serde_custom_tikv_config() {
         raft_store_max_leader_lease: ReadableDuration::secs(12),
         right_derive_when_split: false,
         allow_remove_leader: true,
+        merge_max_log_gap: 3,
+        merge_check_tick_interval: ReadableDuration::secs(11),
         use_delete_range: false,
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),

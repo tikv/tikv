@@ -21,7 +21,7 @@ use tikv::raftstore::Result;
 use tikv::raftstore::store::Msg;
 use tikv::util::HandyRwLock;
 use tikv::util::config::*;
-use kvproto::eraftpb::{Message, MessageType};
+use raft::eraftpb::{Message, MessageType};
 use kvproto::raft_serverpb::RaftMessage;
 
 use super::transport_simulate::*;
@@ -36,7 +36,7 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(500);
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
 
@@ -102,15 +102,12 @@ fn test_server_huge_snapshot() {
 }
 
 fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
-    // truncate the log quickly so that we can force sending snapshot.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
-    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+    configure_for_snapshot(cluster);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(2);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
     pd_client.must_add_peer(r1, new_peer(2, 2));
@@ -211,7 +208,7 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
@@ -259,10 +256,7 @@ fn test_server_concurrent_snap() {
 }
 
 fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
-    // truncate the log quickly so that we can force sending snapshot.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
-    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+    configure_for_snapshot(cluster);
 
     cluster.run();
     let cf = "lock";
@@ -352,7 +346,7 @@ fn test_node_stale_snap() {
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
     // add peer (2,2) to region 1.
@@ -432,14 +426,11 @@ impl Filter<Msg> for SnapshotAppendFilter {
 }
 
 fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
-    // truncate the log quickly so that we can force sending snapshot.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
-    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+    configure_for_snapshot(cluster);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
     cluster.run();
 
     pd_client.must_remove_peer(1, new_peer(4, 4));

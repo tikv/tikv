@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{self, Arc};
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::rc::Rc;
@@ -24,9 +24,9 @@ use rocksdb::{Writable, WriteBatch, DB};
 use protobuf::Message;
 
 use kvproto::metapb::{self, Region};
-use kvproto::eraftpb::{ConfState, Entry, HardState, Snapshot};
-use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData,
-                             RegionLocalState};
+use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
+use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftLocalState,
+                             RaftSnapshotData, RegionLocalState};
 use util::worker::Scheduler;
 use util::{self, rocksdb};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
@@ -282,12 +282,6 @@ where
 impl From<Error> for RaftError {
     fn from(err: Error) -> RaftError {
         storage_error(err)
-    }
-}
-
-impl<T> From<sync::PoisonError<T>> for RaftError {
-    fn from(_: sync::PoisonError<T>) -> RaftError {
-        storage_error("lock failed")
     }
 }
 
@@ -1134,11 +1128,11 @@ pub fn fetch_entries_to(
         // to fetch one empty log.
         for i in low..high {
             let key = keys::raft_log_key(region_id, i);
-            match box_try!(engine.get(&key)) {
-                None => return Err(RaftError::Store(StorageError::Unavailable)),
-                Some(v) => {
+            match engine.get(&key) {
+                Ok(None) => return Err(RaftError::Store(StorageError::Unavailable)),
+                Ok(Some(v)) => {
                     let mut entry = Entry::new();
-                    box_try!(entry.merge_from_bytes(&v));
+                    entry.merge_from_bytes(&v)?;
                     assert_eq!(entry.get_index(), i);
                     total_size += v.len() as u64;
                     if buf.is_empty() || total_size <= max_size {
@@ -1148,6 +1142,7 @@ pub fn fetch_entries_to(
                         break;
                     }
                 }
+                Err(e) => return Err(storage_error(e)),
             }
         }
         return Ok(total_size);
@@ -1235,10 +1230,10 @@ pub fn do_snapshot(
     let apply_state: RaftApplyState =
         match snap.get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))? {
             None => {
-                return Err(box_err!(
+                return Err(storage_error(format!(
                     "could not load raft state of region {}",
                     region_id
-                ))
+                )))
             }
             Some(state) => state,
         };
@@ -1248,7 +1243,12 @@ pub fn do_snapshot(
         apply_state.get_truncated_state().get_term()
     } else {
         match raft_db.get_msg::<Entry>(&keys::raft_log_key(region_id, idx))? {
-            None => return Err(box_err!("entry {} of {} not found.", idx, region_id)),
+            None => {
+                return Err(storage_error(format!(
+                    "entry {} of {} not found.",
+                    idx, region_id
+                )))
+            }
             Some(entry) => entry.get_term(),
         }
     };
@@ -1265,7 +1265,10 @@ pub fn do_snapshot(
         })?;
 
     if state.get_state() != PeerState::Normal {
-        return Err(box_err!("snap job for {} seems stale, skip.", region_id));
+        return Err(storage_error(format!(
+            "snap job for {} seems stale, skip.",
+            region_id
+        )));
     }
 
     let mut snapshot = Snapshot::new();
@@ -1294,7 +1297,7 @@ pub fn do_snapshot(
         Box::new(mgr.clone()),
     )?;
     let mut v = vec![];
-    box_try!(snap_data.write_to_vec(&mut v));
+    snap_data.write_to_vec(&mut v)?;
     snapshot.set_data(v);
 
     SNAPSHOT_KV_COUNT_HISTOGRAM.observe(stat.kv_count as f64);
@@ -1350,6 +1353,35 @@ pub fn write_peer_state<T: Mutable>(
     Ok(())
 }
 
+pub fn mark_merge_done<T: Mutable>(
+    kv_engine: &DB,
+    kv_wb: &T,
+    region: &metapb::Region,
+    target: &metapb::Region,
+) -> Result<()> {
+    let mut merge_state = MergeState::new();
+    merge_state.set_target(target.to_owned());
+    write_merge_state(kv_engine, kv_wb, region, PeerState::Tombstone, merge_state)
+}
+
+pub fn write_merge_state<T: Mutable>(
+    kv_engine: &DB,
+    kv_wb: &T,
+    region: &metapb::Region,
+    state: PeerState,
+    merge_state: MergeState,
+) -> Result<()> {
+    let region_id = region.get_id();
+    let mut region_state = RegionLocalState::new();
+    region_state.set_state(state);
+    region_state.set_region(region.clone());
+    region_state.set_merge_state(merge_state);
+
+    let handle = rocksdb::get_cf_handle(kv_engine, CF_RAFT)?;
+    kv_wb.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
+    Ok(())
+}
+
 impl Storage for PeerStorage {
     fn initial_state(&self) -> raft::Result<RaftState> {
         self.initial_state()
@@ -1385,7 +1417,7 @@ mod test {
     use std::cell::RefCell;
     use std::time::Duration;
     use std::path::Path;
-    use kvproto::eraftpb::{ConfState, Entry};
+    use raft::eraftpb::{ConfState, Entry};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::{Error as RaftError, StorageError};
     use tempdir::*;
@@ -1397,7 +1429,7 @@ mod test {
     use util::worker::{Scheduler, Worker};
     use util::rocksdb::new_engine;
     use storage::{ALL_CFS, CF_DEFAULT};
-    use kvproto::eraftpb::HardState;
+    use raft::eraftpb::HardState;
     use rocksdb::WriteBatch;
 
     use super::*;

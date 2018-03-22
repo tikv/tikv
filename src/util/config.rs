@@ -749,6 +749,7 @@ mod check_data_dir {
     use std::io::Read;
     use std::ffi::{CStr, CString};
     use std::path::Path;
+    use std::sync::Mutex;
     use libc;
 
     use super::{canonicalize_path, ConfigError};
@@ -762,7 +763,16 @@ mod check_data_dir {
     }
 
     fn get_fs_info(path: &str, mnt_file: &str) -> Result<FsInfo, ConfigError> {
+        lazy_static! {
+            // According `man 3 getmntent`, The pointer returned by `getmntent` points
+            // to a static area of memory which is overwritten by subsequent calls.
+            // So we use a lock to protect it in order to avoid `make dev` fail.
+            static ref GETMNTENT_LOCK: Mutex<()> = Mutex::new(());
+        }
+
         unsafe {
+            let _lock = GETMNTENT_LOCK.lock().unwrap();
+
             let profile = CString::new(mnt_file).unwrap();
             let retype = CString::new("r").unwrap();
             let afile = libc::setmntent(profile.as_ptr(), retype.as_ptr());
