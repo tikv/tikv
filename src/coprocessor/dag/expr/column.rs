@@ -103,26 +103,26 @@ mod test {
             EvalResults(None, None, None, None, None, Some(dur.clone()), None),
         ];
 
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
         for (ii, exp) in expecteds.iter().enumerate().take(row.len()) {
             let c = col_expr(ii as i64);
-            let e = Expression::build(&ctx, c).unwrap();
+            let e = Expression::build(&mut ctx, c).unwrap();
 
-            let i = e.eval_int(&ctx, &row).unwrap_or(None);
-            let r = e.eval_real(&ctx, &row).unwrap_or(None);
-            let dec = e.eval_decimal(&ctx, &row)
+            let i = e.eval_int(&mut ctx, &row).unwrap_or(None);
+            let r = e.eval_real(&mut ctx, &row).unwrap_or(None);
+            let dec = e.eval_decimal(&mut ctx, &row)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let s = e.eval_string(&ctx, &row)
+            let s = e.eval_string(&mut ctx, &row)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let t = e.eval_time(&ctx, &row)
+            let t = e.eval_time(&mut ctx, &row)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let dur = e.eval_duration(&ctx, &row)
+            let dur = e.eval_duration(&mut ctx, &row)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let j = e.eval_json(&ctx, &row)
+            let j = e.eval_json(&mut ctx, &row)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
 

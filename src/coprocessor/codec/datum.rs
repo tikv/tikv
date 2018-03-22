@@ -97,7 +97,7 @@ fn checked_add_i64(l: u64, r: i64) -> Option<u64> {
 }
 
 impl Datum {
-    pub fn cmp(&self, ctx: &EvalContext, datum: &Datum) -> Result<Ordering> {
+    pub fn cmp(&self, ctx: &mut EvalContext, datum: &Datum) -> Result<Ordering> {
         if let Datum::Json(_) = *self {
             if let Datum::Json(_) = *datum {
             } else {
@@ -132,7 +132,7 @@ impl Datum {
         }
     }
 
-    fn cmp_i64(&self, ctx: &EvalContext, i: i64) -> Result<Ordering> {
+    fn cmp_i64(&self, ctx: &mut EvalContext, i: i64) -> Result<Ordering> {
         match *self {
             Datum::I64(ii) => Ok(ii.cmp(&i)),
             Datum::U64(u) => if i < 0 || u > i64::MAX as u64 {
@@ -144,7 +144,7 @@ impl Datum {
         }
     }
 
-    fn cmp_u64(&self, ctx: &EvalContext, u: u64) -> Result<Ordering> {
+    fn cmp_u64(&self, ctx: &mut EvalContext, u: u64) -> Result<Ordering> {
         match *self {
             Datum::I64(i) => if i < 0 || u > i64::MAX as u64 {
                 Ok(Ordering::Less)
@@ -156,7 +156,7 @@ impl Datum {
         }
     }
 
-    fn cmp_f64(&self, ctx: &EvalContext, f: f64) -> Result<Ordering> {
+    fn cmp_f64(&self, ctx: &mut EvalContext, f: f64) -> Result<Ordering> {
         match *self {
             Datum::Null | Datum::Min => Ok(Ordering::Less),
             Datum::Max => Ok(Ordering::Greater),
@@ -183,7 +183,7 @@ impl Datum {
         }
     }
 
-    fn cmp_bytes(&self, ctx: &EvalContext, bs: &[u8]) -> Result<Ordering> {
+    fn cmp_bytes(&self, ctx: &mut EvalContext, bs: &[u8]) -> Result<Ordering> {
         match *self {
             Datum::Null | Datum::Min => Ok(Ordering::Less),
             Datum::Max => Ok(Ordering::Greater),
@@ -195,7 +195,7 @@ impl Datum {
             }
             Datum::Time(ref t) => {
                 let s = str::from_utf8(bs)?;
-                let t2 = Time::parse_datetime(s, DEFAULT_FSP, &ctx.tz)?;
+                let t2 = Time::parse_datetime(s, DEFAULT_FSP, &ctx.cfg.tz)?;
                 Ok(t.cmp(&t2))
             }
             Datum::Dur(ref d) => {
@@ -209,7 +209,7 @@ impl Datum {
         }
     }
 
-    fn cmp_dec(&self, ctx: &EvalContext, dec: &Decimal) -> Result<Ordering> {
+    fn cmp_dec(&self, ctx: &mut EvalContext, dec: &Decimal) -> Result<Ordering> {
         match *self {
             Datum::Dec(ref d) => Ok(d.cmp(dec)),
             Datum::Bytes(ref bs) => {
@@ -224,7 +224,7 @@ impl Datum {
         }
     }
 
-    fn cmp_dur(&self, ctx: &EvalContext, d: &Duration) -> Result<Ordering> {
+    fn cmp_dur(&self, ctx: &mut EvalContext, d: &Duration) -> Result<Ordering> {
         match *self {
             Datum::Dur(ref d2) => Ok(d2.cmp(d)),
             Datum::Bytes(ref bs) => {
@@ -235,11 +235,11 @@ impl Datum {
         }
     }
 
-    fn cmp_time(&self, ctx: &EvalContext, time: &Time) -> Result<Ordering> {
+    fn cmp_time(&self, ctx: &mut EvalContext, time: &Time) -> Result<Ordering> {
         match *self {
             Datum::Bytes(ref bs) => {
                 let s = str::from_utf8(bs)?;
-                let t = Time::parse_datetime(s, DEFAULT_FSP, &ctx.tz)?;
+                let t = Time::parse_datetime(s, DEFAULT_FSP, &ctx.cfg.tz)?;
                 Ok(t.cmp(time))
             }
             Datum::Time(ref t) => Ok(t.cmp(time)),
@@ -274,7 +274,7 @@ impl Datum {
 
     /// `into_bool` converts self to a bool.
     /// source function name is `ToBool`.
-    pub fn into_bool(self, ctx: &EvalContext) -> Result<Option<bool>> {
+    pub fn into_bool(self, ctx: &mut EvalContext) -> Result<Option<bool>> {
         let b = match self {
             Datum::I64(i) => Some(i != 0),
             Datum::U64(u) => Some(u != 0),
@@ -317,7 +317,7 @@ impl Datum {
 
     /// `into_f64` converts self into f64.
     /// source function name is `ToFloat64`.
-    pub fn into_f64(self, ctx: &EvalContext) -> Result<f64> {
+    pub fn into_f64(self, ctx: &mut EvalContext) -> Result<f64> {
         match self {
             Datum::I64(i) => Ok(i as f64),
             Datum::U64(u) => Ok(u as f64),
@@ -366,7 +366,7 @@ impl Datum {
 
     /// into_arith converts datum to appropriate datum for arithmetic computing.
     /// Keep compatible with TiDB's `CoerceArithmetic` function.
-    pub fn into_arith(self, ctx: &EvalContext) -> Result<Datum> {
+    pub fn into_arith(self, ctx: &mut EvalContext) -> Result<Datum> {
         match self {
             // MySQL will convert string to float for arithmetic operation
             Datum::Bytes(bs) => convert::bytes_to_f64(ctx, &bs).map(From::from),
@@ -500,7 +500,7 @@ impl Datum {
         Ok(res)
     }
 
-    pub fn checked_div(self, ctx: &EvalContext, d: Datum) -> Result<Datum> {
+    pub fn checked_div(self, ctx: &mut EvalContext, d: Datum) -> Result<Datum> {
         match (self, d) {
             (Datum::F64(f), d) => {
                 let f2 = d.into_f64(ctx)?;
@@ -524,7 +524,7 @@ impl Datum {
     }
 
     /// Keep compatible with TiDB's `ComputePlus` function.
-    pub fn checked_add(self, _: &EvalContext, d: Datum) -> Result<Datum> {
+    pub fn checked_add(self, _: &mut EvalContext, d: Datum) -> Result<Datum> {
         let res: Datum = match (&self, &d) {
             (&Datum::I64(l), &Datum::I64(r)) => l.checked_add(r).into(),
             (&Datum::I64(l), &Datum::U64(r)) | (&Datum::U64(r), &Datum::I64(l)) => {
@@ -552,7 +552,7 @@ impl Datum {
     }
 
     /// `checked_minus` computes the result of `self - d`.
-    pub fn checked_minus(self, _: &EvalContext, d: Datum) -> Result<Datum> {
+    pub fn checked_minus(self, _: &mut EvalContext, d: Datum) -> Result<Datum> {
         let res = match (&self, &d) {
             (&Datum::I64(l), &Datum::I64(r)) => l.checked_sub(r).into(),
             (&Datum::I64(l), &Datum::U64(r)) => if l < 0 {
@@ -580,7 +580,7 @@ impl Datum {
     }
 
     // `checked_mul` computes the result of a * b.
-    pub fn checked_mul(self, _: &EvalContext, d: Datum) -> Result<Datum> {
+    pub fn checked_mul(self, _: &mut EvalContext, d: Datum) -> Result<Datum> {
         let res = match (&self, &d) {
             (&Datum::I64(l), &Datum::I64(r)) => l.checked_mul(r).into(),
             (&Datum::I64(l), &Datum::U64(r)) | (&Datum::U64(r), &Datum::I64(l)) => {
@@ -602,7 +602,7 @@ impl Datum {
     }
 
     // `checked_rem` computes the result of a mod b.
-    pub fn checked_rem(self, _: &EvalContext, d: Datum) -> Result<Datum> {
+    pub fn checked_rem(self, _: &mut EvalContext, d: Datum) -> Result<Datum> {
         match d {
             Datum::I64(0) | Datum::U64(0) => return Ok(Datum::Null),
             Datum::F64(f) if f == 0f64 => return Ok(Datum::Null),
@@ -630,7 +630,7 @@ impl Datum {
     }
 
     // `checked_int_div` computes the result of a / b, both a and b are integer.
-    pub fn checked_int_div(self, _: &EvalContext, d: Datum) -> Result<Datum> {
+    pub fn checked_int_div(self, _: &mut EvalContext, d: Datum) -> Result<Datum> {
         match d {
             Datum::I64(0) | Datum::U64(0) => return Ok(Datum::Null),
             _ => {}
@@ -970,6 +970,7 @@ mod test {
     use util::as_slice;
 
     use std::cmp::Ordering;
+    use std::sync::Arc;
     use std::time::Duration as StdDuration;
     use std::{i16, i32, i64, i8, u16, u32, u64, u8};
 
@@ -1590,15 +1591,15 @@ mod test {
                 Ordering::Less,
             ),
         ];
-
+        let mut ctx = EvalContext::default();
         for (lhs, rhs, ret) in tests {
-            if ret != lhs.cmp(&Default::default(), &rhs).unwrap() {
+            if ret != lhs.cmp(&mut ctx, &rhs).unwrap() {
                 panic!("{:?} should be {:?} to {:?}", lhs, ret, rhs);
             }
 
             let rev_ret = ret.reverse();
 
-            if rev_ret != rhs.cmp(&Default::default(), &lhs).unwrap() {
+            if rev_ret != rhs.cmp(&mut ctx, &lhs).unwrap() {
                 panic!("{:?} should be {:?} to {:?}", rhs, rev_ret, lhs);
             }
 
@@ -1653,17 +1654,13 @@ mod test {
             ),
             (Datum::Dec(0u64.into()), Some(false)),
         ];
-        use chrono::FixedOffset;
-        use coprocessor::dag::expr::EvalContext;
+        use coprocessor::dag::expr::{EvalConfig, EvalContext, FLAG_IGNORE_TRUNCATE};
 
-        let ctx = EvalContext {
-            tz: FixedOffset::east(0),
-            ignore_truncate: true,
-            truncate_as_warning: true,
-        };
+        let cfg = EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
+        let mut ctx = EvalContext::new(Arc::new(cfg));
 
         for (d, b) in tests {
-            if d.clone().into_bool(&ctx).unwrap() != b {
+            if d.clone().into_bool(&mut ctx).unwrap() != b {
                 panic!("expect {:?} to be {:?}", d, b);
             }
         }
