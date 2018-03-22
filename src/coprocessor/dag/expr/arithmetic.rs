@@ -19,7 +19,7 @@ use coprocessor::codec::mysql::{Decimal, Res};
 use super::{Error, EvalContext, FnCall, Result};
 
 impl FnCall {
-    pub fn plus_real(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn plus_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let lhs = try_opt!(self.children[0].eval_real(ctx, row));
         let rhs = try_opt!(self.children[1].eval_real(ctx, row));
         let res = lhs + rhs;
@@ -31,7 +31,7 @@ impl FnCall {
 
     pub fn plus_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
@@ -40,7 +40,7 @@ impl FnCall {
         result.map(|t| Some(Cow::Owned(t)))
     }
 
-    pub fn plus_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn plus_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try_opt!(self.children[0].eval_int(ctx, row));
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
         let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
@@ -66,7 +66,7 @@ impl FnCall {
         res.ok_or(Error::Overflow).map(Some)
     }
 
-    pub fn minus_real(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn minus_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let lhs = try_opt!(self.children[0].eval_real(ctx, row));
         let rhs = try_opt!(self.children[1].eval_real(ctx, row));
         let res = lhs - rhs;
@@ -78,7 +78,7 @@ impl FnCall {
 
     pub fn minus_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
@@ -87,7 +87,7 @@ impl FnCall {
         result.map(Cow::Owned).map(Some)
     }
 
-    pub fn minus_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn minus_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try_opt!(self.children[0].eval_int(ctx, row));
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
         let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
@@ -111,7 +111,7 @@ impl FnCall {
         res.ok_or(Error::Overflow).map(Some)
     }
 
-    pub fn multiply_real(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn multiply_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let lhs = try_opt!(self.children[0].eval_real(ctx, row));
         let rhs = try_opt!(self.children[1].eval_real(ctx, row));
         let res = lhs * rhs;
@@ -123,7 +123,7 @@ impl FnCall {
 
     pub fn multiply_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
@@ -132,7 +132,7 @@ impl FnCall {
         result.map(Cow::Owned).map(Some)
     }
 
-    pub fn multiply_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn multiply_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try_opt!(self.children[0].eval_int(ctx, row));
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
         let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
@@ -153,7 +153,7 @@ impl FnCall {
         res.ok_or(Error::Overflow).map(Some)
     }
 
-    pub fn divide_real(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn divide_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let lhs = try_opt!(self.children[0].eval_real(ctx, row));
         let rhs = try_opt!(self.children[1].eval_real(ctx, row));
         if rhs == 0f64 {
@@ -169,7 +169,7 @@ impl FnCall {
 
     pub fn divide_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
@@ -245,7 +245,7 @@ mod test {
                 Datum::I64(i64::MIN),
             ),
         ];
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
         for tt in tests {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
@@ -254,13 +254,13 @@ mod test {
             let rus = mysql::has_unsigned_flag(rhs.get_field_type().get_flag());
             let unsigned = lus | rus;
 
-            let mut op = Expression::build(&ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
+            let mut op = Expression::build(&mut ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
             if unsigned {
                 // According to TiDB, the result is unsigned if any of arguments is unsigned.
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
 
-            let got = op.eval(&ctx, &[]).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, tt.3);
         }
     }
@@ -323,13 +323,13 @@ mod test {
                //     Datum::F64(41f64)
                // )
         ];
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
         for tt in tests {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let op = Expression::build(&ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
-            let got = op.eval(&ctx, &[]).unwrap();
+            let op = Expression::build(&mut ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, tt.3);
         }
     }
@@ -386,13 +386,13 @@ mod test {
                 Datum::Null,
             ),
         ];
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
         for tt in tests {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let op = Expression::build(&ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
-            let got = op.eval(&ctx, &[]).unwrap();
+            let op = Expression::build(&mut ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, tt.3);
         }
     }
@@ -440,7 +440,7 @@ mod test {
                 Datum::U64(1),
             ),
         ];
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
         for tt in tests {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
@@ -449,13 +449,13 @@ mod test {
             let rus = mysql::has_unsigned_flag(rhs.get_field_type().get_flag());
             let unsigned = lus | rus;
 
-            let mut op = Expression::build(&ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
+            let mut op = Expression::build(&mut ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
             if unsigned {
                 // According to TiDB, the result is unsigned if any of arguments is unsigned.
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
 
-            let got = op.eval(&ctx, &[]).unwrap_err();
+            let got = op.eval(&mut ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
     }
@@ -484,13 +484,13 @@ mod test {
                 Datum::F64(0.00001),
             ),
         ];
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
         for tt in tests {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let op = Expression::build(&ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
-            let got = op.eval(&ctx, &[]).unwrap_err();
+            let op = Expression::build(&mut ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
     }
