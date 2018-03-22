@@ -1171,7 +1171,7 @@ fn dump_snap_meta_file(path: &str) {
 
     let mut meta = SnapshotMeta::new();
     meta.merge_from_bytes(&content)
-        .unwrap_or_else(|e| panic!("parse from bytes errro {:?}", e));
+        .unwrap_or_else(|e| panic!("parse from bytes error {:?}", e));
     for cf_file in meta.get_cf_files() {
         println!(
             "cf {}, size {}, checksum: {}",
