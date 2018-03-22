@@ -1834,13 +1834,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_ready_commit_merge(&mut self, region: metapb::Region, source: metapb::Region) {
         let source_peer = {
             let peer = self.region_peers.get_mut(&source.get_id()).unwrap();
-            // In some case, PrepareMerge entry may be carried by the dst region. So
-            // the peer is not in merging mode.
-            if peer.pending_merge.is_none() {
-                let mut state = MergeState::new();
-                state.set_target(region.clone());
-                peer.pending_merge = Some(state);
-            }
+            assert!(peer.pending_merge.is_some());
             peer.peer.clone()
         };
         self.destroy_peer(source.get_id(), source_peer, true);
