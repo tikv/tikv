@@ -17,7 +17,6 @@ use std::sync::Arc;
 use fail;
 use futures::Future;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
-use tikv::util::config::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
 use tikv::storage::CF_RAFT;
@@ -32,7 +31,7 @@ use raftstore::util::*;
 fn test_node_merge_rollback() {
     let _guard = ::setup();
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
+    configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -117,7 +116,7 @@ fn test_node_merge_rollback() {
 fn test_node_merge_restart() {
     let _guard = ::setup();
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
+    configure_for_merge(&mut cluster);
     cluster.run();
 
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -192,8 +191,9 @@ fn test_node_merge_restart() {
 fn test_node_merge_recover_snapshot() {
     let _guard = ::setup();
     let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 12;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
-    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 

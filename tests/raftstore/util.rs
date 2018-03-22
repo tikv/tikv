@@ -458,9 +458,18 @@ pub fn create_test_engine(
 }
 
 pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
-    // truncate the log quickly so that we can force sending snapshot.
+    // Truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
     cluster.cfg.raft_store.merge_max_log_gap = 1;
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+}
+
+pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
+    // Avoid log compaction which will prevent merge.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
+    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    // Make merge check resume quickly.
+    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
 }
