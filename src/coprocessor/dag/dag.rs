@@ -20,7 +20,7 @@ use protobuf::{Message as PbMsg, RepeatedField};
 
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
-use coprocessor::dag::expr::EvalContext;
+use coprocessor::dag::expr::EvalConfig;
 use coprocessor::Result;
 use coprocessor::endpoint::{get_pk, ReqContext};
 use storage::{Snapshot, SnapshotStore};
@@ -42,7 +42,7 @@ impl DAGContext {
         snap: Box<Snapshot>,
         req_ctx: ReqContext,
     ) -> Result<DAGContext> {
-        let eval_ctx = Arc::new(box_try!(EvalContext::new(
+        let eval_cfg = Arc::new(box_try!(EvalConfig::new(
             req.get_time_zone_offset(),
             req.get_flags()
         )));
@@ -53,7 +53,7 @@ impl DAGContext {
             req_ctx.fill_cache,
         );
 
-        let dag_executor = build_exec(req.take_executors().into_vec(), store, ranges, eval_ctx)?;
+        let dag_executor = build_exec(req.take_executors().into_vec(), store, ranges, eval_cfg)?;
         Ok(DAGContext {
             columns: dag_executor.columns,
             has_aggr: dag_executor.has_aggr,
