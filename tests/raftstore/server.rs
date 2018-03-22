@@ -169,7 +169,6 @@ impl Simulator for ServerCluster {
         cfg.server.addr = format!("{}", addr);
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans.clone());
-        let server_cfg = Arc::new(cfg.server.clone());
 
         // Create node.
         let mut node = Node::new(

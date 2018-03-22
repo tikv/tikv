@@ -12,13 +12,13 @@
 // limitations under the License.
 
 mod metrics;
-mod dag;
-mod statistics;
-mod checksum;
-mod service;
-mod util;
 mod readpool_context;
-pub mod local_metrics;
+mod local_metrics;
+pub mod dag;
+pub mod statistics;
+pub mod checksum;
+pub mod service;
+pub mod util;
 pub mod codec;
 
 use std::boxed::FnBox;
