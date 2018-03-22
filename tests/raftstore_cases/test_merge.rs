@@ -99,10 +99,9 @@ fn test_node_base_merge() {
                 .unwrap()
                 .unwrap();
             if state.get_state() == PeerState::Tombstone {
-                let region = state.get_region();
-                if region.get_region_epoch().get_version() == version + 1 {
-                    assert_eq!(region.get_region_epoch().get_conf_ver(), conf_ver + 1);
-                }
+                let epoch = state.get_region().get_region_epoch();
+                assert_eq!(epoch.get_version(), version + 1);
+                assert_eq!(epoch.get_conf_ver(), conf_ver + 1);
                 continue 'outer;
             }
             thread::sleep(Duration::from_millis(500));
