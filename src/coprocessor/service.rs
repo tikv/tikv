@@ -35,7 +35,6 @@ use super::local_metrics::BasicLocalMetrics;
 const OUTDATED_ERROR_MSG: &str = "request outdated.";
 const ENDPOINT_IS_BUSY: &str = "endpoint is busy";
 
-#[derive(Clone)]
 pub struct Service {
     engine: Box<storage::Engine>,
     read_pool: ReadPool<ReadPoolContext>,
@@ -43,6 +42,16 @@ pub struct Service {
     batch_row_limit: usize,
     stream_batch_row_limit: usize,
     max_handle_duration: Duration,
+}
+
+impl Clone for Service {
+    fn clone(&self) -> Self {
+        Service {
+            engine: self.engine.clone(),
+            read_pool: self.read_pool.clone(),
+            ..*self
+        }
+    }
 }
 
 impl util::AssertSend for Service {}
@@ -73,7 +82,7 @@ impl Service {
 
         let ranges = req.get_ranges().to_vec();
 
-        let builder = match req.get_tp() {
+        let builder: RequestHandlerBuilder = match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut dag = DAGRequest::new();
                 box_try!(dag.merge_from(&mut is));
@@ -84,7 +93,9 @@ impl Service {
                 let start_ts = dag.get_start_ts();
                 let req_ctx =
                     ReqContext::new(req.get_context(), table_scan, self.max_handle_duration);
-                box move |snap| DAGContext::new(dag, ranges, snap, req_ctx)
+                box move |snap| {
+                    DAGContext::new(dag, ranges, snap, req_ctx).map(|ctx| ctx.into_boxed())
+                }
             }
             REQ_TYPE_ANALYZE => {
                 let mut analyze = AnalyzeReq::new();
@@ -93,7 +104,9 @@ impl Service {
                 let start_ts = analyze.get_start_ts();
                 let req_ctx =
                     ReqContext::new(req.get_context(), table_scan, self.max_handle_duration);
-                box move |snap| AnalyzeContext::new(analyze, ranges, snap, req_ctx)
+                box move |snap| {
+                    AnalyzeContext::new(analyze, ranges, snap, req_ctx).map(|ctx| ctx.into_boxed())
+                }
             }
             REQ_TYPE_CHECKSUM => {
                 let mut checksum = ChecksumRequest::new();
@@ -102,7 +115,10 @@ impl Service {
                 let start_ts = checksum.get_start_ts();
                 let req_ctx =
                     ReqContext::new(req.get_context(), table_scan, self.max_handle_duration);
-                box move |snap| ChecksumContext::new(checksum, ranges, snap, req_ctx)
+                box move |snap| {
+                    ChecksumContext::new(checksum, ranges, snap, req_ctx)
+                        .map(|ctx| ctx.into_boxed())
+                }
             }
             tp => return Err(box_err!("unsupported tp {}", tp)),
         };
@@ -112,7 +128,9 @@ impl Service {
     /// Creates a `RequestHandlerBuilder`.
     fn new_request_handler_builder(&self, req: &coppb::Request) -> RequestHandlerBuilder {
         self.try_new_request_handler_builder(req)
-            .unwrap_or_else(|e| box move |_| Ok(cop_util::ErrorRequestHandler::from_error(e)))
+            .unwrap_or_else(|e| {
+                box move |_| Ok(cop_util::ErrorRequestHandler::from_error(e).into_boxed())
+            })
     }
 
     fn get_batch_row_limit(&self, is_streaming: bool) -> usize {
@@ -126,12 +144,14 @@ impl Service {
     fn async_snapshot(
         engine: Box<storage::Engine>,
         ctx: &kvrpcpb::Context,
-    ) -> impl Future<Item = Box<storage::Snapshot + 'static>, Error = Error> {
+    ) -> impl Future<Item = Box<storage::Snapshot>, Error = Error> {
         let (callback, future) = util::future::paired_future_callback();
         let val = engine.async_snapshot(ctx, callback);
         future::result(val)
             .and_then(|_| future.map_err(|cancel| storage::Engine::Error::Other(box_err!(cancel))))
             .and_then(|(_ctx, result)| result)
+            // map engine::Error -> coprocessor::Error
+            .map_err(Error::from)
     }
 
     fn handle_request(
@@ -144,16 +164,14 @@ impl Service {
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(req.get_context().get_priority());
         let result = self.read_pool.future_execute(priority, move |_ctxd| {
-            Service::async_snapshot(engine, req.get_context())
-                // map engine::Error -> coprocessor::Error
-                .map_err(Error::from)
-                .and_then(|snapshot| {
-                    let mut handler: Box<RequestHandler> = match request_handler_builder(snapshot) {
-                        Ok(handler) => handler,
-                        Err(e) => cop_util::ErrorRequestHandler::from_error(e),
-                    };
-                    handler.check_if_outdated()?;
-                    let resp_stream: Box<_> = if use_streaming_interface {
+            Service::async_snapshot(engine, req.get_context()).and_then(|snapshot| {
+                let mut handler: Box<RequestHandler> = match request_handler_builder(snapshot) {
+                    Ok(handler) => handler,
+                    Err(e) => cop_util::ErrorRequestHandler::from_error(e).into_boxed(),
+                };
+                handler.check_if_outdated()?;
+                let resp_stream: Box<Stream<Item = _, Error = _> + Send> =
+                    if use_streaming_interface {
                         box stream::once(handler.handle_request(batch_row_limit))
                     } else {
                         box stream::unfold((handler, false), move |(mut handler, finished)| {
@@ -161,35 +179,38 @@ impl Service {
                                 return None;
                             }
                             match handler.handle_streaming_request(batch_row_limit) {
-                                Ok((None, _)) => {
-                                    None
-                                }
+                                Ok((None, _)) => None,
                                 Ok((Some(resp), finished)) => {
                                     let yielded = resp;
                                     let next_state = (handler, finished);
                                     Some(Ok((yielded, next_state)))
-                                },
-                                Err(e) => {
-                                    Some(Err(e))
                                 }
+                                Err(e) => Some(Err(e)),
                             }
                         })
                     };
-                    Ok(resp_stream)
-                })
+                Ok(resp_stream)
+            })
         });
         let future_of_stream = future::result(result).map_err(|_| Error::Full).flatten();
-        stream::once(future_of_stream).flatten().then(|result| {
-            // TODO: Can be simplified using recover() in futures 0.2.
-            let resp = match result {
-                Ok(resp) => resp,
-                Err(e) => {
-                    let mut metrics = BasicLocalMetrics::default();
-                    make_error_response(e, &mut metrics)
-                }
-            };
-            Ok::<_, ()>(resp)
-        })
+        stream::unfold(true, move |is_initial| {
+            // TODO: Can be simplified using `stream::once(future_of_stream)` in futures 0.2.
+            if !is_initial {
+                return None;
+            }
+            Some(future_of_stream.map(|stream| (stream, false)))
+        }).flatten()
+            .then(|result| {
+                // TODO: Can be simplified using `recover()` in futures 0.2.
+                let resp = match result {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        let mut metrics = BasicLocalMetrics::default();
+                        make_error_response(e, &mut metrics)
+                    }
+                };
+                Ok::<_, ()>(resp)
+            })
     }
 
     pub fn handle_stream_request(
@@ -205,7 +226,7 @@ impl Service {
     ) -> impl Future<Item = coppb::Response, Error = ()> {
         self.handle_request(req, false)
             .take(1)
-            .fold(None, |_, resp| Some(resp))
+            .fold(None, |_, resp| Ok(Some(resp)))
             .then(|result| {
                 let resp = match result {
                     Ok(Some(resp)) => resp,

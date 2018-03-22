@@ -29,7 +29,7 @@ use std::time::Duration;
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 
 use util::time::Instant;
-use storage::{self, engine, mvcc, txn};
+use storage;
 
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::service::Service;
@@ -64,19 +64,19 @@ quick_error! {
 
 pub type Result<T> = result::Result<T, Error>;
 
-impl From<engine::Error> for Error {
-    fn from(e: engine::Error) -> Error {
+impl From<storage::engine::Error> for Error {
+    fn from(e: storage::engine::Error) -> Error {
         match e {
-            engine::Error::Request(e) => Error::Region(e),
+            storage::engine::Error::Request(e) => Error::Region(e),
             _ => Error::Other(box e),
         }
     }
 }
 
-impl From<txn::Error> for Error {
-    fn from(e: txn::Error) -> Error {
+impl From<storage::txn::Error> for Error {
+    fn from(e: storage::txn::Error) -> Error {
         match e {
-            txn::Error::Mvcc(mvcc::Error::KeyIsLocked {
+            storage::txn::Error::Mvcc(storage::mvcc::Error::KeyIsLocked {
                 primary,
                 ts,
                 key,
@@ -111,11 +111,17 @@ trait RequestHandler: Send {
     }
 
     fn check_if_outdated(&self) -> Result<()>;
+
+    fn into_boxed(self) -> Box<RequestHandler>
+    where
+        Self: 'static + Sized,
+    {
+        box self
+    }
 }
 
 /// `RequestHandlerBuilder` accepts a `Box<Snapshot>` and builds a `RequestHandler`.
-type RequestHandlerBuilder =
-    Box<FnBox(Box<storage::Snapshot + Send>) -> Result<Box<RequestHandler>>>;
+type RequestHandlerBuilder = Box<FnBox(Box<storage::Snapshot>) -> Result<Box<RequestHandler>>>;
 
 #[derive(Debug)]
 struct ReqContext {

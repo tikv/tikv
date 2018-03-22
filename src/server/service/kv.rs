@@ -802,6 +802,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let future = self.cop_service
             .handle_unary_request(req)
+            .map_err(|_| unreachable!())
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {

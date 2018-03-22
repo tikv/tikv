@@ -42,14 +42,14 @@ impl AnalyzeContext {
         ranges: Vec<KeyRange>,
         snap: Box<Snapshot>,
         req_ctx: ReqContext,
-    ) -> Result<Box<RequestHandler>> {
+    ) -> Result<AnalyzeContext> {
         let snap = SnapshotStore::new(
             snap,
             req.get_start_ts(),
             req_ctx.isolation_level,
             req_ctx.fill_cache,
         );
-        Ok(box AnalyzeContext {
+        Ok(AnalyzeContext {
             req: req,
             snap: Some(snap),
             ranges: ranges,

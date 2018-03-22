@@ -42,7 +42,7 @@ impl DAGContext {
         ranges: Vec<KeyRange>,
         snap: Box<Snapshot>,
         req_ctx: ReqContext,
-    ) -> Result<Box<RequestHandler>> {
+    ) -> Result<DAGContext> {
         let eval_ctx = Arc::new(box_try!(EvalContext::new(
             req.get_time_zone_offset(),
             req.get_flags()
@@ -55,7 +55,7 @@ impl DAGContext {
         );
 
         let dag_executor = build_exec(req.take_executors().into_vec(), store, ranges, eval_ctx)?;
-        Ok(box DAGContext {
+        Ok(DAGContext {
             columns: dag_executor.columns,
             has_aggr: dag_executor.has_aggr,
             req_ctx: req_ctx,

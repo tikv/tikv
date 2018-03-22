@@ -38,14 +38,14 @@ impl ChecksumContext {
         ranges: Vec<KeyRange>,
         snap: Box<Snapshot>,
         req_ctx: ReqContext,
-    ) -> Result<Box<RequestHandler>> {
+    ) -> Result<ChecksumContext> {
         let store = SnapshotStore::new(
             snap,
             req.get_start_ts(),
             req_ctx.isolation_level,
             req_ctx.fill_cache,
         );
-        Ok(box ChecksumContext {
+        Ok(ChecksumContext {
             req: req,
             store: store,
             ranges: ranges.into_iter(),

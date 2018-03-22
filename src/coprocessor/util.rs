@@ -23,10 +23,12 @@ use super::codec::datum::Datum;
 pub struct ErrorRequestHandler {}
 
 impl ErrorRequestHandler {
-    pub fn new(msg: &str) -> ErrorRequestHandler {}
+    pub fn new(msg: &str) -> ErrorRequestHandler {
+        ErrorRequestHandler {}
+    }
 
-    pub fn from_error<T: Error>(err: T) -> Box<RequestHandler> {
-        box ErrorRequestHandler::new(err.description())
+    pub fn from_error<T: Error>(err: T) -> ErrorRequestHandler {
+        ErrorRequestHandler::new(err.description())
     }
 }
 

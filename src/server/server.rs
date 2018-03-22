@@ -271,13 +271,14 @@ mod tests {
             &readpool::Config::default_for_test(),
             || || coprocessor::ReadPoolContext::new(None),
         );
+        let cop_service = coprocessor::Service::new(&cfg, storage.get_engine(), cop_read_pool);
 
         let mut server = Server::new(
             &cfg,
             &security_mgr,
             1024,
             storage,
-            cop_read_pool,
+            cop_service,
             router,
             MockResolver {
                 quick_fail: Arc::clone(&quick_fail),
