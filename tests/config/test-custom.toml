@@ -90,7 +90,7 @@ right-derive-when-split = false
 allow-remove-leader = true
 merge-max-log-gap = 3
 merge-check-tick-interval = "11s"
-use-delete-range = true
+use-delete-range = false
 
 [coprocessor]
 split-region-on-table = true
