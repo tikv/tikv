@@ -57,6 +57,8 @@ enum SchedulePolicy {
     Repeat(isize),
     /// Repeat till succcess.
     TillSuccess,
+    /// Stop immediately.
+    Stop,
 }
 
 impl SchedulePolicy {
@@ -69,6 +71,7 @@ impl SchedulePolicy {
                 false
             },
             SchedulePolicy::TillSuccess => true,
+            SchedulePolicy::Stop => false,
         }
     }
 }
@@ -89,10 +92,19 @@ enum Operator {
         peer: metapb::Peer,
         policy: SchedulePolicy,
     },
+    MergeRegion {
+        source_region_id: u64,
+        target_region_id: u64,
+        policy: Arc<RwLock<SchedulePolicy>>,
+    },
 }
 
 impl Operator {
-    fn make_region_heartbeat_response(&self) -> pdpb::RegionHeartbeatResponse {
+    fn make_region_heartbeat_response(
+        &self,
+        region_id: u64,
+        cluster: &Cluster,
+    ) -> pdpb::RegionHeartbeatResponse {
         match *self {
             Operator::AddPeer { ref peer, .. } => {
                 if let Either::Left(ref peer) = *peer {
@@ -105,12 +117,26 @@ impl Operator {
                 new_pd_change_peer(eraftpb::ConfChangeType::RemoveNode, peer.clone())
             }
             Operator::TransferLeader { ref peer, .. } => new_pd_transfer_leader(peer.clone()),
+            Operator::MergeRegion {
+                target_region_id, ..
+            } => {
+                if target_region_id == region_id {
+                    pdpb::RegionHeartbeatResponse::new()
+                } else {
+                    let region = cluster
+                        .get_region_by_id(target_region_id)
+                        .unwrap()
+                        .unwrap()
+                        .clone();
+                    new_pd_merge_region(region)
+                }
+            }
         }
     }
 
     fn try_finished(
         &mut self,
-        pending_peers: &HashMap<u64, metapb::Peer>,
+        cluster: &Cluster,
         region: &metapb::Region,
         leader: &metapb::Peer,
     ) -> bool {
@@ -135,7 +161,7 @@ impl Operator {
                 }
                 if let Either::Right(ref pr) = *peer {
                     // Still adding peer?
-                    return !pending_peers.contains_key(&pr.get_id());
+                    return !cluster.pending_peers.contains_key(&pr.get_id());
                 }
                 unreachable!()
             }
@@ -147,6 +173,22 @@ impl Operator {
                 ref peer,
                 ref mut policy,
             } => leader == peer || !policy.schedule(),
+            Operator::MergeRegion {
+                source_region_id,
+                ref mut policy,
+                ..
+            } => {
+                if cluster
+                    .get_region_by_id(source_region_id)
+                    .unwrap()
+                    .is_none()
+                {
+                    *policy.write().unwrap() = SchedulePolicy::Stop;
+                    false
+                } else {
+                    !policy.write().unwrap().schedule()
+                }
+            }
         }
     }
 }
@@ -293,45 +335,50 @@ impl Cluster {
         assert!(end_key > start_key);
 
         let version = region.get_region_epoch().get_version();
-        let conf_ver = region.get_region_epoch().get_conf_ver();
 
-        let search_key = data_key(region.get_start_key());
-        let search_region = match self.get_region(search_key) {
-            None => {
-                // Find no range after start key, insert directly.
-                self.add_region(&region);
+        loop {
+            let search_key = data_key(region.get_start_key());
+            let search_region = match self.get_region(search_key) {
+                None => {
+                    // Find no range after start key, insert directly.
+                    self.add_region(&region);
+                    return Ok(());
+                }
+                Some(search_region) => search_region,
+            };
+
+            let search_start_key = enc_start_key(&search_region);
+            let search_end_key = enc_end_key(&search_region);
+
+            let search_version = search_region.get_region_epoch().get_version();
+
+            if start_key == search_start_key && end_key == search_end_key {
+                // we are the same, must check epoch here.
+                check_stale_region(&search_region, &region)?;
+                if search_region.get_region_epoch().get_version()
+                    < region.get_region_epoch().get_version()
+                {
+                    self.remove_region(&search_region);
+                    self.add_region(&region);
+                }
                 return Ok(());
             }
-            Some(search_region) => search_region,
-        };
 
-        let search_start_key = enc_start_key(&search_region);
-        let search_end_key = enc_end_key(&search_region);
+            if search_start_key >= end_key {
+                // No range covers [start, end) now, insert directly.
+                self.add_region(&region);
+                return Ok(());
+            } else {
+                // overlap, remove old, insert new.
+                // E.g, 1 [a, c) -> 1 [a, b) + 2 [b, c), either new 1 or 2 reports, the region
+                // is overlapped with origin [a, c).
+                if version <= search_version {
+                    return Err(box_err!("epoch {:?} is stale.", region.get_region_epoch()));
+                }
 
-        let search_version = search_region.get_region_epoch().get_version();
-        let search_conf_ver = search_region.get_region_epoch().get_conf_ver();
-
-        if start_key == search_start_key && end_key == search_end_key {
-            // we are the same, must check epoch here.
-            return check_stale_region(&search_region, &region);
-        }
-
-        if search_start_key >= end_key {
-            // No range covers [start, end) now, insert directly.
-            self.add_region(&region);
-        } else {
-            // overlap, remove old, insert new.
-            // E.g, 1 [a, c) -> 1 [a, b) + 2 [b, c), either new 1 or 2 reports, the region
-            // is overlapped with origin [a, c).
-            if version <= search_version || conf_ver < search_conf_ver {
-                return Err(box_err!("epoch {:?} is stale.", region.get_region_epoch()));
+                self.remove_region(&search_region);
             }
-
-            self.remove_region(&search_region);
-            self.add_region(&region);
         }
-
-        Ok(())
     }
 
     fn handle_heartbeat_conf_ver(
@@ -361,20 +408,25 @@ impl Cluster {
             // 3) pd is (1, 2), TiKV is (3)
             // 4) pd id (1), TiKV is (2, 3)
 
-            assert_ne!(region_peer_len, cur_region_peer_len);
-
             if cur_region_peer_len > region_peer_len {
                 // must pd is (1, 2), TiKV is (1)
                 assert_eq!(cur_region_peer_len - region_peer_len, 1);
                 let peers = setdiff_peers(&cur_region, &region);
                 assert_eq!(peers.len(), 1);
                 assert!(setdiff_peers(&region, &cur_region).is_empty());
-            } else {
+            } else if cur_region_peer_len < region_peer_len {
                 // must pd is (1), TiKV is (1, 2)
                 assert_eq!(region_peer_len - cur_region_peer_len, 1);
                 let peers = setdiff_peers(&region, &cur_region);
                 assert_eq!(peers.len(), 1);
                 assert!(setdiff_peers(&cur_region, &region).is_empty());
+            } else {
+                must_same_peers(&cur_region, &region);
+                assert_eq!(cur_conf_ver + 1, conf_ver);
+                assert_eq!(
+                    cur_region.get_region_epoch().get_version() + 1,
+                    region.get_region_epoch().get_version()
+                );
             }
 
             // update the region.
@@ -457,7 +509,7 @@ impl Cluster {
         let region_id = region.get_id();
         let mut operator = None;
         if let Some(mut op) = self.operators.remove(&region_id) {
-            if !op.try_finished(&self.pending_peers, &region, &leader) {
+            if !op.try_finished(self, &region, &leader) {
                 operator = Some(op);
             };
         } else if self.enable_peer_count_check {
@@ -474,7 +526,7 @@ impl Cluster {
             region_id, operator, leader, region
         );
 
-        let mut resp = operator.make_region_heartbeat_response();
+        let mut resp = operator.make_region_heartbeat_response(region.get_id(), self);
         self.operators.insert(region_id, operator);
         resp.set_region_id(region_id);
         resp.set_region_epoch(region.take_region_epoch());
@@ -706,6 +758,30 @@ impl TestPdClient {
     pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.remove_peer(region_id, peer.clone());
         self.must_none_peer(region_id, peer);
+    }
+
+    pub fn must_merge(&self, from: u64, target: u64) {
+        let op = Operator::MergeRegion {
+            source_region_id: from,
+            target_region_id: target,
+            policy: Arc::new(RwLock::new(SchedulePolicy::TillSuccess)),
+        };
+        self.schedule_operator(from, op.clone());
+        self.schedule_operator(target, op);
+
+        for _ in 1..500 {
+            sleep_ms(10);
+
+            if self.get_region_by_id(from).wait().unwrap().is_none() {
+                return;
+            }
+        }
+
+        let region = self.get_region_by_id(from).wait().unwrap();
+        if region.is_none() {
+            return;
+        }
+        panic!("region {:?} is still not merged.", region.unwrap());
     }
 
     // check whether region is split by split_key or not.
