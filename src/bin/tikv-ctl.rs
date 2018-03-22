@@ -1051,13 +1051,14 @@ fn main() {
                     Arg::with_name("config_name")
                         .short("n")
                         .takes_value(true)
-                        .help("config name of the module, eg. max_background_jobs in kvdb or raftdb"),
+                        .help("config name of the module, for kvdb or raftdb, you can choose \
+                            max_background_jobs or default.disable_auto_compactions, default stands for cf"),
                 )
                 .arg(
                     Arg::with_name("config_value")
                         .short("v")
                         .takes_value(true)
-                        .help("config value of the module, eg. 8 for max_background_jobs"),
+                        .help("config value of the module, eg. 8 for max_background_jobs or true for disable_auto_compactions"),
                 ),
         )
         .subcommand(
