@@ -1020,13 +1020,13 @@ fn main() {
                     Arg::with_name("config_name")
                         .short("n")
                         .takes_value(true)
-                        .help("config name of the module"),
+                        .help("config name of the module, eg. max_background_jobs in kvdb or raftdb"),
                 )
                 .arg(
                     Arg::with_name("config_value")
                         .short("v")
                         .takes_value(true)
-                        .help("config value of the module"),
+                        .help("config value of the module, eg. 8 for max_background_jobs"),
                 ),
         )
         .subcommand(
