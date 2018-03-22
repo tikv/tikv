@@ -345,6 +345,15 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
             .map(|_| RegionConsistencyCheckResponse::new());
         self.handle_response(ctx, sink, f, "check_region_consistency");
     }
+
+    fn modify_tikv_config(
+        &self,
+        _: RpcContext,
+        _: ModifyTikvConfigRequest,
+        _: UnarySink<ModifyTikvConfigResponse>,
+    ) {
+        unimplemented!();
+    }
 }
 
 fn region_detail<T: RaftStoreRouter>(

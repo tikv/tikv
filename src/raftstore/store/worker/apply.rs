@@ -19,6 +19,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::collections::VecDeque;
+use std::cmp;
 
 use rocksdb::{Writable, WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
@@ -27,9 +28,10 @@ use uuid::Uuid;
 
 use kvproto::metapb::{Peer as PeerMeta, Region};
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
-use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftTruncatedState};
+use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState,
+                             RegionLocalState};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType,
-                          RaftCmdRequest, RaftCmdResponse, Request, Response};
+                          CommitMergeRequest, RaftCmdRequest, RaftCmdResponse, Request, Response};
 use kvproto::importpb::SSTMeta;
 
 use util::worker::Runnable;
@@ -37,13 +39,14 @@ use util::{escape, rocksdb, MustConsumeVec};
 use util::time::{duration_to_sec, Instant, SlowTimer};
 use util::collections::HashMap;
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use raft::NO_LIMIT;
 use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{cmd_resp, keys, util, Store};
 use raftstore::store::msg::Callback;
 use raftstore::store::engine::{Mutable, Peekable, Snapshot};
 use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply_state,
-                                     write_peer_state};
+                                     write_merge_state, write_peer_state};
 use raftstore::store::peer::{check_epoch, Peer};
 use raftstore::store::metrics::*;
 use import::SSTImporter;
@@ -161,6 +164,18 @@ pub enum ExecResult {
         right: Region,
         right_derive: bool,
     },
+    PrepareMerge {
+        region: Region,
+        state: MergeState,
+    },
+    CommitMerge {
+        region: Region,
+        source: Region,
+    },
+    RollbackMerge {
+        region: Region,
+        commit: u64,
+    },
     ComputeHash {
         region: Region,
         index: u64,
@@ -214,6 +229,7 @@ struct ApplyContextCore<'a> {
     importer: &'a SSTImporter,
     wb: Option<WriteBatch>,
     cbs: MustConsumeVec<ApplyCallback>,
+    merged_regions: Vec<u64>,
     apply_res: Vec<ApplyRes>,
     wb_last_bytes: u64,
     wb_last_keys: u64,
@@ -235,6 +251,7 @@ impl<'a> ApplyContextCore<'a> {
             importer: importer,
             wb: None,
             cbs: MustConsumeVec::new("callback of apply context"),
+            merged_regions: vec![],
             apply_res: vec![],
             wb_last_bytes: 0,
             wb_last_keys: 0,
@@ -328,6 +345,7 @@ impl<'a> ApplyContextCore<'a> {
             exec_res: results,
             metrics: delegate.metrics.clone(),
             applied_index_term: delegate.applied_index_term,
+            merged: false,
         });
     }
 
@@ -432,11 +450,15 @@ pub fn notify_stale_req(term: u64, cb: Callback) {
 
 /// Check if a write is needed to be issued before handle the command.
 fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
-    // When encounter ComputeHash cmd, we must write the write batch to engine immediately.
-    if cmd.has_admin_request()
-        && cmd.get_admin_request().get_cmd_type() == AdminCmdType::ComputeHash
-    {
-        return true;
+    if cmd.has_admin_request() {
+        match cmd.get_admin_request().get_cmd_type() {
+            // ComputeHash require an up to date snapshot.
+            AdminCmdType::ComputeHash |
+            // Merge needs to get the latest apply index.
+            AdminCmdType::CommitMerge |
+            AdminCmdType::RollbackMerge => return true,
+            _ => {}
+        }
     }
 
     // When write batch contains more than `recommended` keys, write the batch to engine.
@@ -465,6 +487,7 @@ pub struct ApplyDelegate {
     // peer_tag, "[region region_id] peer_id"
     tag: String,
     engine: Arc<DB>,
+    raft_engine: Arc<DB>,
     region: Region,
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
@@ -476,28 +499,33 @@ pub struct ApplyDelegate {
     apply_state: RaftApplyState,
     applied_index_term: u64,
     term: u64,
+    is_merging: bool,
     pending_cmds: PendingCmdQueue,
     metrics: ApplyMetrics,
+    last_merge_version: u64,
 }
 
 impl ApplyDelegate {
     fn from_peer(peer: &Peer) -> ApplyDelegate {
         let reg = Registration::new(peer);
-        ApplyDelegate::from_registration(peer.kv_engine(), reg)
+        ApplyDelegate::from_registration(peer.kv_engine(), peer.raft_engine(), reg)
     }
 
-    fn from_registration(db: Arc<DB>, reg: Registration) -> ApplyDelegate {
+    fn from_registration(db: Arc<DB>, raft_db: Arc<DB>, reg: Registration) -> ApplyDelegate {
         ApplyDelegate {
             id: reg.id,
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
             engine: db,
+            raft_engine: raft_db,
             region: reg.region,
             pending_remove: false,
             apply_state: reg.apply_state,
             applied_index_term: reg.applied_index_term,
             term: reg.term,
+            is_merging: false,
             pending_cmds: Default::default(),
             metrics: Default::default(),
+            last_merge_version: 0,
         }
     }
 
@@ -518,6 +546,7 @@ impl ApplyDelegate {
             return;
         }
         apply_ctx.prepare_for(self);
+        apply_ctx.committed_count += committed_entries.len();
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
@@ -753,6 +782,22 @@ impl ApplyDelegate {
                     self.metrics.size_diff_hint = 0;
                     self.metrics.delete_keys_hint = 0;
                 }
+                ExecResult::PrepareMerge { ref region, .. } => {
+                    self.region = region.clone();
+                    self.is_merging = true;
+                }
+                ExecResult::CommitMerge {
+                    ref region,
+                    ref source,
+                } => {
+                    self.region = region.clone();
+                    self.last_merge_version = region.get_region_epoch().get_version();
+                    ctx.merged_regions.push(source.get_id());
+                }
+                ExecResult::RollbackMerge { ref region, .. } => {
+                    self.region = region.clone();
+                    self.is_merging = false;
+                }
             }
         }
 
@@ -832,7 +877,10 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext,
     ) -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         let req = Rc::clone(&ctx.exec_ctx.as_ref().unwrap().req);
-        check_epoch(&self.region, &req)?;
+        // Include region for stale epoch after merge may cause key not in range.
+        let include_region =
+            req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
+        check_epoch(&self.region, &req, include_region)?;
         if req.has_admin_request() {
             self.exec_admin_cmd(ctx, req.get_admin_request())
         } else {
@@ -861,6 +909,10 @@ impl ApplyDelegate {
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
             AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
             AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
+            // TODO: is it backward compatible to add new cmd_type?
+            AdminCmdType::PrepareMerge => self.exec_prepare_merge(ctx, request),
+            AdminCmdType::CommitMerge => self.exec_commit_merge(ctx, request),
+            AdminCmdType::RollbackMerge => self.exec_rollback_merge(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         }?;
         response.set_cmd_type(cmd_type);
@@ -1141,6 +1193,271 @@ impl ApplyDelegate {
         }
     }
 
+    fn exec_prepare_merge(
+        &mut self,
+        ctx: &mut ApplyContext,
+        req: &AdminRequest,
+    ) -> Result<(AdminResponse, Option<ExecResult>)> {
+        PEER_ADMIN_CMD_COUNTER_VEC
+            .with_label_values(&["prepare_merge", "all"])
+            .inc();
+
+        let prepare_merge = req.get_prepare_merge();
+        let index = prepare_merge.get_min_index();
+        let exec_ctx = ctx.exec_ctx.as_ref().unwrap();
+        let first_index = peer_storage::first_index(&exec_ctx.apply_state);
+        if index < first_index {
+            // We filter `CompactLog` command before.
+            panic!(
+                "{} first index {} > min_index {}, skip pre merge.",
+                self.tag, first_index, index
+            );
+        }
+        let mut region = self.region.clone();
+        let region_version = region.get_region_epoch().get_version() + 1;
+        region.mut_region_epoch().set_version(region_version);
+        // In theory conf version should not be increased when executing prepare_merge.
+        // However, we don't want to do conf change after prepare_merge is committed.
+        // This can also be done by iterating all proposal to find if prepare_merge is
+        // proposed before proposing conf change, but it make things complicated.
+        // Another way is make conf change also check region version, but this is not
+        // backward compatible.
+        let conf_version = region.get_region_epoch().get_conf_ver() + 1;
+        region.mut_region_epoch().set_conf_ver(conf_version);
+        let mut merging_state = MergeState::new();
+        merging_state.set_min_index(index);
+        merging_state.set_target(prepare_merge.get_target().to_owned());
+        merging_state.set_commit(exec_ctx.index);
+        write_merge_state(
+            &self.engine,
+            ctx.wb(),
+            &region,
+            PeerState::Merging,
+            merging_state.clone(),
+        ).unwrap_or_else(|e| {
+            panic!(
+                "{} failed to save merging state {:?} for region {:?}: {:?}",
+                self.tag, merging_state, region, e
+            )
+        });
+
+        PEER_ADMIN_CMD_COUNTER_VEC
+            .with_label_values(&["prepare_merge", "success"])
+            .inc();
+
+        Ok((
+            AdminResponse::new(),
+            Some(ExecResult::PrepareMerge {
+                region: region,
+                state: merging_state,
+            }),
+        ))
+    }
+
+    fn load_entries_for_merge(&self, merge: &CommitMergeRequest, apply_index: u64) -> Vec<Entry> {
+        // Entries from [first_index, last_index) need to be loaded.
+        let first_index = apply_index + 1;
+        let last_index = merge.get_commit();
+        if first_index >= last_index {
+            return vec![];
+        }
+        let exist_first_index = merge
+            .get_entries()
+            .get(0)
+            .map_or(last_index, |e| e.get_index());
+        if first_index >= exist_first_index {
+            return merge.get_entries()[(first_index - exist_first_index) as usize..].to_vec();
+        }
+        let source_region = merge.get_source();
+        let mut entries = Vec::with_capacity((last_index - first_index) as usize);
+        peer_storage::fetch_entries_to(
+            &self.raft_engine,
+            source_region.get_id(),
+            first_index,
+            exist_first_index,
+            NO_LIMIT,
+            &mut entries,
+        ).unwrap_or_else(|e| {
+            panic!(
+                "{} failed to load entries [{}:{}) from region {}: {:?}",
+                self.tag,
+                first_index,
+                exist_first_index,
+                source_region.get_id(),
+                e
+            );
+        });
+        entries.extend_from_slice(merge.get_entries());
+        entries
+    }
+
+    fn catch_up_log_for_merge(
+        &mut self,
+        ctx: &mut ApplyContext,
+        merge: &CommitMergeRequest,
+        exist_region: &Region,
+    ) {
+        let source_region = merge.get_source();
+        let apply_state_key = keys::apply_state_key(source_region.get_id());
+        let apply_state: RaftApplyState = match self.engine.get_msg_cf(CF_RAFT, &apply_state_key) {
+            Ok(Some(s)) => s,
+            e => panic!(
+                "{} failed to get apply state of {:?}: {:?}",
+                self.tag, source_region, e
+            ),
+        };
+        let apply_index = apply_state.get_applied_index();
+        if apply_index >= merge.get_commit() {
+            if source_region.get_region_epoch() != exist_region.get_region_epoch() {
+                panic!(
+                    "{} source region {:?} not match exist region {:?}",
+                    self.tag, source_region, exist_region
+                );
+            }
+            return;
+        }
+
+        let entries = self.load_entries_for_merge(merge, apply_index);
+        if entries.is_empty() {
+            return;
+        }
+        let stash = ctx.stash(self);
+        let mut delegate = match ctx.delegates.get_mut(&source_region.get_id()) {
+            None => panic!("{} source region {:?} not exist", self.tag, source_region),
+            Some(e) => e.take().unwrap_or_else(|| {
+                panic!(
+                    "{} unexpected circle dependency of region {:?}",
+                    self.tag, source_region
+                )
+            }),
+        };
+        delegate.handle_raft_committed_entries(ctx, entries);
+        *ctx.delegates.get_mut(&source_region.get_id()).unwrap() = Some(delegate);
+        ctx.apply_res.last_mut().unwrap().merged = true;
+        ctx.restore_stash(stash);
+    }
+
+    fn exec_commit_merge(
+        &mut self,
+        ctx: &mut ApplyContext,
+        req: &AdminRequest,
+    ) -> Result<(AdminResponse, Option<ExecResult>)> {
+        PEER_ADMIN_CMD_COUNTER_VEC
+            .with_label_values(&["commit_merge", "all"])
+            .inc();
+
+        let merge = req.get_commit_merge();
+        let source_region = merge.get_source();
+        let region_state_key = keys::region_state_key(source_region.get_id());
+        let state: RegionLocalState = match self.engine.get_msg_cf(CF_RAFT, &region_state_key) {
+            Ok(Some(s)) => s,
+            e => panic!(
+                "{} failed to get regions state of {:?}: {:?}",
+                self.tag, source_region, e
+            ),
+        };
+        match state.get_state() {
+            PeerState::Normal | PeerState::Merging => {}
+            _ => panic!(
+                "{} unexpected state of merging region {:?}",
+                self.tag, state
+            ),
+        }
+        let exist_region = state.get_region();
+        if source_region.get_start_key() != exist_region.get_start_key()
+            || source_region.get_end_key() != exist_region.get_end_key()
+        {
+            panic!(
+                "{} source_region {:?} not match exist region {:?}",
+                self.tag, source_region, exist_region
+            );
+        }
+
+        self.catch_up_log_for_merge(ctx, merge, exist_region);
+
+        let mut region = self.region.clone();
+        // Use a max value so that pd can ensure overlapped region has a priority.
+        let version = cmp::max(
+            source_region.get_region_epoch().get_version(),
+            region.get_region_epoch().get_version(),
+        ) + 1;
+        region.mut_region_epoch().set_version(version);
+        if keys::enc_end_key(&region) == keys::enc_start_key(source_region) {
+            region.set_end_key(source_region.get_end_key().to_vec());
+        } else {
+            region.set_start_key(source_region.get_start_key().to_vec());
+        }
+        write_peer_state(&self.engine, ctx.wb(), &region, PeerState::Normal)
+            .and_then(|_| {
+                // Should source_region be used?
+                write_peer_state(&self.engine, ctx.wb(), exist_region, PeerState::Tombstone)
+            })
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to save merge region {:?}: {:?}",
+                    self.tag, region, e
+                )
+            });
+
+        PEER_ADMIN_CMD_COUNTER_VEC
+            .with_label_values(&["commit_merge", "success"])
+            .inc();
+
+        let resp = AdminResponse::new();
+        Ok((
+            resp,
+            Some(ExecResult::CommitMerge {
+                region: region,
+                source: source_region.to_owned(),
+            }),
+        ))
+    }
+
+    fn exec_rollback_merge(
+        &mut self,
+        ctx: &mut ApplyContext,
+        req: &AdminRequest,
+    ) -> Result<(AdminResponse, Option<ExecResult>)> {
+        PEER_ADMIN_CMD_COUNTER_VEC
+            .with_label_values(&["rollback_merge", "all"])
+            .inc();
+        let region_state_key = keys::region_state_key(self.region_id());
+        let state: RegionLocalState = match self.engine.get_msg_cf(CF_RAFT, &region_state_key) {
+            Ok(Some(s)) => s,
+            e => panic!("{} failed to get regions state: {:?}", self.tag, e),
+        };
+        assert_eq!(state.get_state(), PeerState::Merging, "{}", self.tag);
+        let rollback = req.get_rollback_merge();
+        assert_eq!(
+            state.get_merge_state().get_commit(),
+            rollback.get_commit(),
+            "{}",
+            self.tag
+        );
+        let mut region = self.region.clone();
+        let version = region.get_region_epoch().get_version();
+        // Update version to avoid duplicated rollback requests.
+        region.mut_region_epoch().set_version(version + 1);
+        write_peer_state(&self.engine, ctx.wb(), &region, PeerState::Normal).unwrap_or_else(|e| {
+            panic!(
+                "{} failed to rollback merge {:?}: {:?}",
+                self.tag, rollback, e
+            )
+        });
+
+        PEER_ADMIN_CMD_COUNTER_VEC
+            .with_label_values(&["rollback_merge", "success"])
+            .inc();
+        let resp = AdminResponse::new();
+        Ok((
+            resp,
+            Some(ExecResult::RollbackMerge {
+                region: region,
+                commit: rollback.get_commit(),
+            }),
+        ))
+    }
+
     fn exec_compact_log(
         &mut self,
         ctx: &mut ApplyContext,
@@ -1158,6 +1475,13 @@ impl ApplyDelegate {
             debug!(
                 "{} compact index {} <= first index {}, no need to compact",
                 self.tag, compact_index, first_index
+            );
+            return Ok((resp, None));
+        }
+        if self.is_merging {
+            info!(
+                "{} is in merging mode, skip compact {}",
+                self.tag, compact_index
             );
             return Ok((resp, None));
         }
@@ -1678,6 +2002,7 @@ pub struct ApplyRes {
     pub applied_index_term: u64,
     pub exec_res: Vec<ExecResult>,
     pub metrics: ApplyMetrics,
+    pub merged: bool,
 }
 
 #[derive(Debug)]
@@ -1689,6 +2014,7 @@ pub enum TaskRes {
 // TODO: use threadpool to do task concurrently
 pub struct Runner {
     db: Arc<DB>,
+    raft_db: Arc<DB>,
     host: Arc<CoprocessorHost>,
     importer: Arc<SSTImporter>,
     delegates: HashMap<u64, Option<ApplyDelegate>>,
@@ -1712,6 +2038,7 @@ impl Runner {
         }
         Runner {
             db: store.kv_engine(),
+            raft_db: store.raft_engine(),
             host: Arc::clone(&store.coprocessor_host),
             importer: Arc::clone(&store.importer),
             delegates: delegates,
@@ -1730,7 +2057,7 @@ impl Runner {
             .use_delete_range(self.use_delete_range)
             .enable_sync_log(self.sync_log);
         for apply in applys {
-            if apply.entries.is_empty() {
+            if apply.entries.is_empty() || core.merged_regions.contains(&apply.region_id) {
                 continue;
             }
             let mut delegate = match self.delegates.get_mut(&apply.region_id) {
@@ -1762,6 +2089,12 @@ impl Runner {
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
         core.write_to_db(&self.db);
+
+        for region_id in core.merged_regions.drain(..) {
+            if let Some(mut e) = self.delegates.remove(&region_id) {
+                e.as_mut().unwrap().destroy();
+            }
+        }
 
         if !core.apply_res.is_empty() {
             self.notifier.send(TaskRes::Applys(core.apply_res)).unwrap();
@@ -1815,7 +2148,8 @@ impl Runner {
         let peer_id = s.id;
         let region_id = s.region.get_id();
         let term = s.term;
-        let delegate = ApplyDelegate::from_registration(Arc::clone(&self.db), s);
+        let delegate =
+            ApplyDelegate::from_registration(Arc::clone(&self.db), Arc::clone(&self.raft_db), s);
         info!(
             "{} register to apply delegates at term {}",
             delegate.tag, delegate.term
@@ -1883,11 +2217,15 @@ mod tests {
     use import::test_helpers::*;
     use util::collections::HashMap;
 
-    pub fn create_tmp_engine(path: &str) -> (TempDir, Arc<DB>) {
+    pub fn create_tmp_engine(path: &str) -> (TempDir, Arc<DB>, Arc<DB>) {
         let path = TempDir::new(path).unwrap();
-        let db =
-            Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap());
-        (path, db)
+        let db = Arc::new(
+            rocksdb::new_engine(path.path().join("db").to_str().unwrap(), ALL_CFS, None).unwrap(),
+        );
+        let raft_db = Arc::new(
+            rocksdb::new_engine(path.path().join("raft").to_str().unwrap(), &[], None).unwrap(),
+        );
+        (path, db, raft_db)
     }
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
@@ -1898,12 +2236,14 @@ mod tests {
 
     fn new_runner(
         db: Arc<DB>,
+        raft_db: Arc<DB>,
         host: Arc<CoprocessorHost>,
         importer: Arc<SSTImporter>,
         tx: Sender<TaskRes>,
     ) -> Runner {
         Runner {
             db: db,
+            raft_db: raft_db,
             host: host,
             importer: importer,
             delegates: HashMap::default(),
@@ -1962,11 +2302,12 @@ mod tests {
     #[test]
     fn test_basic_flow() {
         let (tx, rx) = mpsc::channel();
-        let (_tmp, db) = create_tmp_engine("apply-basic");
+        let (_tmp, db, raft_db) = create_tmp_engine("apply-basic");
         let host = Arc::new(CoprocessorHost::default());
         let (_dir, importer) = create_tmp_importer("apply-basic");
         let mut runner = new_runner(
             Arc::clone(&db),
+            raft_db,
             Arc::clone(&host),
             Arc::clone(&importer),
             tx,
@@ -2242,12 +2583,12 @@ mod tests {
 
     #[test]
     fn test_handle_raft_committed_entries() {
-        let (_path, db) = create_tmp_engine("test-delegate");
+        let (_path, db, raft_db) = create_tmp_engine("test-delegate");
         let (import_dir, importer) = create_tmp_importer("test-delegate");
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let mut delegate = ApplyDelegate::from_registration(Arc::clone(&db), reg);
+        let mut delegate = ApplyDelegate::from_registration(Arc::clone(&db), raft_db, reg);
         let mut delegates = HashMap::default();
         let (tx, rx) = mpsc::channel();
 
@@ -2447,7 +2788,7 @@ mod tests {
             entries.push(put_entry);
         }
         delegate.handle_raft_committed_entries(&mut apply_ctx, entries);
-        apply_ctx.core.write_to_db(&db);
+        apply_ctx.write_to_db(&db);
         for _ in 0..WRITE_BATCH_MAX_KEYS {
             rx.try_recv().unwrap();
         }
@@ -2503,17 +2844,19 @@ mod tests {
 
     #[test]
     fn test_stash() {
-        let (_path, db) = create_tmp_engine("test-delegate");
+        let (_path, db, raft_db) = create_tmp_engine("test-delegate");
         let (_import_dir, importer) = create_tmp_importer("test-delegate");
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let mut delegate1 = ApplyDelegate::from_registration(Arc::clone(&db), reg);
+        let mut delegate1 =
+            ApplyDelegate::from_registration(Arc::clone(&db), Arc::clone(&raft_db), reg);
         delegate1.apply_state.set_applied_index(3);
         reg = Registration::default();
         reg.region.set_start_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let mut delegate2 = ApplyDelegate::from_registration(Arc::clone(&db), reg);
+        let mut delegate2 =
+            ApplyDelegate::from_registration(Arc::clone(&db), Arc::clone(&raft_db), reg);
         delegate2.apply_state.set_applied_index(1);
 
         let host = CoprocessorHost::default();

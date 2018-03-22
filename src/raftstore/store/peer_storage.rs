@@ -26,8 +26,8 @@ use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 use kvproto::metapb::{self, Region};
-use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData,
-                             RegionLocalState};
+use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftLocalState,
+                             RaftSnapshotData, RegionLocalState};
 use util::worker::Scheduler;
 use util::{self, rocksdb};
 use raftstore::{Error, Result};
@@ -1339,6 +1339,35 @@ pub fn write_peer_state<T: Mutable>(
     let mut region_state = RegionLocalState::new();
     region_state.set_state(state);
     region_state.set_region(region.clone());
+    let handle = rocksdb::get_cf_handle(kv_engine, CF_RAFT)?;
+    kv_wb.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
+    Ok(())
+}
+
+pub fn mark_merge_done<T: Mutable>(
+    kv_engine: &DB,
+    kv_wb: &T,
+    region: &metapb::Region,
+    target: &metapb::Region,
+) -> Result<()> {
+    let mut merge_state = MergeState::new();
+    merge_state.set_target(target.to_owned());
+    write_merge_state(kv_engine, kv_wb, region, PeerState::Tombstone, merge_state)
+}
+
+pub fn write_merge_state<T: Mutable>(
+    kv_engine: &DB,
+    kv_wb: &T,
+    region: &metapb::Region,
+    state: PeerState,
+    merge_state: MergeState,
+) -> Result<()> {
+    let region_id = region.get_id();
+    let mut region_state = RegionLocalState::new();
+    region_state.set_state(state);
+    region_state.set_region(region.clone());
+    region_state.set_merge_state(merge_state);
+
     let handle = rocksdb::get_cf_handle(kv_engine, CF_RAFT)?;
     kv_wb.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
     Ok(())

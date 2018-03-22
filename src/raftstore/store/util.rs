@@ -217,7 +217,7 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
 }
 
 /// Check if replicas of two regions are on the same stores.
-pub fn region_on_same_store(lhs: &metapb::Region, rhs: &metapb::Region) -> bool {
+pub fn region_on_same_stores(lhs: &metapb::Region, rhs: &metapb::Region) -> bool {
     if lhs.get_peers().len() != rhs.get_peers().len() {
         return false;
     }
@@ -747,7 +747,7 @@ mod tests {
             for (store_id, peer_id) in s2.into_iter().zip(5..) {
                 r2.mut_peers().push(new_peer(store_id, peer_id));
             }
-            let res = super::region_on_same_store(&r1, &r2);
+            let res = super::region_on_same_stores(&r1, &r2);
             assert_eq!(res, exp, "{:?} vs {:?}", r1, r2);
         }
     }
