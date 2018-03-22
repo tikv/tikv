@@ -23,13 +23,14 @@ use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::{self, Message};
 use kvproto::metapb;
-use raft::eraftpb::{self, ConfChangeType, MessageType};
+use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
                           RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse};
-use kvproto::raft_serverpb::{PeerState, RaftMessage};
+use kvproto::raft_serverpb::{MergeState, PeerState, RaftMessage};
 use kvproto::pdpb::PeerStats;
 
-use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX};
+use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
+           INVALID_INDEX, NO_LIMIT};
 use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
@@ -45,7 +46,8 @@ use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
 use pd::{PdTask, INVALID_ID};
 
 use super::store::{DestroyPeerJob, Store, StoreStat};
-use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
+use super::peer_storage::{mark_merge_done, write_peer_state, ApplySnapResult, InvokeContext,
+                          PeerStorage};
 use super::util::{self, Lease, LeaseState};
 use super::cmd_resp;
 use super::transport::Transport;
@@ -220,6 +222,7 @@ pub struct Peer {
     apply_scheduler: Scheduler<ApplyTask>,
 
     pub pending_remove: bool,
+    pub pending_merge: Option<MergeState>,
 
     marked_to_be_checked: bool,
 
@@ -329,6 +332,7 @@ impl Peer {
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
             marked_to_be_checked: false,
+            pending_merge: None,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
             last_applying_idx: applied_index,
@@ -367,6 +371,10 @@ impl Peer {
     }
 
     pub fn maybe_destroy(&mut self) -> Option<DestroyPeerJob> {
+        if self.pending_remove {
+            info!("{} is being destroyed, skip", self.tag);
+            return None;
+        }
         let initialized = self.get_store().is_initialized();
         let async_remove = if self.is_applying_snapshot() {
             if !self.mut_store().cancel_applying_snap() {
@@ -392,7 +400,7 @@ impl Peer {
         })
     }
 
-    pub fn destroy(&mut self) -> Result<()> {
+    pub fn destroy(&mut self, keep_data: bool) -> Result<()> {
         let t = Instant::now();
 
         let region = self.get_store().get_region().clone();
@@ -402,14 +410,18 @@ impl Peer {
         let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
         self.mut_store().clear_meta(&kv_wb, &raft_wb)?;
-        write_peer_state(&self.kv_engine, &kv_wb, &region, PeerState::Tombstone)?;
+        if let Some(ref state) = self.pending_merge {
+            mark_merge_done(&self.kv_engine, &kv_wb, &region, state.get_target())?;
+        } else {
+            write_peer_state(&self.kv_engine, &kv_wb, &region, PeerState::Tombstone)?;
+        }
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(self.cfg.sync_log);
         self.kv_engine.write_opt(kv_wb, &write_opts)?;
         self.raft_engine.write_opt(raft_wb, &write_opts)?;
 
-        if self.get_store().is_initialized() {
+        if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
             // will be cleared by a newer snapshot applying or restart.
             if let Err(e) = self.get_store().clear_data() {
@@ -535,6 +547,11 @@ impl Peer {
     }
 
     pub fn step(&mut self, m: eraftpb::Message) -> Result<()> {
+        fail_point!(
+            "step_message_3_1",
+            { self.peer.get_store_id() == 3 && self.region_id == 1 },
+            |_| Ok(())
+        );
         if self.is_leader() && m.get_from() != INVALID_ID {
             self.peer_heartbeats.insert(m.get_from(), Instant::now());
         }
@@ -932,8 +949,10 @@ impl Peer {
             _ => false,
         });
 
-        self.raft_group
-            .advance_apply(res.apply_state.get_applied_index());
+        if !res.merged {
+            self.raft_group
+                .advance_apply(res.apply_state.get_applied_index());
+        }
         self.mut_store().apply_state = res.apply_state.clone();
         self.mut_store().applied_index_term = res.applied_index_term;
         self.peer_stat.written_keys += res.metrics.written_keys;
@@ -1358,15 +1377,90 @@ impl Peer {
         true
     }
 
+    pub fn get_min_progress(&self) -> u64 {
+        self.raft_group
+            .status()
+            .progress
+            .values()
+            .map(|pr| pr.matched)
+            .min()
+            .unwrap_or_default()
+    }
+
+    fn pre_propose(&self, req: &mut RaftCmdRequest) -> Result<()> {
+        self.coprocessor_host.pre_propose(self.region(), req)?;
+
+        if !req.get_admin_request().has_prepare_merge() {
+            return Ok(());
+        }
+
+        let last_index = self.raft_group.raft.raft_log.last_index();
+        let min_progress = self.get_min_progress();
+        let min_index = min_progress + 1;
+        if min_progress == 0 || last_index - min_progress > self.cfg.merge_max_log_gap {
+            return Err(box_err!(
+                "log gap ({}, {}] is too large, skip merge",
+                min_progress,
+                last_index
+            ));
+        }
+        let mut entry_size = 0;
+        for entry in self.raft_group.raft.raft_log.entries(min_index, NO_LIMIT)? {
+            entry_size += entry.get_data().len();
+            if entry.get_entry_type() == EntryType::EntryConfChange {
+                return Err(box_err!("log gap contains conf change, skip merging."));
+            }
+            if entry.get_data().is_empty() {
+                continue;
+            }
+            let cmd: RaftCmdRequest =
+                util::parse_data_at(entry.get_data(), entry.get_index(), &self.tag);
+            if !cmd.has_admin_request() {
+                continue;
+            }
+            let cmd_type = cmd.get_admin_request().get_cmd_type();
+            match cmd_type {
+                AdminCmdType::TransferLeader
+                | AdminCmdType::ComputeHash
+                | AdminCmdType::VerifyHash
+                | AdminCmdType::InvalidAdmin => continue,
+                _ => {}
+            }
+            // Any command that can change epoch or log gap should be rejected.
+            return Err(box_err!(
+                "log gap contains admin request {:?}, skip merging.",
+                cmd_type
+            ));
+        }
+        if entry_size as f64 > self.cfg.raft_entry_max_size.0 as f64 * 0.9 {
+            return Err(box_err!(
+                "log gap size exceed entry size limit, skip merging."
+            ));
+        }
+        req.mut_admin_request()
+            .mut_prepare_merge()
+            .set_min_index(min_index);
+        Ok(())
+    }
+
     fn propose_normal(
         &mut self,
         mut req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
     ) -> Result<u64> {
+        if self.pending_merge.is_some()
+            && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge
+        {
+            return Err(box_err!("peer in merging mode, can't do proposal."));
+        }
+
         metrics.normal += 1;
 
         // TODO: validate request for unexpected changes.
-        self.coprocessor_host.pre_propose(self.region(), &mut req)?;
+        if let Err(e) = self.pre_propose(&mut req) {
+            warn!("{} skip proposal: {:?}", self.tag, e);
+            return Err(e);
+        }
         let data = req.write_to_bytes()?;
 
         // TODO: use local histogram metrics
@@ -1424,6 +1518,9 @@ impl Peer {
         req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
     ) -> Result<u64> {
+        if self.pending_merge.is_some() {
+            return Err(box_err!("peer in merging mode, can't do proposal."));
+        }
         if self.raft_group.raft.pending_conf_index > self.get_store().applied_index() {
             info!("{} there is a pending conf change, try later", self.tag);
             return Err(box_err!(
@@ -1494,9 +1591,16 @@ impl Peer {
     }
 }
 
-pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> {
+pub fn check_epoch(
+    region: &metapb::Region,
+    req: &RaftCmdRequest,
+    include_region: bool,
+) -> Result<()> {
     let (mut check_ver, mut check_conf_ver) = (false, false);
-    if req.has_admin_request() {
+    if !req.has_admin_request() {
+        // for get/set/delete, we don't care conf_version.
+        check_ver = true;
+    } else {
         match req.get_admin_request().get_cmd_type() {
             AdminCmdType::CompactLog
             | AdminCmdType::InvalidAdmin
@@ -1504,14 +1608,14 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
             | AdminCmdType::VerifyHash => {}
             AdminCmdType::Split => check_ver = true,
             AdminCmdType::ChangePeer => check_conf_ver = true,
-            AdminCmdType::TransferLeader => {
+            AdminCmdType::PrepareMerge
+            | AdminCmdType::CommitMerge
+            | AdminCmdType::RollbackMerge
+            | AdminCmdType::TransferLeader => {
                 check_ver = true;
                 check_conf_ver = true;
             }
         };
-    } else {
-        // for get/set/delete, we don't care conf_version.
-        check_ver = true;
     }
 
     if !check_ver && !check_conf_ver {
@@ -1535,6 +1639,11 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
             from_epoch,
             latest_epoch
         );
+        let regions = if include_region {
+            vec![region.to_owned()]
+        } else {
+            vec![]
+        };
         return Err(Error::StaleEpoch(
             format!(
                 "latest_epoch of region {} is {:?}, but you \
@@ -1543,7 +1652,7 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
                 latest_epoch,
                 from_epoch
             ),
-            vec![region.to_owned()],
+            regions,
         ));
     }
 
@@ -1662,7 +1771,7 @@ impl Peer {
     }
 
     fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<ReadResponse> {
-        check_epoch(self.region(), req)?;
+        check_epoch(self.region(), req, true)?;
         let mut need_snapshot = false;
         let snapshot = Snapshot::new(Arc::clone(&self.kv_engine));
         let requests = req.get_requests();
@@ -1717,7 +1826,11 @@ fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
     if msg.has_admin_request() {
         let req = msg.get_admin_request();
         return match req.get_cmd_type() {
-            AdminCmdType::ChangePeer | AdminCmdType::Split => true,
+            AdminCmdType::ChangePeer
+            | AdminCmdType::Split
+            | AdminCmdType::PrepareMerge
+            | AdminCmdType::CommitMerge
+            | AdminCmdType::RollbackMerge => true,
             _ => false,
         };
     }
