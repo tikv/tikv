@@ -402,6 +402,9 @@ trait DebugExecutor {
         self.set_region_tombstone(regions);
     }
 
+    /// Recover the cluster when given `store_ids` are failed.
+    fn remove_fail_stores(&self, store_ids: Vec<u64>);
+
     fn check_region_consistency(&self, _: u64);
 
     fn check_local_mode(&self);
@@ -553,6 +556,10 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only avaliable for local mode");
     }
 
+    fn remove_fail_stores(&self, _: Vec<u64>) {
+        self.check_local_mode();
+    }
+
     fn check_region_consistency(&self, region_id: u64) {
         let mut req = RegionConsistencyCheckRequest::new();
         req.set_region_id(region_id);
@@ -644,6 +651,13 @@ impl DebugExecutor for Debugger {
             return;
         }
         println!("all regions are healthy")
+    }
+
+    fn remove_fail_stores(&self, store_ids: Vec<u64>) {
+        println!("removing stores {:?} from configrations...", store_ids);
+        self.remove_failed_stores(store_ids)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
+        println!("success");
     }
 
     fn dump_metrics(&self, _tags: Vec<&str>) {
@@ -979,22 +993,39 @@ fn main() {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("unsafe-recover")
+                .about("unsafe recover the cluster when majority replicas are failed")
+                .subcommand(
+                    SubCommand::with_name("remove-fail-stores").arg(
+                        Arg::with_name("stores")
+                            .required(true)
+                            .takes_value(true)
+                            .multiple(true)
+                            .use_delimiter(true)
+                            .require_delimiter(true)
+                            .value_delimiter(",")
+                            .help("failed store id list"),
+                    ),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("metrics")
                 .about("print the metrics")
                 .arg(
-                Arg::with_name("tag")
-                    .short("t")
-                    .long("tag")
-                    .takes_value(true)
-                    .multiple(true)
-                    .use_delimiter(true)
-                    .require_delimiter(true)
-                    .value_delimiter(",")
-                    .default_value(METRICS_PROMETHEUS)
-                    .help(
-                        "set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not specified, print prometheus",
-                    ),
-            ),)
+                    Arg::with_name("tag")
+                        .short("t")
+                        .long("tag")
+                        .takes_value(true)
+                        .multiple(true)
+                        .use_delimiter(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
+                        .default_value(METRICS_PROMETHEUS)
+                        .help(
+                            "set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not specified, print prometheus",
+                        ),
+                ),
+            )
             .subcommand(
             SubCommand::with_name("consistency-check")
                 .about("force consistency-check for a specified region")
@@ -1137,6 +1168,14 @@ fn main() {
             panic!("invalid pd configuration: {:?}", e);
         }
         debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
+    } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
+        if let Some(matches) = matches.subcommand_matches("remove-fail-stores") {
+            let stores = matches.values_of("stores").unwrap();
+            match stores.map(|s| s.parse()).collect::<Result<Vec<u64>, _>>() {
+                Ok(store_ids) => debug_executor.remove_fail_stores(store_ids),
+                Err(e) => perror_and_exit("parse store id list", e),
+            }
+        }
     } else if let Some(matches) = matches.subcommand_matches("consistency-check") {
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
         debug_executor.check_region_consistency(region_id);
