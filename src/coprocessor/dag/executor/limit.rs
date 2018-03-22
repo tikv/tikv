@@ -15,6 +15,7 @@
 #![allow(dead_code)]
 
 use tipb::executor::Limit;
+use tipb::select;
 
 use coprocessor::Result;
 use coprocessor::dag::executor::{Executor, Row};
@@ -61,6 +62,10 @@ impl<'a> Executor for LimitExecutor<'a> {
             metrics.executor_count.limit += 1;
             self.first_collect = false;
         }
+    }
+
+    fn take_eval_warnings(&mut self) -> Vec<select::Error> {
+        self.src.take_eval_warnings()
     }
 }
 

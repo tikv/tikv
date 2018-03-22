@@ -88,6 +88,7 @@ impl DAGContext {
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
+                    sel_resp.set_warnings(RepeatedField::from_vec(self.exec.take_eval_warnings()));
                     self.exec
                         .collect_output_counts(sel_resp.mut_output_counts());
                     let data = box_try!(sel_resp.write_to_bytes());
@@ -134,6 +135,7 @@ impl DAGContext {
         let mut s_resp = StreamResponse::new();
         s_resp.set_encode_type(EncodeType::TypeDefault);
         s_resp.set_data(box_try!(chunk.write_to_bytes()));
+        s_resp.set_warnings(RepeatedField::from_vec(self.exec.take_eval_warnings()));
         self.exec.collect_output_counts(s_resp.mut_output_counts());
 
         let mut resp = Response::new();

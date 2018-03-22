@@ -16,6 +16,7 @@ use std::sync::Arc;
 use tipb::executor::{self, ExecType};
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
+use tipb::select;
 use kvproto::coprocessor::KeyRange;
 
 use coprocessor::codec::mysql;
@@ -136,6 +137,9 @@ pub trait Executor {
     fn next(&mut self) -> Result<Option<Row>>;
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>);
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics);
+    fn take_eval_warnings(&mut self) -> Vec<select::Error> {
+        Vec::default()
+    }
 
     /// Only `TableScan` and `IndexScan` need to implement `start_scan`.
     fn start_scan(&mut self) {}

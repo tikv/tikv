@@ -18,6 +18,7 @@ use std::cmp::Ordering;
 use tipb::schema::ColumnInfo;
 use tipb::executor::Aggregation;
 use tipb::expression::{Expr, ExprType};
+use tipb::select;
 
 use util::collections::{OrderMap, OrderMapEntry};
 use coprocessor::codec::table::RowColsDict;
@@ -209,6 +210,12 @@ impl Executor for HashAggExecutor {
             self.first_collect = false;
         }
     }
+
+    fn take_eval_warnings(&mut self) -> Vec<select::Error> {
+        let mut warnings = self.src.take_eval_warnings();
+        warnings.append(&mut self.ctx.take_warnings());
+        warnings
+    }
 }
 
 impl Executor for StreamAggExecutor {
@@ -261,6 +268,12 @@ impl Executor for StreamAggExecutor {
             metrics.executor_count.aggregation += 1;
             self.first_collect = false;
         }
+    }
+
+    fn take_eval_warnings(&mut self) -> Vec<select::Error> {
+        let mut warnings = self.src.take_eval_warnings();
+        warnings.append(&mut self.ctx.take_warnings());
+        warnings
     }
 }
 

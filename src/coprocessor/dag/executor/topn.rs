@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::mem;
 use std::usize;
 use std::sync::Arc;
 use std::vec::IntoIter;
@@ -18,6 +19,7 @@ use std::vec::IntoIter;
 use tipb::executor::TopN;
 use tipb::schema::ColumnInfo;
 use tipb::expression::ByItem;
+use tipb::select;
 
 use coprocessor::codec::datum::Datum;
 use coprocessor::Result;
@@ -57,6 +59,7 @@ pub struct TopNExecutor {
     related_cols_offset: Vec<usize>, // offset of related columns
     iter: Option<IntoIter<Row>>,
     ctx: EvalContext,
+    heap_warnings: Vec<select::Error>,
     src: Box<Executor + Send>,
     limit: usize,
     count: i64,
@@ -87,6 +90,7 @@ impl TopNExecutor {
             limit: meta.get_limit() as usize,
             count: 0,
             first_collect: true,
+            heap_warnings: Vec::default(),
         })
     }
 
@@ -116,9 +120,12 @@ impl TopNExecutor {
         let sort_rows = heap.into_sorted_vec()?;
         let data: Vec<Row> = sort_rows
             .into_iter()
-            .map(|sort_row| Row {
-                handle: sort_row.handle,
-                data: sort_row.data,
+            .map(|sort_row| {
+                self.heap_warnings.append(&mut sort_row.take_warnings());
+                Row {
+                    handle: sort_row.handle,
+                    data: sort_row.data,
+                }
             })
             .collect();
         self.iter = Some(data.into_iter());
@@ -153,6 +160,14 @@ impl Executor for TopNExecutor {
             metrics.executor_count.topn += 1;
             self.first_collect = false;
         }
+    }
+
+    fn take_eval_warnings(&mut self) -> Vec<select::Error> {
+        let mut warnings = self.src.take_eval_warnings();
+        warnings.append(&mut self.ctx.take_warnings());
+        let mut heap_warnings = mem::replace(&mut self.heap_warnings, Vec::new());
+        warnings.append(&mut heap_warnings);
+        warnings
     }
 }
 

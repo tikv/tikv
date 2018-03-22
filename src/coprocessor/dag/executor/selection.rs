@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use tipb::executor::Selection;
 use tipb::schema::ColumnInfo;
+use tipb::select;
 
 use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 use coprocessor::Result;
@@ -89,6 +90,12 @@ impl Executor for SelectionExecutor {
             metrics.executor_count.selection += 1;
             self.first_collect = false;
         }
+    }
+
+    fn take_eval_warnings(&mut self) -> Vec<select::Error> {
+        let mut warnings = self.src.take_eval_warnings();
+        warnings.append(&mut self.ctx.take_warnings());
+        warnings
     }
 }
 
