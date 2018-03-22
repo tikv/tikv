@@ -1052,7 +1052,8 @@ fn main() {
                         .short("n")
                         .takes_value(true)
                         .help("config name of the module, for kvdb or raftdb, you can choose \
-                            max_background_jobs or default.disable_auto_compactions, default stands for default column family(cf), \
+                            max_background_jobs or default.disable_auto_compactions and so on, \
+                            default stands for default column family(cf), \
                             default|write|lock|raft cf is for kvdb, default cf is for raftdb"),
                 )
                 .arg(
