@@ -21,6 +21,7 @@ extern crate futures;
 extern crate grpcio;
 extern crate kvproto;
 extern crate protobuf;
+extern crate raft;
 extern crate rocksdb;
 extern crate rustc_serialize;
 extern crate tikv;
@@ -42,9 +43,9 @@ use grpcio::{ChannelBuilder, Environment};
 use protobuf::RepeatedField;
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::raft_serverpb::PeerState;
+use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::metapb::{Peer, Region};
-use kvproto::eraftpb::{ConfChange, Entry, EntryType};
+use raft::eraftpb::{ConfChange, Entry, EntryType};
 use kvproto::kvrpcpb::MvccInfo;
 use kvproto::debugpb::*;
 use kvproto::debugpb::DB as DBType;
@@ -57,6 +58,11 @@ use tikv::server::debug::{Debugger, RegionInfo};
 use tikv::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::config::TiKvConfig;
+
+const METRICS_PROMETHEUS: &str = "prometheus";
+const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
+const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
+const METRICS_JEMALLOC: &str = "jemalloc";
 
 fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     eprintln!("{}: {}", prefix, e);
@@ -405,6 +411,8 @@ trait DebugExecutor {
     /// Init a new empty region on the store with given infos.
     fn init_empty_region(&self, Arc<SecurityManager>, &PdConfig, u64);
 
+    fn check_region_consistency(&self, _: u64);
+
     fn check_local_mode(&self);
 
     fn get_all_meta_regions(&self) -> Vec<u64>;
@@ -427,6 +435,7 @@ trait DebugExecutor {
     fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>);
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
+    fn dump_metrics(&self, tags: Vec<&str>);
 }
 
 impl DebugExecutor for DebugClient {
@@ -519,6 +528,29 @@ impl DebugExecutor for DebugClient {
         println!("success!");
     }
 
+    fn dump_metrics(&self, tags: Vec<&str>) {
+        let mut req = GetMetricsRequest::new();
+        req.set_all(true);
+        if tags.len() == 1 && tags[0] == METRICS_PROMETHEUS {
+            req.set_all(false);
+        }
+        let mut resp = self.get_metrics(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::metrics", e));
+        for tag in tags {
+            println!("tag:{}", tag);
+            let metrics = match tag {
+                METRICS_ROCKSDB_KV => resp.take_rocksdb_kv(),
+                METRICS_ROCKSDB_RAFT => resp.take_rocksdb_raft(),
+                METRICS_JEMALLOC => resp.take_jemalloc(),
+                METRICS_PROMETHEUS => resp.take_prometheus(),
+                _ => String::from(
+                    "unsupported tag, should be one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv",
+                ),
+            };
+            println!("{}", metrics);
+        }
+    }
+
     fn set_region_tombstone(&self, _: Vec<Region>) {
         unimplemented!("only avaliable for local mode");
     }
@@ -537,6 +569,14 @@ impl DebugExecutor for DebugClient {
 
     fn init_empty_region(&self, _: Arc<SecurityManager>, _: &PdConfig, _: u64) {
         self.check_local_mode();
+    }
+
+    fn check_region_consistency(&self, region_id: u64) {
+        let mut req = RegionConsistencyCheckRequest::new();
+        req.set_region_id(region_id);
+        self.check_region_consistency(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::check_region_consistency", e));
+        println!("success!");
     }
 }
 
@@ -665,6 +705,15 @@ impl DebugExecutor for Debugger {
         self.init_empty_region(region)
             .unwrap_or_else(|e| perror_and_exit("Debugger::init_empty_region", e));
         println!("success");
+    }
+
+    fn dump_metrics(&self, _tags: Vec<&str>) {
+        unimplemented!("only avaliable for online mode");
+    }
+
+    fn check_region_consistency(&self, _: u64) {
+        eprintln!("only support remote mode");
+        process::exit(-1);
     }
 }
 
@@ -1028,10 +1077,46 @@ fn main() {
                         .short("r")
                         .takes_value(true)
                         .help("the origin region id"),
+                        ),
+        )
+        .subcommand(
+            SubCommand::with_name("metrics")
+                .about("print the metrics")
+                .arg(
+                    Arg::with_name("tag")
+                        .short("t")
+                        .long("tag")
+                        .takes_value(true)
+                        .multiple(true)
+                        .use_delimiter(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
+                        .default_value(METRICS_PROMETHEUS)
+                        .help(
+                            "set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not specified, print prometheus",
+                        ),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("consistency-check")
+                .about("force consistency-check for a specified region")
+                .arg(
+                    Arg::with_name("region")
+                        .required(true)
+                        .short("r")
+                        .takes_value(true)
+                        .help("the target region"),
                 ),
         )
         .subcommand(
             SubCommand::with_name("bad-regions").about("get all regions with corrupt raft"),
+        )
+        .subcommand(
+            SubCommand::with_name("dump-snap-meta").about("dump snapshot meta file")
+            .arg(Arg::with_name("file")
+                 .short("f").long("file")
+                 .takes_value(true)
+                 .help("meta file path"))
         );
     let matches = app.clone().get_matches();
 
@@ -1049,6 +1134,11 @@ fn main() {
         (None, None) => {}
         _ => unreachable!(),
     };
+
+    if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
+        let path = matches.value_of("file").unwrap();
+        return dump_snap_meta_file(path);
+    }
 
     let db = matches.value_of("db");
     let raft_db = matches.value_of("raftdb");
@@ -1143,8 +1233,14 @@ fn main() {
         pd_cfg.endpoints = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
         debug_executor.init_empty_region(mgr, &pd_cfg, region_id);
+    } else if let Some(matches) = matches.subcommand_matches("consistency-check") {
+        let region_id = matches.value_of("region").unwrap().parse().unwrap();
+        debug_executor.check_region_consistency(region_id);
     } else if matches.subcommand_matches("bad-regions").is_some() {
         debug_executor.print_bad_regions();
+    } else if let Some(matches) = matches.subcommand_matches("metrics") {
+        let tags = Vec::from_iter(matches.values_of("tag").unwrap());
+        debug_executor.dump_metrics(tags)
     } else {
         let _ = app.print_help();
     }
@@ -1198,4 +1294,22 @@ fn new_security_mgr(matches: &ArgMatches) -> Arc<SecurityManager> {
     cfg.cert_path = cert_path.unwrap().to_owned();
     cfg.key_path = key_path.unwrap().to_owned();
     Arc::new(SecurityManager::new(&cfg).expect("failed to initialize security manager"))
+}
+
+fn dump_snap_meta_file(path: &str) {
+    let mut f =
+        File::open(path).unwrap_or_else(|e| panic!("open file {} failed, error {:?}", path, e));
+    let mut content = Vec::new();
+    f.read_to_end(&mut content)
+        .unwrap_or_else(|e| panic!("read meta file error {:?}", e));
+
+    let mut meta = SnapshotMeta::new();
+    meta.merge_from_bytes(&content)
+        .unwrap_or_else(|e| panic!("parse from bytes error {:?}", e));
+    for cf_file in meta.get_cf_files() {
+        println!(
+            "cf {}, size {}, checksum: {}",
+            cf_file.cf, cf_file.size, cf_file.checksum
+        );
+    }
 }

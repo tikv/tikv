@@ -136,6 +136,17 @@ mod test {
     }
 
     #[test]
+    fn test_hash() {
+        let hash_result = CMSketch::hash("€".as_bytes());
+        assert_eq!(hash_result.0, 0x59E3303A2FDD9555);
+        assert_eq!(hash_result.1, 0x4F9D8BB3E4BC3164);
+
+        let hash_result = CMSketch::hash("€€€€€€€€€€".as_bytes());
+        assert_eq!(hash_result.0, 0xCECFEB77375EEF6F);
+        assert_eq!(hash_result.1, 0xE9830BC26869E2C6);
+    }
+
+    #[test]
     fn test_cm_sketch() {
         let (depth, width) = (8, 2048);
         let (total, max_value) = (10000, 10000000);

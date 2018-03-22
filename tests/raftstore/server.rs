@@ -13,6 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, RwLock};
+use std::path::Path;
 
 use grpc::EnvBuilder;
 use tempdir::TempDir;
@@ -22,6 +23,7 @@ use tikv::server::{Server, ServerTransport};
 use tikv::server::{create_raft_storage, Config, Node, PdStoreAddrResolver, RaftClient};
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::ServerRaftStoreRouter;
+use tikv::server::readpool::ReadPool;
 use tikv::raftstore::{store, Result};
 use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager};
 use tikv::raftstore::coprocessor::CoprocessorHost;
@@ -29,7 +31,7 @@ use tikv::server::transport::RaftStoreRouter;
 use tikv::util::transport::SendCh;
 use tikv::util::security::SecurityManager;
 use tikv::util::worker::{FutureWorker, Worker};
-use tikv::storage::Engine;
+use tikv::storage::{self, Engine};
 use tikv::import::{ImportSSTService, SSTImporter};
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
@@ -120,16 +122,23 @@ impl Simulator for ServerCluster {
         let (engines, path) = create_test_engine(engines, store_sendch.clone(), &cfg);
 
         // Create storage.
-        let mut store = create_raft_storage(sim_router.clone(), &cfg.storage).unwrap();
+        let read_pool = ReadPool::new("readpool", &cfg.readpool.storage, || {
+            || storage::ReadPoolContext::new(None)
+        });
+        let mut store = create_raft_storage(sim_router.clone(), &cfg.storage, read_pool).unwrap();
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
         // Create import service.
         let importer = {
-            let dir = TempDir::new("test-import-sst").unwrap().into_path();
+            let dir = Path::new(engines.kv_engine.path()).join("import-sst");
             Arc::new(SSTImporter::new(dir).unwrap())
         };
-        let import_service = ImportSSTService::new(cfg.import.clone(), store.clone(), importer);
+        let import_service = ImportSSTService::new(
+            cfg.import.clone(),
+            sim_router.clone(),
+            Arc::clone(&importer),
+        );
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
@@ -174,6 +183,7 @@ impl Simulator for ServerCluster {
             snap_status_receiver,
             pd_worker,
             coprocessor_host,
+            importer,
         ).unwrap();
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

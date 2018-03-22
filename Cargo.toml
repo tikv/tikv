@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "1.1.0-dev.1"
+version = "2.0.0-rc.2"
 keywords = ["KV", "distributed-systems", "raft"]
 build = "build.rs"
 
@@ -55,7 +55,7 @@ regex = "0.1"
 fnv = "1.0"
 sys-info = "0.5.1"
 flat_map = "0.0.4"
-ordermap = "0.3"
+indexmap = "1.0"
 mio = "0.5"
 futures = "0.1"
 futures-cpupool = "0.1"
@@ -65,14 +65,17 @@ serde = "1.0"
 serde_json = "1.0"
 serde_derive = "1.0"
 rustc-serialize = "0.3"
-murmur3 = "0.4.0"
 zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.4", features = [ "serde", "v4" ] }
+raft = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.4"
+
+[dependencies.murmur3]
+git = "https://github.com/pingcap/murmur3.git"
 
 [dependencies.rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"

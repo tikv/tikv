@@ -25,7 +25,7 @@ use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
 use kvproto::metapb::Region;
 use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
 use kvproto::debugpb::DB as DBType;
-use kvproto::eraftpb::Entry;
+use raft::eraftpb::Entry;
 use kvproto::raft_serverpb::*;
 
 use raft::{self, quorum, RawNode};
@@ -95,6 +95,10 @@ pub struct Debugger {
 impl Debugger {
     pub fn new(engines: Engines) -> Debugger {
         Debugger { engines }
+    }
+
+    pub fn get_engine(&self) -> &Engines {
+        &self.engines
     }
 
     /// Get all regions holding region meta data from raft CF in KV storage.
@@ -708,7 +712,7 @@ mod tests {
 
     use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
     use kvproto::metapb::{Peer, Region};
-    use kvproto::eraftpb::EntryType;
+    use raft::eraftpb::EntryType;
     use tempdir::TempDir;
 
     use raftstore::store::engine::Mutable;

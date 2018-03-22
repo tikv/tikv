@@ -45,6 +45,10 @@ quick_error! {
             description(msg)
             display("config value error: {}", msg)
         }
+        FileSystem(msg: String) {
+            description(msg)
+            display("{}", msg)
+        }
     }
 }
 
@@ -737,6 +741,240 @@ pub use self::check_kernel::check_kernel;
 #[cfg(not(target_os = "linux"))]
 pub fn check_kernel() -> Vec<ConfigError> {
     Vec::new()
+}
+
+#[cfg(target_os = "linux")]
+mod check_data_dir {
+    use std::fs::{self, File};
+    use std::io::Read;
+    use std::ffi::{CStr, CString};
+    use std::path::Path;
+    use std::sync::Mutex;
+    use libc;
+
+    use super::{canonicalize_path, ConfigError};
+
+    #[derive(Debug, Default)]
+    struct FsInfo {
+        tp: String,
+        opts: String,
+        mnt_dir: String,
+        fsname: String,
+    }
+
+    fn get_fs_info(path: &str, mnt_file: &str) -> Result<FsInfo, ConfigError> {
+        lazy_static! {
+            // According `man 3 getmntent`, The pointer returned by `getmntent` points
+            // to a static area of memory which is overwritten by subsequent calls.
+            // So we use a lock to protect it in order to avoid `make dev` fail.
+            static ref GETMNTENT_LOCK: Mutex<()> = Mutex::new(());
+        }
+
+        unsafe {
+            let _lock = GETMNTENT_LOCK.lock().unwrap();
+
+            let profile = CString::new(mnt_file).unwrap();
+            let retype = CString::new("r").unwrap();
+            let afile = libc::setmntent(profile.as_ptr(), retype.as_ptr());
+            let mut fs = FsInfo::default();
+            loop {
+                let ent = libc::getmntent(afile);
+                if ent.is_null() {
+                    break;
+                }
+                let ent = &*ent;
+                let cur_dir = CStr::from_ptr(ent.mnt_dir).to_str().unwrap();
+                if path.starts_with(&cur_dir) && cur_dir.len() >= fs.mnt_dir.len() {
+                    fs.tp = CStr::from_ptr(ent.mnt_type).to_str().unwrap().to_owned();
+                    fs.opts = CStr::from_ptr(ent.mnt_opts).to_str().unwrap().to_owned();
+                    fs.fsname = CStr::from_ptr(ent.mnt_fsname).to_str().unwrap().to_owned();
+                    fs.mnt_dir = cur_dir.to_owned();
+                }
+            }
+
+            libc::endmntent(afile);
+            if fs.mnt_dir.is_empty() {
+                return Err(ConfigError::FileSystem(format!(
+                    "path: {:?} not find in mountable",
+                    path
+                )));
+            }
+            Ok(fs)
+        }
+    }
+
+    fn get_rotational_info(fsname: &str) -> Result<String, ConfigError> {
+        // get device path
+        let device = match fs::canonicalize(fsname) {
+            Ok(path) => format!("{}", path.display()),
+            Err(_) => String::from(fsname),
+        };
+        let dev = device.trim_left_matches("/dev/");
+        let block_dir = "/sys/block";
+        let mut device_dir = format!("{}/{}", block_dir, dev);
+        if !Path::new(&device_dir).exists() {
+            let dir = fs::read_dir(&block_dir).map_err(|e| {
+                ConfigError::FileSystem(format!("read block dir {:?} failed: {:?}", block_dir, e))
+            })?;
+            let mut find = false;
+            for entry in dir {
+                if entry.is_err() {
+                    continue;
+                }
+                let entry = entry.unwrap();
+                let mut cur_path = entry.path();
+                cur_path.push(dev);
+                if cur_path.exists() {
+                    device_dir = entry.path().to_str().unwrap().to_owned();
+                    find = true;
+                    break;
+                }
+            }
+            if !find {
+                return Err(ConfigError::FileSystem(format!(
+                    "fs: {:?} no device find in block",
+                    fsname
+                )));
+            }
+        }
+
+        let rota_path = format!("{}/queue/rotational", device_dir);
+        if !Path::new(&rota_path).exists() {
+            return Err(ConfigError::FileSystem(format!(
+                "block {:?} has no rotational file",
+                device_dir
+            )));
+        }
+
+        let mut buffer = String::new();
+        File::open(&rota_path)
+            .and_then(|mut f| f.read_to_string(&mut buffer))
+            .map_err(|e| {
+                ConfigError::FileSystem(format!(
+                    "get_rotational_info from {:?} failed: {:?}",
+                    rota_path, e
+                ))
+            })?;
+        Ok(buffer.trim_matches('\n').to_owned())
+    }
+
+    // check device && fs
+    pub fn check_data_dir(data_path: &str, mnt_file: &str) -> Result<(), ConfigError> {
+        let real_path = match canonicalize_path(data_path) {
+            Ok(path) => path,
+            Err(e) => {
+                return Err(ConfigError::FileSystem(format!(
+                    "path: {:?} canonicalize failed: {:?}",
+                    data_path, e
+                )))
+            }
+        };
+
+        let fs_info = get_fs_info(&real_path, mnt_file)?;
+        // TODO check ext4 nodelalloc
+        info!("data_path: {:?}, mount fs info: {:?}", data_path, fs_info);
+        let rotational_info = get_rotational_info(&fs_info.fsname)?;
+        if rotational_info != "0" {
+            warn!("{:?} not on SSD device", data_path);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod test {
+        use std::fs::File;
+        use std::io::Write;
+        use std::os::unix::fs::symlink;
+        use tempdir::TempDir;
+
+        use super::*;
+
+        fn create_file(fpath: &str, buf: &[u8]) {
+            let mut file = File::create(fpath).unwrap();
+            file.write_all(buf).unwrap();
+            file.flush().unwrap();
+        }
+
+        #[test]
+        fn test_get_fs_info() {
+            let tmp_dir = TempDir::new("test-get-fs-info").unwrap();
+            let mninfo = br#"tmpfs /home tmpfs rw,nosuid,noexec,relatime,size=1628744k,mode=755 0 0
+/dev/sda4 /home/shirly ext4 rw,relatime,errors=remount-ro,data=ordered 0 0
+/dev/sdb /data1 ext4 rw,relatime,errors=remount-ro,data=ordered 0 0
+securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
+"#;
+            let mnt_file = format!("{}", tmp_dir.into_path().join("mnt.txt").display());
+            create_file(&mnt_file, mninfo);
+            let f = get_fs_info("/home/shirly/1111", &mnt_file).unwrap();
+            assert_eq!(f.fsname, "/dev/sda4");
+            assert_eq!(f.mnt_dir, "/home/shirly");
+
+            // not found
+            let f2 = get_fs_info("/tmp", &mnt_file);
+            assert!(f2.is_err());
+        }
+
+        #[test]
+        fn test_get_rotational_info() {
+            // test device not exist
+            let ret = get_rotational_info("/dev/invalid");
+            assert!(ret.is_err());
+        }
+
+        #[test]
+        fn test_check_data_dir() {
+            // test invalid data_path
+            let ret = check_data_dir("/sys/invalid", "/proc/mounts");
+            assert!(ret.is_err());
+            // get real path's fs_info
+            let tmp_dir = TempDir::new("test-get-fs-info").unwrap();
+            let data_path = format!("{}/data1", tmp_dir.path().display());
+            let fs_info = get_fs_info(&data_path, "/proc/mounts").unwrap();
+
+            // data_path may not mountted on a normal device on container
+            if !fs_info.fsname.starts_with("/dev") {
+                return;
+            }
+
+            // test with real path
+            let ret = check_data_dir(&data_path, "/proc/mounts");
+            assert!(ret.is_ok());
+
+            // test with device mapper
+            // get real_path's rotational info
+            let expect = get_rotational_info(&fs_info.fsname).unwrap();
+            // ln -s fs_info.fsname tmp_device
+            let tmp_device = format!("{}/tmp_device", tmp_dir.path().display());
+            // /dev/xxx may not exists in container.
+            if !Path::new(&fs_info.fsname).exists() {
+                return;
+            }
+            symlink(&fs_info.fsname, &tmp_device).unwrap();
+            // mount info: data_path=>tmp_device
+            let mninfo = format!(
+                "{} {} ext4 rw,relatime,errors=remount-ro,data=ordered 0 0",
+                &tmp_device, &data_path
+            );
+            let mnt_file = format!("{}/mnt.txt", tmp_dir.path().display());
+            create_file(&mnt_file, mninfo.as_bytes());
+            // check info
+            let res = check_data_dir(&data_path, &mnt_file);
+            assert!(res.is_ok());
+            // check rotational info
+            let get = get_rotational_info(&tmp_device).unwrap();
+            assert_eq!(expect, get);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn check_data_dir(data_path: &str) -> Result<(), ConfigError> {
+    self::check_data_dir::check_data_dir(data_path, "/proc/mounts")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn check_data_dir(_data_path: &str) -> Result<(), ConfigError> {
+    Ok(())
 }
 
 /// `check_addr` validates an address. Addresses are formed like "Host:Port".
