@@ -35,7 +35,12 @@ pub enum CmpOp {
 }
 
 impl FnCall {
-    pub fn compare_int(&self, ctx: &EvalContext, row: &[Datum], op: CmpOp) -> Result<Option<i64>> {
+    pub fn compare_int(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+        op: CmpOp,
+    ) -> Result<Option<i64>> {
         let e = |i: usize| self.children[i].eval_int(ctx, row);
         do_compare(e, op, |l, r| {
             let lhs_unsigned = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
@@ -44,7 +49,12 @@ impl FnCall {
         })
     }
 
-    pub fn compare_real(&self, ctx: &EvalContext, row: &[Datum], op: CmpOp) -> Result<Option<i64>> {
+    pub fn compare_real(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+        op: CmpOp,
+    ) -> Result<Option<i64>> {
         do_compare(
             |i| self.children[i].eval_real(ctx, row),
             op,
@@ -54,7 +64,7 @@ impl FnCall {
 
     pub fn compare_decimal(
         &self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &[Datum],
         op: CmpOp,
     ) -> Result<Option<i64>> {
@@ -64,7 +74,7 @@ impl FnCall {
 
     pub fn compare_string(
         &self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &[Datum],
         op: CmpOp,
     ) -> Result<Option<i64>> {
@@ -72,14 +82,19 @@ impl FnCall {
         do_compare(e, op, |l, r| Ok(l.cmp(&r)))
     }
 
-    pub fn compare_time(&self, ctx: &EvalContext, row: &[Datum], op: CmpOp) -> Result<Option<i64>> {
+    pub fn compare_time(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+        op: CmpOp,
+    ) -> Result<Option<i64>> {
         let e = |i: usize| self.children[i].eval_time(ctx, row);
         do_compare(e, op, |l, r| Ok(l.cmp(&r)))
     }
 
     pub fn compare_duration(
         &self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &[Datum],
         op: CmpOp,
     ) -> Result<Option<i64>> {
@@ -87,23 +102,28 @@ impl FnCall {
         do_compare(e, op, |l, r| Ok(l.cmp(&r)))
     }
 
-    pub fn compare_json(&self, ctx: &EvalContext, row: &[Datum], op: CmpOp) -> Result<Option<i64>> {
+    pub fn compare_json(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+        op: CmpOp,
+    ) -> Result<Option<i64>> {
         let e = |i: usize| self.children[i].eval_json(ctx, row);
         do_compare(e, op, |l, r| Ok(l.cmp(&r)))
     }
 
     /// See http://dev.mysql.com/doc/refman/5.7/en/comparison-operators.html#function_coalesce
-    pub fn coalesce_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn coalesce_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         do_coalesce(self, |v| v.eval_int(ctx, row))
     }
 
-    pub fn coalesce_real(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn coalesce_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         do_coalesce(self, |v| v.eval_real(ctx, row))
     }
 
     pub fn coalesce_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         do_coalesce(self, |v| v.eval_decimal(ctx, row))
@@ -111,7 +131,7 @@ impl FnCall {
 
     pub fn coalesce_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         do_coalesce(self, |v| v.eval_time(ctx, row))
@@ -119,7 +139,7 @@ impl FnCall {
 
     pub fn coalesce_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         do_coalesce(self, |v| v.eval_duration(ctx, row))
@@ -127,7 +147,7 @@ impl FnCall {
 
     pub fn coalesce_string<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         do_coalesce(self, |v| v.eval_string(ctx, row))
@@ -135,13 +155,13 @@ impl FnCall {
 
     pub fn coalesce_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         do_coalesce(self, |v| v.eval_json(ctx, row))
     }
 
-    pub fn in_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn in_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         do_in(
             self,
             |v| v.eval_int(ctx, row),
@@ -158,7 +178,7 @@ impl FnCall {
         )
     }
 
-    pub fn in_real(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn in_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         do_in(
             self,
             |v| v.eval_real(ctx, row),
@@ -166,23 +186,23 @@ impl FnCall {
         )
     }
 
-    pub fn in_decimal(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn in_decimal(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         do_in(self, |v| v.eval_decimal(ctx, row), |l, r| Ok(l.cmp(r)))
     }
 
-    pub fn in_time(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn in_time(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         do_in(self, |v| v.eval_time(ctx, row), |l, r| Ok(l.cmp(r)))
     }
 
-    pub fn in_duration(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn in_duration(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         do_in(self, |v| v.eval_duration(ctx, row), |l, r| Ok(l.cmp(r)))
     }
 
-    pub fn in_string(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn in_string(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         do_in(self, |v| v.eval_string(ctx, row), |l, r| Ok(l.cmp(r)))
     }
 
-    pub fn in_json(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn in_json(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         do_in(self, |v| v.eval_json(ctx, row), |l, r| Ok(l.cmp(r)))
     }
 
@@ -190,7 +210,7 @@ impl FnCall {
     /// charsets. This behaviour is for keeping compatible with TiDB. But MySQL
     /// compare them as bytes only if any charset of pattern or target is binary,
     /// otherwise MySQL will compare decoded string.
-    pub fn like(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn like(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let target = try_opt!(self.children[0].eval_string(ctx, row));
         let pattern = try_opt!(self.children[1].eval_string(ctx, row));
         let escape = try_opt!(self.children[2].eval_int(ctx, row)) as u32;
@@ -198,9 +218,9 @@ impl FnCall {
     }
 }
 
-fn do_compare<T, E, F>(e: E, op: CmpOp, get_order: F) -> Result<Option<i64>>
+fn do_compare<T, E, F>(mut e: E, op: CmpOp, get_order: F) -> Result<Option<i64>>
 where
-    E: Fn(usize) -> Result<Option<T>>,
+    E: FnMut(usize) -> Result<Option<T>>,
     F: Fn(T, T) -> Result<Ordering>,
 {
     let lhs = e(0)?;
@@ -256,9 +276,9 @@ fn cmp_i64_with_unsigned_flag(
     }
 }
 
-fn do_coalesce<'a, F, T>(expr: &'a FnCall, f: F) -> Result<Option<T>>
+fn do_coalesce<'a, F, T>(expr: &'a FnCall, mut f: F) -> Result<Option<T>>
 where
-    F: Fn(&'a Expression) -> Result<Option<T>>,
+    F: FnMut(&'a Expression) -> Result<Option<T>>,
 {
     for exp in &expr.children {
         let v = f(exp)?;
@@ -269,9 +289,9 @@ where
     Ok(None)
 }
 
-fn do_in<'a, T, E, F>(expr: &'a FnCall, f: F, get_order: E) -> Result<Option<i64>>
+fn do_in<'a, T, E, F>(expr: &'a FnCall, mut f: F, get_order: E) -> Result<Option<i64>>
 where
-    F: Fn(&'a Expression) -> Result<Option<T>>,
+    F: FnMut(&'a Expression) -> Result<Option<T>>,
     E: Fn(&T, &T) -> Result<Ordering>,
 {
     let (first, others) = expr.children.split_first().unwrap();
@@ -458,7 +478,7 @@ mod test {
             ),
         ];
 
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
 
         for (sig, row, exp) in cases {
             let children: Vec<Expr> = (0..row.len()).map(|id| col_expr(id as i64)).collect();
@@ -467,8 +487,8 @@ mod test {
             expr.set_sig(sig);
 
             expr.set_children(RepeatedField::from_vec(children));
-            let e = Expression::build(&ctx, expr).unwrap();
-            let res = e.eval(&ctx, &row).unwrap();
+            let e = Expression::build(&mut ctx, expr).unwrap();
+            let res = e.eval(&mut ctx, &row).unwrap();
             assert_eq!(res, exp);
         }
     }
@@ -593,7 +613,7 @@ mod test {
             ),
         ];
 
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
 
         for (sig, row, exp) in cases {
             let children: Vec<Expr> = (0..row.len()).map(|id| col_expr(id as i64)).collect();
@@ -602,8 +622,8 @@ mod test {
             expr.set_sig(sig);
 
             expr.set_children(RepeatedField::from_vec(children));
-            let e = Expression::build(&ctx, expr).unwrap();
-            let res = e.eval(&ctx, &row).unwrap();
+            let e = Expression::build(&mut ctx, expr).unwrap();
+            let res = e.eval(&mut ctx, &row).unwrap();
             assert_eq!(res, exp);
         }
     }
@@ -642,14 +662,14 @@ mod test {
             (r#"3hello"#, r#"__hello"#, '_', false),
             (r#"3hello"#, r#"%_hello"#, '%', true),
         ];
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
         for (target_str, pattern_str, escape, exp) in cases {
             let target = datum_expr(Datum::Bytes(target_str.as_bytes().to_vec()));
             let pattern = datum_expr(Datum::Bytes(pattern_str.as_bytes().to_vec()));
             let escape = datum_expr(Datum::I64(escape as i64));
             let op = fncall_expr(ScalarFuncSig::LikeSig, &[target, pattern, escape]);
-            let op = Expression::build(&ctx, op).unwrap();
-            let got = op.eval(&ctx, &[]).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::from(exp);
             assert_eq!(got, exp, "{:?} like {:?}", target_str, pattern_str);
         }
