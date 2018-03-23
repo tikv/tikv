@@ -335,6 +335,9 @@ mod test {
         let snapshot_store = store.store();
         let mut statistics = Statistics::default();
         let data = snapshot_store.get(&make_key(k), &mut statistics).unwrap();
+        assert_eq!(statistics.write.processed, 4);
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.next, 3);
         assert_eq!(data.unwrap(), v1);
     }
 
