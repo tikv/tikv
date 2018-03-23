@@ -348,11 +348,23 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
 
     fn modify_tikv_config(
         &self,
-        _ctx: RpcContext,
-        _req: ModifyTikvConfigRequest,
-        _sink: UnarySink<ModifyTikvConfigResponse>,
+        ctx: RpcContext,
+        mut req: ModifyTikvConfigRequest,
+        sink: UnarySink<ModifyTikvConfigResponse>,
     ) {
-        unimplemented!()
+        const TAG: &str = "modify_tikv_config";
+
+        let module = req.get_module();
+        let config_name = req.take_config_name();
+        let config_value = req.take_config_value();
+
+        let f = self.pool
+            .spawn(future::ok(self.debugger.clone()).and_then(move |debugger| {
+                debugger.modify_tikv_config(module, &config_name, &config_value)
+            }))
+            .map(|_| ModifyTikvConfigResponse::new());
+
+        self.handle_response(ctx, sink, f, TAG);
     }
 }
 
