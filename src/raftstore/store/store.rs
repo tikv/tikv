@@ -58,7 +58,7 @@ use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, Clea
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
-use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
+use super::engine::{Iterable, Mutable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
@@ -298,7 +298,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     region,
                     self.store_id()
                 );
-                self.clear_stale_meta(&mut kv_wb, &mut raft_wb, region);
+                self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
                 return Ok(true);
             }
             if local_state.get_state() == PeerState::Applying {
@@ -360,7 +360,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 region,
                 self.store_id()
             );
-            self.on_ready_prepare_merge(region, state);
+            self.on_ready_prepare_merge(region, state, false);
         }
 
         info!(
@@ -385,8 +385,9 @@ impl<T, C> Store<T, C> {
         &mut self,
         kv_wb: &mut WriteBatch,
         raft_wb: &mut WriteBatch,
-        region: &metapb::Region,
+        origin_state: &RegionLocalState,
     ) {
+        let region = origin_state.get_region();
         let raft_key = keys::raft_state_key(region.get_id());
         let raft_state = match self.raft_engine.get_msg(&raft_key).unwrap() {
             // it has been cleaned up.
@@ -402,8 +403,9 @@ impl<T, C> Store<T, C> {
             region.get_id(),
             &raft_state,
         ).unwrap();
-        peer_storage::write_peer_state(&self.kv_engine, kv_wb, region, PeerState::Tombstone)
-            .unwrap();
+        let key = keys::region_state_key(region.get_id());
+        let handle = rocksdb::get_cf_handle(&self.kv_engine, CF_RAFT).unwrap();
+        kv_wb.put_msg_cf(handle, &key, origin_state).unwrap();
     }
 
     /// `clear_stale_data` clean up all possible garbage data.
@@ -967,6 +969,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     local_state
                 ));
             }
+            debug!("[region {}] tombstone state: {:?}", region_id, local_state);
             let region = local_state.get_region();
             let region_epoch = region.get_region_epoch();
             if local_state.has_merge_state() {
@@ -1749,12 +1752,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let min_index = peer.get_min_progress() + 1;
             let low = cmp::max(min_index, state.get_min_index());
             // TODO: move this into raft module.
-            let entries = if low >= state.get_commit() {
+            // +1 to include the PrepareMerge proposal.
+            let entries = if low >= state.get_commit() + 1 {
                 vec![]
             } else {
                 self.region_peers[&region.get_id()]
                     .get_store()
-                    .entries(low, state.get_commit(), NO_LIMIT)
+                    .entries(low, state.get_commit() + 1, NO_LIMIT)
                     .unwrap()
             };
 
@@ -1812,11 +1816,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_merge_check_tick(event_loop);
     }
 
-    fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState) {
+    fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState, merged: bool) {
         {
             let peer = self.region_peers.get_mut(&region.get_id()).unwrap();
             peer.pending_merge = Some(state);
             peer.mut_store().region = region.clone();
+        }
+
+        if merged {
+            // CommitMerge will try to catch up log for source region. If PrepareMerge is executed
+            // in the progress of catching up, there is no need to schedule merge again.
+            return;
         }
 
         if let Err(e) = self.schedule_merge(&region) {
@@ -1833,13 +1843,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_ready_commit_merge(&mut self, region: metapb::Region, source: metapb::Region) {
         let source_peer = {
             let peer = self.region_peers.get_mut(&source.get_id()).unwrap();
-            // In some case, PrepareMerge entry may be carried by the dst region. So
-            // the peer is not in merging mode.
-            if peer.pending_merge.is_none() {
-                let mut state = MergeState::new();
-                state.set_target(region.clone());
-                peer.pending_merge = Some(state);
-            }
+            assert!(peer.pending_merge.is_some());
             peer.peer.clone()
         };
         self.destroy_peer(source.get_id(), source_peer, true);
@@ -1949,7 +1953,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     right_derive,
                 } => self.on_ready_split_region(region_id, left, right, right_derive),
                 ExecResult::PrepareMerge { region, state } => {
-                    self.on_ready_prepare_merge(region, state);
+                    self.on_ready_prepare_merge(region, state, merged);
                 }
                 ExecResult::CommitMerge { region, source } => {
                     self.on_ready_commit_merge(region, source);
