@@ -45,12 +45,12 @@ impl HalfStatus {
         self.cur_bucket_size += current_len;
     }
 
-    pub fn split_key(self) -> Option<Vec<u8>> {
+    pub fn split_key(mut self) -> Option<Vec<u8>> {
         let mid = self.buckets.len() / 2;
         if mid == 0 {
             None
         } else {
-            self.buckets.get(mid).cloned()
+            Some(self.buckets.swap_remove(mid))
         }
     }
 }
