@@ -54,7 +54,7 @@ mod cleanup_sst;
 pub mod apply;
 
 pub use self::region::{Runner as RegionRunner, Task as RegionTask};
-pub use self::split_check::{Runner as SplitCheckRunner, SplitType, Task as SplitCheckTask};
+pub use self::split_check::{Runner as SplitCheckRunner, Task as SplitCheckTask};
 pub use self::compact::{Runner as CompactRunner, Task as CompactTask};
 pub use self::raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask};
 pub use self::consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask};

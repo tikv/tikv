@@ -49,4 +49,4 @@ pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 
 // Only used in tests
 #[cfg(test)]
-pub use self::worker::{SplitCheckRunner, SplitCheckTask, SplitType};
+pub use self::worker::{SplitCheckRunner, SplitCheckTask};

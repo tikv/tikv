@@ -115,7 +115,7 @@ mod tests {
     use kvproto::metapb::Region;
 
     use storage::ALL_CFS;
-    use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask, SplitType};
+    use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
     use util::rocksdb::{new_engine_opt, CFOptions};
     use util::worker::Runnable;
     use util::transport::RetryableSendCh;
@@ -160,7 +160,7 @@ mod tests {
         // we flush it to SST so we can use the size properties instead.
         engine.flush(true).unwrap();
 
-        runnable.run(SplitCheckTask::new(&region, SplitType::HalfSplit));
+        runnable.run(SplitCheckTask::new(&region, false));
         match rx.try_recv() {
             Ok(Msg::SplitRegion {
                 region_id,

@@ -53,7 +53,7 @@ use import::SSTImporter;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, CleanupSSTTask,
                     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
                     RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
-                    SplitCheckTask, SplitType};
+                    SplitCheckTask};
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -2351,7 +2351,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             {
                 continue;
             }
-            let task = SplitCheckTask::new(peer.region(), SplitType::AutoSplit);
+            let task = SplitCheckTask::new(peer.region(), true);
             if let Err(e) = self.split_check_worker.schedule(task) {
                 error!("{} failed to schedule split check: {}", self.tag, e);
             }
@@ -2556,7 +2556,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return;
         }
 
-        let task = SplitCheckTask::new(region, SplitType::HalfSplit);
+        let task = SplitCheckTask::new(region, false);
         if let Err(e) = self.split_check_worker.schedule(task) {
             error!("{} failed to schedule split check: {}", self.tag, e);
         }
