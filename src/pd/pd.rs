@@ -69,6 +69,7 @@ pub enum Task {
     ValidatePeer {
         region: metapb::Region,
         peer: metapb::Peer,
+        merge_source: Option<u64>,
     },
     ReadStats {
         read_stats: HashMap<u64, FlowStatistics>,
@@ -149,7 +150,12 @@ impl Display for Task {
             Task::ValidatePeer {
                 ref region,
                 ref peer,
-            } => write!(f, "validate peer {:?} with region {:?}", peer, region),
+                ref merge_source,
+            } => write!(
+                f,
+                "validate peer {:?} with region {:?}, merge_source {:?}",
+                peer, region, merge_source
+            ),
             Task::ReadStats { ref read_stats } => {
                 write!(f, "get the read statistics {:?}", read_stats)
             }
@@ -336,6 +342,7 @@ impl<T: PdClient> Runner<T> {
         handle: &Handle,
         local_region: metapb::Region,
         peer: metapb::Peer,
+        merge_source: Option<u64>,
     ) {
         let ch = self.ch.clone();
         let f = self.pd_client
@@ -351,9 +358,9 @@ impl<T: PdClient> Runner<T> {
                             // This means the region info in PD is not updated to the latest even
                             // after max_leader_missing_duration. Something is wrong in the system.
                             // Just add a log here for this situation.
-                            error!(
+                            info!(
                                 "[region {}] {} the local region epoch: {:?} is greater the \
-                                 region epoch in PD: {:?}. Something is wrong!",
+                                 region epoch in PD: {:?}, ignored.",
                                 local_region.get_id(),
                                 peer.get_id(),
                                 local_region.get_region_epoch(),
@@ -378,7 +385,11 @@ impl<T: PdClient> Runner<T> {
                             PD_VALIDATE_PEER_COUNTER_VEC
                                 .with_label_values(&["peer stale"])
                                 .inc();
-                            send_destroy_peer_message(ch, local_region, peer, pd_region);
+                            if let Some(source) = merge_source {
+                                send_merge_fail(ch, source);
+                            } else {
+                                send_destroy_peer_message(ch, local_region, peer, pd_region);
+                            }
                             return Ok(());
                         }
                         info!(
@@ -443,7 +454,14 @@ impl<T: PdClient> Runner<T> {
                         transfer_leader.get_peer()
                     );
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
-                    send_admin_request(&ch, region_id, epoch, peer, req, Callback::None);
+                    send_admin_request(&ch, region_id, epoch, peer, req, Callback::None)
+                } else if resp.has_merge() {
+                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["merge"]).inc();
+
+                    let merge = resp.take_merge();
+                    info!("[region {}] try to merge {:?}", region_id, merge);
+                    let req = new_merge_request(merge);
+                    send_admin_request(&ch, region_id, epoch, peer, req, Callback::None)
                 } else {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                 }
@@ -546,7 +564,11 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 self.handle_store_heartbeat(handle, stats, store_info)
             }
             Task::ReportSplit { left, right } => self.handle_report_split(handle, left, right),
-            Task::ValidatePeer { region, peer } => self.handle_validate_peer(handle, region, peer),
+            Task::ValidatePeer {
+                region,
+                peer,
+                merge_source,
+            } => self.handle_validate_peer(handle, region, peer, merge_source),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
             Task::DestroyPeer { region_id } => self.handle_destroy_peer(region_id),
         };
@@ -583,6 +605,14 @@ fn new_transfer_leader_request(peer: metapb::Peer) -> AdminRequest {
     req
 }
 
+fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
+    let mut req = AdminRequest::new();
+    req.set_cmd_type(AdminCmdType::PrepareMerge);
+    req.mut_prepare_merge()
+        .set_target(merge.get_target().to_owned());
+    req
+}
+
 fn send_admin_request(
     ch: &SendCh<Msg>,
     region_id: u64,
@@ -605,6 +635,13 @@ fn send_admin_request(
             "[region {}] send {:?} request err {:?}",
             region_id, cmd_type, e
         );
+    }
+}
+
+// send merge fail to gc merge source.
+fn send_merge_fail(ch: SendCh<Msg>, source: u64) {
+    if let Err(e) = ch.send(Msg::MergeFail { region_id: source }) {
+        error!("[region {}] failed to report merge fail: {:?}", source, e);
     }
 }
 

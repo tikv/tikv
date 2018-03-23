@@ -25,8 +25,8 @@ use protobuf::Message;
 
 use kvproto::metapb::{self, Region};
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
-use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData,
-                             RegionLocalState};
+use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftLocalState,
+                             RaftSnapshotData, RegionLocalState};
 use util::worker::Scheduler;
 use util::{self, rocksdb};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
@@ -827,7 +827,7 @@ impl PeerStorage {
             self.clear_meta(kv_wb, raft_wb)?;
         }
 
-        write_peer_state(&self.kv_engine, kv_wb, &region, PeerState::Applying)?;
+        write_peer_state(&self.kv_engine, kv_wb, &region, PeerState::Applying, None)?;
 
         let last_index = snap.get_metadata().get_index();
 
@@ -1343,12 +1343,21 @@ pub fn write_peer_state<T: Mutable>(
     kv_wb: &T,
     region: &metapb::Region,
     state: PeerState,
+    merge_state: Option<MergeState>,
 ) -> Result<()> {
     let region_id = region.get_id();
     let mut region_state = RegionLocalState::new();
     region_state.set_state(state);
     region_state.set_region(region.clone());
+    if let Some(state) = merge_state {
+        region_state.set_merge_state(state);
+    }
+
     let handle = rocksdb::get_cf_handle(kv_engine, CF_RAFT)?;
+    debug!(
+        "[region {}] writing merge state: {:?}",
+        region_id, region_state
+    );
     kv_wb.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
     Ok(())
 }
