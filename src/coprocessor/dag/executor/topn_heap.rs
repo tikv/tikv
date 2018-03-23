@@ -195,9 +195,6 @@ impl PartialOrd for SortRow {
     }
 }
 
-unsafe impl Send for TopNHeap {}
-unsafe impl Send for SortRow {}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
