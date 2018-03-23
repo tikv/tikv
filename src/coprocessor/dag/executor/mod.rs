@@ -137,6 +137,9 @@ pub trait Executor {
     fn next(&mut self) -> Result<Option<Row>>;
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>);
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics);
+
+    /// Only executors with eval computation need to implement `take_eval_warnings`
+    /// It returns warnings happened during eval computation.
     fn take_eval_warnings(&mut self) -> Vec<select::Error> {
         Vec::default()
     }
