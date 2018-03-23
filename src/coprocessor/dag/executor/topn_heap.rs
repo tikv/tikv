@@ -32,7 +32,7 @@ pub struct SortRow {
     pub key: Vec<Datum>,
     order_cols: Arc<Vec<ByItem>>,
     eval_cfg: Arc<EvalConfig>,
-    eval_warnings: Arc<RefCell<Vec<select::Error>>>,
+    eval_warnings: RefCell<Vec<select::Error>>,
     err: Arc<RefCell<Option<String>>>,
 }
 
@@ -51,7 +51,7 @@ impl SortRow {
             key: key,
             order_cols: order_cols,
             eval_cfg: eval_cfg,
-            eval_warnings: Arc::new(RefCell::new(Vec::default())),
+            eval_warnings: RefCell::new(Vec::default()),
             err: err,
         }
     }
