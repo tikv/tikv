@@ -24,6 +24,7 @@ use tikv::storage::CF_RAFT;
 use tikv::raftstore::store::Peekable;
 
 use raftstore::node::new_node_cluster;
+use raftstore::transport_simulate::*;
 use raftstore::util;
 use raftstore::util::*;
 
@@ -116,6 +117,7 @@ fn test_node_merge_rollback() {
 #[test]
 fn test_node_merge_restart() {
     let _guard = ::setup();
+    // ::util::init_log();
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
     cluster.run();
@@ -185,6 +187,29 @@ fn test_node_merge_restart() {
         assert!(state.get_region().get_start_key().is_empty());
         assert!(state.get_region().get_end_key().is_empty());
     }
+
+    // Now test if cluster works fine when it crash after merge is applied
+    // but before notifying raftstore thread.
+    let region = pd_client.get_region(b"k1").unwrap();
+    let peer_on_store1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+    cluster.must_put(b"k11", b"v11");
+    must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
+    let skip_destroy_fp = "raft_store_skip_destroy_peer";
+    fail::cfg(skip_destroy_fp, "return()").unwrap();
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    pd_client.must_merge(left.get_id(), right.get_id());
+    let peer = find_peer(&right, 3).unwrap().to_owned();
+    pd_client.must_remove_peer(right.get_id(), peer);
+    cluster.shutdown();
+    fail::remove(skip_destroy_fp);
+    cluster.clear_send_filters();
+    cluster.start();
+    must_get_none(&cluster.get_engine(3), b"k1");
+    must_get_none(&cluster.get_engine(3), b"k3");
 }
 
 /// Test if merging state will be removed after accepting a snapshot.
