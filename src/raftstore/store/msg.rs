@@ -107,6 +107,7 @@ pub enum Tick {
     CompactLockCf,
     ConsistencyCheck,
     CheckMerge,
+    CheckPeerStaleState,
 }
 
 #[derive(Debug, PartialEq)]

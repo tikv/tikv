@@ -99,8 +99,11 @@ pub fn new_store_cfg() -> Config {
         // In production environment, the value of max_leader_missing_duration
         // should be configured far beyond the election timeout.
         max_leader_missing_duration: ReadableDuration::secs(3),
-        // Use a value of 2 seconds as abnormal_leader_missing_duration just for a valid config.
+        // To make a valid config, use a value of 2 seconds as
+        // abnormal_leader_missing_duration and set
+        // peer_stale_state_check_interval to 1 second.
         abnormal_leader_missing_duration: ReadableDuration::secs(2),
+        peer_stale_state_check_interval: ReadableDuration::secs(1),
         pd_heartbeat_tick_interval: ReadableDuration::millis(20),
         region_split_check_diff: ReadableSize(10000),
         report_region_flow_interval: ReadableDuration::millis(100),
