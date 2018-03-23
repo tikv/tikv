@@ -41,6 +41,7 @@ extern crate bitflags;
 extern crate byteorder;
 extern crate chrono;
 extern crate crc;
+extern crate crossbeam_channel;
 #[macro_use]
 extern crate fail;
 extern crate flat_map;
