@@ -26,7 +26,6 @@ use raftstore::Error as RaftServerError;
 use storage::engine::Error as EngineError;
 use storage::Error as StorageError;
 use pd::Error as PdError;
-use super::snap::Task as SnapTask;
 use coprocessor::EndPointTask;
 
 quick_error!{
@@ -91,10 +90,6 @@ quick_error!{
             cause(err)
             display("{:?}", err)
             description(err.description())
-        }
-        SnapWorkerStopped(err: ScheduleError<SnapTask>) {
-            from()
-            display("{:?}", err)
         }
         EndPointStopped(err: ScheduleError<EndPointTask>) {
             from()

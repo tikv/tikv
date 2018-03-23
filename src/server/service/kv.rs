@@ -21,7 +21,7 @@ use mio::Token;
 use grpc::{ClientStreamingSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
            RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
 use futures::{future, stream, Future, Sink, Stream};
-use futures::sync::mpsc;
+use futures::sync::mpsc::{self, Sender};
 use futures_cpupool::CpuPool;
 use protobuf::RepeatedField;
 use kvproto::tikvpb_grpc;
@@ -40,7 +40,7 @@ use storage::txn::Error as TxnError;
 use storage::mvcc::{Error as MvccError, Write as MvccWrite, WriteType};
 use storage::engine::Error as EngineError;
 use server::transport::RaftStoreRouter;
-use server::snap::Task as SnapTask;
+use server::snap::RecvTask as SnapRecvTask;
 use server::metrics::*;
 use server::{CopStream, Error, OnResponse};
 use raftstore::store::{Callback, Msg as StoreMessage};
@@ -48,6 +48,7 @@ use coprocessor::{err_resp, EndPointTask, RequestTask};
 use coprocessor::local_metrics::BasicLocalMetrics;
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
+const SNAP_RECV_CHUNKS_LIMIT: usize = 8;
 
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter + 'static> {
@@ -58,7 +59,7 @@ pub struct Service<T: RaftStoreRouter + 'static> {
     // For handling raft messages.
     ch: T,
     // For handling snapshot.
-    snap_scheduler: Scheduler<SnapTask>,
+    snap_recv_task_sink: Sender<SnapRecvTask>,
     token: Arc<AtomicUsize>, // TODO: remove it.
     recursion_limit: u32,
     stream_channel_size: usize,
@@ -122,7 +123,7 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
         storage: Storage,
         end_point_scheduler: Scheduler<EndPointTask>,
         ch: T,
-        snap_scheduler: Scheduler<SnapTask>,
+        snap_recv_task_sink: Sender<SnapRecvTask>,
         recursion_limit: u32,
         stream_channel_size: usize,
     ) -> Service<T> {
@@ -130,7 +131,7 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
             storage: storage,
             end_point_scheduler: end_point_scheduler,
             ch: ch,
-            snap_scheduler: snap_scheduler,
+            snap_recv_task_sink: snap_recv_task_sink,
             token: Arc::new(AtomicUsize::new(1)),
             recursion_limit: recursion_limit,
             stream_channel_size: stream_channel_size,
@@ -937,42 +938,19 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         stream: RequestStream<SnapshotChunk>,
         sink: ClientStreamingSink<Done>,
     ) {
-        let token = Token(self.token.fetch_add(1, Ordering::SeqCst));
-        let sched = self.snap_scheduler.clone();
-        let sched2 = sched.clone();
+        let snap_recv_sink = self.snap_recv_task_sink.clone();
+        let (tx, rx) = mpsc::channel(SNAP_RECV_CHUNKS_LIMIT);
+
+        let recv_chunks = tx.send_all(stream.then(|r| Ok(r)))
+            .map(|_| ())
+            .map_err(|_| ());
+
         ctx.spawn(
-            stream
-                .map_err(Error::from)
-                .for_each(move |mut chunk| {
-                    let res = if chunk.has_message() {
-                        sched
-                            .schedule(SnapTask::Register(token, chunk.take_message()))
-                            .map_err(Error::from)
-                    } else if !chunk.get_data().is_empty() {
-                        // TODO: Remove PipeBuffer or take good use of it.
-                        let mut b = PipeBuffer::new(chunk.get_data().len());
-                        b.write_all(chunk.get_data()).unwrap();
-                        sched
-                            .schedule(SnapTask::Write(token, b))
-                            .map_err(Error::from)
-                    } else {
-                        Err(box_err!("empty chunk"))
-                    };
-                    future::result(res)
-                })
-                .then(move |res| {
-                    let res = match res {
-                        Ok(_) => sched2.schedule(SnapTask::Close(token)),
-                        Err(e) => {
-                            error!("receive snapshot err: {}", e);
-                            sched2.schedule(SnapTask::Discard(token))
-                        }
-                    };
-                    future::result(res.map_err(Error::from))
-                })
-                .and_then(|_| sink.success(Done::new()).map_err(Error::from))
-                .then(|_| future::ok::<_, ()>(())),
-        );
+            snap_recv_sink
+                .send(box rx.then(|t| t.unwrap()))
+                .map_err(|_| ())
+                .and_then(|_| recv_chunks),
+        )
     }
 
     fn mvcc_get_by_key(
