@@ -919,6 +919,71 @@ impl Storage {
             .flatten()
     }
 
+    pub fn async_raw_batch_get(
+        &self,
+        ctx: Context,
+        keys: Vec<Vec<u8>>,
+    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
+        const CMD: &str = "raw_batch_get";
+        let engine = self.get_engine();
+        let priority = readpool::Priority::from(ctx.get_priority());
+
+        let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
+
+        let res = self.read_pool.future_execute(priority, move |ctxd| {
+            let mut _timer = {
+                let ctxd = ctxd.clone();
+                let mut thread_ctx = ctxd.current_thread_context_mut();
+                thread_ctx.start_command_duration_timer(CMD, priority, true)
+            };
+
+            Self::async_snapshot(engine, &ctx)
+                .and_then(move |snapshot: Box<Snapshot>| {
+                    let mut thread_ctx = ctxd.current_thread_context_mut();
+                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+
+                    // no scan_count for this kind of op.
+                    snapshot.batch_get(&keys)
+                            // map storage::engine::Error -> storage::Error
+                            .map_err(Error::from)
+                            .map(|results| results
+                                    .into_iter()
+                                    .zip(keys)
+                                    .filter(|&(ref v, ref _k)|
+                                        !(v.is_ok() && v.as_ref().unwrap().is_none())
+                                    )
+                                    .map(|(v, k)| match v {
+                                        Ok(Some(x)) => Ok((k.encoded().clone(), x)),
+                                        Err(e) => Err(Error::from(e)),
+                                        _ => unreachable!(),
+                                    })
+                                    .collect()
+                            )
+                            .map(|r: Vec<Result<KvPair>>| {
+                                    let mut stats = Statistics::default();
+                                    let (records, key_len, value_len) = r.iter().map(|r| match *r {
+                                        Ok(ref pair) => (1, pair.0.len(), pair.1.len()),
+                                        Err(_) => (0, 0, 0),
+                                    }).fold((0, 0, 0),
+                                        |acc, x| (acc.0 + x.0, acc.1 + x.1, acc.2 + x.2));
+                                    stats.data.flow_stats.read_keys = records;
+                                    stats.data.flow_stats.read_bytes = key_len + value_len;
+                                    thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
+                                    thread_ctx.collect_key_reads(CMD, r.len() as u64);
+                                    r
+                            })
+                })
+                .then(move |r| {
+                    _timer.observe_duration();
+                    r
+                })
+        });
+
+        future::result(res)
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
+    }
+
     pub fn async_raw_put(
         &self,
         ctx: Context,
@@ -937,6 +1002,32 @@ impl Storage {
         )?;
         RAWKV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_put"])
+            .inc();
+        Ok(())
+    }
+
+    pub fn async_raw_batch_put(
+        &self,
+        ctx: Context,
+        pairs: Vec<KvPair>,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        for &(ref key, _) in &pairs {
+            if key.len() > self.max_key_size {
+                callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
+                return Ok(());
+            }
+        }
+        let requests = pairs
+            .into_iter()
+            .map(|(k, v)| Modify::Put(CF_DEFAULT, Key::from_encoded(k), v))
+            .collect();
+        self.engine
+            .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
+                callback(res.map_err(Error::from))
+            })?;
+        RAWKV_COMMAND_COUNTER_VEC
+            .with_label_values(&["raw_batch_put"])
             .inc();
         Ok(())
     }
@@ -994,11 +1085,37 @@ impl Storage {
         Ok(())
     }
 
+    pub fn async_raw_batch_delete(
+        &self,
+        ctx: Context,
+        keys: Vec<Vec<u8>>,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        for key in &keys {
+            if key.len() > self.max_key_size {
+                callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
+                return Ok(());
+            }
+        }
+        let requests = keys.into_iter()
+            .map(|k| Modify::Delete(CF_DEFAULT, Key::from_encoded(k)))
+            .collect();
+        self.engine
+            .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
+                callback(res.map_err(Error::from))
+            })?;
+        RAWKV_COMMAND_COUNTER_VEC
+            .with_label_values(&["raw_batch_delete"])
+            .inc();
+        Ok(())
+    }
+
     fn raw_scan(
-        snapshot: Box<Snapshot>,
+        snapshot: &Snapshot,
         start_key: &Key,
         limit: usize,
         stats: &mut Statistics,
+        key_only: bool,
     ) -> engine::Result<Vec<Result<KvPair>>> {
         let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Forward)?;
         if !cursor.seek(start_key, &mut stats.data)? {
@@ -1006,7 +1123,14 @@ impl Storage {
         }
         let mut pairs = vec![];
         while cursor.valid() && pairs.len() < limit {
-            pairs.push(Ok((cursor.key().to_owned(), cursor.value().to_owned())));
+            pairs.push(Ok((
+                cursor.key().to_owned(),
+                if key_only {
+                    vec![]
+                } else {
+                    cursor.value().to_owned()
+                },
+            )));
             cursor.next(&mut stats.data);
         }
         Ok(pairs)
@@ -1017,6 +1141,7 @@ impl Storage {
         ctx: Context,
         key: Vec<u8>,
         limit: usize,
+        key_only: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_scan";
         let engine = self.get_engine();
@@ -1036,10 +1161,11 @@ impl Storage {
 
                     let mut statistics = Statistics::default();
                     let result = Storage::raw_scan(
-                        snapshot,
+                        snapshot.as_ref(),
                         &Key::from_encoded(key),
                         limit,
                         &mut statistics,
+                        key_only,
                     ).map_err(Error::from)
                         .map(|r| {
                             let mut valid_keys = 0;
@@ -1061,6 +1187,72 @@ impl Storage {
                     thread_ctx.collect_scan_count(CMD, &statistics);
 
                     result
+                })
+                .then(move |r| {
+                    _timer.observe_duration();
+                    r
+                })
+        });
+
+        future::result(res)
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
+    }
+
+    pub fn async_raw_batch_scan(
+        &self,
+        ctx: Context,
+        start_keys: Vec<Vec<u8>>,
+        start_key_limit: usize,
+        key_only: bool,
+    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
+        const CMD: &str = "raw_batch_scan";
+        let engine = self.get_engine();
+        let priority = readpool::Priority::from(ctx.get_priority());
+
+        let start_keys: Vec<Key> = start_keys.into_iter().map(Key::from_encoded).collect();
+
+        let res = self.read_pool.future_execute(priority, move |ctxd| {
+            let mut _timer = {
+                let ctxd = ctxd.clone();
+                let mut thread_ctx = ctxd.current_thread_context_mut();
+                thread_ctx.start_command_duration_timer(CMD, priority, true)
+            };
+
+            Self::async_snapshot(engine, &ctx)
+                .and_then(move |snapshot: Box<Snapshot>| {
+                    let mut thread_ctx = ctxd.current_thread_context_mut();
+                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+
+                    let mut statistics = Statistics::default();
+                    let mut result = Vec::new();
+                    for start_key in &start_keys {
+                        let pairs = Storage::raw_scan(
+                            snapshot.as_ref(),
+                            start_key,
+                            start_key_limit,
+                            &mut statistics,
+                            key_only,
+                        )?;
+                        let mut valid_keys = 0;
+                        let mut bytes_read = 0;
+                        let mut stats = Statistics::default();
+                        pairs.iter().for_each(|r| {
+                            if let Ok(ref pair) = *r {
+                                valid_keys += 1;
+                                bytes_read += pair.0.len() + pair.1.len();
+                            }
+                        });
+                        stats.data.flow_stats.read_keys = valid_keys;
+                        stats.data.flow_stats.read_bytes = bytes_read;
+                        thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
+                        thread_ctx.collect_key_reads(CMD, valid_keys as u64);
+                        result.extend(pairs.into_iter());
+                    }
+
+                    thread_ctx.collect_scan_count(CMD, &statistics);
+
+                    Ok(result)
                 })
                 .then(move |r| {
                     _timer.observe_duration();
@@ -1930,4 +2122,327 @@ mod tests {
 
         rx.recv().unwrap();
     }
+
+    #[test]
+    fn test_raw_batch_put() {
+        let read_pool = new_read_pool();
+        let config = Config::default();
+        let mut storage = Storage::new(&config, read_pool).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+
+        let test_data = vec![
+            (b"a".to_vec(), b"aa".to_vec()),
+            (b"b".to_vec(), b"bb".to_vec()),
+            (b"c".to_vec(), b"cc".to_vec()),
+            (b"d".to_vec(), b"dd".to_vec()),
+            (b"e".to_vec(), b"ee".to_vec()),
+        ];
+
+        // Write key-value pairs in a batch
+        storage
+            .async_raw_batch_put(
+                Context::new(),
+                test_data.clone(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Verify pairs one by one
+        for (key, val) in test_data {
+            expect_value(val, storage.async_raw_get(Context::new(), key).wait());
+        }
+    }
+
+    #[test]
+    fn test_raw_batch_get() {
+        let read_pool = new_read_pool();
+        let config = Config::default();
+        let mut storage = Storage::new(&config, read_pool).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+
+        let test_data = vec![
+            (b"a".to_vec(), b"aa".to_vec()),
+            (b"b".to_vec(), b"bb".to_vec()),
+            (b"c".to_vec(), b"cc".to_vec()),
+            (b"d".to_vec(), b"dd".to_vec()),
+            (b"e".to_vec(), b"ee".to_vec()),
+        ];
+
+        // Write key-value pairs one by one
+        for &(ref key, ref value) in &test_data {
+            storage
+                .async_raw_put(
+                    Context::new(),
+                    key.clone(),
+                    value.clone(),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+        }
+        rx.recv().unwrap();
+
+        // Verify pairs in a batch
+        let keys = test_data.iter().map(|&(ref k, _)| k.clone()).collect();
+        let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
+        expect_multi_values(
+            results,
+            storage.async_raw_batch_get(Context::new(), keys).wait(),
+        );
+    }
+
+    #[test]
+    fn test_raw_batch_delete() {
+        let read_pool = new_read_pool();
+        let config = Config::default();
+        let mut storage = Storage::new(&config, read_pool).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+
+        let test_data = vec![
+            (b"a".to_vec(), b"aa".to_vec()),
+            (b"b".to_vec(), b"bb".to_vec()),
+            (b"c".to_vec(), b"cc".to_vec()),
+            (b"d".to_vec(), b"dd".to_vec()),
+            (b"e".to_vec(), b"ee".to_vec()),
+        ];
+
+        // Write key-value pairs in batch
+        storage
+            .async_raw_batch_put(
+                Context::new(),
+                test_data.clone(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Verify pairs exist
+        let keys = test_data.iter().map(|&(ref k, _)| k.clone()).collect();
+        let results = test_data
+            .iter()
+            .map(|&(ref k, ref v)| Some((k.clone(), v.clone())))
+            .collect();
+        expect_multi_values(
+            results,
+            storage.async_raw_batch_get(Context::new(), keys).wait(),
+        );
+
+        // Delete ["b", "d"]
+        storage
+            .async_raw_batch_delete(
+                Context::new(),
+                vec![b"b".to_vec(), b"d".to_vec()],
+                expect_ok_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Assert "b" and "d" are gone
+        expect_value(
+            b"aa".to_vec(),
+            storage.async_raw_get(Context::new(), b"a".to_vec()).wait(),
+        );
+        expect_none(storage.async_raw_get(Context::new(), b"b".to_vec()).wait());
+        expect_value(
+            b"cc".to_vec(),
+            storage.async_raw_get(Context::new(), b"c".to_vec()).wait(),
+        );
+        expect_none(storage.async_raw_get(Context::new(), b"d".to_vec()).wait());
+        expect_value(
+            b"ee".to_vec(),
+            storage.async_raw_get(Context::new(), b"e".to_vec()).wait(),
+        );
+
+        // Delete ["a", "c", "e"]
+        storage
+            .async_raw_batch_delete(
+                Context::new(),
+                vec![b"a".to_vec(), b"c".to_vec(), b"e".to_vec()],
+                expect_ok_callback(tx.clone(), 2),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Assert no key remains
+        for (k, _) in test_data {
+            expect_none(storage.async_raw_get(Context::new(), k).wait());
+        }
+    }
+
+    #[test]
+    fn test_raw_scan() {
+        let read_pool = new_read_pool();
+        let config = Config::default();
+        let mut storage = Storage::new(&config, read_pool).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+
+        let test_data = vec![
+            (b"a".to_vec(), b"aa".to_vec()),
+            (b"a1".to_vec(), b"aa11".to_vec()),
+            (b"a2".to_vec(), b"aa22".to_vec()),
+            (b"a3".to_vec(), b"aa33".to_vec()),
+            (b"b".to_vec(), b"bb".to_vec()),
+            (b"b1".to_vec(), b"bb11".to_vec()),
+            (b"b2".to_vec(), b"bb22".to_vec()),
+            (b"b3".to_vec(), b"bb33".to_vec()),
+            (b"c".to_vec(), b"cc".to_vec()),
+            (b"c1".to_vec(), b"cc11".to_vec()),
+            (b"c2".to_vec(), b"cc22".to_vec()),
+            (b"c3".to_vec(), b"cc33".to_vec()),
+            (b"d".to_vec(), b"dd".to_vec()),
+            (b"d1".to_vec(), b"dd11".to_vec()),
+            (b"d2".to_vec(), b"dd22".to_vec()),
+            (b"d3".to_vec(), b"dd33".to_vec()),
+            (b"e".to_vec(), b"ee".to_vec()),
+            (b"e1".to_vec(), b"ee11".to_vec()),
+            (b"e2".to_vec(), b"ee22".to_vec()),
+            (b"e3".to_vec(), b"ee33".to_vec()),
+        ];
+
+        // Write key-value pairs in batch
+        storage
+            .async_raw_batch_put(
+                Context::new(),
+                test_data.clone(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Scan pairs with key only
+        let mut results: Vec<Option<KvPair>> = test_data
+            .iter()
+            .map(|&(ref k, _)| Some((k.clone(), vec![])))
+            .collect();
+        expect_multi_values(
+            results.clone(),
+            storage
+                .async_raw_scan(Context::new(), vec![], 20, true)
+                .wait(),
+        );
+        results = results.split_off(10);
+        expect_multi_values(
+            results,
+            storage
+                .async_raw_scan(Context::new(), b"c2".to_vec(), 20, true)
+                .wait(),
+        );
+        let mut results: Vec<Option<KvPair>> =
+            test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
+        expect_multi_values(
+            results.clone(),
+            storage
+                .async_raw_scan(Context::new(), vec![], 20, false)
+                .wait(),
+        );
+        results = results.split_off(10);
+        expect_multi_values(
+            results,
+            storage
+                .async_raw_scan(Context::new(), b"c2".to_vec(), 20, false)
+                .wait(),
+        );
+    }
+
+    #[test]
+    fn test_raw_batch_scan() {
+        let read_pool = new_read_pool();
+        let config = Config::default();
+        let mut storage = Storage::new(&config, read_pool).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+
+        let test_data = vec![
+            (b"a".to_vec(), b"aa".to_vec()),
+            (b"a1".to_vec(), b"aa11".to_vec()),
+            (b"a2".to_vec(), b"aa22".to_vec()),
+            (b"a3".to_vec(), b"aa33".to_vec()),
+            (b"b".to_vec(), b"bb".to_vec()),
+            (b"b1".to_vec(), b"bb11".to_vec()),
+            (b"b2".to_vec(), b"bb22".to_vec()),
+            (b"b3".to_vec(), b"bb33".to_vec()),
+            (b"c".to_vec(), b"cc".to_vec()),
+            (b"c1".to_vec(), b"cc11".to_vec()),
+            (b"c2".to_vec(), b"cc22".to_vec()),
+            (b"c3".to_vec(), b"cc33".to_vec()),
+            (b"d".to_vec(), b"dd".to_vec()),
+            (b"d1".to_vec(), b"dd11".to_vec()),
+            (b"d2".to_vec(), b"dd22".to_vec()),
+            (b"d3".to_vec(), b"dd33".to_vec()),
+            (b"e".to_vec(), b"ee".to_vec()),
+            (b"e1".to_vec(), b"ee11".to_vec()),
+            (b"e2".to_vec(), b"ee22".to_vec()),
+            (b"e3".to_vec(), b"ee33".to_vec()),
+        ];
+
+        // Write key-value pairs in batch
+        storage
+            .async_raw_batch_put(
+                Context::new(),
+                test_data.clone(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Verify pairs exist
+        let keys = test_data.iter().map(|&(ref k, _)| k.clone()).collect();
+        let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
+        expect_multi_values(
+            results,
+            storage.async_raw_batch_get(Context::new(), keys).wait(),
+        );
+
+        let results = vec![
+            Some((b"a".to_vec(), b"aa".to_vec())),
+            Some((b"a1".to_vec(), b"aa11".to_vec())),
+            Some((b"a2".to_vec(), b"aa22".to_vec())),
+            Some((b"b".to_vec(), b"bb".to_vec())),
+            Some((b"b1".to_vec(), b"bb11".to_vec())),
+            Some((b"b2".to_vec(), b"bb22".to_vec())),
+            Some((b"c".to_vec(), b"cc".to_vec())),
+            Some((b"c1".to_vec(), b"cc11".to_vec())),
+            Some((b"c2".to_vec(), b"cc22".to_vec())),
+        ];
+
+        expect_multi_values(
+            results,
+            storage
+                .async_raw_batch_scan(
+                    Context::new(),
+                    vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()],
+                    3,
+                    false,
+                )
+                .wait(),
+        );
+
+        let results = vec![
+            Some((b"a".to_vec(), vec![])),
+            Some((b"a1".to_vec(), vec![])),
+            Some((b"a2".to_vec(), vec![])),
+            Some((b"b".to_vec(), vec![])),
+            Some((b"b1".to_vec(), vec![])),
+            Some((b"b2".to_vec(), vec![])),
+            Some((b"c".to_vec(), vec![])),
+            Some((b"c1".to_vec(), vec![])),
+            Some((b"c2".to_vec(), vec![])),
+        ];
+        expect_multi_values(
+            results,
+            storage
+                .async_raw_batch_scan(
+                    Context::new(),
+                    vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()],
+                    3,
+                    true,
+                )
+                .wait(),
+        );
+    }
+
 }
