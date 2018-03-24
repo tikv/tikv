@@ -70,20 +70,18 @@ impl<C: PdClient> Runner<C> {
         let mut results = Vec::new();
         for sst in ssts {
             match self.pd_client.get_region(sst.get_range().get_start()) {
-                Ok(region) => {
+                Ok(r) => {
                     // The region id may or may not be the same as the
                     // SST file, but it doesn't matter, because the
                     // epoch of a range will not decrease anyway.
-                    if is_epoch_stale(region.get_region_epoch(), sst.get_region_epoch()) {
+                    if is_epoch_stale(r.get_region_epoch(), sst.get_region_epoch()) {
                         // Region has not been updated.
                         continue;
                     }
-                    if region
-                        .get_peers()
-                        .into_iter()
-                        .any(|p| p.get_store_id() == store_id)
+                    if r.get_id() == sst.get_region_id()
+                        && r.get_peers().iter().any(|p| p.get_store_id() == store_id)
                     {
-                        // The SST still belongs to the store.
+                        // The SST still belongs to this store.
                         continue;
                     }
                     results.push(sst);
@@ -94,11 +92,9 @@ impl<C: PdClient> Runner<C> {
             }
         }
 
-        // We need to send back the result because of a time window
-        // between we check the local store and get region information
-        // from PD. During this window, a region may leave a stale
-        // peer on this store, which may ingest the SST file before it
-        // is destroyed.
+        // We need to send back the result to check for the stale
+        // peer, which may ingest the stale SST before it is
+        // destroyed.
         let msg = Msg::ValidateSSTResult(results);
         if let Err(e) = self.store_ch.try_send(msg) {
             error!("send validate sst result: {:?}", e);

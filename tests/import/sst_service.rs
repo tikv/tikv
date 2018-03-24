@@ -25,6 +25,7 @@ use kvproto::importpb::*;
 use kvproto::importpb_grpc::*;
 use grpc::{ChannelBuilder, Environment, Result, WriteFlags};
 
+use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
 use tikv::import::test_helpers::*;
 
@@ -150,7 +151,7 @@ fn test_cleanup_sst() {
 
     let temp_dir = TempDir::new("test_cleanup_sst").unwrap();
 
-    let sst_path = temp_dir.path().join("test.sst");
+    let sst_path = temp_dir.path().join("test_split.sst");
     let sst_range = (0, 100);
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
     meta.set_region_id(ctx.get_region_id());
@@ -165,13 +166,31 @@ fn test_cleanup_sst() {
     assert!(send_upload_sst(&import, &upload).is_err());
 
     // The uploaded SST should be deleted if the region split.
-    let region = cluster.get_region(b"a");
-    cluster.must_split(&region, b"b");
+    let region = cluster.get_region(&[]);
+    cluster.must_split(&region, &[100]);
 
-    thread::sleep(Duration::from_millis(CLEANUP_SST_MILLIS * 2));
+    check_sst_deleted(&import, &upload);
 
-    // If we can upload the same file, it means the previous file has been deleted.
+    let left = cluster.get_region(&[]);
+    let right = cluster.get_region(&[100]);
+
+    let sst_path = temp_dir.path().join("test_merge.sst");
+    let sst_range = (0, 100);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(left.get_id());
+    meta.set_region_epoch(left.get_region_epoch().clone());
+
+    let mut upload = UploadRequest::new();
+    upload.set_meta(meta);
+    upload.set_data(data);
     send_upload_sst(&import, &upload).unwrap();
+
+    // The uploaded SST should be deleted if the region merged.
+    cluster.pd_client.must_merge(left.get_id(), right.get_id());
+    let res = cluster.pd_client.get_region_by_id(left.get_id());
+    assert!(res.wait().unwrap().is_none());
+
+    check_sst_deleted(&import, &upload);
 }
 
 fn new_sst_meta(crc32: u32, length: u64) -> SSTMeta {
@@ -186,4 +205,15 @@ fn send_upload_sst(client: &ImportSstClient, m: &UploadRequest) -> Result<Upload
     let (tx, rx) = client.upload().unwrap();
     let stream = stream::once({ Ok((m.clone(), WriteFlags::default().buffer_hint(true))) });
     stream.forward(tx).and_then(|_| rx).wait()
+}
+
+fn check_sst_deleted(client: &ImportSstClient, m: &UploadRequest) {
+    for _ in 0..10 {
+        if send_upload_sst(client, m).is_ok() {
+            // If we can upload the file, it means the previous file has been deleted.
+            return;
+        }
+        thread::sleep(Duration::from_millis(CLEANUP_SST_MILLIS));
+    }
+    send_upload_sst(client, m).unwrap();
 }
