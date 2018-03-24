@@ -2968,9 +2968,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_validate_sst_result(&mut self, ssts: Vec<SSTMeta>) {
-        // Even if an SST don't belong to this store now, a stale peer
-        // can still ingest the SST before it is destroyed. So we need
-        // to make sure that no stale peer exists.
+        // Even if an SST doesn't belong to this store now, a stale
+        // peer can still ingest the SST before it is destroyed. So we
+        // need to make sure that no stale peer exists.
         let mut delete_ssts = Vec::new();
         for sst in ssts {
             if !self.region_peers.contains_key(&sst.get_region_id()) {

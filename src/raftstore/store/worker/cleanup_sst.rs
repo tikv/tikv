@@ -14,8 +14,6 @@
 use std::fmt;
 use std::sync::Arc;
 
-use futures::Future;
-use kvproto::metapb::Region;
 use kvproto::importpb::SSTMeta;
 
 use pd::PdClient;
@@ -69,13 +67,16 @@ impl<C: PdClient> Runner<C> {
 
     fn handle_validate_sst(&self, ssts: Vec<SSTMeta>) {
         let store_id = self.store_id;
-        // Get region info from PD, then check if the SST still belongs to the store.
-        let f = &|sst: SSTMeta, res: Result<Option<Region>, _>| {
-            match res {
-                Ok(Some(region)) => {
+        let mut results = Vec::new();
+        for sst in ssts {
+            match self.pd_client.get_region(sst.get_range().get_start()) {
+                Ok(region) => {
+                    // The region id may or may not be the same as the
+                    // SST file, but it doesn't matter, because the
+                    // epoch of a range will not decrease anyway.
                     if is_epoch_stale(region.get_region_epoch(), sst.get_region_epoch()) {
                         // Region has not been updated.
-                        return Ok(None);
+                        continue;
                     }
                     if region
                         .get_peers()
@@ -83,32 +84,21 @@ impl<C: PdClient> Runner<C> {
                         .any(|p| p.get_store_id() == store_id)
                     {
                         // The SST still belongs to the store.
-                        return Ok(None);
+                        continue;
                     }
-                    Ok(Some(sst))
-                }
-                Ok(None) => {
-                    // TODO: handle merge
-                    Ok(None)
+                    results.push(sst);
                 }
                 Err(e) => {
-                    error!("get region {} failed {:?}", sst.get_region_id(), e);
-                    Err(e)
+                    error!("get region failed: {:?}", e);
                 }
-            }
-        };
-
-        let mut results = Vec::new();
-        for sst in ssts {
-            let sst = self.pd_client
-                .get_region_by_id(sst.get_region_id())
-                .then(move |res| f(sst, res))
-                .wait();
-            if let Ok(Some(sst)) = sst {
-                results.push(sst);
             }
         }
 
+        // We need to send back the result because of a time window
+        // between we check the local store and get region information
+        // from PD. During this window, a region may leave a stale
+        // peer on this store, which may ingest the SST file before it
+        // is destroyed.
         let msg = Msg::ValidateSSTResult(results);
         if let Err(e) = self.store_ch.try_send(msg) {
             error!("send validate sst result: {:?}", e);
