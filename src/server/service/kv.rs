@@ -738,7 +738,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .async_raw_batch_scan(
                 req.take_context(),
                 start_keys,
-                req.get_start_key_limit() as usize,
+                req.get_each_limit() as usize,
                 req.get_key_only(),
             )
             .then(|v| {

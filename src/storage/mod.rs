@@ -1203,7 +1203,7 @@ impl Storage {
         &self,
         ctx: Context,
         start_keys: Vec<Vec<u8>>,
-        start_key_limit: usize,
+        each_limit: usize,
         key_only: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_batch_scan";
@@ -1230,7 +1230,7 @@ impl Storage {
                         let pairs = Storage::raw_scan(
                             snapshot.as_ref(),
                             start_key,
-                            start_key_limit,
+                            each_limit,
                             &mut statistics,
                             key_only,
                         )?;
