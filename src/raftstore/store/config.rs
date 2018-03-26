@@ -232,7 +232,7 @@ impl Config {
         let stale_state_check = self.peer_stale_state_check_interval.as_millis() as u64;
         if stale_state_check < election_timeout * 2 {
             return Err(box_err!(
-                "peer stale state check interval {} ms is less than election timeout x2 {} ms",
+                "peer stale state check interval {} ms is less than election timeout x 2 {} ms",
                 stale_state_check,
                 election_timeout * 2
             ));
