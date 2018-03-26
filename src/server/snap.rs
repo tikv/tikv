@@ -35,7 +35,7 @@ use super::transport::RaftStoreRouter;
 pub type Callback = Box<FnBox(Result<()>) + Send>;
 
 const DEFAULT_SENDER_POOL_SIZE: usize = 3;
-// How many snapshots can be sent concurrent.
+// How many snapshots can be sent concurrently.
 const DEFAULT_SENDER_CONCURRENT: usize = 3;
 // How many snapshots can be received concurrent.
 const DEFAULT_RECVER_CONCURRENT: usize = 3;
