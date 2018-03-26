@@ -18,8 +18,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::i64;
 use std::thread;
 use std::time::Duration;
-use futures::Stream;
-use futures::sync::mpsc as futures_mpsc;
+use futures::{Future, Stream};
+use futures::sync::{mpsc as futures_mpsc, oneshot};
 
 use tikv::coprocessor::*;
 use kvproto::kvrpcpb::Context;
@@ -1484,11 +1484,11 @@ fn test_reverse() {
 }
 
 pub fn handle_request(end_point: &Worker<EndPointTask>, req: Request) -> Response {
-    let (tx, rx) = futures_mpsc::channel(1);
+    let (tx, rx) = oneshot::channel();
     let on_resp = OnResponse::Unary(tx);
     let req = RequestTask::new(req, on_resp, 100).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();
-    rx.wait().next().unwrap().unwrap()
+    rx.wait().unwrap()
 }
 
 fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectResponse {
@@ -2102,11 +2102,11 @@ fn test_handle_truncate() {
         let req = DAGSelect::from(&product.table)
             .where_expr(cond.clone())
             .build();
-        let (tx, rx) = futures_mpsc::channel(1);
+        let (tx, rx) = oneshot::channel();
         let on_resp = OnResponse::Unary(tx);
         let req = RequestTask::new(req, on_resp, 100).unwrap();
         end_point.schedule(EndPointTask::Request(req)).unwrap();
-        let resp = rx.wait().next().unwrap().unwrap();
+        let resp = rx.wait().unwrap();
         assert!(!resp.get_other_error().is_empty());
     }
 

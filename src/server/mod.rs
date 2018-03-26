@@ -28,7 +28,7 @@ pub mod debug;
 use std::fmt::{Debug, Formatter, Result as FormatResult};
 
 use futures::{stream, Future, Sink, Stream};
-use futures::sync::mpsc;
+use futures::sync::{mpsc, oneshot};
 
 pub use self::config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Error, Result};
@@ -39,7 +39,7 @@ pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::raft_client::RaftClient;
 
 pub enum OnResponse<T> {
-    Unary(mpsc::Sender<T>),
+    Unary(oneshot::Sender<T>),
     Streaming(mpsc::Sender<T>),
 }
 
@@ -51,11 +51,15 @@ impl<T: Send + Debug + 'static> OnResponse<T> {
         }
     }
 
-    pub fn respond(self, resp: T) -> impl Future<Item = (), Error = mpsc::SendError<T>> {
-        let sender = match self {
-            OnResponse::Unary(sender) | OnResponse::Streaming(sender) => sender,
-        };
-        sender.send_all(stream::once(Ok(resp))).map(|_| ())
+    pub fn respond(self, resp: T) {
+        match self {
+            OnResponse::Unary(sender) => {
+                let _ = sender.send(resp);
+            }
+            OnResponse::Streaming(sender) => {
+                let _ = sender.send_all(stream::once(Ok(resp))).wait();
+            }
+        }
     }
 
     pub fn respond_stream<S>(self, s: S) -> impl Future<Item = (), Error = mpsc::SendError<T>>

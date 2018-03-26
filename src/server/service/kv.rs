@@ -19,7 +19,7 @@ use mio::Token;
 use grpc::{ClientStreamingSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
            RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
 use futures::{future, stream, Future, Sink, Stream};
-use futures::sync::mpsc as futures_mpsc;
+use futures::sync::{mpsc as futures_mpsc, oneshot};
 use protobuf::RepeatedField;
 use kvproto::tikvpb_grpc;
 use kvproto::raft_serverpb::*;
@@ -800,7 +800,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         const LABEL: &str = "coprocessor";
         let timer = self.metrics.coprocessor.start_coarse_timer();
 
-        let (tx, rx) = futures_mpsc::channel(1);
+        let (tx, rx) = oneshot::channel();
         let on_resp = OnResponse::Unary(tx);
         let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
             Ok(req_task) => req_task,
@@ -823,13 +823,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             return self.send_fail_status(ctx, sink, error, code);
         }
 
-        let future = rx.take(1)
-            .fold(None, |_, v| future::ok::<_, ()>(Some(v)))
-            .and_then(|opt_v| match opt_v {
-                None => Err(()),
-                Some(v) => Ok(v),
-            })
-            .map_err(|_| Error::Sink)
+        let future = rx.map_err(Error::from)
             .and_then(|resp| sink.success(resp).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
