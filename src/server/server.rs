@@ -194,6 +194,7 @@ mod tests {
     use std::sync::*;
     use std::sync::mpsc::*;
     use std::sync::atomic::*;
+    use std::env;
 
     use super::*;
     use super::super::{Config, Result};
@@ -259,8 +260,9 @@ mod tests {
     }
 
     #[test]
-    // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
     fn test_peer_resolve() {
+        env::remove_var("http_proxy");
+        env::remove_var("https_proxy");
         let mut cfg = Config::default();
         let storage_cfg = StorageConfig::default();
         cfg.addr = "127.0.0.1:0".to_owned();
