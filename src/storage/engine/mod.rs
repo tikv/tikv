@@ -124,9 +124,6 @@ pub trait Engine: Send + Debug {
 pub trait Snapshot: Send + Debug {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
-    fn batch_get(&self, keys: &[Key]) -> Result<Vec<Result<Option<Value>>>> {
-        Ok(keys.iter().map(|key| self.get(key)).collect())
-    }
     #[allow(needless_lifetimes)]
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor>;
     #[allow(needless_lifetimes)]

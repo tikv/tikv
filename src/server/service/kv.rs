@@ -671,7 +671,6 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let timer = self.metrics.raw_batch_get.start_coarse_timer();
 
         let keys = req.take_keys().into_iter().map(|x| x).collect();
-
         let future = self.storage
             .async_raw_batch_get(req.take_context(), keys)
             .then(|v| {
@@ -732,12 +731,17 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         const LABEL: &str = "raw_batch_scan";
         let timer = self.metrics.raw_batch_scan.start_coarse_timer();
 
-        let start_keys = req.take_start_keys().into_iter().map(|x| x).collect();
-
+        let start_keys: Vec<Vec<u8>> = req.take_start_keys().into_iter().map(|x| x).collect();
+        let end_keys = if start_keys.len() == req.get_end_keys().len() {
+            req.take_end_keys().into_iter().map(|x| x).collect()
+        } else {
+            start_keys.clone()
+        };
         let future = self.storage
             .async_raw_batch_scan(
                 req.take_context(),
                 start_keys,
+                end_keys,
                 req.get_each_limit() as usize,
                 req.get_key_only(),
             )
@@ -803,12 +807,11 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         const LABEL: &str = "raw_batch_put";
         let timer = self.metrics.raw_batch_put.start_coarse_timer();
 
-        let (cb, future) = paired_future_callback();
         let pairs = req.take_pairs()
             .into_iter()
             .map(|mut x| (x.take_key(), x.take_value()))
             .collect();
-
+        let (cb, future) = paired_future_callback();
         let res = self.storage
             .async_raw_batch_put(req.take_context(), pairs, cb);
         if let Err(e) = res {
@@ -885,7 +888,6 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let timer = self.metrics.raw_batch_delete.start_coarse_timer();
 
         let keys = req.take_keys().into_iter().map(|x| x).collect();
-
         let (cb, future) = paired_future_callback();
         let res = self.storage
             .async_raw_batch_delete(req.take_context(), keys, cb);

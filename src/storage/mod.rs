@@ -943,35 +943,25 @@ impl Storage {
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
                     // no scan_count for this kind of op.
-                    snapshot.batch_get(&keys)
-                            // map storage::engine::Error -> storage::Error
-                            .map_err(Error::from)
-                            .map(|results| results
-                                    .into_iter()
-                                    .zip(keys)
-                                    .filter(|&(ref v, ref _k)|
-                                        !(v.is_ok() && v.as_ref().unwrap().is_none())
-                                    )
-                                    .map(|(v, k)| match v {
-                                        Ok(Some(x)) => Ok((k.encoded().clone(), x)),
-                                        Err(e) => Err(Error::from(e)),
-                                        _ => unreachable!(),
-                                    })
-                                    .collect()
-                            )
-                            .map(|r: Vec<Result<KvPair>>| {
-                                    let mut stats = Statistics::default();
-                                    let (records, key_len, value_len) = r.iter().map(|r| match *r {
-                                        Ok(ref pair) => (1, pair.0.len(), pair.1.len()),
-                                        Err(_) => (0, 0, 0),
-                                    }).fold((0, 0, 0),
-                                        |acc, x| (acc.0 + x.0, acc.1 + x.1, acc.2 + x.2));
-                                    stats.data.flow_stats.read_keys = records;
-                                    stats.data.flow_stats.read_bytes = key_len + value_len;
-                                    thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
-                                    thread_ctx.collect_key_reads(CMD, r.len() as u64);
-                                    r
-                            })
+                    let mut stats = Statistics::default();
+                    thread_ctx.collect_key_reads(CMD, keys.len() as u64);
+                    let result: Vec<Result<KvPair>> = keys.iter()
+                        .map(|k| snapshot.get(k))
+                        .filter(|v| !(v.is_ok() && v.as_ref().unwrap().is_none()))
+                        .into_iter()
+                        .zip(&keys)
+                        .map(|(v, k)| match v {
+                            Ok(Some(v)) => {
+                                stats.data.flow_stats.read_keys += 1;
+                                stats.data.flow_stats.read_bytes = k.encoded().len() + v.len();
+                                Ok((k.encoded().clone(), v))
+                            }
+                            Err(e) => Err(Error::from(e)),
+                            _ => unreachable!(),
+                        })
+                        .collect();
+                    thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
+                    Ok(result)
                 })
                 .then(move |r| {
                     _timer.observe_duration();
@@ -1113,6 +1103,7 @@ impl Storage {
     fn raw_scan(
         snapshot: &Snapshot,
         start_key: &Key,
+        end_key: Option<&Key>,
         limit: usize,
         stats: &mut Statistics,
         key_only: bool,
@@ -1123,6 +1114,11 @@ impl Storage {
         }
         let mut pairs = vec![];
         while cursor.valid() && pairs.len() < limit {
+            if let Some(end) = end_key {
+                if cursor.key().cmp(end.encoded()) != cmp::Ordering::Less {
+                    break;
+                }
+            }
             pairs.push(Ok((
                 cursor.key().to_owned(),
                 if key_only {
@@ -1163,6 +1159,7 @@ impl Storage {
                     let result = Storage::raw_scan(
                         snapshot.as_ref(),
                         &Key::from_encoded(key),
+                        None,
                         limit,
                         &mut statistics,
                         key_only,
@@ -1203,6 +1200,7 @@ impl Storage {
         &self,
         ctx: Context,
         start_keys: Vec<Vec<u8>>,
+        end_keys: Vec<Vec<u8>>,
         each_limit: usize,
         key_only: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
@@ -1210,7 +1208,12 @@ impl Storage {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let start_keys: Vec<Key> = start_keys.into_iter().map(Key::from_encoded).collect();
+        assert_eq!(start_keys.len(), end_keys.len());
+        let ranges: Vec<_> = start_keys
+            .into_iter()
+            .zip(end_keys)
+            .map(|(s, e)| (Key::from_encoded(s), Key::from_encoded(e)))
+            .collect();
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
             let mut _timer = {
@@ -1226,10 +1229,22 @@ impl Storage {
 
                     let mut statistics = Statistics::default();
                     let mut result = Vec::new();
-                    for start_key in &start_keys {
+                    for i in 0..ranges.len() {
+                        let range = &ranges[i];
+                        let start_key = &range.0;
+                        let end_key = if range.1.encoded().is_empty() {
+                            if i + 1 == ranges.len() {
+                                None
+                            } else {
+                                Some(&ranges[i + 1].0)
+                            }
+                        } else {
+                            Some(&range.1)
+                        };
                         let pairs = Storage::raw_scan(
                             snapshot.as_ref(),
                             start_key,
+                            end_key,
                             each_limit,
                             &mut statistics,
                             key_only,
@@ -2401,6 +2416,63 @@ mod tests {
             Some((b"a".to_vec(), b"aa".to_vec())),
             Some((b"a1".to_vec(), b"aa11".to_vec())),
             Some((b"a2".to_vec(), b"aa22".to_vec())),
+            Some((b"a3".to_vec(), b"aa33".to_vec())),
+            Some((b"b".to_vec(), b"bb".to_vec())),
+            Some((b"b1".to_vec(), b"bb11".to_vec())),
+            Some((b"b2".to_vec(), b"bb22".to_vec())),
+            Some((b"b3".to_vec(), b"bb33".to_vec())),
+            Some((b"c".to_vec(), b"cc".to_vec())),
+            Some((b"c1".to_vec(), b"cc11".to_vec())),
+            Some((b"c2".to_vec(), b"cc22".to_vec())),
+            Some((b"c3".to_vec(), b"cc33".to_vec())),
+            Some((b"d".to_vec(), b"dd".to_vec())),
+        ];
+
+        expect_multi_values(
+            results,
+            storage
+                .async_raw_batch_scan(
+                    Context::new(),
+                    vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()],
+                    vec![vec![], vec![], vec![]],
+                    5,
+                    false,
+                )
+                .wait(),
+        );
+
+        let results = vec![
+            Some((b"a".to_vec(), vec![])),
+            Some((b"a1".to_vec(), vec![])),
+            Some((b"a2".to_vec(), vec![])),
+            Some((b"a3".to_vec(), vec![])),
+            Some((b"b".to_vec(), vec![])),
+            Some((b"b1".to_vec(), vec![])),
+            Some((b"b2".to_vec(), vec![])),
+            Some((b"b3".to_vec(), vec![])),
+            Some((b"c".to_vec(), vec![])),
+            Some((b"c1".to_vec(), vec![])),
+            Some((b"c2".to_vec(), vec![])),
+            Some((b"c3".to_vec(), vec![])),
+            Some((b"d".to_vec(), vec![])),
+        ];
+        expect_multi_values(
+            results,
+            storage
+                .async_raw_batch_scan(
+                    Context::new(),
+                    vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()],
+                    vec![vec![], vec![], vec![]],
+                    5,
+                    true,
+                )
+                .wait(),
+        );
+
+        let results = vec![
+            Some((b"a".to_vec(), b"aa".to_vec())),
+            Some((b"a1".to_vec(), b"aa11".to_vec())),
+            Some((b"a2".to_vec(), b"aa22".to_vec())),
             Some((b"b".to_vec(), b"bb".to_vec())),
             Some((b"b1".to_vec(), b"bb11".to_vec())),
             Some((b"b2".to_vec(), b"bb22".to_vec())),
@@ -2415,6 +2487,7 @@ mod tests {
                 .async_raw_batch_scan(
                     Context::new(),
                     vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()],
+                    vec![vec![], vec![], vec![]],
                     3,
                     false,
                 )
@@ -2438,7 +2511,57 @@ mod tests {
                 .async_raw_batch_scan(
                     Context::new(),
                     vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()],
+                    vec![vec![], vec![], vec![]],
                     3,
+                    true,
+                )
+                .wait(),
+        );
+
+        let results = vec![
+            Some((b"a".to_vec(), b"aa".to_vec())),
+            Some((b"a1".to_vec(), b"aa11".to_vec())),
+            Some((b"a2".to_vec(), b"aa22".to_vec())),
+            Some((b"b".to_vec(), b"bb".to_vec())),
+            Some((b"b1".to_vec(), b"bb11".to_vec())),
+            Some((b"b2".to_vec(), b"bb22".to_vec())),
+            Some((b"c".to_vec(), b"cc".to_vec())),
+            Some((b"c1".to_vec(), b"cc11".to_vec())),
+            Some((b"c2".to_vec(), b"cc22".to_vec())),
+        ];
+
+        expect_multi_values(
+            results,
+            storage
+                .async_raw_batch_scan(
+                    Context::new(),
+                    vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()],
+                    vec![b"a3".to_vec(), b"b3".to_vec(), b"c3".to_vec()],
+                    5,
+                    false,
+                )
+                .wait(),
+        );
+
+        let results = vec![
+            Some((b"a".to_vec(), vec![])),
+            Some((b"a1".to_vec(), vec![])),
+            Some((b"a2".to_vec(), vec![])),
+            Some((b"b".to_vec(), vec![])),
+            Some((b"b1".to_vec(), vec![])),
+            Some((b"b2".to_vec(), vec![])),
+            Some((b"c".to_vec(), vec![])),
+            Some((b"c1".to_vec(), vec![])),
+            Some((b"c2".to_vec(), vec![])),
+        ];
+        expect_multi_values(
+            results,
+            storage
+                .async_raw_batch_scan(
+                    Context::new(),
+                    vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()],
+                    vec![b"a3".to_vec(), b"b3".to_vec(), b"c3".to_vec()],
+                    5,
                     true,
                 )
                 .wait(),
