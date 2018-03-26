@@ -135,7 +135,7 @@ impl Default for Config {
             raft_log_gc_size_limit: split_size * 3 / 4,
             split_region_check_tick_interval: ReadableDuration::secs(10),
             region_split_check_diff: split_size / 16,
-            clean_stale_peer_delay: ReadableDuration::secs(60),
+            clean_stale_peer_delay: ReadableDuration::minutes(5),
             region_compact_check_interval: ReadableDuration::minutes(5),
             region_compact_check_step: 100,
             region_compact_min_tombstones: 10000,

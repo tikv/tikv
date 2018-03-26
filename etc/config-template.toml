@@ -163,7 +163,7 @@
 # use-delete-range = false
 
 # delay time before deleting a stale peer
-# clean-stale-peer-delay = "60s"
+# clean-stale-peer-delay = "5m"
 
 [coprocessor]
 # When it is true, it will try to split a region with table prefix if
