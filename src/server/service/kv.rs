@@ -13,11 +13,9 @@
 
 use std::boxed::FnBox;
 use std::fmt::Debug;
-use std::io::Write;
 use std::iter::{self, FromIterator};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use mio::Token;
+use std::sync::atomic::AtomicUsize;
 use grpc::{ClientStreamingSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
            RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
 use futures::{future, stream, Future, Sink, Stream};
@@ -33,7 +31,6 @@ use prometheus::Histogram;
 
 use util::worker::Scheduler;
 use util::collections::HashMap;
-use util::buf::PipeBuffer;
 use util::future::paired_future_callback;
 use storage::{self, Key, Mutation, Options, Storage, Value};
 use storage::txn::Error as TxnError;
@@ -941,15 +938,16 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let snap_recv_sink = self.snap_recv_task_sink.clone();
         let (tx, rx) = mpsc::channel(SNAP_RECV_CHUNKS_LIMIT);
 
-        let recv_chunks = tx.send_all(stream.then(|r| Ok(r)))
-            .map(|_| ())
-            .map_err(|_| ());
+        let recv_chunks = tx.send_all(stream.then(Ok)).map(|_| ()).map_err(|_| ());
+
+        let success = sink.success(Done::new()).map_err(|_| ());
 
         ctx.spawn(
             snap_recv_sink
                 .send(box rx.then(|t| t.unwrap()))
                 .map_err(|_| ())
-                .and_then(|_| recv_chunks),
+                .and_then(|_| recv_chunks)
+                .and_then(|_| success),
         )
     }
 

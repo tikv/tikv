@@ -12,8 +12,6 @@
 // limitations under the License.
 //! The macros crate contains all useful needed macros.
 
-use futures::future;
-
 /// Get the count of macro's arguments.
 ///
 /// # Examples
