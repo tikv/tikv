@@ -832,8 +832,10 @@ impl TiKvConfig {
                     ).as_str(),
                 );
             }
-            error_msg
-                .push_str("Before start TiKV, please remove `last_conf.toml` in data directory.");
+            error_msg.push_str(
+                "After you have done the above jobs, please remove `last_conf.toml` \
+                 in data directory and start TiKV again.",
+            );
 
             return Err(error_msg.into());
         }
