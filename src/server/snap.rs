@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::mem;
 use std::fmt::{self, Display, Formatter};
 use std::boxed::FnBox;
 use std::time::Instant;
@@ -196,8 +195,8 @@ fn get_snap_stream_for_send(
 }
 
 struct RecvSnapContext {
-    snap_key: SnapKey,
-    snap_file: Option<Box<Snapshot>>,
+    key: SnapKey,
+    file: Option<Box<Snapshot>>,
     raft_msg: RaftMessage,
 }
 
@@ -207,7 +206,7 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
     snap_mgr: SnapManager,
     raft_router: R,
 ) -> impl Future<Item = (), Error = ()> {
-    let head_and_chunks = task.take(1).into_future().map_err(|(e, _)| {
+    let head_and_chunks = task.into_future().map_err(|(e, _)| {
         error!("receive first chunk from gRPC: {}", e);
     });
 
@@ -218,12 +217,11 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
                 Ok(context) => context,
                 Err(_) => return box future::err(()),
             };
-
-            if context.snap_file.is_none() {
+            if context.file.is_none() {
                 return box future::ok(context);
             }
 
-            let key = context.snap_key.clone();
+            let key = context.key.clone();
             let chunks = chunks.map_err(move |e| {
                 error!("{} receive chunks fail from gRPC: {}", key, e);
             });
@@ -231,14 +229,14 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
             box chunks.fold(context, |mut context, mut chunk| {
                 let data = chunk.take_data();
                 if !data.is_empty() {
-                    let file = context.snap_file.as_mut().unwrap();
-                    let key = context.snap_key.clone();
+                    let file = context.file.as_mut().unwrap();
+                    let key = context.key.clone();
                     file.write_all(&data).map_err(|e| {
                         let path = file.path();
                         error!("{} failed to write snapshot file {}: {}", key, path, e);
                     })?;
                 } else {
-                    error!("{} receive chunk with empty data", context.snap_key);
+                    error!("{} receive chunk with empty data", context.key);
                     return Err(());
                 }
                 Ok(context)
@@ -246,15 +244,14 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
         },
     );
 
-    all_chunks_success.and_then(move |mut context| {
-        let key = context.snap_key.clone();
-        if let Some(ref mut file) = context.snap_file.as_mut() {
+    all_chunks_success.and_then(move |context| {
+        let (key, file, raft_msg) = (context.key, context.file, context.raft_msg);
+        if let Some(mut file) = file {
             file.save().map_err(|e| {
                 let path = file.path();
                 error!("{} failed to save snapshot file {}: {:?}", key, path, e);
             })?;
         }
-        let raft_msg = mem::replace(&mut context.raft_msg, RaftMessage::default());
         raft_router.send_raft_msg(raft_msg).map_err(|e| {
             error!("{} failed to send snapshot to raft: {}", key, e);
         })?;
@@ -293,8 +290,8 @@ fn get_context_from_head_chunk(
     };
 
     Ok(RecvSnapContext {
-        snap_key: key,
-        snap_file: snap,
+        key: key,
+        file: snap,
         raft_msg: meta,
     })
 }
