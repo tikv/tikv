@@ -69,7 +69,7 @@ fn new_cluster_and_tikv_import_client(
 
 #[test]
 fn test_upload_sst() {
-    let (_cluster, _, _, import) = new_cluster_and_tikv_import_client();
+    let (_cluster, ctx, _, import) = new_cluster_and_tikv_import_client();
 
     let data = vec![1; 1024];
     let crc32 = calc_data_crc32(&data);
@@ -88,7 +88,9 @@ fn test_upload_sst() {
     upload.set_meta(meta);
     assert!(send_upload_sst(&import, &upload).is_err());
 
-    let meta = new_sst_meta(crc32, length);
+    let mut meta = new_sst_meta(crc32, length);
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
     upload.set_meta(meta);
     send_upload_sst(&import, &upload).unwrap();
 
