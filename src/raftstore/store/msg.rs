@@ -174,7 +174,9 @@ pub enum Msg {
         region_id: u64,
     },
 
-    ValidateSSTResult(Vec<SSTMeta>),
+    ValidateSSTResult {
+        invalid_ssts: Vec<SSTMeta>,
+    },
 }
 
 impl fmt::Debug for Msg {
@@ -211,7 +213,7 @@ impl fmt::Debug for Msg {
             ),
             Msg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),
             Msg::MergeFail { region_id } => write!(fmt, "MergeFail region_id {}", region_id),
-            Msg::ValidateSSTResult(_) => write!(fmt, "Validate SST Result"),
+            Msg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
         }
     }
 }

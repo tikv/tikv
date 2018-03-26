@@ -2976,6 +2976,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 delete_ssts.push(sst);
             }
         }
+        if delete_ssts.is_empty() {
+            return;
+        }
 
         let task = CleanupSSTTask::DeleteSST { ssts: delete_ssts };
         if let Err(e) = self.cleanup_sst_worker.schedule(task) {
@@ -3001,15 +3004,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        let task = CleanupSSTTask::DeleteSST { ssts: delete_ssts };
-        if let Err(e) = self.cleanup_sst_worker.schedule(task) {
-            error!("schedule to delete ssts: {:?}", e);
+        if !delete_ssts.is_empty() {
+            let task = CleanupSSTTask::DeleteSST { ssts: delete_ssts };
+            if let Err(e) = self.cleanup_sst_worker.schedule(task) {
+                error!("schedule to delete ssts: {:?}", e);
+            }
         }
-        let task = CleanupSSTTask::ValidateSST {
-            ssts: validate_ssts,
-        };
-        if let Err(e) = self.cleanup_sst_worker.schedule(task) {
-            error!("schedule to validate ssts: {:?}", e);
+
+        if !validate_ssts.is_empty() {
+            let task = CleanupSSTTask::ValidateSST {
+                ssts: validate_ssts,
+            };
+            if let Err(e) = self.cleanup_sst_worker.schedule(task) {
+                error!("schedule to validate ssts: {:?}", e);
+            }
         }
 
         Ok(())
@@ -3164,7 +3172,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             } => self.on_approximate_region_size(region_id, region_size),
             Msg::CompactedEvent(event) => self.on_compaction_finished(event),
             Msg::MergeFail { region_id } => self.on_merge_fail(region_id),
-            Msg::ValidateSSTResult(ssts) => self.on_validate_sst_result(ssts),
+            Msg::ValidateSSTResult { invalid_ssts } => self.on_validate_sst_result(invalid_ssts),
         }
     }
 

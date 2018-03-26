@@ -67,7 +67,7 @@ impl<C: PdClient> Runner<C> {
 
     fn handle_validate_sst(&self, ssts: Vec<SSTMeta>) {
         let store_id = self.store_id;
-        let mut results = Vec::new();
+        let mut invalid_ssts = Vec::new();
         for sst in ssts {
             match self.pd_client.get_region(sst.get_range().get_start()) {
                 Ok(r) => {
@@ -84,7 +84,7 @@ impl<C: PdClient> Runner<C> {
                         // The SST still belongs to this store.
                         continue;
                     }
-                    results.push(sst);
+                    invalid_ssts.push(sst);
                 }
                 Err(e) => {
                     error!("get region failed: {:?}", e);
@@ -95,7 +95,7 @@ impl<C: PdClient> Runner<C> {
         // We need to send back the result to check for the stale
         // peer, which may ingest the stale SST before it is
         // destroyed.
-        let msg = Msg::ValidateSSTResult(results);
+        let msg = Msg::ValidateSSTResult { invalid_ssts };
         if let Err(e) = self.store_ch.try_send(msg) {
             error!("send validate sst result: {:?}", e);
         }
