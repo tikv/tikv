@@ -356,7 +356,7 @@ mod tests {
     use super::*;
 
     use std::vec;
-    use std::sync::{atomic, mpsc};
+    use std::sync::{atomic, mpsc, Arc};
     use std::thread;
 
     use storage::engine::{self, TEMP_DIR};
@@ -712,8 +712,6 @@ mod tests {
 
     #[test]
     fn test_special_streaming_handlers() {
-        static COUNTER: atomic::AtomicIsize = atomic::ATOMIC_ISIZE_INIT;
-
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || ReadPoolContext::new(None)
@@ -721,7 +719,9 @@ mod tests {
         let service = Service::new(&Config::default(), engine, read_pool);
 
         // handler returns `finished == true` should not be called again.
-        let handler = StreamFromClosure::new(|nth| match nth {
+        let counter = Arc::new(atomic::AtomicIsize::new(0));
+        let counter_clone = Arc::clone(&counter);
+        let handler = StreamFromClosure::new(move |nth| match nth {
             0 => {
                 let mut resp = coppb::Response::new();
                 resp.set_data(vec![1, 2, 7]);
@@ -729,7 +729,7 @@ mod tests {
             }
             _ => {
                 // we cannot use `unreachable!()` here because CpuPool catches panic.
-                COUNTER.store(1, atomic::Ordering::SeqCst);
+                counter_clone.store(1, atomic::Ordering::SeqCst);
                 Err(box_err!("unreachable"))
             }
         });
@@ -741,10 +741,12 @@ mod tests {
             .unwrap();
         assert_eq!(resp_vec.len(), 1);
         assert_eq!(resp_vec[0].get_data(), [1, 2, 7]);
-        assert_eq!(COUNTER.load(atomic::Ordering::SeqCst), 0);
+        assert_eq!(counter.load(atomic::Ordering::SeqCst), 0);
 
         // handler returns `None` but `finished == false` should not be called again.
-        let handler = StreamFromClosure::new(|nth| match nth {
+        let counter = Arc::new(atomic::AtomicIsize::new(0));
+        let counter_clone = Arc::clone(&counter);
+        let handler = StreamFromClosure::new(move |nth| match nth {
             0 => {
                 let mut resp = coppb::Response::new();
                 resp.set_data(vec![1, 2, 13]);
@@ -752,7 +754,7 @@ mod tests {
             }
             1 => Ok((None, false)),
             _ => {
-                COUNTER.store(1, atomic::Ordering::SeqCst);
+                counter_clone.store(1, atomic::Ordering::SeqCst);
                 Err(box_err!("unreachable"))
             }
         });
@@ -764,10 +766,12 @@ mod tests {
             .unwrap();
         assert_eq!(resp_vec.len(), 1);
         assert_eq!(resp_vec[0].get_data(), [1, 2, 13]);
-        assert_eq!(COUNTER.load(atomic::Ordering::SeqCst), 0);
+        assert_eq!(counter.load(atomic::Ordering::SeqCst), 0);
 
         // handler returns `Err(..)` should not be called again.
-        let handler = StreamFromClosure::new(|nth| match nth {
+        let counter = Arc::new(atomic::AtomicIsize::new(0));
+        let counter_clone = Arc::clone(&counter);
+        let handler = StreamFromClosure::new(move |nth| match nth {
             0 => {
                 let mut resp = coppb::Response::new();
                 resp.set_data(vec![1, 2, 23]);
@@ -775,7 +779,7 @@ mod tests {
             }
             1 => Err(box_err!("foo")),
             _ => {
-                COUNTER.store(1, atomic::Ordering::SeqCst);
+                counter_clone.store(1, atomic::Ordering::SeqCst);
                 Err(box_err!("unreachable"))
             }
         });
@@ -788,13 +792,11 @@ mod tests {
         assert_eq!(resp_vec.len(), 2);
         assert_eq!(resp_vec[0].get_data(), [1, 2, 23]);
         assert!(!resp_vec[1].get_other_error().is_empty());
-        assert_eq!(COUNTER.load(atomic::Ordering::SeqCst), 0);
+        assert_eq!(counter.load(atomic::Ordering::SeqCst), 0);
     }
 
     #[test]
     fn test_channel_size() {
-        static COUNTER: atomic::AtomicIsize = atomic::ATOMIC_ISIZE_INIT;
-
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || ReadPoolContext::new(None)
@@ -808,11 +810,13 @@ mod tests {
             read_pool,
         );
 
-        let handler = StreamFromClosure::new(|nth| {
+        let counter = Arc::new(atomic::AtomicIsize::new(0));
+        let counter_clone = Arc::clone(&counter);
+        let handler = StreamFromClosure::new(move |nth| {
             // produce an infinite stream
             let mut resp = coppb::Response::new();
             resp.set_data(vec![1, 2, nth as u8]);
-            COUNTER.fetch_add(1, atomic::Ordering::SeqCst);
+            counter_clone.fetch_add(1, atomic::Ordering::SeqCst);
             Ok((Some(resp), false))
         });
         let handler_builder = box |_| Ok(handler.into_boxed());
@@ -823,6 +827,6 @@ mod tests {
             .wait()
             .unwrap();
         assert_eq!(resp_vec.len(), 7);
-        assert!(COUNTER.load(atomic::Ordering::SeqCst) < 14);
+        assert!(counter.load(atomic::Ordering::SeqCst) < 14);
     }
 }
