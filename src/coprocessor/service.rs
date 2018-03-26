@@ -346,7 +346,7 @@ mod tests {
     use super::*;
 
     use std::vec;
-    use std::sync::mpsc;
+    use std::sync::{atomic, mpsc};
     use std::thread;
 
     use storage::engine::{self, TEMP_DIR};
@@ -702,6 +702,8 @@ mod tests {
 
     #[test]
     fn test_special_streaming_handlers() {
+        static COUNTER: atomic::AtomicIsize = atomic::ATOMIC_ISIZE_INIT;
+
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || ReadPoolContext::new(None)
@@ -715,7 +717,11 @@ mod tests {
                 resp.set_data(vec![1, 2, 7]);
                 Ok((Some(resp), true))
             }
-            _ => Err(box_err!("unreachable")),
+            _ => {
+                // we cannot use `unreachable!()` here because CpuPool catches panic.
+                COUNTER.store(1, atomic::Ordering::SeqCst);
+                Err(box_err!("unreachable"))
+            }
         });
         let handler_builder = box |_| Ok(handler.into_boxed());
         let resp_vec = service
@@ -725,6 +731,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp_vec.len(), 1);
         assert_eq!(resp_vec[0].get_data(), [1, 2, 7]);
+        assert_eq!(COUNTER.load(atomic::Ordering::SeqCst), 0);
 
         // handler returns `None` but `finished == false` should not be called again.
         let handler = StreamFromClosure::new(|nth| match nth {
@@ -734,7 +741,10 @@ mod tests {
                 Ok((Some(resp), false))
             }
             1 => Ok((None, false)),
-            _ => Err(box_err!("unreachable")),
+            _ => {
+                COUNTER.store(1, atomic::Ordering::SeqCst);
+                Err(box_err!("unreachable"))
+            }
         });
         let handler_builder = box |_| Ok(handler.into_boxed());
         let resp_vec = service
@@ -744,6 +754,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp_vec.len(), 1);
         assert_eq!(resp_vec[0].get_data(), [1, 2, 13]);
+        assert_eq!(COUNTER.load(atomic::Ordering::SeqCst), 0);
 
         // handler returns `Err(..)` should not be called again.
         let handler = StreamFromClosure::new(|nth| match nth {
@@ -753,7 +764,10 @@ mod tests {
                 Ok((Some(resp), false))
             }
             1 => Err(box_err!("foo")),
-            _ => Err(box_err!("unreachable")),
+            _ => {
+                COUNTER.store(1, atomic::Ordering::SeqCst);
+                Err(box_err!("unreachable"))
+            }
         });
         let handler_builder = box |_| Ok(handler.into_boxed());
         let resp_vec = service
@@ -764,5 +778,41 @@ mod tests {
         assert_eq!(resp_vec.len(), 2);
         assert_eq!(resp_vec[0].get_data(), [1, 2, 23]);
         assert!(!resp_vec[1].get_other_error().is_empty());
+        assert_eq!(COUNTER.load(atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn test_channel_size() {
+        static COUNTER: atomic::AtomicIsize = atomic::ATOMIC_ISIZE_INIT;
+
+        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+            || ReadPoolContext::new(None)
+        });
+        let service = Service::new(
+            &Config {
+                end_point_stream_channel_size: 3,
+                ..Config::default()
+            },
+            engine,
+            read_pool,
+        );
+
+        let handler = StreamFromClosure::new(|nth| {
+            // produce an infinite stream
+            let mut resp = coppb::Response::new();
+            resp.set_data(vec![1, 2, nth as u8]);
+            COUNTER.fetch_add(1, atomic::Ordering::SeqCst);
+            Ok((Some(resp), false))
+        });
+        let handler_builder = box |_| Ok(handler.into_boxed());
+        let resp_vec = service
+            .handle_stream_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
+            .take(7)
+            .collect()
+            .wait()
+            .unwrap();
+        assert_eq!(resp_vec.len(), 7);
+        assert_eq!(COUNTER.load(atomic::Ordering::SeqCst) < 14);
     }
 }
