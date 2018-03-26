@@ -23,7 +23,7 @@ use util::collections::{OrderMap, OrderMapEntry};
 use coprocessor::codec::table::RowColsDict;
 use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
 use coprocessor::endpoint::SINGLE_GROUP;
-use coprocessor::dag::expr::{EvalContext, Expression};
+use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 use coprocessor::Result;
 
 use super::aggregate::{self, AggrFunc};
@@ -36,13 +36,13 @@ struct AggFuncExpr {
 }
 
 impl AggFuncExpr {
-    fn batch_build(ctx: &EvalContext, expr: Vec<Expr>) -> Result<Vec<AggFuncExpr>> {
+    fn batch_build(ctx: &mut EvalContext, expr: Vec<Expr>) -> Result<Vec<AggFuncExpr>> {
         expr.into_iter()
             .map(|v| AggFuncExpr::build(ctx, v))
             .collect()
     }
 
-    fn build(ctx: &EvalContext, mut expr: Expr) -> Result<AggFuncExpr> {
+    fn build(ctx: &mut EvalContext, mut expr: Expr) -> Result<AggFuncExpr> {
         let args = box_try!(Expression::batch_build(
             ctx,
             expr.take_children().into_vec()
@@ -51,7 +51,7 @@ impl AggFuncExpr {
         Ok(AggFuncExpr { args: args, tp: tp })
     }
 
-    fn eval_args(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Vec<Datum>> {
+    fn eval_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Vec<Datum>> {
         let res: Vec<Datum> = box_try!(self.args.iter().map(|v| v.eval(ctx, row)).collect());
         Ok(res)
     }
@@ -60,7 +60,7 @@ impl AggFuncExpr {
 impl AggrFunc {
     fn update_with_expr(
         &mut self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         expr: &AggFuncExpr,
         row: &[Datum],
     ) -> Result<()> {
@@ -79,7 +79,7 @@ pub struct HashAggExecutor {
     group_key_aggrs: OrderMap<Vec<u8>, Vec<Box<AggrFunc>>>,
     cursor: usize,
     executed: bool,
-    ctx: Arc<EvalContext>,
+    ctx: EvalContext,
     cols: Arc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
     src: Box<Executor + Send>,
@@ -90,7 +90,7 @@ pub struct HashAggExecutor {
 impl HashAggExecutor {
     pub fn new(
         mut meta: Aggregation,
-        ctx: Arc<EvalContext>,
+        eval_config: Arc<EvalConfig>,
         columns: Arc<Vec<ColumnInfo>>,
         src: Box<Executor + Send>,
     ) -> Result<HashAggExecutor> {
@@ -100,9 +100,10 @@ impl HashAggExecutor {
         visitor.batch_visit(&group_by)?;
         let aggr_func = meta.take_agg_func().into_vec();
         visitor.batch_visit(&aggr_func)?;
+        let mut ctx = EvalContext::new(eval_config);
         Ok(HashAggExecutor {
-            group_by: box_try!(Expression::batch_build(&ctx, group_by)),
-            aggr_func: AggFuncExpr::batch_build(&ctx, aggr_func)?,
+            group_by: box_try!(Expression::batch_build(&mut ctx, group_by)),
+            aggr_func: AggFuncExpr::batch_build(&mut ctx, aggr_func)?,
             group_key_aggrs: OrderMap::new(),
             cursor: 0,
             executed: false,
@@ -115,14 +116,14 @@ impl HashAggExecutor {
         })
     }
 
-    fn get_group_key(&self, row: &[Datum]) -> Result<Vec<u8>> {
+    fn get_group_key(&mut self, row: &[Datum]) -> Result<Vec<u8>> {
         if self.group_by.is_empty() {
             let single_group = Datum::Bytes(SINGLE_GROUP.to_vec());
             return Ok(box_try!(datum::encode_value(&[single_group])));
         }
         let mut vals = Vec::with_capacity(self.group_by.len());
         for expr in &self.group_by {
-            let v = box_try!(expr.eval(&self.ctx, row));
+            let v = box_try!(expr.eval(&mut self.ctx, row));
             vals.push(v);
         }
         let res = box_try!(datum::encode_value(&vals));
@@ -132,7 +133,7 @@ impl HashAggExecutor {
     fn aggregate(&mut self) -> Result<()> {
         while let Some(row) = self.src.next()? {
             let cols = inflate_with_col_for_dag(
-                &self.ctx,
+                &mut self.ctx,
                 &row.data,
                 &self.cols,
                 &self.related_cols_offset,
@@ -144,7 +145,7 @@ impl HashAggExecutor {
                     let mut aggrs = Vec::with_capacity(self.aggr_func.len());
                     for expr in &self.aggr_func {
                         let mut aggr = aggregate::build_aggr_func(expr.tp)?;
-                        aggr.update_with_expr(&self.ctx, expr, &cols)?;
+                        aggr.update_with_expr(&mut self.ctx, expr, &cols)?;
                         aggrs.push(aggr);
                     }
                     e.insert(aggrs);
@@ -152,7 +153,7 @@ impl HashAggExecutor {
                 OrderMapEntry::Occupied(e) => {
                     let aggrs = e.into_mut();
                     for (expr, aggr) in self.aggr_func.iter().zip(aggrs) {
-                        aggr.update_with_expr(&self.ctx, expr, &cols)?;
+                        aggr.update_with_expr(&mut self.ctx, expr, &cols)?;
                     }
                 }
             }
@@ -218,7 +219,7 @@ impl Executor for StreamAggExecutor {
 
         while let Some(row) = self.src.next()? {
             let cols = inflate_with_col_for_dag(
-                &self.ctx,
+                &mut self.ctx,
                 &row.data,
                 &self.cols,
                 &self.related_cols_offset,
@@ -232,7 +233,7 @@ impl Executor for StreamAggExecutor {
                 None
             };
             for (expr, func) in self.agg_exprs.iter().zip(&mut self.agg_funcs) {
-                func.update_with_expr(&self.ctx, expr, &cols)?;
+                func.update_with_expr(&mut self.ctx, expr, &cols)?;
             }
             if new_group {
                 return Ok(ret);
@@ -267,7 +268,7 @@ impl Executor for StreamAggExecutor {
 // It assumes all the input data is sorted by group by key.
 // When next() is called, it finds a group and returns a result for the same group.
 pub struct StreamAggExecutor {
-    ctx: Arc<EvalContext>,
+    ctx: EvalContext,
     src: Box<Executor + Send>,
 
     executed: bool,
@@ -286,7 +287,7 @@ pub struct StreamAggExecutor {
 
 impl StreamAggExecutor {
     pub fn new(
-        ctx: Arc<EvalContext>,
+        eval_config: Arc<EvalConfig>,
         src: Box<Executor + Send>,
         mut meta: Aggregation,
         columns: Arc<Vec<ColumnInfo>>,
@@ -297,7 +298,8 @@ impl StreamAggExecutor {
         let aggs = meta.take_agg_func().into_vec();
         visitor.batch_visit(&aggs)?;
         let group_len = group_bys.len();
-        let exprs = AggFuncExpr::batch_build(&ctx, aggs)?;
+        let mut ctx = EvalContext::new(eval_config);
+        let exprs = AggFuncExpr::batch_build(&mut ctx, aggs)?;
         // Get aggregation functions.
         let mut funcs = Vec::with_capacity(exprs.len());
         for expr in &exprs {
@@ -310,7 +312,7 @@ impl StreamAggExecutor {
             executed: false,
             agg_exprs: exprs,
             agg_funcs: funcs,
-            group_by_exprs: box_try!(Expression::batch_build(&ctx, group_bys)),
+            group_by_exprs: box_try!(Expression::batch_build(&mut ctx, group_bys)),
             ctx: ctx,
             related_cols_offset: visitor.column_offsets(),
             cols: columns,
@@ -331,8 +333,9 @@ impl StreamAggExecutor {
         let mut tmp_group_row = Vec::with_capacity(self.group_by_exprs.len());
         let mut matched = !self.is_first_group;
         for (i, expr) in self.group_by_exprs.iter().enumerate() {
-            let v = box_try!(expr.eval(&self.ctx, row));
-            if matched && box_try!(v.cmp(&self.ctx, &self.cur_group_row[i])) != Ordering::Equal {
+            let v = box_try!(expr.eval(&mut self.ctx, row));
+            if matched && box_try!(v.cmp(&mut self.ctx, &self.cur_group_row[i])) != Ordering::Equal
+            {
                 matched = false;
             }
             tmp_group_row.push(v);
@@ -511,7 +514,7 @@ mod test {
             IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique).unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
-            Arc::new(EvalContext::default()),
+            Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation.clone(),
             Arc::new(col_infos.clone()),
@@ -541,7 +544,7 @@ mod test {
             IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique).unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
-            Arc::new(EvalContext::default()),
+            Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation.clone(),
             Arc::new(col_infos.clone()),
@@ -592,7 +595,7 @@ mod test {
             IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique).unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
-            Arc::new(EvalContext::default()),
+            Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation,
             Arc::new(col_infos),
@@ -742,7 +745,7 @@ mod test {
         // init the hash aggregation executor
         let mut aggr_ect = HashAggExecutor::new(
             aggregation,
-            Arc::new(EvalContext::default()),
+            Arc::new(EvalConfig::default()),
             Arc::new(cis),
             Box::new(ts_ect),
         ).unwrap();
