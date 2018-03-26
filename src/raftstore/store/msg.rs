@@ -18,6 +18,7 @@ use std::fmt;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::RegionEpoch;
+use kvproto::importpb::SSTMeta;
 
 use raft::SnapshotStatus;
 use util::escape;
@@ -107,6 +108,7 @@ pub enum Tick {
     CompactLockCf,
     ConsistencyCheck,
     CheckMerge,
+    CleanupImportSST,
 }
 
 #[derive(Debug, PartialEq)]
@@ -171,6 +173,10 @@ pub enum Msg {
     MergeFail {
         region_id: u64,
     },
+
+    ValidateSSTResult {
+        invalid_ssts: Vec<SSTMeta>,
+    },
 }
 
 impl fmt::Debug for Msg {
@@ -207,6 +213,7 @@ impl fmt::Debug for Msg {
             ),
             Msg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),
             Msg::MergeFail { region_id } => write!(fmt, "MergeFail region_id {}", region_id),
+            Msg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
         }
     }
 }
