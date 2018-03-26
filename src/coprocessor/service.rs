@@ -42,6 +42,7 @@ pub struct Service {
     recursion_limit: u32,
     batch_row_limit: usize,
     stream_batch_row_limit: usize,
+    stream_channel_size: usize,
     max_handle_duration: Duration,
 }
 
@@ -69,6 +70,7 @@ impl Service {
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
+            stream_channel_size: cfg.end_point_stream_channel_size,
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
         }
     }
@@ -130,6 +132,7 @@ impl Service {
     }
 
     /// Creates a `RequestHandlerBuilder`.
+    #[inline]
     fn new_request_handler_builder(
         &self,
         req: &coppb::Request,
@@ -139,6 +142,7 @@ impl Service {
             .unwrap_or_else(|e| box move |_| Ok(cop_util::ErrorRequestHandler::new(e).into_boxed()))
     }
 
+    #[inline]
     fn get_batch_row_limit(&self, is_streaming: bool) -> usize {
         if is_streaming {
             self.stream_batch_row_limit
@@ -147,6 +151,7 @@ impl Service {
         }
     }
 
+    #[inline]
     fn async_snapshot(
         engine: Box<storage::Engine>,
         ctx: &kvrpcpb::Context,
@@ -160,17 +165,22 @@ impl Service {
             .map_err(Error::from)
     }
 
+    #[inline]
     fn run_handler(
         handler: Box<RequestHandler>,
         is_streaming: bool,
     ) -> impl Stream<Item = coppb::Response, Error = Error> {
         stream::unfold((handler, false), move |(mut handler, finished)| {
+            // TODO: Shall we check whether it is outdated in each streaming iterate?
             if finished {
                 return None;
             }
             if is_streaming {
                 match handler.handle_streaming_request() {
-                    Ok((None, _)) => None,
+                    Ok((None, _)) => {
+                        // if we get `None`, stream is always considered finished.
+                        None
+                    }
                     Ok((Some(resp), finished)) => {
                         let yielded = resp;
                         let next_state = (handler, finished);
@@ -197,7 +207,7 @@ impl Service {
         handler_builder: RequestHandlerBuilder,
         is_streaming: bool,
     ) -> impl Stream<Item = coppb::Response, Error = ()> {
-        let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(8);
+        let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(context.get_priority());
 
@@ -248,6 +258,7 @@ impl Service {
     }
 
     /// Specifying custom request handler is useful in tests.
+    #[inline]
     fn handle_stream_request_by_custom_handler(
         &self,
         context: kvrpcpb::Context,
@@ -263,18 +274,18 @@ impl Service {
         handler_builder: RequestHandlerBuilder,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
         self.handle_request_by_custom_handler(context, handler_builder, false)
-            .take(1)
-            .fold(None, |_, resp| Ok::<_, ()>(Some(resp)))
+            .into_future()  // called `.next()` in futures 0.2
             .then(|result| {
                 let resp = match result {
-                    Ok(Some(resp)) => resp,
-                    Ok(None) => unreachable!(),
-                    Err(_) => unreachable!(),
+                    Ok((Some(resp), _)) => resp,
+                    Ok((None, _)) => unreachable!(),
+                    Err((_, _)) => unreachable!(),
                 };
                 Ok::<_, ()>(resp)
             })
     }
 
+    #[inline]
     pub fn handle_stream_request(
         &self,
         mut req: coppb::Request,
@@ -283,6 +294,7 @@ impl Service {
         self.handle_stream_request_by_custom_handler(req.take_context(), handler_builder)
     }
 
+    #[inline]
     pub fn handle_unary_request(
         &self,
         mut req: coppb::Request,
@@ -333,63 +345,134 @@ fn make_error_response(e: Error, metrics: &mut BasicLocalMetrics) -> coppb::Resp
 mod tests {
     use super::*;
 
+    use std::vec;
     use std::sync::mpsc;
     use std::thread;
 
     use storage::engine::{self, TEMP_DIR};
 
-    struct DummyReqHandler {
-        is_outdated: bool,
-        delay_millis: u64,
-        unary_result: Option<Result<coppb::Response>>,
+    use tipb::expression::Expr;
+    use tipb::executor::Executor;
+
+    /// a `RequestHandler` that is always outdated
+    struct OutdatedFixture;
+
+    impl OutdatedFixture {
+        pub fn new() -> OutdatedFixture {
+            OutdatedFixture {}
+        }
     }
 
-    impl DummyReqHandler {
-        pub fn new_outdated() -> DummyReqHandler {
-            DummyReqHandler {
-                is_outdated: true,
-                delay_millis: 0,
-                unary_result: None,
+    impl RequestHandler for OutdatedFixture {
+        fn check_if_outdated(&self) -> Result<()> {
+            Err(Error::Outdated(Duration::from_secs(1), "select"))
+        }
+    }
+
+    /// an unary `RequestHandler` that always produces a fixture.
+    struct UnaryFixture {
+        handle_duration_millis: u64,
+        result: Option<Result<coppb::Response>>,
+    }
+
+    impl UnaryFixture {
+        pub fn new(result: Result<coppb::Response>) -> UnaryFixture {
+            UnaryFixture {
+                handle_duration_millis: 0,
+                result: Some(result),
             }
         }
 
-        pub fn new_unary_fixture(result: Result<coppb::Response>) -> DummyReqHandler {
-            DummyReqHandler {
-                is_outdated: false,
-                delay_millis: 0,
-                unary_result: Some(result),
-            }
-        }
-
-        pub fn new_delayed_unary_fixture(
+        pub fn new_with_duration(
             result: Result<coppb::Response>,
-            delay_millis: u64,
-        ) -> DummyReqHandler {
-            DummyReqHandler {
-                is_outdated: false,
-                delay_millis,
-                unary_result: Some(result),
+            handle_duration_millis: u64,
+        ) -> UnaryFixture {
+            UnaryFixture {
+                handle_duration_millis,
+                result: Some(result),
             }
         }
     }
 
-    impl RequestHandler for DummyReqHandler {
+    impl RequestHandler for UnaryFixture {
         fn handle_request(&mut self) -> Result<coppb::Response> {
-            if self.is_outdated {
-                unreachable!();
-            }
-            if self.delay_millis > 0 {
-                thread::sleep(Duration::from_millis(self.delay_millis))
-            }
-            self.unary_result.take().unwrap()
+            thread::sleep(Duration::from_millis(self.handle_duration_millis));
+            self.result.take().unwrap()
         }
 
         fn check_if_outdated(&self) -> Result<()> {
-            if self.is_outdated {
-                Err(Error::Outdated(Duration::from_secs(1), "select"))
-            } else {
-                Ok(())
+            Ok(())
+        }
+    }
+
+    /// a streaming `RequestHandler` that always produces a fixture.
+    struct StreamFixture {
+        result_len: usize,
+        result_iter: vec::IntoIter<Result<coppb::Response>>,
+        nth: usize,
+    }
+
+    impl StreamFixture {
+        pub fn new(result: Vec<Result<coppb::Response>>) -> StreamFixture {
+            StreamFixture {
+                result_len: result.len(),
+                result_iter: result.into_iter(),
+                nth: 0,
             }
+        }
+    }
+
+    impl RequestHandler for StreamFixture {
+        fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
+            let is_finished = if self.result_len == 0 {
+                true
+            } else {
+                self.nth >= (self.result_len - 1)
+            };
+            let ret = match self.result_iter.next() {
+                None => {
+                    assert!(is_finished);
+                    Ok((None, is_finished))
+                }
+                Some(Ok(resp)) => Ok((Some(resp), is_finished)),
+                Some(Err(e)) => Err(e),
+            };
+            self.nth += 1;
+            ret
+        }
+
+        fn check_if_outdated(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// a streaming `RequestHandler` that produces values according a closure.
+    struct StreamFromClosure {
+        result_generator: Box<Fn(usize) -> HandlerStreamStepResult + Send>,
+        nth: usize,
+    }
+
+    impl StreamFromClosure {
+        pub fn new<F>(result_generator: F) -> StreamFromClosure
+        where
+            F: Fn(usize) -> HandlerStreamStepResult + Send + 'static,
+        {
+            StreamFromClosure {
+                result_generator: box result_generator,
+                nth: 0,
+            }
+        }
+    }
+
+    impl RequestHandler for StreamFromClosure {
+        fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
+            let result = (self.result_generator)(self.nth);
+            self.nth += 1;
+            result
+        }
+
+        fn check_if_outdated(&self) -> Result<()> {
+            Ok(())
         }
     }
 
@@ -403,7 +486,7 @@ mod tests {
 
         // a normal request
         let handler_builder =
-            box |_| Ok(DummyReqHandler::new_unary_fixture(Ok(coppb::Response::new())).into_boxed());
+            box |_| Ok(UnaryFixture::new(Ok(coppb::Response::new())).into_boxed());
         let resp = service
             .handle_unary_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
             .wait()
@@ -411,12 +494,48 @@ mod tests {
         assert!(resp.get_other_error().is_empty());
 
         // an outdated request
-        let handler_builder = box |_| Ok(DummyReqHandler::new_outdated().into_boxed());
+        let handler_builder = box |_| Ok(OutdatedFixture::new().into_boxed());
         let resp = service
             .handle_unary_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
             .wait()
             .unwrap();
         assert_eq!(resp.get_other_error(), OUTDATED_ERROR_MSG);
+    }
+
+    #[test]
+    fn test_stack_guard() {
+        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+            || ReadPoolContext::new(None)
+        });
+        let service = Service::new(
+            &Config {
+                end_point_recursion_limit: 5,
+                ..Config::default()
+            },
+            engine,
+            read_pool,
+        );
+
+        let req = {
+            let mut expr = Expr::new();
+            for _ in 0..10 {
+                let mut e = Expr::new();
+                e.mut_children().push(expr);
+                expr = e;
+            }
+            let mut e = Executor::new();
+            e.mut_selection().mut_conditions().push(expr);
+            let mut dag = DAGRequest::new();
+            dag.mut_executors().push(e);
+            let mut req = coppb::Request::new();
+            req.set_tp(REQ_TYPE_DAG);
+            req.set_data(dag.write_to_bytes().unwrap());
+            req
+        };
+
+        let resp: coppb::Response = service.handle_unary_request(req).wait().unwrap();
+        assert!(!resp.get_other_error().is_empty());
     }
 
     #[test]
@@ -474,9 +593,8 @@ mod tests {
             let mut context = kvrpcpb::Context::new();
             context.set_priority(kvrpcpb::CommandPri::Normal);
 
-            let handler_builder = box |_| {
-                Ok(DummyReqHandler::new_delayed_unary_fixture(Ok(response), 1000).into_boxed())
-            };
+            let handler_builder =
+                box |_| Ok(UnaryFixture::new_with_duration(Ok(response), 1000).into_boxed());
             let future = service.handle_unary_request_by_custom_handler(context, handler_builder);
             let tx = tx.clone();
             thread::spawn(move || tx.send(future.wait().unwrap()));
@@ -509,17 +627,142 @@ mod tests {
         });
         let service = Service::new(&Config::default(), engine, read_pool);
 
-        let handler_builder = box |_| {
-            Ok(
-                DummyReqHandler::new_unary_fixture(Err(Error::Other(box_err!("foobar"))))
-                    .into_boxed(),
-            )
-        };
+        let handler_builder =
+            box |_| Ok(UnaryFixture::new(Err(Error::Other(box_err!("foo")))).into_boxed());
         let resp = service
             .handle_unary_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
             .wait()
             .unwrap();
         assert_eq!(resp.get_data().len(), 0);
         assert!(!resp.get_other_error().is_empty());
+    }
+
+    #[test]
+    #[allow(needless_range_loop)]
+    fn test_error_streaming_response() {
+        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+            || ReadPoolContext::new(None)
+        });
+        let service = Service::new(&Config::default(), engine, read_pool);
+
+        // Fail immediately
+        let handler_builder =
+            box |_| Ok(StreamFixture::new(vec![Err(Error::Other(box_err!("foo")))]).into_boxed());
+        let resp_vec = service
+            .handle_stream_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
+            .collect()
+            .wait()
+            .unwrap();
+        assert_eq!(resp_vec.len(), 1);
+        assert_eq!(resp_vec[0].get_data().len(), 0);
+        assert!(!resp_vec[0].get_other_error().is_empty());
+
+        // Fail after some success responses
+        let mut responses = Vec::new();
+        for i in 0..5 {
+            let mut resp = coppb::Response::new();
+            resp.set_data(vec![1, 2, i]);
+            responses.push(Ok(resp));
+        }
+        responses.push(Err(Error::Other(box_err!("foo"))));
+
+        let handler_builder = box move |_| Ok(StreamFixture::new(responses).into_boxed());
+        let resp_vec = service
+            .handle_stream_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
+            .collect()
+            .wait()
+            .unwrap();
+        assert_eq!(resp_vec.len(), 6);
+        for i in 0..5 {
+            assert_eq!(resp_vec[i].get_data(), [1, 2, i as u8]);
+        }
+        assert_eq!(resp_vec[5].get_data().len(), 0);
+        assert!(!resp_vec[5].get_other_error().is_empty());
+    }
+
+    #[test]
+    fn test_empty_streaming_response() {
+        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+            || ReadPoolContext::new(None)
+        });
+        let service = Service::new(&Config::default(), engine, read_pool);
+
+        let handler_builder = box |_| Ok(StreamFixture::new(vec![]).into_boxed());
+        let resp_vec = service
+            .handle_stream_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
+            .collect()
+            .wait()
+            .unwrap();
+        assert_eq!(resp_vec.len(), 0);
+    }
+
+    // TODO: Test panic?
+
+    #[test]
+    fn test_special_streaming_handlers() {
+        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+            || ReadPoolContext::new(None)
+        });
+        let service = Service::new(&Config::default(), engine, read_pool);
+
+        // handler returns `finished == true` should not be called again.
+        let handler = StreamFromClosure::new(|nth| match nth {
+            0 => {
+                let mut resp = coppb::Response::new();
+                resp.set_data(vec![1, 2, 7]);
+                Ok((Some(resp), true))
+            }
+            _ => Err(box_err!("unreachable")),
+        });
+        let handler_builder = box |_| Ok(handler.into_boxed());
+        let resp_vec = service
+            .handle_stream_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
+            .collect()
+            .wait()
+            .unwrap();
+        assert_eq!(resp_vec.len(), 1);
+        assert_eq!(resp_vec[0].get_data(), [1, 2, 7]);
+
+        // handler returns `None` but `finished == false` should not be called again.
+        let handler = StreamFromClosure::new(|nth| match nth {
+            0 => {
+                let mut resp = coppb::Response::new();
+                resp.set_data(vec![1, 2, 13]);
+                Ok((Some(resp), false))
+            }
+            1 => Ok((None, false)),
+            _ => Err(box_err!("unreachable")),
+        });
+        let handler_builder = box |_| Ok(handler.into_boxed());
+        let resp_vec = service
+            .handle_stream_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
+            .collect()
+            .wait()
+            .unwrap();
+        assert_eq!(resp_vec.len(), 1);
+        assert_eq!(resp_vec[0].get_data(), [1, 2, 13]);
+
+        // handler returns `Err(..)` should not be called again.
+        let handler = StreamFromClosure::new(|nth| match nth {
+            0 => {
+                let mut resp = coppb::Response::new();
+                resp.set_data(vec![1, 2, 23]);
+                Ok((Some(resp), false))
+            }
+            1 => Err(box_err!("foo")),
+            _ => Err(box_err!("unreachable")),
+        });
+        let handler_builder = box |_| Ok(handler.into_boxed());
+        let resp_vec = service
+            .handle_stream_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
+            .collect()
+            .wait()
+            .unwrap();
+        assert_eq!(resp_vec.len(), 2);
+        assert_eq!(resp_vec[0].get_data(), [1, 2, 23]);
+        assert!(!resp_vec[1].get_other_error().is_empty());
     }
 }

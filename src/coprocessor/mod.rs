@@ -98,13 +98,15 @@ impl From<storage::txn::Error> for Error {
     }
 }
 
+type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
+
 trait RequestHandler: Send {
     fn handle_request(&mut self) -> Result<coppb::Response> {
-        panic!("unsupported operation");
+        panic!("unary request is not supported for this handler");
     }
 
-    fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
-        panic!("unsupported operation");
+    fn handle_streaming_request(&mut self) -> HandlerStreamStepResult {
+        panic!("streaming request is not supported for this handler");
     }
 
     fn collect_metrics_into(&mut self, _metrics: &mut self::dag::executor::ExecutorMetrics) {
