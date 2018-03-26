@@ -165,6 +165,10 @@
 # delay time before deleting a stale peer
 # clean-stale-peer-delay = "60s"
 
+# Interval to cleanup import sst files.
+# cleanup-import-sst-interval = "10m"
+
+
 [coprocessor]
 # When it is true, it will try to split a region with table prefix if
 # that region crosses tables. It is recommended to turn off this option
