@@ -19,7 +19,7 @@ use super::{Error, EvalContext, FnCall, Result};
 
 impl FnCall {
     #[inline]
-    pub fn abs_real(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn abs_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.abs()))
     }
@@ -27,7 +27,7 @@ impl FnCall {
     #[inline]
     pub fn abs_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let d = try_opt!(self.children[0].eval_decimal(ctx, row));
@@ -36,7 +36,7 @@ impl FnCall {
     }
 
     #[inline]
-    pub fn abs_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn abs_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let n = try_opt!(self.children[0].eval_int(ctx, row));
         if n == i64::MIN {
             return Err(Error::Overflow);
@@ -45,18 +45,18 @@ impl FnCall {
     }
 
     #[inline]
-    pub fn abs_uint(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn abs_uint(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
     }
 
     #[inline]
-    pub fn ceil_real(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn ceil_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.ceil()))
     }
 
     #[inline]
-    pub fn ceil_dec_to_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn ceil_dec_to_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let d = try_opt!(self.children[0].eval_decimal(ctx, row));
         let d: Result<Decimal> = d.ceil().into();
         d.and_then(|dec| dec.as_i64_with_ctx(ctx)).map(Some)
@@ -65,7 +65,7 @@ impl FnCall {
     #[inline]
     pub fn ceil_dec_to_dec<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let d = try_opt!(self.children[0].eval_decimal(ctx, row));
@@ -74,18 +74,18 @@ impl FnCall {
     }
 
     #[inline]
-    pub fn ceil_int_to_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn ceil_int_to_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
     }
 
     #[inline]
-    pub fn floor_real(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn floor_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.floor()))
     }
 
     #[inline]
-    pub fn floor_dec_to_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn floor_dec_to_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let d = try_opt!(self.children[0].eval_decimal(ctx, row));
         let d: Result<Decimal> = d.floor().into();
         d.and_then(|dec| dec.as_i64_with_ctx(ctx)).map(Some)
@@ -94,7 +94,7 @@ impl FnCall {
     #[inline]
     pub fn floor_dec_to_dec<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let d = try_opt!(self.children[0].eval_decimal(ctx, row));
@@ -103,7 +103,7 @@ impl FnCall {
     }
 
     #[inline]
-    pub fn floor_int_to_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn floor_int_to_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
     }
 }
@@ -111,11 +111,12 @@ impl FnCall {
 #[cfg(test)]
 mod test {
     use std::{f64, i64, u64};
+    use std::sync::Arc;
     use tipb::expression::ScalarFuncSig;
     use coprocessor::codec::{convert, mysql, Datum};
     use coprocessor::codec::mysql::types;
     use coprocessor::dag::expr::test::{check_overflow, datum_expr, fncall_expr, str2dec};
-    use coprocessor::dag::expr::{EvalContext, Expression};
+    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
 
     #[test]
     fn test_abs() {
@@ -136,15 +137,15 @@ mod test {
             (ScalarFuncSig::AbsDecimal, str2dec("1.1"), str2dec("1.1")),
             (ScalarFuncSig::AbsDecimal, str2dec("-1.1"), str2dec("1.1")),
         ];
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
             let mut f = fncall_expr(sig, &[arg]);
             if sig == ScalarFuncSig::AbsUInt {
                 f.mut_field_type().set_flag(types::UNSIGNED_FLAG as u32);
             }
-            let op = Expression::build(&ctx, f).unwrap();
-            let got = op.eval(&ctx, &[]).unwrap();
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -152,11 +153,11 @@ mod test {
     #[test]
     fn test_overflow_abs() {
         let tests = vec![(ScalarFuncSig::AbsInt, Datum::I64(i64::MIN))];
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
         for tt in tests {
             let arg = datum_expr(tt.1);
-            let op = Expression::build(&ctx, fncall_expr(tt.0, &[arg])).unwrap();
-            let got = op.eval(&ctx, &[]).unwrap_err();
+            let op = Expression::build(&mut ctx, fncall_expr(tt.0, &[arg])).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
     }
@@ -211,11 +212,12 @@ mod test {
                 str2dec("9223372036854775808"),
             ),
         ];
-        let mut ctx = EvalContext::default();
-        ctx.ignore_truncate = true; // for ceil decimal to int.
+
+        // for ceil decimal to int.
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
-            let mut op = Expression::build(&ctx, fncall_expr(sig, &[arg.clone()])).unwrap();
+            let mut op = Expression::build(&mut ctx, fncall_expr(sig, &[arg.clone()])).unwrap();
             if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
@@ -223,7 +225,7 @@ mod test {
                 op.mut_tp().set_flen(convert::UNSPECIFIED_LENGTH);
                 op.mut_tp().set_decimal(convert::UNSPECIFIED_LENGTH);
             }
-            let got = op.eval(&ctx, &[]).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -278,11 +280,11 @@ mod test {
                 str2dec("9223372036854775808"),
             ),
         ];
-        let mut ctx = EvalContext::default();
-        ctx.ignore_truncate = true; // for ceil decimal to int.
+        // for ceil decimal to int.
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
-            let mut op = Expression::build(&ctx, fncall_expr(sig, &[arg.clone()])).unwrap();
+            let mut op = Expression::build(&mut ctx, fncall_expr(sig, &[arg.clone()])).unwrap();
             if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
@@ -290,7 +292,7 @@ mod test {
                 op.mut_tp().set_flen(convert::UNSPECIFIED_LENGTH);
                 op.mut_tp().set_decimal(convert::UNSPECIFIED_LENGTH);
             }
-            let got = op.eval(&ctx, &[]).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
