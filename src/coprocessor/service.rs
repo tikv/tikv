@@ -813,6 +813,6 @@ mod tests {
             .wait()
             .unwrap();
         assert_eq!(resp_vec.len(), 7);
-        assert_eq!(COUNTER.load(atomic::Ordering::SeqCst) < 14);
+        assert!(COUNTER.load(atomic::Ordering::SeqCst) < 14);
     }
 }
