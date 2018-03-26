@@ -223,13 +223,19 @@ impl Service {
                         Service::run_handler(handler, is_streaming)
                             .then(Ok::<_, mpsc::SendError<_>>)
                             .forward(tx1)
-                            .map_err(|_| Error::Other(box_err!("sink send failed")))
-                            .map(|_| ())
+                            .then(|_| {
+                                // ignore sink send failures
+                                Ok(())
+                            })
                     })
                 })
                 .map_err(move |e| {
                     stream::once::<_, mpsc::SendError<_>>(Ok(Err(e)))
                         .forward(tx2)
+                        .then(|_| {
+                            // ignore sink send failures
+                            Ok::<_, ()>(())
+                        })
                         .wait()
                         .unwrap();
                 })
@@ -239,6 +245,10 @@ impl Service {
             Err(_) => {
                 stream::once::<_, mpsc::SendError<_>>(Ok(Err(Error::Full)))
                     .forward(tx)
+                    .then(|_| {
+                        // ignore sink send failures
+                        Ok::<_, ()>(())
+                    })
                     .wait()
                     .unwrap();
             }
