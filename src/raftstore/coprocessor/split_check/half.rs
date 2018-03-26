@@ -37,12 +37,11 @@ impl HalfStatus {
     }
 
     pub fn push_data(&mut self, key: &[u8], value_size: u64) {
-        let current_len = key.len() as u64 + value_size;
         if self.buckets.is_empty() || self.cur_bucket_size >= self.each_bucket_size {
             self.buckets.push(key.to_vec());
             self.cur_bucket_size = 0;
         }
-        self.cur_bucket_size += current_len;
+        self.cur_bucket_size += key.len() as u64 + value_size;
     }
 
     pub fn split_key(mut self) -> Option<Vec<u8>> {
@@ -156,23 +155,27 @@ mod tests {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
             engine.put(&s, &s).unwrap();
         }
-        // Approximate size of memtable is inaccurate for small data,
-        // we flush it to SST so we can use the size properties instead.
-        engine.flush(true).unwrap();
 
         runnable.run(SplitCheckTask::new(&region, false));
-        match rx.try_recv() {
-            Ok(Msg::SplitRegion {
-                region_id,
-                region_epoch,
-                split_key,
-                ..
-            }) => {
-                assert_eq!(region_id, region.get_id());
-                assert_eq!(&region_epoch, region.get_region_epoch());
-                assert_eq!(split_key, b"0006");
+        loop {
+            match rx.try_recv() {
+                Ok(Msg::SplitRegion {
+                    region_id,
+                    region_epoch,
+                    split_key,
+                    ..
+                }) => {
+                    assert_eq!(region_id, region.get_id());
+                    assert_eq!(&region_epoch, region.get_region_epoch());
+                    assert_eq!(split_key, b"0006");
+                    break;
+                }
+                Ok(Msg::ApproximateRegionSize { region_id, .. }) => {
+                    assert_eq!(region_id, region.get_id());
+                    continue;
+                }
+                others => panic!("expect split check result, but got {:?}", others),
             }
-            others => panic!("expect split check result, but got {:?}", others),
         }
     }
 }

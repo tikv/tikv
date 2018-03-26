@@ -212,10 +212,10 @@ impl CoprocessorHost {
         &self,
         region: &Region,
         engine: &DB,
-        auto_check: bool,
+        auto_split: bool,
     ) -> SplitCheckStatus {
         let mut ob_ctx = ObserverContext::new(region);
-        let mut split_status = SplitCheckStatus::new(auto_check);
+        let mut split_status = SplitCheckStatus::new(auto_split);
         for entry in &self.registry.split_check_observers {
             entry
                 .observer

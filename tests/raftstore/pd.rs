@@ -105,10 +105,9 @@ enum Operator {
 impl Operator {
     fn make_region_heartbeat_response(
         &self,
-        region: &metapb::Region,
+        region_id: u64,
         cluster: &Cluster,
     ) -> pdpb::RegionHeartbeatResponse {
-        let region_id = region.get_id();
         match *self {
             Operator::AddPeer { ref peer, .. } => {
                 if let Either::Left(ref peer) = *peer {
@@ -534,7 +533,7 @@ impl Cluster {
             region_id, operator, leader, region
         );
 
-        let mut resp = operator.make_region_heartbeat_response(&region, self);
+        let mut resp = operator.make_region_heartbeat_response(region.get_id(), self);
         self.operators.insert(region_id, operator);
         resp.set_region_id(region_id);
         resp.set_region_epoch(region.take_region_epoch());
