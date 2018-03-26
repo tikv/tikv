@@ -20,13 +20,6 @@ lazy_static! {
             "Bucketed histogram of server send snapshots duration"
         ).unwrap();
 
-    pub static ref SNAP_TASK_COUNTER: CounterVec =
-        register_counter_vec!(
-            "tikv_server_snapshot_task_total",
-            "Total number of snapshot task",
-            &["type"]
-        ).unwrap();
-
     pub static ref GRPC_MSG_HISTOGRAM_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_grpc_msg_duration_seconds",

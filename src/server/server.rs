@@ -31,7 +31,7 @@ use coprocessor::{EndPointHost, EndPointTask};
 use super::service::*;
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::resolve::StoreAddrResolver;
-use super::snap::{Runner as SnapHandler, Task as SnapTask};
+use super::snap::TaskHandler as SnapTaskHandler;
 use super::raft_client::RaftClient;
 use pd::PdTask;
 
@@ -52,8 +52,9 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     end_point_worker: Worker<EndPointTask>,
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
-    snap_worker: Worker<SnapTask>,
     pd_scheduler: FutureScheduler<PdTask>,
+
+    snap_handler: SnapTaskHandler,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
@@ -84,13 +85,14 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         let end_point_worker = WorkerBuilder::new("end-point-worker")
             .batch_size(DEFAULT_COPROCESSOR_BATCH)
             .create();
-        let snap_worker = Worker::new("snap-handler");
+
+        let snap_handler = SnapTaskHandler::default();
 
         let kv_service = KvService::new(
             storage.clone(),
             end_point_worker.scheduler(),
             raft_router.clone(),
-            snap_worker.scheduler(),
+            snap_handler.get_recv_task_sink(),
             cfg.end_point_recursion_limit,
             cfg.end_point_stream_channel_size,
         );
@@ -123,12 +125,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             SocketAddr::new(IpAddr::from_str(host)?, port as u16)
         };
 
-        let trans = ServerTransport::new(
-            raft_client,
-            snap_worker.scheduler(),
-            raft_router.clone(),
-            resolver,
-        );
+        let sink = snap_handler.get_send_task_sink();
+        let trans = ServerTransport::new(raft_client, sink, raft_router.clone(), resolver);
 
         let svr = Server {
             env: Arc::clone(&env),
@@ -139,8 +137,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             storage: storage,
             end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
-            snap_worker: snap_worker,
             pd_scheduler: pd_scheduler,
+            snap_handler: snap_handler,
         };
 
         Ok(svr)
@@ -158,13 +156,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             self.pd_scheduler.clone(),
         );
         box_try!(self.end_point_worker.start(end_point));
-        let snap_runner = SnapHandler::new(
-            Arc::clone(&self.env),
-            self.snap_mgr.clone(),
-            self.raft_router.clone(),
-            security_mgr,
-        );
-        box_try!(self.snap_worker.start(snap_runner));
+
+        let env = Arc::clone(&self.env);
+        let snap_mgr = self.snap_mgr.clone();
+        let router = self.raft_router.clone();
+        self.snap_handler.start(env, security_mgr, snap_mgr, router);
+
         self.grpc_server.start();
         info!("TiKV is ready to serve");
         Ok(())
@@ -172,7 +169,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 
     pub fn stop(&mut self) -> Result<()> {
         self.end_point_worker.stop();
-        self.snap_worker.stop();
         if let Err(e) = self.storage.stop() {
             error!("failed to stop store: {:?}", e);
         }

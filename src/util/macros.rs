@@ -10,7 +10,6 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 //! The macros crate contains all useful needed macros.
 
 /// Get the count of macro's arguments.
@@ -99,6 +98,16 @@ macro_rules! box_err {
     ($f:tt, $($arg:expr),+) => ({
         box_err!(format!($f, $($arg),+))
     });
+}
+
+#[macro_export]
+macro_rules! future_try {
+    ($e: expr) => {
+        match $e {
+            Ok(r) => r,
+            Err(e) => return box future::err(e),
+        }
+    }
 }
 
 #[allow(doc_markdown)]
