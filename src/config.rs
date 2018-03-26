@@ -773,38 +773,69 @@ impl TiKvConfig {
     }
 
     pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), Box<Error>> {
-        if last_cfg.rocksdb.wal_dir != self.rocksdb.wal_dir {
-            return Err(format!(
-                "db wal_dir have been changed, former db wal_dir is {}, \
-                 current db wal_dir is {}, please guarantee all data wal log \
-                 have been moved to destination directory.",
-                last_cfg.rocksdb.wal_dir, self.rocksdb.wal_dir
-            ).into());
-        }
-
-        if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir {
-            return Err(format!(
-                "raftdb wal_dir have been changed, former raftdb wal_dir is {}, \
-                 current raftdb wal_dir is {}, please guarantee all raft wal log \
-                 have been moved to destination directory.",
-                last_cfg.raftdb.wal_dir, self.rocksdb.wal_dir
-            ).into());
-        }
-
+        let mut data_dir_changed = false;
+        let mut data_wal_dir_changed = false;
+        let mut raft_dir_changed = false;
+        let mut raft_wal_dir_changed = false;
         if last_cfg.storage.data_dir != self.storage.data_dir {
-            return Err(format!(
-                "storage data dir have been changed, former data dir is {}, \
-                 current data dir is {}, please check if it is expected.",
-                last_cfg.storage.data_dir, self.storage.data_dir
-            ).into());
+            data_dir_changed = true;
+        }
+        if last_cfg.rocksdb.wal_dir != self.rocksdb.wal_dir {
+            data_wal_dir_changed = true;
+        }
+        if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path {
+            raft_dir_changed = true;
+        }
+        if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir {
+            raft_wal_dir_changed = true;
         }
 
-        if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path {
-            return Err(format!(
-                "raft dir have been changed, former raft dir is {}, \
-                 current raft dir is {}, please check if it is expected.",
-                last_cfg.raft_store.raftdb_path, self.raft_store.raftdb_path
-            ).into());
+        if data_dir_changed || data_wal_dir_changed || raft_dir_changed || raft_wal_dir_changed {
+            let mut error_msg = String::new();
+            if data_dir_changed {
+                error_msg.push_str(
+                    format!(
+                        "Data dir have been changed, former data dir is {}, \
+                         current data dir is {}, please guarantee all data \
+                         have been moved to destination directory.",
+                        last_cfg.storage.data_dir, self.storage.data_dir
+                    ).as_str(),
+                );
+            }
+            if data_wal_dir_changed {
+                error_msg.push_str(
+                    format!(
+                        "Data wal_dir have been changed, former data wal_dir is {}, \
+                         current data wal_dir is {}, please guarantee all data wal log \
+                         have been moved to destination directory.",
+                        last_cfg.rocksdb.wal_dir, self.rocksdb.wal_dir
+                    ).as_str(),
+                );
+            }
+            if raft_dir_changed {
+                error_msg.push_str(
+                    format!(
+                        "Raft dir have been changed, former raft dir is {}, current \
+                         raft dir is {}, please guarantee all raft have \
+                         been moved to destination directory.",
+                        last_cfg.raft_store.raftdb_path, self.raft_store.raftdb_path
+                    ).as_str(),
+                );
+            }
+            if raft_wal_dir_changed {
+                error_msg.push_str(
+                    format!(
+                        "Raft wal_dir have been changed, former raft wal_dir is {}, \
+                         current raft wal_dir is {}, please guarantee all raft wal log \
+                         have been moved to destination directory.",
+                        last_cfg.raftdb.wal_dir, self.raftdb.wal_dir
+                    ).as_str(),
+                );
+            }
+            error_msg
+                .push_str("Before start TiKV, please remove `last_conf.toml` in data directory.");
+
+            return Err(error_msg.into());
         }
 
         Ok(())
