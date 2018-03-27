@@ -113,7 +113,7 @@ trait RequestHandler: Send {
         // Do nothing by default
     }
 
-    fn check_if_outdated(&self) -> Result<()>;
+    fn get_context(&self) -> &ReqContext;
 
     fn into_boxed(self) -> Box<RequestHandler>
     where
@@ -129,6 +129,7 @@ type RequestHandlerBuilder =
 
 #[derive(Debug)]
 pub struct ReqContext {
+    pub txn_start_ts: u64,
     pub start_time: Instant,
     pub deadline: Instant,
     pub isolation_level: kvrpcpb::IsolationLevel,
@@ -139,12 +140,14 @@ pub struct ReqContext {
 impl ReqContext {
     pub fn new(
         ctx: &kvrpcpb::Context,
+        txn_start_ts: u64,
         table_scan: bool,
         max_handle_duration: Duration,
     ) -> ReqContext {
         let start_time = Instant::now_coarse();
         let deadline = start_time + max_handle_duration;
         ReqContext {
+            txn_start_ts,
             start_time,
             deadline,
             isolation_level: ctx.get_isolation_level(),
@@ -169,5 +172,19 @@ impl ReqContext {
             return Err(Error::Outdated(elapsed, self.get_scan_tag()));
         }
         Ok(())
+    }
+}
+
+impl Default for ReqContext {
+    fn default() -> Self {
+        let now = Instant::now_coarse();
+        ReqContext {
+            start_time: now,
+            deadline: now + Duration::from_secs(60),
+            txn_start_ts: 0,
+            isolation_level: kvrpcpb::IsolationLevel::RC,
+            fill_cache: false,
+            table_scan: false,
+        }
     }
 }

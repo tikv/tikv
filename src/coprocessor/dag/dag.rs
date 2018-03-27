@@ -151,8 +151,8 @@ impl RequestHandler for DAGContext {
         Ok((None, true))
     }
 
-    fn check_if_outdated(&self) -> Result<()> {
-        self.req_ctx.check_if_outdated()
+    fn get_context(&self) -> &ReqContext {
+        &self.req_ctx
     }
 }
 

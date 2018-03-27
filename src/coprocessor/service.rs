@@ -94,9 +94,12 @@ impl Service {
                 if let Some(scan) = dag.get_executors().iter().next() {
                     table_scan = scan.get_tp() == ExecType::TypeTableScan;
                 }
-                // let start_ts = dag.get_start_ts();
-                let req_ctx =
-                    ReqContext::new(req.get_context(), table_scan, self.max_handle_duration);
+                let req_ctx = ReqContext::new(
+                    req.get_context(),
+                    dag.get_start_ts(),
+                    table_scan,
+                    self.max_handle_duration,
+                );
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
                 box move |snap| {
                     DAGContext::new(dag, ranges, snap, req_ctx, batch_row_limit)
@@ -107,9 +110,12 @@ impl Service {
                 let mut analyze = AnalyzeReq::new();
                 box_try!(analyze.merge_from(&mut is));
                 let table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
-                // let start_ts = analyze.get_start_ts();
-                let req_ctx =
-                    ReqContext::new(req.get_context(), table_scan, self.max_handle_duration);
+                let req_ctx = ReqContext::new(
+                    req.get_context(),
+                    analyze.get_start_ts(),
+                    table_scan,
+                    self.max_handle_duration,
+                );
                 box move |snap| {
                     AnalyzeContext::new(analyze, ranges, snap, req_ctx).map(|ctx| ctx.into_boxed())
                 }
@@ -118,9 +124,12 @@ impl Service {
                 let mut checksum = ChecksumRequest::new();
                 box_try!(checksum.merge_from(&mut is));
                 let table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
-                // let start_ts = checksum.get_start_ts();
-                let req_ctx =
-                    ReqContext::new(req.get_context(), table_scan, self.max_handle_duration);
+                let req_ctx = ReqContext::new(
+                    req.get_context(),
+                    checksum.get_start_ts(),
+                    table_scan,
+                    self.max_handle_duration,
+                );
                 box move |snap| {
                     ChecksumContext::new(checksum, ranges, snap, req_ctx)
                         .map(|ctx| ctx.into_boxed())
@@ -202,7 +211,7 @@ impl Service {
                     Ok(handler) => handler,
                     Err(e) => cop_util::ErrorRequestHandler::new(e).into_boxed(),
                 };
-                future::result(handler.check_if_outdated())
+                future::result(handler.get_context().check_if_outdated())
                     .and_then(move |_| handler.handle_request())
             })
         });
@@ -247,7 +256,7 @@ impl Service {
                         Ok(handler) => handler,
                         Err(e) => cop_util::ErrorRequestHandler::new(e).into_boxed(),
                     };
-                    future::result(handler.check_if_outdated()).and_then(move |_| {
+                    future::result(handler.get_context().check_if_outdated()).and_then(move |_| {
                         Service::run_stream_handler(handler)
                             .then(Ok::<_, mpsc::SendError<_>>)
                             .forward(tx1)
@@ -355,18 +364,23 @@ mod tests {
     use tipb::expression::Expr;
     use tipb::executor::Executor;
 
-    /// a `RequestHandler` that is always outdated
-    struct OutdatedFixture;
+    /// an unary `RequestHandler` that
+    struct OutdatedFixture {
+        req_ctx: ReqContext,
+    }
 
     impl OutdatedFixture {
         pub fn new() -> OutdatedFixture {
-            OutdatedFixture {}
+            let context = kvrpcpb::Context::new();
+            OutdatedFixture {
+                req_ctx: ReqContext::new(&context, 0, false, Duration::from_secs(0)),
+            }
         }
     }
 
     impl RequestHandler for OutdatedFixture {
-        fn check_if_outdated(&self) -> Result<()> {
-            Err(Error::Outdated(Duration::from_secs(1), "select"))
+        fn get_context(&self) -> &ReqContext {
+            &self.req_ctx
         }
     }
 
@@ -374,6 +388,7 @@ mod tests {
     struct UnaryFixture {
         handle_duration_millis: u64,
         result: Option<Result<coppb::Response>>,
+        req_ctx: ReqContext,
     }
 
     impl UnaryFixture {
@@ -381,6 +396,7 @@ mod tests {
             UnaryFixture {
                 handle_duration_millis: 0,
                 result: Some(result),
+                req_ctx: ReqContext::default(),
             }
         }
 
@@ -391,6 +407,7 @@ mod tests {
             UnaryFixture {
                 handle_duration_millis,
                 result: Some(result),
+                req_ctx: ReqContext::default(),
             }
         }
     }
@@ -401,8 +418,8 @@ mod tests {
             self.result.take().unwrap()
         }
 
-        fn check_if_outdated(&self) -> Result<()> {
-            Ok(())
+        fn get_context(&self) -> &ReqContext {
+            &self.req_ctx
         }
     }
 
@@ -411,6 +428,7 @@ mod tests {
         result_len: usize,
         result_iter: vec::IntoIter<Result<coppb::Response>>,
         nth: usize,
+        req_ctx: ReqContext,
     }
 
     impl StreamFixture {
@@ -419,6 +437,7 @@ mod tests {
                 result_len: result.len(),
                 result_iter: result.into_iter(),
                 nth: 0,
+                req_ctx: ReqContext::default(),
             }
         }
     }
@@ -442,8 +461,8 @@ mod tests {
             ret
         }
 
-        fn check_if_outdated(&self) -> Result<()> {
-            Ok(())
+        fn get_context(&self) -> &ReqContext {
+            &self.req_ctx
         }
     }
 
@@ -451,6 +470,7 @@ mod tests {
     struct StreamFromClosure {
         result_generator: Box<Fn(usize) -> HandlerStreamStepResult + Send>,
         nth: usize,
+        req_ctx: ReqContext,
     }
 
     impl StreamFromClosure {
@@ -461,6 +481,7 @@ mod tests {
             StreamFromClosure {
                 result_generator: box result_generator,
                 nth: 0,
+                req_ctx: ReqContext::default(),
             }
         }
     }
@@ -472,8 +493,8 @@ mod tests {
             result
         }
 
-        fn check_if_outdated(&self) -> Result<()> {
-            Ok(())
+        fn get_context(&self) -> &ReqContext {
+            &self.req_ctx
         }
     }
 

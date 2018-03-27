@@ -19,12 +19,16 @@ use super::codec::mysql;
 use super::codec::datum::Datum;
 
 pub struct ErrorRequestHandler {
+    req_ctx: ReqContext,
     error: Option<Error>,
 }
 
 impl ErrorRequestHandler {
     pub fn new(error: Error) -> ErrorRequestHandler {
-        ErrorRequestHandler { error: Some(error) }
+        ErrorRequestHandler {
+            error: Some(error),
+            req_ctx: ReqContext::default(),
+        }
     }
 }
 
@@ -37,9 +41,8 @@ impl RequestHandler for ErrorRequestHandler {
         Err(self.error.take().unwrap())
     }
 
-    /// `ErrorRequestHandler` is never outdated.
-    fn check_if_outdated(&self) -> Result<()> {
-        Ok(())
+    fn get_context(&self) -> &ReqContext {
+        &self.req_ctx
     }
 }
 
