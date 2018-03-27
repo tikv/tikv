@@ -16,14 +16,13 @@ use std::sync::Arc;
 use tipb::executor::{self, ExecType};
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
-use tipb::select;
 use kvproto::coprocessor::KeyRange;
 
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{self, Datum};
 use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::endpoint::get_pk;
-use coprocessor::dag::expr::{EvalConfig, EvalContext};
+use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings};
 use coprocessor::{Error, Result};
 use storage::SnapshotStore;
 use util::codec::number::NumberDecoder;
@@ -140,8 +139,8 @@ pub trait Executor {
 
     /// Only executors with eval computation need to implement `take_eval_warnings`
     /// It returns warnings happened during eval computation.
-    fn take_eval_warnings(&mut self) -> Vec<select::Error> {
-        Vec::default()
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        None
     }
 
     /// Only `TableScan` and `IndexScan` need to implement `start_scan`.

@@ -15,10 +15,10 @@
 #![allow(dead_code)]
 
 use tipb::executor::Limit;
-use tipb::select;
 
 use coprocessor::Result;
 use coprocessor::dag::executor::{Executor, Row};
+use coprocessor::dag::expr::EvalWarnings;
 use super::ExecutorMetrics;
 
 pub struct LimitExecutor<'a> {
@@ -64,7 +64,7 @@ impl<'a> Executor for LimitExecutor<'a> {
         }
     }
 
-    fn take_eval_warnings(&mut self) -> Vec<select::Error> {
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         self.src.take_eval_warnings()
     }
 }

@@ -18,13 +18,12 @@ use std::cmp::Ordering;
 use tipb::schema::ColumnInfo;
 use tipb::executor::Aggregation;
 use tipb::expression::{Expr, ExprType};
-use tipb::select;
 
 use util::collections::{OrderMap, OrderMapEntry};
 use coprocessor::codec::table::RowColsDict;
 use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
 use coprocessor::endpoint::SINGLE_GROUP;
-use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
+use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use coprocessor::Result;
 
 use super::aggregate::{self, AggrFunc};
@@ -211,10 +210,13 @@ impl Executor for HashAggExecutor {
         }
     }
 
-    fn take_eval_warnings(&mut self) -> Vec<select::Error> {
-        let mut warnings = self.src.take_eval_warnings();
-        warnings.append(&mut self.ctx.take_warnings());
-        warnings
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        if let Some(mut warnings) = self.src.take_eval_warnings() {
+            warnings.merge(self.ctx.take_warnings());
+            Some(warnings)
+        } else {
+            Some(self.ctx.take_warnings())
+        }
     }
 }
 
@@ -270,10 +272,13 @@ impl Executor for StreamAggExecutor {
         }
     }
 
-    fn take_eval_warnings(&mut self) -> Vec<select::Error> {
-        let mut warnings = self.src.take_eval_warnings();
-        warnings.append(&mut self.ctx.take_warnings());
-        warnings
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        if let Some(mut warnings) = self.src.take_eval_warnings() {
+            warnings.merge(self.ctx.take_warnings());
+            Some(warnings)
+        } else {
+            Some(self.ctx.take_warnings())
+        }
     }
 }
 

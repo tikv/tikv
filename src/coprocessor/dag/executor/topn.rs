@@ -11,19 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::mem;
 use std::usize;
 use std::sync::Arc;
+use std::cell::RefCell;
 use std::vec::IntoIter;
 
 use tipb::executor::TopN;
 use tipb::schema::ColumnInfo;
 use tipb::expression::ByItem;
-use tipb::select;
 
 use coprocessor::codec::datum::Datum;
 use coprocessor::Result;
-use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
+use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 
 use super::topn_heap::TopNHeap;
 use super::{inflate_with_col_for_dag, Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
@@ -58,8 +57,8 @@ pub struct TopNExecutor {
     cols: Arc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
     iter: Option<IntoIter<Row>>,
-    ctx: EvalContext,
-    heap_warnings: Vec<select::Error>,
+    eval_ctx: Option<EvalContext>,
+    eval_warnings: Option<EvalWarnings>,
     src: Box<Executor + Send>,
     limit: usize,
     count: i64,
@@ -79,18 +78,19 @@ impl TopNExecutor {
         for by_item in &order_by {
             visitor.visit(by_item.get_expr())?;
         }
-        let mut ctx = EvalContext::new(eval_cfg);
+        let mut eval_ctx = EvalContext::new(Arc::clone(&eval_cfg));
+        let order_by = OrderBy::new(&mut eval_ctx, order_by)?;
         Ok(TopNExecutor {
-            order_by: OrderBy::new(&mut ctx, order_by)?,
+            order_by: order_by,
             cols: columns_info,
             related_cols_offset: visitor.column_offsets(),
             iter: None,
-            ctx: ctx,
+            eval_ctx: Some(eval_ctx),
+            eval_warnings: None,
             src: src,
             limit: meta.get_limit() as usize,
             count: 0,
             first_collect: true,
-            heap_warnings: Vec::default(),
         })
     }
 
@@ -100,16 +100,22 @@ impl TopNExecutor {
             return Ok(());
         }
 
-        let mut heap = TopNHeap::new(self.limit, Arc::clone(&self.ctx.cfg))?;
+        if self.eval_ctx.is_none() {
+            return Ok(());
+        }
+
+        let ctx = Arc::new(RefCell::new(self.eval_ctx.take().unwrap()));
+        let mut heap = TopNHeap::new(self.limit, Arc::clone(&ctx))?;
+
         while let Some(row) = self.src.next()? {
             let cols = inflate_with_col_for_dag(
-                &mut self.ctx,
+                &mut ctx.borrow_mut(),
                 &row.data,
                 self.cols.as_ref(),
                 &self.related_cols_offset,
                 row.handle,
             )?;
-            let ob_values = self.order_by.eval(&mut self.ctx, &cols)?;
+            let ob_values = self.order_by.eval(&mut ctx.borrow_mut(), &cols)?;
             heap.try_add_row(
                 row.handle,
                 row.data,
@@ -120,15 +126,13 @@ impl TopNExecutor {
         let sort_rows = heap.into_sorted_vec()?;
         let data: Vec<Row> = sort_rows
             .into_iter()
-            .map(|sort_row| {
-                self.heap_warnings.append(&mut sort_row.take_warnings());
-                Row {
-                    handle: sort_row.handle,
-                    data: sort_row.data,
-                }
+            .map(|sort_row| Row {
+                handle: sort_row.handle,
+                data: sort_row.data,
             })
             .collect();
         self.iter = Some(data.into_iter());
+        self.eval_warnings = Some(ctx.borrow_mut().take_warnings());
         Ok(())
     }
 }
@@ -162,18 +166,22 @@ impl Executor for TopNExecutor {
         }
     }
 
-    fn take_eval_warnings(&mut self) -> Vec<select::Error> {
-        let mut warnings = self.src.take_eval_warnings();
-        warnings.append(&mut self.ctx.take_warnings());
-        let mut heap_warnings = mem::replace(&mut self.heap_warnings, Vec::new());
-        warnings.append(&mut heap_warnings);
-        warnings
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        if let Some(mut warnings) = self.src.take_eval_warnings() {
+            if let Some(mut topn_warnings) = self.eval_warnings.take() {
+                warnings.merge(topn_warnings);
+            }
+            Some(warnings)
+        } else {
+            self.eval_warnings.take()
+        }
     }
 }
 
 #[cfg(test)]
 pub mod test {
     use std::sync::Arc;
+    use std::cell::RefCell;
 
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
@@ -209,7 +217,8 @@ pub mod test {
         order_cols.push(new_order_by(1, false));
         let order_cols = Arc::new(order_cols);
 
-        let mut topn_heap = TopNHeap::new(5, Arc::new(EvalConfig::default())).unwrap();
+        let mut topn_heap =
+            TopNHeap::new(5, Arc::new(RefCell::new(EvalContext::default()))).unwrap();
 
         let test_data = vec![
             (1, String::from("data1"), Datum::Null, Datum::I64(1)),
@@ -323,7 +332,8 @@ pub mod test {
         order_cols.push(new_order_by(0, false));
         order_cols.push(new_order_by(1, true));
         let order_cols = Arc::new(order_cols);
-        let mut topn_heap = TopNHeap::new(5, Arc::new(EvalConfig::default())).unwrap();
+        let mut topn_heap =
+            TopNHeap::new(5, Arc::new(RefCell::new(EvalContext::default()))).unwrap();
 
         let ob_values1: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2)];
         let row_data = RowColsDict::new(HashMap::default(), b"name:1".to_vec());
