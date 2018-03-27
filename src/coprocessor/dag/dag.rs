@@ -52,8 +52,8 @@ impl DAGContext {
         let store = SnapshotStore::new(
             snap,
             req.get_start_ts(),
-            req_ctx.isolation_level,
-            req_ctx.fill_cache,
+            req_ctx.context.get_isolation_level(),
+            !req_ctx.context.get_not_fill_cache(),
         );
 
         let dag_executor = build_exec(req.take_executors().into_vec(), store, ranges, eval_cfg)?;
@@ -79,10 +79,6 @@ impl DAGContext {
             resp.set_range(range);
         }
         Ok(resp)
-    }
-
-    pub fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        self.exec.collect_metrics_into(metrics);
     }
 }
 
@@ -149,6 +145,10 @@ impl RequestHandler for DAGContext {
                 .map(|r| (Some(r), finished));
         }
         Ok((None, true))
+    }
+
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
+        self.exec.collect_metrics_into(metrics);
     }
 
     fn get_context(&self) -> &ReqContext {

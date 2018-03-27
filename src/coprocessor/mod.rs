@@ -129,12 +129,11 @@ type RequestHandlerBuilder =
 
 #[derive(Debug)]
 pub struct ReqContext {
+    pub context: kvrpcpb::Context,
+    pub table_scan: bool, // Whether is a table scan request.
     pub txn_start_ts: u64,
     pub start_time: Instant,
     pub deadline: Instant,
-    pub isolation_level: kvrpcpb::IsolationLevel,
-    pub fill_cache: bool,
-    pub table_scan: bool, // Whether is a table scan request.
 }
 
 impl ReqContext {
@@ -147,12 +146,11 @@ impl ReqContext {
         let start_time = Instant::now_coarse();
         let deadline = start_time + max_handle_duration;
         ReqContext {
+            context: ctx.clone(),
+            table_scan,
             txn_start_ts,
             start_time,
             deadline,
-            isolation_level: ctx.get_isolation_level(),
-            fill_cache: !ctx.get_not_fill_cache(),
-            table_scan,
         }
     }
 
@@ -179,12 +177,11 @@ impl Default for ReqContext {
     fn default() -> Self {
         let now = Instant::now_coarse();
         ReqContext {
+            context: kvrpcpb::Context::new(),
+            table_scan: false,
+            txn_start_ts: 0,
             start_time: now,
             deadline: now + Duration::from_secs(60),
-            txn_start_ts: 0,
-            isolation_level: kvrpcpb::IsolationLevel::RC,
-            fill_cache: false,
-            table_scan: false,
         }
     }
 }

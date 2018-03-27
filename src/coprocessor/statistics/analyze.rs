@@ -47,8 +47,8 @@ impl AnalyzeContext {
         let snap = SnapshotStore::new(
             snap,
             req.get_start_ts(),
-            req_ctx.isolation_level,
-            req_ctx.fill_cache,
+            req_ctx.context.get_isolation_level(),
+            !req_ctx.context.get_not_fill_cache(),
         );
         Ok(AnalyzeContext {
             req: req,

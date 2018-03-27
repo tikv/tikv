@@ -22,6 +22,7 @@ use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::checksum::{ChecksumRequest, ChecksumScanOn};
 
 use util;
+use util::time::{self, Instant};
 use storage;
 use server::Config;
 use server::readpool::{self, ReadPool};
@@ -32,6 +33,10 @@ use super::dag::DAGContext;
 use super::statistics::analyze::AnalyzeContext;
 use super::checksum::ChecksumContext;
 use super::local_metrics::BasicLocalMetrics;
+use super::dag::executor::ExecutorMetrics;
+
+// If handle time is larger than the lower bound, the query is considered as slow query.
+const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
 
 const OUTDATED_ERROR_MSG: &str = "request outdated.";
 const COPROCESSOR_BUSY_ERROR_MSG: &str = "coprocessor is busy";
@@ -203,30 +208,123 @@ impl Service {
         context: kvrpcpb::Context,
         handler_builder: RequestHandlerBuilder,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
+        let req_begin_time = Instant::now_coarse();
+
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(context.get_priority());
-        let result = self.read_pool.future_execute(priority, move |_ctxd| {
-            Service::async_snapshot(engine, &context).and_then(move |snapshot| {
-                let mut handler = match handler_builder(snapshot) {
-                    Ok(handler) => handler,
-                    Err(e) => cop_util::ErrorRequestHandler::new(e).into_boxed(),
-                };
-                future::result(handler.get_context().check_if_outdated())
-                    .and_then(move |_| handler.handle_request())
-            })
+
+        let result = self.read_pool.future_execute(priority, move |ctxd| {
+            Service::async_snapshot(engine, &context)
+                .map_err(|e| (e, None))
+                .and_then(move |snapshot| {
+                    let mut handler: Box<RequestHandler> = match handler_builder(snapshot) {
+                        Ok(handler) => handler,
+                        Err(e) => cop_util::ErrorRequestHandler::new(e).into_boxed(),
+                    };
+
+                    future::result(handler.get_context().check_if_outdated())
+                        .map_err(|e| (e, None))
+                        .and_then(move |_| {
+                            let (scan_tag, region_id, record_handle_time, record_scan_detail) = {
+                                let req_ctx = handler.get_context();
+                                let scan_tag = req_ctx.get_scan_tag();
+                                let record_handle_time = req_ctx.context.get_handle_time();
+                                let record_scan_detail = req_ctx.context.get_scan_detail();
+                                let region_id = req_ctx.context.get_region_id();
+                                (scan_tag, region_id, record_handle_time, record_scan_detail)
+                            };
+
+                            // Before handling, record a time.
+                            let process_begin_time = Instant::now_coarse();
+                            let wait_time =
+                                time::duration_to_sec(process_begin_time - req_begin_time);
+
+                            let result = handler.handle_request();
+                            let exec_metrics = {
+                                let mut metrics = ExecutorMetrics::default();
+                                handler.collect_metrics_into(&mut metrics);
+                                metrics
+                            };
+
+                            // After handling, record a time as well.
+                            let process_end_time = Instant::now_coarse();
+                            let process_time =
+                                time::duration_to_sec(process_end_time - process_begin_time);
+
+                            // Clients may request these process durations.
+                            let opt_exec_details = {
+                                let mut exec_details = kvrpcpb::ExecDetails::new();
+                                if record_handle_time || process_time > SLOW_QUERY_LOWER_BOUND {
+                                    let mut handle = kvrpcpb::HandleTime::new();
+                                    handle.set_process_ms((process_time * 1000f64) as i64);
+                                    handle.set_wait_ms((wait_time * 1000f64) as i64);
+                                    exec_details.set_handle_time(handle);
+                                }
+                                if record_scan_detail || process_time > SLOW_QUERY_LOWER_BOUND {
+                                    let detail = exec_metrics.cf_stats.scan_detail();
+                                    exec_details.set_scan_detail(detail);
+                                }
+                                // `exec_details` may be tested against `has_exec_details` so that
+                                // we need the accurate existence.
+                                if exec_details.has_handle_time() && exec_details.has_scan_detail()
+                                {
+                                    Some(exec_details)
+                                } else {
+                                    None
+                                }
+                            };
+
+                            let mut thread_ctx = ctxd.current_thread_context_mut();
+                            thread_ctx
+                                .basic_local_metrics
+                                .wait_time
+                                .with_label_values(&[scan_tag])
+                                .observe(wait_time);
+                            thread_ctx
+                                .basic_local_metrics
+                                .handle_time
+                                .with_label_values(&[scan_tag])
+                                .observe(process_time);
+                            thread_ctx
+                                .basic_local_metrics
+                                .req_time
+                                .with_label_values(&[scan_tag])
+                                .observe(time::duration_to_sec(process_end_time - req_begin_time));
+                            thread_ctx
+                                .basic_local_metrics
+                                .scan_keys
+                                .with_label_values(&[scan_tag])
+                                .observe(exec_metrics.cf_stats.total_op_count() as f64);
+                            thread_ctx.collect(region_id, scan_tag, exec_metrics);
+
+                            // Attach execution details (if any) no matter succeeded or not.
+                            match result {
+                                Ok(resp) => Ok((resp, opt_exec_details)),
+                                Err(e) => Err((e, opt_exec_details)),
+                            }
+                        })
+                })
         });
         future::result(result)
-            .map_err(|_| Error::Full)
+            .map_err(|_| (Error::Full, None))
             .flatten()
             .then(|result| {
-                let resp = match result {
-                    Ok(resp) => resp,
-                    Err(e) => {
+                let resp_with_exec_details = match result {
+                    Ok((resp, exec_details)) => (resp, exec_details),
+                    Err((e, exec_details)) => {
+                        // Even error responses need execution details.
                         let mut metrics = BasicLocalMetrics::default();
-                        make_error_response(e, &mut metrics)
+                        (make_error_response(e, &mut metrics), exec_details)
                     }
                 };
-                Ok(resp)
+                Ok(resp_with_exec_details)
+            })
+            .map(|(mut resp, opt_exec_details)| {
+                // If execution details are available, attach it in the response.
+                if let Some(exec_details) = opt_exec_details {
+                    resp.set_exec_details(exec_details);
+                }
+                resp
             })
     }
 

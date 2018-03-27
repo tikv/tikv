@@ -22,7 +22,7 @@ use super::local_metrics::{BasicLocalMetrics, ExecLocalMetrics};
 
 pub struct Context {
     // TODO: ExecLocalMetrics can be merged into this file.
-    pub exec_local_metrics: ExecLocalMetrics,
+    exec_local_metrics: ExecLocalMetrics,
     pub basic_local_metrics: BasicLocalMetrics,
 }
 
