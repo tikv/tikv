@@ -54,8 +54,10 @@ use tikv::util::{escape, unescape};
 use tikv::util::security::{SecurityConfig, SecurityManager};
 use tikv::util::rocksdb as rocksdb_util;
 use tikv::raftstore::store::{keys, Engines};
+use tikv::raftstore::store::util::delete_all_in_range;
 use tikv::server::debug::{Debugger, RegionInfo};
 use tikv::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use tikv::storage::types::Key;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::config::TiKvConfig;
 
@@ -409,6 +411,15 @@ trait DebugExecutor {
 
     fn check_local_mode(&self);
 
+    fn cleanup(&self, from: Option<&str>, to: Option<&str>) {
+        let from = from.map(|f| from_hex(f)).unwrap();
+        let to = to.map(|t| from_hex(t)).unwrap();
+        let from = keys::data_key(Key::from_raw(&from).encoded());
+        let to = keys::data_key(Key::from_raw(&to).encoded());
+
+        self.do_cleanup(from, to);
+    }
+
     fn get_all_meta_regions(&self) -> Vec<u64>;
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8>;
@@ -433,6 +444,8 @@ trait DebugExecutor {
     fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str);
 
     fn dump_metrics(&self, tags: Vec<&str>);
+
+    fn do_cleanup(&self, from: Vec<u8>, to: Vec<u8>);
 }
 
 impl DebugExecutor for DebugClient {
@@ -577,6 +590,10 @@ impl DebugExecutor for DebugClient {
             .unwrap_or_else(|e| perror_and_exit("DebugClient::modify_tikv_config", e));
         println!("success");
     }
+
+    fn do_cleanup(&self, _: Vec<u8>, _: Vec<u8>) {
+        unimplemented!();
+    }
 }
 
 impl DebugExecutor for Debugger {
@@ -672,6 +689,15 @@ impl DebugExecutor for Debugger {
     fn modify_tikv_config(&self, _: MODULE, _: &str, _: &str) {
         eprintln!("only support remote mode");
         process::exit(-1);
+    }
+
+    fn do_cleanup(&self, from: Vec<u8>, to: Vec<u8>) {
+        let db = self.get_db_from_type(DBType::KV).unwrap();
+        if let Err(e) = delete_all_in_range(db, &from, &to, false) {
+            println!("clean up range failed, error {:?}", e);
+        } else {
+            println!("success!");
+        }
     }
 }
 
@@ -1069,6 +1095,24 @@ fn main() {
                  .short("f").long("file")
                  .takes_value(true)
                  .help("meta file path"))
+        )
+        .subcommand(
+            SubCommand::with_name("cleanup")
+                .about("clean up a range for all column families of kv db")
+                .arg(
+                    Arg::with_name("from")
+                        .short("f")
+                        .long("from")
+                        .takes_value(true)
+                        .help("set the start key, in hex form"),
+                )
+                .arg(
+                    Arg::with_name("to")
+                        .short("t")
+                        .long("to")
+                        .takes_value(true)
+                        .help("set the end key, in hex form"),
+                ),
         );
     let matches = app.clone().get_matches();
 
@@ -1192,6 +1236,10 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("metrics") {
         let tags = Vec::from_iter(matches.values_of("tag").unwrap());
         debug_executor.dump_metrics(tags)
+    } else if let Some(matches) = matches.subcommand_matches("cleanup") {
+        let from = matches.value_of("from");
+        let to = matches.value_of("to");
+        debug_executor.cleanup(from, to);
     } else {
         let _ = app.print_help();
     }

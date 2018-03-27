@@ -117,7 +117,7 @@ impl Debugger {
         Ok(regions)
     }
 
-    fn get_db_from_type(&self, db: DBType) -> Result<&DB> {
+    pub fn get_db_from_type(&self, db: DBType) -> Result<&DB> {
         match db {
             DBType::KV => Ok(&self.engines.kv_engine),
             DBType::RAFT => Ok(&self.engines.raft_engine),
