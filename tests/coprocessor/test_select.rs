@@ -13,7 +13,6 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::{cmp, mem};
-use std::sync::mpsc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::i64;
 use std::thread;
@@ -1510,18 +1509,18 @@ where
     let (stream_tx, stream_rx) = futures_mpsc::channel(10);
     let req = RequestTask::new(req, OnResponse::Streaming(stream_tx), 100).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();
-
-    let (tx, rx) = mpsc::channel();
-    for resp in stream_rx.wait() {
-        let resp = resp.unwrap();
-        check_range(&resp);
-        assert!(!resp.get_data().is_empty());
-        let mut stream_resp = StreamResponse::new();
-        stream_resp.merge_from_bytes(resp.get_data()).unwrap();
-        tx.send(stream_resp).unwrap();
-    }
-    drop(tx);
-    rx.into_iter().collect()
+    stream_rx
+        .wait()
+        .into_iter()
+        .map(|resp| {
+            let resp = resp.unwrap();
+            check_range(&resp);
+            assert!(!resp.get_data().is_empty());
+            let mut stream_resp = StreamResponse::new();
+            stream_resp.merge_from_bytes(resp.get_data()).unwrap();
+            stream_resp
+        })
+        .collect()
 }
 
 #[test]
