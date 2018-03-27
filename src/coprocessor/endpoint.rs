@@ -707,7 +707,7 @@ impl Runnable<Task> for Host {
                     if let Err(e) = req.check_outdated() {
                         let resp = err_resp(e, &mut self.basic_local_metrics);
                         req.on_resp.respond(resp);
-                        return;
+                        continue;
                     }
                     let key = req.get_request_key();
                     grouped_reqs.entry(key).or_insert_with(Vec::new).push(req);
