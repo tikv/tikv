@@ -22,6 +22,7 @@ use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::checksum::{ChecksumRequest, ChecksumScanOn};
 
 use util;
+use util::futurepool;
 use util::time::{self, Instant};
 use storage;
 use server::Config;
@@ -208,7 +209,7 @@ impl Service {
         context: kvrpcpb::Context,
         handler_builder: RequestHandlerBuilder,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
-        let req_begin_time = Instant::now_coarse();
+        let mut tracker = Tracker::new(&context);
 
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(context.get_priority());
@@ -222,22 +223,16 @@ impl Service {
                         Err(e) => cop_util::ErrorRequestHandler::new(e).into_boxed(),
                     };
 
+                    let (region_id, scan_tag) = {
+                        let ctx = handler.get_context();
+                        (ctx.context.get_region_id(), ctx.get_scan_tag())
+                    };
+
                     future::result(handler.get_context().check_if_outdated())
                         .map_err(|e| (e, None))
                         .and_then(move |_| {
-                            let (scan_tag, region_id, record_handle_time, record_scan_detail) = {
-                                let req_ctx = handler.get_context();
-                                let scan_tag = req_ctx.get_scan_tag();
-                                let record_handle_time = req_ctx.context.get_handle_time();
-                                let record_scan_detail = req_ctx.context.get_scan_detail();
-                                let region_id = req_ctx.context.get_region_id();
-                                (scan_tag, region_id, record_handle_time, record_scan_detail)
-                            };
-
-                            // Before handling, record a time.
-                            let process_begin_time = Instant::now_coarse();
-                            let wait_time =
-                                time::duration_to_sec(process_begin_time - req_begin_time);
+                            tracker.before_all_items();
+                            tracker.begin_item();
 
                             let result = handler.handle_request();
                             let exec_metrics = {
@@ -246,56 +241,10 @@ impl Service {
                                 metrics
                             };
 
-                            // After handling, record a time as well.
-                            let process_end_time = Instant::now_coarse();
-                            let process_time =
-                                time::duration_to_sec(process_end_time - process_begin_time);
-
-                            // Clients may request these process durations.
-                            let opt_exec_details = {
-                                let mut exec_details = kvrpcpb::ExecDetails::new();
-                                if record_handle_time || process_time > SLOW_QUERY_LOWER_BOUND {
-                                    let mut handle = kvrpcpb::HandleTime::new();
-                                    handle.set_process_ms((process_time * 1000f64) as i64);
-                                    handle.set_wait_ms((wait_time * 1000f64) as i64);
-                                    exec_details.set_handle_time(handle);
-                                }
-                                if record_scan_detail || process_time > SLOW_QUERY_LOWER_BOUND {
-                                    let detail = exec_metrics.cf_stats.scan_detail();
-                                    exec_details.set_scan_detail(detail);
-                                }
-                                // `exec_details` may be tested against `has_exec_details` so that
-                                // we need the accurate existence.
-                                if exec_details.has_handle_time() && exec_details.has_scan_detail()
-                                {
-                                    Some(exec_details)
-                                } else {
-                                    None
-                                }
-                            };
-
-                            let mut thread_ctx = ctxd.current_thread_context_mut();
-                            thread_ctx
-                                .basic_local_metrics
-                                .wait_time
-                                .with_label_values(&[scan_tag])
-                                .observe(wait_time);
-                            thread_ctx
-                                .basic_local_metrics
-                                .handle_time
-                                .with_label_values(&[scan_tag])
-                                .observe(process_time);
-                            thread_ctx
-                                .basic_local_metrics
-                                .req_time
-                                .with_label_values(&[scan_tag])
-                                .observe(time::duration_to_sec(process_end_time - req_begin_time));
-                            thread_ctx
-                                .basic_local_metrics
-                                .scan_keys
-                                .with_label_values(&[scan_tag])
-                                .observe(exec_metrics.cf_stats.total_op_count() as f64);
-                            thread_ctx.collect(region_id, scan_tag, exec_metrics);
+                            tracker.end_item(exec_metrics);
+                            let opt_exec_details = tracker.get_item_exec_details();
+                            tracker.after_all_items();
+                            tracker.track(region_id, scan_tag, ctxd);
 
                             // Attach execution details (if any) no matter succeeded or not.
                             match result {
@@ -409,6 +358,122 @@ impl Service {
     ) -> impl Stream<Item = coppb::Response, Error = ()> {
         let handler_builder = self.new_request_handler_builder(&req, true);
         self.handle_stream_request_by_custom_handler(req.take_context(), handler_builder)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Tracker {
+    request_begin_at: Instant,
+    item_begin_at: Instant,
+
+    // temp results
+    current_stage: usize,
+    wait_time: Duration,
+    req_time: Duration,
+    item_process_time: Duration,
+    total_process_time: Duration,
+    total_exec_metrics: ExecutorMetrics,
+
+    // settings
+    record_handle_time: bool,
+    record_scan_detail: bool,
+}
+
+impl Tracker {
+    pub fn new(context: &kvrpcpb::Context) -> Tracker {
+        Tracker {
+            request_begin_at: Instant::now_coarse(),
+            item_begin_at: Instant::now_coarse(),
+
+            current_stage: 0,
+            wait_time: Duration::default(),
+            req_time: Duration::default(),
+            item_process_time: Duration::default(),
+            total_process_time: Duration::default(),
+            total_exec_metrics: ExecutorMetrics::default(),
+
+            record_handle_time: context.get_handle_time(),
+            record_scan_detail: context.get_scan_detail(),
+        }
+    }
+
+    pub fn before_all_items(&mut self) {
+        assert!(self.current_stage == 0);
+        self.wait_time = Instant::now_coarse() - self.request_begin_at;
+        self.current_stage = 1;
+    }
+
+    pub fn begin_item(&mut self) {
+        assert!(self.current_stage == 1 || self.current_stage == 3);
+        self.item_begin_at = Instant::now_coarse();
+        self.current_stage = 2;
+    }
+
+    pub fn end_item(&mut self, mut exec_metrics: ExecutorMetrics) {
+        assert!(self.current_stage == 2);
+        self.item_process_time = Instant::now_coarse() - self.item_begin_at;
+        self.total_process_time += self.item_process_time;
+        self.total_exec_metrics.merge(&mut exec_metrics);
+        self.current_stage = 3;
+    }
+
+    pub fn get_item_exec_details(&self) -> Option<kvrpcpb::ExecDetails> {
+        assert!(self.current_stage == 3);
+        let is_slow_query = time::duration_to_sec(self.item_process_time) > SLOW_QUERY_LOWER_BOUND;
+        let mut exec_details = kvrpcpb::ExecDetails::new();
+        if self.record_handle_time || is_slow_query {
+            let mut handle = kvrpcpb::HandleTime::new();
+            handle.set_process_ms(time::duration_to_sec(self.item_process_time) as i64);
+            handle.set_wait_ms(time::duration_to_sec(self.wait_time) as i64);
+            exec_details.set_handle_time(handle);
+        }
+        if self.record_scan_detail || is_slow_query {
+            let detail = self.total_exec_metrics.cf_stats.scan_detail();
+            exec_details.set_scan_detail(detail);
+        }
+        if exec_details.has_handle_time() || exec_details.has_scan_detail() {
+            Some(exec_details)
+        } else {
+            None
+        }
+    }
+
+    pub fn after_all_items(&mut self) {
+        assert!(self.current_stage == 3);
+        self.req_time = Instant::now_coarse() - self.request_begin_at;
+        self.current_stage = 4;
+    }
+
+    pub fn track(
+        self,
+        region_id: u64,
+        scan_tag: &str,
+        ctxd: futurepool::ContextDelegators<ReadPoolContext>,
+    ) {
+        // TODO: Log Slow Queries
+        assert!(self.current_stage == 4);
+        let mut thread_ctx = ctxd.current_thread_context_mut();
+        thread_ctx
+            .basic_local_metrics
+            .wait_time
+            .with_label_values(&[scan_tag])
+            .observe(time::duration_to_sec(self.wait_time));
+        thread_ctx
+            .basic_local_metrics
+            .handle_time
+            .with_label_values(&[scan_tag])
+            .observe(time::duration_to_sec(self.total_process_time));
+        thread_ctx
+            .basic_local_metrics
+            .req_time
+            .with_label_values(&[scan_tag])
+            .observe(time::duration_to_sec(self.req_time));
+        thread_ctx
+            .basic_local_metrics
+            .scan_keys
+            .with_label_values(&[scan_tag])
+            .observe(self.total_exec_metrics.cf_stats.total_op_count() as f64);
+        thread_ctx.collect(region_id, scan_tag, self.total_exec_metrics);
     }
 }
 
