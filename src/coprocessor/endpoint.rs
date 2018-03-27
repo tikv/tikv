@@ -900,8 +900,7 @@ mod tests {
     use super::*;
     use storage::engine::{self, TEMP_DIR};
     use std::thread;
-    use std::time::Duration;
-    use futures::{Future, Sink, Stream};
+    use futures::Future;
     use futures::sync::oneshot;
 
     use kvproto::coprocessor::Request;
@@ -961,18 +960,9 @@ mod tests {
         let mut end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
         end_point.max_running_task_count = 1;
         worker.start(end_point).unwrap();
-        let (tx, rx) = futures_mpsc::channel(150);
+        let (mpsc_tx, mpsc_rx) = mpsc::channel();
         for pos in 0..30 * 4 {
-            let (delayed_tx, delayed_rx) = oneshot::channel();
-            let tx = tx.clone();
-            thread::spawn(move || {
-                let _ = delayed_rx
-                    .map(|v| {
-                        thread::sleep(Duration::from_millis(100));
-                        let _ = tx.send(v).wait();
-                    })
-                    .wait();
-            });
+            let (tx, rx) = oneshot::channel();
             let mut req = Request::new();
             req.set_tp(REQ_TYPE_DAG);
             if pos % 3 == 0 {
@@ -982,13 +972,20 @@ mod tests {
             } else {
                 req.mut_context().set_priority(CommandPri::High);
             }
-            let on_resp = OnResponse::Unary(delayed_tx);
+            let on_resp = OnResponse::Unary(tx);
             let task = RequestTask::new(req, on_resp, 1000).unwrap();
             worker.schedule(Task::Request(task)).unwrap();
+            let mpsc_tx = mpsc_tx.clone();
+            thread::spawn(move || {
+                rx.map(move |v| {
+                    mpsc_tx.send(v).unwrap();
+                }).wait()
+                    .unwrap();
+            });
         }
-        let mut rx_iter = rx.wait();
+        let mut rx_iter = mpsc_rx.into_iter();
         for _ in 0..120 {
-            let resp = rx_iter.next().unwrap().unwrap();
+            let resp = rx_iter.next().unwrap();
             if !resp.has_region_error() {
                 continue;
             }

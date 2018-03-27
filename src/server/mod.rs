@@ -57,6 +57,7 @@ impl<T: Send + Debug + 'static> OnResponse<T> {
                 let _ = sender.send(resp);
             }
             OnResponse::Streaming(sender) => {
+                // `stream::once` never blocks so that we can safely `wait()` here.
                 let _ = sender.send_all(stream::once(Ok(resp))).wait();
             }
         }

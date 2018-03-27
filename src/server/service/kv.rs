@@ -131,7 +131,7 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
             token: Arc::new(AtomicUsize::new(1)),
             recursion_limit: recursion_limit,
             metrics: Metrics::new(),
-            stream_channel_size,
+            stream_channel_size: stream_channel_size,
         }
     }
 
@@ -878,7 +878,6 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let future = sink.send_all(stream)
             .map(|_| timer.observe_duration())
-            .map_err(Error::from)
             .map_err(move |e| {
                 debug!("{} failed: {:?}", label, e);
                 GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
