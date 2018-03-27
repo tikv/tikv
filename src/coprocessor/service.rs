@@ -166,46 +166,74 @@ impl Service {
     }
 
     #[inline]
-    fn run_handler(
+    fn run_stream_handler(
         handler: Box<RequestHandler>,
-        is_streaming: bool,
     ) -> impl Stream<Item = coppb::Response, Error = Error> {
         stream::unfold((handler, false), move |(mut handler, finished)| {
             // TODO: Shall we check whether it is outdated in each streaming iterate?
             if finished {
                 return None;
             }
-            if is_streaming {
-                match handler.handle_streaming_request() {
-                    Ok((None, _)) => {
-                        // if we get `None`, stream is always considered finished.
-                        None
-                    }
-                    Ok((Some(resp), finished)) => {
-                        let yielded = resp;
-                        let next_state = (handler, finished);
-                        Some(Ok((yielded, next_state)))
-                    }
-                    Err(e) => Some(Err(e)),
+            match handler.handle_streaming_request() {
+                Ok((None, _)) => {
+                    // if we get `None`, stream is always considered finished.
+                    None
                 }
-            } else {
-                match handler.handle_request() {
-                    Ok(resp) => {
-                        let yielded = resp;
-                        let next_state = (handler, true);
-                        Some(Ok((yielded, next_state)))
-                    }
-                    Err(e) => Some(Err(e)),
+                Ok((Some(resp), finished)) => {
+                    let yielded = resp;
+                    let next_state = (handler, finished);
+                    Some(Ok((yielded, next_state)))
                 }
+                Err(e) => Some(Err(e)),
             }
         })
     }
 
-    fn handle_request_by_custom_handler(
+    fn handle_unary_request_by_custom_handler(
         &self,
         context: kvrpcpb::Context,
         handler_builder: RequestHandlerBuilder,
-        is_streaming: bool,
+    ) -> impl Future<Item = coppb::Response, Error = ()> {
+        let engine = self.engine.clone();
+        let priority = readpool::Priority::from(context.get_priority());
+        let result = self.read_pool.future_execute(priority, move |_ctxd| {
+            Service::async_snapshot(engine, &context).and_then(move |snapshot| {
+                let mut handler = match handler_builder(snapshot) {
+                    Ok(handler) => handler,
+                    Err(e) => cop_util::ErrorRequestHandler::new(e).into_boxed(),
+                };
+                future::result(handler.check_if_outdated())
+                    .and_then(move |_| handler.handle_request())
+            })
+        });
+        future::result(result)
+            .map_err(|_| Error::Full)
+            .flatten()
+            .then(|result| {
+                let resp = match result {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        let mut metrics = BasicLocalMetrics::default();
+                        make_error_response(e, &mut metrics)
+                    }
+                };
+                Ok(resp)
+            })
+    }
+
+    #[inline]
+    pub fn handle_unary_request(
+        &self,
+        mut req: coppb::Request,
+    ) -> impl Future<Item = coppb::Response, Error = ()> {
+        let handler_builder = self.new_request_handler_builder(&req, false);
+        self.handle_unary_request_by_custom_handler(req.take_context(), handler_builder)
+    }
+
+    fn handle_stream_request_by_custom_handler(
+        &self,
+        context: kvrpcpb::Context,
+        handler_builder: RequestHandlerBuilder,
     ) -> impl Stream<Item = coppb::Response, Error = ()> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let engine = self.engine.clone();
@@ -220,7 +248,7 @@ impl Service {
                         Err(e) => cop_util::ErrorRequestHandler::new(e).into_boxed(),
                     };
                     future::result(handler.check_if_outdated()).and_then(move |_| {
-                        Service::run_handler(handler, is_streaming)
+                        Service::run_stream_handler(handler)
                             .then(Ok::<_, mpsc::SendError<_>>)
                             .forward(tx1)
                             .then(|_| {
@@ -267,34 +295,6 @@ impl Service {
         })
     }
 
-    /// Specifying custom request handler is useful in tests.
-    #[inline]
-    fn handle_stream_request_by_custom_handler(
-        &self,
-        context: kvrpcpb::Context,
-        handler_builder: RequestHandlerBuilder,
-    ) -> impl Stream<Item = coppb::Response, Error = ()> {
-        self.handle_request_by_custom_handler(context, handler_builder, true)
-    }
-
-    /// Specifying custom request handler is useful in tests.
-    fn handle_unary_request_by_custom_handler(
-        &self,
-        context: kvrpcpb::Context,
-        handler_builder: RequestHandlerBuilder,
-    ) -> impl Future<Item = coppb::Response, Error = ()> {
-        self.handle_request_by_custom_handler(context, handler_builder, false)
-            .into_future()  // called `.next()` in futures 0.2
-            .then(|result| {
-                let resp = match result {
-                    Ok((Some(resp), _)) => resp,
-                    Ok((None, _)) => unreachable!(),
-                    Err((_, _)) => unreachable!(),
-                };
-                Ok::<_, ()>(resp)
-            })
-    }
-
     #[inline]
     pub fn handle_stream_request(
         &self,
@@ -302,15 +302,6 @@ impl Service {
     ) -> impl Stream<Item = coppb::Response, Error = ()> {
         let handler_builder = self.new_request_handler_builder(&req, true);
         self.handle_stream_request_by_custom_handler(req.take_context(), handler_builder)
-    }
-
-    #[inline]
-    pub fn handle_unary_request(
-        &self,
-        mut req: coppb::Request,
-    ) -> impl Future<Item = coppb::Response, Error = ()> {
-        let handler_builder = self.new_request_handler_builder(&req, false);
-        self.handle_unary_request_by_custom_handler(req.take_context(), handler_builder)
     }
 }
 
