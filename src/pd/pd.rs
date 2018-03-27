@@ -339,9 +339,7 @@ impl<T: PdClient> Runner<T> {
         let cache = self.heartbeat_cache
             .entry(region_id)
             .or_insert_with(RegionHeartbeatCache::default);
-        info!("debug: before merge {:?}\n{:?}", cache, hb_task);
         cache.merge_heartbeat(&self.db, hb_task);
-        info!("debug: after merge {:?}", cache);
 
         self.store_stat
             .region_bytes_written
@@ -356,7 +354,6 @@ impl<T: PdClient> Runner<T> {
             .region_keys_read
             .observe(cache.read_keys_delta as f64);
 
-        // Now we use put region protocol for heartbeat.
         if let Some((region, peer, region_stat)) = cache.heartbeat() {
             debug!("[region {}] send changed heartbeat to pd", region_id);
             let f = self.pd_client
