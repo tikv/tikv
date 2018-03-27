@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::mem;
 use futures::{future, stream, Future, Stream};
 use futures::sync::mpsc;
 use protobuf::{CodedInputStream, Message};
@@ -180,30 +181,6 @@ impl Service {
             .map_err(Error::from)
     }
 
-    #[inline]
-    fn run_stream_handler(
-        handler: Box<RequestHandler>,
-    ) -> impl Stream<Item = coppb::Response, Error = Error> {
-        stream::unfold((handler, false), move |(mut handler, finished)| {
-            // TODO: Shall we check whether it is outdated in each streaming iterate?
-            if finished {
-                return None;
-            }
-            match handler.handle_streaming_request() {
-                Ok((None, _)) => {
-                    // if we get `None`, stream is always considered finished.
-                    None
-                }
-                Ok((Some(resp), finished)) => {
-                    let yielded = resp;
-                    let next_state = (handler, finished);
-                    Some(Ok((yielded, next_state)))
-                }
-                Err(e) => Some(Err(e)),
-            }
-        })
-    }
-
     fn handle_unary_request_by_custom_handler(
         &self,
         context: kvrpcpb::Context,
@@ -223,10 +200,14 @@ impl Service {
                         Err(e) => cop_util::ErrorRequestHandler::new(e).into_boxed(),
                     };
 
-                    let (region_id, scan_tag) = {
+                    {
                         let ctx = handler.get_context();
-                        (ctx.context.get_region_id(), ctx.get_scan_tag())
-                    };
+                        tracker.set_track_target(
+                            ctx.context.get_region_id(),
+                            ctx.get_scan_tag(),
+                            ctxd,
+                        );
+                    }
 
                     future::result(handler.get_context().check_if_outdated())
                         .map_err(|e| (e, None))
@@ -244,7 +225,7 @@ impl Service {
                             tracker.end_item(exec_metrics);
                             let opt_exec_details = tracker.get_item_exec_details();
                             tracker.after_all_items();
-                            tracker.track(region_id, scan_tag, ctxd);
+                            tracker.track();
 
                             // Attach execution details (if any) no matter succeeded or not.
                             match result {
@@ -291,23 +272,63 @@ impl Service {
         context: kvrpcpb::Context,
         handler_builder: RequestHandlerBuilder,
     ) -> impl Stream<Item = coppb::Response, Error = ()> {
+        let mut tracker = Tracker::new(&context);
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(context.get_priority());
 
         let (tx1, tx2) = (tx.clone(), tx.clone());
-        let result = self.read_pool.future_execute(priority, move |_ctxd| {
+        let result = self.read_pool.future_execute(priority, move |ctxd| {
             Service::async_snapshot(engine, &context)
                 .and_then(move |snapshot| {
                     let handler = match handler_builder(snapshot) {
                         Ok(handler) => handler,
                         Err(e) => cop_util::ErrorRequestHandler::new(e).into_boxed(),
                     };
+
+                    {
+                        let ctx = handler.get_context();
+                        tracker.set_track_target(
+                            ctx.context.get_region_id(),
+                            ctx.get_scan_tag(),
+                            ctxd,
+                        );
+                    }
+
                     future::result(handler.get_context().check_if_outdated()).and_then(move |_| {
-                        Service::run_stream_handler(handler)
-                            .then(Ok::<_, mpsc::SendError<_>>)
+                        tracker.before_all_items();
+                        stream::unfold((handler, false), move |(mut handler, finished)| {
+                            if finished {
+                                return None;
+                            }
+
+                            tracker.begin_item();
+
+                            let result = handler.handle_streaming_request();
+                            let exec_metrics = {
+                                let mut metrics = ExecutorMetrics::default();
+                                handler.collect_metrics_into(&mut metrics);
+                                metrics
+                            };
+
+                            tracker.end_item(exec_metrics);
+                            // let opt_exec_details = tracker.get_item_exec_details();
+
+                            match result {
+                                Ok((None, _)) => {
+                                    // if we get `None`, stream is always considered finished.
+                                    None
+                                }
+                                Ok((Some(resp), finished)) => {
+                                    let yielded = resp;
+                                    let next_state = (handler, finished);
+                                    Some(Ok((yielded, next_state)))
+                                }
+                                Err(e) => Some(Err(e)),
+                            }
+                        }).then(Ok::<_, mpsc::SendError<_>>)
                             .forward(tx1)
-                            .then(|_| {
+                            .then(move |_| {
                                 // ignore sink send failures
                                 Ok(())
                             })
@@ -377,6 +398,11 @@ struct Tracker {
     // settings
     record_handle_time: bool,
     record_scan_detail: bool,
+
+    // target info
+    region_id: Option<u64>,
+    scan_tag: Option<&'static str>,
+    ctxd: Option<futurepool::ContextDelegators<ReadPoolContext>>,
 }
 
 impl Tracker {
@@ -394,6 +420,10 @@ impl Tracker {
 
             record_handle_time: context.get_handle_time(),
             record_scan_detail: context.get_scan_detail(),
+
+            region_id: None,
+            scan_tag: None,
+            ctxd: None,
         }
     }
 
@@ -444,36 +474,67 @@ impl Tracker {
         self.current_stage = 4;
     }
 
-    pub fn track(
-        self,
+    pub fn set_track_target(
+        &mut self,
         region_id: u64,
-        scan_tag: &str,
+        scan_tag: &'static str,
         ctxd: futurepool::ContextDelegators<ReadPoolContext>,
     ) {
+        self.region_id = Some(region_id);
+        self.scan_tag = Some(scan_tag);
+        self.ctxd = Some(ctxd);
+    }
+
+    pub fn track(&mut self) {
+        if self.ctxd.is_none() {
+            return;
+        }
+        if self.current_stage != 4 {
+            return;
+        }
         // TODO: Log Slow Queries
-        assert!(self.current_stage == 4);
+        let total_exec_metrics =
+            mem::replace(&mut self.total_exec_metrics, ExecutorMetrics::default());
+        let ctxd = self.ctxd.take().unwrap();
         let mut thread_ctx = ctxd.current_thread_context_mut();
         thread_ctx
             .basic_local_metrics
             .wait_time
-            .with_label_values(&[scan_tag])
+            .with_label_values(&[self.scan_tag.unwrap()])
             .observe(time::duration_to_sec(self.wait_time));
         thread_ctx
             .basic_local_metrics
             .handle_time
-            .with_label_values(&[scan_tag])
+            .with_label_values(&[self.scan_tag.unwrap()])
             .observe(time::duration_to_sec(self.total_process_time));
         thread_ctx
             .basic_local_metrics
             .req_time
-            .with_label_values(&[scan_tag])
+            .with_label_values(&[self.scan_tag.unwrap()])
             .observe(time::duration_to_sec(self.req_time));
         thread_ctx
             .basic_local_metrics
             .scan_keys
-            .with_label_values(&[scan_tag])
-            .observe(self.total_exec_metrics.cf_stats.total_op_count() as f64);
-        thread_ctx.collect(region_id, scan_tag, self.total_exec_metrics);
+            .with_label_values(&[self.scan_tag.unwrap()])
+            .observe(total_exec_metrics.cf_stats.total_op_count() as f64);
+        thread_ctx.collect(
+            self.region_id.unwrap(),
+            self.scan_tag.unwrap(),
+            total_exec_metrics,
+        );
+        self.current_stage == 5;
+    }
+}
+
+impl Drop for Tracker {
+    fn drop(&mut self) {
+        // Sometimes it is not easy to get back the tracker after passing it to an item generator
+        // so that we utilize the `Drop` trait to make sure that stages after items are called
+        // properly.
+        if self.current_stage == 3 {
+            self.after_all_items();
+        }
+        self.track();
     }
 }
 
