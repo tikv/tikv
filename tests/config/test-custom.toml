@@ -90,7 +90,8 @@ right-derive-when-split = false
 allow-remove-leader = true
 merge-max-log-gap = 3
 merge-check-tick-interval = "11s"
-use-delete-range = false
+use-delete-range = true
+cleanup-import-sst-interval = "12m"
 
 [coprocessor]
 split-region-on-table = true
