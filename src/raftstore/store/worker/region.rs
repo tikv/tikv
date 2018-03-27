@@ -113,7 +113,7 @@ struct PendingDeleteRanges {
 
 impl PendingDeleteRanges {
     // find ranges that overlap with [start_key, end_key)
-    fn find_overlap_ranges(&self, start_key: &[u8], end_key: &[u8]) {
+    fn find_overlap_ranges(&self, start_key: &[u8], end_key: &[u8]) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
         let mut ranges = Vec::new();
         // find the first range that may overlap with [start_key, end_key)
         let sub_range = self.ranges.range((Unbounded, Excluded(start_key.to_vec())));
@@ -163,7 +163,7 @@ impl PendingDeleteRanges {
         timeout: time::Instant,
     ) -> Result<()> {
         if self.find_overlap_ranges(&start_key, &end_key).len() > 0 {
-            return Err("overlap ranges in pending delete range");
+            return Err(box_err!("overlap ranges in pending delete range"));
         }
         let info = StalePeerInfo {
             region_id: region_id,
@@ -266,7 +266,9 @@ impl SnapContext {
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
-        self.destroy_overlap_ranges(&start_key, &end_key);
+        if self.get_delay_secs() > 0 {
+            self.destroy_overlap_ranges(&start_key, &end_key);
+        }
         box_try!(util::delete_all_in_range(
             &self.kv_db,
             &start_key,
@@ -484,13 +486,13 @@ impl Runnable<Task> for Runner {
                 start_key,
                 end_key,
             } => {
-                self.ctx.destroy_overlap_ranges(&start_key, &end_key);
                 if self.ctx.get_delay_secs() > 0 {
+                    self.ctx.destroy_overlap_ranges(&start_key, &end_key);
                     // delay the range deletion because
                     // there might be a coprocessor request related to this range
                     if let Err(e) =
                         self.ctx
-                            .insert_pending_delete_range(region_id, start_key, end_key)
+                            .insert_pending_delete_range(region_id, start_key.clone(), end_key.clone())
                     {
                         error!(
                             "[region {}] register deleting data in [{}, {}) failed: {:?}",
