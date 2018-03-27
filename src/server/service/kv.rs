@@ -77,6 +77,7 @@ struct Metrics {
     raw_delete: Histogram,
     raw_delete_range: Histogram,
     coprocessor: Histogram,
+    coprocessor_stream: Histogram,
     mvcc_get_by_key: Histogram,
     mvcc_get_by_start_ts: Histogram,
     split_region: Histogram,
@@ -102,6 +103,7 @@ impl Metrics {
             raw_delete: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["raw_delete"]),
             raw_delete_range: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["raw_delete_range"]),
             coprocessor: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["coprocessor"]),
+            coprocessor_stream: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["coprocessor_stream"]),
             mvcc_get_by_key: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["mvcc_get_by_key"]),
             mvcc_get_by_start_ts: GRPC_MSG_HISTOGRAM_VEC
                 .with_label_values(&["mvcc_get_by_start_ts"]),
@@ -801,9 +803,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         sink: ServerStreamingSink<Response>,
     ) {
         let label = "coprocessor_stream";
-        let timer = GRPC_MSG_HISTOGRAM_VEC
-            .with_label_values(&[label])
-            .start_coarse_timer();
+        let timer = self.metrics.coprocessor_stream.start_coarse_timer();
 
         let stream = self.cop_service
             .handle_stream_request(req)
