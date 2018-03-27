@@ -97,6 +97,9 @@ enum Operator {
         target_region_id: u64,
         policy: Arc<RwLock<SchedulePolicy>>,
     },
+    HalfSplitRegion {
+        region_epoch: metapb::RegionEpoch,
+    },
 }
 
 impl Operator {
@@ -131,6 +134,7 @@ impl Operator {
                     new_pd_merge_region(region)
                 }
             }
+            Operator::HalfSplitRegion { .. } => new_half_split_region(),
         }
     }
 
@@ -164,6 +168,9 @@ impl Operator {
                     return !cluster.pending_peers.contains_key(&pr.get_id());
                 }
                 unreachable!()
+            }
+            Operator::HalfSplitRegion { ref region_epoch } => {
+                region.get_region_epoch() != region_epoch
             }
             Operator::RemovePeer {
                 ref peer,
@@ -754,6 +761,13 @@ impl TestPdClient {
             policy: SchedulePolicy::TillSuccess,
         };
         self.schedule_operator(region_id, op);
+    }
+
+    pub fn half_split_region(&self, mut region: metapb::Region) {
+        let op = Operator::HalfSplitRegion {
+            region_epoch: region.take_region_epoch(),
+        };
+        self.schedule_operator(region.get_id(), op);
     }
 
     pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
