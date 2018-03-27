@@ -27,7 +27,8 @@ mod split_check;
 pub use self::config::Config;
 pub use self::dispatcher::{CoprocessorHost, Registry};
 pub use self::error::{Error, Result};
-pub use self::split_check::{SizeCheckObserver, Status as SplitCheckStatus, TableCheckObserver,
+pub use self::split_check::{HalfCheckObserver, SizeCheckObserver, Status as SplitCheckStatus,
+                            TableCheckObserver, HALF_SPLIT_OBSERVER_PRIORITY,
                             SIZE_CHECK_OBSERVER_PRIORITY, TABLE_CHECK_OBSERVER_PRIORITY};
 
 /// Coprocessor is used to provide a convient way to inject code to
