@@ -123,19 +123,26 @@ impl<'a> MergedIterator<'a> {
 /// Split checking task.
 pub struct Task {
     region: Region,
+    auto_split: bool,
 }
 
 impl Task {
-    pub fn new(region: &Region) -> Task {
+    pub fn new(region: &Region, auto_split: bool) -> Task {
         Task {
             region: region.clone(),
+            auto_split: auto_split,
         }
     }
 }
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "Split Check Task for {}", self.region.get_id())
+        write!(
+            f,
+            "Split Check Task for {}, auto_split: {:?}",
+            self.region.get_id(),
+            self.auto_split
+        )
     }
 }
 
@@ -158,9 +165,11 @@ impl<C: Sender<Msg>> Runner<C> {
         }
     }
 
-    fn check_split(&mut self, region: &Region) {
-        let mut split_ctx = self.coprocessor
-            .new_split_check_status(region, &self.engine);
+    fn check_split(&mut self, task: Task) {
+        let region = &task.region;
+        let mut split_ctx =
+            self.coprocessor
+                .new_split_check_status(region, &self.engine, task.auto_split);
         if split_ctx.skip() {
             debug!("[region {}] skip split check", region.get_id());
             return;
@@ -197,6 +206,10 @@ impl<C: Sender<Msg>> Runner<C> {
             });
         timer.observe_duration();
 
+        if split_key.is_none() {
+            split_key = split_ctx.split_key();
+        }
+
         if let Err(e) = res {
             error!("[region {}] failed to scan split key: {}", region_id, e);
             return;
@@ -226,8 +239,7 @@ impl<C: Sender<Msg>> Runner<C> {
 
 impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
     fn run(&mut self, task: Task) {
-        let region = &task.region;
-        self.check_split(region);
+        self.check_split(task);
     }
 }
 
