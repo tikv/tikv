@@ -539,6 +539,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
         self.register_merge_check_tick(event_loop);
+        self.register_cleanup_import_sst_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&self.kv_engine),
@@ -577,7 +578,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .start(consistency_check_runner)
         );
 
-        let cleanup_sst_runner = CleanupSSTRunner::new(Arc::clone(&self.importer));
+        let cleanup_sst_runner = CleanupSSTRunner::new(
+            self.store_id(),
+            self.sendch.clone(),
+            Arc::clone(&self.importer),
+            Arc::clone(&self.pd_client),
+        );
         box_try!(self.cleanup_sst_worker.start(cleanup_sst_runner));
 
         let (tx, rx) = mpsc::channel();
@@ -2355,7 +2361,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             {
                 continue;
             }
-            let task = SplitCheckTask::new(peer.region());
+            let task = SplitCheckTask::new(peer.region(), true);
             if let Err(e) = self.split_check_worker.schedule(task) {
                 error!("{} failed to schedule split check: {}", self.tag, e);
             }
@@ -2529,6 +2535,41 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         };
         peer.approximate_size = Some(region_size);
+    }
+
+    fn on_schedule_half_split_region(
+        &mut self,
+        region_id: u64,
+        region_epoch: &metapb::RegionEpoch,
+    ) {
+        let peer = match self.region_peers.get(&region_id) {
+            Some(peer) => peer,
+            None => {
+                error!("{:?}", Error::RegionNotFound(region_id));
+                return;
+            }
+        };
+
+        if !peer.is_leader() {
+            // region on this store is no longer leader, skipped.
+            warn!(
+                "[region {}] region on {} is not leader, skip.",
+                region_id,
+                self.store_id()
+            );
+            return;
+        }
+
+        let region = peer.region();
+        if util::is_epoch_stale(region_epoch, region.get_region_epoch()) {
+            warn!("[region {}] receive a stale halfsplit message", region_id);
+            return;
+        }
+
+        let task = SplitCheckTask::new(region, false);
+        if let Err(e) = self.split_check_worker.schedule(task) {
+            error!("{} failed to schedule split check: {}", self.tag, e);
+        }
     }
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
@@ -2948,15 +2989,89 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_ingest_sst_result(&mut self, ssts: Vec<SSTMeta>) {
-        for sst in ssts {
+        for sst in &ssts {
             let region_id = sst.get_region_id();
             if let Some(region) = self.region_peers.get_mut(&region_id) {
                 region.size_diff_hint += sst.get_length();
             }
-            let task = CleanupSSTTask::DeleteSST { sst };
-            if let Err(e) = self.cleanup_sst_worker.schedule(task) {
-                error!("[region {}] schedule delete sst: {:?}", region_id, e);
+        }
+
+        let task = CleanupSSTTask::DeleteSST { ssts };
+        if let Err(e) = self.cleanup_sst_worker.schedule(task) {
+            error!("schedule to delete ssts: {:?}", e);
+        }
+    }
+
+    fn on_validate_sst_result(&mut self, ssts: Vec<SSTMeta>) {
+        // A stale peer can still ingest a stale SST before it is
+        // destroyed. We need to make sure that no stale peer exists.
+        let mut delete_ssts = Vec::new();
+        for sst in ssts {
+            if !self.region_peers.contains_key(&sst.get_region_id()) {
+                delete_ssts.push(sst);
             }
+        }
+        if delete_ssts.is_empty() {
+            return;
+        }
+
+        let task = CleanupSSTTask::DeleteSST { ssts: delete_ssts };
+        if let Err(e) = self.cleanup_sst_worker.schedule(task) {
+            error!("schedule to delete ssts: {:?}", e);
+        }
+    }
+
+    fn on_cleanup_import_sst(&mut self) -> Result<()> {
+        let mut delete_ssts = Vec::new();
+        let mut validate_ssts = Vec::new();
+
+        let ssts = box_try!(self.importer.list_ssts());
+        for sst in ssts {
+            if let Some(peer) = self.region_peers.get(&sst.get_region_id()) {
+                let region_epoch = peer.region().get_region_epoch();
+                if util::is_epoch_stale(sst.get_region_epoch(), region_epoch) {
+                    // If the SST epoch is stale, it will not be ingested anymore.
+                    delete_ssts.push(sst);
+                }
+            } else {
+                // If the peer doesn't exist, we need to validate the SST through PD.
+                validate_ssts.push(sst);
+            }
+        }
+
+        if !delete_ssts.is_empty() {
+            let task = CleanupSSTTask::DeleteSST { ssts: delete_ssts };
+            if let Err(e) = self.cleanup_sst_worker.schedule(task) {
+                error!("schedule to delete ssts: {:?}", e);
+            }
+        }
+
+        if !validate_ssts.is_empty() {
+            let task = CleanupSSTTask::ValidateSST {
+                ssts: validate_ssts,
+            };
+            if let Err(e) = self.cleanup_sst_worker.schedule(task) {
+                error!("schedule to validate ssts: {:?}", e);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn on_cleanup_import_sst_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = self.on_cleanup_import_sst() {
+            error!("{} failed to cleanup import sst: {:?}", self.tag, e);
+        }
+        self.register_cleanup_import_sst_tick(event_loop);
+    }
+
+    fn register_cleanup_import_sst_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(
+            event_loop,
+            Tick::CleanupImportSST,
+            self.cfg.cleanup_import_sst_interval.as_millis(),
+        ) {
+            error!("{} register cleanup import sst tick err: {:?}", self.tag, e);
         }
     }
 }
@@ -3091,7 +3206,12 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 region_size,
             } => self.on_approximate_region_size(region_id, region_size),
             Msg::CompactedEvent(event) => self.on_compaction_finished(event),
+            Msg::HalfSplitRegion {
+                region_id,
+                region_epoch,
+            } => self.on_schedule_half_split_region(region_id, &region_epoch),
             Msg::MergeFail { region_id } => self.on_merge_fail(region_id),
+            Msg::ValidateSSTResult { invalid_ssts } => self.on_validate_sst_result(invalid_ssts),
         }
     }
 
@@ -3108,6 +3228,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
             Tick::CheckMerge => self.on_check_merge(event_loop),
+            Tick::CleanupImportSST => self.on_cleanup_import_sst_tick(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }
