@@ -273,7 +273,9 @@ impl Service {
         handler_builder: RequestHandlerBuilder,
     ) -> impl Stream<Item = coppb::Response, Error = ()> {
         let mut tracker = Tracker::new(&context);
-        let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
+        let (tx, rx) = mpsc::channel::<(Result<coppb::Response>, Option<kvrpcpb::ExecDetails>)>(
+            self.stream_channel_size,
+        );
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(context.get_priority());
 
@@ -312,7 +314,7 @@ impl Service {
                             };
 
                             tracker.end_item(exec_metrics);
-                            // let opt_exec_details = tracker.get_item_exec_details();
+                            let opt_exec_details = tracker.get_item_exec_details();
 
                             match result {
                                 Ok((None, _)) => {
@@ -320,13 +322,19 @@ impl Service {
                                     None
                                 }
                                 Ok((Some(resp), finished)) => {
-                                    let yielded = resp;
+                                    let yielded = (resp, opt_exec_details);
                                     let next_state = (handler, finished);
                                     Some(Ok((yielded, next_state)))
                                 }
-                                Err(e) => Some(Err(e)),
+                                Err(e) => Some(Err((e, opt_exec_details))),
                             }
-                        }).then(Ok::<_, mpsc::SendError<_>>)
+                        }).then(|r| {
+                            let r = match r {
+                                Ok((r, exec_details)) => (Ok(r), exec_details),
+                                Err((e, exec_details)) => (Err(e), exec_details),
+                            };
+                            Ok::<_, mpsc::SendError<_>>(r)
+                        })
                             .forward(tx1)
                             .then(move |_| {
                                 // ignore sink send failures
@@ -335,7 +343,7 @@ impl Service {
                     })
                 })
                 .map_err(move |e| {
-                    stream::once::<_, mpsc::SendError<_>>(Ok(Err(e)))
+                    stream::once::<_, mpsc::SendError<_>>(Ok((Err(e), None)))
                         .forward(tx2)
                         .then(|_| {
                             // ignore sink send failures
@@ -348,7 +356,7 @@ impl Service {
 
         match result {
             Err(_) => {
-                stream::once::<_, mpsc::SendError<_>>(Ok(Err(Error::Full)))
+                stream::once::<_, mpsc::SendError<_>>(Ok((Err(Error::Full), None)))
                     .forward(tx)
                     .then(|_| {
                         // ignore sink send failures
@@ -363,12 +371,19 @@ impl Service {
             }
         }
 
-        rx.map(|result| match result {
-            Ok(resp) => resp,
-            Err(e) => {
-                let mut metrics = BasicLocalMetrics::default();
-                make_error_response(e, &mut metrics)
+        rx.map(|(result, opt_exec_details)| {
+            let mut resp = match result {
+                Ok(resp) => resp,
+                Err(e) => {
+                    let mut metrics = BasicLocalMetrics::default();
+                    make_error_response(e, &mut metrics)
+                }
+            };
+            // If execution details are available, attach it in the response.
+            if let Some(exec_details) = opt_exec_details {
+                resp.set_exec_details(exec_details);
             }
+            resp
         })
     }
 
@@ -522,7 +537,7 @@ impl Tracker {
             self.scan_tag.unwrap(),
             total_exec_metrics,
         );
-        self.current_stage == 5;
+        self.current_stage = 5;
     }
 }
 
