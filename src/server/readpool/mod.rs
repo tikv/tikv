@@ -89,9 +89,8 @@ impl<T: futurepool::Context + 'static> ReadPool<T> {
         }
     }
 
-    /// TODO: Remove pub.
     #[inline]
-    pub fn get_pool_by_priority(&self, priority: Priority) -> &FuturePool<T> {
+    fn get_pool_by_priority(&self, priority: Priority) -> &FuturePool<T> {
         match priority {
             Priority::High => &self.pool_high,
             Priority::Normal => &self.pool_normal,
