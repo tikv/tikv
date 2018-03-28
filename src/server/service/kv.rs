@@ -19,8 +19,7 @@ use std::sync::atomic::AtomicUsize;
 use grpc::{ClientStreamingSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
            RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
 use futures::{future, stream, Future, Sink, Stream};
-use futures::sync::mpsc;
-use futures_cpupool::CpuPool;
+use futures::sync::{mpsc as futures_mpsc, oneshot};
 use protobuf::RepeatedField;
 use kvproto::tikvpb_grpc;
 use kvproto::raft_serverpb::*;
@@ -39,7 +38,7 @@ use storage::engine::Error as EngineError;
 use server::transport::RaftStoreRouter;
 use server::snap::Task as SnapTask;
 use server::metrics::*;
-use server::{CopStream, Error, OnResponse};
+use server::{Error, OnResponse};
 use raftstore::store::{Callback, Msg as StoreMessage};
 use coprocessor::{err_resp, EndPointTask, RequestTask};
 use coprocessor::local_metrics::BasicLocalMetrics;
@@ -62,8 +61,8 @@ pub struct Service<T: RaftStoreRouter + 'static> {
     max_snap_recv_concurrent: usize,
     token: Arc<AtomicUsize>, // TODO: remove it.
     recursion_limit: u32,
-    stream_channel_size: usize,
     metrics: Metrics,
+    stream_channel_size: usize,
 }
 
 #[derive(Clone)]
@@ -135,8 +134,8 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
             max_snap_recv_concurrent: MAX_RECEIVER_CONCURRENT,
             token: Arc::new(AtomicUsize::new(1)),
             recursion_limit: recursion_limit,
-            stream_channel_size: stream_channel_size,
             metrics: Metrics::new(),
+            stream_channel_size: stream_channel_size,
         }
     }
 
@@ -161,27 +160,6 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
         let status = RpcStatus::new(code, Some(format!("{}", err)));
         ctx.spawn(sink.fail(status).map_err(|_| ()));
     }
-}
-
-#[allow(type_complexity)]
-pub fn make_stream_callback<T: Send + Debug + 'static>(
-    channel_size: usize,
-) -> (
-    Box<FnBox(CopStream<T>, Option<CpuPool>) + Send>,
-    mpsc::Receiver<T>,
-) {
-    let (tx, rx) = mpsc::channel(channel_size);
-    let callback = move |s: CopStream<T>, executor: Option<CpuPool>| {
-        // We can run the callback in two place: Endpoint thread and Cpu pool threads.
-        // In the first case the `executor` will be None so that we needs to wait the
-        // future finish, oterwise we can just spawn it in the executor.
-        let f = s.forward(tx);
-        if let Some(executor) = executor {
-            return executor.spawn(f).forget();
-        }
-        f.wait().unwrap();
-    };
-    (box callback, rx)
 }
 
 impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
@@ -826,8 +804,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         const LABEL: &str = "coprocessor";
         let timer = self.metrics.coprocessor.start_coarse_timer();
 
-        let (cb, future) = paired_future_callback();
-        let on_resp = OnResponse::Unary(cb);
+        let (tx, rx) = oneshot::channel();
+        let on_resp = OnResponse::Unary(tx);
         let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
             Ok(req_task) => req_task,
             Err(e) => {
@@ -849,8 +827,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             return self.send_fail_status(ctx, sink, error, code);
         }
 
-        let future = future
-            .map_err(Error::from)
+        let future = rx.map_err(Error::from)
             .and_then(|resp| sink.success(resp).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
@@ -871,8 +848,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        let (cb, stream) = make_stream_callback(self.stream_channel_size);
-        let on_resp = OnResponse::Streaming(cb);
+        let (tx, rx) = futures_mpsc::channel(self.stream_channel_size);
+        let on_resp = OnResponse::Streaming(tx);
         let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
             Ok(req_task) => req_task,
             Err(e) => {
@@ -896,8 +873,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             return self.send_fail_status_to_stream(ctx, sink, error, code);
         }
 
-        let stream = stream
-            .map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
+        let stream = rx.map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
             .map_err(|e| {
                 let code = RpcStatusCode::Unknown;
                 let msg = Some(format!("{:?}", e));
