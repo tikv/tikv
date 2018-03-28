@@ -761,6 +761,7 @@ impl DAGSelect {
         dag.set_executors(RepeatedField::from_vec(self.execs));
         dag.set_start_ts(next_id() as u64);
         dag.set_flags(flags.iter().fold(0, |acc, f| acc | *f));
+        dag.set_collect_range_counts(true);
 
         let output_offsets = if self.output_offsets.is_some() {
             self.output_offsets.take().unwrap()
@@ -871,12 +872,16 @@ fn test_stream_batch_row_limit() {
 
     let resps = handle_streaming_select(&end_point, req, check_range);
     assert_eq!(resps.len(), 3);
-
+    let expected_output_counts = vec![vec![2 as i64, -1], vec![2 as i64, -1], vec![1 as i64, -1]];
     for (i, resp) in resps.into_iter().enumerate() {
         // For now, we only support default encode type.
         assert_eq!(resp.get_encode_type(), EncodeType::TypeDefault);
         let mut chunk = Chunk::new();
         chunk.merge_from_bytes(resp.get_data()).unwrap();
+        assert_eq!(
+            resp.get_output_counts(),
+            expected_output_counts[i].as_slice()
+        );
 
         let chunks = vec![chunk];
         let chunk_data_limit = stream_row_limit * 3; // we have 3 fields.
@@ -2233,7 +2238,7 @@ fn test_output_counts() {
 
     let req = DAGSelect::from(&product.table).build();
     let resp = handle_select(&end_point, req);
-    assert_eq!(resp.get_output_counts(), [data.len() as i64]);
+    assert_eq!(resp.get_output_counts(), [data.len() as i64, -1]);
 
     end_point.stop().unwrap().join().unwrap();
 }

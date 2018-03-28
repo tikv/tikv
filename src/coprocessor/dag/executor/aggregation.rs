@@ -83,7 +83,6 @@ pub struct HashAggExecutor {
     cols: Arc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
     src: Box<Executor + Send>,
-    count: i64,
     first_collect: bool,
 }
 
@@ -110,7 +109,6 @@ impl HashAggExecutor {
             cols: columns,
             related_cols_offset: visitor.column_offsets(),
             src: src,
-            count: 0,
             first_collect: true,
         })
     }
@@ -185,7 +183,6 @@ impl Executor for HashAggExecutor {
                 if !self.group_by.is_empty() {
                     value.extend_from_slice(group_key);
                 }
-                self.count += 1;
                 Ok(Some(Row {
                     handle: 0,
                     data: RowColsDict::new(map![], value),
@@ -197,8 +194,6 @@ impl Executor for HashAggExecutor {
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
         self.src.collect_output_counts(counts);
-        counts.push(self.count);
-        self.count = 0;
     }
 
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
@@ -250,8 +245,6 @@ impl Executor for StreamAggExecutor {
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
         self.src.collect_output_counts(counts);
-        counts.push(self.count);
-        self.count = 0;
     }
 
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
@@ -508,7 +501,7 @@ mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let is_executor =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique).unwrap();
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique, true).unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalContext::default()),
@@ -522,8 +515,8 @@ mod test {
             row_data.push(row.data);
         }
         assert_eq!(row_data.len(), expect_row_cnt);
-        let expected_counts = vec![idx_row_cnt, expect_row_cnt as i64];
-        let mut counts = Vec::with_capacity(2);
+        let expected_counts = vec![idx_row_cnt];
+        let mut counts = Vec::with_capacity(1);
         agg_ect.collect_output_counts(&mut counts);
         assert_eq!(expected_counts, counts);
 
@@ -538,7 +531,7 @@ mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let is_executor =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique).unwrap();
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique, true).unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalContext::default()),
@@ -568,8 +561,8 @@ mod test {
             assert_eq!(ds.len(), expect_col_cnt);
             assert_eq!(ds[0], Datum::from(expect_cols.0));
         }
-        let expected_counts = vec![idx_row_cnt, expect_row_cnt as i64];
-        let mut counts = Vec::with_capacity(2);
+        let expected_counts = vec![idx_row_cnt];
+        let mut counts = Vec::with_capacity(1);
         agg_ect.collect_output_counts(&mut counts);
         assert_eq!(expected_counts, counts);
 
@@ -589,7 +582,7 @@ mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let is_executor =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique).unwrap();
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique, true).unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalContext::default()),
@@ -646,8 +639,8 @@ mod test {
             assert_eq!(ds[2], Datum::from(expect_cols.2));
             assert_eq!(ds[3], Datum::from(expect_cols.3));
         }
-        let expected_counts = vec![idx_row_cnt, expect_row_cnt as i64];
-        let mut counts = Vec::with_capacity(2);
+        let expected_counts = vec![idx_row_cnt];
+        let mut counts = Vec::with_capacity(1);
         agg_ect.collect_output_counts(&mut counts);
         assert_eq!(expected_counts, counts);
     }
@@ -724,7 +717,7 @@ mod test {
         let key_ranges = vec![get_range(tid, i64::MIN, i64::MAX)];
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store).unwrap();
+        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store, true).unwrap();
 
         // init aggregation meta
         let mut aggregation = Aggregation::default();
@@ -804,8 +797,8 @@ mod test {
             assert_eq!(ds[3], Datum::from(expect_cols.3));
             assert_eq!(ds[4], Datum::from(expect_cols.4));
         }
-        let expected_counts = vec![raw_data.len() as i64, expect_row_cnt as i64];
-        let mut counts = Vec::with_capacity(2);
+        let expected_counts = vec![raw_data.len() as i64];
+        let mut counts = Vec::with_capacity(1);
         aggr_ect.collect_output_counts(&mut counts);
         assert_eq!(expected_counts, counts);
     }
