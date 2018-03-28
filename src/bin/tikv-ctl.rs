@@ -411,12 +411,9 @@ trait DebugExecutor {
 
     fn check_local_mode(&self);
 
-    fn cleanup(&self, from: Option<&str>, to: Option<&str>) {
-        let from = from.map(|f| from_hex(f)).unwrap();
-        let to = to.map(|t| from_hex(t)).unwrap();
-        let from = keys::data_key(Key::from_raw(&from).encoded());
-        let to = keys::data_key(Key::from_raw(&to).encoded());
-
+    fn cleanup(&self, from: &str, to: &str) {
+        let from = keys::data_key(Key::from_raw(&from_hex(from)).encoded());
+        let to = keys::data_key(Key::from_raw(&from_hex(to)).encoded());
         self.do_cleanup(from, to);
     }
 
@@ -1104,6 +1101,7 @@ fn main() {
                         .short("f")
                         .long("from")
                         .takes_value(true)
+                    .required(true)
                         .help("set the start key, in hex form"),
                 )
                 .arg(
@@ -1111,6 +1109,7 @@ fn main() {
                         .short("t")
                         .long("to")
                         .takes_value(true)
+                    .required(true)
                         .help("set the end key, in hex form"),
                 ),
         );
@@ -1237,8 +1236,8 @@ fn main() {
         let tags = Vec::from_iter(matches.values_of("tag").unwrap());
         debug_executor.dump_metrics(tags)
     } else if let Some(matches) = matches.subcommand_matches("cleanup") {
-        let from = matches.value_of("from");
-        let to = matches.value_of("to");
+        let from = matches.value_of("from").unwrap();
+        let to = matches.value_of("to").unwrap();
         debug_executor.cleanup(from, to);
     } else {
         let _ = app.print_help();
