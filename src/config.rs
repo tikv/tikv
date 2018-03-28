@@ -152,9 +152,9 @@ macro_rules! build_cf_opt {
 
 macro_rules! tune_for_import_mode_cf {
     ($opt:expr) => {{
-        // Use universal compaction here it can speed up file
-        // ingestion and range compaction. We may swith back to level
-        // compaction after we have solved these two problems.
+        // Use universal compaction here because it can speed up file
+        // ingestion and range compaction. We may switch back to level
+        // compaction after we have solved these the problems.
         $opt.compaction_style = DBCompactionStyle::Universal;
         // Disable compaction and rate limit.
         $opt.disable_auto_compactions = true;
@@ -828,15 +828,15 @@ impl TiKvConfig {
         let concurrency = sys_info::cpu_num().unwrap() as usize / 2;
         self.import.num_threads = cmp::max(self.import.num_threads, concurrency);
         self.server.grpc_concurrency = cmp::max(self.server.grpc_concurrency, concurrency);
-        // Turn off this to avoid unnecessary compactions.
+        // Turn off this to avoid unnecessary compaction.
         self.raft_store.region_compact_check_interval = ReadableDuration::secs(0);
-        // Tune RocksDB options.
+        // Increase these to speed up RocksDB compaction.
         self.rocksdb.max_background_jobs =
             cmp::max(self.rocksdb.max_background_jobs, concurrency as i32);
         self.rocksdb.max_sub_compactions =
             cmp::max(self.rocksdb.max_sub_compactions, concurrency as u32);
-        tune_for_import_mode_cf!(self.rocksdb.writecf);
         tune_for_import_mode_cf!(self.rocksdb.defaultcf);
+        tune_for_import_mode_cf!(self.rocksdb.writecf);
     }
 
     pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), Box<Error>> {
