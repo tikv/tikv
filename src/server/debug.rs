@@ -23,7 +23,7 @@ use protobuf::{self, Message, RepeatedField};
 
 use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
 use kvproto::metapb::Region;
-use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, MvccWrite};
+use kvproto::kvrpcpb::{LockInfo, MvccInfo, MvccValue, MvccWrite, Op};
 use kvproto::debugpb::{DB as DBType, MODULE};
 use raft::eraftpb::Entry;
 use kvproto::raft_serverpb::*;
@@ -33,7 +33,7 @@ use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerS
 use raftstore::store::{init_apply_state, init_raft_state, write_peer_state};
 use raftstore::store::util as raftstore_util;
 use raftstore::store::engine::{IterOption, Mutable};
-use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use storage::types::{truncate_ts, Key};
 use storage::mvcc::{Lock, Write, WriteType};
 use util::escape;
@@ -477,15 +477,14 @@ impl MvccInfoIterator {
         Ok(None)
     }
 
-    fn next_default(&mut self) -> Result<Option<(Vec<u8>, RepeatedField<ValueInfo>)>> {
+    fn next_default(&mut self) -> Result<Option<(Vec<u8>, RepeatedField<MvccValue>)>> {
         if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.default_iter) {
             let mut values = Vec::with_capacity(vec_kv.len());
             for (key, value) in vec_kv {
-                let mut value_info = ValueInfo::default();
-                value_info.set_is_short_value(is_short_value(&value));
-                value_info.set_value(value);
+                let mut value_info = MvccValue::default();
                 let encoded_key = Key::from_encoded(keys::origin_key(&key).to_owned());
-                value_info.set_ts(box_try!(encoded_key.decode_ts()));
+                value_info.set_start_ts(box_try!(encoded_key.decode_ts()));
+                value_info.set_value(value);
                 values.push(value_info);
             }
             return Ok(Some((prefix, RepeatedField::from_vec(values))));
@@ -505,7 +504,7 @@ impl MvccInfoIterator {
                     WriteType::Lock => write_info.set_field_type(Op::Lock),
                     WriteType::Rollback => write_info.set_field_type(Op::Rollback),
                 }
-                write_info.set_start_ts(write.start_ts);                
+                write_info.set_start_ts(write.start_ts);
                 let encoded_key = Key::from_encoded(keys::origin_key(&key).to_owned());
                 write_info.set_commit_ts(box_try!(encoded_key.decode_ts()));
                 write_info.set_short_value(write.short_value.unwrap_or_default());

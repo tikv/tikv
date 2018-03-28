@@ -1188,13 +1188,12 @@ fn extract_mvcc_info(key: Key, mvcc: storage::MvccInfo) -> MvccInfo {
     mvcc_info
 }
 
-fn extract_2pc_values(res: Vec<(u64, bool, Value)>) -> Vec<ValueInfo> {
+fn extract_2pc_values(res: Vec<(u64, Value)>) -> Vec<MvccValue> {
     res.into_iter()
-        .map(|(start_ts, is_short, value)| {
-            let mut value_info = ValueInfo::new();
-            value_info.set_ts(start_ts);
+        .map(|(start_ts, value)| {
+            let mut value_info = MvccValue::new();
+            value_info.set_start_ts(start_ts);
             value_info.set_value(value);
-            value_info.set_is_short_value(is_short);
             value_info
         })
         .collect()
@@ -1211,7 +1210,7 @@ fn extract_2pc_writes(res: Vec<(u64, MvccWrite)>) -> Vec<kvrpcpb::MvccWrite> {
                 WriteType::Rollback => Op::Rollback,
             };
             write_info.set_field_type(op);
-            write_info.set_start_ts(write.start_ts);            
+            write_info.set_start_ts(write.start_ts);
             write_info.set_commit_ts(commit_ts);
             write_info.set_short_value(write.short_value.unwrap_or_default());
             write_info
