@@ -250,7 +250,8 @@ impl Host {
         let metrics = &mut self.basic_local_metrics;
         if let Err(e) = t.check_outdated() {
             let resp = err_resp(e, metrics);
-            return t.on_resp.respond(resp);
+            t.on_resp.respond(resp);
+            return;
         }
 
         let (mut req, cop_req, req_ctx, on_resp) = (t.req, t.cop_req, t.ctx, t.on_resp);
@@ -276,7 +277,10 @@ impl Host {
                     self.distsql_cache_entry_max_size,
                 ) {
                     Ok(ctx) => ctx,
-                    Err(e) => return on_resp.respond(err_resp(e, metrics)),
+                    Err(e) => {
+                        on_resp.respond(err_resp(e, metrics));
+                        return;
+                    }
                 };
                 if !on_resp.is_streaming() {
                     let region_id = req.get_context().get_region_id();
@@ -291,7 +295,8 @@ impl Host {
                         let mut exec_metrics = ExecutorMetrics::default();
                         ctx.collect_metrics_into(&mut exec_metrics);
                         tracker.record_handle(Some(&mut resp), exec_metrics);
-                        future::ok::<_, ()>(on_resp.respond(resp))
+                        on_resp.respond(resp);
+                        future::ok::<_, ()>(())
                     };
                     return pool.spawn_fn(do_request).forget();
                 }
@@ -314,7 +319,7 @@ impl Host {
                         future::ok::<_, futures_mpsc::SendError<_>>((resp, (ctx, finished)))
                     })
                 });
-                on_resp.respond_stream(box s, pool.clone());
+                pool.spawn(on_resp.respond_stream(s)).forget();
             }
             CopRequest::Analyze(analyze) => {
                 let ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx);
@@ -326,7 +331,8 @@ impl Host {
                         err_resp(e, &mut metrics)
                     });
                     tracker.record_handle(Some(&mut resp), exec_metrics);
-                    future::ok::<_, ()>(on_resp.respond(resp))
+                    on_resp.respond(resp);
+                    future::ok::<_, ()>(())
                 };
                 pool.spawn_fn(do_request).forget();
             }
@@ -340,7 +346,8 @@ impl Host {
                         err_resp(e, &mut metrics)
                     });
                     tracker.record_handle(Some(&mut resp), exec_metrics);
-                    future::ok::<_, ()>(on_resp.respond(resp))
+                    on_resp.respond(resp);
+                    future::ok::<_, ()>(())
                 };
                 pool.spawn_fn(do_request).forget();
             }
@@ -907,9 +914,8 @@ pub fn get_req_pri_str(pri: CommandPri) -> &'static str {
 mod tests {
     use super::*;
     use storage::engine::{self, TEMP_DIR};
-    use std::thread;
-    use std::time::Duration;
-    use std::sync::mpsc;
+    use futures::Future;
+    use futures::sync::oneshot;
 
     use kvproto::coprocessor::Request;
     use tipb::select::DAGRequest;
@@ -953,12 +959,12 @@ mod tests {
 
         let mut req = Request::new();
         req.set_tp(REQ_TYPE_DAG);
-        let (tx, rx) = mpsc::channel();
-        let on_resp = OnResponse::Unary(box move |msg| tx.send(msg).unwrap());
+        let (tx, rx) = oneshot::channel();
+        let on_resp = OnResponse::Unary(tx);
         let task = RequestTask::new(req, on_resp, 1000).unwrap();
 
         worker.schedule(Task::Request(task)).unwrap();
-        let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let resp = rx.wait().unwrap();
         assert!(!resp.get_other_error().is_empty());
         assert_eq!(resp.get_other_error(), super::OUTDATED_ERROR_MSG);
         worker.stop();
@@ -980,28 +986,27 @@ mod tests {
         );
         end_point.max_running_task_count = 1;
         worker.start(end_point).unwrap();
-        let (tx, rx) = mpsc::channel();
-        for pos in 0..30 * 4 {
-            let tx = tx.clone();
-            let mut req = Request::new();
-            req.set_tp(REQ_TYPE_DAG);
-            if pos % 3 == 0 {
-                req.mut_context().set_priority(CommandPri::Low);
-            } else if pos % 3 == 1 {
-                req.mut_context().set_priority(CommandPri::Normal);
-            } else {
-                req.mut_context().set_priority(CommandPri::High);
-            }
-            let on_resp = OnResponse::Unary(box move |msg| {
-                thread::sleep(Duration::from_millis(100));
-                let _ = tx.send(msg); // To avoid panic if rx is closed.
-            });
-
-            let task = RequestTask::new(req, on_resp, 1000).unwrap();
-            worker.schedule(Task::Request(task)).unwrap();
-        }
-        for _ in 0..120 {
-            let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let result_futures: Vec<_> = (0..30 * 4)
+            .map(|pos| {
+                let (tx, rx) = oneshot::channel();
+                let mut req = Request::new();
+                req.set_tp(REQ_TYPE_DAG);
+                if pos % 3 == 0 {
+                    req.mut_context().set_priority(CommandPri::Low);
+                } else if pos % 3 == 1 {
+                    req.mut_context().set_priority(CommandPri::Normal);
+                } else {
+                    req.mut_context().set_priority(CommandPri::High);
+                }
+                let on_resp = OnResponse::Unary(tx);
+                let task = RequestTask::new(req, on_resp, 1000).unwrap();
+                worker.schedule(Task::Request(task)).unwrap();
+                rx
+            })
+            .collect();
+        let results = future::join_all(result_futures).wait().unwrap();
+        assert_eq!(results.len(), 30 * 4);
+        for resp in results {
             if !resp.has_region_error() {
                 continue;
             }
@@ -1027,7 +1032,8 @@ mod tests {
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(dag.write_to_bytes().unwrap());
 
-        let err = RequestTask::new(req, OnResponse::Unary(box |_| ()), 5).unwrap_err();
+        let (tx, _rx) = oneshot::channel();
+        let err = RequestTask::new(req, OnResponse::Unary(tx), 5).unwrap_err();
         let s = format!("{:?}", err);
         assert!(
             s.contains("Recursion"),

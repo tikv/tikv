@@ -13,21 +13,19 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::{cmp, mem};
-use std::sync::mpsc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::i64;
 use std::thread;
 use std::time::Duration;
 use futures::{Future, Stream};
-use futures::sync::mpsc as futures_mpsc;
-use futures_cpupool::CpuPool;
+use futures::sync::{mpsc as futures_mpsc, oneshot};
 
 use tikv::coprocessor::*;
 use kvproto::kvrpcpb::Context;
 use tikv::coprocessor::codec::{datum, table, Datum};
 use tikv::coprocessor::codec::datum::DatumDecoder;
 use tikv::util::codec::number::*;
-use tikv::server::{Config, CopStream, OnResponse};
+use tikv::server::{Config, OnResponse};
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::{self, Key, Mutation, ALL_CFS};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
@@ -44,6 +42,7 @@ use storage::sync_storage::SyncStorage;
 use storage::util::new_raft_engine;
 
 const FLAG_IGNORE_TRUNCATE: u64 = 1;
+const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
 
 static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
 
@@ -1486,11 +1485,11 @@ fn test_reverse() {
 }
 
 pub fn handle_request(end_point: &Worker<EndPointTask>, req: Request) -> Response {
-    let (tx, rx) = mpsc::channel();
-    let on_resp = OnResponse::Unary(box move |r| tx.send(r).unwrap());
+    let (tx, rx) = oneshot::channel();
+    let on_resp = OnResponse::Unary(tx);
     let req = RequestTask::new(req, on_resp, 100).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();
-    rx.recv().unwrap()
+    rx.wait().unwrap()
 }
 
 fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectResponse {
@@ -1509,28 +1508,21 @@ fn handle_streaming_select<F>(
 where
     F: FnMut(&Response) + Send + 'static,
 {
-    let (ftx, frx) = futures_mpsc::channel(16);
-    let callback = box move |s: CopStream<Response>, executor: Option<CpuPool>| {
-        let f = s.forward(ftx);
-        if let Some(executor) = executor {
-            return executor.spawn(f).forget();
-        }
-        f.wait().unwrap();
-    };
-    let req = RequestTask::new(req, OnResponse::Streaming(callback), 100).unwrap();
+    let (stream_tx, stream_rx) = futures_mpsc::channel(10);
+    let req = RequestTask::new(req, OnResponse::Streaming(stream_tx), 100).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();
-
-    let (tx, rx) = mpsc::channel();
-    for resp in frx.wait() {
-        let resp = resp.unwrap();
-        check_range(&resp);
-        assert!(!resp.get_data().is_empty());
-        let mut stream_resp = StreamResponse::new();
-        stream_resp.merge_from_bytes(resp.get_data()).unwrap();
-        tx.send(stream_resp).unwrap();
-    }
-    drop(tx);
-    rx.into_iter().collect()
+    stream_rx
+        .wait()
+        .into_iter()
+        .map(|resp| {
+            let resp = resp.unwrap();
+            check_range(&resp);
+            assert!(!resp.get_data().is_empty());
+            let mut stream_resp = StreamResponse::new();
+            stream_resp.merge_from_bytes(resp.get_data()).unwrap();
+            stream_resp
+        })
+        .collect()
 }
 
 #[test]
@@ -2096,7 +2088,18 @@ fn test_handle_truncate() {
         let req = DAGSelect::from(&product.table)
             .where_expr(cond.clone())
             .build_with(Context::new(), &[FLAG_IGNORE_TRUNCATE]);
+        let resp = handle_select(&end_point, req);
+        assert!(!resp.has_error());
+        assert!(resp.get_warnings().is_empty());
+
+        // truncate as warning
+        let req = DAGSelect::from(&product.table)
+            .where_expr(cond.clone())
+            .build_with(Context::new(), &[FLAG_TRUNCATE_AS_WARNING]);
         let mut resp = handle_select(&end_point, req);
+        assert!(!resp.has_error());
+        assert!(!resp.get_warnings().is_empty());
+        // check data
         let mut spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
         let row = spliter.next().unwrap();
         let (id, name, cnt) = data[2];
@@ -2111,11 +2114,11 @@ fn test_handle_truncate() {
         let req = DAGSelect::from(&product.table)
             .where_expr(cond.clone())
             .build();
-        let (tx, rx) = mpsc::channel();
-        let on_resp = OnResponse::Unary(box move |r| tx.send(r).unwrap());
+        let (tx, rx) = oneshot::channel();
+        let on_resp = OnResponse::Unary(tx);
         let req = RequestTask::new(req, on_resp, 100).unwrap();
         end_point.schedule(EndPointTask::Request(req)).unwrap();
-        let resp = rx.recv().unwrap();
+        let resp = rx.wait().unwrap();
         assert!(!resp.get_other_error().is_empty());
     }
 
