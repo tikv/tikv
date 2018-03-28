@@ -22,7 +22,7 @@ use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{self, Datum};
 use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::endpoint::get_pk;
-use coprocessor::dag::expr::EvalContext;
+use coprocessor::dag::expr::{EvalConfig, EvalContext};
 use coprocessor::{Error, Result};
 use storage::SnapshotStore;
 use util::codec::number::NumberDecoder;
@@ -158,7 +158,7 @@ pub fn build_exec(
     execs: Vec<executor::Executor>,
     store: SnapshotStore,
     ranges: Vec<KeyRange>,
-    ctx: Arc<EvalContext>,
+    ctx: Arc<EvalConfig>,
     collect: bool,
 ) -> Result<DAGExecutor> {
     let mut execs = execs.into_iter();
@@ -252,7 +252,7 @@ fn build_first_executor(
 }
 
 pub fn inflate_with_col_for_dag(
-    ctx: &EvalContext,
+    ctx: &mut EvalContext,
     values: &RowColsDict,
     columns: &[ColumnInfo],
     offsets: &[usize],

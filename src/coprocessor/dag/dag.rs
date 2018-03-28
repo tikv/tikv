@@ -20,7 +20,7 @@ use protobuf::{Message as PbMsg, RepeatedField};
 
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
-use coprocessor::dag::expr::EvalContext;
+use coprocessor::dag::expr::EvalConfig;
 use coprocessor::Result;
 use coprocessor::endpoint::{get_pk, ReqContext};
 use storage::{Snapshot, SnapshotStore};
@@ -42,7 +42,7 @@ impl DAGContext {
         snap: Box<Snapshot>,
         req_ctx: ReqContext,
     ) -> Result<DAGContext> {
-        let eval_ctx = Arc::new(box_try!(EvalContext::new(
+        let eval_cfg = Arc::new(box_try!(EvalConfig::new(
             req.get_time_zone_offset(),
             req.get_flags()
         )));
@@ -57,7 +57,7 @@ impl DAGContext {
             req.take_executors().into_vec(),
             store,
             ranges,
-            eval_ctx,
+            eval_cfg,
             req.get_collect_range_counts(),
         )?;
         Ok(DAGContext {
@@ -148,8 +148,8 @@ impl DAGContext {
         self.exec.collect_output_counts(s_resp.mut_output_counts());
         // The counts was the output count of each executor, but now it is the scan count of each range,
         // so we need a flag to tell them apart.
-        if !sel_resp.get_output_counts().is_empty() {
-            sel_resp.mut_output_counts().push(-1);
+        if !s_resp.get_output_counts().is_empty() {
+            s_resp.mut_output_counts().push(-1);
         }
 
         let mut resp = Response::new();
