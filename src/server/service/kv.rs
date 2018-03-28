@@ -731,16 +731,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         const LABEL: &str = "raw_batch_scan";
         let timer = self.metrics.raw_batch_scan.start_coarse_timer();
 
-        let (start_keys, end_keys): (Vec<_>, Vec<_>) = req.take_ranges()
-            .into_iter()
-            .map(|mut x| (x.take_start_key(), x.take_end_key()))
-            .unzip();
-
         let future = self.storage
             .async_raw_batch_scan(
                 req.take_context(),
-                start_keys,
-                end_keys,
+                req.take_ranges().into_iter().map(|x| x).collect(),
                 req.get_each_limit() as usize,
                 req.get_key_only(),
             )
