@@ -397,7 +397,7 @@ impl Debugger {
         let key = keys::raft_state_key(region_id);
         let raft_state = match box_try!(raft.get_msg::<RaftLocalState>(&key)) {
             Some(s) => s,
-            None => return Err(Error::Other("No RaftLocalState".into())),
+            None => return Err(Error::Other("No RaftLocalState in RAFT rocksdb".into())),
         };
         box_try!(clear_meta(
             kv,
@@ -441,11 +441,11 @@ impl Debugger {
                     return Ok(true);
                 }
                 let exists_region = region_state.get_region();
-                if exists_region.get_start_key() >= region.get_end_key()
-                    || exists_region.get_end_key() <= region.get_start_key()
-                {
+
+                if !region_overlay(&exists_region, &region) {
                     return Ok(true);
                 }
+
                 Err(RaftstoreError::Other("region overlay".into()))
             },
         ));
@@ -524,6 +524,16 @@ impl Debugger {
         }
         Ok(())
     }
+}
+
+fn region_overlay(r1: &Region, r2: &Region) -> bool {
+    if r1.get_start_key() >= r2.get_end_key() && r1.get_end_key() <= r2.get_start_key() {
+        return false;
+    }
+    if r2.get_start_key() >= r1.get_end_key() && r2.get_end_key() <= r1.get_start_key() {
+        return false;
+    }
+    true
 }
 
 pub struct MvccInfoIterator {
@@ -791,6 +801,44 @@ mod tests {
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
             .unwrap()
             .unwrap()
+    }
+
+    #[test]
+    fn test_region_overlay() {
+        let region_with = |start: &[u8], end: &[u8]| -> Region {
+            let mut region = Region::default();
+            region.set_start_key(start.to_owned());
+            region.set_end_key(end.to_owned());
+            region
+        };
+
+        // For normal case.
+        assert!(region_overlay(
+            &region_with(b"a", b"z"),
+            &region_with(b"b", b"y")
+        ));
+        assert!(region_overlay(
+            &region_with(b"a", b"n"),
+            &region_with(b"m", b"z")
+        ));
+        assert!(region_overlay(
+            &region_with(b"a", b"m"),
+            &region_with(b"n", b"z")
+        ));
+
+        // For the first or last region.
+        assert!(region_overlay(
+            &region_with(b"m", b""),
+            &region_with(b"a", b"n")
+        ));
+        assert!(region_overlay(
+            &region_with(b"a", b"n"),
+            &region_with(b"m", b"")
+        ));
+        assert!(!region_overlay(
+            &region_with(b"a", b"m"),
+            &region_with(b"n", b"")
+        ));
     }
 
     #[test]
