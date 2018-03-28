@@ -527,6 +527,11 @@ impl Debugger {
 }
 
 fn region_overlay(r1: &Region, r2: &Region) -> bool {
+    if (r1.get_start_key().is_empty() && r1.get_end_key().is_empty())
+        || (r2.get_start_key().is_empty() && r2.get_end_key().is_empty())
+    {
+        return true;
+    }
     if r1.get_start_key() >= r2.get_end_key() && r1.get_end_key() <= r2.get_start_key() {
         return false;
     }
@@ -833,6 +838,10 @@ mod tests {
         ));
         assert!(region_overlay(
             &region_with(b"a", b"n"),
+            &region_with(b"m", b"")
+        ));
+        assert!(region_overlay(
+            &region_with(b"", b""),
             &region_with(b"m", b"")
         ));
         assert!(!region_overlay(
