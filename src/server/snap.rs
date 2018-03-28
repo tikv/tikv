@@ -180,7 +180,7 @@ fn send_snap(
                 // panic with `Cannot create local mono-item for DefId`.
                 SendStat {
                     key: key,
-                    total_size,
+                    total_size: total_size,
                     elapsed: timer.elapsed(),
                 }
             })
