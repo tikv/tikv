@@ -26,11 +26,9 @@ pub mod snap;
 pub mod debug;
 
 use std::fmt::{Debug, Formatter, Result as FormatResult};
-use std::boxed::FnBox;
 
-use futures::{stream, Stream};
-use futures::sync::mpsc;
-use futures_cpupool::CpuPool;
+use futures::{stream, Future, Sink, Stream};
+use futures::sync::{mpsc, oneshot};
 
 pub use self::config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Error, Result};
@@ -40,11 +38,9 @@ pub use self::node::{create_raft_storage, Node};
 pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::raft_client::RaftClient;
 
-pub type CopStream<T> = Box<Stream<Item = T, Error = mpsc::SendError<T>> + Send>;
-
 pub enum OnResponse<T> {
-    Unary(Box<FnBox(T) + Send>),
-    Streaming(Box<FnBox(CopStream<T>, Option<CpuPool>) + Send>),
+    Unary(oneshot::Sender<T>),
+    Streaming(mpsc::Sender<T>),
 }
 
 impl<T: Send + Debug + 'static> OnResponse<T> {
@@ -57,15 +53,24 @@ impl<T: Send + Debug + 'static> OnResponse<T> {
 
     pub fn respond(self, resp: T) {
         match self {
-            OnResponse::Unary(cb) => cb(resp),
-            OnResponse::Streaming(cb) => cb(box stream::once(Ok(resp)), None),
+            OnResponse::Unary(sender) => {
+                let _ = sender.send(resp);
+            }
+            OnResponse::Streaming(sender) => {
+                // `stream::once` never blocks, and our sender is a mpsc::channel::Sender so
+                // that we can safely `wait()` here.
+                let _ = sender.send_all(stream::once(Ok(resp))).wait();
+            }
         }
     }
 
-    pub fn respond_stream(self, s: CopStream<T>, executor: CpuPool) {
+    pub fn respond_stream<S>(self, s: S) -> impl Future<Item = (), Error = mpsc::SendError<T>>
+    where
+        S: Stream<Item = T, Error = mpsc::SendError<T>>,
+    {
         match self {
-            OnResponse::Streaming(cb) => cb(s, Some(executor)),
             OnResponse::Unary(_) => unreachable!(),
+            OnResponse::Streaming(sender) => sender.send_all(s).map(|_| ()),
         }
     }
 }
