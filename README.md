@@ -32,7 +32,7 @@ cargo +nightly-2018-01-12 install rustfmt-nightly --version 0.3.4
 ```
 
 ### Tikv-server software stack
-This figure represents tikv-server software stack.
+This figure represents the tikv-server software stack.
 
 ![image](images/tikv_stack.png)
 
@@ -46,7 +46,7 @@ When a node starts, the metadata of the Node, Store and Region are registered in
 ### Build
 
 TiKV is a component in the TiDB project. To run TiKV you must build and run it with TiDB and PD together.
-Currently the only interface to TiKV is the [TiDB go cllient](https://github.com/pingcap/tidb/tree/master/store/tikv) and the [TiSpark java client](https://github.com/pingcap/tispark/tree/master/tikv-client/src/main/java/com/pingcap/tikv).
+Currently the only interface to TiKV is the [TiDB Go client](https://github.com/pingcap/tidb/tree/master/store/tikv) and the [TiSpark Java client](https://github.com/pingcap/tispark/tree/master/tikv-client/src/main/java/com/pingcap/tikv).
 You are welcome to develop drivers in other languages.
 
 If you want to use TiDB in production, see [deployment build guide](https://github.com/pingcap/docs/blob/master/dev-guide/deployment.md) to build the TiDB project first.

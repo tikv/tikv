@@ -16,7 +16,7 @@ use std::io::Read;
 use std::fs::File;
 
 use log::LogLevelFilter;
-use rocksdb::{CompactionPriority, DBCompressionType, DBRecoveryMode};
+use rocksdb::{CompactionPriority, DBCompactionStyle, DBCompressionType, DBRecoveryMode};
 use tikv::pd::Config as PdConfig;
 use tikv::server::Config as ServerConfig;
 use tikv::server::readpool::Config as ReadPoolInstanceConfig;
@@ -121,6 +121,7 @@ fn test_serde_custom_tikv_config() {
         max_peer_down_duration: ReadableDuration::minutes(12),
         max_leader_missing_duration: ReadableDuration::hours(12),
         abnormal_leader_missing_duration: ReadableDuration::hours(6),
+        peer_stale_state_check_interval: ReadableDuration::hours(2),
         snap_apply_batch_size: ReadableSize::mb(12),
         lock_cf_compact_interval: ReadableDuration::minutes(12),
         lock_cf_compact_bytes_threshold: ReadableSize::mb(123),
@@ -195,6 +196,10 @@ fn test_serde_custom_tikv_config() {
             dynamic_level_bytes: true,
             num_levels: 4,
             max_bytes_for_level_multiplier: 8,
+            compaction_style: DBCompactionStyle::Universal,
+            disable_auto_compactions: true,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -229,6 +234,10 @@ fn test_serde_custom_tikv_config() {
             dynamic_level_bytes: true,
             num_levels: 4,
             max_bytes_for_level_multiplier: 8,
+            compaction_style: DBCompactionStyle::Universal,
+            disable_auto_compactions: true,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -263,6 +272,10 @@ fn test_serde_custom_tikv_config() {
             dynamic_level_bytes: true,
             num_levels: 4,
             max_bytes_for_level_multiplier: 8,
+            compaction_style: DBCompactionStyle::Universal,
+            disable_auto_compactions: true,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -297,6 +310,10 @@ fn test_serde_custom_tikv_config() {
             dynamic_level_bytes: true,
             num_levels: 4,
             max_bytes_for_level_multiplier: 8,
+            compaction_style: DBCompactionStyle::Universal,
+            disable_auto_compactions: true,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
         },
     };
     value.raftdb = RaftDbConfig {
@@ -354,6 +371,10 @@ fn test_serde_custom_tikv_config() {
             dynamic_level_bytes: true,
             num_levels: 4,
             max_bytes_for_level_multiplier: 8,
+            compaction_style: DBCompactionStyle::Universal,
+            disable_auto_compactions: true,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
         },
     };
     value.storage = StorageConfig {

@@ -82,6 +82,7 @@ messages-per-tick = 12345
 max-peer-down-duration = "12m"
 max-leader-missing-duration = "12h"
 abnormal-leader-missing-duration = "6h"
+peer-stale-state-check-interval = "2h"
 snap-apply-batch-size = "12MB"
 consistency-check-interval = "12s"
 report-region-flow-interval = "12m"
@@ -155,6 +156,10 @@ compaction-pri = 3
 dynamic-level-bytes = true
 num-levels = 4
 max-bytes-for-level-multiplier = 8
+compaction-style = 1
+disable-auto-compactions = true
+soft-pending-compaction-bytes-limit = "12GB"
+hard-pending-compaction-bytes-limit = "12GB"
 
 [rocksdb.writecf]
 block-size = "12KB"
@@ -189,6 +194,10 @@ compaction-pri = 3
 dynamic-level-bytes = true
 num-levels = 4
 max-bytes-for-level-multiplier = 8
+compaction-style = 1
+disable-auto-compactions = true
+soft-pending-compaction-bytes-limit = "12GB"
+hard-pending-compaction-bytes-limit = "12GB"
 
 [rocksdb.lockcf]
 block-size = "12KB"
@@ -223,6 +232,10 @@ compaction-pri = 3
 dynamic-level-bytes = true
 num-levels = 4
 max-bytes-for-level-multiplier = 8
+compaction-style = 1
+disable-auto-compactions = true
+soft-pending-compaction-bytes-limit = "12GB"
+hard-pending-compaction-bytes-limit = "12GB"
 
 [rocksdb.raftcf]
 block-size = "12KB"
@@ -257,6 +270,10 @@ compaction-pri = 3
 dynamic-level-bytes = true
 num-levels = 4
 max-bytes-for-level-multiplier = 8
+compaction-style = 1
+disable-auto-compactions = true
+soft-pending-compaction-bytes-limit = "12GB"
+hard-pending-compaction-bytes-limit = "12GB"
 
 [raftdb]
 wal-recovery-mode = 3
@@ -314,6 +331,10 @@ compaction-pri = 3
 dynamic-level-bytes = true
 num-levels = 4
 max-bytes-for-level-multiplier = 8
+compaction-style = 1
+disable-auto-compactions = true
+soft-pending-compaction-bytes-limit = "12GB"
+hard-pending-compaction-bytes-limit = "12GB"
 
 [security]
 ca-path = "invalid path"
