@@ -167,6 +167,39 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
 }
 
 impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
+    fn raw_batch_get(
+        &self,
+        _: RpcContext,
+        _: RawBatchGetRequest,
+        _: UnarySink<RawBatchGetResponse>,
+    ) {
+        unimplemented!();
+    }
+    fn raw_batch_put(
+        &self,
+        _: RpcContext,
+        _: RawBatchPutRequest,
+        _: UnarySink<RawBatchPutResponse>,
+    ) {
+        unimplemented!();
+    }
+    fn raw_batch_delete(
+        &self,
+        _: RpcContext,
+        _: RawBatchDeleteRequest,
+        _: UnarySink<RawBatchDeleteResponse>,
+    ) {
+        unimplemented!();
+    }
+    fn raw_batch_scan(
+        &self,
+        _: RpcContext,
+        _: RawBatchScanRequest,
+        _: UnarySink<RawBatchScanResponse>,
+    ) {
+        unimplemented!();
+    }
+
     fn kv_get(&self, ctx: RpcContext, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const LABEL: &str = "kv_get";
         let timer = self.metrics.kv_get.start_coarse_timer();
