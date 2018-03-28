@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::boxed::FnBox;
-use std::fmt::Debug;
 use std::iter::{self, FromIterator};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -920,7 +918,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             ctx.spawn(sink.fail(status).map_err(|_| ()));
             return;
         }
-        let (tx, rx) = mpsc::channel(SNAP_RECV_CHUNKS_LIMIT);
+        let (tx, rx) = futures_mpsc::channel(SNAP_RECV_CHUNKS_LIMIT);
         let (cb, future) = paired_future_callback();
 
         let recv_task = SnapTask::Recv {
