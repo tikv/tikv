@@ -11,17 +11,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+extern crate toml;
+
 use std::error::Error;
 use std::usize;
+use std::fs;
+use std::io::{Read, Write};
+use std::io::Error as IoError;
+use std::path::Path;
+use std::fmt;
+use std::cmp;
+use std::i32;
 
 use log::LogLevelFilter;
-use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompressionType,
-              DBOptions, DBRecoveryMode};
+use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
+              DBCompressionType, DBOptions, DBRecoveryMode};
 use sys_info;
 
 use import::Config as ImportConfig;
 use server::Config as ServerConfig;
-use server::readpool::Config as ReadPoolConfig;
+use server::readpool::Config as ReadPoolInstanceConfig;
 use pd::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
@@ -38,6 +47,7 @@ const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
+pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = sys_info::mem_info().unwrap().total * KB;
@@ -89,6 +99,11 @@ macro_rules! cf_config {
             pub dynamic_level_bytes: bool,
             pub num_levels: i32,
             pub max_bytes_for_level_multiplier: i32,
+            #[serde(with = "config::compaction_style_serde")]
+            pub compaction_style: DBCompactionStyle,
+            pub disable_auto_compactions: bool,
+            pub soft_pending_compaction_bytes_limit: ReadableSize,
+            pub hard_pending_compaction_bytes_limit: ReadableSize,
         }
     }
 }
@@ -126,9 +141,33 @@ macro_rules! build_cf_opt {
         cf_opts.compaction_priority($opt.compaction_pri);
         cf_opts.set_level_compaction_dynamic_level_bytes($opt.dynamic_level_bytes);
         cf_opts.set_max_bytes_for_level_multiplier($opt.max_bytes_for_level_multiplier);
+        cf_opts.set_compaction_style($opt.compaction_style);
+        cf_opts.set_disable_auto_compactions($opt.disable_auto_compactions);
+        cf_opts.set_soft_pending_compaction_bytes_limit($opt.soft_pending_compaction_bytes_limit.0);
+        cf_opts.set_hard_pending_compaction_bytes_limit($opt.hard_pending_compaction_bytes_limit.0);
 
         cf_opts
     }};
+}
+
+macro_rules! tune_for_import_mode_cf {
+    ($opt:expr) => {{
+        // Use universal compaction here because it can speed up file
+        // ingestion and range compaction. We may switch back to level
+        // compaction after we have solved these the problems.
+        $opt.compaction_style = DBCompactionStyle::Universal;
+        // Disable compaction and rate limit.
+        $opt.disable_auto_compactions = true;
+        $opt.level0_stop_writes_trigger = i32::MAX;
+        $opt.level0_slowdown_writes_trigger = i32::MAX;
+        $opt.soft_pending_compaction_bytes_limit = ReadableSize::kb(0);
+        $opt.hard_pending_compaction_bytes_limit = ReadableSize::kb(0);
+        // Limit the cache size in case of OOM.
+        $opt.pin_l0_filter_and_index_blocks = false;
+        if $opt.block_cache_size.0 > GB {
+            $opt.block_cache_size.0 = GB;
+        }
+    }}
 }
 
 cf_config!(DefaultCfConfig);
@@ -168,6 +207,10 @@ impl Default for DefaultCfConfig {
             dynamic_level_bytes: false,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
+            compaction_style: DBCompactionStyle::Level,
+            disable_auto_compactions: false,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
         }
     }
 }
@@ -218,6 +261,10 @@ impl Default for WriteCfConfig {
             dynamic_level_bytes: false,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
+            compaction_style: DBCompactionStyle::Level,
+            disable_auto_compactions: false,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
         }
     }
 }
@@ -270,6 +317,10 @@ impl Default for LockCfConfig {
             dynamic_level_bytes: false,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
+            compaction_style: DBCompactionStyle::Level,
+            disable_auto_compactions: false,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
         }
     }
 }
@@ -315,6 +366,10 @@ impl Default for RaftCfConfig {
             dynamic_level_bytes: false,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
+            compaction_style: DBCompactionStyle::Level,
+            disable_auto_compactions: false,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
         }
     }
 }
@@ -382,8 +437,8 @@ impl Default for DbConfig {
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_dir: "".to_owned(),
             rate_bytes_per_sec: ReadableSize::kb(0),
-            bytes_per_sync: ReadableSize::mb(0),
-            wal_bytes_per_sync: ReadableSize::kb(0),
+            bytes_per_sync: ReadableSize::mb(1),
+            wal_bytes_per_sync: ReadableSize::kb(512),
             max_sub_compactions: 1,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
@@ -490,6 +545,10 @@ impl Default for RaftDefaultCfConfig {
             dynamic_level_bytes: false,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
+            compaction_style: DBCompactionStyle::Level,
+            disable_auto_compactions: false,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
         }
     }
 }
@@ -559,8 +618,8 @@ impl Default for RaftDbConfig {
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
             allow_concurrent_memtable_write: false,
-            bytes_per_sync: ReadableSize::mb(0),
-            wal_bytes_per_sync: ReadableSize::kb(0),
+            bytes_per_sync: ReadableSize::mb(1),
+            wal_bytes_per_sync: ReadableSize::kb(512),
             defaultcf: RaftDefaultCfConfig::default(),
         }
     }
@@ -641,6 +700,21 @@ pub enum LogLevel {
     Warn,
     Error,
     Off,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct ReadPoolConfig {
+    pub storage: ReadPoolInstanceConfig,
+}
+
+impl Default for ReadPoolConfig {
+    fn default() -> ReadPoolConfig {
+        ReadPoolConfig {
+            storage: ReadPoolInstanceConfig::default(),
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -747,5 +821,194 @@ impl TiKvConfig {
             }
             self.raft_store.region_split_size = default_raft_store.region_split_size;
         }
+    }
+
+    pub fn tune_for_import_mode(&mut self) {
+        // Increate concurrency for better performance.
+        let concurrency = sys_info::cpu_num().unwrap() as usize / 2;
+        self.import.num_threads = cmp::max(self.import.num_threads, concurrency);
+        self.server.grpc_concurrency = cmp::max(self.server.grpc_concurrency, concurrency);
+        // Turn off this to avoid unnecessary compaction.
+        self.raft_store.region_compact_check_interval = ReadableDuration::secs(0);
+        // Increase these to speed up RocksDB compaction.
+        self.rocksdb.max_background_jobs =
+            cmp::max(self.rocksdb.max_background_jobs, concurrency as i32);
+        self.rocksdb.max_sub_compactions =
+            cmp::max(self.rocksdb.max_sub_compactions, concurrency as u32);
+        tune_for_import_mode_cf!(self.rocksdb.defaultcf);
+        tune_for_import_mode_cf!(self.rocksdb.writecf);
+    }
+
+    pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), Box<Error>> {
+        if last_cfg.rocksdb.wal_dir != self.rocksdb.wal_dir {
+            return Err(format!(
+                "db wal_dir have been changed, former db wal_dir is {}, \
+                 current db wal_dir is {}, please guarantee all data wal log \
+                 have been moved to destination directory.",
+                last_cfg.rocksdb.wal_dir, self.rocksdb.wal_dir
+            ).into());
+        }
+
+        if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir {
+            return Err(format!(
+                "raftdb wal_dir have been changed, former raftdb wal_dir is {}, \
+                 current raftdb wal_dir is {}, please guarantee all raft wal log \
+                 have been moved to destination directory.",
+                last_cfg.raftdb.wal_dir, self.rocksdb.wal_dir
+            ).into());
+        }
+
+        if last_cfg.storage.data_dir != self.storage.data_dir {
+            return Err(format!(
+                "storage data dir have been changed, former data dir is {}, \
+                 current data dir is {}, please check if it is expected.",
+                last_cfg.storage.data_dir, self.storage.data_dir
+            ).into());
+        }
+
+        if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path {
+            return Err(format!(
+                "raft dir have been changed, former raft dir is {}, \
+                 current raft dir is {}, please check if it is expected.",
+                last_cfg.raft_store.raftdb_path, self.raft_store.raftdb_path
+            ).into());
+        }
+
+        Ok(())
+    }
+
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Self
+    where
+        P: fmt::Debug,
+    {
+        fs::File::open(&path)
+            .map_err::<Box<Error>, _>(|e| Box::new(e))
+            .and_then(|mut f| {
+                let mut s = String::new();
+                f.read_to_string(&mut s)?;
+                let c = toml::from_str(&s)?;
+                Ok(c)
+            })
+            .unwrap_or_else(|e| {
+                panic!(
+                    "invalid auto generated configuration file {:?}, err {}",
+                    path, e
+                );
+            })
+    }
+
+    pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), IoError> {
+        let content = toml::to_string(&self).unwrap();
+        let mut f = fs::File::create(&path)?;
+        f.write_all(content.as_bytes())?;
+        f.sync_all()?;
+
+        Ok(())
+    }
+}
+
+pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
+    // Check current critical configurations with last time, if there are some
+    // changes, user must guarantee relevant works have been done.
+    let store_path = Path::new(&config.storage.data_dir);
+    let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
+    if last_cfg_path.exists() {
+        let last_cfg = TiKvConfig::from_file(&last_cfg_path);
+        if let Err(e) = config.check_critical_cfg_with(&last_cfg) {
+            return Err(format!("check critical config failed, err {:?}", e));
+        }
+    }
+
+    // Create parent directory if missing.
+    if let Err(e) = fs::create_dir_all(&store_path) {
+        return Err(format!(
+            "create parent directory {} failed, err {:?}",
+            store_path.to_str().unwrap(),
+            e
+        ));
+    }
+
+    // Persist current critical configurations to file.
+    if let Err(e) = config.write_to_file(&last_cfg_path) {
+        return Err(format!(
+            "persist critical config to {} failed, err {:?}",
+            last_cfg_path.to_str().unwrap(),
+            e
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use tempdir::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn test_check_critical_cfg_with() {
+        let mut tikv_cfg = TiKvConfig::default();
+        let mut last_cfg = TiKvConfig::default();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+
+        tikv_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+
+        last_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+
+        tikv_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+
+        last_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+
+        tikv_cfg.storage.data_dir = "/data1".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+
+        last_cfg.storage.data_dir = "/data1".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+
+        tikv_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+
+        last_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+    }
+
+    #[test]
+    fn test_persist_cfg() {
+        let dir = TempDir::new("test_persist_cfg").unwrap();
+        let path_buf = dir.path().join(LAST_CONFIG_FILE);
+        let file = path_buf.as_path().to_str().unwrap();
+        let (s1, s2) = ("/xxx/wal_dir".to_owned(), "/yyy/wal_dir".to_owned());
+
+        let mut tikv_cfg = TiKvConfig::default();
+
+        tikv_cfg.rocksdb.wal_dir = s1.clone();
+        tikv_cfg.raftdb.wal_dir = s2.clone();
+        tikv_cfg.write_to_file(file).unwrap();
+        let cfg_from_file = TiKvConfig::from_file(file);
+        assert_eq!(cfg_from_file.rocksdb.wal_dir, s1.clone());
+        assert_eq!(cfg_from_file.raftdb.wal_dir, s2.clone());
+
+        // write critical config when exist.
+        tikv_cfg.rocksdb.wal_dir = s2.clone();
+        tikv_cfg.raftdb.wal_dir = s1.clone();
+        tikv_cfg.write_to_file(file).unwrap();
+        let cfg_from_file = TiKvConfig::from_file(file);
+        assert_eq!(cfg_from_file.rocksdb.wal_dir, s2.clone());
+        assert_eq!(cfg_from_file.raftdb.wal_dir, s1.clone());
+    }
+
+    #[test]
+    fn test_create_parent_dir_if_missing() {
+        let tmp_path = TempDir::new("test_create_parent_dir_if_missing").unwrap();
+        let pathbuf = tmp_path.into_path().join("not_exist_dir");
+
+        let mut tikv_cfg = TiKvConfig::default();
+        tikv_cfg.storage.data_dir = pathbuf.as_path().to_str().unwrap().to_owned();
+        assert!(check_and_persist_critical_config(&tikv_cfg).is_ok());
     }
 }

@@ -31,7 +31,7 @@ use tikv::util::rocksdb::get_cf_handle;
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
 
@@ -135,7 +135,7 @@ fn test_fast_destroy<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
 
     // Disable default max peer number check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");
@@ -186,7 +186,7 @@ fn test_server_fast_destroy() {
 fn test_readd_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
 
@@ -258,7 +258,7 @@ fn test_server_stale_meta() {
     let mut cluster = new_server_cluster(0, count);
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     cluster.run();
     cluster.add_send_filter(IsolationFilterFactory::new(3));

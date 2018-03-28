@@ -69,7 +69,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         snap_mgr: SnapManager,
         pd_scheduler: FutureScheduler<PdTask>,
         debug_engines: Option<Engines>,
-        import_service: Option<ImportSSTService>,
+        import_service: Option<ImportSSTService<T>>,
     ) -> Result<Server<T, S>> {
         let env = Arc::new(
             EnvBuilder::new()
@@ -93,7 +93,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             raft_router.clone(),
             snap_worker.scheduler(),
             cfg.end_point_recursion_limit,
-            cfg.end_point_request_max_handle_duration.as_secs(),
+            cfg.end_point_stream_channel_size,
         );
         let addr = SocketAddr::from_str(&cfg.addr)?;
         info!("listening on {}", addr);
@@ -110,7 +110,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                 .register_service(create_tikv(kv_service));
             sb = security_mgr.bind(sb, &ip, addr.port());
             if let Some(engines) = debug_engines {
-                sb = sb.register_service(create_debug(DebugService::new(engines)));
+                let debug_service = DebugService::new(engines, raft_router.clone());
+                sb = sb.register_service(create_debug(debug_service));
             }
             if let Some(service) = import_service {
                 sb = sb.register_service(create_import_sst(service));
@@ -205,7 +206,7 @@ mod tests {
     use super::super::{Config, Result};
     use super::super::transport::RaftStoreRouter;
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
-    use storage::{Config as StorageConfig, Storage};
+    use storage::{self, Config as StorageConfig, Storage};
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::Result as RaftStoreResult;
     use raftstore::store::Msg as StoreMsg;
@@ -213,6 +214,7 @@ mod tests {
     use raftstore::store::transport::Transport;
     use util::worker::FutureWorker;
     use util::security::SecurityConfig;
+    use server::readpool::{self, ReadPool};
 
     #[derive(Clone)]
     struct MockResolver {
@@ -270,7 +272,10 @@ mod tests {
         let storage_cfg = StorageConfig::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
-        let mut storage = Storage::new(&storage_cfg).unwrap();
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+            || storage::ReadPoolContext::new(None)
+        });
+        let mut storage = Storage::new(&storage_cfg, read_pool).unwrap();
         storage.start(&storage_cfg).unwrap();
 
         let (tx, rx) = mpsc::channel();

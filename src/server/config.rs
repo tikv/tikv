@@ -45,6 +45,9 @@ pub const DEFAULT_MAX_RUNNING_TASK_COUNT: usize = 2 as usize * 1000;
 // Number of rows in each chunk.
 pub const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
 
+// Number of rows in each chunk for streaming coprocessor.
+pub const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -70,7 +73,9 @@ pub struct Config {
     pub distsql_cache_entry_max_size: ReadableSize,
     pub end_point_stack_size: ReadableSize,
     pub end_point_recursion_limit: u32,
+    pub end_point_stream_channel_size: usize,
     pub end_point_batch_row_limit: usize,
+    pub end_point_stream_batch_row_limit: usize,
     pub end_point_request_max_handle_duration: ReadableDuration,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
@@ -105,7 +110,9 @@ impl Default for Config {
             distsql_cache_entry_max_size: ReadableSize(DEFAULT_DISTSQL_CACHE_ENTRY_MAX_SIZE as u64),
             end_point_stack_size: ReadableSize::mb(DEFAULT_ENDPOINT_STACK_SIZE_MB),
             end_point_recursion_limit: 1000,
+            end_point_stream_channel_size: 8,
             end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,
+            end_point_stream_batch_row_limit: DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT,
             end_point_request_max_handle_duration: ReadableDuration::secs(
                 DEFAULT_REQUEST_MAX_HANDLE_SECS,
             ),

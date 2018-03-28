@@ -13,6 +13,7 @@
 
 use std::sync::{mpsc, Arc};
 use std::path::Path;
+use tikv::import::SSTImporter;
 use tikv::raftstore::store::{bootstrap_store, create_event_loop, keys, Engines, Peekable,
                              SnapManager};
 use tikv::server::Node;
@@ -95,6 +96,11 @@ fn test_node_bootstrap_with_prepared_data() {
     // Create coprocessor.
     let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
 
+    let importer = {
+        let dir = tmp_path.path().join("import-sst");
+        Arc::new(SSTImporter::new(dir).unwrap())
+    };
+
     // try to restart this node, will clear the prepare data
     node.start(
         event_loop,
@@ -104,6 +110,7 @@ fn test_node_bootstrap_with_prepared_data() {
         snapshot_status_receiver,
         pd_worker,
         coprocessor_host,
+        importer,
         None,
     ).unwrap();
     assert!(

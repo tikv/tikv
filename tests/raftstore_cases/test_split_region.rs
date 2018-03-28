@@ -18,7 +18,7 @@ use std::sync::mpsc::channel;
 use rand::{self, Rng};
 
 use kvproto::metapb;
-use kvproto::eraftpb::MessageType;
+use raft::eraftpb::MessageType;
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
@@ -431,6 +431,7 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 5;
+    cluster.cfg.raft_store.merge_max_log_gap = 1;
     cluster.cfg.raft_store.raft_log_gc_threshold = 5;
 
     // We use three nodes([1, 2, 3]) for this test.
@@ -497,7 +498,7 @@ fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
 
@@ -729,4 +730,43 @@ fn test_node_quick_election_after_split() {
 fn test_server_quick_election_after_split() {
     let mut cluster = new_server_cluster(0, 3);
     test_quick_election_after_split(&mut cluster);
+}
+
+#[test]
+fn test_node_half_split_region() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_half_split_region(&mut cluster);
+}
+
+#[test]
+fn test_server_half_split_region() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_half_split_region(&mut cluster);
+}
+
+fn test_half_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
+    // length of each key+value
+    let item_len = 74;
+    // make bucket's size to item_len, which means one row one bucket
+    cluster.cfg.coprocessor.region_max_size = ReadableSize(item_len) * 1024;
+    let mut range = 1..;
+    cluster.run();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"").unwrap();
+    let mid_key = put_till_size(cluster, 11 * item_len, &mut range);
+    let max_key = put_till_size(cluster, 9 * item_len, &mut range);
+    let target = pd_client.get_region(&max_key).unwrap();
+    assert_eq!(region, target);
+    pd_client.half_split_region(target);
+    // it should be finished in millis if split.
+    thread::sleep(Duration::from_secs(1));
+
+    let left = pd_client.get_region(b"").unwrap();
+    let right = pd_client.get_region(&max_key).unwrap();
+    assert_eq!(region.get_start_key(), left.get_start_key());
+    assert_eq!(mid_key.as_slice(), right.get_start_key());
+    assert_eq!(right.get_start_key(), left.get_end_key());
+    assert_eq!(region.get_end_key(), right.get_end_key());
 }
