@@ -540,6 +540,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
         self.register_merge_check_tick(event_loop);
+        self.register_check_peer_stale_state_tick(event_loop);
         self.register_cleanup_import_sst_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(
@@ -647,7 +648,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let timer = self.raft_metrics.process_tick.start_coarse_timer();
-        let mut leader_missing = 0;
         for peer in &mut self.region_peers.values_mut() {
             if peer.pending_remove {
                 continue;
@@ -664,51 +664,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if peer.raft_group.tick() {
                 peer.mark_to_be_checked(&mut self.pending_raft_groups);
             }
-
-            // If this peer detects the leader is missing for a long long time,
-            // it should consider itself as a stale peer which is removed from
-            // the original cluster.
-            // This most likely happens in the following scenario:
-            // At first, there are three peer A, B, C in the cluster, and A is leader.
-            // Peer B gets down. And then A adds D, E, F into the cluster.
-            // Peer D becomes leader of the new cluster, and then removes peer A, B, C.
-            // After all these peer in and out, now the cluster has peer D, E, F.
-            // If peer B goes up at this moment, it still thinks it is one of the cluster
-            // and has peers A, C. However, it could not reach A, C since they are removed
-            // from the cluster or probably destroyed.
-            // Meantime, D, E, F would not reach B, since it's not in the cluster anymore.
-            // In this case, peer B would notice that the leader is missing for a long time,
-            // and it would check with pd to confirm whether it's still a member of the cluster.
-            // If not, it destroys itself as a stale peer which is removed out already.
-            match peer.check_stale_state() {
-                StaleState::Valid => (),
-                StaleState::LeaderMissing => {
-                    warn!(
-                        "{} leader missing longer than abnormal_leader_missing_duration {:?}",
-                        peer.tag, self.cfg.abnormal_leader_missing_duration.0,
-                    );
-                    leader_missing += 1;
-                }
-                StaleState::ToValidate => {
-                    // for peer B in case 1 above
-                    warn!(
-                        "{} leader missing longer than max_leader_missing_duration {:?}. \
-                         To check with pd whether it's still valid",
-                        peer.tag, self.cfg.max_leader_missing_duration.0,
-                    );
-                    let task = PdTask::ValidatePeer {
-                        peer: peer.peer.clone(),
-                        region: peer.region().clone(),
-                        merge_source: None,
-                    };
-                    if let Err(e) = self.pd_worker.schedule(task) {
-                        error!("{} failed to notify pd: {}", peer.tag, e)
-                    }
-                }
-            }
         }
-        self.raft_metrics.leader_missing = leader_missing;
-
         timer.observe_duration();
 
         self.raft_metrics.flush();
@@ -2365,7 +2321,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             {
                 continue;
             }
-            let task = SplitCheckTask::new(peer.region());
+            let task = SplitCheckTask::new(peer.region(), true);
             if let Err(e) = self.split_check_worker.schedule(task) {
                 error!("{} failed to schedule split check: {}", self.tag, e);
             }
@@ -2539,6 +2495,41 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         };
         peer.approximate_size = Some(region_size);
+    }
+
+    fn on_schedule_half_split_region(
+        &mut self,
+        region_id: u64,
+        region_epoch: &metapb::RegionEpoch,
+    ) {
+        let peer = match self.region_peers.get(&region_id) {
+            Some(peer) => peer,
+            None => {
+                error!("{:?}", Error::RegionNotFound(region_id));
+                return;
+            }
+        };
+
+        if !peer.is_leader() {
+            // region on this store is no longer leader, skipped.
+            warn!(
+                "[region {}] region on {} is not leader, skip.",
+                region_id,
+                self.store_id()
+            );
+            return;
+        }
+
+        let region = peer.region();
+        if util::is_epoch_stale(region_epoch, region.get_region_epoch()) {
+            warn!("[region {}] receive a stale halfsplit message", region_id);
+            return;
+        }
+
+        let task = SplitCheckTask::new(region, false);
+        if let Err(e) = self.split_check_worker.schedule(task) {
+            error!("{} failed to schedule split check: {}", self.tag, e);
+        }
     }
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
@@ -2751,6 +2742,74 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             event_loop,
             Tick::CompactLockCf,
             self.cfg.lock_cf_compact_interval.as_millis(),
+        ) {
+            error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
+        }
+    }
+
+    fn on_check_peer_stale_state_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        let mut leader_missing = 0;
+        for peer in &mut self.region_peers.values_mut() {
+            if peer.pending_remove {
+                continue;
+            }
+
+            if peer.is_applying_snapshot() || peer.has_pending_snapshot() {
+                continue;
+            }
+
+            // If this peer detects the leader is missing for a long long time,
+            // it should consider itself as a stale peer which is removed from
+            // the original cluster.
+            // This most likely happens in the following scenario:
+            // At first, there are three peer A, B, C in the cluster, and A is leader.
+            // Peer B gets down. And then A adds D, E, F into the cluster.
+            // Peer D becomes leader of the new cluster, and then removes peer A, B, C.
+            // After all these peer in and out, now the cluster has peer D, E, F.
+            // If peer B goes up at this moment, it still thinks it is one of the cluster
+            // and has peers A, C. However, it could not reach A, C since they are removed
+            // from the cluster or probably destroyed.
+            // Meantime, D, E, F would not reach B, since it's not in the cluster anymore.
+            // In this case, peer B would notice that the leader is missing for a long time,
+            // and it would check with pd to confirm whether it's still a member of the cluster.
+            // If not, it destroys itself as a stale peer which is removed out already.
+            match peer.check_stale_state() {
+                StaleState::Valid => (),
+                StaleState::LeaderMissing => {
+                    warn!(
+                        "{} leader missing longer than abnormal_leader_missing_duration {:?}",
+                        peer.tag, self.cfg.abnormal_leader_missing_duration.0,
+                    );
+                    leader_missing += 1;
+                }
+                StaleState::ToValidate => {
+                    // for peer B in case 1 above
+                    warn!(
+                        "{} leader missing longer than max_leader_missing_duration {:?}. \
+                         To check with pd whether it's still valid",
+                        peer.tag, self.cfg.max_leader_missing_duration.0,
+                    );
+                    let task = PdTask::ValidatePeer {
+                        peer: peer.peer.clone(),
+                        region: peer.region().clone(),
+                        merge_source: None,
+                    };
+                    if let Err(e) = self.pd_worker.schedule(task) {
+                        error!("{} failed to notify pd: {}", peer.tag, e)
+                    }
+                }
+            }
+        }
+        self.raft_metrics.leader_missing = leader_missing;
+
+        self.register_check_peer_stale_state_tick(event_loop);
+    }
+
+    fn register_check_peer_stale_state_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(
+            event_loop,
+            Tick::CheckPeerStaleState,
+            self.cfg.peer_stale_state_check_interval.as_millis(),
         ) {
             error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
         }
@@ -3175,6 +3234,10 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 region_size,
             } => self.on_approximate_region_size(region_id, region_size),
             Msg::CompactedEvent(event) => self.on_compaction_finished(event),
+            Msg::HalfSplitRegion {
+                region_id,
+                region_epoch,
+            } => self.on_schedule_half_split_region(region_id, &region_epoch),
             Msg::MergeFail { region_id } => self.on_merge_fail(region_id),
             Msg::ValidateSSTResult { invalid_ssts } => self.on_validate_sst_result(invalid_ssts),
         }
@@ -3193,6 +3256,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
             Tick::CheckMerge => self.on_check_merge(event_loop),
+            Tick::CheckPeerStaleState => self.on_check_peer_stale_state_tick(event_loop),
             Tick::CleanupImportSST => self.on_cleanup_import_sst_tick(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
