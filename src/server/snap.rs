@@ -76,7 +76,7 @@ impl Display for Task {
 }
 
 struct SnapChunk {
-    first: Option<(SnapshotChunk, WriteFlags)>,
+    first: Option<SnapshotChunk>,
     snap: Box<Snapshot>,
     remain_bytes: usize,
 }
@@ -89,7 +89,8 @@ impl Stream for SnapChunk {
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Error> {
         if let Some(t) = self.first.take() {
-            return Ok(Async::Ready(Some(t)));
+            let write_flags = WriteFlags::default().buffer_hint(true);
+            return Ok(Async::Ready(Some((t, write_flags))));
         }
 
         let mut buf = match self.remain_bytes {
@@ -156,7 +157,7 @@ fn send_snap(
         first_chunk.set_message(msg);
 
         SnapChunk {
-            first: Some((first_chunk, WriteFlags::default().buffer_hint(true))),
+            first: Some(first_chunk),
             snap: s,
             remain_bytes: total_size as usize,
         }
@@ -315,7 +316,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 }
             }
             Task::SendTo { addr, msg, cb } => {
-                if self.sending_count.load(Ordering::Acquire) >= MAX_SENDER_CONCURRENT {
+                if self.sending_count.load(Ordering::SeqCst) >= MAX_SENDER_CONCURRENT {
                     info!("drop SendTo Snap[to: {}, snap: {:?}] silently", addr, msg);
                     cb(Err(Error::Other("Too many snapshot send task".into())));
                     return;
