@@ -108,6 +108,7 @@ pub enum Tick {
     CompactLockCf,
     ConsistencyCheck,
     CheckMerge,
+    CheckPeerStaleState,
     CleanupImportSST,
 }
 
