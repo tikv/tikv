@@ -20,10 +20,12 @@ use std::io::{Read, Write};
 use std::io::Error as IoError;
 use std::path::Path;
 use std::fmt;
+use std::cmp;
+use std::i32;
 
 use log::LogLevelFilter;
-use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompressionType,
-              DBOptions, DBRecoveryMode};
+use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
+              DBCompressionType, DBOptions, DBRecoveryMode};
 use sys_info;
 
 use import::Config as ImportConfig;
@@ -97,6 +99,11 @@ macro_rules! cf_config {
             pub dynamic_level_bytes: bool,
             pub num_levels: i32,
             pub max_bytes_for_level_multiplier: i32,
+            #[serde(with = "config::compaction_style_serde")]
+            pub compaction_style: DBCompactionStyle,
+            pub disable_auto_compactions: bool,
+            pub soft_pending_compaction_bytes_limit: ReadableSize,
+            pub hard_pending_compaction_bytes_limit: ReadableSize,
         }
     }
 }
@@ -134,9 +141,33 @@ macro_rules! build_cf_opt {
         cf_opts.compaction_priority($opt.compaction_pri);
         cf_opts.set_level_compaction_dynamic_level_bytes($opt.dynamic_level_bytes);
         cf_opts.set_max_bytes_for_level_multiplier($opt.max_bytes_for_level_multiplier);
+        cf_opts.set_compaction_style($opt.compaction_style);
+        cf_opts.set_disable_auto_compactions($opt.disable_auto_compactions);
+        cf_opts.set_soft_pending_compaction_bytes_limit($opt.soft_pending_compaction_bytes_limit.0);
+        cf_opts.set_hard_pending_compaction_bytes_limit($opt.hard_pending_compaction_bytes_limit.0);
 
         cf_opts
     }};
+}
+
+macro_rules! tune_for_import_mode_cf {
+    ($opt:expr) => {{
+        // Use universal compaction here it can speed up file
+        // ingestion and range compaction. We may swith back to level
+        // compaction after we have solved these two problems.
+        $opt.compaction_style = DBCompactionStyle::Universal;
+        // Disable compaction and rate limit.
+        $opt.disable_auto_compactions = true;
+        $opt.level0_stop_writes_trigger = i32::MAX;
+        $opt.level0_slowdown_writes_trigger = i32::MAX;
+        $opt.soft_pending_compaction_bytes_limit = ReadableSize::kb(0);
+        $opt.hard_pending_compaction_bytes_limit = ReadableSize::kb(0);
+        // Limit the cache size in case of OOM.
+        $opt.pin_l0_filter_and_index_blocks = false;
+        if $opt.block_cache_size.0 > GB {
+            $opt.block_cache_size.0 = GB;
+        }
+    }}
 }
 
 cf_config!(DefaultCfConfig);
@@ -176,6 +207,10 @@ impl Default for DefaultCfConfig {
             dynamic_level_bytes: false,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
+            compaction_style: DBCompactionStyle::Level,
+            disable_auto_compactions: false,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
         }
     }
 }
@@ -226,6 +261,10 @@ impl Default for WriteCfConfig {
             dynamic_level_bytes: false,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
+            compaction_style: DBCompactionStyle::Level,
+            disable_auto_compactions: false,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
         }
     }
 }
@@ -278,6 +317,10 @@ impl Default for LockCfConfig {
             dynamic_level_bytes: false,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
+            compaction_style: DBCompactionStyle::Level,
+            disable_auto_compactions: false,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
         }
     }
 }
@@ -323,6 +366,10 @@ impl Default for RaftCfConfig {
             dynamic_level_bytes: false,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
+            compaction_style: DBCompactionStyle::Level,
+            disable_auto_compactions: false,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
         }
     }
 }
@@ -498,6 +545,10 @@ impl Default for RaftDefaultCfConfig {
             dynamic_level_bytes: false,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
+            compaction_style: DBCompactionStyle::Level,
+            disable_auto_compactions: false,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
         }
     }
 }
@@ -770,6 +821,22 @@ impl TiKvConfig {
             }
             self.raft_store.region_split_size = default_raft_store.region_split_size;
         }
+    }
+
+    pub fn tune_for_import_mode(&mut self) {
+        // Increate concurrency for better performance.
+        let concurrency = sys_info::cpu_num().unwrap() as usize / 2;
+        self.import.num_threads = cmp::max(self.import.num_threads, concurrency);
+        self.server.grpc_concurrency = cmp::max(self.server.grpc_concurrency, concurrency);
+        // Turn off this to avoid unnecessary compactions.
+        self.raft_store.region_compact_check_interval = ReadableDuration::secs(0);
+        // Tune RocksDB options.
+        self.rocksdb.max_background_jobs =
+            cmp::max(self.rocksdb.max_background_jobs, concurrency as i32);
+        self.rocksdb.max_sub_compactions =
+            cmp::max(self.rocksdb.max_sub_compactions, concurrency as u32);
+        tune_for_import_mode_cf!(self.rocksdb.writecf);
+        tune_for_import_mode_cf!(self.rocksdb.defaultcf);
     }
 
     pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), Box<Error>> {

@@ -156,6 +156,10 @@ compaction-pri = 3
 dynamic-level-bytes = true
 num-levels = 4
 max-bytes-for-level-multiplier = 8
+compaction-style = 1
+disable-auto-compactions = true
+soft-pending-compaction-bytes-limit = "12GB"
+hard-pending-compaction-bytes-limit = "12GB"
 
 [rocksdb.writecf]
 block-size = "12KB"
@@ -190,6 +194,10 @@ compaction-pri = 3
 dynamic-level-bytes = true
 num-levels = 4
 max-bytes-for-level-multiplier = 8
+compaction-style = 1
+disable-auto-compactions = true
+soft-pending-compaction-bytes-limit = "12GB"
+hard-pending-compaction-bytes-limit = "12GB"
 
 [rocksdb.lockcf]
 block-size = "12KB"
@@ -224,6 +232,10 @@ compaction-pri = 3
 dynamic-level-bytes = true
 num-levels = 4
 max-bytes-for-level-multiplier = 8
+compaction-style = 1
+disable-auto-compactions = true
+soft-pending-compaction-bytes-limit = "12GB"
+hard-pending-compaction-bytes-limit = "12GB"
 
 [rocksdb.raftcf]
 block-size = "12KB"
@@ -258,6 +270,10 @@ compaction-pri = 3
 dynamic-level-bytes = true
 num-levels = 4
 max-bytes-for-level-multiplier = 8
+compaction-style = 1
+disable-auto-compactions = true
+soft-pending-compaction-bytes-limit = "12GB"
+hard-pending-compaction-bytes-limit = "12GB"
 
 [raftdb]
 wal-recovery-mode = 3
@@ -315,6 +331,10 @@ compaction-pri = 3
 dynamic-level-bytes = true
 num-levels = 4
 max-bytes-for-level-multiplier = 8
+compaction-style = 1
+disable-auto-compactions = true
+soft-pending-compaction-bytes-limit = "12GB"
+hard-pending-compaction-bytes-limit = "12GB"
 
 [security]
 ca-path = "invalid path"
