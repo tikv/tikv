@@ -1101,7 +1101,7 @@ fn main() {
                         .short("f")
                         .long("from")
                         .takes_value(true)
-                    .required(true)
+                        .required(true)
                         .help("set the start key, in hex form"),
                 )
                 .arg(
@@ -1109,7 +1109,7 @@ fn main() {
                         .short("t")
                         .long("to")
                         .takes_value(true)
-                    .required(true)
+                        .required(true)
                         .help("set the end key, in hex form"),
                 ),
         );
