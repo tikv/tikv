@@ -80,6 +80,7 @@ pub struct Config {
     /// Similar to the max_leader_missing_duration, instead it will log warnings and
     /// try to alert monitoring systems, if there is any.
     pub abnormal_leader_missing_duration: ReadableDuration,
+    pub peer_stale_state_check_interval: ReadableDuration,
 
     pub snap_apply_batch_size: ReadableSize,
 
@@ -102,6 +103,8 @@ pub struct Config {
     pub merge_check_tick_interval: ReadableDuration,
 
     pub use_delete_range: bool,
+
+    pub cleanup_import_sst_interval: ReadableDuration,
 
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
@@ -144,7 +147,8 @@ impl Default for Config {
             messages_per_tick: 4096,
             max_peer_down_duration: ReadableDuration::minutes(5),
             max_leader_missing_duration: ReadableDuration::hours(2),
-            abnormal_leader_missing_duration: ReadableDuration::minutes(2),
+            abnormal_leader_missing_duration: ReadableDuration::minutes(10),
+            peer_stale_state_check_interval: ReadableDuration::minutes(5),
             snap_apply_batch_size: ReadableSize::mb(10),
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
@@ -158,6 +162,7 @@ impl Default for Config {
             merge_max_log_gap: 10,
             merge_check_tick_interval: ReadableDuration::secs(10),
             use_delete_range: true,
+            cleanup_import_sst_interval: ReadableDuration::minutes(10),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -227,12 +232,21 @@ impl Config {
             return Err(box_err!("raftstore.merge-check-tick-interval can't be 0."));
         }
 
-        let abnormal_leader_missing = self.abnormal_leader_missing_duration.as_millis() as u64;
-        if abnormal_leader_missing < election_timeout * 2 {
+        let stale_state_check = self.peer_stale_state_check_interval.as_millis() as u64;
+        if stale_state_check < election_timeout * 2 {
             return Err(box_err!(
-                "abnormal leader missing {} ms is less than election timeout x2 {} ms",
-                abnormal_leader_missing,
+                "peer stale state check interval {} ms is less than election timeout x 2 {} ms",
+                stale_state_check,
                 election_timeout * 2
+            ));
+        }
+
+        let abnormal_leader_missing = self.abnormal_leader_missing_duration.as_millis() as u64;
+        if abnormal_leader_missing < stale_state_check {
+            return Err(box_err!(
+                "abnormal leader missing {} ms is less than peer stale state check interval {} ms",
+                abnormal_leader_missing,
+                stale_state_check
             ));
         }
 
@@ -294,9 +308,15 @@ mod tests {
         cfg.merge_check_tick_interval = ReadableDuration::secs(0);
         assert!(cfg.validate().is_err());
 
+        cfg = Config::new();
         cfg.raft_base_tick_interval = ReadableDuration::secs(1);
         cfg.raft_election_timeout_ticks = 10;
-        cfg.abnormal_leader_missing_duration = ReadableDuration::secs(5);
+        cfg.peer_stale_state_check_interval = ReadableDuration::secs(5);
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.peer_stale_state_check_interval = ReadableDuration::minutes(2);
+        cfg.abnormal_leader_missing_duration = ReadableDuration::minutes(1);
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();

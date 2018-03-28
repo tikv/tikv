@@ -13,21 +13,20 @@
 
 use std::sync::{Arc, RwLock};
 use std::sync::mpsc::Sender;
-use futures::{Future, Sink};
-use futures::sync::mpsc::UnboundedSender as FutureSender;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use raft::eraftpb::MessageType;
 
 use util::transport::SendCh;
 use util::HandyRwLock;
+use util::worker::Scheduler;
 use util::collections::HashSet;
 use raft::SnapshotStatus;
 use raftstore::store::{BatchReadCallback, Callback, Msg as StoreMsg, SignificantMsg, Transport};
 use raftstore::Result as RaftStoreResult;
 use server::raft_client::RaftClient;
 use server::Result;
-use super::snap::SendTask as SnapSendTask;
+use super::snap::Task as SnapTask;
 use super::resolve::StoreAddrResolver;
 use super::metrics::*;
 
@@ -143,7 +142,7 @@ where
     S: StoreAddrResolver + 'static,
 {
     raft_client: Arc<RwLock<RaftClient>>,
-    snap_send_sink: FutureSender<SnapSendTask>,
+    snap_scheduler: Scheduler<SnapTask>,
     pub raft_router: T,
     resolving: Arc<RwLock<HashSet<u64>>>,
     resolver: S,
@@ -157,7 +156,7 @@ where
     fn clone(&self) -> Self {
         ServerTransport {
             raft_client: Arc::clone(&self.raft_client),
-            snap_send_sink: self.snap_send_sink.clone(),
+            snap_scheduler: self.snap_scheduler.clone(),
             raft_router: self.raft_router.clone(),
             resolving: Arc::clone(&self.resolving),
             resolver: self.resolver.clone(),
@@ -168,13 +167,13 @@ where
 impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTransport<T, S> {
     pub fn new(
         raft_client: Arc<RwLock<RaftClient>>,
-        snap_send_sink: FutureSender<SnapSendTask>,
+        snap_scheduler: Scheduler<SnapTask>,
         raft_router: T,
         resolver: S,
     ) -> ServerTransport<T, S> {
         ServerTransport {
             raft_client: raft_client,
-            snap_send_sink: snap_send_sink,
+            snap_scheduler: snap_scheduler,
             raft_router: raft_router,
             resolving: Arc::new(RwLock::new(Default::default())),
             resolver: resolver,
@@ -292,19 +291,18 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
                 rep.report(SnapshotStatus::Finish);
             }
         };
-        let sender = self.snap_send_sink.clone();
-        let task = SnapSendTask {
+        if let Err(e) = self.snap_scheduler.schedule(SnapTask::SendTo {
             addr: addr.to_owned(),
             msg: msg,
             cb: cb,
-        };
-        if let Err(e) = sender.send(task).wait() {
-            let SnapSendTask { addr, cb, .. } = e.into_inner();
-            error!(
-                "channel is unavaliable, failed to schedule snapshot to {}",
-                addr,
-            );
-            cb(Err(box_err!("failed to schedule snapshot")));
+        }) {
+            if let SnapTask::SendTo { cb, .. } = e.into_inner() {
+                error!(
+                    "channel is unavaliable, failed to schedule snapshot to {}",
+                    addr
+                );
+                cb(Err(box_err!("failed to schedule snapshot")));
+            }
         }
     }
 
