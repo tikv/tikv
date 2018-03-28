@@ -899,7 +899,6 @@ pub fn get_req_pri_str(pri: CommandPri) -> &'static str {
 mod tests {
     use super::*;
     use storage::engine::{self, TEMP_DIR};
-    use std::thread;
     use futures::Future;
     use futures::sync::oneshot;
 
@@ -960,32 +959,27 @@ mod tests {
         let mut end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
         end_point.max_running_task_count = 1;
         worker.start(end_point).unwrap();
-        let (mpsc_tx, mpsc_rx) = mpsc::channel();
-        for pos in 0..30 * 4 {
-            let (tx, rx) = oneshot::channel();
-            let mut req = Request::new();
-            req.set_tp(REQ_TYPE_DAG);
-            if pos % 3 == 0 {
-                req.mut_context().set_priority(CommandPri::Low);
-            } else if pos % 3 == 1 {
-                req.mut_context().set_priority(CommandPri::Normal);
-            } else {
-                req.mut_context().set_priority(CommandPri::High);
-            }
-            let on_resp = OnResponse::Unary(tx);
-            let task = RequestTask::new(req, on_resp, 1000).unwrap();
-            worker.schedule(Task::Request(task)).unwrap();
-            let mpsc_tx = mpsc_tx.clone();
-            thread::spawn(move || {
-                rx.map(move |v| {
-                    mpsc_tx.send(v).unwrap();
-                }).wait()
-                    .unwrap();
-            });
-        }
-        let mut rx_iter = mpsc_rx.into_iter();
-        for _ in 0..120 {
-            let resp = rx_iter.next().unwrap();
+        let result_futures: Vec<_> = (0..30 * 4)
+            .map(|pos| {
+                let (tx, rx) = oneshot::channel();
+                let mut req = Request::new();
+                req.set_tp(REQ_TYPE_DAG);
+                if pos % 3 == 0 {
+                    req.mut_context().set_priority(CommandPri::Low);
+                } else if pos % 3 == 1 {
+                    req.mut_context().set_priority(CommandPri::Normal);
+                } else {
+                    req.mut_context().set_priority(CommandPri::High);
+                }
+                let on_resp = OnResponse::Unary(tx);
+                let task = RequestTask::new(req, on_resp, 1000).unwrap();
+                worker.schedule(Task::Request(task)).unwrap();
+                rx
+            })
+            .collect();
+        let results = future::join_all(result_futures).wait().unwrap();
+        assert_eq!(results.len(), 30 * 4);
+        for resp in results {
             if !resp.has_region_error() {
                 continue;
             }
