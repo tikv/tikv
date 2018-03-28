@@ -946,11 +946,10 @@ impl Storage {
                     let mut stats = Statistics::default();
                     thread_ctx.collect_key_reads(CMD, keys.len() as u64);
                     let result: Vec<Result<KvPair>> = keys.iter()
-                        .map(|k| snapshot.get(k))
-                        .filter(|v| !(v.is_ok() && v.as_ref().unwrap().is_none()))
+                        .map(|k| (k, snapshot.get(k)))
+                        .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
                         .into_iter()
-                        .zip(&keys)
-                        .map(|(v, k)| match v {
+                        .map(|(k, v)| match v {
                             Ok(Some(v)) => {
                                 stats.data.flow_stats.read_keys += 1;
                                 stats.data.flow_stats.read_bytes = k.encoded().len() + v.len();
@@ -1108,17 +1107,16 @@ impl Storage {
         stats: &mut Statistics,
         key_only: bool,
     ) -> engine::Result<Vec<Result<KvPair>>> {
-        let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Forward)?;
+        let mut option = IterOption::default();
+        if let Some(end) = end_key {
+            option.set_upper_bound(end.encoded().clone());
+        }
+        let mut cursor = snapshot.iter(option, ScanMode::Forward)?;
         if !cursor.seek(start_key, &mut stats.data)? {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
         while cursor.valid() && pairs.len() < limit {
-            if let Some(end) = end_key {
-                if cursor.key().cmp(end.encoded()) != cmp::Ordering::Less {
-                    break;
-                }
-            }
             pairs.push(Ok((
                 cursor.key().to_owned(),
                 if key_only {
