@@ -442,7 +442,7 @@ impl Debugger {
                 }
                 let exists_region = region_state.get_region();
 
-                if !region_overlay(&exists_region, &region) {
+                if !region_overlay(exists_region, &region) {
                     return Ok(true);
                 }
 

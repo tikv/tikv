@@ -735,6 +735,7 @@ impl DebugExecutor for Debugger {
     }
 }
 
+#[allow(cyclomatic_complexity)]
 fn main() {
     let mut app = App::new("TiKV Ctl")
         .author("PingCAP")
