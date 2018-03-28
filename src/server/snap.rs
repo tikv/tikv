@@ -13,13 +13,12 @@
 
 use std::fmt::{self, Display, Formatter};
 use std::boxed::FnBox;
-use std::time::Instant;
-use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use mio::Token;
 use futures::{future, Async, Future, Poll, Stream};
-use futures::stream::{self, Once};
 use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 use grpc::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::raft_serverpb::SnapshotChunk;
@@ -27,6 +26,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 
 use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
+use util::DeferContext;
 use util::worker::Runnable;
 use util::buf::PipeBuffer;
 use util::security::SecurityManager;
@@ -76,7 +76,8 @@ impl Display for Task {
 }
 
 struct SnapChunk {
-    snap: Arc<Mutex<Box<Snapshot>>>,
+    first: Option<(SnapshotChunk, WriteFlags)>,
+    snap: Box<Snapshot>,
     remain_bytes: usize,
 }
 
@@ -87,12 +88,16 @@ impl Stream for SnapChunk {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Error> {
+        if let Some(t) = self.first.take() {
+            return Ok(Async::Ready(Some(t)));
+        }
+
         let mut buf = match self.remain_bytes {
             0 => return Ok(Async::Ready(None)),
             n if n > SNAP_CHUNK_LEN => vec![0; SNAP_CHUNK_LEN],
             n => vec![0; n],
         };
-        let result = self.snap.lock().unwrap().read_exact(buf.as_mut_slice());
+        let result = self.snap.read_exact(buf.as_mut_slice());
         match result {
             Ok(_) => {
                 self.remain_bytes -= buf.len();
@@ -108,6 +113,12 @@ impl Stream for SnapChunk {
     }
 }
 
+struct SendStat {
+    key: SnapKey,
+    total_size: u64,
+    elapsed: Duration,
+}
+
 /// Send the snapshot to specified address.
 ///
 /// It will first send the normal raft snapshot message and then send the snapshot file.
@@ -117,7 +128,7 @@ fn send_snap(
     security_mgr: Arc<SecurityManager>,
     addr: &str,
     msg: RaftMessage,
-) -> Result<impl Future<Item = (), Error = Error>> {
+) -> Result<impl Future<Item = SendStat, Error = Error>> {
     assert!(msg.get_message().has_snapshot());
     let timer = Instant::now();
 
@@ -127,64 +138,52 @@ fn send_snap(
         let snap = msg.get_message().get_snapshot();
         SnapKey::from_snap(snap)?
     };
+
     mgr.register(key.clone(), SnapEntry::Sending);
-    let s = box_try!(mgr.get_snapshot_for_sending(&key).map_err(|e| {
-        mgr.deregister(&key, &SnapEntry::Sending);
-        e
-    }));
+    let deregister = {
+        let (mgr, key) = (mgr.clone(), key.clone());
+        DeferContext::new(move || mgr.deregister(&key, &SnapEntry::Sending))
+    };
+
+    let s = box_try!(mgr.get_snapshot_for_sending(&key));
     if !s.exists() {
-        mgr.deregister(&key, &SnapEntry::Sending);
         return Err(box_err!("missing snap file: {:?}", s.path()));
     }
-    let total_size = s.total_size().map_err(|e| {
-        mgr.deregister(&key, &SnapEntry::Sending);
-        Error::from(e)
-    })?;
-
-    // snapshot file has been validated when created, so no need to validate again.
-    let s = Arc::new(Mutex::new(s));
+    let total_size = s.total_size()?;
 
     let chunks = {
-        let snap_chunk = SnapChunk {
-            snap: Arc::clone(&s),
+        let mut first_chunk = SnapshotChunk::new();
+        first_chunk.set_message(msg);
+
+        SnapChunk {
+            first: Some((first_chunk, WriteFlags::default().buffer_hint(true))),
+            snap: s,
             remain_bytes: total_size as usize,
-        };
-        let first: Once<(SnapshotChunk, _), Error> = stream::once({
-            let mut chunk = SnapshotChunk::new();
-            chunk.set_message(msg);
-            Ok((chunk, WriteFlags::default().buffer_hint(true)))
-        });
-        first.chain(snap_chunk)
+        }
     };
 
     let cb = ChannelBuilder::new(env);
     let channel = security_mgr.connect(cb, addr);
     let client = TikvClient::new(channel);
-    let (sink, receiver) = client.snapshot().map_err(|e| {
-        mgr.deregister(&key, &SnapEntry::Sending);
-        Error::from(e)
-    })?;
+    let (sink, receiver) = client.snapshot()?;
 
     let send = chunks.forward(sink).map_err(Error::from);
-    let send = send.and_then(|_| receiver.map_err(Error::from))
-        .then(move |r| {
+    let send = send.and_then(|(s, _)| receiver.map_err(Error::from).map(|_| s))
+        .then(move |result| {
             send_timer.observe_duration();
-            mgr.deregister(&key, &SnapEntry::Sending);
+            drop(deregister);
             drop(client);
-            if r.is_ok() {
-                s.lock().unwrap().delete();
-                let _elapsed = timer.elapsed();
-                // TODO: Call `info!` here will trigger a compiler bug,
-                // "Cannot create local mono-item for DefId".
-                // info!(
-                //     "[region {}] sent snapshot {} [size: {}, dur: {:?}]",
-                //     key.region_id,
-                //     key,
-                //     total_size,
-                //     timer.elapsed()
-                // );
-            }
-            r.map(|_| ())
+            result.map(|s| {
+                s.snap.delete();
+                // TODO: improve it after rustc resolves the bug.
+                // Call `info` in the closure directly will cause rustc
+                // panic with `Cannot create local mono-item for DefId`.
+                SendStat {
+                    key: key,
+                    total_size,
+                    elapsed: timer.elapsed(),
+                }
+            })
         });
     Ok(send)
 }
@@ -196,7 +195,7 @@ pub struct Runner<R: RaftStoreRouter + 'static> {
     pool: CpuPool,
     raft_router: R,
     security_mgr: Arc<SecurityManager>,
-    concurrent_send_count: Arc<AtomicUsize>,
+    sending_count: Arc<AtomicUsize>,
 }
 
 impl<R: RaftStoreRouter + 'static> Runner<R> {
@@ -216,7 +215,7 @@ impl<R: RaftStoreRouter + 'static> Runner<R> {
                 .create(),
             raft_router: r,
             security_mgr: security_mgr,
-            concurrent_send_count: Arc::new(AtomicUsize::new(0)),
+            sending_count: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -316,7 +315,9 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 }
             }
             Task::SendTo { addr, msg, cb } => {
-                if self.concurrent_send_count.load(Ordering::Acquire) >= MAX_SENDER_CONCURRENT {
+                if self.sending_count.load(Ordering::Acquire) >= MAX_SENDER_CONCURRENT {
+                    info!("drop SendTo Snap[to: {}, snap: {:?}] silently", addr, msg);
+                    cb(Err(Error::Other("Too many snapshot send task".into())));
                     return;
                 }
                 SNAP_TASK_COUNTER.with_label_values(&["send"]).inc();
@@ -324,17 +325,26 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 let env = Arc::clone(&self.env);
                 let mgr = self.snap_mgr.clone();
                 let security_mgr = Arc::clone(&self.security_mgr);
-                let concurrent_send_count = Arc::clone(&self.concurrent_send_count);
-                concurrent_send_count.fetch_add(1, Ordering::Release);
+                let sending_count = Arc::clone(&self.sending_count);
+                sending_count.fetch_add(1, Ordering::SeqCst);
 
                 let f = future::result(send_snap(env, mgr, security_mgr, &addr, msg))
                     .flatten()
                     .then(move |res| {
-                        if res.is_err() {
-                            error!("failed to send snap to {}: {:?}", addr, res);
-                        }
-                        cb(res);
-                        concurrent_send_count.fetch_sub(1, Ordering::Release);
+                        match res {
+                            Ok(stat) => {
+                                info!(
+                                    "[region {}] sent snapshot {} [size: {}, dur: {:?}]",
+                                    stat.key.region_id, stat.key, stat.total_size, stat.elapsed,
+                                );
+                                cb(Ok(()));
+                            }
+                            Err(e) => {
+                                error!("failed to send snap to {}: {:?}", addr, e);
+                                cb(Err(e));
+                            }
+                        };
+                        sending_count.fetch_sub(1, Ordering::SeqCst);
                         future::ok::<_, ()>(())
                     });
 
