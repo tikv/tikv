@@ -113,7 +113,11 @@ struct PendingDeleteRanges {
 
 impl PendingDeleteRanges {
     // find ranges that overlap with [start_key, end_key)
-    fn find_overlap_ranges(&self, start_key: &[u8], end_key: &[u8]) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
+    fn find_overlap_ranges(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
         let mut ranges = Vec::new();
         // find the first range that may overlap with [start_key, end_key)
         let sub_range = self.ranges.range((Unbounded, Excluded(start_key.to_vec())));
@@ -162,7 +166,7 @@ impl PendingDeleteRanges {
         end_key: Vec<u8>,
         timeout: time::Instant,
     ) -> Result<()> {
-        if self.find_overlap_ranges(&start_key, &end_key).len() > 0 {
+        if !self.find_overlap_ranges(&start_key, &end_key).is_empty() {
             return Err(box_err!("overlap ranges in pending delete range"));
         }
         let info = StalePeerInfo {
@@ -490,11 +494,12 @@ impl Runnable<Task> for Runner {
                     self.ctx.destroy_overlap_ranges(&start_key, &end_key);
                     // delay the range deletion because
                     // there might be a coprocessor request related to this range
-                    if let Err(e) =
-                        self.ctx
-                            .insert_pending_delete_range(region_id, start_key.clone(), end_key.clone())
-                    {
-                        error!(
+                    if let Err(e) = self.ctx.insert_pending_delete_range(
+                        region_id,
+                        start_key.clone(),
+                        end_key.clone(),
+                    ) {
+                        panic!(
                             "[region {}] register deleting data in [{}, {}) failed: {:?}",
                             region_id,
                             escape(&start_key),
@@ -508,16 +513,15 @@ impl Runnable<Task> for Runner {
                             escape(&start_key),
                             escape(&end_key)
                         );
-                        return;
                     }
+                } else {
+                    self.ctx.handle_destroy(
+                        region_id,
+                        start_key,
+                        end_key,
+                        false, /* use_delete_files */
+                    );
                 }
-                // use the normal delete_in_range if delay is 0 or we fail to register pending delete range
-                self.ctx.handle_destroy(
-                    region_id,
-                    start_key,
-                    end_key,
-                    false, /* use_delete_files */
-                );
             }
         }
     }
