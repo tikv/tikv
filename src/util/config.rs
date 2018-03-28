@@ -281,6 +281,11 @@ numeric_enum_mod!{compaction_pri_serde CompactionPriority {
     MinOverlappingRatio = 3,
 }}
 
+numeric_enum_mod!{compaction_style_serde DBCompactionStyle {
+    Level = 0,
+    Universal = 1,
+}}
+
 numeric_enum_mod!{recovery_mode_serde DBRecoveryMode {
     TolerateCorruptedTailRecords = 0,
     AbsoluteConsistency = 1,
