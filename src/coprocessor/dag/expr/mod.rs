@@ -22,14 +22,14 @@ mod arithmetic;
 mod math;
 mod json;
 mod time;
+mod ctx;
+pub use self::ctx::*;
 
-use std::{error, io, mem, str};
+use std::{error, io, str};
 use std::borrow::Cow;
 use std::string::FromUtf8Error;
 use std::str::Utf8Error;
-use std::sync::Arc;
 
-use chrono::FixedOffset;
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 use tipb::select;
 
@@ -41,99 +41,6 @@ use coprocessor::codec::{self, Datum};
 use util;
 use util::codec::number::NumberDecoder;
 use util::codec::Error as CError;
-
-/// Flags are used by `DAGRequest.flags` to handle execution mode, like how to handle
-/// truncate error.
-/// `FLAG_IGNORE_TRUNCATE` indicates if truncate error should be ignored.
-/// Read-only statements should ignore truncate error, write statements should not ignore
-/// truncate error.
-pub const FLAG_IGNORE_TRUNCATE: u64 = 1;
-/// `FLAG_TRUNCATE_AS_WARNING` indicates if truncate error should be returned as warning.
-/// This flag only matters if `FLAG_IGNORE_TRUNCATE` is not set, in strict sql mode, truncate error
-/// should be returned as error, in non-strict sql mode, truncate error should be saved as warning.
-pub const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
-
-#[derive(Debug)]
-pub struct EvalConfig {
-    /// timezone to use when parse/calculate time.
-    pub tz: FixedOffset,
-    pub ignore_truncate: bool,
-    pub truncate_as_warning: bool,
-}
-
-impl Default for EvalConfig {
-    fn default() -> EvalConfig {
-        EvalConfig {
-            tz: FixedOffset::east(0),
-            ignore_truncate: false,
-            truncate_as_warning: false,
-        }
-    }
-}
-
-impl EvalConfig {
-    pub fn new(tz_offset: i64, flags: u64) -> Result<EvalConfig> {
-        if tz_offset <= -ONE_DAY || tz_offset >= ONE_DAY {
-            return Err(Error::Eval(format!("invalid tz offset {}", tz_offset)));
-        }
-        let tz = match FixedOffset::east_opt(tz_offset as i32) {
-            None => return Err(Error::Eval(format!("invalid tz offset {}", tz_offset))),
-            Some(tz) => tz,
-        };
-
-        let e = EvalConfig {
-            tz: tz,
-            ignore_truncate: (flags & FLAG_IGNORE_TRUNCATE) > 0,
-            truncate_as_warning: (flags & FLAG_TRUNCATE_AS_WARNING) > 0,
-        };
-
-        Ok(e)
-    }
-}
-
-#[derive(Debug, Default)]
-/// Some global variables needed in an evaluation.
-pub struct EvalContext {
-    pub cfg: Arc<EvalConfig>,
-    warnings: Vec<select::Error>,
-}
-
-const ONE_DAY: i64 = 3600 * 24;
-
-impl EvalContext {
-    pub fn new(cfg: Arc<EvalConfig>) -> EvalContext {
-        EvalContext {
-            cfg: cfg,
-            warnings: Vec::new(),
-        }
-    }
-
-    pub fn append_warning(&mut self, err: Error) -> Result<()> {
-        self.warnings.push(err.into());
-        Ok(())
-    }
-
-    pub fn handle_truncate(&mut self, is_truncated: bool) -> Result<()> {
-        if !is_truncated {
-            return Ok(());
-        }
-        self.handle_truncate_err(Error::Truncated("[1265] Data Truncated".into()))
-    }
-
-    pub fn handle_truncate_err(&mut self, err: Error) -> Result<()> {
-        if self.cfg.ignore_truncate {
-            return Ok(());
-        }
-        if self.cfg.truncate_as_warning {
-            return self.append_warning(err);
-        }
-        Err(err)
-    }
-
-    pub fn take_warnings(&mut self) -> Vec<select::Error> {
-        mem::replace(&mut self.warnings, Vec::default())
-    }
-}
 
 quick_error! {
     #[derive(Debug)]
@@ -500,8 +407,7 @@ mod test {
     use coprocessor::codec::mysql::json::JsonEncoder;
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
     use util::codec::number::{self, NumberEncoder};
-    use super::{Error, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE,
-                FLAG_TRUNCATE_AS_WARNING};
+    use super::{Error, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
@@ -675,27 +581,5 @@ mod test {
             let res = e.eval(&mut ctx, &cols).unwrap();
             assert_eq!(res, exp);
         }
-    }
-
-    #[test]
-    fn test_handle_truncate() {
-        // ignore_truncate = false, truncate_as_warning = false
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, 0).unwrap()));
-        assert!(ctx.handle_truncate(false).is_ok());
-        assert!(ctx.handle_truncate(true).is_err());
-        assert!(ctx.take_warnings().is_empty());
-        // ignore_truncate = false;
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
-        assert!(ctx.handle_truncate(false).is_ok());
-        assert!(ctx.handle_truncate(true).is_ok());
-        assert!(ctx.take_warnings().is_empty());
-
-        // ignore_truncate = false, truncate_as_warning = true
-        let mut ctx = EvalContext::new(Arc::new(
-            EvalConfig::new(0, FLAG_TRUNCATE_AS_WARNING).unwrap(),
-        ));
-        assert!(ctx.handle_truncate(false).is_ok());
-        assert!(ctx.handle_truncate(true).is_ok());
-        assert!(!ctx.take_warnings().is_empty());
     }
 }
