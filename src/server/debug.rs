@@ -23,7 +23,7 @@ use protobuf::{self, Message, RepeatedField};
 
 use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
 use kvproto::metapb::Region;
-use kvproto::kvrpcpb::{LockInfo, MvccInfo, MvccValue, MvccWrite, Op};
+use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::debugpb::{DB as DBType, MODULE};
 use raft::eraftpb::Entry;
 use kvproto::raft_serverpb::*;
@@ -35,7 +35,7 @@ use raftstore::store::util as raftstore_util;
 use raftstore::store::engine::{IterOption, Mutable};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use storage::types::{truncate_ts, Key};
-use storage::mvcc::{Lock, Write, WriteType};
+use storage::mvcc::{Lock, LockType, Write, WriteType};
 use util::escape;
 use util::config::ReadableSize;
 use util::rocksdb::{compact_range, get_cf_handle};
@@ -463,15 +463,19 @@ impl MvccInfoIterator {
         })
     }
 
-    fn next_lock(&mut self) -> Result<Option<(Vec<u8>, LockInfo)>> {
+    fn next_lock(&mut self) -> Result<Option<(Vec<u8>, MvccLock)>> {
         let mut iter = &mut self.lock_iter;
         if let Some((key, value)) = <&mut DBIterator as Iterator>::next(&mut iter) {
             let lock = box_try!(Lock::parse(&value));
-            let mut lock_info = LockInfo::default();
-            lock_info.set_primary_lock(lock.primary);
-            lock_info.set_lock_version(lock.ts);
-            lock_info.set_lock_ttl(lock.ttl);
-            lock_info.set_key(key.clone());
+            let mut lock_info = MvccLock::default();
+            match lock.lock_type {
+                LockType::Put => lock_info.set_field_type(Op::Put),
+                LockType::Delete => lock_info.set_field_type(Op::Del),
+                LockType::Lock => lock_info.set_field_type(Op::Lock),
+            }
+            lock_info.set_start_ts(lock.ts);
+            lock_info.set_primary(lock.primary);
+            lock_info.set_short_value(lock.short_value.unwrap_or_default());
             return Ok(Some((key, lock_info)));
         };
         Ok(None)

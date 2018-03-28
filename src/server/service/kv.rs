@@ -35,7 +35,7 @@ use util::buf::PipeBuffer;
 use util::future::paired_future_callback;
 use storage::{self, Key, Mutation, Options, Storage, Value};
 use storage::txn::Error as TxnError;
-use storage::mvcc::{Error as MvccError, Write as MvccWrite, WriteType};
+use storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
 use storage::engine::Error as EngineError;
 use server::transport::RaftStoreRouter;
 use server::snap::Task as SnapTask;
@@ -978,7 +978,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 } else {
                     match v {
                         Ok(mvcc) => {
-                            resp.set_info(extract_mvcc_info(key, mvcc));
+                            resp.set_info(extract_mvcc_info(mvcc));
                         }
                         Err(e) => resp.set_error(format!("{}", e)),
                     };
@@ -1024,7 +1024,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                     match v {
                         Ok(Some((k, vv))) => {
                             resp.set_key(k.raw().unwrap());
-                            resp.set_info(extract_mvcc_info(k, vv));
+                            resp.set_info(extract_mvcc_info(vv));
                         }
                         Ok(None) => {
                             resp.set_info(Default::default());
@@ -1171,14 +1171,19 @@ fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>)
     }
 }
 
-fn extract_mvcc_info(key: Key, mvcc: storage::MvccInfo) -> MvccInfo {
+fn extract_mvcc_info(mvcc: storage::MvccInfo) -> MvccInfo {
     let mut mvcc_info = MvccInfo::new();
     if let Some(lock) = mvcc.lock {
-        let mut lock_info = LockInfo::new();
-        lock_info.set_primary_lock(lock.primary);
-        lock_info.set_key(key.raw().unwrap());
-        lock_info.set_lock_ttl(lock.ttl);
-        lock_info.set_lock_version(lock.ts);
+        let mut lock_info = MvccLock::new();
+        let op = match lock.lock_type {
+            LockType::Put => Op::Put,
+            LockType::Delete => Op::Del,
+            LockType::Lock => Op::Lock,
+        };
+        lock_info.set_field_type(op);
+        lock_info.set_start_ts(lock.ts);
+        lock_info.set_primary(lock.primary);
+        lock_info.set_short_value(lock.short_value.unwrap_or_default());
         mvcc_info.set_lock(lock_info);
     }
     let vv = extract_2pc_values(mvcc.values);
