@@ -23,7 +23,7 @@ use protobuf::{self, Message, RepeatedField};
 
 use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
 use kvproto::metapb::Region;
-use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
+use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, MvccWrite};
 use kvproto::debugpb::{DB as DBType, MODULE};
 use raft::eraftpb::Entry;
 use kvproto::raft_serverpb::*;
@@ -493,21 +493,22 @@ impl MvccInfoIterator {
         Ok(None)
     }
 
-    fn next_write(&mut self) -> Result<Option<(Vec<u8>, RepeatedField<WriteInfo>)>> {
+    fn next_write(&mut self) -> Result<Option<(Vec<u8>, RepeatedField<MvccWrite>)>> {
         if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.write_iter) {
             let mut writes = Vec::with_capacity(vec_kv.len());
             for (key, value) in vec_kv {
                 let write = box_try!(Write::parse(&value));
-                let mut write_info = WriteInfo::default();
-                write_info.set_start_ts(write.start_ts);
+                let mut write_info = MvccWrite::default();
                 match write.write_type {
                     WriteType::Put => write_info.set_field_type(Op::Put),
                     WriteType::Delete => write_info.set_field_type(Op::Del),
                     WriteType::Lock => write_info.set_field_type(Op::Lock),
                     WriteType::Rollback => write_info.set_field_type(Op::Rollback),
                 }
+                write_info.set_start_ts(write.start_ts);                
                 let encoded_key = Key::from_encoded(keys::origin_key(&key).to_owned());
                 write_info.set_commit_ts(box_try!(encoded_key.decode_ts()));
+                write_info.set_short_value(write.short_value.unwrap_or_default());
                 writes.push(write_info);
             }
             return Ok(Some((prefix, RepeatedField::from_vec(writes))));

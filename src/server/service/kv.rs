@@ -23,6 +23,7 @@ use futures::sync::{mpsc as futures_mpsc, oneshot};
 use protobuf::RepeatedField;
 use kvproto::tikvpb_grpc;
 use kvproto::raft_serverpb::*;
+use kvproto::kvrpcpb;
 use kvproto::kvrpcpb::*;
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
@@ -1199,11 +1200,10 @@ fn extract_2pc_values(res: Vec<(u64, bool, Value)>) -> Vec<ValueInfo> {
         .collect()
 }
 
-fn extract_2pc_writes(res: Vec<(u64, MvccWrite)>) -> Vec<WriteInfo> {
+fn extract_2pc_writes(res: Vec<(u64, MvccWrite)>) -> Vec<kvrpcpb::MvccWrite> {
     res.into_iter()
         .map(|(commit_ts, write)| {
-            let mut write_info = WriteInfo::new();
-            write_info.set_start_ts(write.start_ts);
+            let mut write_info = kvrpcpb::MvccWrite::new();
             let op = match write.write_type {
                 WriteType::Put => Op::Put,
                 WriteType::Delete => Op::Del,
@@ -1211,7 +1211,9 @@ fn extract_2pc_writes(res: Vec<(u64, MvccWrite)>) -> Vec<WriteInfo> {
                 WriteType::Rollback => Op::Rollback,
             };
             write_info.set_field_type(op);
+            write_info.set_start_ts(write.start_ts);            
             write_info.set_commit_ts(commit_ts);
+            write_info.set_short_value(write.short_value.unwrap_or_default());
             write_info
         })
         .collect()
