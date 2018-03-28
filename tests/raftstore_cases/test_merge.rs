@@ -19,7 +19,6 @@ use std::iter::*;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
-use tikv::util::config::*;
 use tikv::storage::CF_RAFT;
 use tikv::raftstore::store::Peekable;
 
@@ -32,6 +31,7 @@ use raftstore::transport_simulate::*;
 #[test]
 fn test_node_base_merge() {
     let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
 
     cluster.run();
 
@@ -99,10 +99,9 @@ fn test_node_base_merge() {
                 .unwrap()
                 .unwrap();
             if state.get_state() == PeerState::Tombstone {
-                let region = state.get_region();
-                if region.get_region_epoch().get_version() == version + 1 {
-                    assert_eq!(region.get_region_epoch().get_conf_ver(), conf_ver + 1);
-                }
+                let epoch = state.get_region().get_region_epoch();
+                assert_eq!(epoch.get_version(), version + 1);
+                assert_eq!(epoch.get_conf_ver(), conf_ver + 1);
                 continue 'outer;
             }
             thread::sleep(Duration::from_millis(500));
@@ -118,9 +117,7 @@ fn test_node_base_merge() {
 fn test_node_merge_prerequisites_check() {
     // ::util::init_log();
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 100;
-    cluster.cfg.raft_store.raft_log_gc_threshold = 500;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
 
     cluster.run();
@@ -190,8 +187,7 @@ fn test_node_merge_prerequisites_check() {
 fn test_node_check_merged_message() {
     // ::util::init_log();
     let mut cluster = new_node_cluster(0, 4);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 100;
-    cluster.cfg.raft_store.raft_log_gc_threshold = 100;
+    configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -273,8 +269,7 @@ fn test_node_check_merged_message() {
 fn test_node_merge_dist_isolation() {
     // ::util::init_log();
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
-    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
+    configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -348,9 +343,9 @@ fn test_node_merge_dist_isolation() {
 fn test_node_merge_brain_split() {
     // ::util::init_log();
     let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
-    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
 
     cluster.run();
 

@@ -160,7 +160,10 @@
 # consistency-check-interval = 0
 
 # Use delete range to drop a large number of continuous keys.
-# use-delete-range = false
+# use-delete-range = true
+
+# Interval to cleanup import sst files.
+# cleanup-import-sst-interval = "10m"
 
 [coprocessor]
 # When it is true, it will try to split a region with table prefix if
