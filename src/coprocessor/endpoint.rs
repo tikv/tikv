@@ -92,7 +92,7 @@ impl Host {
             sched: scheduler,
             reqs: HashMap::default(),
             last_req_id: 0,
-            pool,
+            pool: pool,
             basic_local_metrics: BasicLocalMetrics::default(),
             max_running_task_count: cfg.end_point_max_tasks,
             batch_row_limit: cfg.end_point_batch_row_limit,
