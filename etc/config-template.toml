@@ -27,15 +27,15 @@
 # stack-size = "10MB"
 
 [readpool.coprocessor]
-# Notice: if CPU_NUM > 8, thread pool size for coprocessors
+# Notice: if CPU_NUM > 8, default thread pool size for coprocessors
 # will be set to CPU_NUM * 0.8.
 
-# high-concurrency = 4
-# normal-concurrency = 4
-# low-concurrency = 4
-# max-tasks-high = 8000
-# max-tasks-normal = 8000
-# max-tasks-low = 8000
+# high-concurrency = 8
+# normal-concurrency = 8
+# low-concurrency = 8
+# max-tasks-high = 16000
+# max-tasks-normal = 16000
+# max-tasks-low = 16000
 # stack-size = "10MB"
 
 [server]
@@ -57,14 +57,9 @@
 # Amount to read ahead on individual grpc streams.
 # grpc-stream-initial-window-size = "2MB"
 
-# size of thread pool for endpoint task, should less than total cpu cores.
-# end-point-concurrency = 8
-
 # max count of tasks being handled, new tasks will be rejected.
 # end-point-max-tasks = 2000
 
-# stack size of endpoint, complicated tasks may involve very deep recursion.
-# end-point-stack-size = "10MB"
 # max recursion level allowed when decoding dag expression
 # end-point-recursion-limit = 1000
 
