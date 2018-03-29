@@ -33,7 +33,7 @@ impl fmt::Debug for Context {
 }
 
 impl Context {
-    pub fn new(pd_sender: Option<worker::FutureScheduler<pd::PdTask>>) -> Self {
+    pub fn new(pd_sender: worker::FutureScheduler<pd::PdTask>) -> Self {
         Context {
             exec_local_metrics: ExecLocalMetrics::new(pd_sender),
             basic_local_metrics: BasicLocalMetrics::default(),

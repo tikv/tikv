@@ -703,7 +703,7 @@ mod tests {
     use tipb::executor::Executor;
 
     use util::config::ReadableDuration;
-    use util::worker::Builder as WorkerBuilder;
+    use util::worker::{Builder as WorkerBuilder, FutureWorker};
 
     #[test]
     fn test_get_reg_scan_tag() {
@@ -720,6 +720,7 @@ mod tests {
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
         cfg.end_point_request_max_handle_duration = ReadableDuration::secs(0);
+        let pd_worker = FutureWorker::new("test-pd-worker");
         let read_pool = ReadPool::new(
             "readpool",
             &readpool::Config {
@@ -728,7 +729,7 @@ mod tests {
                 low_concurrency: 1,
                 ..readpool::Config::default_for_test()
             },
-            || || ReadPoolContext::new(None),
+            || || ReadPoolContext::new(pd_worker.scheduler()),
         );
         let end_point = Host::new(engine, worker.scheduler(), &cfg, read_pool);
         worker.start(end_point).unwrap();
@@ -751,6 +752,7 @@ mod tests {
         let mut worker = WorkerBuilder::new("test-endpoint").batch_size(5).create();
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let cfg = Config::default();
+        let pd_worker = FutureWorker::new("test-pd-worker");
         let read_pool = ReadPool::new(
             "readpool",
             &readpool::Config {
@@ -759,7 +761,7 @@ mod tests {
                 low_concurrency: 1,
                 ..readpool::Config::default_for_test()
             },
-            || || ReadPoolContext::new(None),
+            || || ReadPoolContext::new(pd_worker.scheduler()),
         );
         let mut end_point = Host::new(engine, worker.scheduler(), &cfg, read_pool);
         end_point.max_running_task_count = 1;
