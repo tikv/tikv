@@ -17,7 +17,8 @@ use std::time::Duration;
 use std::result;
 
 use kvproto::raft_cmdpb::{CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest,
-                          RaftCmdResponse, RaftRequestHeader, Request, Response};
+                          RaftCmdResponse, RaftRequestHeader, Request, Response,
+                          UnsafeCleanupRangeRequest};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 use protobuf::RepeatedField;
@@ -329,6 +330,14 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                     delete_range.set_end_key(end_key.encoded().to_owned());
                     req.set_cmd_type(CmdType::DeleteRange);
                     req.set_delete_range(delete_range);
+                }
+                Modify::UnsafeCleanupRange(cf, start_key, end_key) => {
+                    let mut unsafe_cleanup_range = UnsafeCleanupRangeRequest::new();
+                    unsafe_cleanup_range.set_cf(cf.to_string());
+                    unsafe_cleanup_range.set_start_key(start_key.encoded().to_owned());
+                    unsafe_cleanup_range.set_end_key(end_key.encoded().to_owned());
+                    req.set_cmd_type(CmdType::UnsafeCleanupRange);
+                    req.set_unsafe_cleanup_range(unsafe_cleanup_range);
                 }
             }
             reqs.push(req);

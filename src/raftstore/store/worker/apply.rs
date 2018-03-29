@@ -49,6 +49,7 @@ use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply
                                      write_peer_state};
 use raftstore::store::peer::{check_epoch, Peer};
 use raftstore::store::metrics::*;
+use raftstore::store::worker::unsafe_cleanup_range;
 use import::SSTImporter;
 
 use super::metrics::*;
@@ -469,10 +470,7 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
     // Some commands may modify keys covered by the current write batch, so we
     // must write the current write batch to the engine first.
     for req in cmd.get_requests() {
-        if req.has_delete_range() {
-            return true;
-        }
-        if req.has_ingest_sst() {
+        if req.has_delete_range() || req.has_ingest_sst() || req.has_unsafe_cleanup_range() {
             return true;
         }
     }
@@ -1504,6 +1502,7 @@ impl ApplyDelegate {
                 CmdType::DeleteRange => {
                     self.handle_delete_range(req, &mut ranges, ctx.use_delete_range)
                 }
+                CmdType::UnsafeCleanupRange => self.handle_unsafe_cleanup_range(ctx, req),
                 CmdType::IngestSST => self.handle_ingest_sst(ctx, req, &mut ssts),
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
@@ -1709,6 +1708,54 @@ impl ApplyDelegate {
 
         ssts.push(sst.clone());
         Ok(Response::new())
+    }
+
+    fn handle_unsafe_cleanup_range(
+        &mut self,
+        ctx: &ApplyContext,
+        req: &Request,
+    ) -> Result<Response> {
+        let s_key = req.get_unsafe_cleanup_range().get_start_key();
+        let e_key = req.get_unsafe_cleanup_range().get_end_key();
+        if !e_key.is_empty() && s_key >= e_key {
+            return Err(box_err!(
+                "invalid unsafe cleanup range command, start_key: {:?}, end_key: {:?}",
+                s_key,
+                e_key
+            ));
+        }
+        check_data_key(s_key, &self.region)?;
+        let end_key = keys::data_end_key(e_key);
+        let region_end_key = keys::data_end_key(self.region.get_end_key());
+        if end_key > region_end_key {
+            return Err(Error::KeyNotInRegion(e_key.to_vec(), self.region.clone()));
+        }
+
+        let resp = Response::new();
+        let mut cf = req.get_unsafe_cleanup_range().get_cf();
+        if cf.is_empty() {
+            cf = CF_DEFAULT;
+        }
+        if ALL_CFS.iter().find(|x| **x == cf).is_none() {
+            return Err(box_err!("invalid unsafe cleanup command, cf: {:?}", cf));
+        }
+
+        // Unsafe_cleanup_range tasks are expensive operations, so we deliver them to
+        // another worker thread to prevent them blocking apply thread.
+        let task_key = unsafe_cleanup_range::encode_task_key(cf, &keys::data_key(s_key));
+        rocksdb::get_cf_handle(&self.engine, CF_DEFAULT)
+            .and_then(|handle| ctx.wb().put_cf(handle, &task_key, &end_key))
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to write unsafe cleanup range task ({}, {}), error {:?}",
+                    self.tag,
+                    escape(&task_key),
+                    escape(&end_key),
+                    e
+                )
+            });
+
+        Ok(resp)
     }
 }
 

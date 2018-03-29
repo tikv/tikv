@@ -637,7 +637,7 @@ mod tests {
                         let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();
                         wb.delete_cf(handle, &k).unwrap();
                     }
-                    Modify::DeleteRange(cf, k1, k2) => {
+                    Modify::DeleteRange(cf, k1, k2) | Modify::UnsafeCleanupRange(cf, k1, k2) => {
                         let k1 = keys::data_key(k1.encoded());
                         let k2 = keys::data_key(k2.encoded());
                         let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();

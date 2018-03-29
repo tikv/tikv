@@ -47,6 +47,11 @@ pub const REGION_META_PREFIX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
 pub const REGION_META_MIN_KEY: &[u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
 pub const REGION_META_MAX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_META_PREFIX + 1];
 
+// Unsafe cleanup range tasks.
+pub const UNSAFE_CLEANUP_RANGE_PREFIX: u8 = 0x04;
+pub const UNSAFE_CLEANUP_RANGE_MIN_KEY: &[u8] = &[LOCAL_PREFIX, UNSAFE_CLEANUP_RANGE_PREFIX];
+pub const UNSAFE_CLEANUP_RANGE_MAX_KEY: &[u8] = &[LOCAL_PREFIX, UNSAFE_CLEANUP_RANGE_PREFIX + 1];
+
 // Following are the suffix after the local prefix.
 // For region id
 pub const RAFT_LOG_SUFFIX: u8 = 0x01;
@@ -215,6 +220,25 @@ pub fn data_end_key(region_end_key: &[u8]) -> Vec<u8> {
         DATA_MAX_KEY.to_vec()
     } else {
         data_key(region_end_key)
+    }
+}
+
+pub fn unsafe_cleanup_range_key(key: &[u8]) -> Vec<u8> {
+    let mut vec = Vec::with_capacity(UNSAFE_CLEANUP_RANGE_MIN_KEY.len() + key.len());
+    vec.extend_from_slice(UNSAFE_CLEANUP_RANGE_MIN_KEY);
+    vec.extend_from_slice(key);
+    vec
+}
+
+pub fn decode_unsafe_cleanup_range_key(key: &[u8]) -> Result<Vec<u8>> {
+    let prefix_len = UNSAFE_CLEANUP_RANGE_MIN_KEY.len();
+    if key.len() >= prefix_len && &key[..prefix_len] == UNSAFE_CLEANUP_RANGE_MIN_KEY {
+        Ok(key[prefix_len..].to_vec())
+    } else {
+        Err(box_err!(
+            "Invalid unsafe_cleanup_range key {:?}",
+            escape(key)
+        ))
     }
 }
 

@@ -62,6 +62,26 @@ pub const DATA_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
 
+pub fn encode_cf(cf: &str) -> u8 {
+    match cf {
+        CF_DEFAULT => 0x01,
+        CF_LOCK => 0x02,
+        CF_WRITE => 0x03,
+        CF_RAFT => 0x04,
+        _ => panic!("unknow column family {}", cf),
+    }
+}
+
+pub fn decode_cf(cf: u8) -> &'static str {
+    match cf {
+        0x01 => CF_DEFAULT,
+        0x02 => CF_LOCK,
+        0x03 => CF_WRITE,
+        0x04 => CF_RAFT,
+        _ => panic!("unkown column family code {}", cf),
+    }
+}
+
 pub fn is_short_value(value: &[u8]) -> bool {
     value.len() <= SHORT_VALUE_MAX_LEN
 }
@@ -774,6 +794,38 @@ impl Storage {
             })?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["delete_range"])
+            .inc();
+        Ok(())
+    }
+
+    pub fn async_unsafe_cleanup_range(
+        &self,
+        ctx: Context,
+        start_key: Key,
+        end_key: Key,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        let mut modifies = Vec::with_capacity(DATA_CFS.len());
+        for cf in DATA_CFS {
+            // We enable memtable prefix bloom for CF_WRITE column family, for delete_range
+            // operation, RocksDB will add start key to the prefix bloom, and the start key
+            // will go through function prefix_extractor. In our case the prefix_extractor
+            // is FixedSuffixSliceTransform, which will trim the timestamp at the tail. If the
+            // length of start key is less than 8, we will encounter index out of range error.
+            let s = if *cf == CF_WRITE {
+                start_key.append_ts(u64::MAX)
+            } else {
+                start_key.clone()
+            };
+            modifies.push(Modify::UnsafeCleanupRange(cf, s, end_key.clone()));
+        }
+
+        self.engine
+            .async_write(&ctx, modifies, box |(_, res): (_, engine::Result<_>)| {
+                callback(res.map_err(Error::from))
+            })?;
+        KV_COMMAND_COUNTER_VEC
+            .with_label_values(&["unsafe_cleanup_range"])
             .inc();
         Ok(())
     }

@@ -160,6 +160,16 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
                 let handle = rocksdb::get_cf_handle(db, cf)?;
                 wb.delete_range_cf(handle, start_key.encoded(), end_key.encoded())
             }
+            Modify::UnsafeCleanupRange(cf, start_key, end_key) => {
+                trace!(
+                    "EngineRocksdb: unsafe_cleanup_range_cf {}, {}, {}",
+                    cf,
+                    escape(start_key.encoded()),
+                    escape(end_key.encoded())
+                );
+                let handle = rocksdb::get_cf_handle(db, cf)?;
+                wb.delete_range_cf(handle, start_key.encoded(), end_key.encoded())
+            }
         };
         if let Err(msg) = res {
             return Err(Error::RocksDb(msg));
