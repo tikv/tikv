@@ -208,7 +208,6 @@ impl RegionHeartbeatCache {
                     self.last_written_bytes = total_written_bytes;
                     self.valid = false;
                 }
-                // TODO: what if last_written_bytes > total_written_bytes?
 
                 if self.last_written_keys < total_written_keys {
                     self.written_keys_delta += total_written_keys - self.last_written_keys;
