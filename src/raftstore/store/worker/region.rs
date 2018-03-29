@@ -181,7 +181,7 @@ impl PendingDeleteRanges {
     pub fn drain_timeout_ranges(&mut self, now: time::Instant) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
         let ranges = self.ranges
             .iter()
-            .filter(|&(_, ref info)| info.timeout <= now)
+            .filter(|&(_, info)| info.timeout <= now)
             .map(|(start_key, info)| (info.region_id, start_key.clone(), info.end_key.clone()))
             .collect();
         for &(_, ref start_key, _) in &ranges {
