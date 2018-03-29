@@ -23,7 +23,6 @@ use coprocessor::util;
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::dag::expr::EvalConfig;
-use coprocessor::endpoint::ReqContext;
 use storage::{Snapshot, SnapshotStore};
 
 use super::executor::{build_exec, Executor, ExecutorMetrics, Row};
@@ -50,8 +49,8 @@ impl DAGContext {
         let store = SnapshotStore::new(
             snap,
             req.get_start_ts(),
-            req_ctx.isolation_level,
-            req_ctx.fill_cache,
+            req_ctx.context.get_isolation_level(),
+            !req_ctx.context.get_not_fill_cache(),
         );
 
         let dag_executor = build_exec(

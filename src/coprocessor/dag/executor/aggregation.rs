@@ -20,11 +20,11 @@ use tipb::executor::Aggregation;
 use tipb::expression::{Expr, ExprType};
 
 use util::collections::{OrderMap, OrderMapEntry};
+
+use coprocessor::*;
 use coprocessor::codec::table::RowColsDict;
 use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
-use coprocessor::endpoint::SINGLE_GROUP;
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
-use coprocessor::Result;
 
 use super::aggregate::{self, AggrFunc};
 use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};

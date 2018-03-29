@@ -20,10 +20,9 @@ use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, Analyz
 use tipb::schema::ColumnInfo;
 use tipb::executor::TableScan;
 
+use coprocessor::*;
 use coprocessor::dag::executor::{Executor, ExecutorMetrics, IndexScanExecutor, TableScanExecutor};
-use coprocessor::endpoint::ReqContext;
 use coprocessor::codec::datum;
-use coprocessor::{Error, Result};
 use storage::{Snapshot, SnapshotStore};
 use super::fmsketch::FMSketch;
 use super::cmsketch::CMSketch;
@@ -46,8 +45,8 @@ impl AnalyzeContext {
         let snap = SnapshotStore::new(
             snap,
             req.get_start_ts(),
-            req_ctx.isolation_level,
-            req_ctx.fill_cache,
+            req_ctx.context.get_isolation_level(),
+            !req_ctx.context.get_not_fill_cache(),
         );
         AnalyzeContext {
             req: req,
