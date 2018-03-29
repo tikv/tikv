@@ -223,7 +223,7 @@ pub fn data_end_key(region_end_key: &[u8]) -> Vec<u8> {
     }
 }
 
-pub fn unsafe_cleanup_range_key(key: &[u8]) -> Vec<u8> {
+pub fn encode_unsafe_cleanup_range_key(key: &[u8]) -> Vec<u8> {
     let mut vec = Vec::with_capacity(UNSAFE_CLEANUP_RANGE_MIN_KEY.len() + key.len());
     vec.extend_from_slice(UNSAFE_CLEANUP_RANGE_MIN_KEY);
     vec.extend_from_slice(key);

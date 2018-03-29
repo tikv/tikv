@@ -31,7 +31,7 @@ pub struct Runner {
 }
 
 pub fn encode_task_key(cf: &str, start_key: &[u8]) -> Vec<u8> {
-    let mut vec = keys::unsafe_cleanup_range_key(start_key);
+    let mut vec = keys::encode_unsafe_cleanup_range_key(start_key);
     vec.push(encode_cf(cf));
     vec
 }
