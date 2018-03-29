@@ -1194,6 +1194,21 @@ impl Storage {
             .flatten()
     }
 
+    fn check_key_ranges(ranges: &[KeyRange]) -> bool {
+        let ranges_len = ranges.len();
+        for i in 0..ranges_len {
+            let start_key = ranges[i].get_start_key();
+            let mut end_key = ranges[i].get_end_key();
+            if end_key.is_empty() && i + 1 != ranges_len {
+                end_key = ranges[i + 1].get_start_key();
+            }
+            if !end_key.is_empty() && start_key >= end_key {
+                return false;
+            }
+        }
+        true
+    }
+
     pub fn async_raw_batch_scan(
         &self,
         ctx: Context,
@@ -1218,6 +1233,9 @@ impl Storage {
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
                     let mut statistics = Statistics::default();
+                    if !Self::check_key_ranges(&ranges) {
+                        return Err(box_err!("Invalid KeyRanges"));
+                    };
                     let mut result = Vec::new();
                     let ranges_len = ranges.len();
                     for i in 0..ranges_len {
