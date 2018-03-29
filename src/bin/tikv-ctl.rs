@@ -373,6 +373,14 @@ trait DebugExecutor {
         self.do_compact(db, cf, from, to);
     }
 
+    fn compact_region(&self, db: DBType, cf: &str, region_id: u64) {
+        let region_local = self.get_region_info(region_id).region_local_state.unwrap();
+        let r = region_local.get_region();
+        let from = keys::data_key(r.get_start_key());
+        let to = keys::data_key(r.get_end_key());
+        self.do_compact(db, cf, from, to);
+    }
+
     fn print_bad_regions(&self);
 
     fn set_region_tombstone_after_remove_peer(
@@ -964,6 +972,13 @@ fn main() {
                         .long("to")
                         .takes_value(true)
                         .help("set the end raw key, in escaped form"),
+                )
+                .arg(
+                    Arg::with_name("region")
+                    .short("r")
+                    .long("region")
+                    .takes_value(true)
+                    .help("set the region id"),
                 ),
         )
         .subcommand(
@@ -1156,7 +1171,11 @@ fn main() {
         let cf = matches.value_of("cf").unwrap();
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
-        debug_executor.compact(db_type, cf, from_key, to_key);
+        if let Some(region) = matches.value_of("region") {
+            debug_executor.compact_region(db_type, cf, region.parse().unwrap());
+        } else {
+            debug_executor.compact(db_type, cf, from_key, to_key);
+        }
     } else if let Some(matches) = matches.subcommand_matches("tombstone") {
         let regions = matches
             .values_of("regions")
