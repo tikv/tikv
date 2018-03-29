@@ -24,7 +24,7 @@ use util::collections::{OrderMap, OrderMapEntry};
 use coprocessor::*;
 use coprocessor::codec::table::RowColsDict;
 use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
-use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
+use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 
 use super::aggregate::{self, AggrFunc};
 use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
@@ -209,6 +209,15 @@ impl Executor for HashAggExecutor {
             self.first_collect = false;
         }
     }
+
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        if let Some(mut warnings) = self.src.take_eval_warnings() {
+            warnings.merge(self.ctx.take_warnings());
+            Some(warnings)
+        } else {
+            Some(self.ctx.take_warnings())
+        }
+    }
 }
 
 impl Executor for StreamAggExecutor {
@@ -260,6 +269,15 @@ impl Executor for StreamAggExecutor {
         if self.first_collect {
             metrics.executor_count.aggregation += 1;
             self.first_collect = false;
+        }
+    }
+
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        if let Some(mut warnings) = self.src.take_eval_warnings() {
+            warnings.merge(self.ctx.take_warnings());
+            Some(warnings)
+        } else {
+            Some(self.ctx.take_warnings())
         }
     }
 }

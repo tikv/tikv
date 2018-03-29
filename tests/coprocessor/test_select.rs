@@ -13,12 +13,12 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::{cmp, mem};
-use std::sync::mpsc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::i64;
 use std::thread;
 use std::time::Duration;
 use futures::{Future, Stream};
+use futures::sync::{mpsc as futures_mpsc, oneshot};
 
 use tikv::coprocessor::*;
 use kvproto::kvrpcpb::Context;
@@ -41,6 +41,7 @@ use storage::sync_storage::SyncStorage;
 use storage::util::new_raft_engine;
 
 const FLAG_IGNORE_TRUNCATE: u64 = 1;
+const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
 
 static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
 
@@ -2016,7 +2017,18 @@ fn test_handle_truncate() {
         let req = DAGSelect::from(&product.table)
             .where_expr(cond.clone())
             .build_with(Context::new(), &[FLAG_IGNORE_TRUNCATE]);
+        let resp = handle_select(&end_point, req);
+        assert!(!resp.has_error());
+        assert!(resp.get_warnings().is_empty());
+
+        // truncate as warning
+        let req = DAGSelect::from(&product.table)
+            .where_expr(cond.clone())
+            .build_with(Context::new(), &[FLAG_TRUNCATE_AS_WARNING]);
         let mut resp = handle_select(&end_point, req);
+        assert!(!resp.has_error());
+        assert!(!resp.get_warnings().is_empty());
+        // check data
         let mut spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
         let row = spliter.next().unwrap();
         let (id, name, cnt) = data[2];

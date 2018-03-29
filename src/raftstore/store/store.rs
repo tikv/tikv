@@ -57,7 +57,7 @@ use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, Clea
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
-use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
+use super::engine::{Iterable, Mutable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
@@ -297,7 +297,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     region,
                     self.store_id()
                 );
-                self.clear_stale_meta(&mut kv_wb, &mut raft_wb, region);
+                self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
                 return Ok(true);
             }
             if local_state.get_state() == PeerState::Applying {
@@ -359,7 +359,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 region,
                 self.store_id()
             );
-            self.on_ready_prepare_merge(region, state);
+            self.on_ready_prepare_merge(region, state, false);
         }
 
         info!(
@@ -384,8 +384,9 @@ impl<T, C> Store<T, C> {
         &mut self,
         kv_wb: &mut WriteBatch,
         raft_wb: &mut WriteBatch,
-        region: &metapb::Region,
+        origin_state: &RegionLocalState,
     ) {
+        let region = origin_state.get_region();
         let raft_key = keys::raft_state_key(region.get_id());
         let raft_state = match self.raft_engine.get_msg(&raft_key).unwrap() {
             // it has been cleaned up.
@@ -401,8 +402,9 @@ impl<T, C> Store<T, C> {
             region.get_id(),
             &raft_state,
         ).unwrap();
-        peer_storage::write_peer_state(&self.kv_engine, kv_wb, region, PeerState::Tombstone)
-            .unwrap();
+        let key = keys::region_state_key(region.get_id());
+        let handle = rocksdb::get_cf_handle(&self.kv_engine, CF_RAFT).unwrap();
+        kv_wb.put_msg_cf(handle, &key, origin_state).unwrap();
     }
 
     /// `clear_stale_data` clean up all possible garbage data.
@@ -537,6 +539,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
         self.register_merge_check_tick(event_loop);
+        self.register_check_peer_stale_state_tick(event_loop);
+        self.register_cleanup_import_sst_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&self.kv_engine),
@@ -575,7 +579,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .start(consistency_check_runner)
         );
 
-        let cleanup_sst_runner = CleanupSSTRunner::new(Arc::clone(&self.importer));
+        let cleanup_sst_runner = CleanupSSTRunner::new(
+            self.store_id(),
+            self.sendch.clone(),
+            Arc::clone(&self.importer),
+            Arc::clone(&self.pd_client),
+        );
         box_try!(self.cleanup_sst_worker.start(cleanup_sst_runner));
 
         let (tx, rx) = mpsc::channel();
@@ -635,7 +644,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let timer = self.raft_metrics.process_tick.start_coarse_timer();
-        let mut leader_missing = 0;
         for peer in &mut self.region_peers.values_mut() {
             if peer.pending_remove {
                 continue;
@@ -652,51 +660,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if peer.raft_group.tick() {
                 peer.mark_to_be_checked(&mut self.pending_raft_groups);
             }
-
-            // If this peer detects the leader is missing for a long long time,
-            // it should consider itself as a stale peer which is removed from
-            // the original cluster.
-            // This most likely happens in the following scenario:
-            // At first, there are three peer A, B, C in the cluster, and A is leader.
-            // Peer B gets down. And then A adds D, E, F into the cluster.
-            // Peer D becomes leader of the new cluster, and then removes peer A, B, C.
-            // After all these peer in and out, now the cluster has peer D, E, F.
-            // If peer B goes up at this moment, it still thinks it is one of the cluster
-            // and has peers A, C. However, it could not reach A, C since they are removed
-            // from the cluster or probably destroyed.
-            // Meantime, D, E, F would not reach B, since it's not in the cluster anymore.
-            // In this case, peer B would notice that the leader is missing for a long time,
-            // and it would check with pd to confirm whether it's still a member of the cluster.
-            // If not, it destroys itself as a stale peer which is removed out already.
-            match peer.check_stale_state() {
-                StaleState::Valid => (),
-                StaleState::LeaderMissing => {
-                    warn!(
-                        "{} leader missing longer than abnormal_leader_missing_duration {:?}",
-                        peer.tag, self.cfg.abnormal_leader_missing_duration.0,
-                    );
-                    leader_missing += 1;
-                }
-                StaleState::ToValidate => {
-                    // for peer B in case 1 above
-                    warn!(
-                        "{} leader missing longer than max_leader_missing_duration {:?}. \
-                         To check with pd whether it's still valid",
-                        peer.tag, self.cfg.max_leader_missing_duration.0,
-                    );
-                    let task = PdTask::ValidatePeer {
-                        peer: peer.peer.clone(),
-                        region: peer.region().clone(),
-                        merge_source: None,
-                    };
-                    if let Err(e) = self.pd_worker.schedule(task) {
-                        error!("{} failed to notify pd: {}", peer.tag, e)
-                    }
-                }
-            }
         }
-        self.raft_metrics.leader_missing = leader_missing;
-
         timer.observe_duration();
 
         self.raft_metrics.flush();
@@ -963,6 +927,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     local_state
                 ));
             }
+            debug!("[region {}] tombstone state: {:?}", region_id, local_state);
             let region = local_state.get_region();
             let region_epoch = region.get_region_epoch();
             if local_state.has_merge_state() {
@@ -1745,12 +1710,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let min_index = peer.get_min_progress() + 1;
             let low = cmp::max(min_index, state.get_min_index());
             // TODO: move this into raft module.
-            let entries = if low >= state.get_commit() {
+            // +1 to include the PrepareMerge proposal.
+            let entries = if low >= state.get_commit() + 1 {
                 vec![]
             } else {
                 self.region_peers[&region.get_id()]
                     .get_store()
-                    .entries(low, state.get_commit(), NO_LIMIT)
+                    .entries(low, state.get_commit() + 1, NO_LIMIT)
                     .unwrap()
             };
 
@@ -1808,11 +1774,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_merge_check_tick(event_loop);
     }
 
-    fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState) {
+    fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState, merged: bool) {
         {
             let peer = self.region_peers.get_mut(&region.get_id()).unwrap();
             peer.pending_merge = Some(state);
             peer.mut_store().region = region.clone();
+        }
+
+        if merged {
+            // CommitMerge will try to catch up log for source region. If PrepareMerge is executed
+            // in the progress of catching up, there is no need to schedule merge again.
+            return;
         }
 
         if let Err(e) = self.schedule_merge(&region) {
@@ -1829,13 +1801,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_ready_commit_merge(&mut self, region: metapb::Region, source: metapb::Region) {
         let source_peer = {
             let peer = self.region_peers.get_mut(&source.get_id()).unwrap();
-            // In some case, PrepareMerge entry may be carried by the dst region. So
-            // the peer is not in merging mode.
-            if peer.pending_merge.is_none() {
-                let mut state = MergeState::new();
-                state.set_target(region.clone());
-                peer.pending_merge = Some(state);
-            }
+            assert!(peer.pending_merge.is_some());
             peer.peer.clone()
         };
         self.destroy_peer(source.get_id(), source_peer, true);
@@ -1945,7 +1911,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     right_derive,
                 } => self.on_ready_split_region(region_id, left, right, right_derive),
                 ExecResult::PrepareMerge { region, state } => {
-                    self.on_ready_prepare_merge(region, state);
+                    self.on_ready_prepare_merge(region, state, merged);
                 }
                 ExecResult::CommitMerge { region, source } => {
                     self.on_ready_commit_merge(region, source);
@@ -2351,7 +2317,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             {
                 continue;
             }
-            let task = SplitCheckTask::new(peer.region());
+            let task = SplitCheckTask::new(peer.region(), true);
             if let Err(e) = self.split_check_worker.schedule(task) {
                 error!("{} failed to schedule split check: {}", self.tag, e);
             }
@@ -2525,6 +2491,41 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         };
         peer.approximate_size = Some(region_size);
+    }
+
+    fn on_schedule_half_split_region(
+        &mut self,
+        region_id: u64,
+        region_epoch: &metapb::RegionEpoch,
+    ) {
+        let peer = match self.region_peers.get(&region_id) {
+            Some(peer) => peer,
+            None => {
+                error!("{:?}", Error::RegionNotFound(region_id));
+                return;
+            }
+        };
+
+        if !peer.is_leader() {
+            // region on this store is no longer leader, skipped.
+            warn!(
+                "[region {}] region on {} is not leader, skip.",
+                region_id,
+                self.store_id()
+            );
+            return;
+        }
+
+        let region = peer.region();
+        if util::is_epoch_stale(region_epoch, region.get_region_epoch()) {
+            warn!("[region {}] receive a stale halfsplit message", region_id);
+            return;
+        }
+
+        let task = SplitCheckTask::new(region, false);
+        if let Err(e) = self.split_check_worker.schedule(task) {
+            error!("{} failed to schedule split check: {}", self.tag, e);
+        }
     }
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
@@ -2741,6 +2742,74 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
         }
     }
+
+    fn on_check_peer_stale_state_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        let mut leader_missing = 0;
+        for peer in &mut self.region_peers.values_mut() {
+            if peer.pending_remove {
+                continue;
+            }
+
+            if peer.is_applying_snapshot() || peer.has_pending_snapshot() {
+                continue;
+            }
+
+            // If this peer detects the leader is missing for a long long time,
+            // it should consider itself as a stale peer which is removed from
+            // the original cluster.
+            // This most likely happens in the following scenario:
+            // At first, there are three peer A, B, C in the cluster, and A is leader.
+            // Peer B gets down. And then A adds D, E, F into the cluster.
+            // Peer D becomes leader of the new cluster, and then removes peer A, B, C.
+            // After all these peer in and out, now the cluster has peer D, E, F.
+            // If peer B goes up at this moment, it still thinks it is one of the cluster
+            // and has peers A, C. However, it could not reach A, C since they are removed
+            // from the cluster or probably destroyed.
+            // Meantime, D, E, F would not reach B, since it's not in the cluster anymore.
+            // In this case, peer B would notice that the leader is missing for a long time,
+            // and it would check with pd to confirm whether it's still a member of the cluster.
+            // If not, it destroys itself as a stale peer which is removed out already.
+            match peer.check_stale_state() {
+                StaleState::Valid => (),
+                StaleState::LeaderMissing => {
+                    warn!(
+                        "{} leader missing longer than abnormal_leader_missing_duration {:?}",
+                        peer.tag, self.cfg.abnormal_leader_missing_duration.0,
+                    );
+                    leader_missing += 1;
+                }
+                StaleState::ToValidate => {
+                    // for peer B in case 1 above
+                    warn!(
+                        "{} leader missing longer than max_leader_missing_duration {:?}. \
+                         To check with pd whether it's still valid",
+                        peer.tag, self.cfg.max_leader_missing_duration.0,
+                    );
+                    let task = PdTask::ValidatePeer {
+                        peer: peer.peer.clone(),
+                        region: peer.region().clone(),
+                        merge_source: None,
+                    };
+                    if let Err(e) = self.pd_worker.schedule(task) {
+                        error!("{} failed to notify pd: {}", peer.tag, e)
+                    }
+                }
+            }
+        }
+        self.raft_metrics.leader_missing = leader_missing;
+
+        self.register_check_peer_stale_state_tick(event_loop);
+    }
+
+    fn register_check_peer_stale_state_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(
+            event_loop,
+            Tick::CheckPeerStaleState,
+            self.cfg.peer_stale_state_check_interval.as_millis(),
+        ) {
+            error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
+        }
+    }
 }
 
 fn report_split_pd(
@@ -2944,15 +3013,89 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_ingest_sst_result(&mut self, ssts: Vec<SSTMeta>) {
-        for sst in ssts {
+        for sst in &ssts {
             let region_id = sst.get_region_id();
             if let Some(region) = self.region_peers.get_mut(&region_id) {
                 region.size_diff_hint += sst.get_length();
             }
-            let task = CleanupSSTTask::DeleteSST { sst };
-            if let Err(e) = self.cleanup_sst_worker.schedule(task) {
-                error!("[region {}] schedule delete sst: {:?}", region_id, e);
+        }
+
+        let task = CleanupSSTTask::DeleteSST { ssts };
+        if let Err(e) = self.cleanup_sst_worker.schedule(task) {
+            error!("schedule to delete ssts: {:?}", e);
+        }
+    }
+
+    fn on_validate_sst_result(&mut self, ssts: Vec<SSTMeta>) {
+        // A stale peer can still ingest a stale SST before it is
+        // destroyed. We need to make sure that no stale peer exists.
+        let mut delete_ssts = Vec::new();
+        for sst in ssts {
+            if !self.region_peers.contains_key(&sst.get_region_id()) {
+                delete_ssts.push(sst);
             }
+        }
+        if delete_ssts.is_empty() {
+            return;
+        }
+
+        let task = CleanupSSTTask::DeleteSST { ssts: delete_ssts };
+        if let Err(e) = self.cleanup_sst_worker.schedule(task) {
+            error!("schedule to delete ssts: {:?}", e);
+        }
+    }
+
+    fn on_cleanup_import_sst(&mut self) -> Result<()> {
+        let mut delete_ssts = Vec::new();
+        let mut validate_ssts = Vec::new();
+
+        let ssts = box_try!(self.importer.list_ssts());
+        for sst in ssts {
+            if let Some(peer) = self.region_peers.get(&sst.get_region_id()) {
+                let region_epoch = peer.region().get_region_epoch();
+                if util::is_epoch_stale(sst.get_region_epoch(), region_epoch) {
+                    // If the SST epoch is stale, it will not be ingested anymore.
+                    delete_ssts.push(sst);
+                }
+            } else {
+                // If the peer doesn't exist, we need to validate the SST through PD.
+                validate_ssts.push(sst);
+            }
+        }
+
+        if !delete_ssts.is_empty() {
+            let task = CleanupSSTTask::DeleteSST { ssts: delete_ssts };
+            if let Err(e) = self.cleanup_sst_worker.schedule(task) {
+                error!("schedule to delete ssts: {:?}", e);
+            }
+        }
+
+        if !validate_ssts.is_empty() {
+            let task = CleanupSSTTask::ValidateSST {
+                ssts: validate_ssts,
+            };
+            if let Err(e) = self.cleanup_sst_worker.schedule(task) {
+                error!("schedule to validate ssts: {:?}", e);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn on_cleanup_import_sst_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = self.on_cleanup_import_sst() {
+            error!("{} failed to cleanup import sst: {:?}", self.tag, e);
+        }
+        self.register_cleanup_import_sst_tick(event_loop);
+    }
+
+    fn register_cleanup_import_sst_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(
+            event_loop,
+            Tick::CleanupImportSST,
+            self.cfg.cleanup_import_sst_interval.as_millis(),
+        ) {
+            error!("{} register cleanup import sst tick err: {:?}", self.tag, e);
         }
     }
 }
@@ -3087,7 +3230,12 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 region_size,
             } => self.on_approximate_region_size(region_id, region_size),
             Msg::CompactedEvent(event) => self.on_compaction_finished(event),
+            Msg::HalfSplitRegion {
+                region_id,
+                region_epoch,
+            } => self.on_schedule_half_split_region(region_id, &region_epoch),
             Msg::MergeFail { region_id } => self.on_merge_fail(region_id),
+            Msg::ValidateSSTResult { invalid_ssts } => self.on_validate_sst_result(invalid_ssts),
         }
     }
 
@@ -3104,6 +3252,8 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
             Tick::CheckMerge => self.on_check_merge(event_loop),
+            Tick::CheckPeerStaleState => self.on_check_peer_stale_state_tick(event_loop),
+            Tick::CleanupImportSST => self.on_cleanup_import_sst_tick(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }

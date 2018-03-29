@@ -24,7 +24,7 @@ use protobuf;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
-use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, TransferLeader};
+use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
 use raft::eraftpb::ConfChangeType;
 
 use tikv::raftstore::store::*;
@@ -99,8 +99,11 @@ pub fn new_store_cfg() -> Config {
         // In production environment, the value of max_leader_missing_duration
         // should be configured far beyond the election timeout.
         max_leader_missing_duration: ReadableDuration::secs(3),
-        // Use a value of 2 seconds as abnormal_leader_missing_duration just for a valid config.
+        // To make a valid config, use a value of 2 seconds as
+        // abnormal_leader_missing_duration and set
+        // peer_stale_state_check_interval to 1 second.
         abnormal_leader_missing_duration: ReadableDuration::secs(2),
+        peer_stale_state_check_interval: ReadableDuration::secs(1),
         pd_heartbeat_tick_interval: ReadableDuration::millis(20),
         region_split_check_diff: ReadableSize(10000),
         report_region_flow_interval: ReadableDuration::millis(100),
@@ -303,6 +306,13 @@ pub fn new_pd_change_peer(
     resp
 }
 
+pub fn new_half_split_region() -> RegionHeartbeatResponse {
+    let split_region = SplitRegion::new();
+    let mut resp = RegionHeartbeatResponse::new();
+    resp.set_split_region(split_region);
+    resp
+}
+
 pub fn new_pd_transfer_leader(peer: metapb::Peer) -> RegionHeartbeatResponse {
     let mut transfer_leader = TransferLeader::new();
     transfer_leader.set_peer(peer);
@@ -458,9 +468,18 @@ pub fn create_test_engine(
 }
 
 pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
-    // truncate the log quickly so that we can force sending snapshot.
+    // Truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
     cluster.cfg.raft_store.merge_max_log_gap = 1;
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+}
+
+pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
+    // Avoid log compaction which will prevent merge.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
+    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    // Make merge check resume quickly.
+    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
 }

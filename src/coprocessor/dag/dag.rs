@@ -45,10 +45,10 @@ impl DAGContext {
         req_ctx: ReqContext,
         batch_row_limit: usize,
     ) -> Result<DAGContext> {
-        let eval_cfg = Arc::new(box_try!(EvalConfig::new(
-            req.get_time_zone_offset(),
-            req.get_flags()
-        )));
+        let mut eval_cfg = box_try!(EvalConfig::new(req.get_time_zone_offset(), req.get_flags(),));
+        if req.has_max_warning_count() {
+            eval_cfg.set_max_warning_cnt(req.get_max_warning_count() as usize);
+        }
         let store = SnapshotStore::new(
             snap,
             req.get_start_ts(),
@@ -56,7 +56,12 @@ impl DAGContext {
             !req_ctx.context.get_not_fill_cache(),
         );
 
-        let dag_executor = build_exec(req.take_executors().into_vec(), store, ranges, eval_cfg)?;
+        let dag_executor = build_exec(
+            req.take_executors().into_vec(),
+            store,
+            ranges,
+            Arc::new(eval_cfg),
+        )?;
         Ok(DAGContext {
             columns: dag_executor.columns,
             has_aggr: dag_executor.has_aggr,
@@ -108,6 +113,10 @@ impl RequestHandler for DAGContext {
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
+                    if let Some(eval_warnings) = self.exec.take_eval_warnings() {
+                        sel_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
+                        sel_resp.set_warning_count(eval_warnings.warning_cnt as i64);
+                    }
                     self.exec
                         .collect_output_counts(sel_resp.mut_output_counts());
                     let data = box_try!(sel_resp.write_to_bytes());

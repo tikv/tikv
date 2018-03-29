@@ -27,7 +27,7 @@ use coprocessor::util;
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{self, Datum};
 use coprocessor::codec::table::{RowColsDict, TableDecoder};
-use coprocessor::dag::expr::{EvalConfig, EvalContext};
+use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings};
 
 mod scanner;
 mod table_scan;
@@ -137,6 +137,12 @@ pub trait Executor {
     fn next(&mut self) -> Result<Option<Row>>;
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>);
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics);
+
+    /// Only executors with eval computation need to implement `take_eval_warnings`
+    /// It returns warnings happened during eval computation.
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        None
+    }
 
     /// Only `TableScan` and `IndexScan` need to implement `start_scan`.
     fn start_scan(&mut self) {}
