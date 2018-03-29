@@ -103,16 +103,15 @@ impl DAGContext {
                     resp.set_data(data);
                     return Ok(resp);
                 }
-                Err(e) => if let Error::Eval(err) = e {
+                Err(Error::Eval(err)) => {
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_error(err);
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);
                     return Ok(resp);
-                } else {
-                    return Err(e);
-                },
+                }
+                Err(e) => return Err(e),
             }
         }
     }
@@ -139,16 +138,15 @@ impl DAGContext {
                     finished = true;
                     break;
                 }
-                Err(e) => if let Error::Eval(err) = e {
+                Err(Error::Eval(err)) => {
                     let mut resp = Response::new();
                     let mut sel_resp = StreamResponse::new();
                     sel_resp.set_error(err);
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);
                     return Ok((Some(resp), true));
-                } else {
-                    return Err(e);
-                },
+                }
+                Err(e) => return Err(e),
             }
         }
         if record_cnt > 0 {
