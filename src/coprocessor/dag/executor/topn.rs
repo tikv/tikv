@@ -13,6 +13,7 @@
 
 use std::usize;
 use std::sync::Arc;
+use std::cell::RefCell;
 use std::vec::IntoIter;
 
 use tipb::executor::TopN;
@@ -21,7 +22,7 @@ use tipb::expression::ByItem;
 
 use coprocessor::codec::datum::Datum;
 use coprocessor::Result;
-use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
+use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 
 use super::topn_heap::TopNHeap;
 use super::{inflate_with_col_for_dag, Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
@@ -56,7 +57,8 @@ pub struct TopNExecutor {
     cols: Arc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
     iter: Option<IntoIter<Row>>,
-    ctx: EvalContext,
+    eval_ctx: Option<EvalContext>,
+    eval_warnings: Option<EvalWarnings>,
     src: Box<Executor + Send>,
     limit: usize,
     first_collect: bool,
@@ -75,13 +77,15 @@ impl TopNExecutor {
         for by_item in &order_by {
             visitor.visit(by_item.get_expr())?;
         }
-        let mut ctx = EvalContext::new(eval_cfg);
+        let mut eval_ctx = EvalContext::new(Arc::clone(&eval_cfg));
+        let order_by = OrderBy::new(&mut eval_ctx, order_by)?;
         Ok(TopNExecutor {
-            order_by: OrderBy::new(&mut ctx, order_by)?,
+            order_by: order_by,
             cols: columns_info,
             related_cols_offset: visitor.column_offsets(),
             iter: None,
-            ctx: ctx,
+            eval_ctx: Some(eval_ctx),
+            eval_warnings: None,
             src: src,
             limit: meta.get_limit() as usize,
             first_collect: true,
@@ -94,16 +98,22 @@ impl TopNExecutor {
             return Ok(());
         }
 
-        let mut heap = TopNHeap::new(self.limit, Arc::clone(&self.ctx.cfg))?;
+        if self.eval_ctx.is_none() {
+            return Ok(());
+        }
+
+        let ctx = Arc::new(RefCell::new(self.eval_ctx.take().unwrap()));
+        let mut heap = TopNHeap::new(self.limit, Arc::clone(&ctx))?;
+
         while let Some(row) = self.src.next()? {
             let cols = inflate_with_col_for_dag(
-                &mut self.ctx,
+                &mut ctx.borrow_mut(),
                 &row.data,
                 self.cols.as_ref(),
                 &self.related_cols_offset,
                 row.handle,
             )?;
-            let ob_values = self.order_by.eval(&mut self.ctx, &cols)?;
+            let ob_values = self.order_by.eval(&mut ctx.borrow_mut(), &cols)?;
             heap.try_add_row(
                 row.handle,
                 row.data,
@@ -120,6 +130,7 @@ impl TopNExecutor {
             })
             .collect();
         self.iter = Some(data.into_iter());
+        self.eval_warnings = Some(ctx.borrow_mut().take_warnings());
         Ok(())
     }
 }
@@ -147,11 +158,23 @@ impl Executor for TopNExecutor {
             self.first_collect = false;
         }
     }
+
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        if let Some(mut warnings) = self.src.take_eval_warnings() {
+            if let Some(mut topn_warnings) = self.eval_warnings.take() {
+                warnings.merge(topn_warnings);
+            }
+            Some(warnings)
+        } else {
+            self.eval_warnings.take()
+        }
+    }
 }
 
 #[cfg(test)]
 pub mod test {
     use std::sync::Arc;
+    use std::cell::RefCell;
 
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
@@ -187,7 +210,8 @@ pub mod test {
         order_cols.push(new_order_by(1, false));
         let order_cols = Arc::new(order_cols);
 
-        let mut topn_heap = TopNHeap::new(5, Arc::new(EvalConfig::default())).unwrap();
+        let mut topn_heap =
+            TopNHeap::new(5, Arc::new(RefCell::new(EvalContext::default()))).unwrap();
 
         let test_data = vec![
             (1, String::from("data1"), Datum::Null, Datum::I64(1)),
@@ -301,7 +325,8 @@ pub mod test {
         order_cols.push(new_order_by(0, false));
         order_cols.push(new_order_by(1, true));
         let order_cols = Arc::new(order_cols);
-        let mut topn_heap = TopNHeap::new(5, Arc::new(EvalConfig::default())).unwrap();
+        let mut topn_heap =
+            TopNHeap::new(5, Arc::new(RefCell::new(EvalContext::default()))).unwrap();
 
         let ob_values1: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2)];
         let row_data = RowColsDict::new(HashMap::default(), b"name:1".to_vec());
