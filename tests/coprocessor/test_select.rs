@@ -18,7 +18,6 @@ use std::i64;
 use std::thread;
 use std::time::Duration;
 use futures::{Future, Stream};
-use futures::sync::{mpsc as futures_mpsc, oneshot};
 
 use tikv::coprocessor::*;
 use kvproto::kvrpcpb::Context;
@@ -1458,18 +1457,19 @@ fn handle_streaming_select<F>(
 where
     F: FnMut(&Response) + Send + 'static,
 {
-    let (tx, rx) = mpsc::channel();
     let stream = end_point.handle_stream_request(req);
-    for resp in stream.wait() {
-        let resp = resp.unwrap();
-        check_range(&resp);
-        assert!(!resp.get_data().is_empty());
-        let mut stream_resp = StreamResponse::new();
-        stream_resp.merge_from_bytes(resp.get_data()).unwrap();
-        tx.send(stream_resp).unwrap();
-    }
-    drop(tx);
-    rx.into_iter().collect()
+    stream
+        .wait()
+        .into_iter()
+        .map(|resp| {
+            let resp = resp.unwrap();
+            check_range(&resp);
+            assert!(!resp.get_data().is_empty());
+            let mut stream_resp = StreamResponse::new();
+            stream_resp.merge_from_bytes(resp.get_data()).unwrap();
+            stream_resp
+        })
+        .collect()
 }
 
 #[test]
