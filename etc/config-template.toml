@@ -249,9 +249,6 @@
 # rocksdb max total wal size
 # max-total-wal-size = "4GB"
 
-# rocksdb writable file max buffer size
-# writable-file-max-buffer-size = "1MB"
-
 # Rocksdb Statistics provides cumulative stats over time.
 # Turn statistics on will introduce about 5%-10% overhead for RocksDB,
 # but it is worthy to know the internal status of RocksDB.
@@ -419,7 +416,6 @@
 # max-open-files = 40960
 # max-manifest-file-size = "20MB"
 # create-if-missing = true
-# writable-file-max-buffer-size = "1MB"
 
 # enable-statistics = true
 # stats-dump-period = "10m"
