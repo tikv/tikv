@@ -2113,12 +2113,9 @@ fn test_handle_truncate() {
         let req = DAGSelect::from(&product.table)
             .where_expr(cond.clone())
             .build();
-        let (tx, rx) = oneshot::channel();
-        let on_resp = OnResponse::Unary(tx);
-        let req = RequestTask::new(req, on_resp, 100).unwrap();
-        end_point.schedule(EndPointTask::Request(req)).unwrap();
-        let resp = rx.wait().unwrap();
-        assert!(!resp.get_other_error().is_empty());
+        let mut resp = handle_select(&end_point, req);
+        assert!(resp.has_error());
+        assert!(resp.get_warnings().is_empty());
     }
 
     end_point.stop().unwrap().join().unwrap();
