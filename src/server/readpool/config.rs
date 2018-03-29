@@ -15,9 +15,8 @@ use sys_info;
 
 use util::config::ReadableSize;
 
-const DEFAULT_HIGH_CONCURRENCY: usize = 4;
-const DEFAULT_NORMAL_CONCURRENCY: usize = 4;
-const DEFAULT_LOW_CONCURRENCY: usize = 4;
+const DEFAULT_CONCURRENCY: usize = 4;
+const DEFAULT_COP_CONCURRENCY: usize = 8;
 
 // Assume a request can be finished in 1ms, a request at position x will wait about
 // 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
@@ -52,12 +51,12 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            high_concurrency: DEFAULT_HIGH_CONCURRENCY,
-            normal_concurrency: DEFAULT_NORMAL_CONCURRENCY,
-            low_concurrency: DEFAULT_LOW_CONCURRENCY,
-            max_tasks_high: DEFAULT_MAX_TASKS_PER_CORE * DEFAULT_HIGH_CONCURRENCY,
-            max_tasks_normal: DEFAULT_MAX_TASKS_PER_CORE * DEFAULT_NORMAL_CONCURRENCY,
-            max_tasks_low: DEFAULT_MAX_TASKS_PER_CORE * DEFAULT_LOW_CONCURRENCY,
+            high_concurrency: DEFAULT_CONCURRENCY,
+            normal_concurrency: DEFAULT_CONCURRENCY,
+            low_concurrency: DEFAULT_CONCURRENCY,
+            max_tasks_high: DEFAULT_MAX_TASKS_PER_CORE * DEFAULT_CONCURRENCY,
+            max_tasks_normal: DEFAULT_MAX_TASKS_PER_CORE * DEFAULT_CONCURRENCY,
+            max_tasks_low: DEFAULT_MAX_TASKS_PER_CORE * DEFAULT_CONCURRENCY,
             stack_size: ReadableSize::mb(DEFAULT_STACK_SIZE_MB),
         }
     }
@@ -69,7 +68,7 @@ impl Config {
         let concurrency = if cpu_num > 8 {
             (f64::from(cpu_num) * 0.8) as usize
         } else {
-            DEFAULT_HIGH_CONCURRENCY
+            DEFAULT_COP_CONCURRENCY
         };
         Config {
             high_concurrency: concurrency,
