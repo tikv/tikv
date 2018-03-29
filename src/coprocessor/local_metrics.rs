@@ -24,11 +24,11 @@ use pd::PdTask;
 /// `CopFlowStatistics` is for flow statistics, it would be reported to PD by flush.
 pub struct CopFlowStatistics {
     data: HashMap<u64, FlowStatistics>,
-    sender: Option<FutureScheduler<PdTask>>,
+    sender: FutureScheduler<PdTask>,
 }
 
 impl CopFlowStatistics {
-    pub fn new(sender: Option<FutureScheduler<PdTask>>) -> CopFlowStatistics {
+    pub fn new(sender: FutureScheduler<PdTask>) -> CopFlowStatistics {
         CopFlowStatistics {
             sender: sender,
             data: Default::default(),
@@ -42,18 +42,16 @@ impl CopFlowStatistics {
     }
 
     pub fn flush(&mut self) {
-        if let Some(ref sender) = self.sender {
-            if self.data.is_empty() {
-                return;
-            }
-            let mut to_send_stats = HashMap::default();
-            mem::swap(&mut to_send_stats, &mut self.data);
-            if let Err(e) = sender.schedule(PdTask::ReadStats {
-                read_stats: to_send_stats,
-            }) {
-                error!("send coprocessor statistics: {:?}", e);
-            };
+        if self.data.is_empty() {
+            return;
         }
+        let mut to_send_stats = HashMap::default();
+        mem::swap(&mut to_send_stats, &mut self.data);
+        if let Err(e) = self.sender.schedule(PdTask::ReadStats {
+            read_stats: to_send_stats,
+        }) {
+            error!("send coprocessor statistics: {:?}", e);
+        };
     }
 }
 
@@ -66,7 +64,7 @@ pub struct ExecLocalMetrics {
 }
 
 impl ExecLocalMetrics {
-    pub fn new(sender: Option<FutureScheduler<PdTask>>) -> ExecLocalMetrics {
+    pub fn new(sender: FutureScheduler<PdTask>) -> ExecLocalMetrics {
         ExecLocalMetrics {
             flow_stats: CopFlowStatistics::new(sender),
             scan_details: COPR_SCAN_DETAILS.local(),

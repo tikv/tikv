@@ -29,7 +29,7 @@ use tikv::server::{Config, OnResponse};
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::{self, Key, Mutation, ALL_CFS};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
-use tikv::util::worker::{Builder as WorkerBuilder, Worker};
+use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 use tipb::executor::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
@@ -512,12 +512,13 @@ fn init_data_with_details(
     if commit {
         store.commit_with_ctx(ctx);
     }
+    let pd_worker = FutureWorker::new("test-pd-worker");
+    let pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+        || ReadPoolContext::new(pd_worker.scheduler())
+    });
     let mut end_point = WorkerBuilder::new("test select worker")
         .batch_size(5)
         .create();
-    let pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-        || ReadPoolContext::new(None)
-    });
     let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), &cfg, pool);
     end_point.start(runner).unwrap();
 

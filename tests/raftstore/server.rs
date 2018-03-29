@@ -149,7 +149,7 @@ impl Simulator for ServerCluster {
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor, || {
-            || coprocessor::ReadPoolContext::new(None)
+            || coprocessor::ReadPoolContext::new(pd_worker.scheduler())
         });
 
         let mut server = Server::new(
