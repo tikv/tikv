@@ -349,6 +349,10 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
         });
         config.raft_store.capacity = capacity;
     }
+
+    if matches.is_present("import-mode") {
+        config.tune_for_import_mode();
+    }
 }
 
 // Set gRPC event engine to epollsig.
@@ -470,6 +474,11 @@ fn main() {
                     "Sets server labels. Uses `,` to separate kv pairs, like \
                      `zone=cn,disk=ssd`",
                 ),
+        )
+        .arg(
+            Arg::with_name("import-mode")
+                .long("import-mode")
+                .help("Run in import mode"),
         )
         .arg(
             Arg::with_name("print-sample-config")

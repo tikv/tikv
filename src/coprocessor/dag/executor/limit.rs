@@ -18,6 +18,7 @@ use tipb::executor::Limit;
 
 use coprocessor::Result;
 use coprocessor::dag::executor::{Executor, Row};
+use coprocessor::dag::expr::EvalWarnings;
 use super::ExecutorMetrics;
 
 pub struct LimitExecutor<'a> {
@@ -61,6 +62,10 @@ impl<'a> Executor for LimitExecutor<'a> {
             metrics.executor_count.limit += 1;
             self.first_collect = false;
         }
+    }
+
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        self.src.take_eval_warnings()
     }
 }
 
