@@ -254,7 +254,7 @@ impl Executor for IndexScanExecutor {
         counts.append(&mut self.counts[..self.cursor].to_vec());
         self.counts.drain(0..self.cursor);
         self.cursor = 0;
-        if self.counts.len() > 0 {
+        if !self.counts.is_empty() {
             counts.push(self.counts[0]);
             self.counts[0] = 0;
         }
