@@ -206,6 +206,7 @@ mod tests {
     use raftstore::store::Msg as StoreMsg;
     use raftstore::store::*;
     use raftstore::store::transport::Transport;
+    use util::worker::FutureWorker;
     use util::security::SecurityConfig;
     use server::readpool::{self, ReadPool};
 
@@ -285,10 +286,11 @@ mod tests {
         let cfg = Arc::new(cfg);
         let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
 
+        let pd_worker = FutureWorker::new("test-pd-worker");
         let cop_read_pool = ReadPool::new(
             "cop-readpool",
             &readpool::Config::default_for_test(),
-            || || coprocessor::ReadPoolContext::new(None),
+            || || coprocessor::ReadPoolContext::new(pd_worker.scheduler()),
         );
 
         let mut server = Server::new(
