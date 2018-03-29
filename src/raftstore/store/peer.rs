@@ -46,8 +46,7 @@ use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
 use pd::{PdTask, INVALID_ID};
 
 use super::store::{DestroyPeerJob, Store, StoreStat};
-use super::peer_storage::{mark_merge_done, write_peer_state, ApplySnapResult, InvokeContext,
-                          PeerStorage};
+use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::util::{self, Lease, LeaseState};
 use super::cmd_resp;
 use super::transport::Transport;
@@ -400,6 +399,7 @@ impl Peer {
     }
 
     pub fn destroy(&mut self, keep_data: bool) -> Result<()> {
+        fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = Instant::now();
 
         let region = self.get_store().get_region().clone();
@@ -409,11 +409,13 @@ impl Peer {
         let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
         self.mut_store().clear_meta(&kv_wb, &raft_wb)?;
-        if let Some(ref state) = self.pending_merge {
-            mark_merge_done(&self.kv_engine, &kv_wb, &region, state.get_target())?;
-        } else {
-            write_peer_state(&self.kv_engine, &kv_wb, &region, PeerState::Tombstone)?;
-        }
+        write_peer_state(
+            &self.kv_engine,
+            &kv_wb,
+            &region,
+            PeerState::Tombstone,
+            self.pending_merge.clone(),
+        )?;
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(self.cfg.sync_log);

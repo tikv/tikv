@@ -46,7 +46,7 @@ use raftstore::store::{cmd_resp, keys, util, Store};
 use raftstore::store::msg::Callback;
 use raftstore::store::engine::{Mutable, Peekable, Snapshot};
 use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply_state,
-                                     write_merge_state, write_peer_state};
+                                     write_peer_state};
 use raftstore::store::peer::{check_epoch, Peer};
 use raftstore::store::metrics::*;
 use import::SSTImporter;
@@ -1065,7 +1065,7 @@ impl ApplyDelegate {
         } else {
             PeerState::Normal
         };
-        if let Err(e) = write_peer_state(&self.engine, ctx.wb_mut(), &region, state) {
+        if let Err(e) = write_peer_state(&self.engine, ctx.wb_mut(), &region, state, None) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
@@ -1145,9 +1145,15 @@ impl ApplyDelegate {
         let region_ver = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_ver);
         new_region.mut_region_epoch().set_version(region_ver);
-        write_peer_state(&self.engine, ctx.wb_mut(), &region, PeerState::Normal)
+        write_peer_state(&self.engine, ctx.wb_mut(), &region, PeerState::Normal, None)
             .and_then(|_| {
-                write_peer_state(&self.engine, ctx.wb_mut(), &new_region, PeerState::Normal)
+                write_peer_state(
+                    &self.engine,
+                    ctx.wb_mut(),
+                    &new_region,
+                    PeerState::Normal,
+                    None,
+                )
             })
             .and_then(|_| {
                 write_initial_apply_state(&self.engine, ctx.wb_mut(), new_region.get_id())
@@ -1228,12 +1234,12 @@ impl ApplyDelegate {
         merging_state.set_min_index(index);
         merging_state.set_target(prepare_merge.get_target().to_owned());
         merging_state.set_commit(exec_ctx.index);
-        write_merge_state(
+        write_peer_state(
             &self.engine,
             ctx.wb(),
             &region,
             PeerState::Merging,
-            merging_state.clone(),
+            Some(merging_state.clone()),
         ).unwrap_or_else(|e| {
             panic!(
                 "{} failed to save merging state {:?} for region {:?}: {:?}",
@@ -1257,7 +1263,7 @@ impl ApplyDelegate {
     fn load_entries_for_merge(&self, merge: &CommitMergeRequest, apply_index: u64) -> Vec<Entry> {
         // Entries from [first_index, last_index) need to be loaded.
         let first_index = apply_index + 1;
-        let last_index = merge.get_commit();
+        let last_index = merge.get_commit() + 1;
         if first_index >= last_index {
             return vec![];
         }
@@ -1295,25 +1301,19 @@ impl ApplyDelegate {
         &mut self,
         ctx: &mut ApplyContext,
         merge: &CommitMergeRequest,
-        exist_region: &Region,
+        exist_region: &mut Region,
     ) {
-        let source_region = merge.get_source();
-        let apply_state_key = keys::apply_state_key(source_region.get_id());
+        let region_id = exist_region.get_id();
+        let apply_state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState = match self.engine.get_msg_cf(CF_RAFT, &apply_state_key) {
             Ok(Some(s)) => s,
             e => panic!(
                 "{} failed to get apply state of {:?}: {:?}",
-                self.tag, source_region, e
+                self.tag, exist_region, e
             ),
         };
         let apply_index = apply_state.get_applied_index();
         if apply_index >= merge.get_commit() {
-            if source_region.get_region_epoch() != exist_region.get_region_epoch() {
-                panic!(
-                    "{} source region {:?} not match exist region {:?}",
-                    self.tag, source_region, exist_region
-                );
-            }
             return;
         }
 
@@ -1322,17 +1322,18 @@ impl ApplyDelegate {
             return;
         }
         let stash = ctx.stash(self);
-        let mut delegate = match ctx.delegates.get_mut(&source_region.get_id()) {
-            None => panic!("{} source region {:?} not exist", self.tag, source_region),
+        let mut delegate = match ctx.delegates.get_mut(&region_id) {
+            None => panic!("{} source region {} not exist", self.tag, region_id),
             Some(e) => e.take().unwrap_or_else(|| {
                 panic!(
                     "{} unexpected circle dependency of region {:?}",
-                    self.tag, source_region
+                    self.tag, exist_region
                 )
             }),
         };
         delegate.handle_raft_committed_entries(ctx, entries);
-        *ctx.delegates.get_mut(&source_region.get_id()).unwrap() = Some(delegate);
+        *exist_region = delegate.region.clone();
+        *ctx.delegates.get_mut(&region_id).unwrap() = Some(delegate);
         ctx.apply_res.last_mut().unwrap().merged = true;
         ctx.restore_stash(stash);
     }
@@ -1363,18 +1364,14 @@ impl ApplyDelegate {
                 self.tag, state
             ),
         }
-        let exist_region = state.get_region();
-        if source_region.get_start_key() != exist_region.get_start_key()
-            || source_region.get_end_key() != exist_region.get_end_key()
-        {
+        let mut exist_region = state.get_region().to_owned();
+        self.catch_up_log_for_merge(ctx, merge, &mut exist_region);
+        if *source_region != exist_region {
             panic!(
                 "{} source_region {:?} not match exist region {:?}",
                 self.tag, source_region, exist_region
             );
         }
-
-        self.catch_up_log_for_merge(ctx, merge, exist_region);
-
         let mut region = self.region.clone();
         // Use a max value so that pd can ensure overlapped region has a priority.
         let version = cmp::max(
@@ -1387,10 +1384,18 @@ impl ApplyDelegate {
         } else {
             region.set_start_key(source_region.get_start_key().to_vec());
         }
-        write_peer_state(&self.engine, ctx.wb(), &region, PeerState::Normal)
+        write_peer_state(&self.engine, ctx.wb(), &region, PeerState::Normal, None)
             .and_then(|_| {
-                // Should source_region be used?
-                write_peer_state(&self.engine, ctx.wb(), exist_region, PeerState::Tombstone)
+                // TODO: maybe all information needs to be filled?
+                let mut merging_state = MergeState::new();
+                merging_state.set_target(self.region.clone());
+                write_peer_state(
+                    &self.engine,
+                    ctx.wb(),
+                    source_region,
+                    PeerState::Tombstone,
+                    Some(merging_state),
+                )
             })
             .unwrap_or_else(|e| {
                 panic!(
@@ -1438,12 +1443,14 @@ impl ApplyDelegate {
         let version = region.get_region_epoch().get_version();
         // Update version to avoid duplicated rollback requests.
         region.mut_region_epoch().set_version(version + 1);
-        write_peer_state(&self.engine, ctx.wb(), &region, PeerState::Normal).unwrap_or_else(|e| {
-            panic!(
-                "{} failed to rollback merge {:?}: {:?}",
-                self.tag, rollback, e
-            )
-        });
+        write_peer_state(&self.engine, ctx.wb(), &region, PeerState::Normal, None).unwrap_or_else(
+            |e| {
+                panic!(
+                    "{} failed to rollback merge {:?}: {:?}",
+                    self.tag, rollback, e
+                )
+            },
+        );
 
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["rollback_merge", "success"])
