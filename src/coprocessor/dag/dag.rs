@@ -18,11 +18,12 @@ use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message as PbMsg, RepeatedField};
 
+use coprocessor::*;
+use coprocessor::util;
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::dag::expr::EvalConfig;
-use coprocessor::Result;
-use coprocessor::endpoint::{get_pk, ReqContext};
+use coprocessor::endpoint::ReqContext;
 use storage::{Snapshot, SnapshotStore};
 
 use super::executor::{build_exec, Executor, ExecutorMetrics, Row};
@@ -173,7 +174,7 @@ fn inflate_cols(row: &Row, cols: &[ColumnInfo], output_offsets: &[u32]) -> Resul
         match data.get(col_id) {
             Some(value) => values.extend_from_slice(value),
             None if col.get_pk_handle() => {
-                let pk = get_pk(col, row.handle);
+                let pk = util::get_pk(col, row.handle);
                 box_try!(values.encode(&[pk], false));
             }
             None if col.has_default_val() => {

@@ -18,11 +18,12 @@ use std::iter::Peekable;
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::TableScan;
 
-use coprocessor::codec::table;
-use coprocessor::endpoint::is_point;
-use coprocessor::{Error, Result};
 use storage::{Key, SnapshotStore};
 use util::collections::HashSet;
+
+use coprocessor::*;
+use coprocessor::util;
+use coprocessor::codec::table;
 
 use super::{Executor, ExecutorMetrics, Row};
 use super::scanner::{ScanOn, Scanner};
@@ -121,7 +122,7 @@ impl Executor for TableScanExecutor {
 
             if let Some(range) = self.key_ranges.next() {
                 self.current_range = Some(range.clone());
-                if is_point(&range) {
+                if util::is_point(&range) {
                     self.metrics.scan_counter.inc_point();
                     if let Some(row) = self.get_row_from_point(range)? {
                         self.count += 1;
@@ -144,7 +145,7 @@ impl Executor for TableScanExecutor {
 
     fn start_scan(&mut self) {
         if let Some(range) = self.current_range.as_ref() {
-            if !is_point(range) {
+            if !util::is_point(range) {
                 let scanner = self.scanner.as_ref().unwrap();
                 return scanner.start_scan(&mut self.scan_range);
             }
@@ -163,7 +164,7 @@ impl Executor for TableScanExecutor {
         let mut ret_range = mem::replace(&mut self.scan_range, KeyRange::default());
         match self.current_range.as_ref() {
             Some(range) => {
-                if !is_point(range) {
+                if !util::is_point(range) {
                     let scanner = self.scanner.as_ref().unwrap();
                     if scanner.stop_scan(&mut ret_range) {
                         return Some(ret_range);

@@ -18,6 +18,7 @@ mod statistics;
 mod checksum;
 mod readpool_context;
 pub mod local_metrics;
+pub mod util;
 pub mod codec;
 
 pub use self::endpoint::err_resp;
