@@ -49,7 +49,7 @@ use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply
                                      write_peer_state};
 use raftstore::store::peer::{check_epoch, Peer};
 use raftstore::store::metrics::*;
-use raftstore::store::worker::unsafe_cleanup_range;
+use raftstore::store::worker::UCRTaskQueue;
 use import::SSTImporter;
 
 use super::metrics::*;
@@ -501,15 +501,23 @@ pub struct ApplyDelegate {
     pending_cmds: PendingCmdQueue,
     metrics: ApplyMetrics,
     last_merge_version: u64,
+
+    // unsafe cleanup range task queue
+    ucr_task_queue: Arc<UCRTaskQueue>,
 }
 
 impl ApplyDelegate {
-    fn from_peer(peer: &Peer) -> ApplyDelegate {
+    fn from_peer(peer: &Peer, ucr_task_queue: Arc<UCRTaskQueue>) -> ApplyDelegate {
         let reg = Registration::new(peer);
-        ApplyDelegate::from_registration(peer.kv_engine(), peer.raft_engine(), reg)
+        ApplyDelegate::from_registration(peer.kv_engine(), peer.raft_engine(), reg, ucr_task_queue)
     }
 
-    fn from_registration(db: Arc<DB>, raft_db: Arc<DB>, reg: Registration) -> ApplyDelegate {
+    fn from_registration(
+        db: Arc<DB>,
+        raft_db: Arc<DB>,
+        reg: Registration,
+        ucr_task_queue: Arc<UCRTaskQueue>,
+    ) -> ApplyDelegate {
         ApplyDelegate {
             id: reg.id,
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
@@ -524,6 +532,7 @@ impl ApplyDelegate {
             pending_cmds: Default::default(),
             metrics: Default::default(),
             last_merge_version: 0,
+            ucr_task_queue: ucr_task_queue,
         }
     }
 
@@ -1502,7 +1511,7 @@ impl ApplyDelegate {
                 CmdType::DeleteRange => {
                     self.handle_delete_range(req, &mut ranges, ctx.use_delete_range)
                 }
-                CmdType::UnsafeCleanupRange => self.handle_unsafe_cleanup_range(ctx, req),
+                CmdType::UnsafeCleanupRange => self.handle_unsafe_cleanup_range(req),
                 CmdType::IngestSST => self.handle_ingest_sst(ctx, req, &mut ssts),
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
@@ -1710,11 +1719,7 @@ impl ApplyDelegate {
         Ok(Response::new())
     }
 
-    fn handle_unsafe_cleanup_range(
-        &mut self,
-        ctx: &ApplyContext,
-        req: &Request,
-    ) -> Result<Response> {
+    fn handle_unsafe_cleanup_range(&mut self, req: &Request) -> Result<Response> {
         let s_key = req.get_unsafe_cleanup_range().get_start_key();
         let e_key = req.get_unsafe_cleanup_range().get_end_key();
         if !e_key.is_empty() && s_key >= e_key {
@@ -1742,14 +1747,14 @@ impl ApplyDelegate {
 
         // Unsafe_cleanup_range tasks are expensive operations, so we deliver them to
         // another worker thread to prevent them blocking apply thread.
-        let task_key = unsafe_cleanup_range::encode_task_key(cf, &keys::data_key(s_key));
-        rocksdb::get_cf_handle(&self.engine, CF_DEFAULT)
-            .and_then(|handle| ctx.wb().put_cf(handle, &task_key, &end_key))
+        let start_key = keys::data_key(s_key);
+        self.ucr_task_queue
+            .add_task(cf, &start_key, &end_key)
             .unwrap_or_else(|e| {
                 panic!(
                     "{} failed to write unsafe cleanup range task ({}, {}), error {:?}",
                     self.tag,
-                    escape(&task_key),
+                    escape(&start_key),
                     escape(&end_key),
                     e
                 )
@@ -2039,6 +2044,7 @@ pub struct Runner {
     notifier: Sender<TaskRes>,
     sync_log: bool,
     use_delete_range: bool,
+    ucr_task_queue: Arc<UCRTaskQueue>, // unsafe_cleanup_range task queue
     tag: String,
 }
 
@@ -2048,11 +2054,15 @@ impl Runner {
         notifier: Sender<TaskRes>,
         sync_log: bool,
         use_delete_range: bool,
+        ucr_task_queue: Arc<UCRTaskQueue>,
     ) -> Runner {
         let mut delegates =
             HashMap::with_capacity_and_hasher(store.get_peers().len(), Default::default());
         for (&region_id, p) in store.get_peers() {
-            delegates.insert(region_id, Some(ApplyDelegate::from_peer(p)));
+            delegates.insert(
+                region_id,
+                Some(ApplyDelegate::from_peer(p, Arc::clone(&ucr_task_queue))),
+            );
         }
         Runner {
             db: store.kv_engine(),
@@ -2063,6 +2073,7 @@ impl Runner {
             notifier: notifier,
             sync_log: sync_log,
             use_delete_range: use_delete_range,
+            ucr_task_queue: ucr_task_queue,
             tag: format!("[store {}]", store.store_id()),
         }
     }
@@ -2166,8 +2177,12 @@ impl Runner {
         let peer_id = s.id;
         let region_id = s.region.get_id();
         let term = s.term;
-        let delegate =
-            ApplyDelegate::from_registration(Arc::clone(&self.db), Arc::clone(&self.raft_db), s);
+        let delegate = ApplyDelegate::from_registration(
+            Arc::clone(&self.db),
+            Arc::clone(&self.raft_db),
+            s,
+            Arc::clone(&self.ucr_task_queue),
+        );
         info!(
             "{} register to apply delegates at term {}",
             delegate.tag, delegate.term
@@ -2230,6 +2245,7 @@ mod tests {
     use kvproto::raft_cmdpb::*;
     use raftstore::coprocessor::*;
     use raftstore::store::msg::WriteResponse;
+    use raftstore::store::worker::UCRTaskQueue;
 
     use super::*;
     use import::test_helpers::*;
@@ -2258,9 +2274,10 @@ mod tests {
         host: Arc<CoprocessorHost>,
         importer: Arc<SSTImporter>,
         tx: Sender<TaskRes>,
+        ucr_task_queue: Arc<UCRTaskQueue>,
     ) -> Runner {
         Runner {
-            db: db,
+            db: Arc::clone(&db),
             raft_db: raft_db,
             host: host,
             importer: importer,
@@ -2269,6 +2286,7 @@ mod tests {
             sync_log: false,
             tag: "".to_owned(),
             use_delete_range: true,
+            ucr_task_queue: ucr_task_queue,
         }
     }
 
@@ -2323,12 +2341,14 @@ mod tests {
         let (_tmp, db, raft_db) = create_tmp_engine("apply-basic");
         let host = Arc::new(CoprocessorHost::default());
         let (_dir, importer) = create_tmp_importer("apply-basic");
+        let ucr_task_queue = Arc::new(UCRTaskQueue::new(Arc::clone(&db)));
         let mut runner = new_runner(
             Arc::clone(&db),
             raft_db,
             Arc::clone(&host),
             Arc::clone(&importer),
             tx,
+            ucr_task_queue,
         );
 
         let mut reg = Registration::default();
@@ -2606,7 +2626,9 @@ mod tests {
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let mut delegate = ApplyDelegate::from_registration(Arc::clone(&db), raft_db, reg);
+        let ucr_task_queue = Arc::new(UCRTaskQueue::new(Arc::clone(&db)));
+        let mut delegate =
+            ApplyDelegate::from_registration(Arc::clone(&db), raft_db, reg, ucr_task_queue);
         let mut delegates = HashMap::default();
         let (tx, rx) = mpsc::channel();
 
@@ -2867,14 +2889,23 @@ mod tests {
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let mut delegate1 =
-            ApplyDelegate::from_registration(Arc::clone(&db), Arc::clone(&raft_db), reg);
+        let ucr_task_queue = Arc::new(UCRTaskQueue::new(Arc::clone(&db)));
+        let mut delegate1 = ApplyDelegate::from_registration(
+            Arc::clone(&db),
+            Arc::clone(&raft_db),
+            reg,
+            Arc::clone(&ucr_task_queue),
+        );
         delegate1.apply_state.set_applied_index(3);
         reg = Registration::default();
         reg.region.set_start_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let mut delegate2 =
-            ApplyDelegate::from_registration(Arc::clone(&db), Arc::clone(&raft_db), reg);
+        let mut delegate2 = ApplyDelegate::from_registration(
+            Arc::clone(&db),
+            Arc::clone(&raft_db),
+            reg,
+            Arc::clone(&ucr_task_queue),
+        );
         delegate2.apply_state.set_applied_index(1);
 
         let host = CoprocessorHost::default();

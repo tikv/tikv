@@ -60,6 +60,7 @@ pub use self::compact::{Runner as CompactRunner, Task as CompactTask};
 pub use self::raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask};
 pub use self::consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask};
 pub use self::cleanup_sst::{Runner as CleanupSSTRunner, Task as CleanupSSTTask};
-pub use self::unsafe_cleanup_range::{Runner as UnsafeCleanupRangeRunner, UNSAFE_CLEANUP_INTERVAL};
+pub use self::unsafe_cleanup_range::{Runner as UnsafeCleanupRangeRunner,
+                                     TaskQueue as UCRTaskQueue, UNSAFE_CLEANUP_INTERVAL};
 pub use self::apply::{Apply, ApplyMetrics, ApplyRes, Proposal, RegionProposal, Registration,
                       Runner as ApplyRunner, Task as ApplyTask, TaskRes as ApplyTaskRes};

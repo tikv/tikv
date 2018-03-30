@@ -20,17 +20,41 @@ use util::escape;
 use util::timer::Timer;
 use util::worker::{Runnable, RunnableWithTimer};
 use raftstore::store::{keys, util};
-use storage::{decode_cf, encode_cf, CF_DEFAULT};
+use storage::{decode_cf, encode_cf};
 use util::rocksdb::get_cf_handle;
 
 pub const UNSAFE_CLEANUP_INTERVAL: u64 = 5_000; // milliseconds
 
-pub struct Runner {
-    engine: Arc<DB>,
-    use_delete_range: bool,
+#[derive(Debug)]
+pub struct TaskQueue {
+    db: Arc<DB>, // use db to store tasks.
 }
 
-pub fn encode_task_key(cf: &str, start_key: &[u8]) -> Vec<u8> {
+impl Clone for TaskQueue {
+    fn clone(&self) -> TaskQueue {
+        TaskQueue {
+            db: Arc::clone(&self.db),
+        }
+    }
+}
+
+pub struct Task {
+    cf: String,
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+}
+
+impl Task {
+    fn new(cf: String, start_key: Vec<u8>, end_key: Vec<u8>) -> Task {
+        Task {
+            cf: cf,
+            start_key: start_key,
+            end_key: end_key,
+        }
+    }
+}
+
+fn encode_task_key(cf: &str, start_key: &[u8]) -> Vec<u8> {
     let mut vec = keys::encode_unsafe_cleanup_range_key(start_key);
     vec.push(encode_cf(cf));
     vec
@@ -45,10 +69,54 @@ fn decode_task_key(key: &[u8]) -> (&'static str, Vec<u8>) {
     (cf, start_key)
 }
 
+impl TaskQueue {
+    pub fn new(db: Arc<DB>) -> TaskQueue {
+        TaskQueue { db: db }
+    }
+
+    pub fn add_task(&self, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<(), String> {
+        let task_key = encode_task_key(cf, start_key);
+        self.db.put(&task_key, end_key)?;
+        Ok(())
+    }
+
+    pub fn pick_task(&self) -> Option<Task> {
+        let mut read_options = ReadOptions::default();
+        read_options.fill_cache(false);
+        read_options.set_iterate_lower_bound(keys::UNSAFE_CLEANUP_RANGE_MIN_KEY);
+        read_options.set_iterate_upper_bound(keys::UNSAFE_CLEANUP_RANGE_MAX_KEY);
+        let mut iter = self.db.iter_opt(read_options);
+        iter.seek(SeekKey::Start);
+        if iter.valid() {
+            let (cf, start_key) = decode_task_key(iter.key());
+            Some(Task::new(
+                String::from(cf),
+                start_key,
+                iter.value().to_vec(),
+            ))
+        } else {
+            None
+        }
+    }
+
+    pub fn delete_task(&self, task: Task) -> Result<(), String> {
+        let task_key = encode_task_key(&task.cf, &task.start_key);
+        self.db.delete(&task_key)?;
+        Ok(())
+    }
+}
+
+pub struct Runner {
+    engine: Arc<DB>,
+    task_queue: Arc<TaskQueue>,
+    use_delete_range: bool,
+}
+
 impl Runner {
-    pub fn new(engine: Arc<DB>, use_delete_range: bool) -> Runner {
+    pub fn new(engine: Arc<DB>, task_queue: Arc<TaskQueue>, use_delete_range: bool) -> Runner {
         Runner {
             engine: engine,
+            task_queue: task_queue,
             use_delete_range: use_delete_range,
         }
     }
@@ -82,30 +150,16 @@ impl Runner {
             });
     }
 
-    fn pop_task(&self, task_key: &[u8]) {
-        let handle = get_cf_handle(&self.engine, CF_DEFAULT)
-            .unwrap_or_else(|e| panic!("get cf default failed, error {:?}", e));
-        self.engine
-            .delete_cf(handle, task_key)
-            .unwrap_or_else(|e| panic!("write to db failed, error {:?}", e));
-    }
-
     fn unsafe_cleanup_ranges(&self) {
         let t = Instant::now();
-        let mut read_options = ReadOptions::default();
-        read_options.fill_cache(false);
-        read_options.set_iterate_lower_bound(keys::UNSAFE_CLEANUP_RANGE_MIN_KEY);
-        read_options.set_iterate_upper_bound(keys::UNSAFE_CLEANUP_RANGE_MAX_KEY);
-        let mut iter = self.engine.iter_opt(read_options);
-        iter.seek(SeekKey::Start);
-        while iter.valid() {
-            let (cf, start_key) = decode_task_key(iter.key());
-
+        while let Some(task) = self.task_queue.pick_task() {
             // Cleanup the range.
-            self.unsafe_cleanup_range(cf, &start_key, iter.value());
+            self.unsafe_cleanup_range(&task.cf, &task.start_key, &task.end_key);
 
-            // Pop the task after range have been cleanup.
-            self.pop_task(iter.key());
+            // Delete task after finished.
+            self.task_queue
+                .delete_task(task)
+                .unwrap_or_else(|e| panic!("delete unsafe cleanup task failed, error {:?}", e));
 
             // If there are too many ranges need to cleanup, it will takes a long long
             // while to finish. In that situation if we don't limit the total time of
@@ -113,8 +167,6 @@ impl Runner {
             if t.elapsed() > Duration::from_millis(UNSAFE_CLEANUP_INTERVAL) {
                 break;
             }
-
-            iter.next();
         }
     }
 }

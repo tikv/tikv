@@ -54,7 +54,8 @@ use import::SSTImporter;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, CleanupSSTTask,
                     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
                     RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
-                    SplitCheckTask, UnsafeCleanupRangeRunner, UNSAFE_CLEANUP_INTERVAL};
+                    SplitCheckTask, UCRTaskQueue, UnsafeCleanupRangeRunner,
+                    UNSAFE_CLEANUP_INTERVAL};
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -590,8 +591,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         );
         box_try!(self.cleanup_sst_worker.start(cleanup_sst_runner));
 
-        let unsafe_cleanup_range_runner =
-            UnsafeCleanupRangeRunner::new(Arc::clone(&self.kv_engine), self.cfg.use_delete_range);
+        let ucr_task_queue = Arc::new(UCRTaskQueue::new(Arc::clone(&self.kv_engine)));
+        let unsafe_cleanup_range_runner = UnsafeCleanupRangeRunner::new(
+            Arc::clone(&self.kv_engine),
+            Arc::clone(&ucr_task_queue),
+            self.cfg.use_delete_range,
+        );
         let mut timer = Timer::new(1);
         timer.add_task(Duration::from_millis(UNSAFE_CLEANUP_INTERVAL), ());
         box_try!(
@@ -600,7 +605,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         );
 
         let (tx, rx) = mpsc::channel();
-        let apply_runner = ApplyRunner::new(self, tx, self.cfg.sync_log, self.cfg.use_delete_range);
+        let apply_runner = ApplyRunner::new(
+            self,
+            tx,
+            self.cfg.sync_log,
+            self.cfg.use_delete_range,
+            ucr_task_queue,
+        );
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
 
