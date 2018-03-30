@@ -112,7 +112,7 @@ impl Host {
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
         let pool = self.pool.get_pool_by_priority(priority);
         let ctxd = pool.get_context_delegators();
-        tracker.ctx_pool(&ctxd);
+        tracker.ctx_pool(ctxd);
 
         let handler: Result<Box<RequestHandler>> = req_handler_builder(snap);
 
@@ -227,8 +227,8 @@ impl RequestTracker {
         self.running_task_count = Some(running_task_count);
     }
 
-    fn ctx_pool(&mut self, ctx_pool: &futurepool::ContextDelegators<ReadPoolContext>) {
-        self.ctx_pool = Some(ctx_pool.clone());
+    fn ctx_pool(&mut self, ctx_pool: futurepool::ContextDelegators<ReadPoolContext>) {
+        self.ctx_pool = Some(ctx_pool);
     }
 
     // This function will be only called in thread pool.
