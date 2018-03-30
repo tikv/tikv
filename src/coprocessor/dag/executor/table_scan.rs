@@ -37,7 +37,7 @@ pub struct TableScanExecutor {
     // The `KeyRange` scaned between `start_scan` and `stop_scan`.
     scan_range: KeyRange,
     scanner: Option<Scanner>,
-    cursor: usize,
+    // The number of scan keys for each range.
     counts: Vec<i64>,
     metrics: ExecutorMetrics,
     first_collect: bool,
@@ -62,12 +62,11 @@ impl TableScanExecutor {
             key_ranges.reverse();
         }
 
-        let counts: Vec<i64>;
-        if collect {
-            counts = vec![0; key_ranges.len()]
+        let counts = if collect {
+            Vec::with_capacity(key_ranges.len())
         } else {
-            counts = Vec::default()
-        }
+            Vec::default()
+        };
 
         Ok(TableScanExecutor {
             store: store,
@@ -77,7 +76,6 @@ impl TableScanExecutor {
             current_range: None,
             scan_range: KeyRange::default(),
             scanner: None,
-            cursor: 0,
             counts: counts,
             metrics: Default::default(),
             first_collect: true,
@@ -125,22 +123,22 @@ impl Executor for TableScanExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
-                if self.cursor < self.counts.len() {
-                    self.counts[self.cursor] += 1;
+                if let Some(last) = self.counts.last_mut() {
+                    *last += 1;
                 }
                 return Ok(Some(row));
             }
 
             if let Some(range) = self.key_ranges.next() {
-                if self.current_range.is_some() {
-                    self.cursor += 1;
+                if self.counts.capacity() > 0 {
+                    self.counts.push(0);
                 }
                 self.current_range = Some(range.clone());
                 if is_point(&range) {
                     self.metrics.scan_counter.inc_point();
                     if let Some(row) = self.get_row_from_point(range)? {
-                        if self.cursor < self.counts.len() {
-                            self.counts[self.cursor] += 1;
+                        if let Some(last) = self.counts.last_mut() {
+                            *last += 1;
                         }
                         return Ok(Some(row));
                     }
@@ -200,12 +198,12 @@ impl Executor for TableScanExecutor {
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
-        if self.cursor > self.counts.len() {
+        let cursor = self.counts.len();
+        if cursor == 0 {
             return;
         }
-        counts.append(&mut self.counts[..self.cursor].to_vec());
-        self.counts.drain(0..self.cursor);
-        self.cursor = 0;
+        let mut u: Vec<_> = self.counts.drain(0..cursor - 1).collect();
+        counts.append(&mut u);
         if !self.counts.is_empty() {
             counts.push(self.counts[0]);
             self.counts[0] = 0;

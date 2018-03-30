@@ -41,7 +41,7 @@ pub struct IndexScanExecutor {
     scan_range: KeyRange,
     scanner: Option<Scanner>,
     unique: bool,
-    cursor: usize,
+    // The number of scan keys for each range.
     counts: Vec<i64>,
     metrics: ExecutorMetrics,
     first_collect: bool,
@@ -66,12 +66,11 @@ impl IndexScanExecutor {
             pk_col = Some(cols.pop().unwrap());
         }
         let col_ids = cols.iter().map(|c| c.get_column_id()).collect();
-        let counts: Vec<i64>;
-        if collect {
-            counts = vec![0; key_ranges.len()]
+        let counts = if collect {
+            Vec::with_capacity(key_ranges.len())
         } else {
-            counts = Vec::default()
-        }
+            Vec::default()
+        };
         Ok(IndexScanExecutor {
             store: store,
             desc: desc,
@@ -82,7 +81,6 @@ impl IndexScanExecutor {
             scan_range: KeyRange::default(),
             scanner: None,
             unique: unique,
-            cursor: 0,
             counts: counts,
             metrics: Default::default(),
             first_collect: true,
@@ -106,7 +104,6 @@ impl IndexScanExecutor {
             scan_range: KeyRange::default(),
             scanner: None,
             unique: false,
-            cursor: 0,
             counts: Vec::default(),
             metrics: ExecutorMetrics::default(),
             first_collect: true,
@@ -175,20 +172,20 @@ impl Executor for IndexScanExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
-                if self.cursor < self.counts.len() {
-                    self.counts[self.cursor] += 1;
+                if let Some(last) = self.counts.last_mut() {
+                    *last += 1;
                 }
                 return Ok(Some(row));
             }
             if let Some(range) = self.key_ranges.next() {
-                if self.current_range.is_some() {
-                    self.cursor += 1;
+                if self.counts.capacity() > 0 {
+                    self.counts.push(0);
                 }
                 self.current_range = Some(range.clone());
                 if self.is_point(&range) {
                     if let Some(row) = self.get_row_from_point(range)? {
-                        if self.cursor < self.counts.len() {
-                            self.counts[self.cursor] += 1;
+                        if let Some(last) = self.counts.last_mut() {
+                            *last += 1;
                         }
                         return Ok(Some(row));
                     }
@@ -248,12 +245,12 @@ impl Executor for IndexScanExecutor {
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
-        if self.cursor > self.counts.len() {
+        let cursor = self.counts.len();
+        if cursor == 0 {
             return;
         }
-        counts.append(&mut self.counts[..self.cursor].to_vec());
-        self.counts.drain(0..self.cursor);
-        self.cursor = 0;
+        let mut u: Vec<_> = self.counts.drain(0..cursor - 1).collect();
+        counts.append(&mut u);
         if !self.counts.is_empty() {
             counts.push(self.counts[0]);
             self.counts[0] = 0;
