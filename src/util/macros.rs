@@ -189,6 +189,22 @@ macro_rules! try_opt {
     });
 }
 
+/// `send_response` sends messages to various grpc sinks.
+macro_rules! send_response {
+    ($ctx:expr, $sink:expr, $resp:expr, $map_err:expr, $tag:expr) => ({
+        let f = $resp.then(|v| match v {
+            Ok(resp) => $sink.success(resp),
+            Err(e) => $sink.fail($map_err(e)),
+        });
+        $ctx.spawn(f.map_err(move |e| error!("{} failed: {:?}", $tag, e)));
+    });
+
+    ($ctx:expr, $sink:expr, $err_status:expr, $tag:expr) => ({
+        let f = $sink.fail($err_status);
+        $ctx.spawn(f.map_err(move |e| error!("{} failed: {:?}", $tag, e)));
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::error::Error;

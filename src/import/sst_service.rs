@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
-use futures::{future, Future, Stream};
+use futures::{Future, Stream};
 use futures::sync::mpsc;
 use futures_cpupool::{Builder, CpuPool};
 use kvproto::importpb::*;
@@ -26,7 +26,6 @@ use util::time::Instant;
 use raftstore::store::Callback;
 use server::transport::RaftStoreRouter;
 
-use super::service::*;
 use super::metrics::*;
 use super::{Config, Error, SSTImporter};
 
@@ -72,36 +71,47 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let import2 = Arc::clone(&self.importer);
         let bounded_stream = mpsc::spawn(stream, &self.threads, self.cfg.stream_channel_window);
 
-        ctx.spawn(
-            self.threads.spawn(
-                bounded_stream
-                    .map_err(Error::from)
-                    .for_each(move |chunk| {
-                        let start = Instant::now_coarse();
-                        if chunk.has_meta() {
-                            import1.create(token, chunk.get_meta())?;
+        let result = self.threads.spawn(
+            bounded_stream
+                .map_err(Error::from)
+                .for_each(move |chunk| {
+                    let start = Instant::now_coarse();
+                    if chunk.has_meta() {
+                        import1.create(token, chunk.get_meta())?;
+                    }
+                    if !chunk.get_data().is_empty() {
+                        let data = chunk.get_data();
+                        import1.append(token, data)?;
+                        IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
+                    }
+                    IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
+                    Ok(())
+                })
+                .then(move |res| match res {
+                    Ok(_) => import2.finish(token),
+                    Err(e) => {
+                        if let Some(f) = import2.remove(token) {
+                            error!("remove {:?}: {:?}", f, e);
                         }
-                        if !chunk.get_data().is_empty() {
-                            let data = chunk.get_data();
-                            import1.append(token, data)?;
-                            IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
-                        }
-                        IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
-                        Ok(())
-                    })
-                    .then(move |res| match res {
-                        Ok(_) => import2.finish(token),
-                        Err(e) => {
-                            if let Some(f) = import2.remove(token) {
-                                error!("remove {:?}: {:?}", f, e);
-                            }
-                            Err(e)
-                        }
-                    })
-                    .map(|_| UploadResponse::new())
-                    .then(move |res| send_rpc_response!(res, sink, label, timer)),
-            ),
-        )
+                        Err(e)
+                    }
+                })
+                .then(move |res| match res {
+                    Ok(_) => {
+                        IMPORT_RPC_DURATION
+                            .with_label_values(&[label, "ok"])
+                            .observe(timer.elapsed_secs());
+                        Ok(UploadResponse::new())
+                    }
+                    Err(e) => {
+                        IMPORT_RPC_DURATION
+                            .with_label_values(&[label, "error"])
+                            .observe(timer.elapsed_secs());
+                        Err(e)
+                    }
+                }),
+        );
+        send_response!(ctx, sink, result, Error::into, label);
     }
 
     fn ingest(&self, ctx: RpcContext, mut req: IngestRequest, sink: UnarySink<IngestResponse>) {
@@ -123,24 +133,29 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
 
         let (cb, future) = paired_future_callback();
         if let Err(e) = self.router.send_command(cmd, Callback::Write(cb)) {
-            return send_rpc_error(ctx, sink, e);
+            send_response!(ctx, sink, Error::from(e).into(), label);
+            return;
         }
 
-        ctx.spawn(
-            future
-                .map_err(Error::from)
-                .then(|res| match res {
-                    Ok(mut res) => {
-                        let mut resp = IngestResponse::new();
-                        let mut header = res.response.take_header();
-                        if header.has_error() {
-                            resp.set_error(header.take_error());
-                        }
-                        future::ok(resp)
-                    }
-                    Err(e) => future::err(e),
-                })
-                .then(move |res| send_rpc_response!(res, sink, label, timer)),
-        )
+        let result = future.map_err(Error::from).then(move |res| match res {
+            Ok(mut res) => {
+                let mut resp = IngestResponse::new();
+                let mut header = res.response.take_header();
+                if header.has_error() {
+                    resp.set_error(header.take_error());
+                }
+                IMPORT_RPC_DURATION
+                    .with_label_values(&[label, "ok"])
+                    .observe(timer.elapsed_secs());
+                Ok(resp)
+            }
+            Err(e) => {
+                IMPORT_RPC_DURATION
+                    .with_label_values(&[label, "error"])
+                    .observe(timer.elapsed_secs());
+                Err(e)
+            }
+        });
+        send_response!(ctx, sink, result, Error::into, label);
     }
 }
