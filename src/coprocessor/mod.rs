@@ -115,8 +115,6 @@ trait RequestHandler: Send {
         // Do nothing by default
     }
 
-    fn get_context(&self) -> &ReqContext;
-
     fn into_boxed(self) -> Box<RequestHandler>
     where
         Self: 'static + Sized,
@@ -140,7 +138,7 @@ pub struct ReqContext {
 
 impl ReqContext {
     pub fn new(
-        ctx: &kvrpcpb::Context,
+        context: kvrpcpb::Context,
         txn_start_ts: u64,
         table_scan: bool,
         max_handle_duration: Duration,
@@ -148,7 +146,7 @@ impl ReqContext {
         let start_time = Instant::now_coarse();
         let deadline = start_time + max_handle_duration;
         ReqContext {
-            context: ctx.clone(),
+            context,
             table_scan,
             txn_start_ts,
             start_time,

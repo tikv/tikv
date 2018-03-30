@@ -106,10 +106,10 @@ impl Host {
     fn handle_request(&mut self, snap: Box<Snapshot>, t: RequestTask) {
         let metrics = &mut self.basic_local_metrics;
 
-        let (req, req_handler_builder, on_resp) = (t.req, t.req_handler_builder, t.on_resp);
-        let mut tracker = t.tracker;
+        let (mut tracker, req_ctx, req_handler_builder, on_resp) =
+            (t.tracker, t.req_ctx, t.req_handler_builder, t.on_resp);
 
-        let priority = readpool::Priority::from(req.get_context().get_priority());
+        let priority = readpool::Priority::from(req_ctx.context.get_priority());
         let pool = self.pool.get_pool_by_priority(priority);
         let ctxd = pool.get_context_delegators();
         tracker.ctx_pool(&ctxd);
@@ -121,7 +121,7 @@ impl Host {
                 on_resp.respond(err_resp(e, metrics));
             }
             Ok(mut handler) => {
-                if let Err(e) = handler.get_context().check_if_outdated() {
+                if let Err(e) = req_ctx.check_if_outdated() {
                     let resp = err_resp(e, metrics);
                     on_resp.respond(resp);
                     return;
@@ -353,7 +353,7 @@ impl Drop for RequestTracker {
 }
 
 pub struct RequestTask {
-    req: Request,
+    req_ctx: Arc<ReqContext>,
     req_handler_builder: RequestHandlerBuilder,
     on_resp: OnResponse<Response>,
     tracker: RequestTracker,
@@ -362,86 +362,94 @@ pub struct RequestTask {
 impl Debug for RequestTask {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("RequestTask")
-            .field("req", &self.req)
-            .field("on_resp", &self.on_resp)
+            .field("req_ctx", &self.req_ctx)
             .field("tracker", &self.tracker)
             .finish()
     }
 }
 
+impl Display for RequestTask {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        Debug::fmt(self, f)
+    }
+}
+
 impl RequestTask {
     pub fn new(
-        req: Request,
+        mut req: Request,
         on_resp: OnResponse<Response>,
         recursion_limit: u32,
         batch_row_limit: usize,
         max_handle_duration: Duration,
     ) -> Result<RequestTask> {
         let mut table_scan = false;
-        let ranges = req.get_ranges().to_vec();
-        let (txn_start_ts, scan_tag, req_handler_builder): (_, _, RequestHandlerBuilder) =
-            match req.get_tp() {
-                REQ_TYPE_DAG => {
-                    let mut is = CodedInputStream::from_bytes(req.get_data());
-                    is.set_recursion_limit(recursion_limit);
-                    let mut dag = DAGRequest::new();
-                    box_try!(dag.merge_from(&mut is));
-                    if let Some(scan) = dag.get_executors().iter().next() {
-                        table_scan = scan.get_tp() == ExecType::TypeTableScan;
-                    }
-                    let req_ctx = ReqContext::new(
-                        req.get_context(),
-                        dag.get_start_ts(),
-                        table_scan,
-                        max_handle_duration,
-                    );
-                    let (txn_start_ts, scan_tag) = (req_ctx.txn_start_ts, req_ctx.get_scan_tag());
-                    let builder = box move |snap| {
-                        DAGContext::new(dag, ranges, snap, req_ctx, batch_row_limit)
-                            .map(|ctx| ctx.into_boxed())
-                    };
-                    (txn_start_ts, scan_tag, builder)
+        let (data, ranges, context) = (
+            req.take_data(),
+            req.take_ranges().to_vec(),
+            req.take_context(),
+        );
+        let (req_ctx, req_handler_builder): (_, RequestHandlerBuilder) = match req.get_tp() {
+            REQ_TYPE_DAG => {
+                let mut is = CodedInputStream::from_bytes(&data);
+                is.set_recursion_limit(recursion_limit);
+                let mut dag = DAGRequest::new();
+                box_try!(dag.merge_from(&mut is));
+                if let Some(scan) = dag.get_executors().iter().next() {
+                    table_scan = scan.get_tp() == ExecType::TypeTableScan;
                 }
-                REQ_TYPE_ANALYZE => {
-                    let mut is = CodedInputStream::from_bytes(req.get_data());
-                    is.set_recursion_limit(recursion_limit);
-                    let mut analyze = AnalyzeReq::new();
-                    box_try!(analyze.merge_from(&mut is));
-                    table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
-                    let req_ctx = ReqContext::new(
-                        req.get_context(),
-                        analyze.get_start_ts(),
-                        table_scan,
-                        max_handle_duration,
-                    );
-                    let (txn_start_ts, scan_tag) = (req_ctx.txn_start_ts, req_ctx.get_scan_tag());
-                    let builder = box move |snap| {
-                        AnalyzeContext::new(analyze, ranges, snap, req_ctx)
-                            .map(|ctx| ctx.into_boxed())
-                    };
-                    (txn_start_ts, scan_tag, builder)
-                }
-                REQ_TYPE_CHECKSUM => {
-                    let mut is = CodedInputStream::from_bytes(req.get_data());
-                    is.set_recursion_limit(recursion_limit);
-                    let mut checksum = ChecksumRequest::new();
-                    box_try!(checksum.merge_from(&mut is));
-                    table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
-                    let req_ctx = ReqContext::new(
-                        req.get_context(),
-                        checksum.get_start_ts(),
-                        table_scan,
-                        max_handle_duration,
-                    );
-                    let (txn_start_ts, scan_tag) = (req_ctx.txn_start_ts, req_ctx.get_scan_tag());
-                    let builder = box move |snap| {
-                        ChecksumContext::new(checksum, ranges, snap, req_ctx)
-                            .map(|ctx| ctx.into_boxed())
-                    };
-                    (txn_start_ts, scan_tag, builder)
-                }
-                tp => return Err(box_err!("unsupported tp {}", tp)),
-            };
+                let req_ctx = Arc::new(ReqContext::new(
+                    context,
+                    dag.get_start_ts(),
+                    table_scan,
+                    max_handle_duration,
+                ));
+                let req_ctx_clone = Arc::clone(&req_ctx);
+                let builder = box move |snap| {
+                    DAGContext::new(dag, ranges, snap, req_ctx_clone, batch_row_limit)
+                        .map(|ctx| ctx.into_boxed())
+                };
+                (req_ctx, builder)
+            }
+            REQ_TYPE_ANALYZE => {
+                let mut is = CodedInputStream::from_bytes(&data);
+                is.set_recursion_limit(recursion_limit);
+                let mut analyze = AnalyzeReq::new();
+                box_try!(analyze.merge_from(&mut is));
+                table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
+                let req_ctx = Arc::new(ReqContext::new(
+                    context,
+                    analyze.get_start_ts(),
+                    table_scan,
+                    max_handle_duration,
+                ));
+                let req_ctx_clone = Arc::clone(&req_ctx);
+                let builder = box move |snap| {
+                    AnalyzeContext::new(analyze, ranges, snap, &req_ctx_clone)
+                        .map(|ctx| ctx.into_boxed())
+                };
+                (req_ctx, builder)
+            }
+            REQ_TYPE_CHECKSUM => {
+                let mut is = CodedInputStream::from_bytes(&data);
+                is.set_recursion_limit(recursion_limit);
+                let mut checksum = ChecksumRequest::new();
+                box_try!(checksum.merge_from(&mut is));
+                table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
+                let req_ctx = Arc::new(ReqContext::new(
+                    context,
+                    checksum.get_start_ts(),
+                    table_scan,
+                    max_handle_duration,
+                ));
+                let req_ctx_clone = Arc::clone(&req_ctx);
+                let builder = box move |snap| {
+                    ChecksumContext::new(checksum, ranges, snap, &req_ctx_clone)
+                        .map(|ctx| ctx.into_boxed())
+                };
+                (req_ctx, builder)
+            }
+            tp => return Err(box_err!("unsupported tp {}", tp)),
+        };
 
         let start_time = Instant::now_coarse();
 
@@ -460,10 +468,10 @@ impl RequestTask {
             exec_metrics: ExecutorMetrics::default(),
 
             region_id: req.get_context().get_region_id(),
-            txn_start_ts: txn_start_ts,
+            txn_start_ts: req_ctx.txn_start_ts,
             ranges_len: req.get_ranges().len(),
             first_range: req.get_ranges().get(0).cloned(),
-            scan_tag: scan_tag,
+            scan_tag: req_ctx.get_scan_tag(),
             pri_str: get_req_pri_str(req.get_context().get_priority()),
         };
 
@@ -472,7 +480,7 @@ impl RequestTask {
             .add(1.0);
 
         Ok(RequestTask {
-            req: req,
+            req_ctx: req_ctx,
             req_handler_builder: req_handler_builder,
             on_resp: on_resp,
             tracker: request_tracker,
@@ -480,28 +488,15 @@ impl RequestTask {
     }
 
     pub fn priority(&self) -> CommandPri {
-        self.req.get_context().get_priority()
+        self.req_ctx.context.get_priority()
     }
 
     fn get_request_key(&self) -> (u64, u64, u64) {
-        let ctx = self.req.get_context();
+        let ctx = &self.req_ctx.context;
         let region_id = ctx.get_region_id();
         let version = ctx.get_region_epoch().get_version();
         let peer_id = ctx.get_peer().get_id();
         (region_id, version, peer_id)
-    }
-}
-
-impl Display for RequestTask {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(
-            f,
-            "request [context {:?}, tp: {}, ranges: {} ({:?})]",
-            self.req.get_context(),
-            self.req.get_tp(),
-            self.req.get_ranges().len(),
-            self.req.get_ranges().get(0)
-        )
     }
 }
 
@@ -517,6 +512,11 @@ impl Runnable<Task> for Host {
         for task in tasks.drain(..) {
             match task {
                 Task::Request(mut req) => {
+                    if let Err(e) = req.req_ctx.check_if_outdated() {
+                        let resp = err_resp(e, &mut self.basic_local_metrics);
+                        req.on_resp.respond(resp);
+                        continue;
+                    }
                     let key = req.get_request_key();
                     grouped_reqs.entry(key).or_insert_with(Vec::new).push(req);
                 }
@@ -528,7 +528,7 @@ impl Runnable<Task> for Host {
                 },
                 Task::RetryRequests(retry) => for id in retry {
                     if let Err(e) = {
-                        let ctx = self.reqs[&id][0].req.get_context();
+                        let ctx = &self.reqs[&id][0].req_ctx.context;
                         let sched = self.sched.clone();
                         self.engine.async_snapshot(ctx, box move |(_, res)| {
                             sched.schedule(Task::SnapRes(id, res)).unwrap()
@@ -558,7 +558,7 @@ impl Runnable<Task> for Host {
                 req.tracker.task_count(task_count);
             }
             self.last_req_id += 1;
-            batch.push(reqs[0].req.get_context().clone());
+            batch.push(reqs[0].req_ctx.context.clone());
             self.reqs.insert(self.last_req_id, reqs);
         }
         let end_id = self.last_req_id;
@@ -680,7 +680,7 @@ mod tests {
     #[test]
     fn test_get_reg_scan_tag() {
         let context = kvrpcpb::Context::new();
-        let mut ctx = ReqContext::new(&context, 0, true, Duration::from_secs(60));
+        let mut ctx = ReqContext::new(context, 0, true, Duration::from_secs(60));
         assert_eq!(ctx.get_scan_tag(), "select");
         ctx.table_scan = false;
         assert_eq!(ctx.get_scan_tag(), "index");
