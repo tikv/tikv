@@ -20,7 +20,7 @@ use util::escape;
 use util::timer::Timer;
 use util::worker::{Runnable, RunnableWithTimer};
 use raftstore::store::{keys, util};
-use storage::{decode_cf, encode_cf};
+use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::rocksdb::get_cf_handle;
 
 pub const UNSAFE_CLEANUP_INTERVAL: u64 = 5_000; // milliseconds
@@ -38,6 +38,7 @@ impl Clone for TaskQueue {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub struct Task {
     cf: String,
     start_key: Vec<u8>,
@@ -51,6 +52,26 @@ impl Task {
             start_key: start_key,
             end_key: end_key,
         }
+    }
+}
+
+pub fn encode_cf(cf: &str) -> u8 {
+    match cf {
+        CF_DEFAULT => 0x01,
+        CF_LOCK => 0x02,
+        CF_WRITE => 0x03,
+        CF_RAFT => 0x04,
+        _ => panic!("unknow column family {}", cf),
+    }
+}
+
+pub fn decode_cf(cf: u8) -> &'static str {
+    match cf {
+        0x01 => CF_DEFAULT,
+        0x02 => CF_LOCK,
+        0x03 => CF_WRITE,
+        0x04 => CF_RAFT,
+        _ => panic!("unkown column family code {}", cf),
     }
 }
 
@@ -180,5 +201,57 @@ impl RunnableWithTimer<i32, ()> for Runner {
         self.unsafe_cleanup_ranges();
 
         timer.add_task(Duration::from_millis(UNSAFE_CLEANUP_INTERVAL), ());
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use tempdir::TempDir;
+
+    use rocksdb::{self, Writable, WriteBatch, DB};
+    use storage::types::Key as MvccKey;
+    use storage::mvcc::{Write, WriteType};
+    use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use util::rocksdb::new_engine;
+    use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
+
+    use super::*;
+
+    #[test]
+    fn test_encode_decode_cf() {
+        let (default, lock, write, raft) = (0x01, 0x02, 0x03, 0x04);
+
+        assert_eq!(encode_cf(CF_DEFAULT), default);
+        assert_eq!(encode_cf(CF_LOCK), lock);
+        assert_eq!(encode_cf(CF_WRITE), write);
+        assert_eq!(encode_cf(CF_RAFT), raft);
+
+        assert_eq!(decode_cf(default), CF_DEFAULT);
+        assert_eq!(decode_cf(lock), CF_LOCK);
+        assert_eq!(decode_cf(write), CF_WRITE);
+        assert_eq!(decode_cf(raft), CF_RAFT);
+    }
+
+    #[test]
+    fn test_task_queue() {
+        let path = TempDir::new("unsafe-cleanup-range-task-queue-test").unwrap();
+        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT], None).unwrap();
+
+        let (start_key, end_key) = (b"a", b"b");
+        let task_queue = TaskQueue::new(Arc::new(db));
+
+        assert_eq!(task_queue.pick_task(), None);
+
+        task_queue.add_task(CF_DEFAULT, start_key, end_key).unwrap();
+        let task_expected = Task::new(
+            String::from(CF_DEFAULT),
+            start_key.to_vec(),
+            end_key.to_vec(),
+        );
+        let task_picked = task_queue.pick_task().unwrap();
+        assert_eq!(task_picked, task_expected);
+
+        task_queue.delete_task(task_picked).unwrap();
+        assert_eq!(task_queue.pick_task(), None);
     }
 }

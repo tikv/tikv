@@ -62,26 +62,6 @@ pub const DATA_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
 
-pub fn encode_cf(cf: &str) -> u8 {
-    match cf {
-        CF_DEFAULT => 0x01,
-        CF_LOCK => 0x02,
-        CF_WRITE => 0x03,
-        CF_RAFT => 0x04,
-        _ => panic!("unknow column family {}", cf),
-    }
-}
-
-pub fn decode_cf(cf: u8) -> &'static str {
-    match cf {
-        0x01 => CF_DEFAULT,
-        0x02 => CF_LOCK,
-        0x03 => CF_WRITE,
-        0x04 => CF_RAFT,
-        _ => panic!("unkown column family code {}", cf),
-    }
-}
-
 pub fn is_short_value(value: &[u8]) -> bool {
     value.len() <= SHORT_VALUE_MAX_LEN
 }
