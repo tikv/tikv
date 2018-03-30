@@ -216,37 +216,41 @@ impl Service {
         let result = self.read_pool.future_execute(priority, move |ctxd| {
             tracker.set_track_target(ctxd);
 
-            Service::async_snapshot(engine, &req_ctx.context)
+            future::result(req_ctx.check_if_outdated())
                 .map_err(|e| (e, None))
-                .and_then(move |snapshot| {
-                    let mut handler: Box<RequestHandler> = match handler_builder(snapshot) {
-                        Ok(handler) => handler,
-                        Err(e) => cop_util::ErrorRequestHandler::new(e).into_boxed(),
-                    };
-
-                    future::result(req_ctx.check_if_outdated())
+                .and_then(move |_| {
+                    Service::async_snapshot(engine, &req_ctx.context)
                         .map_err(|e| (e, None))
-                        .and_then(move |_| {
-                            tracker.before_all_items();
-                            tracker.begin_item();
-
-                            let result = handler.handle_request();
-                            let exec_metrics = {
-                                let mut metrics = ExecutorMetrics::default();
-                                handler.collect_metrics_into(&mut metrics);
-                                metrics
+                        .and_then(move |snapshot| {
+                            let mut handler: Box<RequestHandler> = match handler_builder(snapshot) {
+                                Ok(handler) => handler,
+                                Err(e) => cop_util::ErrorRequestHandler::new(e).into_boxed(),
                             };
 
-                            tracker.end_item(exec_metrics);
-                            let opt_exec_details = tracker.get_item_exec_details();
-                            tracker.after_all_items();
-                            tracker.track();
+                            future::result(req_ctx.check_if_outdated())
+                                .map_err(|e| (e, None))
+                                .and_then(move |_| {
+                                    tracker.before_all_items();
+                                    tracker.begin_item();
 
-                            // Attach execution details (if any) no matter succeeded or not.
-                            match result {
-                                Ok(resp) => Ok((resp, opt_exec_details)),
-                                Err(e) => Err((e, opt_exec_details)),
-                            }
+                                    let result = handler.handle_request();
+                                    let exec_metrics = {
+                                        let mut metrics = ExecutorMetrics::default();
+                                        handler.collect_metrics_into(&mut metrics);
+                                        metrics
+                                    };
+
+                                    tracker.end_item(exec_metrics);
+                                    let opt_exec_details = tracker.get_item_exec_details();
+                                    tracker.after_all_items();
+                                    tracker.track();
+
+                                    // Attach execution details (if any) no matter succeeded or not.
+                                    match result {
+                                        Ok(resp) => Ok((resp, opt_exec_details)),
+                                        Err(e) => Err((e, opt_exec_details)),
+                                    }
+                                })
                         })
                 })
         });
@@ -298,56 +302,58 @@ impl Service {
         let result = self.read_pool.future_execute(priority, move |ctxd| {
             tracker.set_track_target(ctxd);
 
-            Service::async_snapshot(engine, &req_ctx.context)
-                .and_then(move |snapshot| {
-                    let handler = match handler_builder(snapshot) {
-                        Ok(handler) => handler,
-                        Err(e) => cop_util::ErrorRequestHandler::new(e).into_boxed(),
-                    };
+            future::result(req_ctx.check_if_outdated())
+                .and_then(move |_| {
+                    Service::async_snapshot(engine, &req_ctx.context).and_then(move |snapshot| {
+                        let handler = match handler_builder(snapshot) {
+                            Ok(handler) => handler,
+                            Err(e) => cop_util::ErrorRequestHandler::new(e).into_boxed(),
+                        };
 
-                    future::result(req_ctx.check_if_outdated()).and_then(move |_| {
-                        tracker.before_all_items();
-                        stream::unfold((handler, false), move |(mut handler, finished)| {
-                            if finished {
-                                return None;
-                            }
-
-                            tracker.begin_item();
-
-                            let result = handler.handle_streaming_request();
-                            let exec_metrics = {
-                                let mut metrics = ExecutorMetrics::default();
-                                handler.collect_metrics_into(&mut metrics);
-                                metrics
-                            };
-
-                            tracker.end_item(exec_metrics);
-                            let opt_exec_details = tracker.get_item_exec_details();
-
-                            match result {
-                                Ok((None, _)) => {
-                                    // if we get `None`, stream is always considered finished.
-                                    None
+                        future::result(req_ctx.check_if_outdated()).and_then(move |_| {
+                            tracker.before_all_items();
+                            stream::unfold((handler, false), move |(mut handler, finished)| {
+                                if finished {
+                                    return None;
                                 }
-                                Ok((Some(resp), finished)) => {
-                                    let yielded = (resp, opt_exec_details);
-                                    let next_state = (handler, finished);
-                                    Some(Ok((yielded, next_state)))
+
+                                tracker.begin_item();
+
+                                let result = handler.handle_streaming_request();
+                                let exec_metrics = {
+                                    let mut metrics = ExecutorMetrics::default();
+                                    handler.collect_metrics_into(&mut metrics);
+                                    metrics
+                                };
+
+                                tracker.end_item(exec_metrics);
+                                let opt_exec_details = tracker.get_item_exec_details();
+
+                                match result {
+                                    Ok((None, _)) => {
+                                        // if we get `None`, stream is always considered finished.
+                                        None
+                                    }
+                                    Ok((Some(resp), finished)) => {
+                                        let yielded = (resp, opt_exec_details);
+                                        let next_state = (handler, finished);
+                                        Some(Ok((yielded, next_state)))
+                                    }
+                                    Err(e) => Some(Err((e, opt_exec_details))),
                                 }
-                                Err(e) => Some(Err((e, opt_exec_details))),
-                            }
-                        }).then(|r| {
-                            let r = match r {
-                                Ok((r, exec_details)) => (Ok(r), exec_details),
-                                Err((e, exec_details)) => (Err(e), exec_details),
-                            };
-                            Ok::<_, mpsc::SendError<_>>(r)
-                        })
-                            .forward(tx1)
-                            .then(move |_| {
-                                // ignore sink send failures
-                                Ok(())
+                            }).then(|r| {
+                                let r = match r {
+                                    Ok((r, exec_details)) => (Ok(r), exec_details),
+                                    Err((e, exec_details)) => (Err(e), exec_details),
+                                };
+                                Ok::<_, mpsc::SendError<_>>(r)
                             })
+                                .forward(tx1)
+                                .then(move |_| {
+                                    // ignore sink send failures
+                                    Ok(())
+                                })
+                        })
                     })
                 })
                 .map_err(move |e| {
@@ -724,6 +730,8 @@ mod tests {
             .wait()
             .unwrap();
         assert_eq!(resp.get_other_error(), OUTDATED_ERROR_MSG);
+
+        // TODO: How can we test whether outdated request triggers a snapshot?
     }
 
     #[test]
