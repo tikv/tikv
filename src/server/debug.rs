@@ -332,7 +332,11 @@ impl Debugger {
         Ok(res)
     }
 
-    pub fn remove_failed_stores(&self, store_ids: Vec<u64>) -> Result<()> {
+    pub fn remove_failed_stores(
+        &self,
+        store_ids: Vec<u64>,
+        region_ids: Option<Vec<u64>>,
+    ) -> Result<()> {
         let store_id = self.get_store_id()?;
         if store_ids.iter().any(|&s| s == store_id) {
             let msg = format!("Store {} in the failed list", store_id);
@@ -341,21 +345,18 @@ impl Debugger {
         let wb = WriteBatch::new();
         let handle = box_try!(get_cf_handle(self.engines.kv_engine.as_ref(), CF_RAFT));
         let store_ids = HashSet::<u64>::from_iter(store_ids);
-        box_try!(self.engines.kv_engine.scan_cf(
-            CF_RAFT,
-            keys::REGION_META_MIN_KEY,
-            keys::REGION_META_MAX_KEY,
-            false,
-            &mut |key, value| {
+
+        {
+            let do_task = |key: &[u8], value: &[u8]| {
                 let (_, suffix_type) = box_try!(keys::decode_region_meta_key(key));
                 if suffix_type != keys::REGION_STATE_SUFFIX {
-                    return Ok(true);
+                    return Ok(());
                 }
 
                 let mut region_state = RegionLocalState::new();
                 box_try!(region_state.merge_from_bytes(value));
                 if region_state.get_state() == PeerState::Tombstone {
-                    return Ok(true);
+                    return Ok(());
                 }
 
                 let mut new_peers = region_state.get_region().get_peers().to_owned();
@@ -376,9 +377,30 @@ impl Debugger {
                         .set_peers(RepeatedField::from_vec(new_peers));
                     box_try!(wb.put_msg_cf(handle, key, &region_state));
                 }
-                Ok(true)
-            },
-        ));
+                Ok(())
+            };
+
+            if let Some(region_ids) = region_ids {
+                let kv = &self.engines.kv_engine;
+                for region_id in region_ids {
+                    let key = keys::region_state_key(region_id);
+                    if let Some(value) = box_try!(kv.get_value_cf(CF_RAFT, &key)) {
+                        box_try!(do_task(&key, &value));
+                    } else {
+                        let msg = format!("No such region {} on the store", region_id);
+                        return Err(Error::Other(msg.into()));
+                    }
+                }
+            } else {
+                box_try!(self.engines.kv_engine.scan_cf(
+                    CF_RAFT,
+                    keys::REGION_META_MIN_KEY,
+                    keys::REGION_META_MAX_KEY,
+                    false,
+                    &mut |key, value| do_task(key, value).map(|_| true)
+                ));
+            }
+        }
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
@@ -991,7 +1013,11 @@ mod tests {
         // region 2 with peers at stores 21, 22, 23.
         init_region_state(engine, 2, &[21, 22, 23]);
 
-        assert!(debugger.remove_failed_stores(vec![13, 14, 23]).is_ok());
+        assert!(
+            debugger
+                .remove_failed_stores(vec![13, 14, 23], None)
+                .is_ok()
+        );
         let region_state = get_region_state(engine, 1);
         assert_eq!(region_state.get_region().get_peers().len(), 2);
         let region_state = get_region_state(engine, 2);
@@ -999,7 +1025,7 @@ mod tests {
 
         // Should fail when the store itself is in the failed list.
         init_region_state(engine, 3, &[100, 31, 32, 33]);
-        assert!(debugger.remove_failed_stores(vec![100]).is_err());
+        assert!(debugger.remove_failed_stores(vec![100], None).is_err());
     }
 
     #[test]

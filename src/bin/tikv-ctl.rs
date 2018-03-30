@@ -403,7 +403,7 @@ trait DebugExecutor {
     }
 
     /// Recover the cluster when given `store_ids` are failed.
-    fn remove_fail_stores(&self, store_ids: Vec<u64>);
+    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>);
 
     fn check_region_consistency(&self, _: u64);
 
@@ -556,7 +556,7 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only avaliable for local mode");
     }
 
-    fn remove_fail_stores(&self, _: Vec<u64>) {
+    fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>) {
         self.check_local_mode();
     }
 
@@ -653,9 +653,9 @@ impl DebugExecutor for Debugger {
         println!("all regions are healthy")
     }
 
-    fn remove_fail_stores(&self, store_ids: Vec<u64>) {
+    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>) {
         println!("removing stores {:?} from configrations...", store_ids);
-        self.remove_failed_stores(store_ids)
+        self.remove_failed_stores(store_ids, region_ids)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
         println!("success");
     }
@@ -996,16 +996,28 @@ fn main() {
             SubCommand::with_name("unsafe-recover")
                 .about("unsafe recover the cluster when majority replicas are failed")
                 .subcommand(
-                    SubCommand::with_name("remove-fail-stores").arg(
+                    SubCommand::with_name("remove-fail-stores")
+                    .arg(
                         Arg::with_name("stores")
                             .required(true)
+                            .short("s")
                             .takes_value(true)
                             .multiple(true)
                             .use_delimiter(true)
                             .require_delimiter(true)
                             .value_delimiter(",")
                             .help("failed store id list"),
-                    ),
+                    )
+                    .arg(
+                        Arg::with_name("regions")
+                            .takes_value(true)
+                            .short("r")
+                            .multiple(true)
+                            .use_delimiter(true)
+                            .require_delimiter(true)
+                            .value_delimiter(",")
+                            .help("only for these regions"),
+                        )
                 ),
         )
         .subcommand(
@@ -1173,9 +1185,14 @@ fn main() {
         debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
     } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
         if let Some(matches) = matches.subcommand_matches("remove-fail-stores") {
+            let region_ids = matches.values_of("regions").map(|rs| {
+                rs.map(|r| r.parse())
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("parse regions fail")
+            });
             let stores = matches.values_of("stores").unwrap();
             match stores.map(|s| s.parse()).collect::<Result<Vec<u64>, _>>() {
-                Ok(store_ids) => debug_executor.remove_fail_stores(store_ids),
+                Ok(store_ids) => debug_executor.remove_fail_stores(store_ids, region_ids),
                 Err(e) => perror_and_exit("parse store id list", e),
             }
         }
