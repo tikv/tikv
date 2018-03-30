@@ -13,25 +13,30 @@
 
 mod endpoint;
 mod metrics;
-mod dag;
-mod statistics;
-mod checksum;
 mod readpool_context;
 pub mod local_metrics;
+pub mod dag;
+pub mod statistics;
+pub mod checksum;
 pub mod util;
 pub mod codec;
 
 pub use self::endpoint::err_resp;
 pub use self::readpool_context::Context as ReadPoolContext;
 
+use std::boxed::FnBox;
 use std::result;
 use std::error;
 use std::time::Duration;
 
-use kvproto::{errorpb, kvrpcpb};
+use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 
 use util::time::Instant;
 use storage;
+
+pub const REQ_TYPE_DAG: i64 = 103;
+pub const REQ_TYPE_ANALYZE: i64 = 104;
+pub const REQ_TYPE_CHECKSUM: i64 = 105;
 
 const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
@@ -93,9 +98,36 @@ impl From<storage::txn::Error> for Error {
     }
 }
 
-pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask,
-                         DEFAULT_REQUEST_MAX_HANDLE_SECS, REQ_TYPE_CHECKSUM, REQ_TYPE_DAG};
-pub use self::dag::{ScanOn, Scanner};
+pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask};
+
+type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
+
+trait RequestHandler: Send {
+    fn handle_request(&mut self) -> Result<coppb::Response> {
+        panic!("unary request is not supported for this handler");
+    }
+
+    fn handle_streaming_request(&mut self) -> HandlerStreamStepResult {
+        panic!("streaming request is not supported for this handler");
+    }
+
+    fn collect_metrics_into(&mut self, _metrics: &mut self::dag::executor::ExecutorMetrics) {
+        // Do nothing by default
+    }
+
+    fn get_context(&self) -> &ReqContext;
+
+    fn into_boxed(self) -> Box<RequestHandler>
+    where
+        Self: 'static + Sized,
+    {
+        box self
+    }
+}
+
+/// `RequestHandlerBuilder` accepts a `Box<Snapshot>` and builds a `RequestHandler`.
+type RequestHandlerBuilder =
+    Box<FnBox(Box<storage::Snapshot + 'static>) -> Result<Box<RequestHandler>> + Send>;
 
 #[derive(Debug)]
 pub struct ReqContext {
@@ -107,19 +139,21 @@ pub struct ReqContext {
 }
 
 impl ReqContext {
-    pub fn new(ctx: &kvrpcpb::Context, txn_start_ts: u64, table_scan: bool) -> ReqContext {
+    pub fn new(
+        ctx: &kvrpcpb::Context,
+        txn_start_ts: u64,
+        table_scan: bool,
+        max_handle_duration: Duration,
+    ) -> ReqContext {
         let start_time = Instant::now_coarse();
+        let deadline = start_time + max_handle_duration;
         ReqContext {
             context: ctx.clone(),
             table_scan,
             txn_start_ts,
             start_time,
-            deadline: start_time,
+            deadline,
         }
-    }
-
-    pub fn set_max_handle_duration(&mut self, request_max_handle_duration: Duration) {
-        self.deadline = self.start_time + request_max_handle_duration;
     }
 
     #[inline]

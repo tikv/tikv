@@ -47,13 +47,6 @@ use super::metrics::*;
 use super::local_metrics::BasicLocalMetrics;
 use super::dag::executor::ExecutorMetrics;
 
-pub const REQ_TYPE_DAG: i64 = 103;
-pub const REQ_TYPE_ANALYZE: i64 = 104;
-pub const REQ_TYPE_CHECKSUM: i64 = 105;
-
-// If a request has been handled for more than 60 seconds, the client should
-// be timeout already, so it can be safely aborted.
-pub const DEFAULT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 // If handle time is larger than the lower bound, the query is considered as slow query.
 const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
 
@@ -70,9 +63,6 @@ pub struct Host {
     basic_local_metrics: BasicLocalMetrics,
     max_running_task_count: usize,
     running_task_count: Arc<AtomicUsize>,
-    batch_row_limit: usize,
-    stream_batch_row_limit: usize,
-    request_max_handle_duration: Duration,
 }
 
 impl Host {
@@ -90,9 +80,6 @@ impl Host {
             pool: pool,
             basic_local_metrics: BasicLocalMetrics::default(),
             max_running_task_count: cfg.end_point_max_tasks,
-            batch_row_limit: cfg.end_point_batch_row_limit,
-            stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
-            request_max_handle_duration: cfg.end_point_request_max_handle_duration.0,
             running_task_count: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -118,97 +105,64 @@ impl Host {
 
     fn handle_request(&mut self, snap: Box<Snapshot>, t: RequestTask) {
         let metrics = &mut self.basic_local_metrics;
-        if let Err(e) = t.check_outdated() {
-            let resp = err_resp(e, metrics);
-            t.on_resp.respond(resp);
-            return;
-        }
 
-        let (mut req, cop_req, req_ctx, on_resp) = (t.req, t.cop_req, t.ctx, t.on_resp);
+        let (req, req_handler_builder, on_resp) = (t.req, t.req_handler_builder, t.on_resp);
         let mut tracker = t.tracker;
-        let ranges = req.take_ranges().into_vec();
 
         let priority = readpool::Priority::from(req.get_context().get_priority());
         let pool = self.pool.get_pool_by_priority(priority);
         let ctxd = pool.get_context_delegators();
         tracker.ctx_pool(&ctxd);
 
-        match cop_req {
-            CopRequest::DAG(dag) => {
-                let mut ctx = match DAGContext::new(dag, ranges, snap, req_ctx) {
-                    Ok(ctx) => ctx,
-                    Err(e) => {
-                        on_resp.respond(err_resp(e, metrics));
-                        return;
-                    }
-                };
+        let handler: Result<Box<RequestHandler>> = req_handler_builder(snap);
+
+        match handler {
+            Err(e) => {
+                on_resp.respond(err_resp(e, metrics));
+            }
+            Ok(mut handler) => {
+                if let Err(e) = handler.get_context().check_if_outdated() {
+                    let resp = err_resp(e, metrics);
+                    on_resp.respond(resp);
+                    return;
+                }
+
                 if !on_resp.is_streaming() {
-                    let batch_row_limit = self.batch_row_limit;
+                    // unary
                     let do_request = move |_| {
                         tracker.record_wait();
-                        let mut resp = ctx.handle_request(batch_row_limit).unwrap_or_else(|e| {
+                        let mut resp = handler.handle_request().unwrap_or_else(|e| {
                             let mut metrics = tracker.get_basic_metrics();
                             err_resp(e, &mut metrics)
                         });
                         let mut exec_metrics = ExecutorMetrics::default();
-                        ctx.collect_metrics_into(&mut exec_metrics);
+                        handler.collect_metrics_into(&mut exec_metrics);
                         tracker.record_handle(Some(&mut resp), exec_metrics);
                         on_resp.respond(resp);
                         future::ok::<_, ()>(())
                     };
                     pool.spawn(do_request).forget();
-                    return;
+                } else {
+                    // streaming
+                    let s = stream::unfold((handler, false), move |(mut handler, finished)| {
+                        if finished {
+                            return None;
+                        }
+                        tracker.record_wait();
+                        let (mut item, finished) =
+                            handler.handle_streaming_request().unwrap_or_else(|e| {
+                                let mut metrics = tracker.get_basic_metrics();
+                                (Some(err_resp(e, &mut metrics)), true)
+                            });
+                        let mut exec_metrics = ExecutorMetrics::default();
+                        handler.collect_metrics_into(&mut exec_metrics);
+                        tracker.record_handle(item.as_mut(), exec_metrics);
+                        item.map(|resp| {
+                            future::ok::<_, futures_mpsc::SendError<_>>((resp, (handler, finished)))
+                        })
+                    });
+                    pool.spawn(move |_| on_resp.respond_stream(s)).forget();
                 }
-                // For streaming.
-                let batch_row_limit = self.stream_batch_row_limit;
-                let s = stream::unfold((ctx, false), move |(mut ctx, finished)| {
-                    if finished {
-                        return None;
-                    }
-                    tracker.record_wait();
-                    let (mut item, finished) = ctx.handle_streaming_request(batch_row_limit)
-                        .unwrap_or_else(|e| {
-                            let mut metrics = tracker.get_basic_metrics();
-                            (Some(err_resp(e, &mut metrics)), true)
-                        });
-                    let mut exec_metrics = ExecutorMetrics::default();
-                    ctx.collect_metrics_into(&mut exec_metrics);
-                    tracker.record_handle(item.as_mut(), exec_metrics);
-                    item.map(|resp| {
-                        future::ok::<_, futures_mpsc::SendError<_>>((resp, (ctx, finished)))
-                    })
-                });
-                pool.spawn(move |_| on_resp.respond_stream(s)).forget();
-            }
-            CopRequest::Analyze(analyze) => {
-                let ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx);
-                let mut exec_metrics = ExecutorMetrics::default();
-                let do_request = move |_| {
-                    tracker.record_wait();
-                    let mut resp = ctx.handle_request(&mut exec_metrics).unwrap_or_else(|e| {
-                        let mut metrics = tracker.get_basic_metrics();
-                        err_resp(e, &mut metrics)
-                    });
-                    tracker.record_handle(Some(&mut resp), exec_metrics);
-                    on_resp.respond(resp);
-                    future::ok::<_, ()>(())
-                };
-                pool.spawn(do_request).forget();
-            }
-            CopRequest::Checksum(checksum) => {
-                let ctx = ChecksumContext::new(checksum, ranges, snap, &req_ctx);
-                let mut exec_metrics = ExecutorMetrics::default();
-                let do_request = move |_| {
-                    tracker.record_wait();
-                    let mut resp = ctx.handle_request(&mut exec_metrics).unwrap_or_else(|e| {
-                        let mut metrics = tracker.get_basic_metrics();
-                        err_resp(e, &mut metrics)
-                    });
-                    tracker.record_handle(Some(&mut resp), exec_metrics);
-                    on_resp.respond(resp);
-                    future::ok::<_, ()>(())
-                };
-                pool.spawn(do_request).forget();
             }
         }
     }
@@ -240,13 +194,6 @@ impl Display for Task {
             Task::RetryRequests(ref retry) => write!(f, "retry on task ids: {:?}", retry),
         }
     }
-}
-
-#[derive(Debug)]
-enum CopRequest {
-    DAG(DAGRequest),
-    Analyze(AnalyzeReq),
-    Checksum(ChecksumRequest),
 }
 
 #[derive(Debug)]
@@ -405,13 +352,21 @@ impl Drop for RequestTracker {
     }
 }
 
-#[derive(Debug)]
 pub struct RequestTask {
     req: Request,
-    cop_req: CopRequest,
-    ctx: ReqContext,
+    req_handler_builder: RequestHandlerBuilder,
     on_resp: OnResponse<Response>,
     tracker: RequestTracker,
+}
+
+impl Debug for RequestTask {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("RequestTask")
+            .field("req", &self.req)
+            .field("on_resp", &self.on_resp)
+            .field("tracker", &self.tracker)
+            .finish()
+    }
 }
 
 impl RequestTask {
@@ -419,41 +374,76 @@ impl RequestTask {
         req: Request,
         on_resp: OnResponse<Response>,
         recursion_limit: u32,
+        batch_row_limit: usize,
+        max_handle_duration: Duration,
     ) -> Result<RequestTask> {
         let mut table_scan = false;
-        let (start_ts, cop_req) = match req.get_tp() {
-            REQ_TYPE_DAG => {
-                let mut is = CodedInputStream::from_bytes(req.get_data());
-                is.set_recursion_limit(recursion_limit);
-                let mut dag = DAGRequest::new();
-                box_try!(dag.merge_from(&mut is));
-                if let Some(scan) = dag.get_executors().iter().next() {
-                    table_scan = scan.get_tp() == ExecType::TypeTableScan;
+        let ranges = req.get_ranges().to_vec();
+        let (txn_start_ts, scan_tag, req_handler_builder): (_, _, RequestHandlerBuilder) =
+            match req.get_tp() {
+                REQ_TYPE_DAG => {
+                    let mut is = CodedInputStream::from_bytes(req.get_data());
+                    is.set_recursion_limit(recursion_limit);
+                    let mut dag = DAGRequest::new();
+                    box_try!(dag.merge_from(&mut is));
+                    if let Some(scan) = dag.get_executors().iter().next() {
+                        table_scan = scan.get_tp() == ExecType::TypeTableScan;
+                    }
+                    let req_ctx = ReqContext::new(
+                        req.get_context(),
+                        dag.get_start_ts(),
+                        table_scan,
+                        max_handle_duration,
+                    );
+                    let (txn_start_ts, scan_tag) = (req_ctx.txn_start_ts, req_ctx.get_scan_tag());
+                    let builder = box move |snap| {
+                        DAGContext::new(dag, ranges, snap, req_ctx, batch_row_limit)
+                            .map(|ctx| ctx.into_boxed())
+                    };
+                    (txn_start_ts, scan_tag, builder)
                 }
-                (dag.get_start_ts(), CopRequest::DAG(dag))
-            }
-            REQ_TYPE_ANALYZE => {
-                let mut is = CodedInputStream::from_bytes(req.get_data());
-                is.set_recursion_limit(recursion_limit);
-                let mut analyze = AnalyzeReq::new();
-                box_try!(analyze.merge_from(&mut is));
-                table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
-                (analyze.get_start_ts(), CopRequest::Analyze(analyze))
-            }
-            REQ_TYPE_CHECKSUM => {
-                let mut is = CodedInputStream::from_bytes(req.get_data());
-                is.set_recursion_limit(recursion_limit);
-                let mut checksum = ChecksumRequest::new();
-                box_try!(checksum.merge_from(&mut is));
-                table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
-                (checksum.get_start_ts(), CopRequest::Checksum(checksum))
-            }
-            tp => return Err(box_err!("unsupported tp {}", tp)),
-        };
+                REQ_TYPE_ANALYZE => {
+                    let mut is = CodedInputStream::from_bytes(req.get_data());
+                    is.set_recursion_limit(recursion_limit);
+                    let mut analyze = AnalyzeReq::new();
+                    box_try!(analyze.merge_from(&mut is));
+                    table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
+                    let req_ctx = ReqContext::new(
+                        req.get_context(),
+                        analyze.get_start_ts(),
+                        table_scan,
+                        max_handle_duration,
+                    );
+                    let (txn_start_ts, scan_tag) = (req_ctx.txn_start_ts, req_ctx.get_scan_tag());
+                    let builder = box move |snap| {
+                        AnalyzeContext::new(analyze, ranges, snap, req_ctx)
+                            .map(|ctx| ctx.into_boxed())
+                    };
+                    (txn_start_ts, scan_tag, builder)
+                }
+                REQ_TYPE_CHECKSUM => {
+                    let mut is = CodedInputStream::from_bytes(req.get_data());
+                    is.set_recursion_limit(recursion_limit);
+                    let mut checksum = ChecksumRequest::new();
+                    box_try!(checksum.merge_from(&mut is));
+                    table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
+                    let req_ctx = ReqContext::new(
+                        req.get_context(),
+                        checksum.get_start_ts(),
+                        table_scan,
+                        max_handle_duration,
+                    );
+                    let (txn_start_ts, scan_tag) = (req_ctx.txn_start_ts, req_ctx.get_scan_tag());
+                    let builder = box move |snap| {
+                        ChecksumContext::new(checksum, ranges, snap, req_ctx)
+                            .map(|ctx| ctx.into_boxed())
+                    };
+                    (txn_start_ts, scan_tag, builder)
+                }
+                tp => return Err(box_err!("unsupported tp {}", tp)),
+            };
 
         let start_time = Instant::now_coarse();
-
-        let req_ctx = ReqContext::new(req.get_context(), start_ts, table_scan);
 
         let request_tracker = RequestTracker {
             running_task_count: None,
@@ -470,10 +460,10 @@ impl RequestTask {
             exec_metrics: ExecutorMetrics::default(),
 
             region_id: req.get_context().get_region_id(),
-            txn_start_ts: start_ts,
+            txn_start_ts: txn_start_ts,
             ranges_len: req.get_ranges().len(),
             first_range: req.get_ranges().get(0).cloned(),
-            scan_tag: req_ctx.get_scan_tag(),
+            scan_tag: scan_tag,
             pri_str: get_req_pri_str(req.get_context().get_priority()),
         };
 
@@ -483,25 +473,14 @@ impl RequestTask {
 
         Ok(RequestTask {
             req: req,
-            cop_req: cop_req,
-            ctx: req_ctx,
+            req_handler_builder: req_handler_builder,
             on_resp: on_resp,
             tracker: request_tracker,
         })
     }
 
-    #[inline]
-    fn check_outdated(&self) -> Result<()> {
-        self.ctx.check_if_outdated()
-    }
-
     pub fn priority(&self) -> CommandPri {
         self.req.get_context().get_priority()
-    }
-
-    pub fn set_max_handle_duration(&mut self, request_max_handle_duration: Duration) {
-        self.ctx
-            .set_max_handle_duration(request_max_handle_duration);
     }
 
     fn get_request_key(&self) -> (u64, u64, u64) {
@@ -538,12 +517,6 @@ impl Runnable<Task> for Host {
         for task in tasks.drain(..) {
             match task {
                 Task::Request(mut req) => {
-                    req.set_max_handle_duration(self.request_max_handle_duration);
-                    if let Err(e) = req.check_outdated() {
-                        let resp = err_resp(e, &mut self.basic_local_metrics);
-                        req.on_resp.respond(resp);
-                        continue;
-                    }
                     let key = req.get_request_key();
                     grouped_reqs.entry(key).or_insert_with(Vec::new).push(req);
                 }
@@ -702,13 +675,12 @@ mod tests {
     use tipb::expression::Expr;
     use tipb::executor::Executor;
 
-    use util::config::ReadableDuration;
     use util::worker::{Builder as WorkerBuilder, FutureWorker};
 
     #[test]
     fn test_get_reg_scan_tag() {
         let context = kvrpcpb::Context::new();
-        let mut ctx = ReqContext::new(&context, 0, true);
+        let mut ctx = ReqContext::new(&context, 0, true, Duration::from_secs(60));
         assert_eq!(ctx.get_scan_tag(), "select");
         ctx.table_scan = false;
         assert_eq!(ctx.get_scan_tag(), "index");
@@ -718,8 +690,7 @@ mod tests {
     fn test_req_outdated() {
         let mut worker = WorkerBuilder::new("test-endpoint").batch_size(30).create();
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
-        let mut cfg = Config::default();
-        cfg.end_point_request_max_handle_duration = ReadableDuration::secs(0);
+        let cfg = Config::default();
         let pd_worker = FutureWorker::new("test-pd-worker");
         let read_pool = ReadPool::new(
             "readpool",
@@ -738,7 +709,7 @@ mod tests {
         req.set_tp(REQ_TYPE_DAG);
         let (tx, rx) = oneshot::channel();
         let on_resp = OnResponse::Unary(tx);
-        let task = RequestTask::new(req, on_resp, 1000).unwrap();
+        let task = RequestTask::new(req, on_resp, 1000, 64, Duration::from_secs(0)).unwrap();
 
         worker.schedule(Task::Request(task)).unwrap();
         let resp = rx.wait().unwrap();
@@ -779,7 +750,8 @@ mod tests {
                     req.mut_context().set_priority(CommandPri::High);
                 }
                 let on_resp = OnResponse::Unary(tx);
-                let task = RequestTask::new(req, on_resp, 1000).unwrap();
+                let task =
+                    RequestTask::new(req, on_resp, 1000, 64, Duration::from_secs(60)).unwrap();
                 worker.schedule(Task::Request(task)).unwrap();
                 rx
             })
@@ -813,7 +785,8 @@ mod tests {
         req.set_data(dag.write_to_bytes().unwrap());
 
         let (tx, _rx) = oneshot::channel();
-        let err = RequestTask::new(req, OnResponse::Unary(tx), 5).unwrap_err();
+        let err = RequestTask::new(req, OnResponse::Unary(tx), 5, 64, Duration::from_secs(60))
+            .unwrap_err();
         let s = format!("{:?}", err);
         assert!(
             s.contains("Recursion"),
