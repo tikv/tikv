@@ -866,7 +866,7 @@ fn test_stream_batch_row_limit() {
         assert_eq!(end[end.len() - 1], end_last_byte);
     };
 
-    let resps = handle_streaming_select(&end_point, req, check_range);
+    let resps = handle_streaming_select(&end_point, req, stream_row_limit, check_range);
     assert_eq!(resps.len(), 3);
 
     for (i, resp) in resps.into_iter().enumerate() {
@@ -1493,6 +1493,7 @@ fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectRespon
 fn handle_streaming_select<F>(
     end_point: &Worker<EndPointTask>,
     req: Request,
+    batch_row_limit: usize,
     mut check_range: F,
 ) -> Vec<StreamResponse>
 where
@@ -1503,7 +1504,7 @@ where
         req,
         OnResponse::Streaming(stream_tx),
         100,
-        128,
+        batch_row_limit,
         Duration::from_secs(60),
     ).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();

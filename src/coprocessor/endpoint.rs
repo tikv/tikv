@@ -382,13 +382,18 @@ impl RequestTask {
         batch_row_limit: usize,
         max_handle_duration: Duration,
     ) -> Result<RequestTask> {
-        let mut table_scan = false;
-        let (data, ranges, context) = (
+        let (data, ranges, context, tp) = (
             req.take_data(),
-            req.take_ranges().to_vec(),
+            req.take_ranges(),
             req.take_context(),
+            req.get_tp(),
         );
-        let (req_ctx, req_handler_builder): (_, RequestHandlerBuilder) = match req.get_tp() {
+        // drop it in case of mistakenly using its fields
+        drop(req);
+
+        let mut table_scan = false;
+
+        let (req_ctx, req_handler_builder): (_, RequestHandlerBuilder) = match tp {
             REQ_TYPE_DAG => {
                 let mut is = CodedInputStream::from_bytes(&data);
                 is.set_recursion_limit(recursion_limit);
@@ -404,6 +409,7 @@ impl RequestTask {
                     max_handle_duration,
                 ));
                 let req_ctx_clone = Arc::clone(&req_ctx);
+                let ranges = ranges.to_vec();
                 let builder = box move |snap| {
                     DAGContext::new(dag, ranges, snap, req_ctx_clone, batch_row_limit)
                         .map(|ctx| ctx.into_boxed())
@@ -423,6 +429,7 @@ impl RequestTask {
                     max_handle_duration,
                 ));
                 let req_ctx_clone = Arc::clone(&req_ctx);
+                let ranges = ranges.to_vec();
                 let builder = box move |snap| {
                     AnalyzeContext::new(analyze, ranges, snap, &req_ctx_clone)
                         .map(|ctx| ctx.into_boxed())
@@ -442,6 +449,7 @@ impl RequestTask {
                     max_handle_duration,
                 ));
                 let req_ctx_clone = Arc::clone(&req_ctx);
+                let ranges = ranges.to_vec();
                 let builder = box move |snap| {
                     ChecksumContext::new(checksum, ranges, snap, &req_ctx_clone)
                         .map(|ctx| ctx.into_boxed())
@@ -456,8 +464,8 @@ impl RequestTask {
         let request_tracker = RequestTracker {
             running_task_count: None,
             ctx_pool: None,
-            record_handle_time: req.get_context().get_handle_time(),
-            record_scan_detail: req.get_context().get_scan_detail(),
+            record_handle_time: req_ctx.context.get_handle_time(),
+            record_scan_detail: req_ctx.context.get_scan_detail(),
 
             start: start_time,
             total_handle_time: 0f64,
@@ -467,12 +475,12 @@ impl RequestTask {
             handle_time: None,
             exec_metrics: ExecutorMetrics::default(),
 
-            region_id: req.get_context().get_region_id(),
+            region_id: req_ctx.context.get_region_id(),
             txn_start_ts: req_ctx.txn_start_ts,
-            ranges_len: req.get_ranges().len(),
-            first_range: req.get_ranges().get(0).cloned(),
+            ranges_len: ranges.len(),
+            first_range: ranges.get(0).cloned(),
             scan_tag: req_ctx.get_scan_tag(),
-            pri_str: get_req_pri_str(req.get_context().get_priority()),
+            pri_str: get_req_pri_str(req_ctx.context.get_priority()),
         };
 
         COPR_PENDING_REQS
