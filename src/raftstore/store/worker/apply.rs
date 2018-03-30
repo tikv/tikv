@@ -1635,35 +1635,15 @@ impl ApplyDelegate {
         ranges: &mut Vec<Range>,
         use_delete_range: bool,
     ) -> Result<Response> {
-        let s_key = req.get_delete_range().get_start_key();
-        let e_key = req.get_delete_range().get_end_key();
-        if !e_key.is_empty() && s_key >= e_key {
-            return Err(box_err!(
-                "invalid delete range command, start_key: {:?}, end_key: {:?}",
-                s_key,
-                e_key
-            ));
-        }
-        check_data_key(s_key, &self.region)?;
-        let end_key = keys::data_end_key(e_key);
-        let region_end_key = keys::data_end_key(self.region.get_end_key());
-        if end_key > region_end_key {
-            return Err(Error::KeyNotInRegion(e_key.to_vec(), self.region.clone()));
-        }
+        let cf = Self::convert_cf(req.get_delete_range().get_cf())?;
+        let (start_key, end_key) = self.convert_range(
+            req.get_delete_range().get_start_key(),
+            req.get_delete_range().get_end_key(),
+        )?;
 
-        let resp = Response::new();
-        let mut cf = req.get_delete_range().get_cf();
-        if cf.is_empty() {
-            cf = CF_DEFAULT;
-        }
-        if ALL_CFS.iter().find(|x| **x == cf).is_none() {
-            return Err(box_err!("invalid delete range command, cf: {:?}", cf));
-        }
-        let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
-
-        let start_key = keys::data_key(s_key);
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
+        let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
         self.engine
             .delete_files_in_range_cf(handle, &start_key, &end_key, /* include_end */ false)
             .unwrap_or_else(|e| {
@@ -1691,7 +1671,7 @@ impl ApplyDelegate {
 
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
-        Ok(resp)
+        Ok(Response::new())
     }
 
     fn handle_ingest_sst(
@@ -1719,35 +1699,49 @@ impl ApplyDelegate {
         Ok(Response::new())
     }
 
-    fn handle_unsafe_cleanup_range(&mut self, req: &Request) -> Result<Response> {
-        let s_key = req.get_unsafe_cleanup_range().get_start_key();
-        let e_key = req.get_unsafe_cleanup_range().get_end_key();
+    fn convert_range(&self, s_key: &[u8], e_key: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+        // start key must less than end key, the maximum end key is empty.
         if !e_key.is_empty() && s_key >= e_key {
             return Err(box_err!(
-                "invalid unsafe cleanup range command, start_key: {:?}, end_key: {:?}",
+                "invalid start_key: {:?}, end_key: {:?}",
                 s_key,
                 e_key
             ));
         }
+
+        // check start key
         check_data_key(s_key, &self.region)?;
+        let start_key = keys::data_key(s_key);
+
+        // check end key
         let end_key = keys::data_end_key(e_key);
         let region_end_key = keys::data_end_key(self.region.get_end_key());
         if end_key > region_end_key {
             return Err(Error::KeyNotInRegion(e_key.to_vec(), self.region.clone()));
         }
 
-        let resp = Response::new();
-        let mut cf = req.get_unsafe_cleanup_range().get_cf();
+        Ok((start_key, end_key))
+    }
+
+    fn convert_cf(cf: &str) -> Result<&str> {
         if cf.is_empty() {
-            cf = CF_DEFAULT;
+            Ok(CF_DEFAULT)
+        } else if ALL_CFS.iter().find(|x| **x == cf).is_none() {
+            Err(box_err!("invalid unsafe cleanup command, cf: {:?}", cf))
+        } else {
+            Ok(cf)
         }
-        if ALL_CFS.iter().find(|x| **x == cf).is_none() {
-            return Err(box_err!("invalid unsafe cleanup command, cf: {:?}", cf));
-        }
+    }
+
+    fn handle_unsafe_cleanup_range(&mut self, req: &Request) -> Result<Response> {
+        let cf = Self::convert_cf(req.get_unsafe_cleanup_range().get_cf())?;
+        let (start_key, end_key) = self.convert_range(
+            req.get_unsafe_cleanup_range().get_start_key(),
+            req.get_unsafe_cleanup_range().get_end_key(),
+        )?;
 
         // Unsafe_cleanup_range tasks are expensive operations, so we deliver them to
         // another worker thread to prevent them blocking apply thread.
-        let start_key = keys::data_key(s_key);
         self.ucr_task_queue
             .add_task(cf, &start_key, &end_key)
             .unwrap_or_else(|e| {
@@ -1760,7 +1754,7 @@ impl ApplyDelegate {
                 )
             });
 
-        Ok(resp)
+        Ok(Response::new())
     }
 }
 
