@@ -131,14 +131,21 @@ pub struct Runner {
     engine: Arc<DB>,
     task_queue: Arc<TaskQueue>,
     use_delete_range: bool,
+    timout_interval: u64,
 }
 
 impl Runner {
-    pub fn new(engine: Arc<DB>, task_queue: Arc<TaskQueue>, use_delete_range: bool) -> Runner {
+    pub fn new(
+        engine: Arc<DB>,
+        task_queue: Arc<TaskQueue>,
+        use_delete_range: bool,
+        timout_interval: u64,
+    ) -> Runner {
         Runner {
             engine: engine,
             task_queue: task_queue,
             use_delete_range: use_delete_range,
+            timout_interval: timout_interval,
         }
     }
 
@@ -185,7 +192,7 @@ impl Runner {
             // If there are too many ranges need to cleanup, it will takes a long long
             // while to finish. In that situation if we don't limit the total time of
             // this function, shutdown will wait a long long time.
-            if t.elapsed() > Duration::from_millis(UNSAFE_CLEANUP_INTERVAL) {
+            if t.elapsed() > Duration::from_millis(self.timout_interval) {
                 break;
             }
         }
@@ -200,20 +207,19 @@ impl RunnableWithTimer<i32, ()> for Runner {
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         self.unsafe_cleanup_ranges();
 
-        timer.add_task(Duration::from_millis(UNSAFE_CLEANUP_INTERVAL), ());
+        timer.add_task(Duration::from_millis(self.timout_interval), ());
     }
 }
 
 #[cfg(test)]
 mod test {
+    use std::thread;
     use tempdir::TempDir;
 
-    use rocksdb::{self, Writable, WriteBatch, DB};
-    use storage::types::Key as MvccKey;
-    use storage::mvcc::{Write, WriteType};
+    use rocksdb::Writable;
     use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use util::rocksdb::new_engine;
-    use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
+    use util::worker::Worker;
 
     use super::*;
 
@@ -253,5 +259,53 @@ mod test {
 
         task_queue.delete_task(task_picked).unwrap();
         assert_eq!(task_queue.pick_task(), None);
+    }
+
+    #[test]
+    fn test_unsafe_cleanup_range_runner() {
+        let path = TempDir::new("unsafe-cleanup-range-runner-test").unwrap();
+        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT], None).unwrap();
+        let db = Arc::new(db);
+
+        let task_queue = Arc::new(TaskQueue::new(Arc::clone(&db)));
+        let runner = Runner::new(
+            Arc::clone(&db),
+            Arc::clone(&task_queue),
+            false,
+            50, /* 50ms */
+        );
+        let mut timer = Timer::new(1);
+        timer.add_task(Duration::from_millis(50), ());
+        let mut worker = Worker::new("runner");
+        worker.start_with_timer(runner, timer).unwrap();
+
+        // put some data
+        let keys = [b"za", b"zb", b"zc", b"zd"];
+        for key in &keys {
+            db.put(key.as_ref(), b"value").unwrap();
+        }
+
+        // add cleanup task ["za", "zd")
+        task_queue
+            .add_task(CF_DEFAULT, keys[0].as_ref(), keys[3].as_ref())
+            .unwrap();
+        thread::sleep(Duration::from_millis(200));
+
+        // only left "zd"
+        for key in &keys[..3] {
+            assert!(db.get(key.as_ref()).unwrap().is_none());
+        }
+        assert!(db.get(keys[3].as_ref()).unwrap().is_some());
+
+        // add cleanup task ["za", "ze")
+        task_queue
+            .add_task(CF_DEFAULT, keys[0].as_ref(), b"ze")
+            .unwrap();
+        thread::sleep(Duration::from_millis(200));
+
+        // nothing left
+        for key in &keys {
+            assert!(db.get(key.as_ref()).unwrap().is_none());
+        }
     }
 }

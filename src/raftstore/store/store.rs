@@ -596,6 +596,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Arc::clone(&self.kv_engine),
             Arc::clone(&ucr_task_queue),
             self.cfg.use_delete_range,
+            UNSAFE_CLEANUP_INTERVAL,
         );
         let mut timer = Timer::new(1);
         timer.add_task(Duration::from_millis(UNSAFE_CLEANUP_INTERVAL), ());
