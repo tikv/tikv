@@ -327,7 +327,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
             }
             Task::SendTo { addr, msg, cb } => {
                 if self.sending_count.load(Ordering::SeqCst) >= MAX_SENDER_CONCURRENT {
-                    info!(
+                    warn!(
                         "too many sending snapshot tasks, drop SendTo Snap[to: {}, snap: {:?}]",
                         addr, msg
                     );
