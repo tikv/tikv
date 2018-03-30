@@ -165,9 +165,14 @@ impl PendingDeleteRanges {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
         timeout: time::Instant,
-    ) -> Result<()> {
+    ) {
         if !self.find_overlap_ranges(&start_key, &end_key).is_empty() {
-            return Err(box_err!("overlap ranges in pending delete range"));
+            panic!(
+                "[region {}] register deleting data in [{}, {}) failed due to overlap",
+                region_id,
+                escape(&start_key),
+                escape(&end_key),
+            );
         }
         let info = StalePeerInfo {
             region_id: region_id,
@@ -175,7 +180,6 @@ impl PendingDeleteRanges {
             timeout: timeout,
         };
         self.ranges.insert(start_key, info);
-        Ok(())
     }
 
     pub fn drain_timeout_ranges(&mut self, now: time::Instant) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
@@ -270,9 +274,7 @@ impl SnapContext {
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
-        if self.get_delay_secs() > 0 {
-            self.destroy_overlap_ranges(&start_key, &end_key);
-        }
+        self.destroy_overlap_ranges(&start_key, &end_key);
         box_try!(util::delete_all_in_range(
             &self.kv_db,
             &start_key,
@@ -401,16 +403,16 @@ impl SnapContext {
         }
     }
 
-    fn destroy_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) {
+    fn destroy_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) -> bool {
+        if self.clean_stale_peer_delay.as_secs() == 0 {
+            return false;
+        }
         let to_destroy = self.pending_delete_ranges
             .drain_overlap_ranges(start_key, end_key);
         for (region_id, s_key, e_key) in to_destroy {
             self.handle_destroy(region_id, s_key, e_key, false /* use_delete_files */);
         }
-    }
-
-    fn get_delay_secs(&self) -> u64 {
-        self.clean_stale_peer_delay.as_secs()
+        true
     }
 
     fn insert_pending_delete_range(
@@ -418,10 +420,21 @@ impl SnapContext {
         region_id: u64,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-    ) -> Result<()> {
-        let timeout = time::Instant::now() + self.clean_stale_peer_delay;
-        self.pending_delete_ranges
-            .insert(region_id, start_key, end_key, timeout)
+    ) -> bool {
+        if self.destroy_overlap_ranges(&start_key, &end_key) {
+            info!(
+                "[region {}] register deleting data in [{}, {})",
+                region_id,
+                escape(&start_key),
+                escape(&end_key),
+            );
+            let timeout = time::Instant::now() + self.clean_stale_peer_delay;
+            self.pending_delete_ranges
+                .insert(region_id, start_key, end_key, timeout);
+            true
+        } else {
+            false
+        }
     }
 
     fn clean_timeout_ranges(&mut self) {
@@ -490,31 +503,16 @@ impl Runnable<Task> for Runner {
                 start_key,
                 end_key,
             } => {
-                if self.ctx.get_delay_secs() > 0 {
-                    self.ctx.destroy_overlap_ranges(&start_key, &end_key);
-                    // delay the range deletion because
-                    // there might be a coprocessor request related to this range
-                    if let Err(e) = self.ctx.insert_pending_delete_range(
-                        region_id,
-                        start_key.clone(),
-                        end_key.clone(),
-                    ) {
-                        panic!(
-                            "[region {}] register deleting data in [{}, {}) failed: {:?}",
-                            region_id,
-                            escape(&start_key),
-                            escape(&end_key),
-                            e
-                        );
-                    } else {
-                        info!(
-                            "[region {}] register deleting data in [{}, {})",
-                            region_id,
-                            escape(&start_key),
-                            escape(&end_key)
-                        );
-                    }
-                } else {
+                // try to delay the range deletion because
+                // there might be a coprocessor request related to this range,
+                // if success, the range will be deleted later;
+                // if failed, it means the range deletion delay is 0,
+                // so we don't use delete files to delete range
+                if !self.ctx.insert_pending_delete_range(
+                    region_id,
+                    start_key.clone(),
+                    end_key.clone(),
+                ) {
                     self.ctx.handle_destroy(
                         region_id,
                         start_key,
@@ -556,27 +554,12 @@ mod test {
         let id = 0;
 
         let timeout = time::Instant::now() + delay;
-        pending_delete_ranges
-            .insert(id, b"a".to_vec(), b"c".to_vec(), timeout)
-            .unwrap();
-        pending_delete_ranges
-            .insert(id + 1, b"f".to_vec(), b"i".to_vec(), timeout)
-            .unwrap();
-        pending_delete_ranges
-            .insert(id, b"m".to_vec(), b"n".to_vec(), timeout)
-            .unwrap();
-        pending_delete_ranges
-            .insert(id + 1, b"p".to_vec(), b"t".to_vec(), timeout)
-            .unwrap();
-        pending_delete_ranges
-            .insert(id, b"x".to_vec(), b"z".to_vec(), timeout)
-            .unwrap();
+        pending_delete_ranges.insert(id, b"a".to_vec(), b"c".to_vec(), timeout);
+        pending_delete_ranges.insert(id + 1, b"f".to_vec(), b"i".to_vec(), timeout);
+        pending_delete_ranges.insert(id, b"m".to_vec(), b"n".to_vec(), timeout);
+        pending_delete_ranges.insert(id + 1, b"p".to_vec(), b"t".to_vec(), timeout);
+        pending_delete_ranges.insert(id, b"x".to_vec(), b"z".to_vec(), timeout);
 
-        assert!(
-            pending_delete_ranges
-                .insert(id + 2, b"g".to_vec(), b"q".to_vec(), timeout)
-                .is_err()
-        );
         assert_eq!(pending_delete_ranges.len(), 5);
 
         thread::sleep(delay / 2);
@@ -592,9 +575,7 @@ mod test {
             ]
         );
         assert_eq!(pending_delete_ranges.len(), 2);
-        pending_delete_ranges
-            .insert(id + 2, b"g".to_vec(), b"q".to_vec(), timeout)
-            .unwrap();
+        pending_delete_ranges.insert(id + 2, b"g".to_vec(), b"q".to_vec(), timeout);
         assert_eq!(pending_delete_ranges.len(), 3);
 
         thread::sleep(delay / 2);
