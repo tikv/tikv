@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::mem;
+use std::sync::Arc;
 use futures::{future, stream, Future, Stream};
 use futures::sync::mpsc;
 use protobuf::{CodedInputStream, Message};
@@ -82,18 +83,29 @@ impl Service {
         }
     }
 
-    /// Create a `RequestHandlerBuilder` and returns `Err` if fails.
-    fn try_new_request_handler_builder(
+    /// Parse the raw `Request` to create `RequestHandlerBuilder` and `ReqContext`.
+    /// Returns `Err` if fails.
+    fn try_parse_request(
         &self,
-        req: &coppb::Request,
+        mut req: coppb::Request,
         is_streaming: bool,
-    ) -> Result<RequestHandlerBuilder> {
-        let mut is = CodedInputStream::from_bytes(req.get_data());
+    ) -> Result<(RequestHandlerBuilder, Arc<ReqContext>)> {
+        let (context, data, ranges) = (
+            req.take_context(),
+            req.take_data(),
+            req.take_ranges().to_vec(),
+        );
+
+        let mut is = CodedInputStream::from_bytes(&data);
         is.set_recursion_limit(self.recursion_limit);
 
-        let ranges = req.get_ranges().to_vec();
+        // `Arc` is required because when scheduling handlers (i.e. outside the handler) we need
+        // it to determine whether or not it is outdated, while when running handlers (i.e. inside
+        // the handler) we also need it to determine whether or not it is outdated.
+        let req_ctx: Arc<ReqContext>;
+        let builder: RequestHandlerBuilder;
 
-        let builder: RequestHandlerBuilder = match req.get_tp() {
+        match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut dag = DAGRequest::new();
                 box_try!(dag.merge_from(&mut is));
@@ -101,61 +113,71 @@ impl Service {
                 if let Some(scan) = dag.get_executors().iter().next() {
                     table_scan = scan.get_tp() == ExecType::TypeTableScan;
                 }
-                let req_ctx = ReqContext::new(
-                    req.get_context(),
+                req_ctx = Arc::new(ReqContext::new(
+                    context,
                     dag.get_start_ts(),
                     table_scan,
                     self.max_handle_duration,
-                );
+                ));
+                let req_ctx_cloned = Arc::clone(&req_ctx);
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
-                box move |snap| {
-                    DAGContext::new(dag, ranges, snap, req_ctx, batch_row_limit)
+                builder = box move |snap| {
+                    DAGContext::new(dag, ranges, snap, req_ctx_cloned, batch_row_limit)
                         .map(|ctx| ctx.into_boxed())
-                }
+                };
             }
             REQ_TYPE_ANALYZE => {
                 let mut analyze = AnalyzeReq::new();
                 box_try!(analyze.merge_from(&mut is));
                 let table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
-                let req_ctx = ReqContext::new(
-                    req.get_context(),
+                req_ctx = Arc::new(ReqContext::new(
+                    context,
                     analyze.get_start_ts(),
                     table_scan,
                     self.max_handle_duration,
-                );
-                box move |snap| {
-                    AnalyzeContext::new(analyze, ranges, snap, req_ctx).map(|ctx| ctx.into_boxed())
-                }
+                ));
+                let req_ctx_cloned = Arc::clone(&req_ctx);
+                builder = box move |snap| {
+                    AnalyzeContext::new(analyze, ranges, snap, &req_ctx_cloned)
+                        .map(|ctx| ctx.into_boxed())
+                };
             }
             REQ_TYPE_CHECKSUM => {
                 let mut checksum = ChecksumRequest::new();
                 box_try!(checksum.merge_from(&mut is));
                 let table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
-                let req_ctx = ReqContext::new(
-                    req.get_context(),
+                req_ctx = Arc::new(ReqContext::new(
+                    context,
                     checksum.get_start_ts(),
                     table_scan,
                     self.max_handle_duration,
-                );
-                box move |snap| {
-                    ChecksumContext::new(checksum, ranges, snap, req_ctx)
+                ));
+                let req_ctx_cloned = Arc::clone(&req_ctx);
+                builder = box move |snap| {
+                    ChecksumContext::new(checksum, ranges, snap, &req_ctx_cloned)
                         .map(|ctx| ctx.into_boxed())
-                }
+                };
             }
             tp => return Err(box_err!("unsupported tp {}", tp)),
         };
-        Ok(builder)
+        Ok((builder, req_ctx))
     }
 
-    /// Creates a `RequestHandlerBuilder`.
+    /// Parse the raw `Request` to create `RequestHandlerBuilder` and `ReqContext`.
     #[inline]
-    fn new_request_handler_builder(
+    fn parse_request(
         &self,
-        req: &coppb::Request,
+        req: coppb::Request,
         is_streaming: bool,
-    ) -> RequestHandlerBuilder {
-        self.try_new_request_handler_builder(req, is_streaming)
-            .unwrap_or_else(|e| box move |_| Ok(cop_util::ErrorRequestHandler::new(e).into_boxed()))
+    ) -> (RequestHandlerBuilder, Arc<ReqContext>) {
+        match self.try_parse_request(req, is_streaming) {
+            Ok(v) => v,
+            Err(e) => {
+                let builder = box move |_| Ok(cop_util::ErrorRequestHandler::new(e).into_boxed());
+                let req_ctx = Arc::new(ReqContext::default());
+                (builder, req_ctx)
+            }
+        }
     }
 
     #[inline]
@@ -183,16 +205,18 @@ impl Service {
 
     fn handle_unary_request_by_custom_handler(
         &self,
-        context: kvrpcpb::Context,
+        req_ctx: Arc<ReqContext>,
         handler_builder: RequestHandlerBuilder,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
-        let mut tracker = Tracker::new(&context);
+        let mut tracker = Tracker::new(Arc::clone(&req_ctx));
 
         let engine = self.engine.clone();
-        let priority = readpool::Priority::from(context.get_priority());
+        let priority = readpool::Priority::from(req_ctx.context.get_priority());
 
         let result = self.read_pool.future_execute(priority, move |ctxd| {
-            Service::async_snapshot(engine, &context)
+            tracker.set_track_target(ctxd);
+
+            Service::async_snapshot(engine, &req_ctx.context)
                 .map_err(|e| (e, None))
                 .and_then(move |snapshot| {
                     let mut handler: Box<RequestHandler> = match handler_builder(snapshot) {
@@ -200,16 +224,7 @@ impl Service {
                         Err(e) => cop_util::ErrorRequestHandler::new(e).into_boxed(),
                     };
 
-                    {
-                        let ctx = handler.get_context();
-                        tracker.set_track_target(
-                            ctx.context.get_region_id(),
-                            ctx.get_scan_tag(),
-                            ctxd,
-                        );
-                    }
-
-                    future::result(handler.get_context().check_if_outdated())
+                    future::result(req_ctx.check_if_outdated())
                         .map_err(|e| (e, None))
                         .and_then(move |_| {
                             tracker.before_all_items();
@@ -261,43 +276,36 @@ impl Service {
     #[inline]
     pub fn handle_unary_request(
         &self,
-        mut req: coppb::Request,
+        req: coppb::Request,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
-        let handler_builder = self.new_request_handler_builder(&req, false);
-        self.handle_unary_request_by_custom_handler(req.take_context(), handler_builder)
+        let (handler_builder, req_ctx) = self.parse_request(req, false);
+        self.handle_unary_request_by_custom_handler(req_ctx, handler_builder)
     }
 
     fn handle_stream_request_by_custom_handler(
         &self,
-        context: kvrpcpb::Context,
+        req_ctx: Arc<ReqContext>,
         handler_builder: RequestHandlerBuilder,
     ) -> impl Stream<Item = coppb::Response, Error = ()> {
-        let mut tracker = Tracker::new(&context);
+        let mut tracker = Tracker::new(Arc::clone(&req_ctx));
         let (tx, rx) = mpsc::channel::<(Result<coppb::Response>, Option<kvrpcpb::ExecDetails>)>(
             self.stream_channel_size,
         );
         let engine = self.engine.clone();
-        let priority = readpool::Priority::from(context.get_priority());
+        let priority = readpool::Priority::from(req_ctx.context.get_priority());
 
         let (tx1, tx2) = (tx.clone(), tx.clone());
         let result = self.read_pool.future_execute(priority, move |ctxd| {
-            Service::async_snapshot(engine, &context)
+            tracker.set_track_target(ctxd);
+
+            Service::async_snapshot(engine, &req_ctx.context)
                 .and_then(move |snapshot| {
                     let handler = match handler_builder(snapshot) {
                         Ok(handler) => handler,
                         Err(e) => cop_util::ErrorRequestHandler::new(e).into_boxed(),
                     };
 
-                    {
-                        let ctx = handler.get_context();
-                        tracker.set_track_target(
-                            ctx.context.get_region_id(),
-                            ctx.get_scan_tag(),
-                            ctxd,
-                        );
-                    }
-
-                    future::result(handler.get_context().check_if_outdated()).and_then(move |_| {
+                    future::result(req_ctx.check_if_outdated()).and_then(move |_| {
                         tracker.before_all_items();
                         stream::unfold((handler, false), move |(mut handler, finished)| {
                             if finished {
@@ -390,10 +398,10 @@ impl Service {
     #[inline]
     pub fn handle_stream_request(
         &self,
-        mut req: coppb::Request,
+        req: coppb::Request,
     ) -> impl Stream<Item = coppb::Response, Error = ()> {
-        let handler_builder = self.new_request_handler_builder(&req, true);
-        self.handle_stream_request_by_custom_handler(req.take_context(), handler_builder)
+        let (handler_builder, req_ctx) = self.parse_request(req, true);
+        self.handle_stream_request_by_custom_handler(req_ctx, handler_builder)
     }
 }
 
@@ -410,18 +418,15 @@ struct Tracker {
     total_process_time: Duration,
     total_exec_metrics: ExecutorMetrics,
 
-    // settings
-    record_handle_time: bool,
-    record_scan_detail: bool,
+    // info
+    req_ctx: Arc<ReqContext>,
 
-    // target info
-    region_id: Option<u64>,
-    scan_tag: Option<&'static str>,
+    // target
     ctxd: Option<futurepool::ContextDelegators<ReadPoolContext>>,
 }
 
 impl Tracker {
-    pub fn new(context: &kvrpcpb::Context) -> Tracker {
+    pub fn new(req_ctx: Arc<ReqContext>) -> Tracker {
         Tracker {
             request_begin_at: Instant::now_coarse(),
             item_begin_at: Instant::now_coarse(),
@@ -433,11 +438,8 @@ impl Tracker {
             total_process_time: Duration::default(),
             total_exec_metrics: ExecutorMetrics::default(),
 
-            record_handle_time: context.get_handle_time(),
-            record_scan_detail: context.get_scan_detail(),
+            req_ctx,
 
-            region_id: None,
-            scan_tag: None,
             ctxd: None,
         }
     }
@@ -466,13 +468,13 @@ impl Tracker {
         assert!(self.current_stage == 3);
         let is_slow_query = time::duration_to_sec(self.item_process_time) > SLOW_QUERY_LOWER_BOUND;
         let mut exec_details = kvrpcpb::ExecDetails::new();
-        if self.record_handle_time || is_slow_query {
+        if self.req_ctx.context.get_handle_time() || is_slow_query {
             let mut handle = kvrpcpb::HandleTime::new();
             handle.set_process_ms(time::duration_to_sec(self.item_process_time) as i64);
             handle.set_wait_ms(time::duration_to_sec(self.wait_time) as i64);
             exec_details.set_handle_time(handle);
         }
-        if self.record_scan_detail || is_slow_query {
+        if self.req_ctx.context.get_scan_detail() || is_slow_query {
             let detail = self.total_exec_metrics.cf_stats.scan_detail();
             exec_details.set_scan_detail(detail);
         }
@@ -489,14 +491,7 @@ impl Tracker {
         self.current_stage = 4;
     }
 
-    pub fn set_track_target(
-        &mut self,
-        region_id: u64,
-        scan_tag: &'static str,
-        ctxd: futurepool::ContextDelegators<ReadPoolContext>,
-    ) {
-        self.region_id = Some(region_id);
-        self.scan_tag = Some(scan_tag);
+    pub fn set_track_target(&mut self, ctxd: futurepool::ContextDelegators<ReadPoolContext>) {
         self.ctxd = Some(ctxd);
     }
 
@@ -511,30 +506,31 @@ impl Tracker {
         let total_exec_metrics =
             mem::replace(&mut self.total_exec_metrics, ExecutorMetrics::default());
         let ctxd = self.ctxd.take().unwrap();
+        let scan_tag = self.req_ctx.get_scan_tag();
         let mut thread_ctx = ctxd.current_thread_context_mut();
         thread_ctx
             .basic_local_metrics
             .wait_time
-            .with_label_values(&[self.scan_tag.unwrap()])
+            .with_label_values(&[scan_tag])
             .observe(time::duration_to_sec(self.wait_time));
         thread_ctx
             .basic_local_metrics
             .handle_time
-            .with_label_values(&[self.scan_tag.unwrap()])
+            .with_label_values(&[scan_tag])
             .observe(time::duration_to_sec(self.total_process_time));
         thread_ctx
             .basic_local_metrics
             .req_time
-            .with_label_values(&[self.scan_tag.unwrap()])
+            .with_label_values(&[scan_tag])
             .observe(time::duration_to_sec(self.req_time));
         thread_ctx
             .basic_local_metrics
             .scan_keys
-            .with_label_values(&[self.scan_tag.unwrap()])
+            .with_label_values(&[scan_tag])
             .observe(total_exec_metrics.cf_stats.total_op_count() as f64);
         thread_ctx.collect(
-            self.region_id.unwrap(),
-            self.scan_tag.unwrap(),
+            self.req_ctx.context.get_region_id(),
+            scan_tag,
             total_exec_metrics,
         );
         self.current_stage = 5;
@@ -603,31 +599,10 @@ mod tests {
     use tipb::expression::Expr;
     use tipb::executor::Executor;
 
-    /// an unary `RequestHandler` that
-    struct OutdatedFixture {
-        req_ctx: ReqContext,
-    }
-
-    impl OutdatedFixture {
-        pub fn new() -> OutdatedFixture {
-            let context = kvrpcpb::Context::new();
-            OutdatedFixture {
-                req_ctx: ReqContext::new(&context, 0, false, Duration::from_secs(0)),
-            }
-        }
-    }
-
-    impl RequestHandler for OutdatedFixture {
-        fn get_context(&self) -> &ReqContext {
-            &self.req_ctx
-        }
-    }
-
     /// an unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
         handle_duration_millis: u64,
         result: Option<Result<coppb::Response>>,
-        req_ctx: ReqContext,
     }
 
     impl UnaryFixture {
@@ -635,7 +610,6 @@ mod tests {
             UnaryFixture {
                 handle_duration_millis: 0,
                 result: Some(result),
-                req_ctx: ReqContext::default(),
             }
         }
 
@@ -646,7 +620,6 @@ mod tests {
             UnaryFixture {
                 handle_duration_millis,
                 result: Some(result),
-                req_ctx: ReqContext::default(),
             }
         }
     }
@@ -656,10 +629,6 @@ mod tests {
             thread::sleep(Duration::from_millis(self.handle_duration_millis));
             self.result.take().unwrap()
         }
-
-        fn get_context(&self) -> &ReqContext {
-            &self.req_ctx
-        }
     }
 
     /// a streaming `RequestHandler` that always produces a fixture.
@@ -667,7 +636,6 @@ mod tests {
         result_len: usize,
         result_iter: vec::IntoIter<Result<coppb::Response>>,
         nth: usize,
-        req_ctx: ReqContext,
     }
 
     impl StreamFixture {
@@ -676,7 +644,6 @@ mod tests {
                 result_len: result.len(),
                 result_iter: result.into_iter(),
                 nth: 0,
-                req_ctx: ReqContext::default(),
             }
         }
     }
@@ -699,17 +666,12 @@ mod tests {
             self.nth += 1;
             ret
         }
-
-        fn get_context(&self) -> &ReqContext {
-            &self.req_ctx
-        }
     }
 
     /// a streaming `RequestHandler` that produces values according a closure.
     struct StreamFromClosure {
         result_generator: Box<Fn(usize) -> HandlerStreamStepResult + Send>,
         nth: usize,
-        req_ctx: ReqContext,
     }
 
     impl StreamFromClosure {
@@ -720,7 +682,6 @@ mod tests {
             StreamFromClosure {
                 result_generator: box result_generator,
                 nth: 0,
-                req_ctx: ReqContext::default(),
             }
         }
     }
@@ -730,10 +691,6 @@ mod tests {
             let result = (self.result_generator)(self.nth);
             self.nth += 1;
             result
-        }
-
-        fn get_context(&self) -> &ReqContext {
-            &self.req_ctx
         }
     }
 
@@ -749,15 +706,21 @@ mod tests {
         let handler_builder =
             box |_| Ok(UnaryFixture::new(Ok(coppb::Response::new())).into_boxed());
         let resp = service
-            .handle_unary_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
+            .handle_unary_request_by_custom_handler(
+                Arc::new(ReqContext::default()),
+                handler_builder,
+            )
             .wait()
             .unwrap();
         assert!(resp.get_other_error().is_empty());
 
         // an outdated request
-        let handler_builder = box |_| Ok(OutdatedFixture::new().into_boxed());
+        let handler_builder =
+            box |_| Ok(UnaryFixture::new(Ok(coppb::Response::new())).into_boxed());
+        let outdated_req_ctx =
+            ReqContext::new(kvrpcpb::Context::new(), 0, false, Duration::from_secs(0));
         let resp = service
-            .handle_unary_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
+            .handle_unary_request_by_custom_handler(Arc::new(outdated_req_ctx), handler_builder)
             .wait()
             .unwrap();
         assert_eq!(resp.get_other_error(), OUTDATED_ERROR_MSG);
@@ -856,7 +819,10 @@ mod tests {
 
             let handler_builder =
                 box |_| Ok(UnaryFixture::new_with_duration(Ok(response), 1000).into_boxed());
-            let future = service.handle_unary_request_by_custom_handler(context, handler_builder);
+            let future = service.handle_unary_request_by_custom_handler(
+                Arc::new(ReqContext::default()),
+                handler_builder,
+            );
             let tx = tx.clone();
             thread::spawn(move || tx.send(future.wait().unwrap()));
             thread::sleep(Duration::from_millis(100));
@@ -891,7 +857,10 @@ mod tests {
         let handler_builder =
             box |_| Ok(UnaryFixture::new(Err(Error::Other(box_err!("foo")))).into_boxed());
         let resp = service
-            .handle_unary_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
+            .handle_unary_request_by_custom_handler(
+                Arc::new(ReqContext::default()),
+                handler_builder,
+            )
             .wait()
             .unwrap();
         assert_eq!(resp.get_data().len(), 0);
@@ -911,7 +880,10 @@ mod tests {
         let handler_builder =
             box |_| Ok(StreamFixture::new(vec![Err(Error::Other(box_err!("foo")))]).into_boxed());
         let resp_vec = service
-            .handle_stream_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
+            .handle_stream_request_by_custom_handler(
+                Arc::new(ReqContext::default()),
+                handler_builder,
+            )
             .collect()
             .wait()
             .unwrap();
@@ -930,7 +902,10 @@ mod tests {
 
         let handler_builder = box move |_| Ok(StreamFixture::new(responses).into_boxed());
         let resp_vec = service
-            .handle_stream_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
+            .handle_stream_request_by_custom_handler(
+                Arc::new(ReqContext::default()),
+                handler_builder,
+            )
             .collect()
             .wait()
             .unwrap();
@@ -952,7 +927,10 @@ mod tests {
 
         let handler_builder = box |_| Ok(StreamFixture::new(vec![]).into_boxed());
         let resp_vec = service
-            .handle_stream_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
+            .handle_stream_request_by_custom_handler(
+                Arc::new(ReqContext::default()),
+                handler_builder,
+            )
             .collect()
             .wait()
             .unwrap();
@@ -986,7 +964,10 @@ mod tests {
         });
         let handler_builder = box |_| Ok(handler.into_boxed());
         let resp_vec = service
-            .handle_stream_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
+            .handle_stream_request_by_custom_handler(
+                Arc::new(ReqContext::default()),
+                handler_builder,
+            )
             .collect()
             .wait()
             .unwrap();
@@ -1011,7 +992,10 @@ mod tests {
         });
         let handler_builder = box |_| Ok(handler.into_boxed());
         let resp_vec = service
-            .handle_stream_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
+            .handle_stream_request_by_custom_handler(
+                Arc::new(ReqContext::default()),
+                handler_builder,
+            )
             .collect()
             .wait()
             .unwrap();
@@ -1036,7 +1020,10 @@ mod tests {
         });
         let handler_builder = box |_| Ok(handler.into_boxed());
         let resp_vec = service
-            .handle_stream_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
+            .handle_stream_request_by_custom_handler(
+                Arc::new(ReqContext::default()),
+                handler_builder,
+            )
             .collect()
             .wait()
             .unwrap();
@@ -1072,7 +1059,10 @@ mod tests {
         });
         let handler_builder = box |_| Ok(handler.into_boxed());
         let resp_vec = service
-            .handle_stream_request_by_custom_handler(kvrpcpb::Context::new(), handler_builder)
+            .handle_stream_request_by_custom_handler(
+                Arc::new(ReqContext::default()),
+                handler_builder,
+            )
             .take(7)
             .collect()
             .wait()

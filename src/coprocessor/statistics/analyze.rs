@@ -33,7 +33,6 @@ pub struct AnalyzeContext {
     req: AnalyzeReq,
     snap: Option<SnapshotStore>,
     ranges: Vec<KeyRange>,
-    req_ctx: ReqContext,
     metrics: ExecutorMetrics,
 }
 
@@ -42,7 +41,7 @@ impl AnalyzeContext {
         req: AnalyzeReq,
         ranges: Vec<KeyRange>,
         snap: Box<Snapshot>,
-        req_ctx: ReqContext,
+        req_ctx: &ReqContext,
     ) -> Result<AnalyzeContext> {
         let snap = SnapshotStore::new(
             snap,
@@ -54,7 +53,6 @@ impl AnalyzeContext {
             req: req,
             snap: Some(snap),
             ranges: ranges,
-            req_ctx,
             metrics: ExecutorMetrics::default(),
         })
     }
@@ -145,10 +143,6 @@ impl RequestHandler for AnalyzeContext {
 
     fn collect_metrics_into(&mut self, metrics: &mut self::dag::executor::ExecutorMetrics) {
         metrics.merge(&mut self.metrics);
-    }
-
-    fn get_context(&self) -> &ReqContext {
-        &self.req_ctx
     }
 }
 

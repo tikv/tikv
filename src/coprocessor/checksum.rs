@@ -29,7 +29,6 @@ pub struct ChecksumContext {
     store: SnapshotStore,
     ranges: IntoIter<KeyRange>,
     scanner: Option<Scanner>,
-    req_ctx: ReqContext,
     metrics: ExecutorMetrics,
 }
 
@@ -38,7 +37,7 @@ impl ChecksumContext {
         req: ChecksumRequest,
         ranges: Vec<KeyRange>,
         snap: Box<Snapshot>,
-        req_ctx: ReqContext,
+        req_ctx: &ReqContext,
     ) -> Result<ChecksumContext> {
         let store = SnapshotStore::new(
             snap,
@@ -51,7 +50,6 @@ impl ChecksumContext {
             store: store,
             ranges: ranges.into_iter(),
             scanner: None,
-            req_ctx,
             metrics: ExecutorMetrics::default(),
         })
     }
@@ -119,10 +117,6 @@ impl RequestHandler for ChecksumContext {
 
     fn collect_metrics_into(&mut self, metrics: &mut self::dag::executor::ExecutorMetrics) {
         metrics.merge(&mut self.metrics);
-    }
-
-    fn get_context(&self) -> &ReqContext {
-        &self.req_ctx
     }
 }
 

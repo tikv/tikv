@@ -31,7 +31,7 @@ use super::executor::{build_exec, Executor, ExecutorMetrics, Row};
 pub struct DAGContext {
     columns: Arc<Vec<ColumnInfo>>,
     has_aggr: bool,
-    req_ctx: ReqContext,
+    req_ctx: Arc<ReqContext>,
     exec: Box<Executor + Send>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
@@ -42,7 +42,7 @@ impl DAGContext {
         mut req: DAGRequest,
         ranges: Vec<KeyRange>,
         snap: Box<Snapshot>,
-        req_ctx: ReqContext,
+        req_ctx: Arc<ReqContext>,
         batch_row_limit: usize,
     ) -> Result<DAGContext> {
         let mut eval_cfg = box_try!(EvalConfig::new(req.get_time_zone_offset(), req.get_flags(),));
@@ -158,10 +158,6 @@ impl RequestHandler for DAGContext {
 
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         self.exec.collect_metrics_into(metrics);
-    }
-
-    fn get_context(&self) -> &ReqContext {
-        &self.req_ctx
     }
 }
 
