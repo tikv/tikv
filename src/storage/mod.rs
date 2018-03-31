@@ -1246,8 +1246,7 @@ mod tests {
     fn new_read_pool() -> ReadPool<ReadPoolContext> {
         let (tx, _) = unbounded();
         ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(FutureScheduler::new("test future scheduler",
-                                                         tx.clone()))
+            || ReadPoolContext::new(FutureScheduler::new("test future scheduler", tx.clone()))
         })
     }
 

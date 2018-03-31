@@ -30,7 +30,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::util::transport::SendCh;
 use tikv::util::security::SecurityManager;
-use tikv::util::worker::{FutureWorker, Worker, FutureScheduler};
+use tikv::util::worker::{FutureScheduler, FutureWorker, Worker};
 use tikv::storage::{self, Engine};
 use tikv::import::{ImportSSTService, SSTImporter};
 use kvproto::raft_serverpb::{self, RaftMessage};
@@ -125,8 +125,12 @@ impl Simulator for ServerCluster {
         // Create storage.
         let (tx, _) = unbounded();
         let read_pool = ReadPool::new("readpool", &cfg.readpool.storage, || {
-            || storage::ReadPoolContext::new(FutureScheduler::new("test future scheduler",
-                                                                  tx.clone()))
+            || {
+                storage::ReadPoolContext::new(FutureScheduler::new(
+                    "test future scheduler",
+                    tx.clone(),
+                ))
+            }
         });
         let mut store = create_raft_storage(sim_router.clone(), &cfg.storage, read_pool).unwrap();
         store.start(&cfg.storage).unwrap();

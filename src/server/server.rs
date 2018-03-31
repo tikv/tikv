@@ -269,8 +269,12 @@ mod tests {
 
         let (tx, _) = unbounded();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(FutureScheduler::new("test future scheduler",
-                                                                  tx.clone()))
+            || {
+                storage::ReadPoolContext::new(FutureScheduler::new(
+                    "test future scheduler",
+                    tx.clone(),
+                ))
+            }
         });
         let mut storage = Storage::new(&storage_cfg, read_pool).unwrap();
         storage.start(&storage_cfg).unwrap();

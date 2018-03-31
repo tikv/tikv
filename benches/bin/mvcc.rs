@@ -32,8 +32,7 @@ use super::print_result;
 fn bench_tombstone_scan() -> BenchSamples {
     let (tx, _) = unbounded();
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-        || storage::ReadPoolContext::new(FutureScheduler::new("test future scheduler",
-                                                              tx.clone()))
+        || storage::ReadPoolContext::new(FutureScheduler::new("test future scheduler", tx.clone()))
     });
     let store = SyncStorage::new(&Default::default(), read_pool);
     let mut ts_generator = 1..;

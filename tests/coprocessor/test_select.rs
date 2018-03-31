@@ -30,7 +30,7 @@ use tikv::server::{Config, OnResponse};
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::{self, Key, Mutation, ALL_CFS};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
-use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker, FutureScheduler};
+use tikv::util::worker::{Builder as WorkerBuilder, FutureScheduler, FutureWorker, Worker};
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 use tipb::executor::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
@@ -387,8 +387,12 @@ impl Store {
     fn new(engine: Box<Engine>) -> Store {
         let (tx, _) = unbounded();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(FutureScheduler::new("test future scheduler",
-                                                                  tx.clone()))
+            || {
+                storage::ReadPoolContext::new(FutureScheduler::new(
+                    "test future scheduler",
+                    tx.clone(),
+                ))
+            }
         });
         Store {
             store: SyncStorage::from_engine(engine, &Default::default(), read_pool),

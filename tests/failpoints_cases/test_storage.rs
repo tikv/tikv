@@ -34,8 +34,7 @@ fn test_storage_1gc() {
     let (_cluster, engine, ctx) = new_raft_engine(3, "");
     let (tx, _) = unbounded();
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-        || storage::ReadPoolContext::new(FutureScheduler::new("test future scheduler",
-                                                              tx.clone()))
+        || storage::ReadPoolContext::new(FutureScheduler::new("test future scheduler", tx.clone()))
     });
     let config = Config::default();
     let mut storage = Storage::from_engine(engine.clone(), &config, read_pool).unwrap();
@@ -81,8 +80,7 @@ fn test_scheduler_leader_change_twice() {
     let config = Config::default();
     let (tx, _) = unbounded();
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-        || storage::ReadPoolContext::new(FutureScheduler::new("test future scheduler",
-                                                              tx.clone()))
+        || storage::ReadPoolContext::new(FutureScheduler::new("test future scheduler", tx.clone()))
     });
 
     let engine0 = cluster.sim.rl().storages[&peers[0].get_id()].clone();
@@ -133,8 +131,12 @@ fn test_scheduler_leader_change_twice() {
         let engine1 = cluster.sim.rl().storages[&peers[1].get_id()].clone();
         let (tx, _) = unbounded();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(FutureScheduler::new("test future scheduler",
-                                                                  tx.clone()))
+            || {
+                storage::ReadPoolContext::new(FutureScheduler::new(
+                    "test future scheduler",
+                    tx.clone(),
+                ))
+            }
         });
         let mut storage1 = Storage::from_engine(engine1, &config, read_pool).unwrap();
         storage1.start(&config).unwrap();

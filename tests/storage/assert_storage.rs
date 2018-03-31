@@ -36,8 +36,12 @@ impl Default for AssertionStorage {
     fn default() -> AssertionStorage {
         let (tx, _) = unbounded();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(FutureScheduler::new("test future scheduler",
-                                                                  tx.clone()))
+            || {
+                storage::ReadPoolContext::new(FutureScheduler::new(
+                    "test future scheduler",
+                    tx.clone(),
+                ))
+            }
         });
         AssertionStorage {
             ctx: Context::new(),
@@ -73,7 +77,12 @@ impl AssertionStorage {
         self.ctx.set_peer(leader.clone());
         let (tx, _) = unbounded();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(FutureScheduler::new("test future scheduler", tx.clone()))
+            || {
+                storage::ReadPoolContext::new(FutureScheduler::new(
+                    "test future scheduler",
+                    tx.clone(),
+                ))
+            }
         });
         self.store = SyncStorage::from_engine(engine, &Config::default(), read_pool);
     }

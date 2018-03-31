@@ -132,7 +132,8 @@ impl futurepool::Context for Context {
         if !self.read_flow_stats.is_empty() {
             let mut read_stats = HashMap::default();
             mem::swap(&mut read_stats, &mut self.read_flow_stats);
-            let result = self.pd_sender.schedule(pd::PdTask::ReadStats { read_stats });
+            let result = self.pd_sender
+                .schedule(pd::PdTask::ReadStats { read_stats });
             if let Err(e) = result {
                 error!("Failed to send readpool read flow statistics: {:?}", e);
             }
