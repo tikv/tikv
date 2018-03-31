@@ -23,6 +23,8 @@ use super::util::new_raft_storage_with_store_count;
 use tikv::storage::config::Config;
 use tikv::storage::engine;
 use tikv::server::readpool::{self, ReadPool};
+use tikv::util::worker::FutureScheduler;
+use futures::sync::mpsc::unbounded;
 
 #[derive(Clone)]
 pub struct AssertionStorage {
@@ -32,8 +34,10 @@ pub struct AssertionStorage {
 
 impl Default for AssertionStorage {
     fn default() -> AssertionStorage {
+        let (tx, _) = unbounded();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(None)
+            || storage::ReadPoolContext::new(FutureScheduler::new("test future scheduler",
+                                                                  tx.clone()))
         });
         AssertionStorage {
             ctx: Context::new(),
@@ -67,8 +71,9 @@ impl AssertionStorage {
         self.ctx.set_region_id(region.get_id());
         self.ctx.set_region_epoch(region.get_region_epoch().clone());
         self.ctx.set_peer(leader.clone());
+        let (tx, _) = unbounded();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(None)
+            || storage::ReadPoolContext::new(FutureScheduler::new("test future scheduler", tx.clone()))
         });
         self.store = SyncStorage::from_engine(engine, &Config::default(), read_pool);
     }

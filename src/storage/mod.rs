@@ -1186,7 +1186,9 @@ mod tests {
     use super::*;
     use std::sync::mpsc::{channel, Sender};
     use kvproto::kvrpcpb::Context;
+    use futures::sync::mpsc::unbounded;
     use util::config::ReadableSize;
+    use util::worker::FutureScheduler;
 
     fn expect_none(x: Result<Option<Value>>) {
         assert_eq!(x.unwrap(), None);
@@ -1242,8 +1244,10 @@ mod tests {
     }
 
     fn new_read_pool() -> ReadPool<ReadPoolContext> {
+        let (tx, _) = unbounded();
         ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(None)
+            || ReadPoolContext::new(FutureScheduler::new("test future scheduler",
+                                                         tx.clone()))
         })
     }
 

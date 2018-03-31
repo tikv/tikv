@@ -25,7 +25,7 @@ use storage;
 use super::metrics::*;
 
 pub struct Context {
-    pd_sender: Option<worker::FutureScheduler<pd::PdTask>>,
+    pd_sender: worker::FutureScheduler<pd::PdTask>,
 
     // TODO: command_duration, processing_read_duration, kv_command_counter can be merged together.
     command_duration: LocalHistogramVec,
@@ -47,7 +47,7 @@ impl fmt::Debug for Context {
 }
 
 impl Context {
-    pub fn new(pd_sender: Option<worker::FutureScheduler<pd::PdTask>>) -> Self {
+    pub fn new(pd_sender: worker::FutureScheduler<pd::PdTask>) -> Self {
         Context {
             pd_sender,
             command_duration: SCHED_HISTOGRAM_VEC.local(),
@@ -130,13 +130,11 @@ impl futurepool::Context for Context {
 
         // Report PD metrics
         if !self.read_flow_stats.is_empty() {
-            if let Some(ref sender) = self.pd_sender {
-                let mut read_stats = HashMap::default();
-                mem::swap(&mut read_stats, &mut self.read_flow_stats);
-                let result = sender.schedule(pd::PdTask::ReadStats { read_stats });
-                if let Err(e) = result {
-                    error!("Failed to send readpool read flow statistics: {:?}", e);
-                }
+            let mut read_stats = HashMap::default();
+            mem::swap(&mut read_stats, &mut self.read_flow_stats);
+            let result = self.pd_sender.schedule(pd::PdTask::ReadStats { read_stats });
+            if let Err(e) = result {
+                error!("Failed to send readpool read flow statistics: {:?}", e);
             }
         }
     }

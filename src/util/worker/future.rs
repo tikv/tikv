@@ -55,7 +55,7 @@ pub struct Scheduler<T> {
 }
 
 impl<T: Display> Scheduler<T> {
-    fn new<S: Into<String>>(name: S, sender: UnboundedSender<Option<T>>) -> Scheduler<T> {
+    pub fn new<S: Into<String>>(name: S, sender: UnboundedSender<Option<T>>) -> Scheduler<T> {
         Scheduler {
             name: Arc::new(name.into()),
             sender: sender,

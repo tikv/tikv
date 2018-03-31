@@ -18,7 +18,9 @@ use raftstore::cluster::Cluster;
 use raftstore::server::ServerCluster;
 use raftstore::server::new_server_cluster;
 use tikv::util::HandyRwLock;
+use tikv::util::worker::FutureScheduler;
 use tikv::server::readpool::{self, ReadPool};
+use futures::sync::mpsc::unbounded;
 use super::sync_storage::SyncStorage;
 
 pub fn new_raft_engine(count: usize, key: &str) -> (Cluster<ServerCluster>, Box<Engine>, Context) {
@@ -40,8 +42,9 @@ pub fn new_raft_storage_with_store_count(
     count: usize,
     key: &str,
 ) -> (Cluster<ServerCluster>, SyncStorage, Context) {
+    let (tx, _) = unbounded();
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-        || storage::ReadPoolContext::new(None)
+        || storage::ReadPoolContext::new(FutureScheduler::new("test future scheduler", tx.clone()))
     });
     let (cluster, engine, ctx) = new_raft_engine(count, key);
     (
