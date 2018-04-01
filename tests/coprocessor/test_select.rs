@@ -19,7 +19,6 @@ use std::thread;
 use std::time::Duration;
 use futures::{Future, Stream};
 use futures::sync::{mpsc as futures_mpsc, oneshot};
-use futures::sync::mpsc::unbounded;
 
 use tikv::coprocessor::*;
 use kvproto::kvrpcpb::Context;
@@ -30,7 +29,7 @@ use tikv::server::{Config, OnResponse};
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::{self, Key, Mutation, ALL_CFS};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
-use tikv::util::worker::{Builder as WorkerBuilder, FutureScheduler, FutureWorker, Worker};
+use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 use tipb::executor::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
@@ -385,14 +384,9 @@ pub struct Store {
 
 impl Store {
     fn new(engine: Box<Engine>) -> Store {
-        let (tx, _) = unbounded();
+        let pd_worker = FutureWorker::new("test future worker");
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || {
-                storage::ReadPoolContext::new(FutureScheduler::new(
-                    "test future scheduler",
-                    tx.clone(),
-                ))
-            }
+            || storage::ReadPoolContext::new(pd_worker.scheduler())
         });
         Store {
             store: SyncStorage::from_engine(engine, &Default::default(), read_pool),

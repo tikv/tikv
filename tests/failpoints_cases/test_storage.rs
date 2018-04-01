@@ -23,8 +23,7 @@ use tikv::util::HandyRwLock;
 use raftstore::server::new_server_cluster;
 use storage::util::new_raft_engine;
 use tikv::server::readpool::{self, ReadPool};
-use tikv::util::worker::FutureScheduler;
-use futures::sync::mpsc::unbounded;
+use tikv::util::worker::FutureWorker;
 
 #[test]
 fn test_storage_1gc() {
@@ -32,9 +31,9 @@ fn test_storage_1gc() {
     let snapshot_fp = "raftkv_async_snapshot_finish";
     let batch_snapshot_fp = "raftkv_async_batch_snapshot_finish";
     let (_cluster, engine, ctx) = new_raft_engine(3, "");
-    let (tx, _) = unbounded();
+    let pd_worker = FutureWorker::new("test future worker");
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-        || storage::ReadPoolContext::new(FutureScheduler::new("test future scheduler", tx.clone()))
+        || storage::ReadPoolContext::new(pd_worker.scheduler())
     });
     let config = Config::default();
     let mut storage = Storage::from_engine(engine.clone(), &config, read_pool).unwrap();
@@ -78,9 +77,9 @@ fn test_scheduler_leader_change_twice() {
     let peers = region0.get_peers();
     cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
     let config = Config::default();
-    let (tx, _) = unbounded();
+    let pd_worker = FutureWorker::new("test future worker");
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-        || storage::ReadPoolContext::new(FutureScheduler::new("test future scheduler", tx.clone()))
+        || storage::ReadPoolContext::new(pd_worker.scheduler())
     });
 
     let engine0 = cluster.sim.rl().storages[&peers[0].get_id()].clone();
@@ -129,14 +128,9 @@ fn test_scheduler_leader_change_twice() {
         cluster.must_transfer_leader(region1.get_id(), peers[1].clone());
 
         let engine1 = cluster.sim.rl().storages[&peers[1].get_id()].clone();
-        let (tx, _) = unbounded();
+        let pd_worker = FutureWorker::new("test future worker");
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || {
-                storage::ReadPoolContext::new(FutureScheduler::new(
-                    "test future scheduler",
-                    tx.clone(),
-                ))
-            }
+            || storage::ReadPoolContext::new(pd_worker.scheduler())
         });
         let mut storage1 = Storage::from_engine(engine1, &config, read_pool).unwrap();
         storage1.start(&config).unwrap();
