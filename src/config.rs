@@ -707,13 +707,23 @@ pub enum LogLevel {
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
     pub storage: ReadPoolInstanceConfig,
+    pub coprocessor: ReadPoolInstanceConfig,
 }
 
 impl Default for ReadPoolConfig {
     fn default() -> ReadPoolConfig {
         ReadPoolConfig {
-            storage: ReadPoolInstanceConfig::default(),
+            storage: ReadPoolInstanceConfig::default_for_storage(),
+            coprocessor: ReadPoolInstanceConfig::default_for_coprocessor(),
         }
+    }
+}
+
+impl ReadPoolConfig {
+    pub fn validate(&mut self) -> Result<(), Box<Error>> {
+        self.storage.validate()?;
+        self.coprocessor.validate()?;
+        Ok(())
     }
 }
 
@@ -758,6 +768,7 @@ impl Default for TiKvConfig {
 
 impl TiKvConfig {
     pub fn validate(&mut self) -> Result<(), Box<Error>> {
+        self.readpool.validate()?;
         self.storage.validate()?;
 
         self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
