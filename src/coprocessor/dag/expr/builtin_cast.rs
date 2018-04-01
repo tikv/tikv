@@ -14,12 +14,12 @@
 use std::{str, i64, u64};
 use std::borrow::Cow;
 
-use coprocessor::codec::{mysql, Datum};
+use coprocessor::codec::{mysql, Datum, Error as CError};
 use coprocessor::codec::mysql::{charset, types, Decimal, Duration, Json, Res, Time};
 use coprocessor::codec::mysql::decimal::RoundMode;
 use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
 
-use super::{Error, EvalContext, FnCall, Result};
+use super::{err, Error, EvalContext, FnCall, Result};
 
 impl FnCall {
     pub fn cast_int_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -40,15 +40,25 @@ impl FnCall {
     pub fn cast_decimal_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let val = val.into_owned().round(0, RoundMode::HalfEven).unwrap();
-        if mysql::has_unsigned_flag(u64::from(self.tp.get_flag())) {
-            let uint = val.as_u64().unwrap();
-            // TODO:handle overflow
-            Ok(Some(uint as i64))
+        let (overflow, res) = if mysql::has_unsigned_flag(u64::from(self.tp.get_flag())) {
+            let uint = val.as_u64();
+            (uint.is_overflow(), uint.unwrap() as i64)
         } else {
-            let val = val.as_i64().unwrap();
-            // TODO:handle overflow
-            Ok(Some(val))
+            let val = val.as_i64();
+            (val.is_overflow(), val.unwrap())
+        };
+
+        if overflow {
+            if !ctx.cfg.overflow_as_warning {
+                return Err(err::gen_overflow_err(
+                    "ConvertIntToUInt",
+                    format!("{}", val),
+                ));
+            }
+            ctx.warnings
+                .append_warning(err::gen_truncated_wrong_val("DECIMAL", format!("{}", val)));
         }
+        Ok(Some(res))
     }
 
     pub fn cast_str_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -60,15 +70,31 @@ impl FnCall {
             Some(&b'-') => true,
             _ => false,
         };
-        if is_negative {
-            // negative
-            let v = convert::bytes_to_int(ctx, &val)?;
-            // TODO: if overflow, don't append this warning
-            Ok(Some(v))
+        let res = if is_negative {
+            convert::bytes_to_int(ctx, &val).map(|v| {
+                ctx.warnings
+                    .append_warning(err::gen_cast_neg_int_as_unsigned());
+                v
+            })
         } else {
-            let urs = convert::bytes_to_uint(ctx, &val)?;
-            // TODO: process overflow
-            Ok(Some(urs as i64))
+            convert::bytes_to_uint(ctx, &val).map(|urs| {
+                if !mysql::has_unsigned_flag(u64::from(self.tp.get_flag()))
+                    && urs > (i64::MAX as u64)
+                {
+                    ctx.warnings
+                        .append_warning(err::gen_cast_as_signed_overflow());
+                }
+                urs as i64
+            })
+        };
+
+        match res {
+            Ok(v) => Ok(Some(v)),
+            Err(CError::Overflow(e)) => {
+                ctx.overflow_from_cast_str_as_int(&val, Error::Overflow(e), is_negative)
+                    .map(Some)
+            }
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -412,8 +438,14 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
         let s = format!("{}", val);
-        let dur = Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8)?;
-        Ok(Some(Cow::Owned(dur)))
+        match Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8) {
+            Ok(dur) => Ok(Some(Cow::Owned(dur))),
+            Err(CError::Overflow(_)) => {
+                ctx.handle_over_flow(err::gen_overflow_err("Duration", format!("{}", val)))?;
+                Ok(None)
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     pub fn cast_real_as_duration<'a, 'b: 'a>(

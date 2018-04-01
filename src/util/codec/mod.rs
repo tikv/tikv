@@ -46,6 +46,10 @@ quick_error! {
             cause(err)
             description("enconding failed")
         }
+        Overflow(reason:String){
+            description("overflow")
+            display("{}",reason)
+        }
         Other(err: Box<error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
@@ -63,6 +67,7 @@ impl Error {
             Error::KeyNotFound => Some(Error::KeyNotFound),
             Error::InvalidDataType(ref r) => Some(Error::InvalidDataType(r.clone())),
             Error::Encoding(e) => Some(Error::Encoding(e)),
+            Error::Overflow(ref e) => Some(Error::Overflow(e.clone())),
             Error::Protobuf(_) | Error::Io(_) | Error::Other(_) => None,
         }
     }
@@ -75,3 +80,7 @@ impl From<FromUtf8Error> for Error {
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
+
+pub fn gen_overflow_msg(data: &str, range: &str) -> String {
+    format!("{} value is out of range in {:?}", data, range)
+}

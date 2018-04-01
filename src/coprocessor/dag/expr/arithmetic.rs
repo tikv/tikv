@@ -16,7 +16,7 @@ use std::borrow::Cow;
 use std::ops::{Add, Mul, Sub};
 use coprocessor::codec::{mysql, Datum};
 use coprocessor::codec::mysql::{Decimal, Res};
-use super::{Error, EvalContext, FnCall, Result};
+use super::{gen_overflow_err, Error, EvalContext, FnCall, Result};
 
 impl FnCall {
     pub fn plus_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -24,7 +24,7 @@ impl FnCall {
         let rhs = try_opt!(self.children[1].eval_real(ctx, row));
         let res = lhs + rhs;
         if !res.is_finite() {
-            return Err(Error::Overflow);
+            return Err(gen_overflow_err("DOUBLE", format!("({} + {})", lhs, rhs)));
         }
         Ok(Some(res))
     }
@@ -63,7 +63,13 @@ impl FnCall {
             },
             (false, false) => lhs.checked_add(rhs),
         };
-        res.ok_or(Error::Overflow).map(Some)
+        let data_type = if lus | rus {
+            "BIGINT UNSIGNED"
+        } else {
+            "BIGINT"
+        };
+        res.ok_or_else(|| gen_overflow_err(data_type, format!("({} + {})", lhs, rhs)))
+            .map(Some)
     }
 
     pub fn minus_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -71,7 +77,7 @@ impl FnCall {
         let rhs = try_opt!(self.children[1].eval_real(ctx, row));
         let res = lhs - rhs;
         if !res.is_finite() {
-            return Err(Error::Overflow);
+            return Err(gen_overflow_err("DOUBLE", format!("({} - {})", lhs, rhs)));
         }
         Ok(Some(res))
     }
@@ -92,6 +98,11 @@ impl FnCall {
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
         let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
         let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
+        let data_type = if lus | rus {
+            "BIGINT UNSIGNED"
+        } else {
+            "BIGINT"
+        };
         let res = match (lus, rus) {
             (true, true) => (lhs as u64).checked_sub(rhs as u64).map(|t| t as i64),
             (true, false) => if rhs >= 0 {
@@ -104,11 +115,12 @@ impl FnCall {
             (false, true) => if lhs >= 0 {
                 (lhs as u64).checked_sub(rhs as u64).map(|t| t as i64)
             } else {
-                return Err(Error::Overflow);
+                return Err(gen_overflow_err(data_type, format!("({} - {})", lhs, rhs)));
             },
             (false, false) => lhs.checked_sub(rhs),
         };
-        res.ok_or(Error::Overflow).map(Some)
+        res.ok_or_else(|| gen_overflow_err(data_type, format!("({} - {})", lhs, rhs)))
+            .map(Some)
     }
 
     pub fn multiply_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -116,7 +128,7 @@ impl FnCall {
         let rhs = try_opt!(self.children[1].eval_real(ctx, row));
         let res = lhs * rhs;
         if !res.is_finite() {
-            return Err(Error::Overflow);
+            return Err(gen_overflow_err("DOUBLE", format!("({} * {})", lhs, rhs)));
         }
         Ok(Some(res))
     }
@@ -150,7 +162,8 @@ impl FnCall {
             (true, false) => u64_mul_i64(lhs, rhs),
             (false, true) => u64_mul_i64(rhs, lhs),
         };
-        res.ok_or(Error::Overflow).map(Some)
+        res.ok_or_else(|| gen_overflow_err("BIGINT UNSIGNED", format!("({} * {})", lhs, rhs)))
+            .map(Some)
     }
 
     pub fn divide_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -161,7 +174,7 @@ impl FnCall {
         }
         let res = lhs / rhs;
         if res.is_infinite() {
-            Err(Error::Overflow)
+            Err(gen_overflow_err("DOUBLE", format!("({} / {})", lhs, rhs)))
         } else {
             Ok(Some(res))
         }
@@ -174,10 +187,12 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
         let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
+        let overflow = gen_overflow_err("DECIMAL", format!("({} / {})", lhs, rhs));
         match lhs.into_owned() / rhs.into_owned() {
             Some(v) => match v {
                 Res::Ok(v) => Ok(Some(Cow::Owned(v))),
-                Res::Truncated(_) | Res::Overflow(_) => Err(Error::Overflow),
+                Res::Truncated(v) => Err(Error::Truncated(format!("{} truncated", v))),
+                Res::Overflow(_) => Err(overflow),
             },
             None => Ok(None),
         }
