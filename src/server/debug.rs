@@ -20,7 +20,7 @@ use std::iter::FromIterator;
 use std::collections::HashSet;
 
 use protobuf::{self, Message, RepeatedField};
-
+use grpc::{RpcStatus, RpcStatusCode};
 use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
 use kvproto::metapb::Region;
 use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
@@ -61,6 +61,17 @@ quick_error!{
             description(err.description())
             display("{:?}", err)
         }
+    }
+}
+
+impl Into<RpcStatus> for Error {
+    fn into(self) -> RpcStatus {
+        let (code, msg) = match self {
+            Error::NotFound(msg) => (RpcStatusCode::NotFound, Some(msg)),
+            Error::InvalidArgument(msg) => (RpcStatusCode::InvalidArgument, Some(msg)),
+            Error::Other(e) => (RpcStatusCode::Unknown, Some(format!("{:?}", e))),
+        };
+        RpcStatus::new(code, msg)
     }
 }
 

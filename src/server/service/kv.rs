@@ -15,6 +15,8 @@ use std::io::Write;
 use std::iter::{self, FromIterator};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::result::Result as StdResult;
+
 use mio::Token;
 use grpc::{ClientStreamingSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
            RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
@@ -26,7 +28,7 @@ use kvproto::raft_serverpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
-use prometheus::Histogram;
+use prometheus::{Histogram, HistogramTimer};
 
 use util::worker::Scheduler;
 use util::collections::HashMap;
@@ -134,28 +136,6 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
             stream_channel_size: stream_channel_size,
         }
     }
-
-    fn send_fail_status<M>(
-        &self,
-        ctx: RpcContext,
-        sink: UnarySink<M>,
-        err: Error,
-        code: RpcStatusCode,
-    ) {
-        let status = RpcStatus::new(code, Some(format!("{}", err)));
-        ctx.spawn(sink.fail(status).map_err(|_| ()));
-    }
-
-    fn send_fail_status_to_stream<M>(
-        &self,
-        ctx: RpcContext,
-        sink: ServerStreamingSink<M>,
-        err: Error,
-        code: RpcStatusCode,
-    ) {
-        let status = RpcStatus::new(code, Some(format!("{}", err)));
-        ctx.spawn(sink.fail(status).map_err(|_| ()));
-    }
 }
 
 impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
@@ -182,14 +162,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 }
                 Ok(resp)
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 
     fn kv_scan(&self, ctx: RpcContext, mut req: ScanRequest, sink: UnarySink<ScanResponse>) {
@@ -216,14 +190,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 }
                 Ok(resp)
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 
     fn kv_prewrite(
@@ -258,7 +226,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             cb,
         );
         if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            send_response!(ctx, sink, Error::from(e).into(), LABEL);
             return;
         }
 
@@ -273,14 +241,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 }
                 resp
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 
     fn kv_commit(&self, ctx: RpcContext, mut req: CommitRequest, sink: UnarySink<CommitResponse>) {
@@ -298,7 +260,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             cb,
         );
         if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            send_response!(ctx, sink, Error::from(e).into(), LABEL);
             return;
         }
 
@@ -313,14 +275,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 }
                 resp
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 
     fn kv_import(&self, _: RpcContext, _: ImportRequest, _: UnarySink<ImportResponse>) {
@@ -344,7 +300,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             cb,
         );
         if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            send_response!(ctx, sink, Error::from(e).into(), LABEL);
             return;
         }
 
@@ -363,14 +319,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 }
                 resp
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 
     fn kv_batch_get(
@@ -398,14 +348,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 }
                 Ok(resp)
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 
     fn kv_batch_rollback(
@@ -427,7 +371,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             self.storage
                 .async_rollback(req.take_context(), keys, req.get_start_version(), cb);
         if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            send_response!(ctx, sink, Error::from(e).into(), LABEL);
             return;
         }
 
@@ -442,14 +386,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 }
                 resp
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 
     fn kv_scan_lock(
@@ -470,7 +408,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             cb,
         );
         if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            send_response!(ctx, sink, Error::from(e).into(), LABEL);
             return;
         }
 
@@ -488,14 +426,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 }
                 resp
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 
     fn kv_resolve_lock(
@@ -524,7 +456,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let res = self.storage
             .async_resolve_lock(req.take_context(), txn_status, cb);
         if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            send_response!(ctx, sink, Error::from(e).into(), LABEL);
             return;
         }
 
@@ -539,14 +471,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 }
                 resp
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 
     fn kv_gc(&self, ctx: RpcContext, mut req: GCRequest, sink: UnarySink<GCResponse>) {
@@ -557,7 +483,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let res = self.storage
             .async_gc(req.take_context(), req.get_safe_point(), cb);
         if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            send_response!(ctx, sink, Error::from(e).into(), LABEL);
             return;
         }
 
@@ -572,14 +498,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 }
                 resp
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 
     fn kv_delete_range(
@@ -599,7 +519,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             cb,
         );
         if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            send_response!(ctx, sink, Error::from(e).into(), LABEL);
             return;
         }
 
@@ -614,14 +534,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 }
                 resp
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 
     fn raw_get(&self, ctx: RpcContext, mut req: RawGetRequest, sink: UnarySink<RawGetResponse>) {
@@ -643,14 +557,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 }
                 Ok(resp)
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 
     fn raw_scan(&self, ctx: RpcContext, mut req: RawScanRequest, sink: UnarySink<RawScanResponse>) {
@@ -672,14 +580,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 }
                 Ok(resp)
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 
     fn raw_put(&self, ctx: RpcContext, mut req: RawPutRequest, sink: UnarySink<RawPutResponse>) {
@@ -691,7 +593,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             self.storage
                 .async_raw_put(req.take_context(), req.take_key(), req.take_value(), cb);
         if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            send_response!(ctx, sink, Error::from(e).into(), LABEL);
             return;
         }
 
@@ -706,14 +608,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 }
                 resp
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 
     fn raw_delete(
@@ -729,7 +625,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let res = self.storage
             .async_raw_delete(req.take_context(), req.take_key(), cb);
         if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            send_response!(ctx, sink, Error::from(e).into(), LABEL);
             return;
         }
 
@@ -744,14 +640,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 }
                 resp
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 
     fn raw_delete_range(
@@ -771,7 +661,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             cb,
         );
         if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            send_response!(ctx, sink, Error::from(e).into(), LABEL);
             return;
         }
 
@@ -786,14 +676,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 }
                 resp
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 
     fn coprocessor(&self, ctx: RpcContext, req: Request, sink: UnarySink<Response>) {
@@ -806,31 +690,22 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             Ok(req_task) => req_task,
             Err(e) => {
                 let mut metrics = BasicLocalMetrics::default();
-                let future = sink.success(err_resp(e, &mut metrics))
-                    .map(|_| timer.observe_duration())
-                    .map_err(move |e| {
-                        debug!("{} failed: {:?}", LABEL, e);
-                        GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-                    });
-                return ctx.spawn(future);
+                let future = future::ok(err_resp(e, &mut metrics))
+                    .then(|res| record_metrics(res, timer, LABEL));
+                send_response!(ctx, sink, future, Error::into, LABEL);
+                return;
             }
         };
 
         let task = EndPointTask::Request(req_task);
         if let Err(e) = self.end_point_scheduler.schedule(task) {
-            let error = Error::from(e);
-            let code = RpcStatusCode::ResourceExhausted;
-            return self.send_fail_status(ctx, sink, error, code);
+            send_response!(ctx, sink, Error::from(e).into(), LABEL);
+            return;
         }
 
         let future = rx.map_err(Error::from)
-            .and_then(|resp| sink.success(resp).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 
     fn coprocessor_stream(
@@ -864,9 +739,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let task = EndPointTask::Request(req_task);
         if let Err(e) = self.end_point_scheduler.schedule(task) {
-            let error = Error::from(e);
-            let code = RpcStatusCode::ResourceExhausted;
-            return self.send_fail_status_to_stream(ctx, sink, error, code);
+            send_response!(ctx, sink, Error::from(e).into(), label);
+            return;
         }
 
         let stream = rx.map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
@@ -964,7 +838,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let (cb, future) = paired_future_callback();
         let res = storage.async_mvcc_by_key(req.take_context(), key.clone(), cb);
         if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            send_response!(ctx, sink, Error::from(e).into(), LABEL);
             return;
         }
 
@@ -984,14 +858,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 }
                 resp
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 
     fn mvcc_get_by_start_ts(
@@ -1009,7 +877,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let res = storage.async_mvcc_by_start_ts(req.take_context(), req.get_start_ts(), cb);
         if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            send_response!(ctx, sink, Error::from(e).into(), LABEL);
             return;
         }
 
@@ -1033,13 +901,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 }
                 resp
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 
     fn split_region(
@@ -1060,7 +923,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         };
 
         if let Err(e) = self.ch.try_send(req) {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            send_response!(ctx, sink, Error::from(e).into(), LABEL);
             return;
         }
 
@@ -1078,14 +941,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 }
                 resp
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("{} failed: {:?}", LABEL, e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
-            });
-
-        ctx.spawn(future);
+            .then(|res| record_metrics(res, timer, LABEL));
+        send_response!(ctx, sink, future, Error::into, LABEL);
     }
 }
 
@@ -1227,4 +1084,17 @@ fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<Key
             .collect(),
         Err(e) => vec![extract_key_error(&e)],
     }
+}
+
+fn record_metrics<T, E>(
+    res: StdResult<T, E>,
+    timer: HistogramTimer,
+    label: &str,
+) -> StdResult<T, E> {
+    if res.is_ok() {
+        timer.observe_duration()
+    } else {
+        GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+    }
+    res
 }
