@@ -132,24 +132,24 @@ struct RegionHeartbeatCache {
 impl RegionHeartbeatCache {
     fn heartbeat(&mut self) -> Option<(Region, Peer, RegionStat)> {
         if self.valid {
-            None
-        } else {
-            self.valid = true;
-            let region_stat = RegionStat::new(
-                self.down_peers.clone(),
-                self.pending_peers.clone(),
-                self.written_bytes_delta,
-                self.written_keys_delta,
-                self.read_bytes_delta,
-                self.read_keys_delta,
-                self.approximate_size,
-            );
-            self.read_bytes_delta = 0;
-            self.read_keys_delta = 0;
-            self.written_bytes_delta = 0;
-            self.written_keys_delta = 0;
-            Some((self.region.clone(), self.peer.clone(), region_stat))
+            return None;
         }
+        // Somthing have changed, send the heartbeat to PD.
+        self.valid = true;
+        let region_stat = RegionStat {
+            down_peers: self.down_peers.clone(),
+            pending_peers: self.pending_peers.clone(),
+            written_bytes: self.written_bytes_delta,
+            written_keys: self.written_keys_delta,
+            read_bytes: self.read_bytes_delta,
+            read_keys: self.read_keys_delta,
+            approximate_size: self.approximate_size,
+        };
+        self.read_bytes_delta = 0;
+        self.read_keys_delta = 0;
+        self.written_bytes_delta = 0;
+        self.written_keys_delta = 0;
+        Some((self.region.clone(), self.peer.clone(), region_stat))
     }
 
     fn merge_flow_statistics(&mut self, stats: FlowStatistics) {
@@ -595,7 +595,9 @@ impl<T: PdClient> Runner<T> {
         if self.is_handle_reconnect_scheduled {
             if self.invalidate_cache.swap(false, Ordering::Relaxed) {
                 info!("invalidate region heartbeat cache");
-                self.heartbeat_cache.clear();
+                self.heartbeat_cache
+                    .values_mut()
+                    .for_each(|cache| cache.valid = false);;
             }
         } else {
             self.is_handle_reconnect_scheduled = true;
