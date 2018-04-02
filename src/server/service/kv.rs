@@ -13,7 +13,7 @@
 
 use std::iter::{self, FromIterator};
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use grpc::{ClientStreamingSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
            RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
 use futures::{future, stream, Future, Sink, Stream};
@@ -44,7 +44,7 @@ use coprocessor::local_metrics::BasicLocalMetrics;
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const SNAP_RECV_CHUNKS_LIMIT: usize = 8;
 // How many snapshots can be recv concurrently. TODO: move it into snap.rs.
-const MAX_RECEIVER_CONCURRENT: usize = 64;
+const MAX_RECEIVER_CONCURRENT: usize = 16;
 
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter + 'static> {
@@ -56,8 +56,7 @@ pub struct Service<T: RaftStoreRouter + 'static> {
     ch: T,
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
-    max_snap_recv_concurrent: usize,
-    token: Arc<AtomicUsize>, // TODO: remove it.
+    snap_recving_count: Arc<AtomicUsize>,
     recursion_limit: u32,
     metrics: Metrics,
     stream_channel_size: usize,
@@ -129,8 +128,7 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
             end_point_scheduler: end_point_scheduler,
             ch: ch,
             snap_scheduler: snap_scheduler,
-            max_snap_recv_concurrent: MAX_RECEIVER_CONCURRENT,
-            token: Arc::new(AtomicUsize::new(1)),
+            snap_recving_count: Arc::new(AtomicUsize::new(0)),
             recursion_limit: recursion_limit,
             metrics: Metrics::new(),
             stream_channel_size: stream_channel_size,
@@ -913,7 +911,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         stream: RequestStream<SnapshotChunk>,
         sink: ClientStreamingSink<Done>,
     ) {
-        if self.snap_scheduler.task_count() >= self.max_snap_recv_concurrent {
+        if self.snap_recving_count.load(Ordering::SeqCst) >= MAX_RECEIVER_CONCURRENT {
             let status = RpcStatus::new(RpcStatusCode::ResourceExhausted, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
             return;
@@ -926,18 +924,24 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             return;
         }
 
+        let snap_recving_count = Arc::clone(&self.snap_recving_count);
+        snap_recving_count.fetch_add(1, Ordering::SeqCst);
+
         // Use None to indicates the stream is finished at gRPC end.
         let stream = stream
             .map(Some)
             .map_err(Error::from)
             .chain(stream::once(Ok(None)))
-            .forward(tx.sink_map_err(|_| Error::Other("futures::sync::mpsc::Sender fail".into())));
+            .forward(tx.sink_map_err(|_| Error::Other("futures::sync::mpsc::Sender fail".into())))
+            .and_then(move |_| sink.success(Done::new()).map_err(Error::from))
+            .map_err(|e| {
+                warn!("Receive snapshot chunks and forward fail: {}", e);
+            });
 
-        ctx.spawn(
-            stream
-                .and_then(move |_| sink.success(Done::new()).map_err(Error::from))
-                .map_err(|_| ()),
-        );
+        ctx.spawn(stream.then(move |r| {
+            snap_recving_count.fetch_sub(1, Ordering::SeqCst);
+            r
+        }));
     }
 
     fn mvcc_get_by_key(

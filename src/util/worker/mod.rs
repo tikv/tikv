@@ -161,11 +161,6 @@ impl<T: Display> Scheduler<T> {
     pub fn is_busy(&self) -> bool {
         self.counter.load(Ordering::SeqCst) > 0
     }
-
-    /// Get the count of pending task.
-    pub fn task_count(&self) -> usize {
-        self.counter.load(Ordering::SeqCst)
-    }
 }
 
 impl<T> Clone for Scheduler<T> {

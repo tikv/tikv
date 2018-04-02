@@ -38,7 +38,7 @@ pub type Callback = Box<FnBox(Result<()>) + Send>;
 
 const DEFAULT_SENDER_POOL_SIZE: usize = 3;
 // How many snapshots can be sent concurrently.
-const MAX_SENDER_CONCURRENT: usize = 64;
+const MAX_SENDER_CONCURRENT: usize = 16;
 
 pub enum Task {
     Recv(Receiver<Option<SnapshotChunk>>),
@@ -204,7 +204,7 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
             }
 
             snap_mgr_1.register(context.key.clone(), SnapEntry::Receiving);
-            box chunks.fold(context, |mut context, chunk| {
+            box chunks.fold(context, move |mut context, chunk| {
                 let mut chunk = match chunk {
                     Some(c) => c,
                     None => {
@@ -217,11 +217,13 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
                 if !data.is_empty() {
                     let (key, file) = (&context.key, context.file.as_mut().unwrap());
                     if let Err(e) = file.write_all(&data) {
+                        snap_mgr_1.deregister(key, &SnapEntry::Receiving);
                         let path = file.path();
                         error!("{} failed to write snapshot file {}: {}", key, path, e);
                         return Err(());
                     }
                 } else {
+                    snap_mgr_1.deregister(&context.key, &SnapEntry::Receiving);
                     error!("{} receive chunk with empty data", context.key);
                     return Err(());
                 }
