@@ -2240,6 +2240,7 @@ mod tests {
     use raftstore::coprocessor::*;
     use raftstore::store::msg::WriteResponse;
     use raftstore::store::worker::UCRTaskQueue;
+    use raftstore::store::util;
 
     use super::*;
     use import::test_helpers::*;
@@ -2551,6 +2552,19 @@ mod tests {
             self.add_delete_range_req(Some(cf), start_key, end_key)
         }
 
+        fn unsafe_cleanup_range(self, start_key: &[u8], end_key: &[u8]) -> EntryBuilder {
+            self.add_unsafe_cleanup_range_req(None, start_key, end_key)
+        }
+
+        fn unsafe_cleanup_range_cf(
+            self,
+            cf: &str,
+            start_key: &[u8],
+            end_key: &[u8],
+        ) -> EntryBuilder {
+            self.add_unsafe_cleanup_range_req(Some(cf), start_key, end_key)
+        }
+
         fn add_delete_req(mut self, cf: Option<&str>, key: &[u8]) -> EntryBuilder {
             let mut cmd = Request::new();
             cmd.set_cmd_type(CmdType::Delete);
@@ -2575,6 +2589,24 @@ mod tests {
             }
             cmd.mut_delete_range().set_start_key(start_key.to_vec());
             cmd.mut_delete_range().set_end_key(end_key.to_vec());
+            self.req.mut_requests().push(cmd);
+            self
+        }
+
+        fn add_unsafe_cleanup_range_req(
+            mut self,
+            cf: Option<&str>,
+            start_key: &[u8],
+            end_key: &[u8],
+        ) -> EntryBuilder {
+            let mut cmd = Request::new();
+            cmd.set_cmd_type(CmdType::UnsafeCleanupRange);
+            if let Some(cf) = cf {
+                cmd.mut_unsafe_cleanup_range().set_cf(cf.to_owned());
+            }
+            cmd.mut_unsafe_cleanup_range()
+                .set_start_key(start_key.to_vec());
+            cmd.mut_unsafe_cleanup_range().set_end_key(end_key.to_vec());
             self.req.mut_requests().push(cmd);
             self
         }
@@ -2621,8 +2653,12 @@ mod tests {
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
         let ucr_task_queue = Arc::new(UCRTaskQueue::new(Arc::clone(&db)));
-        let mut delegate =
-            ApplyDelegate::from_registration(Arc::clone(&db), raft_db, reg, ucr_task_queue);
+        let mut delegate = ApplyDelegate::from_registration(
+            Arc::clone(&db),
+            raft_db,
+            reg,
+            Arc::clone(&ucr_task_queue),
+        );
         let mut delegates = HashMap::default();
         let (tx, rx) = mpsc::channel();
 
@@ -2741,6 +2777,7 @@ mod tests {
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
 
+        // DeleteRange
         let delete_range_entry = EntryBuilder::new(7, 3)
             .delete_range(b"", b"")
             .epoch(1, 3)
@@ -2753,9 +2790,9 @@ mod tests {
         assert_eq!(db.get(&dk_k3).unwrap().unwrap(), b"v1");
 
         let delete_range_entry = EntryBuilder::new(8, 3)
-            .delete_range_cf(CF_DEFAULT, b"", b"k5")
-            .delete_range_cf(CF_LOCK, b"", b"k5")
-            .delete_range_cf(CF_WRITE, b"", b"k5")
+            .delete_range_cf(CF_DEFAULT, b"", b"k3")
+            .delete_range_cf(CF_LOCK, b"", b"k3")
+            .delete_range_cf(CF_WRITE, b"", b"k3")
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
@@ -2763,6 +2800,56 @@ mod tests {
         apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
+        assert!(db.get(&dk_k1).unwrap().is_none());
+        assert!(db.get(&dk_k2).unwrap().is_none());
+        assert!(db.get(&dk_k3).unwrap().is_some());
+
+        // UnsafeCleanupRange
+        let unsafe_cleanup_range_entry = EntryBuilder::new(9, 3)
+            .unsafe_cleanup_range(b"", b"")
+            .epoch(1, 3)
+            .capture_resp(&mut delegate, tx.clone())
+            .build();
+        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![unsafe_cleanup_range_entry]);
+        apply_ctx.write_to_db(&db);
+        let resp = rx.try_recv().unwrap();
+        assert!(resp.get_header().get_error().has_key_not_in_region());
+        assert_eq!(db.get(&dk_k3).unwrap().unwrap(), b"v1");
+
+        let unsafe_cleanup_range_entry = EntryBuilder::new(10, 3)
+            .unsafe_cleanup_range_cf("unkown_cf", b"", b"k5")
+            .epoch(1, 3)
+            .capture_resp(&mut delegate, tx.clone())
+            .build();
+        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![unsafe_cleanup_range_entry]);
+        apply_ctx.write_to_db(&db);
+        let resp = rx.try_recv().unwrap();
+        assert!(!resp.get_header().get_error().get_message().is_empty());
+        assert_eq!(db.get(&dk_k3).unwrap().unwrap(), b"v1");
+
+        let unsafe_cleanup_range_entry = EntryBuilder::new(11, 3)
+            .unsafe_cleanup_range_cf(CF_DEFAULT, b"", b"k5")
+            .unsafe_cleanup_range_cf(CF_LOCK, b"", b"k5")
+            .unsafe_cleanup_range_cf(CF_WRITE, b"", b"k5")
+            .epoch(1, 3)
+            .capture_resp(&mut delegate, tx.clone())
+            .build();
+        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![unsafe_cleanup_range_entry]);
+        apply_ctx.write_to_db(&db);
+        let resp = rx.try_recv().unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+
+        for _ in 0..3 {
+            let ucr_task = ucr_task_queue.pick_task().unwrap();
+            util::delete_all_in_range_cf(
+                &db,
+                &ucr_task.cf,
+                &ucr_task.start_key,
+                &ucr_task.end_key,
+                false,
+            ).unwrap();
+        }
+
         assert!(db.get(&dk_k1).unwrap().is_none());
         assert!(db.get(&dk_k2).unwrap().is_none());
         assert!(db.get(&dk_k3).unwrap().is_none());
@@ -2783,18 +2870,18 @@ mod tests {
         importer.finish(2).unwrap();
 
         // IngestSST
-        let put_ok = EntryBuilder::new(9, 3)
+        let put_ok = EntryBuilder::new(12, 3)
             .capture_resp(&mut delegate, tx.clone())
             .put(&[sst_range.0], &[sst_range.1])
             .epoch(0, 3)
             .build();
         // Add a put above to test flush before ingestion.
-        let ingest_ok = EntryBuilder::new(10, 3)
+        let ingest_ok = EntryBuilder::new(13, 3)
             .capture_resp(&mut delegate, tx.clone())
             .ingest_sst(&meta1)
             .epoch(0, 3)
             .build();
-        let ingest_stale_epoch = EntryBuilder::new(11, 3)
+        let ingest_stale_epoch = EntryBuilder::new(14, 3)
             .capture_resp(&mut delegate, tx.clone())
             .ingest_sst(&meta2)
             .epoch(0, 3)
@@ -2810,11 +2897,11 @@ mod tests {
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().has_error());
         assert_eq!(delegate.applied_index_term, 3);
-        assert_eq!(delegate.apply_state.get_applied_index(), 11);
+        assert_eq!(delegate.apply_state.get_applied_index(), 14);
 
         let mut entries = vec![];
         for i in 0..WRITE_BATCH_MAX_KEYS {
-            let put_entry = EntryBuilder::new(i as u64 + 12, 3)
+            let put_entry = EntryBuilder::new(i as u64 + 15, 3)
                 .put(b"k", b"v")
                 .epoch(1, 3)
                 .capture_resp(&mut delegate, tx.clone())
@@ -2826,7 +2913,7 @@ mod tests {
         for _ in 0..WRITE_BATCH_MAX_KEYS {
             rx.try_recv().unwrap();
         }
-        let index = WRITE_BATCH_MAX_KEYS + 11;
+        let index = WRITE_BATCH_MAX_KEYS + 14;
         assert_eq!(delegate.apply_state.get_applied_index(), index as u64);
         assert_eq!(obs.pre_query_count.load(Ordering::SeqCst), index);
         assert_eq!(obs.post_query_count.load(Ordering::SeqCst), index);

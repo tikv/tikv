@@ -40,9 +40,9 @@ impl Clone for TaskQueue {
 
 #[derive(Debug, PartialEq)]
 pub struct Task {
-    cf: String,
-    start_key: Vec<u8>,
-    end_key: Vec<u8>,
+    pub cf: String,
+    pub start_key: Vec<u8>,
+    pub end_key: Vec<u8>,
 }
 
 impl Task {
@@ -103,7 +103,7 @@ impl TaskQueue {
 
     pub fn pick_task(&self) -> Option<Task> {
         let mut read_options = ReadOptions::default();
-        read_options.fill_cache(false);
+        read_options.fill_cache(true);
         read_options.set_iterate_lower_bound(keys::UNSAFE_CLEANUP_RANGE_MIN_KEY);
         read_options.set_iterate_upper_bound(keys::UNSAFE_CLEANUP_RANGE_MAX_KEY);
         let mut iter = self.db.iter_opt(read_options);
