@@ -531,10 +531,10 @@ impl Runnable<Task> for Runner {
     }
 }
 
-impl RunnableWithTimer<Task, u32> for Runner {
-    fn on_timeout(&mut self, timer: &mut Timer<u32>, _: u32) {
+impl RunnableWithTimer<Task, ()> for Runner {
+    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         self.ctx.clean_timeout_ranges();
-        timer.add_task(Duration::from_millis(STALE_PEER_CHECK_INTERVAL), 0);
+        timer.add_task(Duration::from_millis(STALE_PEER_CHECK_INTERVAL), ());
     }
 }
 

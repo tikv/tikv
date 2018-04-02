@@ -560,7 +560,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.cfg.clean_stale_peer_delay.0,
         );
         let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(STALE_PEER_CHECK_INTERVAL), 0);
+        timer.add_task(Duration::from_millis(STALE_PEER_CHECK_INTERVAL), ());
         box_try!(self.region_worker.start_with_timer(region_runner, timer));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
