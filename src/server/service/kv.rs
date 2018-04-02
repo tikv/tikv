@@ -918,25 +918,25 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             ctx.spawn(sink.fail(status).map_err(|_| ()));
             return;
         }
+
         let (tx, rx) = futures_mpsc::channel(SNAP_RECV_CHUNKS_LIMIT);
-        let (cb, future) = paired_future_callback();
-
-        let recv_task = SnapTask::Recv {
-            chunks: box rx.then(|t| t.unwrap()),
-            cb: cb,
-        };
-
-        if self.snap_scheduler.schedule(recv_task).is_err() {
+        if self.snap_scheduler.schedule(SnapTask::Recv(rx)).is_err() {
             let status = RpcStatus::new(RpcStatusCode::ResourceExhausted, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
             return;
         }
 
-        let send_all = tx.send_all(stream.then(Ok)).map(|_| ()).map_err(|_| ());
+        // Use None to indicates the stream is finished at gRPC end.
+        let stream = stream
+            .map(Some)
+            .map_err(Error::from)
+            .chain(stream::once(Ok(None)))
+            .forward(tx.sink_map_err(|_| Error::Other("futures::sync::mpsc::Sender fail".into())));
+
         ctx.spawn(
-            send_all
-                .and_then(move |_| future.map_err(|_| ()))
-                .and_then(move |_| sink.success(Done::new()).map_err(|_| ())),
+            stream
+                .and_then(move |_| sink.success(Done::new()).map_err(Error::from))
+                .map_err(|_| ()),
         );
     }
 
