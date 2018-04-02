@@ -670,7 +670,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         const LABEL: &str = "raw_batch_get";
         let timer = self.metrics.raw_batch_get.start_coarse_timer();
 
-        let keys = req.take_keys().into_iter().map(|x| x).collect();
+        let keys = req.take_keys().into_vec();
         let future = self.storage
             .async_raw_batch_get(req.take_context(), keys)
             .then(|v| {
@@ -734,7 +734,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let future = self.storage
             .async_raw_batch_scan(
                 req.take_context(),
-                req.take_ranges().into_iter().map(|x| x).collect(),
+                req.take_ranges().into_vec(),
                 req.get_each_limit() as usize,
                 req.get_key_only(),
             )
@@ -880,7 +880,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         const LABEL: &str = "raw_batch_delete";
         let timer = self.metrics.raw_batch_delete.start_coarse_timer();
 
-        let keys = req.take_keys().into_iter().map(|x| x).collect();
+        let keys = req.take_keys().into_vec();
         let (cb, future) = paired_future_callback();
         let res = self.storage
             .async_raw_batch_delete(req.take_context(), keys, cb);

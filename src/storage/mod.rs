@@ -944,7 +944,6 @@ impl Storage {
 
                     // no scan_count for this kind of op.
                     let mut stats = Statistics::default();
-                    thread_ctx.collect_key_reads(CMD, keys.len() as u64);
                     let result: Vec<Result<KvPair>> = keys.iter()
                         .map(|k| (k, snapshot.get(k)))
                         .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
@@ -952,13 +951,14 @@ impl Storage {
                         .map(|(k, v)| match v {
                             Ok(Some(v)) => {
                                 stats.data.flow_stats.read_keys += 1;
-                                stats.data.flow_stats.read_bytes = k.encoded().len() + v.len();
+                                stats.data.flow_stats.read_bytes += k.encoded().len() + v.len();
                                 Ok((k.encoded().clone(), v))
                             }
                             Err(e) => Err(Error::from(e)),
                             _ => unreachable!(),
                         })
                         .collect();
+                    thread_ctx.collect_key_reads(CMD, stats.data.flow_stats.read_keys as u64);
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
                     Ok(result)
                 })
