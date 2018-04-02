@@ -21,11 +21,11 @@ use coprocessor::codec::mysql::Res;
 use util;
 use util::codec::{self, Error as CError};
 
-const ERR_UNKNOWN: i32 = 1105;
-const ERR_TRUNCATED: i32 = 1265;
-const ERR_UNKNOWN_TIMEZONE: i32 = 1298;
-const ERR_DATA_OUT_OF_RANGE: i32 = 1690;
-const ERR_TRUNCATE_WRONG_VALUE: i32 = 1292;
+pub const ERR_UNKNOWN: i32 = 1105;
+pub const ERR_TRUNCATED: i32 = 1265;
+pub const ERR_UNKNOWN_TIMEZONE: i32 = 1298;
+pub const ERR_DATA_OUT_OF_RANGE: i32 = 1690;
+pub const ERR_TRUNCATE_WRONG_VALUE: i32 = 1292;
 
 quick_error! {
     #[derive(Debug)]

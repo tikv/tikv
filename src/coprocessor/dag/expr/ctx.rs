@@ -29,6 +29,8 @@ pub const FLAG_IGNORE_TRUNCATE: u64 = 1;
 /// should be returned as error, in non-strict sql mode, truncate error should be saved as warning.
 pub const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
 
+// `FLAG_IN_SELECT_STMT` indicates if this is a SELECT statement.
+pub const FLAG_IN_SELECT_STMT: u64 = 1 << 5;
 /// `FLAG_OVERFLOW_AS_WARNING` indicates if overflow error should be returned as warning.
 /// In strict sql mode, overflow error should be returned as error,
 /// in non-strict sql mode, overflow error should be saved as warning.
@@ -74,7 +76,7 @@ impl EvalConfig {
             ignore_truncate: (flags & FLAG_IGNORE_TRUNCATE) > 0,
             truncate_as_warning: (flags & FLAG_TRUNCATE_AS_WARNING) > 0,
             overflow_as_warning: (flags & FLAG_OVERFLOW_AS_WARNING) > 0,
-            in_select_stmt: false, // TODO: port in select stmt
+            in_select_stmt: (flags & FLAG_IN_SELECT_STMT) > 0,
             max_warning_cnt: DEFAULT_MAX_WARNING_CNT,
         };
 

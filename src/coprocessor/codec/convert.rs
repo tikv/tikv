@@ -112,14 +112,18 @@ pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
         }
 
         for c in trimed.take_while(|&&c| c >= b'0' && c <= b'9') {
-            r = r.and_then(|r| r.checked_mul(10))
-                .and_then(|r| r.checked_add(i64::from(*c - b'0')));
+            let cur = i64::from(*c - b'0');
+            r = r.and_then(|r| r.checked_mul(10)).and_then(|r| {
+                if negative {
+                    r.checked_sub(cur)
+                } else {
+                    r.checked_add(cur)
+                }
+            });
+
             if r.is_none() {
                 break;
             }
-        }
-        if negative {
-            r = r.and_then(|r| r.checked_mul(-1));
         }
     }
     r.ok_or_else(|| Error::Overflow(gen_overflow_msg("BIGINT", "")))
@@ -338,12 +342,23 @@ mod test {
             (b"+1024", 1024),
             (b"-231", -231),
             (b"", 0),
+            (b"9223372036854775807", i64::MAX),
+            (b"-9223372036854775808", i64::MIN),
         ];
 
         for (bs, n) in tests {
             let t = super::bytes_to_int_without_context(bs).unwrap();
             if t != n {
                 panic!("expect convert {:?} to {}, but got {}", bs, n, t);
+            }
+        }
+
+        let invalid_cases: Vec<&'static [u8]> =
+            vec![b"9223372036854775809", b"-9223372036854775810"];
+        for bs in invalid_cases {
+            let t = super::bytes_to_int_without_context(bs);
+            if !t.is_err() {
+                panic!("expect convert {:?} to overflow, but got {:?}", bs, t);
             }
         }
     }
@@ -369,6 +384,14 @@ mod test {
             let t = super::bytes_to_uint_without_context(bs).unwrap();
             if t != n {
                 panic!("expect convert {:?} to {}, but got {}", bs, n, t);
+            }
+        }
+
+        let invalid_cases: Vec<&'static [u8]> = vec![b"18446744073709551616"];
+        for bs in invalid_cases {
+            let t = super::bytes_to_uint_without_context(bs);
+            if !t.is_err() {
+                panic!("expect convert {:?} to overflow, but got {:?}", bs, t);
             }
         }
     }

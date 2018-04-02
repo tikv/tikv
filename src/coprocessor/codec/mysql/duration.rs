@@ -18,7 +18,7 @@ use std::fmt::{self, Display, Formatter};
 use std::{str, i64, u64};
 use std::io::Write;
 
-use super::super::{Error, Result};
+use super::super::Result;
 use super::{check_fsp, parse_frac, Decimal};
 
 pub const NANOS_PER_SEC: i64 = 1_000_000_000;
@@ -32,10 +32,11 @@ const MAX_TIME_IN_SECS: u64 = 838 * SECS_PER_HOUR + 59 * SECS_PER_MINUTE + 59;
 fn check_dur(dur: &StdDuration) -> Result<()> {
     let secs = dur.as_secs();
     if secs > MAX_TIME_IN_SECS || secs == MAX_TIME_IN_SECS && dur.subsec_nanos() > 0 {
-        return Err(Error::Overflow(format!(
+        return Err(invalid_type!(
             "{:?} is larger than {:?}",
-            dur, MAX_TIME_IN_SECS
-        )));
+            dur,
+            MAX_TIME_IN_SECS
+        ));
     }
     Ok(())
 }
