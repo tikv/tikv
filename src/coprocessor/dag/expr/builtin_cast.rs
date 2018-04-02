@@ -19,7 +19,7 @@ use coprocessor::codec::mysql::{charset, types, Decimal, Duration, Json, Res, Ti
 use coprocessor::codec::mysql::decimal::RoundMode;
 use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
 
-use super::{err, Error, EvalContext, FnCall, Result};
+use super::{Error, EvalContext, FnCall, Result};
 
 impl FnCall {
     pub fn cast_int_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -50,13 +50,12 @@ impl FnCall {
 
         if overflow {
             if !ctx.cfg.overflow_as_warning {
-                return Err(err::gen_overflow_err(
-                    "ConvertIntToUInt",
-                    format!("{}", val),
-                ));
+                return Err(Error::gen_overflow("ConvertIntToUInt", format!("{}", val)));
             }
-            ctx.warnings
-                .append_warning(err::gen_truncated_wrong_val("DECIMAL", format!("{}", val)));
+            ctx.warnings.append_warning(Error::gen_truncated_wrong_val(
+                "DECIMAL",
+                format!("{}", val),
+            ));
         }
         Ok(Some(res))
     }
@@ -73,7 +72,7 @@ impl FnCall {
         let res = if is_negative {
             convert::bytes_to_int(ctx, &val).map(|v| {
                 ctx.warnings
-                    .append_warning(err::gen_cast_neg_int_as_unsigned());
+                    .append_warning(Error::gen_cast_neg_int_as_unsigned());
                 v
             })
         } else {
@@ -82,7 +81,7 @@ impl FnCall {
                     && urs > (i64::MAX as u64)
                 {
                     ctx.warnings
-                        .append_warning(err::gen_cast_as_signed_overflow());
+                        .append_warning(Error::gen_cast_as_signed_overflow());
                 }
                 urs as i64
             })
@@ -441,7 +440,7 @@ impl FnCall {
         match Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8) {
             Ok(dur) => Ok(Some(Cow::Owned(dur))),
             Err(CError::Overflow(_)) => {
-                ctx.handle_over_flow(err::gen_overflow_err("Duration", format!("{}", val)))?;
+                ctx.handle_over_flow(Error::gen_overflow("Duration", format!("{}", val)))?;
                 Ok(None)
             }
             Err(e) => Err(e.into()),

@@ -16,7 +16,7 @@ use std::borrow::Cow;
 use std::ops::{Add, Mul, Sub};
 use coprocessor::codec::{mysql, Datum};
 use coprocessor::codec::mysql::{Decimal, Res};
-use super::{gen_overflow_err, Error, EvalContext, FnCall, Result};
+use super::{Error, EvalContext, FnCall, Result};
 
 impl FnCall {
     pub fn plus_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -24,7 +24,10 @@ impl FnCall {
         let rhs = try_opt!(self.children[1].eval_real(ctx, row));
         let res = lhs + rhs;
         if !res.is_finite() {
-            return Err(gen_overflow_err("DOUBLE", format!("({} + {})", lhs, rhs)));
+            return Err(Error::gen_overflow(
+                "DOUBLE",
+                format!("({} + {})", lhs, rhs),
+            ));
         }
         Ok(Some(res))
     }
@@ -68,7 +71,7 @@ impl FnCall {
         } else {
             "BIGINT"
         };
-        res.ok_or_else(|| gen_overflow_err(data_type, format!("({} + {})", lhs, rhs)))
+        res.ok_or_else(|| Error::gen_overflow(data_type, format!("({} + {})", lhs, rhs)))
             .map(Some)
     }
 
@@ -77,7 +80,10 @@ impl FnCall {
         let rhs = try_opt!(self.children[1].eval_real(ctx, row));
         let res = lhs - rhs;
         if !res.is_finite() {
-            return Err(gen_overflow_err("DOUBLE", format!("({} - {})", lhs, rhs)));
+            return Err(Error::gen_overflow(
+                "DOUBLE",
+                format!("({} - {})", lhs, rhs),
+            ));
         }
         Ok(Some(res))
     }
@@ -115,11 +121,14 @@ impl FnCall {
             (false, true) => if lhs >= 0 {
                 (lhs as u64).checked_sub(rhs as u64).map(|t| t as i64)
             } else {
-                return Err(gen_overflow_err(data_type, format!("({} - {})", lhs, rhs)));
+                return Err(Error::gen_overflow(
+                    data_type,
+                    format!("({} - {})", lhs, rhs),
+                ));
             },
             (false, false) => lhs.checked_sub(rhs),
         };
-        res.ok_or_else(|| gen_overflow_err(data_type, format!("({} - {})", lhs, rhs)))
+        res.ok_or_else(|| Error::gen_overflow(data_type, format!("({} - {})", lhs, rhs)))
             .map(Some)
     }
 
@@ -128,7 +137,10 @@ impl FnCall {
         let rhs = try_opt!(self.children[1].eval_real(ctx, row));
         let res = lhs * rhs;
         if !res.is_finite() {
-            return Err(gen_overflow_err("DOUBLE", format!("({} * {})", lhs, rhs)));
+            return Err(Error::gen_overflow(
+                "DOUBLE",
+                format!("({} * {})", lhs, rhs),
+            ));
         }
         Ok(Some(res))
     }
@@ -162,7 +174,7 @@ impl FnCall {
             (true, false) => u64_mul_i64(lhs, rhs),
             (false, true) => u64_mul_i64(rhs, lhs),
         };
-        res.ok_or_else(|| gen_overflow_err("BIGINT UNSIGNED", format!("({} * {})", lhs, rhs)))
+        res.ok_or_else(|| Error::gen_overflow("BIGINT UNSIGNED", format!("({} * {})", lhs, rhs)))
             .map(Some)
     }
 
@@ -174,7 +186,10 @@ impl FnCall {
         }
         let res = lhs / rhs;
         if res.is_infinite() {
-            Err(gen_overflow_err("DOUBLE", format!("({} / {})", lhs, rhs)))
+            Err(Error::gen_overflow(
+                "DOUBLE",
+                format!("({} / {})", lhs, rhs),
+            ))
         } else {
             Ok(Some(res))
         }
@@ -187,7 +202,7 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
         let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
-        let overflow = gen_overflow_err("DECIMAL", format!("({} / {})", lhs, rhs));
+        let overflow = Error::gen_overflow("DECIMAL", format!("({} / {})", lhs, rhs));
         match lhs.into_owned() / rhs.into_owned() {
             Some(v) => match v {
                 Res::Ok(v) => Ok(Some(Cow::Owned(v))),

@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use chrono::FixedOffset;
 use tipb::select;
-use super::{err, Error, Result};
+use super::{Error, Result};
 
 /// Flags are used by `DAGRequest.flags` to handle execution mode, like how to handle
 /// truncate error.
@@ -62,10 +62,10 @@ impl Default for EvalConfig {
 impl EvalConfig {
     pub fn new(tz_offset: i64, flags: u64) -> Result<EvalConfig> {
         if tz_offset <= -ONE_DAY || tz_offset >= ONE_DAY {
-            return Err(Error::Eval(format!("invalid tz offset {}", tz_offset)));
+            return Err(Error::unknown_timezone(tz_offset));
         }
         let tz = match FixedOffset::east_opt(tz_offset as i32) {
-            None => return Err(Error::Eval(format!("invalid tz offset {}", tz_offset))),
+            None => return Err(Error::unknown_timezone(tz_offset)),
             Some(tz) => tz,
         };
 
@@ -197,7 +197,7 @@ impl EvalContext {
         }
         let orig_str = String::from_utf8_lossy(bytes).into_owned();
         self.warnings
-            .append_warning(err::gen_truncated_wrong_val("INTEGER", orig_str));
+            .append_warning(Error::gen_truncated_wrong_val("INTEGER", orig_str));
         if negitive {
             Ok(i64::MIN)
         } else {

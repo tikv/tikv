@@ -16,8 +16,7 @@ use std::borrow::Cow;
 
 use coprocessor::codec::{mysql, Datum};
 use coprocessor::codec::mysql::Decimal;
-use super::{EvalContext, FnCall, Result};
-use super::gen_overflow_err;
+use super::{Error, EvalContext, FnCall, Result};
 
 impl FnCall {
     pub fn logical_and(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -97,12 +96,12 @@ impl FnCall {
         if mysql::has_unsigned_flag(u64::from(self.children[0].get_tp().get_flag())) {
             let uval = val as u64;
             if uval > i64::MAX as u64 + 1 {
-                return Err(gen_overflow_err("BIGINT", format!("-{}", uval)));
+                return Err(Error::gen_overflow("BIGINT", format!("-{}", uval)));
             } else if uval == i64::MAX as u64 + 1 {
                 return Ok(Some(i64::MIN));
             }
         } else if val == i64::MIN {
-            return Err(gen_overflow_err("BIGINT", format!("-{}", val)));
+            return Err(Error::gen_overflow("BIGINT", format!("-{}", val)));
         }
         Ok(Some(-val))
     }

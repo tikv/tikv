@@ -19,7 +19,13 @@ use tipb::select;
 
 use coprocessor::codec::mysql::Res;
 use util;
-use util::codec::Error as CError;
+use util::codec::{self, Error as CError};
+
+const ERR_UNKNOWN: i32 = 1105;
+const ERR_TRUNCATED: i32 = 1265;
+const ERR_UNKNOWN_TIMEZONE: i32 = 1298;
+const ERR_DATA_OUT_OF_RANGE: i32 = 1690;
+const ERR_TRUNCATE_WRONG_VALUE: i32 = 1292;
 
 quick_error! {
     #[derive(Debug)]
@@ -60,7 +66,7 @@ quick_error! {
             description("TruncatedWrongVal")
             display("{}",msg)
         }
-        Eval(s: String) {
+        Eval(s: String,code:i32) {
             description("evaluation failed")
             display("{}", s)
         }
@@ -72,27 +78,49 @@ quick_error! {
         }
     }
 }
-pub fn gen_overflow_err(data: &str, range: String) -> Error {
-    let msg = format!("{} value is out of range in {:?}", data, range);
-    Error::Overflow(msg)
-}
 
-pub fn gen_truncated_wrong_val(data_type: &str, val: String) -> Error {
-    let msg = format!("Truncated incorrect {} value: '{}'", data_type, val);
-    Error::TruncatedWrongVal(msg)
-}
+impl Error {
+    pub fn gen_overflow(data: &str, range: String) -> Error {
+        let msg = codec::gen_overflow_msg(data, &range);
+        Error::Overflow(msg)
+    }
 
-pub fn gen_cast_neg_int_as_unsigned() -> Error {
-    box_err!("Cast to unsigned converted negative integer to it's positive complement")
-}
+    pub fn gen_truncated_wrong_val(data_type: &str, val: String) -> Error {
+        let msg = format!("Truncated incorrect {} value: '{}'", data_type, val);
+        Error::TruncatedWrongVal(msg)
+    }
 
-pub fn gen_cast_as_signed_overflow() -> Error {
-    box_err!("Cast to signed converted positive out-of-range integer to it's negative complement")
+    pub fn gen_cast_neg_int_as_unsigned() -> Error {
+        let msg = "Cast to unsigned converted negative integer to it's positive complement";
+        Error::Eval(msg.into(), ERR_UNKNOWN)
+    }
+
+    pub fn gen_cast_as_signed_overflow() -> Error {
+        let msg =
+            "Cast to signed converted positive out-of-range integer to it's negative complement";
+        Error::Eval(msg.into(), ERR_UNKNOWN)
+    }
+
+    pub fn unknown_timezone(tz: i64) -> Error {
+        let msg = format!("unknown or incorrect time zone: {}", tz);
+        Error::Eval(msg, ERR_UNKNOWN_TIMEZONE)
+    }
+
+    pub fn code(&self) -> i32 {
+        match *self {
+            Error::Truncated(_) => ERR_TRUNCATED,
+            Error::TruncatedWrongVal(_) => ERR_TRUNCATE_WRONG_VALUE,
+            Error::Overflow(_) => ERR_DATA_OUT_OF_RANGE,
+            Error::Eval(_, code) => code,
+            _ => ERR_UNKNOWN,
+        }
+    }
 }
 
 impl Into<select::Error> for Error {
     fn into(self) -> select::Error {
         let mut err = select::Error::new();
+        err.set_code(self.code());
         err.set_msg(format!("{:?}", self));
         err
     }
@@ -117,7 +145,7 @@ impl<T> Into<Result<T>> for Res<T> {
         match self {
             Res::Ok(t) => Ok(t),
             Res::Truncated(_) => Err(Error::Truncated("Data Truncated".into())),
-            Res::Overflow(_) => Err(gen_overflow_err("", "".into())),
+            Res::Overflow(_) => Err(Error::gen_overflow("", "".into())),
         }
     }
 }
