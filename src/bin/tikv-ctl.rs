@@ -377,7 +377,7 @@ trait DebugExecutor {
         let region_local = self.get_region_info(region_id).region_local_state.unwrap();
         let r = region_local.get_region();
         let from = keys::data_key(r.get_start_key());
-        let to = keys::data_key(r.get_end_key());
+        let to = keys::data_end_key(r.get_end_key());
         self.do_compact(db, cf, from, to);
     }
 
