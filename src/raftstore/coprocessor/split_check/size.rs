@@ -181,7 +181,7 @@ mod tests {
             engine.put(&s, &s).unwrap();
         }
 
-        runnable.run(SplitCheckTask::new(&region));
+        runnable.run(SplitCheckTask::new(&region, true));
         // size has not reached the max_size 100 yet.
         match rx.try_recv() {
             Ok(Msg::ApproximateRegionSize { region_id, .. }) => {
@@ -199,7 +199,7 @@ mod tests {
         // we flush it to SST so we can use the size properties instead.
         engine.flush(true).unwrap();
 
-        runnable.run(SplitCheckTask::new(&region));
+        runnable.run(SplitCheckTask::new(&region, true));
         match rx.try_recv() {
             Ok(Msg::ApproximateRegionSize { region_id, .. }) => {
                 assert_eq!(region_id, region.get_id());
@@ -233,7 +233,7 @@ mod tests {
             engine.flush_cf(handle, true).unwrap();
         }
 
-        runnable.run(SplitCheckTask::new(&region));
+        runnable.run(SplitCheckTask::new(&region, true));
         match rx.try_recv() {
             Ok(Msg::ApproximateRegionSize { region_id, .. }) => {
                 assert_eq!(region_id, region.get_id());
@@ -256,6 +256,6 @@ mod tests {
 
         drop(rx);
         // It should be safe even the result can't be sent back.
-        runnable.run(SplitCheckTask::new(&region));
+        runnable.run(SplitCheckTask::new(&region, true));
     }
 }

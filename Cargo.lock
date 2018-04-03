@@ -461,7 +461,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git#dfb531213dcd80273ac959e250c01bd2b7f6c599"
+source = "git+https://github.com/pingcap/kvproto.git#340ba9feaf29e9be3404be5b891999746330f677"
 dependencies = [
  "futures 0.1.17 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -502,7 +502,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#fdd9bda07e37ae4fe76e8c3068229f40347ee853"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#7e21e222c8dcb9729a61222995dffc3e836194da"
 dependencies = [
  "bzip2-sys 0.1.6 (git+https://github.com/alexcrichton/bzip2-rs.git)",
  "cc 1.0.3 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -898,7 +898,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#fdd9bda07e37ae4fe76e8c3068229f40347ee853"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#7e21e222c8dcb9729a61222995dffc3e836194da"
 dependencies = [
  "crc 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.36 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1122,7 +1122,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "2.0.0-rc.3"
+version = "2.0.0-rc.4"
 dependencies = [
  "backtrace 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "bitflags 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1187,7 +1187,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#a4cb837b2f797f54d3b2bbb3da47dd15af14de7d"
+source = "git+https://github.com/pingcap/tipb.git#2d5073e5521a10f8db2adc0eaab2c46ca0a151d9"
 dependencies = [
  "protobuf 1.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]

@@ -196,7 +196,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let pd_sender = pd_worker.scheduler();
     let storage_read_pool = ReadPool::new("store-read", &cfg.readpool.storage, || {
         let pd_sender = pd_sender.clone();
-        move || storage::ReadPoolContext::new(Some(pd_sender.clone()))
+        move || storage::ReadPoolContext::new(pd_sender.clone())
     });
     let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage, storage_read_pool)
         .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
@@ -349,6 +349,10 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
         });
         config.raft_store.capacity = capacity;
     }
+
+    if matches.is_present("import-mode") {
+        config.tune_for_import_mode();
+    }
 }
 
 // Set gRPC event engine to epollsig.
@@ -470,6 +474,11 @@ fn main() {
                     "Sets server labels. Uses `,` to separate kv pairs, like \
                      `zone=cn,disk=ssd`",
                 ),
+        )
+        .arg(
+            Arg::with_name("import-mode")
+                .long("import-mode")
+                .help("Run in import mode"),
         )
         .arg(
             Arg::with_name("print-sample-config")
