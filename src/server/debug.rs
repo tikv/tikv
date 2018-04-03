@@ -442,7 +442,7 @@ impl Debugger {
                 }
                 let exists_region = region_state.get_region();
 
-                if !region_overlay(exists_region, &region) {
+                if !region_overlap(exists_region, &region) {
                     return Ok(true);
                 }
 
@@ -526,19 +526,15 @@ impl Debugger {
     }
 }
 
-fn region_overlay(r1: &Region, r2: &Region) -> bool {
-    if (r1.get_start_key().is_empty() && r1.get_end_key().is_empty())
-        || (r2.get_start_key().is_empty() && r2.get_end_key().is_empty())
-    {
-        return true;
+fn region_overlap(r1: &Region, r2: &Region) -> bool {
+    let (start_key_1, start_key_2) = (r1.get_start_key(), r2.get_start_key());
+    let (end_key_1, end_key_2) = (r1.get_end_key(), r2.get_end_key());
+    match (end_key_1.is_empty(), end_key_2.is_empty()) {
+        (true, true) => true,
+        (true, false) => start_key_1 < end_key_2,
+        (false, true) => start_key_2 < end_key_1,
+        (false, false) => !(start_key_1 >= end_key_2 || start_key_2 >= end_key_1),
     }
-    if r1.get_start_key() >= r2.get_end_key() && r1.get_end_key() <= r2.get_start_key() {
-        return false;
-    }
-    if r2.get_start_key() >= r1.get_end_key() && r2.get_end_key() <= r1.get_start_key() {
-        return false;
-    }
-    true
 }
 
 pub struct MvccInfoIterator {
@@ -809,8 +805,8 @@ mod tests {
     }
 
     #[test]
-    fn test_region_overlay() {
-        let region_with = |start: &[u8], end: &[u8]| -> Region {
+    fn test_region_overlap() {
+        let new_region = |start: &[u8], end: &[u8]| -> Region {
             let mut region = Region::default();
             region.set_start_key(start.to_owned());
             region.set_end_key(end.to_owned());
@@ -818,35 +814,35 @@ mod tests {
         };
 
         // For normal case.
-        assert!(region_overlay(
-            &region_with(b"a", b"z"),
-            &region_with(b"b", b"y")
+        assert!(region_overlap(
+            &new_region(b"a", b"z"),
+            &new_region(b"b", b"y")
         ));
-        assert!(region_overlay(
-            &region_with(b"a", b"n"),
-            &region_with(b"m", b"z")
+        assert!(region_overlap(
+            &new_region(b"a", b"n"),
+            &new_region(b"m", b"z")
         ));
-        assert!(region_overlay(
-            &region_with(b"a", b"m"),
-            &region_with(b"n", b"z")
+        assert!(!region_overlap(
+            &new_region(b"a", b"m"),
+            &new_region(b"n", b"z")
         ));
 
         // For the first or last region.
-        assert!(region_overlay(
-            &region_with(b"m", b""),
-            &region_with(b"a", b"n")
+        assert!(region_overlap(
+            &new_region(b"m", b""),
+            &new_region(b"a", b"n")
         ));
-        assert!(region_overlay(
-            &region_with(b"a", b"n"),
-            &region_with(b"m", b"")
+        assert!(region_overlap(
+            &new_region(b"a", b"n"),
+            &new_region(b"m", b"")
         ));
-        assert!(region_overlay(
-            &region_with(b"", b""),
-            &region_with(b"m", b"")
+        assert!(region_overlap(
+            &new_region(b"", b""),
+            &new_region(b"m", b"")
         ));
-        assert!(!region_overlay(
-            &region_with(b"a", b"m"),
-            &region_with(b"n", b"")
+        assert!(!region_overlap(
+            &new_region(b"a", b"m"),
+            &new_region(b"n", b"")
         ));
     }
 
