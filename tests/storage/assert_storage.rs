@@ -23,6 +23,7 @@ use super::util::new_raft_storage_with_store_count;
 use tikv::storage::config::Config;
 use tikv::storage::engine;
 use tikv::server::readpool::{self, ReadPool};
+use tikv::util::worker::FutureWorker;
 
 #[derive(Clone)]
 pub struct AssertionStorage {
@@ -32,8 +33,9 @@ pub struct AssertionStorage {
 
 impl Default for AssertionStorage {
     fn default() -> AssertionStorage {
+        let pd_worker = FutureWorker::new("test future worker");
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(None)
+            || storage::ReadPoolContext::new(pd_worker.scheduler())
         });
         AssertionStorage {
             ctx: Context::new(),
@@ -67,8 +69,9 @@ impl AssertionStorage {
         self.ctx.set_region_id(region.get_id());
         self.ctx.set_region_epoch(region.get_region_epoch().clone());
         self.ctx.set_peer(leader.clone());
+        let pd_worker = FutureWorker::new("test future worker");
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(None)
+            || storage::ReadPoolContext::new(pd_worker.scheduler())
         });
         self.store = SyncStorage::from_engine(engine, &Config::default(), read_pool);
     }
