@@ -20,6 +20,7 @@ mod sync_storage;
 use test_util::*;
 use tikv::storage::{self, Key, Mutation};
 use tikv::server::readpool::{self, ReadPool};
+use tikv::util::worker::FutureWorker;
 use kvproto::kvrpcpb::Context;
 use self::sync_storage::SyncStorage;
 
@@ -28,8 +29,9 @@ use super::print_result;
 /// In mvcc kv is not actually deleted, which may cause performance issue
 /// when doing scan.
 fn bench_tombstone_scan() -> BenchSamples {
+    let pd_worker = FutureWorker::new("test pd worker");
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-        || storage::ReadPoolContext::new(None)
+        || storage::ReadPoolContext::new(pd_worker.scheduler())
     });
     let store = SyncStorage::new(&Default::default(), read_pool);
     let mut ts_generator = 1..;
