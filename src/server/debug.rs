@@ -274,7 +274,11 @@ impl Debugger {
     fn verify_region(&self, db: &Arc<DB>, region: Region) -> Result<()> {
         let wb = WriteBatch::new();
 
-        let mut region_verifier = box_try!(RegionVerifier::new(Arc::clone(db), region));
+        let mut region_verifier = box_try!(MvccChecker::new(
+            Arc::clone(db),
+            region.get_start_key(),
+            region.get_end_key()
+        ));
         region_verifier.check_mvcc(&wb)?;
 
         let mut write_opts = WriteOptions::new();
@@ -463,7 +467,7 @@ impl Debugger {
     }
 }
 
-pub struct RegionVerifier {
+pub struct MvccChecker {
     db: Arc<DB>,
     lock_iter: DBIterator,
     default_iter: DBIterator,
@@ -473,11 +477,10 @@ pub struct RegionVerifier {
     write_fix_count: usize,
 }
 
-impl RegionVerifier {
-    fn new(db: Arc<DB>, reg: Region) -> Result<Self> {
-        let region = reg.clone();
-        let start_key = keys::data_key(region.get_start_key());
-        let end_key = keys::data_end_key(region.get_end_key());
+impl MvccChecker {
+    fn new(db: Arc<DB>, start_key: &[u8], end_key: &[u8]) -> Result<Self> {
+        let start_key = keys::data_key(start_key);
+        let end_key = keys::data_end_key(end_key);
         let gen_iter = |cf: &str| -> Result<_> {
             let from = start_key.clone();
             let to = end_key.clone();
@@ -488,7 +491,7 @@ impl RegionVerifier {
             Ok(iter)
         };
 
-        Ok(RegionVerifier {
+        Ok(MvccChecker {
             db: Arc::clone(&db),
             write_iter: gen_iter(CF_WRITE)?,
             lock_iter: gen_iter(CF_LOCK)?,
@@ -520,9 +523,9 @@ impl RegionVerifier {
     pub fn check_mvcc(&mut self, wb: &WriteBatch) -> Result<()> {
         loop {
             // Find min key in the 3 CFs.
-            let mut key = RegionVerifier::min_key(None, &self.default_iter, truncate_ts);
-            key = RegionVerifier::min_key(key, &self.lock_iter, |k| k);
-            key = RegionVerifier::min_key(key, &self.write_iter, truncate_ts);
+            let mut key = MvccChecker::min_key(None, &self.default_iter, truncate_ts);
+            key = MvccChecker::min_key(key, &self.lock_iter, |k| k);
+            key = MvccChecker::min_key(key, &self.write_iter, truncate_ts);
 
             match key {
                 Some(key) => self.check_mvcc_key(wb, key.as_ref())?,
