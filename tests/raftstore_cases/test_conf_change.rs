@@ -615,7 +615,6 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Promote learner (4 ,10) to voter.
     pd_client.must_add_peer(r1, new_peer(4, 10));
-    cluster.stop_node(2);
     cluster.must_put(b"k3", b"v3");
     must_get_equal(&engine_4, b"k3", b"v3");
 
