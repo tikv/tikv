@@ -487,6 +487,24 @@ mod tests {
     }
 
     #[test]
+    fn test_conf_state_from_region() {
+        let mut region = metapb::Region::new();
+
+        let mut peer = metapb::Peer::new();
+        peer.set_id(1);
+        region.mut_peers().push(peer);
+
+        let mut peer = metapb::Peer::new();
+        peer.set_id(2);
+        peer.set_is_learner(true);
+        region.mut_peers().push(peer);
+
+        let cs = conf_state_from_region(&region);
+        assert!(cs.get_nodes().contains(&1));
+        assert!(cs.get_learners().contains(&2));
+    }
+
+    #[test]
     fn test_peer() {
         let mut region = metapb::Region::new();
         region.set_id(1);
