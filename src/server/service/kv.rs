@@ -12,8 +12,6 @@
 // limitations under the License.
 
 use std::iter::{self, FromIterator};
-use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
 use grpc::{ClientStreamingSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
            RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
 use futures::{future, stream, Future, Sink, Stream};
@@ -42,9 +40,6 @@ use coprocessor::{err_resp, EndPointTask, RequestTask};
 use coprocessor::local_metrics::BasicLocalMetrics;
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
-const SNAP_RECV_CHUNKS_LIMIT: usize = 8;
-// How many snapshots can be recv concurrently. TODO: move it into snap.rs.
-const MAX_RECEIVER_CONCURRENT: usize = 64;
 
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter + 'static> {
@@ -56,8 +51,6 @@ pub struct Service<T: RaftStoreRouter + 'static> {
     ch: T,
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
-    max_snap_recv_concurrent: usize,
-    token: Arc<AtomicUsize>, // TODO: remove it.
     recursion_limit: u32,
     metrics: Metrics,
     stream_channel_size: usize,
@@ -129,8 +122,6 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
             end_point_scheduler: end_point_scheduler,
             ch: ch,
             snap_scheduler: snap_scheduler,
-            max_snap_recv_concurrent: MAX_RECEIVER_CONCURRENT,
-            token: Arc::new(AtomicUsize::new(1)),
             recursion_limit: recursion_limit,
             metrics: Metrics::new(),
             stream_channel_size: stream_channel_size,
@@ -913,31 +904,15 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         stream: RequestStream<SnapshotChunk>,
         sink: ClientStreamingSink<Done>,
     ) {
-        if self.snap_scheduler.task_count() >= self.max_snap_recv_concurrent {
+        let task = SnapTask::Recv { stream, sink };
+        if let Err(e) = self.snap_scheduler.schedule(task) {
+            let sink = match e.into_inner() {
+                SnapTask::Recv { sink, .. } => sink,
+                _ => unreachable!(),
+            };
             let status = RpcStatus::new(RpcStatusCode::ResourceExhausted, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
-            return;
         }
-
-        let (tx, rx) = futures_mpsc::channel(SNAP_RECV_CHUNKS_LIMIT);
-        if self.snap_scheduler.schedule(SnapTask::Recv(rx)).is_err() {
-            let status = RpcStatus::new(RpcStatusCode::ResourceExhausted, None);
-            ctx.spawn(sink.fail(status).map_err(|_| ()));
-            return;
-        }
-
-        // Use None to indicates the stream is finished at gRPC end.
-        let stream = stream
-            .map(Some)
-            .map_err(Error::from)
-            .chain(stream::once(Ok(None)))
-            .forward(tx.sink_map_err(|_| Error::Other("futures::sync::mpsc::Sender fail".into())));
-
-        ctx.spawn(
-            stream
-                .and_then(move |_| sink.success(Done::new()).map_err(Error::from))
-                .map_err(|_| ()),
-        );
     }
 
     fn mvcc_get_by_key(
