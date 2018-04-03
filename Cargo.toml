@@ -105,6 +105,7 @@ features = ["secure"]
 
 [replace]
 "protobuf:1.4.1" = { git = "https://github.com/stepancheg/rust-protobuf.git" }
+"grpcio:0.2.1" = { git = "https://github.com/pingcap/grpc-rs.git" }
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
