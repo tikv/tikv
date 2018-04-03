@@ -121,6 +121,12 @@ pub trait Engine: Send + Debug {
     fn clone(&self) -> Box<Engine + 'static>;
 }
 
+impl Clone for Box<Engine> {
+    fn clone(&self) -> Box<Engine> {
+        self.as_ref().clone()
+    }
+}
+
 pub trait Snapshot: Send + Debug {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
