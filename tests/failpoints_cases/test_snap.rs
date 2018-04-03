@@ -108,7 +108,7 @@ impl Filter<RaftMessage> for SnapshotNotifier {
         while self.pending_notify.load(Ordering::SeqCst) > 0 {
             debug!("notify snapshot");
             self.pending_notify.fetch_sub(1, Ordering::SeqCst);
-            self.notifier.lock().unwrap().send(()).unwrap();
+            let _ = self.notifier.lock().unwrap().send(());
         }
         Ok(())
     }
@@ -120,7 +120,7 @@ impl Filter<RaftMessage> for SnapshotNotifier {
 // when the address is being resolved will leave follower's progress
 // stay in Snapshot forever.
 #[test]
-fn test_server_snapshot_on_reslove_failure() {
+fn test_server_snapshot_on_resolve_failure() {
     let _guard = ::setup();
     let mut cluster = new_server_cluster(1, 4);
     configure_for_snapshot(&mut cluster);
@@ -170,12 +170,22 @@ fn test_server_snapshot_on_reslove_failure() {
     must_get_none(&engine4, b"k1");
     cluster.sim.write().unwrap().clear_recv_filters(4);
 
-    // Remove the fail points, now snapshots should works fine.
-    fail::remove(on_resolve_fp);
+    // Remove the on_send_store_fp.
+    // Now it will resolve the store 4's address via heartbeat messages,
+    // so snapshots works fine.
+    //
+    // But keep the on_resolve_fp.
+    // Any snapshot messages that has been sent before will meet the
+    // injected resolve failure eventually.
+    // It perverts a race condition, remove the on_resolve_fp before snapshot
+    // messages meet the failpoint, that fails the test.
     fail::remove(on_send_store_fp);
 
     notify_rx.recv_timeout(Duration::from_secs(3)).unwrap();
     cluster.must_put(b"k2", b"v2");
     must_get_equal(&engine4, b"k1", b"v1");
     must_get_equal(&engine4, b"k2", b"v2");
+
+    // Clean up.
+    fail::remove(on_resolve_fp);
 }
