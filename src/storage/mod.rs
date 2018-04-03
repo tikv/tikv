@@ -785,25 +785,11 @@ impl Storage {
         end_key: Key,
         callback: Callback<()>,
     ) -> Result<()> {
-        let mut modifies = Vec::with_capacity(DATA_CFS.len());
-        for cf in DATA_CFS {
-            // We enable memtable prefix bloom for CF_WRITE column family, for delete_range
-            // operation, RocksDB will add start key to the prefix bloom, and the start key
-            // will go through function prefix_extractor. In our case the prefix_extractor
-            // is FixedSuffixSliceTransform, which will trim the timestamp at the tail. If the
-            // length of start key is less than 8, we will encounter index out of range error.
-            let s = if *cf == CF_WRITE {
-                start_key.append_ts(u64::MAX)
-            } else {
-                start_key.clone()
-            };
-            modifies.push(Modify::UnsafeCleanupRange(cf, s, end_key.clone()));
-        }
-
-        self.engine
-            .async_write(&ctx, modifies, box |(_, res): (_, engine::Result<_>)| {
-                callback(res.map_err(Error::from))
-            })?;
+        self.engine.async_write(
+            &ctx,
+            vec![Modify::UnsafeCleanupRange(start_key, end_key)],
+            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+        )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["unsafe_cleanup_range"])
             .inc();

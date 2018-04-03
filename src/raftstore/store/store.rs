@@ -40,7 +40,6 @@ use protobuf::Message;
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raftstore::{Error, Result};
 use kvproto::metapb;
-use util::timer::Timer;
 use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
 use util::transport::SendCh;
 use util::RingQueue;
@@ -54,8 +53,7 @@ use import::SSTImporter;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, CleanupSSTTask,
                     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
                     RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
-                    SplitCheckTask, UCRTaskQueue, UnsafeCleanupRangeRunner,
-                    UNSAFE_CLEANUP_INTERVAL};
+                    SplitCheckTask};
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -591,27 +589,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         );
         box_try!(self.cleanup_sst_worker.start(cleanup_sst_runner));
 
-        let ucr_task_queue = Arc::new(UCRTaskQueue::new(Arc::clone(&self.kv_engine)));
-        let unsafe_cleanup_range_runner = UnsafeCleanupRangeRunner::new(
-            Arc::clone(&self.kv_engine),
-            Arc::clone(&ucr_task_queue),
-            self.cfg.use_delete_range,
-            UNSAFE_CLEANUP_INTERVAL,
-        );
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(UNSAFE_CLEANUP_INTERVAL), ());
-        box_try!(
-            self.unsafe_cleanup_range_worker
-                .start_with_timer(unsafe_cleanup_range_runner, timer)
-        );
-
         let (tx, rx) = mpsc::channel();
         let apply_runner = ApplyRunner::new(
             self,
             tx,
             self.cfg.sync_log,
             self.cfg.use_delete_range,
-            ucr_task_queue,
+            self.apply_scheduler(),
         );
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));

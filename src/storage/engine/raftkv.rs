@@ -331,9 +331,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                     req.set_cmd_type(CmdType::DeleteRange);
                     req.set_delete_range(delete_range);
                 }
-                Modify::UnsafeCleanupRange(cf, start_key, end_key) => {
+                Modify::UnsafeCleanupRange(start_key, end_key) => {
                     let mut unsafe_cleanup_range = UnsafeCleanupRangeRequest::new();
-                    unsafe_cleanup_range.set_cf(cf.to_string());
                     unsafe_cleanup_range.set_start_key(start_key.encoded().to_owned());
                     unsafe_cleanup_range.set_end_key(end_key.encoded().to_owned());
                     req.set_cmd_type(CmdType::UnsafeCleanupRange);

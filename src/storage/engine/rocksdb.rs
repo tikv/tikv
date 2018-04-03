@@ -11,12 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::u64;
 use std::ops::Deref;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::{Arc, Mutex};
 use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
 use kvproto::kvrpcpb::Context;
-use storage::{CfName, Key, Value, CF_DEFAULT};
+use storage::{CfName, Key, Value, ALL_CFS, CF_DEFAULT, CF_WRITE};
 use raftstore::store::engine::{IterOption, Peekable, SyncSnapshot as RocksSnapshot};
 use util::escape;
 use util::rocksdb;
@@ -160,15 +161,23 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
                 let handle = rocksdb::get_cf_handle(db, cf)?;
                 wb.delete_range_cf(handle, start_key.encoded(), end_key.encoded())
             }
-            Modify::UnsafeCleanupRange(cf, start_key, end_key) => {
+            Modify::UnsafeCleanupRange(start_key, end_key) => {
                 trace!(
-                    "EngineRocksdb: unsafe_cleanup_range_cf {}, {}, {}",
-                    cf,
+                    "EngineRocksdb: unsafe_cleanup_range_cf {}, {}",
                     escape(start_key.encoded()),
                     escape(end_key.encoded())
                 );
-                let handle = rocksdb::get_cf_handle(db, cf)?;
-                wb.delete_range_cf(handle, start_key.encoded(), end_key.encoded())
+                for cf in ALL_CFS {
+                    let s = if *cf == CF_WRITE {
+                        start_key.append_ts(u64::MAX)
+                    } else {
+                        start_key.clone()
+                    };
+                    let handle = rocksdb::get_cf_handle(db, cf)?;
+                    wb.delete_range_cf(handle, s.encoded(), end_key.encoded())
+                        .unwrap();
+                }
+                Ok(())
             }
         };
         if let Err(msg) = res {

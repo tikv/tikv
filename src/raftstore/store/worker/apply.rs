@@ -34,7 +34,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerR
                           CommitMergeRequest, RaftCmdRequest, RaftCmdResponse, Request, Response};
 use kvproto::importpb::SSTMeta;
 
-use util::worker::Runnable;
+use util::worker::{Runnable, Scheduler, Worker};
 use util::{escape, rocksdb, MustConsumeVec};
 use util::time::{duration_to_sec, Instant, SlowTimer};
 use util::collections::HashMap;
@@ -49,7 +49,7 @@ use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply
                                      write_peer_state};
 use raftstore::store::peer::{check_epoch, Peer};
 use raftstore::store::metrics::*;
-use raftstore::store::worker::UCRTaskQueue;
+use raftstore::store::worker::{SubApplyRunner, SubApplyTask};
 use import::SSTImporter;
 
 use super::metrics::*;
@@ -243,10 +243,15 @@ struct ApplyContextCore<'a> {
     sync_log_hint: bool,
     exec_ctx: Option<ExecContext>,
     use_delete_range: bool,
+    sub_apply_scheduler: Option<Scheduler<SubApplyTask>>,
 }
 
 impl<'a> ApplyContextCore<'a> {
-    pub fn new(host: &'a CoprocessorHost, importer: &'a SSTImporter) -> ApplyContextCore<'a> {
+    pub fn new(
+        host: &'a CoprocessorHost,
+        importer: &'a SSTImporter,
+        sub_apply_scheduler: Option<Scheduler<SubApplyTask>>,
+    ) -> ApplyContextCore<'a> {
         ApplyContextCore {
             host: host,
             importer: importer,
@@ -262,6 +267,7 @@ impl<'a> ApplyContextCore<'a> {
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: false,
+            sub_apply_scheduler: sub_apply_scheduler,
         }
     }
 
@@ -278,6 +284,14 @@ impl<'a> ApplyContextCore<'a> {
     pub fn use_delete_range(mut self, use_delete_range: bool) -> ApplyContextCore<'a> {
         self.use_delete_range = use_delete_range;
         self
+    }
+
+    pub fn schedule_sub_task(&self, task: SubApplyTask) {
+        self.sub_apply_scheduler
+            .as_ref()
+            .unwrap()
+            .schedule(task)
+            .unwrap_or_else(|e| panic!("schedule sub task failed, error: {:?}", e));
     }
 
     /// Prepare for applying entries for `delegate`.
@@ -479,6 +493,25 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
 }
 
 #[derive(Debug)]
+struct PausePoint {
+    pub cur_cb: Option<Callback>,
+    pub cur_resp: Option<RaftCmdResponse>,
+    pub results: Vec<ExecResult>,
+    pub remain_entries: Vec<Entry>,
+}
+
+impl PausePoint {
+    pub fn new() -> PausePoint {
+        PausePoint {
+            cur_cb: None,
+            cur_resp: None,
+            results: vec![],
+            remain_entries: vec![],
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct ApplyDelegate {
     // peer_id
     id: u64,
@@ -502,22 +535,16 @@ pub struct ApplyDelegate {
     metrics: ApplyMetrics,
     last_merge_version: u64,
 
-    // unsafe cleanup range task queue
-    ucr_task_queue: Arc<UCRTaskQueue>,
+    pause_point: Option<PausePoint>,
 }
 
 impl ApplyDelegate {
-    fn from_peer(peer: &Peer, ucr_task_queue: Arc<UCRTaskQueue>) -> ApplyDelegate {
+    fn from_peer(peer: &Peer) -> ApplyDelegate {
         let reg = Registration::new(peer);
-        ApplyDelegate::from_registration(peer.kv_engine(), peer.raft_engine(), reg, ucr_task_queue)
+        ApplyDelegate::from_registration(peer.kv_engine(), peer.raft_engine(), reg)
     }
 
-    fn from_registration(
-        db: Arc<DB>,
-        raft_db: Arc<DB>,
-        reg: Registration,
-        ucr_task_queue: Arc<UCRTaskQueue>,
-    ) -> ApplyDelegate {
+    fn from_registration(db: Arc<DB>, raft_db: Arc<DB>, reg: Registration) -> ApplyDelegate {
         ApplyDelegate {
             id: reg.id,
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
@@ -532,8 +559,33 @@ impl ApplyDelegate {
             pending_cmds: Default::default(),
             metrics: Default::default(),
             last_merge_version: 0,
-            ucr_task_queue: ucr_task_queue,
+            pause_point: None,
         }
+    }
+
+    fn pause(&mut self) {
+        self.pause_point = Some(PausePoint::new());
+    }
+
+    fn is_pause(&self) -> bool {
+        self.pause_point.is_some()
+    }
+
+    fn stash_cb(&mut self, cb: Option<Callback>, resp: RaftCmdResponse) {
+        assert!(self.is_pause());
+        self.pause_point.as_mut().unwrap().cur_cb = cb;
+        self.pause_point.as_mut().unwrap().cur_resp = Some(resp);
+    }
+
+    fn stash_ctx(&mut self, results: Vec<ExecResult>, entries: Vec<Entry>) {
+        assert!(self.is_pause());
+        self.pause_point.as_mut().unwrap().results = results;
+        self.pause_point.as_mut().unwrap().remain_entries = entries;
+    }
+
+    fn take_pause_point(&mut self) -> PausePoint {
+        assert!(self.is_pause());
+        self.pause_point.take().unwrap()
     }
 
     pub fn region_id(&self) -> u64 {
@@ -553,13 +605,13 @@ impl ApplyDelegate {
             return;
         }
         apply_ctx.prepare_for(self);
-        apply_ctx.committed_count += committed_entries.len();
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
         apply_ctx.committed_count += committed_entries.len();
         let mut results = vec![];
-        for entry in committed_entries {
+        let mut pos = 0;
+        for (i, entry) in committed_entries.iter().enumerate() {
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
                 break;
@@ -583,9 +635,20 @@ impl ApplyDelegate {
             if let Some(res) = res {
                 results.push(res);
             }
+
+            if self.is_pause() {
+                pos = i;
+                break;
+            }
         }
 
-        apply_ctx.finish_for(self, results);
+        if self.is_pause() {
+            let remain_entries: Vec<Entry> = committed_entries[pos + 1..].to_owned();
+            apply_ctx.committed_count -= remain_entries.len();
+            self.stash_ctx(results, remain_entries);
+        } else {
+            apply_ctx.finish_for(self, results);
+        }
     }
 
     fn update_metrics(&mut self, apply_ctx: &ApplyContextCore) {
@@ -614,7 +677,7 @@ impl ApplyDelegate {
     fn handle_raft_entry_normal(
         &mut self,
         apply_ctx: &mut ApplyContext,
-        entry: Entry,
+        entry: &Entry,
     ) -> Option<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
@@ -650,7 +713,7 @@ impl ApplyDelegate {
     fn handle_raft_entry_conf_change(
         &mut self,
         apply_ctx: &mut ApplyContext,
-        entry: Entry,
+        entry: &Entry,
     ) -> Option<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
@@ -727,7 +790,11 @@ impl ApplyDelegate {
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
-        apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, resp);
+        if self.is_pause() {
+            self.stash_cb(cmd_cb, resp);
+        } else {
+            apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, resp);
+        }
 
         exec_result
     }
@@ -1511,7 +1578,7 @@ impl ApplyDelegate {
                 CmdType::DeleteRange => {
                     self.handle_delete_range(req, &mut ranges, ctx.use_delete_range)
                 }
-                CmdType::UnsafeCleanupRange => self.handle_unsafe_cleanup_range(req),
+                CmdType::UnsafeCleanupRange => self.handle_unsafe_cleanup_range(ctx, req),
                 CmdType::IngestSST => self.handle_ingest_sst(ctx, req, &mut ssts),
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
@@ -1555,6 +1622,8 @@ impl ApplyDelegate {
     }
 
     fn handle_put(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
+        assert!(!self.is_pause());
+
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         check_data_key(key, &self.region)?;
 
@@ -1597,6 +1666,8 @@ impl ApplyDelegate {
     }
 
     fn handle_delete(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
+        assert!(!self.is_pause());
+
         let key = req.get_delete().get_key();
         check_data_key(key, &self.region)?;
 
@@ -1635,6 +1706,8 @@ impl ApplyDelegate {
         ranges: &mut Vec<Range>,
         use_delete_range: bool,
     ) -> Result<Response> {
+        assert!(!self.is_pause());
+
         let cf = Self::convert_cf(req.get_delete_range().get_cf())?;
         let (start_key, end_key) = self.convert_range(
             req.get_delete_range().get_start_key(),
@@ -1680,6 +1753,8 @@ impl ApplyDelegate {
         req: &Request,
         ssts: &mut Vec<SSTMeta>,
     ) -> Result<Response> {
+        assert!(!self.is_pause());
+
         let sst = req.get_ingest_sst().get_sst();
 
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
@@ -1733,26 +1808,22 @@ impl ApplyDelegate {
         }
     }
 
-    fn handle_unsafe_cleanup_range(&mut self, req: &Request) -> Result<Response> {
-        let cf = Self::convert_cf(req.get_unsafe_cleanup_range().get_cf())?;
+    fn handle_unsafe_cleanup_range(
+        &mut self,
+        ctx: &ApplyContext,
+        req: &Request,
+    ) -> Result<Response> {
         let (start_key, end_key) = self.convert_range(
             req.get_unsafe_cleanup_range().get_start_key(),
             req.get_unsafe_cleanup_range().get_end_key(),
         )?;
 
-        // Unsafe_cleanup_range tasks are expensive operations, so we deliver them to
-        // another worker thread to prevent them blocking apply thread.
-        self.ucr_task_queue
-            .add_task(cf, &start_key, &end_key)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to write unsafe cleanup range task ({}, {}), error {:?}",
-                    self.tag,
-                    escape(&start_key),
-                    escape(&end_key),
-                    e
-                )
-            });
+        self.pause();
+        ctx.schedule_sub_task(SubApplyTask::UnsafeCleanupRange {
+            region_id: self.region.get_id(),
+            start_key: start_key,
+            end_key: end_key,
+        });
 
         Ok(Response::new())
     }
@@ -1960,12 +2031,17 @@ pub struct Destroy {
     region_id: u64,
 }
 
+pub struct Resume {
+    region_id: u64,
+}
+
 /// region related task.
 pub enum Task {
     Applies(ApplyBatch),
     Registration(Registration),
     Proposals(Vec<RegionProposal>),
     Destroy(Destroy),
+    Resume(Resume),
 }
 
 impl Task {
@@ -1985,6 +2061,12 @@ impl Task {
             region_id: region_id,
         })
     }
+
+    pub fn resume(region_id: u64) -> Task {
+        Task::Resume(Resume {
+            region_id: region_id,
+        })
+    }
 }
 
 impl Display for Task {
@@ -1996,6 +2078,7 @@ impl Display for Task {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
             Task::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
+            Task::Resume(ref r) => write!(f, "[region {}] resume", r.region_id),
         }
     }
 }
@@ -2038,8 +2121,8 @@ pub struct Runner {
     notifier: Sender<TaskRes>,
     sync_log: bool,
     use_delete_range: bool,
-    ucr_task_queue: Arc<UCRTaskQueue>, // unsafe_cleanup_range task queue
     tag: String,
+    sub_apply_worker: Worker<SubApplyTask>,
 }
 
 impl Runner {
@@ -2048,16 +2131,19 @@ impl Runner {
         notifier: Sender<TaskRes>,
         sync_log: bool,
         use_delete_range: bool,
-        ucr_task_queue: Arc<UCRTaskQueue>,
+        ch: Scheduler<Task>,
     ) -> Runner {
         let mut delegates =
             HashMap::with_capacity_and_hasher(store.get_peers().len(), Default::default());
         for (&region_id, p) in store.get_peers() {
-            delegates.insert(
-                region_id,
-                Some(ApplyDelegate::from_peer(p, Arc::clone(&ucr_task_queue))),
-            );
+            delegates.insert(region_id, Some(ApplyDelegate::from_peer(p)));
         }
+
+        // Start sub_apply_worker to handle time cost request asynchronously.
+        let mut sub_apply_worker = Worker::new("sub apply worker");
+        let sub_apply_runner = SubApplyRunner::new(store.kv_engine(), use_delete_range, ch);
+        sub_apply_worker.start(sub_apply_runner).unwrap();
+
         Runner {
             db: store.kv_engine(),
             raft_db: store.raft_engine(),
@@ -2067,16 +2153,19 @@ impl Runner {
             notifier: notifier,
             sync_log: sync_log,
             use_delete_range: use_delete_range,
-            ucr_task_queue: ucr_task_queue,
             tag: format!("[store {}]", store.store_id()),
+            sub_apply_worker: sub_apply_worker,
         }
     }
 
     fn handle_applies(&mut self, applys: Vec<Apply>) {
         let t = SlowTimer::new();
 
-        let mut core = ApplyContextCore::new(self.host.as_ref(), self.importer.as_ref())
-            .apply_res_capacity(applys.len())
+        let mut core = ApplyContextCore::new(
+            self.host.as_ref(),
+            self.importer.as_ref(),
+            Some(self.sub_apply_worker.scheduler()),
+        ).apply_res_capacity(applys.len())
             .use_delete_range(self.use_delete_range)
             .enable_sync_log(self.sync_log);
         for apply in applys {
@@ -2171,12 +2260,8 @@ impl Runner {
         let peer_id = s.id;
         let region_id = s.region.get_id();
         let term = s.term;
-        let delegate = ApplyDelegate::from_registration(
-            Arc::clone(&self.db),
-            Arc::clone(&self.raft_db),
-            s,
-            Arc::clone(&self.ucr_task_queue),
-        );
+        let delegate =
+            ApplyDelegate::from_registration(Arc::clone(&self.db), Arc::clone(&self.raft_db), s);
         info!(
             "{} register to apply delegates at term {}",
             delegate.tag, delegate.term
@@ -2200,6 +2285,58 @@ impl Runner {
         }
     }
 
+    fn handle_resume(&mut self, r: Resume) {
+        let mut delegate = match self.delegates.get_mut(&r.region_id) {
+            Some(e) => e.take().unwrap(),
+            None => panic!("[region {}] is missing", r.region_id),
+        };
+        assert!(delegate.is_pause());
+
+        let mut core = ApplyContextCore::new(
+            self.host.as_ref(),
+            self.importer.as_ref(),
+            Some(self.sub_apply_worker.scheduler()),
+        ).use_delete_range(self.use_delete_range)
+            .enable_sync_log(self.sync_log);
+
+        // Resume the region.
+        let mut pause_point = delegate.take_pause_point();
+        core.prepare_for(&delegate);
+        core.cbs.last_mut().unwrap().push(
+            pause_point.cur_cb.take(),
+            pause_point.cur_resp.take().unwrap(),
+        );
+        core.finish_for(&mut delegate, pause_point.results);
+
+        // Handle remain entries.
+        let apply = Apply::new(r.region_id, delegate.term, pause_point.remain_entries);
+        delegate.metrics = ApplyMetrics::default();
+        delegate.term = apply.term;
+
+        {
+            let mut ctx = ApplyContext::new(&mut core, &mut self.delegates);
+            delegate.handle_raft_committed_entries(&mut ctx, apply.entries);
+        }
+
+        if delegate.pending_remove {
+            delegate.destroy();
+            self.delegates.remove(&apply.region_id);
+        } else {
+            *self.delegates.get_mut(&apply.region_id).unwrap() = Some(delegate);
+        }
+
+        // Write to engine
+        // raftsotre.sync-log = true means we need prevent data loss when power failure.
+        // take raft log gc for example, we write kv WAL first, then write raft WAL,
+        // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
+        // so we use sync-log flag here.
+        core.write_to_db(&self.db);
+
+        if !core.apply_res.is_empty() {
+            self.notifier.send(TaskRes::Applys(core.apply_res)).unwrap();
+        }
+    }
+
     fn handle_shutdown(&mut self) {
         for p in self.delegates.values_mut() {
             p.as_mut().unwrap().clear_pending_commands();
@@ -2218,6 +2355,7 @@ impl Runnable<Task> for Runner {
             Task::Proposals(props) => self.handle_proposals(props),
             Task::Registration(s) => self.handle_registration(s),
             Task::Destroy(d) => self.handle_destroy(d),
+            Task::Resume(r) => self.handle_resume(r),
         }
     }
 
@@ -2239,8 +2377,6 @@ mod tests {
     use kvproto::raft_cmdpb::*;
     use raftstore::coprocessor::*;
     use raftstore::store::msg::WriteResponse;
-    use raftstore::store::worker::UCRTaskQueue;
-    use raftstore::store::util;
 
     use super::*;
     use import::test_helpers::*;
@@ -2269,7 +2405,6 @@ mod tests {
         host: Arc<CoprocessorHost>,
         importer: Arc<SSTImporter>,
         tx: Sender<TaskRes>,
-        ucr_task_queue: Arc<UCRTaskQueue>,
     ) -> Runner {
         Runner {
             db: Arc::clone(&db),
@@ -2281,7 +2416,7 @@ mod tests {
             sync_log: false,
             tag: "".to_owned(),
             use_delete_range: true,
-            ucr_task_queue: ucr_task_queue,
+            sub_apply_worker: Worker::new("sub apply worker"),
         }
     }
 
@@ -2336,14 +2471,12 @@ mod tests {
         let (_tmp, db, raft_db) = create_tmp_engine("apply-basic");
         let host = Arc::new(CoprocessorHost::default());
         let (_dir, importer) = create_tmp_importer("apply-basic");
-        let ucr_task_queue = Arc::new(UCRTaskQueue::new(Arc::clone(&db)));
         let mut runner = new_runner(
             Arc::clone(&db),
             raft_db,
             Arc::clone(&host),
             Arc::clone(&importer),
             tx,
-            ucr_task_queue,
         );
 
         let mut reg = Registration::default();
@@ -2552,19 +2685,6 @@ mod tests {
             self.add_delete_range_req(Some(cf), start_key, end_key)
         }
 
-        fn unsafe_cleanup_range(self, start_key: &[u8], end_key: &[u8]) -> EntryBuilder {
-            self.add_unsafe_cleanup_range_req(None, start_key, end_key)
-        }
-
-        fn unsafe_cleanup_range_cf(
-            self,
-            cf: &str,
-            start_key: &[u8],
-            end_key: &[u8],
-        ) -> EntryBuilder {
-            self.add_unsafe_cleanup_range_req(Some(cf), start_key, end_key)
-        }
-
         fn add_delete_req(mut self, cf: Option<&str>, key: &[u8]) -> EntryBuilder {
             let mut cmd = Request::new();
             cmd.set_cmd_type(CmdType::Delete);
@@ -2589,24 +2709,6 @@ mod tests {
             }
             cmd.mut_delete_range().set_start_key(start_key.to_vec());
             cmd.mut_delete_range().set_end_key(end_key.to_vec());
-            self.req.mut_requests().push(cmd);
-            self
-        }
-
-        fn add_unsafe_cleanup_range_req(
-            mut self,
-            cf: Option<&str>,
-            start_key: &[u8],
-            end_key: &[u8],
-        ) -> EntryBuilder {
-            let mut cmd = Request::new();
-            cmd.set_cmd_type(CmdType::UnsafeCleanupRange);
-            if let Some(cf) = cf {
-                cmd.mut_unsafe_cleanup_range().set_cf(cf.to_owned());
-            }
-            cmd.mut_unsafe_cleanup_range()
-                .set_start_key(start_key.to_vec());
-            cmd.mut_unsafe_cleanup_range().set_end_key(end_key.to_vec());
             self.req.mut_requests().push(cmd);
             self
         }
@@ -2652,13 +2754,7 @@ mod tests {
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let ucr_task_queue = Arc::new(UCRTaskQueue::new(Arc::clone(&db)));
-        let mut delegate = ApplyDelegate::from_registration(
-            Arc::clone(&db),
-            raft_db,
-            reg,
-            Arc::clone(&ucr_task_queue),
-        );
+        let mut delegate = ApplyDelegate::from_registration(Arc::clone(&db), raft_db, reg);
         let mut delegates = HashMap::default();
         let (tx, rx) = mpsc::channel();
 
@@ -2673,7 +2769,7 @@ mod tests {
         let obs = ApplyObserver::default();
         host.registry
             .register_query_observer(1, Box::new(obs.clone()));
-        let mut core = ApplyContextCore::new(&host, &importer).use_delete_range(true);
+        let mut core = ApplyContextCore::new(&host, &importer, None).use_delete_range(true);
         let mut apply_ctx = ApplyContext::new(&mut core, &mut delegates);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         apply_ctx.write_to_db(&db);
@@ -2804,56 +2900,6 @@ mod tests {
         assert!(db.get(&dk_k2).unwrap().is_none());
         assert!(db.get(&dk_k3).unwrap().is_some());
 
-        // UnsafeCleanupRange
-        let unsafe_cleanup_range_entry = EntryBuilder::new(9, 3)
-            .unsafe_cleanup_range(b"", b"")
-            .epoch(1, 3)
-            .capture_resp(&mut delegate, tx.clone())
-            .build();
-        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![unsafe_cleanup_range_entry]);
-        apply_ctx.write_to_db(&db);
-        let resp = rx.try_recv().unwrap();
-        assert!(resp.get_header().get_error().has_key_not_in_region());
-        assert_eq!(db.get(&dk_k3).unwrap().unwrap(), b"v1");
-
-        let unsafe_cleanup_range_entry = EntryBuilder::new(10, 3)
-            .unsafe_cleanup_range_cf("unkown_cf", b"", b"k5")
-            .epoch(1, 3)
-            .capture_resp(&mut delegate, tx.clone())
-            .build();
-        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![unsafe_cleanup_range_entry]);
-        apply_ctx.write_to_db(&db);
-        let resp = rx.try_recv().unwrap();
-        assert!(!resp.get_header().get_error().get_message().is_empty());
-        assert_eq!(db.get(&dk_k3).unwrap().unwrap(), b"v1");
-
-        let unsafe_cleanup_range_entry = EntryBuilder::new(11, 3)
-            .unsafe_cleanup_range_cf(CF_DEFAULT, b"", b"k5")
-            .unsafe_cleanup_range_cf(CF_LOCK, b"", b"k5")
-            .unsafe_cleanup_range_cf(CF_WRITE, b"", b"k5")
-            .epoch(1, 3)
-            .capture_resp(&mut delegate, tx.clone())
-            .build();
-        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![unsafe_cleanup_range_entry]);
-        apply_ctx.write_to_db(&db);
-        let resp = rx.try_recv().unwrap();
-        assert!(!resp.get_header().has_error(), "{:?}", resp);
-
-        for _ in 0..3 {
-            let ucr_task = ucr_task_queue.pick_task().unwrap();
-            util::delete_all_in_range_cf(
-                &db,
-                &ucr_task.cf,
-                &ucr_task.start_key,
-                &ucr_task.end_key,
-                false,
-            ).unwrap();
-        }
-
-        assert!(db.get(&dk_k1).unwrap().is_none());
-        assert!(db.get(&dk_k2).unwrap().is_none());
-        assert!(db.get(&dk_k3).unwrap().is_none());
-
         // UploadSST
         let sst_path = import_dir.path().join("test.sst");
         let sst_epoch = delegate.region.get_region_epoch().clone();
@@ -2970,27 +3016,18 @@ mod tests {
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let ucr_task_queue = Arc::new(UCRTaskQueue::new(Arc::clone(&db)));
-        let mut delegate1 = ApplyDelegate::from_registration(
-            Arc::clone(&db),
-            Arc::clone(&raft_db),
-            reg,
-            Arc::clone(&ucr_task_queue),
-        );
+        let mut delegate1 =
+            ApplyDelegate::from_registration(Arc::clone(&db), Arc::clone(&raft_db), reg);
         delegate1.apply_state.set_applied_index(3);
         reg = Registration::default();
         reg.region.set_start_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let mut delegate2 = ApplyDelegate::from_registration(
-            Arc::clone(&db),
-            Arc::clone(&raft_db),
-            reg,
-            Arc::clone(&ucr_task_queue),
-        );
+        let mut delegate2 =
+            ApplyDelegate::from_registration(Arc::clone(&db), Arc::clone(&raft_db), reg);
         delegate2.apply_state.set_applied_index(1);
 
         let host = CoprocessorHost::default();
-        let mut core = ApplyContextCore::new(&host, &importer);
+        let mut core = ApplyContextCore::new(&host, &importer, None);
         let (tx, rx) = mpsc::channel();
         core.prepare_for(&delegate1);
         assert_eq!(core.last_applied_index, 3);
