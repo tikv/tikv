@@ -306,8 +306,8 @@ impl<T: Simulator> Cluster<T> {
         let peer = new_peer(store_id, 0);
         let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
         let mut resp = match self.call_command(find_leader, Duration::from_secs(5)) {
-            Some(resp) => resp,
-            None => return None,
+            Ok(resp) => resp,
+            Err(_) => return None,
         };
         let mut region_leader = resp.take_status_response().take_region_leader();
         // NOTE: node id can't be 0.
