@@ -100,11 +100,6 @@ impl DAGContext {
                     }
                     self.exec
                         .collect_output_counts(sel_resp.mut_output_counts());
-                    // The counts was the output count of each executor, but now it is the scan count of each range,
-                    // so we need a flag to tell them apart.
-                    if !sel_resp.get_output_counts().is_empty() {
-                        sel_resp.mut_output_counts().push(-1);
-                    }
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);
                     return Ok(resp);
@@ -154,11 +149,6 @@ impl DAGContext {
             s_resp.set_warning_count(eval_warnings.warning_cnt as i64);
         }
         self.exec.collect_output_counts(s_resp.mut_output_counts());
-        // The counts was the output count of each executor, but now it is the scan count of each range,
-        // so we need a flag to tell them apart.
-        if !s_resp.get_output_counts().is_empty() {
-            s_resp.mut_output_counts().push(-1);
-        }
 
         let mut resp = Response::new();
         resp.set_data(box_try!(s_resp.write_to_bytes()));
