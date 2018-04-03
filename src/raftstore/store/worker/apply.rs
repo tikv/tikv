@@ -2916,18 +2916,18 @@ mod tests {
         importer.finish(2).unwrap();
 
         // IngestSST
-        let put_ok = EntryBuilder::new(12, 3)
+        let put_ok = EntryBuilder::new(9, 3)
             .capture_resp(&mut delegate, tx.clone())
             .put(&[sst_range.0], &[sst_range.1])
             .epoch(0, 3)
             .build();
         // Add a put above to test flush before ingestion.
-        let ingest_ok = EntryBuilder::new(13, 3)
+        let ingest_ok = EntryBuilder::new(10, 3)
             .capture_resp(&mut delegate, tx.clone())
             .ingest_sst(&meta1)
             .epoch(0, 3)
             .build();
-        let ingest_stale_epoch = EntryBuilder::new(14, 3)
+        let ingest_stale_epoch = EntryBuilder::new(11, 3)
             .capture_resp(&mut delegate, tx.clone())
             .ingest_sst(&meta2)
             .epoch(0, 3)
@@ -2943,11 +2943,11 @@ mod tests {
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().has_error());
         assert_eq!(delegate.applied_index_term, 3);
-        assert_eq!(delegate.apply_state.get_applied_index(), 14);
+        assert_eq!(delegate.apply_state.get_applied_index(), 11);
 
         let mut entries = vec![];
         for i in 0..WRITE_BATCH_MAX_KEYS {
-            let put_entry = EntryBuilder::new(i as u64 + 15, 3)
+            let put_entry = EntryBuilder::new(i as u64 + 12, 3)
                 .put(b"k", b"v")
                 .epoch(1, 3)
                 .capture_resp(&mut delegate, tx.clone())
@@ -2959,7 +2959,7 @@ mod tests {
         for _ in 0..WRITE_BATCH_MAX_KEYS {
             rx.try_recv().unwrap();
         }
-        let index = WRITE_BATCH_MAX_KEYS + 14;
+        let index = WRITE_BATCH_MAX_KEYS + 11;
         assert_eq!(delegate.apply_state.get_applied_index(), index as u64);
         assert_eq!(obs.pre_query_count.load(Ordering::SeqCst), index);
         assert_eq!(obs.post_query_count.load(Ordering::SeqCst), index);
