@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::fmt::{self, Display, Formatter};
-use std::result::Result as StdResult;
 use std::boxed::FnBox;
 use std::time::{Duration, Instant};
 use std::sync::Arc;
@@ -187,25 +186,26 @@ struct RecvSnapContext {
 }
 
 impl RecvSnapContext {
-    fn new(head_chunk: Option<SnapshotChunk>, snap_mgr: &SnapManager) -> StdResult<Self, ()> {
+    fn new(head_chunk: Option<SnapshotChunk>, snap_mgr: &SnapManager) -> Result<Self> {
         // head_chunk is None means the stream is empty.
-        let mut head = head_chunk.ok_or(())?;
+        let mut head = head_chunk.ok_or_else(|| Error::Other("empty gRPC stream".into()))?;
         if !head.has_message() {
-            error!("no raft message in the first chunk");
-            return Err(());
+            return Err(box_err!("no raft message in the first chunk"));
         }
 
         let meta = head.take_message();
-        let key = SnapKey::from_snap(meta.get_message().get_snapshot()).map_err(|e| {
-            error!("failed to create snap key: {:?}", e);
-        })?;
+        let key = match SnapKey::from_snap(meta.get_message().get_snapshot()) {
+            Ok(k) => k,
+            Err(e) => return Err(box_err!("failed to create snap key: {:?}", e)),
+        };
 
         let snap = {
-            let s = snap_mgr
-                .get_snapshot_for_receiving(&key, meta.get_message().get_snapshot().get_data())
-                .map_err(|e| {
-                    error!("{} failed to create snapshot file: {:?}", key, e);
-                })?;
+            let data = meta.get_message().get_snapshot().get_data();
+            let s = match snap_mgr.get_snapshot_for_receiving(&key, data) {
+                Ok(s) => s,
+                Err(e) => return Err(box_err!("{} failed to create snapshot file: {:?}", key, e)),
+            };
+
             if s.exists() {
                 let p = s.path();
                 info!("{} snapshot file {} already exists, skip receiving", key, p);
@@ -222,18 +222,18 @@ impl RecvSnapContext {
         })
     }
 
-    fn finish<R: RaftStoreRouter>(self, raft_router: R) -> StdResult<(), ()> {
+    fn finish<R: RaftStoreRouter>(self, raft_router: R) -> Result<()> {
         let key = self.key;
         if let Some(mut file) = self.file {
             if let Err(e) = file.save() {
                 let path = file.path();
-                error!("{} failed to save snapshot file {}: {:?}", key, path, e);
-                return Err(());
+                let e = box_err!("{} failed to save snapshot file {}: {:?}", key, path, e);
+                return Err(e);
             }
         }
-        raft_router.send_raft_msg(self.raft_msg).map_err(|e| {
-            error!("{} failed to send snapshot to raft: {}", key, e);
-        })?;
+        if let Err(e) = raft_router.send_raft_msg(self.raft_msg) {
+            return Err(box_err!("{} failed to send snapshot to raft: {}", key, e));
+        }
         Ok(())
     }
 }
@@ -243,14 +243,14 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
     sink: ClientStreamingSink<Done>,
     snap_mgr: SnapManager,
     raft_router: R,
-) -> impl Future<Item = (), Error = ()> {
-    let stream = stream.map_err(|e| error!("receive snapshot chunks from gRPC fail: {}", e));
+) -> impl Future<Item = (), Error = Error> {
+    let stream = stream.map_err(Error::from);
 
-    let f = stream.into_future().map_err(|_| ()).and_then(
-        move |(head, chunks)| -> Box<Future<Item = (), Error = ()> + Send> {
+    let f = stream.into_future().map_err(|(e, _)| e).and_then(
+        move |(head, chunks)| -> Box<Future<Item = (), Error = Error> + Send> {
             let context = match RecvSnapContext::new(head, &snap_mgr) {
                 Ok(context) => context,
-                Err(_) => return box future::err(()),
+                Err(e) => return box future::err(e),
             };
 
             if context.file.is_none() {
@@ -260,17 +260,16 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
             let context_key = context.key.clone();
             snap_mgr.register(context.key.clone(), SnapEntry::Receiving);
 
-            let recv_chunks = chunks.fold(context, move |mut context, mut chunk| {
+            let recv_chunks = chunks.fold(context, |mut context, mut chunk| -> Result<_> {
                 let data = chunk.take_data();
                 if data.is_empty() {
-                    error!("{} receive chunk with empty data", context.key);
-                    return Err(());
+                    return Err(box_err!("{} receive chunk with empty data", context.key));
                 }
                 if let Err(e) = context.file.as_mut().unwrap().write_all(&data) {
                     let key = &context.key;
                     let path = context.file.as_mut().unwrap().path();
-                    error!("{} failed to write snapshot file {}: {}", key, path, e);
-                    return Err(());
+                    let e = box_err!("{} failed to write snapshot file {}: {}", key, path, e);
+                    return Err(e);
                 }
                 Ok(context)
             });
@@ -281,7 +280,7 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
             })
         },
     );
-    f.and_then(move |_| sink.success(Done::new()).map_err(|_| ()))
+    f.and_then(move |_| sink.success(Done::new()).map_err(Error::from))
 }
 
 pub struct Runner<R: RaftStoreRouter + 'static> {
@@ -321,6 +320,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
         match task {
             Task::Recv { stream, sink } => {
                 if self.recving_count.load(Ordering::SeqCst) >= MAX_RECEIVER_CONCURRENT {
+                    warn!("too many recving snapshot tasks, ignore");
                     let status = RpcStatus::new(RpcStatusCode::ResourceExhausted, None);
                     self.pool.spawn(sink.fail(status)).forget();
                     return;
@@ -331,9 +331,12 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 let raft_router = self.raft_router.clone();
                 let recving_count = Arc::clone(&self.recving_count);
                 recving_count.fetch_add(1, Ordering::SeqCst);
-                let f = recv_snap(stream, sink, snap_mgr, raft_router).then(move |r| {
+                let f = recv_snap(stream, sink, snap_mgr, raft_router).then(move |result| {
                     recving_count.fetch_sub(1, Ordering::SeqCst);
-                    r
+                    if let Err(e) = result {
+                        error!("failed to recv snapshot {}", e);
+                    }
+                    future::ok::<_, ()>(())
                 });
                 self.pool.spawn(f).forget();
             }
