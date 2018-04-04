@@ -47,11 +47,6 @@ pub const REGION_META_PREFIX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
 pub const REGION_META_MIN_KEY: &[u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
 pub const REGION_META_MAX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_META_PREFIX + 1];
 
-// Unsafe cleanup range tasks.
-pub const UNSAFE_CLEANUP_RANGE_PREFIX: u8 = 0x04;
-pub const UNSAFE_CLEANUP_RANGE_MIN_KEY: &[u8] = &[LOCAL_PREFIX, UNSAFE_CLEANUP_RANGE_PREFIX];
-pub const UNSAFE_CLEANUP_RANGE_MAX_KEY: &[u8] = &[LOCAL_PREFIX, UNSAFE_CLEANUP_RANGE_PREFIX + 1];
-
 // Following are the suffix after the local prefix.
 // For region id
 pub const RAFT_LOG_SUFFIX: u8 = 0x01;

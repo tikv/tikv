@@ -157,7 +157,6 @@ pub struct Store<T, C: 'static> {
     pd_worker: FutureWorker<PdTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
     cleanup_sst_worker: Worker<CleanupSSTTask>,
-    unsafe_cleanup_range_worker: Worker<i32>,
     pub apply_worker: Worker<ApplyTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
 
@@ -241,7 +240,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             pd_worker: pd_worker,
             consistency_check_worker: Worker::new("consistency check worker"),
             cleanup_sst_worker: Worker::new("cleanup sst worker"),
-            unsafe_cleanup_range_worker: Worker::new("cleanup range worker"),
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
             last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
@@ -625,7 +623,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         handles.push(self.pd_worker.stop());
         handles.push(self.consistency_check_worker.stop());
         handles.push(self.cleanup_sst_worker.stop());
-        handles.push(self.unsafe_cleanup_range_worker.stop());
         handles.push(self.apply_worker.stop());
 
         for h in handles {
