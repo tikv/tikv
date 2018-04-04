@@ -38,7 +38,7 @@ pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer
         .find(|&p| p.get_store_id() == store_id)
 }
 
-pub fn find_mut_peer(region: &mut metapb::Region, store_id: u64) -> Option<&mut metapb::Peer> {
+pub fn find_peer_mut(region: &mut metapb::Region, store_id: u64) -> Option<&mut metapb::Peer> {
     region
         .mut_peers()
         .iter_mut()
