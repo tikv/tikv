@@ -42,6 +42,7 @@ use storage::sync_storage::SyncStorage;
 use storage::util::new_raft_engine;
 
 const FLAG_IGNORE_TRUNCATE: u64 = 1;
+const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
 
 static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
 
@@ -383,8 +384,9 @@ pub struct Store {
 
 impl Store {
     fn new(engine: Box<Engine>) -> Store {
+        let pd_worker = FutureWorker::new("test future worker");
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(None)
+            || storage::ReadPoolContext::new(pd_worker.scheduler())
         });
         Store {
             store: SyncStorage::from_engine(engine, &Default::default(), read_pool),
@@ -2086,7 +2088,18 @@ fn test_handle_truncate() {
         let req = DAGSelect::from(&product.table)
             .where_expr(cond.clone())
             .build_with(Context::new(), &[FLAG_IGNORE_TRUNCATE]);
+        let resp = handle_select(&end_point, req);
+        assert!(!resp.has_error());
+        assert!(resp.get_warnings().is_empty());
+
+        // truncate as warning
+        let req = DAGSelect::from(&product.table)
+            .where_expr(cond.clone())
+            .build_with(Context::new(), &[FLAG_TRUNCATE_AS_WARNING]);
         let mut resp = handle_select(&end_point, req);
+        assert!(!resp.has_error());
+        assert!(!resp.get_warnings().is_empty());
+        // check data
         let mut spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
         let row = spliter.next().unwrap();
         let (id, name, cnt) = data[2];

@@ -77,10 +77,14 @@ struct Metrics {
     kv_gc: Histogram,
     kv_delete_range: Histogram,
     raw_get: Histogram,
+    raw_batch_get: Histogram,
     raw_scan: Histogram,
+    raw_batch_scan: Histogram,
     raw_put: Histogram,
+    raw_batch_put: Histogram,
     raw_delete: Histogram,
     raw_delete_range: Histogram,
+    raw_batch_delete: Histogram,
     coprocessor: Histogram,
     mvcc_get_by_key: Histogram,
     mvcc_get_by_start_ts: Histogram,
@@ -102,10 +106,14 @@ impl Metrics {
             kv_gc: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["kv_gc"]),
             kv_delete_range: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["kv_delete_range"]),
             raw_get: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["raw_get"]),
+            raw_batch_get: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["raw_batch_get"]),
             raw_scan: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["raw_scan"]),
+            raw_batch_scan: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["raw_batch_scan"]),
             raw_put: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["raw_put"]),
+            raw_batch_put: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["raw_batch_put"]),
             raw_delete: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["raw_delete"]),
             raw_delete_range: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["raw_delete_range"]),
+            raw_batch_delete: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["raw_batch_delete"]),
             coprocessor: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["coprocessor"]),
             mvcc_get_by_key: GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["mvcc_get_by_key"]),
             mvcc_get_by_start_ts: GRPC_MSG_HISTOGRAM_VEC
@@ -654,6 +662,37 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         ctx.spawn(future);
     }
 
+    fn raw_batch_get(
+        &self,
+        ctx: RpcContext,
+        mut req: RawBatchGetRequest,
+        sink: UnarySink<RawBatchGetResponse>,
+    ) {
+        const LABEL: &str = "raw_batch_get";
+        let timer = self.metrics.raw_batch_get.start_coarse_timer();
+
+        let keys = req.take_keys().into_vec();
+        let future = self.storage
+            .async_raw_batch_get(req.take_context(), keys)
+            .then(|v| {
+                let mut resp = RawBatchGetResponse::new();
+                if let Some(err) = extract_region_error(&v) {
+                    resp.set_region_error(err);
+                } else {
+                    resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                }
+                Ok(resp)
+            })
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed: {:?}", LABEL, e);
+                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
+            });
+
+        ctx.spawn(future);
+    }
+
     fn raw_scan(&self, ctx: RpcContext, mut req: RawScanRequest, sink: UnarySink<RawScanResponse>) {
         const LABEL: &str = "raw_scan";
         let timer = self.metrics.raw_scan.start_coarse_timer();
@@ -663,9 +702,45 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 req.take_context(),
                 req.take_start_key(),
                 req.get_limit() as usize,
+                req.get_key_only(),
             )
             .then(|v| {
                 let mut resp = RawScanResponse::new();
+                if let Some(err) = extract_region_error(&v) {
+                    resp.set_region_error(err);
+                } else {
+                    resp.set_kvs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                }
+                Ok(resp)
+            })
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed: {:?}", LABEL, e);
+                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
+            });
+
+        ctx.spawn(future);
+    }
+
+    fn raw_batch_scan(
+        &self,
+        ctx: RpcContext,
+        mut req: RawBatchScanRequest,
+        sink: UnarySink<RawBatchScanResponse>,
+    ) {
+        const LABEL: &str = "raw_batch_scan";
+        let timer = self.metrics.raw_batch_scan.start_coarse_timer();
+
+        let future = self.storage
+            .async_raw_batch_scan(
+                req.take_context(),
+                req.take_ranges().into_vec(),
+                req.get_each_limit() as usize,
+                req.get_key_only(),
+            )
+            .then(|v| {
+                let mut resp = RawBatchScanResponse::new();
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else {
@@ -717,6 +792,48 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         ctx.spawn(future);
     }
 
+    fn raw_batch_put(
+        &self,
+        ctx: RpcContext,
+        mut req: RawBatchPutRequest,
+        sink: UnarySink<RawBatchPutResponse>,
+    ) {
+        const LABEL: &str = "raw_batch_put";
+        let timer = self.metrics.raw_batch_put.start_coarse_timer();
+
+        let pairs = req.take_pairs()
+            .into_iter()
+            .map(|mut x| (x.take_key(), x.take_value()))
+            .collect();
+        let (cb, future) = paired_future_callback();
+        let res = self.storage
+            .async_raw_batch_put(req.take_context(), pairs, cb);
+        if let Err(e) = res {
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            return;
+        }
+
+        let future = future
+            .map_err(Error::from)
+            .map(|v| {
+                let mut resp = RawBatchPutResponse::new();
+                if let Some(err) = extract_region_error(&v) {
+                    resp.set_region_error(err);
+                } else if let Err(e) = v {
+                    resp.set_error(format!("{}", e));
+                }
+                resp
+            })
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed: {:?}", LABEL, e);
+                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
+            });
+
+        ctx.spawn(future);
+    }
+
     fn raw_delete(
         &self,
         ctx: RpcContext,
@@ -738,6 +855,45 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|v| {
                 let mut resp = RawDeleteResponse::new();
+                if let Some(err) = extract_region_error(&v) {
+                    resp.set_region_error(err);
+                } else if let Err(e) = v {
+                    resp.set_error(format!("{}", e));
+                }
+                resp
+            })
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed: {:?}", LABEL, e);
+                GRPC_MSG_FAIL_COUNTER.with_label_values(&[LABEL]).inc();
+            });
+
+        ctx.spawn(future);
+    }
+
+    fn raw_batch_delete(
+        &self,
+        ctx: RpcContext,
+        mut req: RawBatchDeleteRequest,
+        sink: UnarySink<RawBatchDeleteResponse>,
+    ) {
+        const LABEL: &str = "raw_batch_delete";
+        let timer = self.metrics.raw_batch_delete.start_coarse_timer();
+
+        let keys = req.take_keys().into_vec();
+        let (cb, future) = paired_future_callback();
+        let res = self.storage
+            .async_raw_batch_delete(req.take_context(), keys, cb);
+        if let Err(e) = res {
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            return;
+        }
+
+        let future = future
+            .map_err(Error::from)
+            .map(|v| {
+                let mut resp = RawBatchDeleteResponse::new();
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else if let Err(e) = v {
