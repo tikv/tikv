@@ -132,6 +132,11 @@ impl CoprocessorHost {
             SIZE_CHECK_OBSERVER_PRIORITY,
             Box::new(split_size_check_observer),
         );
+
+        registry.register_split_check_observer(
+            HALF_SPLIT_OBSERVER_PRIORITY,
+            Box::new(HalfCheckObserver::new(cfg.region_max_size.0)),
+        );
         if cfg.split_region_on_table {
             registry.register_split_check_observer(
                 TABLE_CHECK_OBSERVER_PRIORITY,
@@ -203,9 +208,14 @@ impl CoprocessorHost {
         }
     }
 
-    pub fn new_split_check_status(&self, region: &Region, engine: &DB) -> SplitCheckStatus {
+    pub fn new_split_check_status(
+        &self,
+        region: &Region,
+        engine: &DB,
+        auto_split: bool,
+    ) -> SplitCheckStatus {
         let mut ob_ctx = ObserverContext::new(region);
-        let mut split_status = SplitCheckStatus::default();
+        let mut split_status = SplitCheckStatus::new(auto_split);
         for entry in &self.registry.split_check_observers {
             entry
                 .observer

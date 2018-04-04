@@ -22,7 +22,7 @@ impl FnCall {
     #[inline]
     pub fn json_type<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let j = try_opt!(self.children[0].eval_json(ctx, row));
@@ -32,7 +32,7 @@ impl FnCall {
     #[inline]
     pub fn json_unquote<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let j = try_opt!(self.children[0].eval_json(ctx, row));
@@ -43,24 +43,29 @@ impl FnCall {
 
     pub fn json_array<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
-        let parser = JsonFuncArgsParser::new(ctx, row);
-        let elems = try_opt!(self.children.iter().map(|e| parser.get_json(e)).collect());
+        let parser = JsonFuncArgsParser::new(row);
+        let elems = try_opt!(
+            self.children
+                .iter()
+                .map(|e| parser.get_json(ctx, e))
+                .collect()
+        );
         Ok(Some(Cow::Owned(Json::Array(elems))))
     }
 
     pub fn json_object<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let mut pairs = BTreeMap::new();
-        let parser = JsonFuncArgsParser::new(ctx, row);
+        let parser = JsonFuncArgsParser::new(row);
         for chunk in self.children.chunks(2) {
             let key = try_opt!(chunk[0].eval_string_and_decode(ctx, row)).into_owned();
-            let val = try_opt!(parser.get_json(&chunk[1]));
+            let val = try_opt!(parser.get_json(ctx, &chunk[1]));
             pairs.insert(key, val);
         }
         Ok(Some(Cow::Owned(Json::Object(pairs))))
@@ -68,20 +73,20 @@ impl FnCall {
 
     pub fn json_extract<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         // TODO: We can cache the PathExpressions if children are Constant.
         let j = try_opt!(self.children[0].eval_json(ctx, row));
-        let parser = JsonFuncArgsParser::new(ctx, row);
-        let path_exprs: Vec<_> = try_opt!(parser.get_path_exprs(&self.children[1..]));
+        let parser = JsonFuncArgsParser::new(row);
+        let path_exprs: Vec<_> = try_opt!(parser.get_path_exprs(ctx, &self.children[1..]));
         Ok(j.extract(&path_exprs).map(Cow::Owned))
     }
 
     #[inline]
     pub fn json_set<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         self.json_modify(ctx, row, ModifyType::Set)
@@ -90,7 +95,7 @@ impl FnCall {
     #[inline]
     pub fn json_insert<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         self.json_modify(ctx, row, ModifyType::Insert)
@@ -99,7 +104,7 @@ impl FnCall {
     #[inline]
     pub fn json_replace<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         self.json_modify(ctx, row, ModifyType::Replace)
@@ -107,12 +112,12 @@ impl FnCall {
 
     pub fn json_remove<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let mut j = try_opt!(self.children[0].eval_json(ctx, row)).into_owned();
-        let parser = JsonFuncArgsParser::new(ctx, row);
-        let path_exprs: Vec<_> = try_opt!(parser.get_path_exprs(&self.children[1..]));
+        let parser = JsonFuncArgsParser::new(row);
+        let path_exprs: Vec<_> = try_opt!(parser.get_path_exprs(ctx, &self.children[1..]));
         j.remove(&path_exprs)
             .map(|_| Some(Cow::Owned(j)))
             .map_err(Error::from)
@@ -120,13 +125,13 @@ impl FnCall {
 
     pub fn json_merge<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
-        let parser = JsonFuncArgsParser::new(ctx, row);
+        let parser = JsonFuncArgsParser::new(row);
         let mut head = try_opt!(self.children[0].eval_json(ctx, row)).into_owned();
         for e in &self.children[1..] {
-            let suffix = try_opt!(parser.get_json_not_none(e));
+            let suffix = try_opt!(parser.get_json_not_none(ctx, e));
             head = head.merge(suffix);
         }
         Ok(Some(Cow::Owned(head)))
@@ -134,17 +139,17 @@ impl FnCall {
 
     fn json_modify<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
         mt: ModifyType,
     ) -> Result<Option<Cow<'a, Json>>> {
         let mut j = try_opt!(self.children[0].eval_json(ctx, row)).into_owned();
-        let parser = JsonFuncArgsParser::new(ctx, row);
+        let parser = JsonFuncArgsParser::new(row);
         let mut path_exprs = Vec::with_capacity(self.children.len() / 2);
         let mut values = Vec::with_capacity(self.children.len() / 2);
         for chunk in self.children[1..].chunks(2) {
-            path_exprs.push(try_opt!(parser.get_path_expr(&chunk[0])));
-            values.push(try_opt!(parser.get_json(&chunk[1])));
+            path_exprs.push(try_opt!(parser.get_path_expr(ctx, &chunk[0])));
+            values.push(try_opt!(parser.get_json(ctx, &chunk[1])));
         }
         j.modify(&path_exprs, values, mt)
             .map(|_| Some(Cow::Owned(j)))
@@ -153,34 +158,41 @@ impl FnCall {
 }
 
 struct JsonFuncArgsParser<'a> {
-    ctx: &'a EvalContext,
     row: &'a [Datum],
 }
 
 impl<'a> JsonFuncArgsParser<'a> {
     #[inline]
-    fn new(ctx: &'a EvalContext, row: &'a [Datum]) -> Self {
-        JsonFuncArgsParser { ctx: ctx, row: row }
+    fn new(row: &'a [Datum]) -> Self {
+        JsonFuncArgsParser { row: row }
     }
 
-    fn get_path_expr(&self, e: &Expression) -> Result<Option<PathExpression>> {
-        let s = try_opt!(e.eval_string_and_decode(self.ctx, self.row));
+    fn get_path_expr(
+        &self,
+        ctx: &mut EvalContext,
+        e: &Expression,
+    ) -> Result<Option<PathExpression>> {
+        let s = try_opt!(e.eval_string_and_decode(ctx, self.row));
         let expr = parse_json_path_expr(&s)?;
         Ok(Some(expr))
     }
 
-    fn get_path_exprs(&self, es: &[Expression]) -> Result<Option<Vec<PathExpression>>> {
-        es.iter().map(|e| self.get_path_expr(e)).collect()
+    fn get_path_exprs(
+        &self,
+        ctx: &mut EvalContext,
+        es: &[Expression],
+    ) -> Result<Option<Vec<PathExpression>>> {
+        es.iter().map(|e| self.get_path_expr(ctx, e)).collect()
     }
 
-    fn get_json(&self, e: &Expression) -> Result<Option<Json>> {
-        let j = e.eval_json(self.ctx, self.row)?
+    fn get_json(&self, ctx: &mut EvalContext, e: &Expression) -> Result<Option<Json>> {
+        let j = e.eval_json(ctx, self.row)?
             .map_or(Json::None, Cow::into_owned);
         Ok(Some(j))
     }
 
-    fn get_json_not_none(&self, e: &Expression) -> Result<Option<Json>> {
-        let j = try_opt!(e.eval_json(self.ctx, self.row)).into_owned();
+    fn get_json_not_none(&self, ctx: &mut EvalContext, e: &Expression) -> Result<Option<Json>> {
+        let j = try_opt!(e.eval_json(ctx, self.row)).into_owned();
         Ok(Some(j))
     }
 }
@@ -205,7 +217,7 @@ mod test {
             (Some(r#"[1, 2, 3]"#), Some("ARRAY")),
             (Some(r#"{"name": 123}"#), Some("OBJECT")),
         ];
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
         for (input, exp) in cases {
             let input = match input {
                 None => Datum::Null,
@@ -218,8 +230,8 @@ mod test {
 
             let arg = datum_expr(input);
             let op = fncall_expr(ScalarFuncSig::JsonTypeSig, &[arg]);
-            let op = Expression::build(&ctx, op).unwrap();
-            let got = op.eval(&ctx, &[]).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -239,7 +251,7 @@ mod test {
                 Some(r#"hello,"quoted string",world"#),
             ),
         ];
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
         for (input, parse, exp) in cases {
             let input = match input {
                 None => Datum::Null,
@@ -256,8 +268,8 @@ mod test {
 
             let arg = datum_expr(input);
             let op = fncall_expr(ScalarFuncSig::JsonUnquoteSig, &[arg]);
-            let op = Expression::build(&ctx, op).unwrap();
-            let got = op.eval(&ctx, &[]).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -282,12 +294,12 @@ mod test {
                 Datum::Json(r#"{"1":null,"2":"sdf","k1":"v1"}"#.parse().unwrap()),
             ),
         ];
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
         for (inputs, exp) in cases {
             let args = inputs.into_iter().map(datum_expr).collect::<Vec<_>>();
             let op = fncall_expr(ScalarFuncSig::JsonObjectSig, &args);
-            let op = Expression::build(&ctx, op).unwrap();
-            let got = op.eval(&ctx, &[]).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -312,12 +324,12 @@ mod test {
                 Datum::Json(r#"[1, null, 2, "sdf", "k1", "v1"]"#.parse().unwrap()),
             ),
         ];
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
         for (inputs, exp) in cases {
             let args = inputs.into_iter().map(datum_expr).collect::<Vec<_>>();
             let op = fncall_expr(ScalarFuncSig::JsonArraySig, &args);
-            let op = Expression::build(&ctx, op).unwrap();
-            let got = op.eval(&ctx, &[]).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -367,12 +379,12 @@ mod test {
                 Datum::Json(r#"{"a":null}"#.parse().unwrap()),
             ),
         ];
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
         for (sig, inputs, exp) in cases {
             let args: Vec<_> = inputs.into_iter().map(datum_expr).collect();
             let op = fncall_expr(sig, &args);
-            let op = Expression::build(&ctx, op).unwrap();
-            let got = op.eval(&ctx, &[]).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -398,12 +410,12 @@ mod test {
                 Datum::Json(r#"[{}, 3, "4"]"#.parse().unwrap()),
             ),
         ];
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
         for (inputs, exp) in cases {
             let args: Vec<_> = inputs.into_iter().map(datum_expr).collect();
             let op = fncall_expr(ScalarFuncSig::JsonMergeSig, &args);
-            let op = Expression::build(&ctx, op).unwrap();
-            let got = op.eval(&ctx, &[]).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -416,10 +428,10 @@ mod test {
             (ScalarFuncSig::JsonInsertSig, make_null_datums(6)),
             (ScalarFuncSig::JsonReplaceSig, make_null_datums(8)),
         ];
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
         for (sig, args) in cases {
             let args: Vec<_> = args.into_iter().map(datum_expr).collect();
-            let op = Expression::build(&ctx, fncall_expr(sig, &args));
+            let op = Expression::build(&mut ctx, fncall_expr(sig, &args));
             assert!(op.is_err());
         }
     }

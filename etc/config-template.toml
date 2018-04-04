@@ -163,7 +163,10 @@
 # consistency-check-interval = 0
 
 # Use delete range to drop a large number of continuous keys.
-# use-delete-range = false
+# use-delete-range = true
+
+# Interval to cleanup import sst files.
+# cleanup-import-sst-interval = "10m"
 
 [coprocessor]
 # When it is true, it will try to split a region with table prefix if
@@ -236,9 +239,6 @@
 
 # rocksdb max total wal size
 # max-total-wal-size = "4GB"
-
-# rocksdb writable file max buffer size
-# writable-file-max-buffer-size = "1MB"
 
 # Rocksdb Statistics provides cumulative stats over time.
 # Turn statistics on will introduce about 5%-10% overhead for RocksDB,
@@ -407,7 +407,6 @@
 # max-open-files = 40960
 # max-manifest-file-size = "20MB"
 # create-if-missing = true
-# writable-file-max-buffer-size = "1MB"
 
 # enable-statistics = true
 # stats-dump-period = "10m"

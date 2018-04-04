@@ -18,17 +18,18 @@ use tipb::executor::Limit;
 
 use coprocessor::Result;
 use coprocessor::dag::executor::{Executor, Row};
+use coprocessor::dag::expr::EvalWarnings;
 use super::ExecutorMetrics;
 
 pub struct LimitExecutor<'a> {
     limit: u64,
     cursor: u64,
-    src: Box<Executor + 'a>,
+    src: Box<Executor + Send + 'a>,
     first_collect: bool,
 }
 
 impl<'a> LimitExecutor<'a> {
-    pub fn new(limit: Limit, src: Box<Executor + 'a>) -> LimitExecutor {
+    pub fn new(limit: Limit, src: Box<Executor + Send + 'a>) -> LimitExecutor {
         LimitExecutor {
             limit: limit.get_limit(),
             cursor: 0,
@@ -61,6 +62,10 @@ impl<'a> Executor for LimitExecutor<'a> {
             metrics.executor_count.limit += 1;
             self.first_collect = false;
         }
+    }
+
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        self.src.take_eval_warnings()
     }
 }
 
