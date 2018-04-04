@@ -415,7 +415,7 @@ impl Debugger {
         Ok(())
     }
 
-    pub fn init_empty_region(&self, region: Region) -> Result<()> {
+    pub fn recreate_region(&self, region: Region) -> Result<()> {
         let region_id = region.get_id();
         let kv = self.engines.kv_engine.as_ref();
         let raft = self.engines.raft_engine.as_ref();
@@ -446,7 +446,7 @@ impl Debugger {
                     return Ok(true);
                 }
 
-                Err(RaftstoreError::Other("region overlay".into()))
+                Err(RaftstoreError::Other("region overlap".into()))
             },
         ));
 

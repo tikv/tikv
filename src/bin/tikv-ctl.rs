@@ -411,11 +411,13 @@ trait DebugExecutor {
     /// Recover the cluster when given `store_ids` are failed.
     fn remove_fail_stores(&self, store_ids: Vec<u64>);
 
-    /// Remove region.
+    /// Remove all metadta of the given region. It should be used in some
+    /// prepare staging to simplify subsequent operations. In most cases,
+    /// `tombstone` the region is really needed.
     fn remove_region(&self, region_id: u64);
 
-    /// Init a new empty region on the store with given infos.
-    fn init_empty_region(&self, Arc<SecurityManager>, &PdConfig, u64);
+    /// Recreate the region with metadata from pd, but alloc new id for it.
+    fn recreate_region(&self, sec_mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64);
 
     fn check_region_consistency(&self, _: u64);
 
@@ -576,7 +578,7 @@ impl DebugExecutor for DebugClient {
         self.check_local_mode();
     }
 
-    fn init_empty_region(&self, _: Arc<SecurityManager>, _: &PdConfig, _: u64) {
+    fn recreate_region(&self, _: Arc<SecurityManager>, _: &PdConfig, _: u64) {
         self.check_local_mode();
     }
 
@@ -684,7 +686,7 @@ impl DebugExecutor for Debugger {
         self.remove_region(region_id).unwrap();
     }
 
-    fn init_empty_region(&self, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64) {
+    fn recreate_region(&self, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64) {
         let rpc_client =
             RpcClient::new(pd_cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
@@ -721,8 +723,8 @@ impl DebugExecutor for Debugger {
             "initing empty region {} with peer_id {}...",
             new_region_id, new_peer_id
         );
-        self.init_empty_region(region)
-            .unwrap_or_else(|e| perror_and_exit("Debugger::init_empty_region", e));
+        self.recreate_region(region)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::recreate_region", e));
         println!("success");
     }
 
@@ -1084,17 +1086,18 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("remove-region")
-                .about("remove a region")
+                .about("remove all metadata of the region")
                 .arg(
                     Arg::with_name("region")
+                        .required(true)
                         .short("r")
                         .takes_value(true)
                         .help("the region id"),
                 ),
         )
         .subcommand(
-            SubCommand::with_name("init-empty-region")
-                .about("init an empty region on the store")
+            SubCommand::with_name("recreate-region")
+                .about("recreate a region with given metadata, but alloc new id for it")
                 .arg(
                     Arg::with_name("pd")
                         .required(true)
@@ -1108,6 +1111,7 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("region")
+                        .required(true)
                         .short("r")
                         .takes_value(true)
                         .help("the origin region id"),
@@ -1291,11 +1295,11 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("remove-region") {
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
         debug_executor.remove_region(region_id);
-    } else if let Some(matches) = matches.subcommand_matches("init-empty-region") {
+    } else if let Some(matches) = matches.subcommand_matches("recreate-region") {
         let mut pd_cfg = PdConfig::default();
         pd_cfg.endpoints = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
-        debug_executor.init_empty_region(mgr, &pd_cfg, region_id);
+        debug_executor.recreate_region(mgr, &pd_cfg, region_id);
     } else if let Some(matches) = matches.subcommand_matches("consistency-check") {
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
         debug_executor.check_region_consistency(region_id);
