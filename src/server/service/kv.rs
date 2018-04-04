@@ -23,6 +23,7 @@ use futures::sync::{mpsc as futures_mpsc, oneshot};
 use protobuf::RepeatedField;
 use kvproto::tikvpb_grpc;
 use kvproto::raft_serverpb::*;
+use kvproto::kvrpcpb;
 use kvproto::kvrpcpb::*;
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
@@ -34,7 +35,7 @@ use util::buf::PipeBuffer;
 use util::future::paired_future_callback;
 use storage::{self, Key, Mutation, Options, Storage, Value};
 use storage::txn::Error as TxnError;
-use storage::mvcc::{Error as MvccError, Write as MvccWrite, WriteType};
+use storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
 use storage::engine::Error as EngineError;
 use server::transport::RaftStoreRouter;
 use server::snap::Task as SnapTask;
@@ -1133,7 +1134,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 } else {
                     match v {
                         Ok(mvcc) => {
-                            resp.set_info(extract_mvcc_info(key, mvcc));
+                            resp.set_info(extract_mvcc_info(mvcc));
                         }
                         Err(e) => resp.set_error(format!("{}", e)),
                     };
@@ -1179,7 +1180,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                     match v {
                         Ok(Some((k, vv))) => {
                             resp.set_key(k.raw().unwrap());
-                            resp.set_info(extract_mvcc_info(k, vv));
+                            resp.set_info(extract_mvcc_info(vv));
                         }
                         Ok(None) => {
                             resp.set_info(Default::default());
@@ -1326,14 +1327,19 @@ fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>)
     }
 }
 
-fn extract_mvcc_info(key: Key, mvcc: storage::MvccInfo) -> MvccInfo {
+fn extract_mvcc_info(mvcc: storage::MvccInfo) -> MvccInfo {
     let mut mvcc_info = MvccInfo::new();
     if let Some(lock) = mvcc.lock {
-        let mut lock_info = LockInfo::new();
-        lock_info.set_primary_lock(lock.primary);
-        lock_info.set_key(key.raw().unwrap());
-        lock_info.set_lock_ttl(lock.ttl);
-        lock_info.set_lock_version(lock.ts);
+        let mut lock_info = MvccLock::new();
+        let op = match lock.lock_type {
+            LockType::Put => Op::Put,
+            LockType::Delete => Op::Del,
+            LockType::Lock => Op::Lock,
+        };
+        lock_info.set_field_type(op);
+        lock_info.set_start_ts(lock.ts);
+        lock_info.set_primary(lock.primary);
+        lock_info.set_short_value(lock.short_value.unwrap_or_default());
         mvcc_info.set_lock(lock_info);
     }
     let vv = extract_2pc_values(mvcc.values);
@@ -1343,23 +1349,21 @@ fn extract_mvcc_info(key: Key, mvcc: storage::MvccInfo) -> MvccInfo {
     mvcc_info
 }
 
-fn extract_2pc_values(res: Vec<(u64, bool, Value)>) -> Vec<ValueInfo> {
+fn extract_2pc_values(res: Vec<(u64, Value)>) -> Vec<MvccValue> {
     res.into_iter()
-        .map(|(start_ts, is_short, value)| {
-            let mut value_info = ValueInfo::new();
-            value_info.set_ts(start_ts);
+        .map(|(start_ts, value)| {
+            let mut value_info = MvccValue::new();
+            value_info.set_start_ts(start_ts);
             value_info.set_value(value);
-            value_info.set_is_short_value(is_short);
             value_info
         })
         .collect()
 }
 
-fn extract_2pc_writes(res: Vec<(u64, MvccWrite)>) -> Vec<WriteInfo> {
+fn extract_2pc_writes(res: Vec<(u64, MvccWrite)>) -> Vec<kvrpcpb::MvccWrite> {
     res.into_iter()
         .map(|(commit_ts, write)| {
-            let mut write_info = WriteInfo::new();
-            write_info.set_start_ts(write.start_ts);
+            let mut write_info = kvrpcpb::MvccWrite::new();
             let op = match write.write_type {
                 WriteType::Put => Op::Put,
                 WriteType::Delete => Op::Del,
@@ -1367,7 +1371,9 @@ fn extract_2pc_writes(res: Vec<(u64, MvccWrite)>) -> Vec<WriteInfo> {
                 WriteType::Rollback => Op::Rollback,
             };
             write_info.set_field_type(op);
+            write_info.set_start_ts(write.start_ts);
             write_info.set_commit_ts(commit_ts);
+            write_info.set_short_value(write.short_value.unwrap_or_default());
             write_info
         })
         .collect()
