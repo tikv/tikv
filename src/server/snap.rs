@@ -225,6 +225,7 @@ impl RecvSnapContext {
     fn finish<R: RaftStoreRouter>(self, raft_router: R) -> Result<()> {
         let key = self.key;
         if let Some(mut file) = self.file {
+            info!("{} saving snapshot file {}", key, file.path());
             if let Err(e) = file.save() {
                 let path = file.path();
                 let e = box_err!("{} failed to save snapshot file {}: {:?}", key, path, e);
@@ -274,10 +275,12 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
                 Ok(context)
             });
 
-            box recv_chunks.then(move |result| {
-                defer!(snap_mgr.deregister(&context_key, &SnapEntry::Receiving));
-                result.and_then(move |context| context.finish(raft_router))
-            })
+            box recv_chunks
+                .and_then(move |context| context.finish(raft_router))
+                .then(move |r| {
+                    snap_mgr.deregister(&context_key, &SnapEntry::Receiving);
+                    r
+                })
         },
     );
     f.and_then(move |_| sink.success(Done::new()).map_err(Error::from))
