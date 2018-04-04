@@ -89,10 +89,11 @@ impl FnCall {
 
         match res {
             Ok(v) => Ok(Some(v)),
-            Err(CError::Overflow(e)) => {
-                ctx.overflow_from_cast_str_as_int(&val, Error::Overflow(e), is_negative)
-                    .map(Some)
-            }
+            Err(CError::Overflow(data, range)) => ctx.overflow_from_cast_str_as_int(
+                &val,
+                Error::gen_overflow(&data, range),
+                is_negative,
+            ).map(Some),
             Err(e) => Err(e.into()),
         }
     }
@@ -440,7 +441,7 @@ impl FnCall {
         // TODO: port NumberToDuration from tidb.
         match Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8) {
             Ok(dur) => Ok(Some(Cow::Owned(dur))),
-            Err(CError::Overflow(_)) => {
+            Err(CError::Overflow(_, _)) => {
                 ctx.handle_over_flow(Error::gen_overflow("Duration", format!("{}", val)))?;
                 Ok(None)
             }

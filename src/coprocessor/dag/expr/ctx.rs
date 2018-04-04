@@ -64,10 +64,10 @@ impl Default for EvalConfig {
 impl EvalConfig {
     pub fn new(tz_offset: i64, flags: u64) -> Result<EvalConfig> {
         if tz_offset <= -ONE_DAY || tz_offset >= ONE_DAY {
-            return Err(Error::unknown_timezone(tz_offset));
+            return Err(Error::gen_unknown_timezone(tz_offset));
         }
         let tz = match FixedOffset::east_opt(tz_offset as i32) {
-            None => return Err(Error::unknown_timezone(tz_offset)),
+            None => return Err(Error::gen_unknown_timezone(tz_offset)),
             Some(tz) => tz,
         };
 

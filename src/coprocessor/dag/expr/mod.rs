@@ -325,7 +325,8 @@ mod test {
     use coprocessor::codec::mysql::json::JsonEncoder;
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
     use util::codec::number::{self, NumberEncoder};
-    use super::{Error, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
+    use super::{Error, EvalConfig, EvalContext, Expression, ERR_DATA_OUT_OF_RANGE,
+                FLAG_IGNORE_TRUNCATE};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
@@ -339,9 +340,10 @@ mod test {
 
     #[inline]
     pub fn check_overflow(e: Error) -> Result<(), ()> {
-        match e {
-            Error::Overflow(_) => Ok(()),
-            _ => Err(()),
+        if e.code() == ERR_DATA_OUT_OF_RANGE {
+            Ok(())
+        } else {
+            Err(())
         }
     }
 

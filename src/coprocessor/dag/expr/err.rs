@@ -19,7 +19,7 @@ use tipb::select;
 
 use coprocessor::codec::mysql::Res;
 use util;
-use util::codec::{self, Error as CError};
+use util::codec::Error as CError;
 
 pub const ERR_UNKNOWN: i32 = 1105;
 pub const ERR_TRUNCATED: i32 = 1265;
@@ -58,14 +58,6 @@ quick_error! {
             description("Truncated")
             display("{}",s)
         }
-        Overflow(msg:String) {
-            description("Overflow")
-            display("{}",msg)
-        }
-        TruncatedWrongVal(msg:String) {
-            description("TruncatedWrongVal")
-            display("{}",msg)
-        }
         Eval(s: String,code:i32) {
             description("evaluation failed")
             display("{}", s)
@@ -81,13 +73,13 @@ quick_error! {
 
 impl Error {
     pub fn gen_overflow(data: &str, range: String) -> Error {
-        let msg = codec::gen_overflow_msg(data, &range);
-        Error::Overflow(msg)
+        let msg = format!("{} value is out of range in {:?}", data, range);
+        Error::Eval(msg, ERR_DATA_OUT_OF_RANGE)
     }
 
     pub fn gen_truncated_wrong_val(data_type: &str, val: String) -> Error {
         let msg = format!("Truncated incorrect {} value: '{}'", data_type, val);
-        Error::TruncatedWrongVal(msg)
+        Error::Eval(msg, ERR_TRUNCATE_WRONG_VALUE)
     }
 
     pub fn gen_cast_neg_int_as_unsigned() -> Error {
@@ -101,7 +93,7 @@ impl Error {
         Error::Eval(msg.into(), ERR_UNKNOWN)
     }
 
-    pub fn unknown_timezone(tz: i64) -> Error {
+    pub fn gen_unknown_timezone(tz: i64) -> Error {
         let msg = format!("unknown or incorrect time zone: {}", tz);
         Error::Eval(msg, ERR_UNKNOWN_TIMEZONE)
     }
@@ -109,8 +101,6 @@ impl Error {
     pub fn code(&self) -> i32 {
         match *self {
             Error::Truncated(_) => ERR_TRUNCATED,
-            Error::TruncatedWrongVal(_) => ERR_TRUNCATE_WRONG_VALUE,
-            Error::Overflow(_) => ERR_DATA_OUT_OF_RANGE,
             Error::Eval(_, code) => code,
             _ => ERR_UNKNOWN,
         }

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use util::codec::{gen_overflow_msg, Error, Result};
+pub use util::codec::{Error, Result};
 
 const TEN_POW: &[u32] = &[
     1,

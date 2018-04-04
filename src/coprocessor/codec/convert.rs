@@ -16,7 +16,7 @@ use std::borrow::Cow;
 
 use coprocessor::dag::expr::EvalContext;
 use super::mysql::Res;
-use super::{gen_overflow_msg, Error, Result};
+use super::{Error, Result};
 // `UNSPECIFIED_LENGTH` is unspecified length from FieldType
 pub const UNSPECIFIED_LENGTH: i32 = -1;
 
@@ -126,7 +126,7 @@ pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
             }
         }
     }
-    r.ok_or_else(|| Error::Overflow(gen_overflow_msg("BIGINT", "")))
+    r.ok_or_else(|| Error::Overflow("BIGINT".into(), "".into()))
 }
 
 /// `bytes_to_uint_without_context` converts a byte arrays to an iu64
@@ -150,7 +150,7 @@ pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
             }
         }
     }
-    r.ok_or_else(|| Error::Overflow(gen_overflow_msg("BIGINT UNSIGNED", "")))
+    r.ok_or_else(|| Error::Overflow("BIGINT UNSIGNED".into(), "".into()))
 }
 
 /// `bytes_to_int` converts a byte arrays to an i64 in best effort.
@@ -158,7 +158,7 @@ pub fn bytes_to_int(ctx: &mut EvalContext, bytes: &[u8]) -> Result<i64> {
     let s = str::from_utf8(bytes)?.trim();
     let vs = get_valid_int_prefix(ctx, s)?;
     bytes_to_int_without_context(vs.as_bytes())
-        .map_err(|_| Error::Overflow(gen_overflow_msg("BIGINT", &vs)))
+        .map_err(|_| Error::Overflow("BIGINT".into(), vs.into()))
 }
 
 /// `bytes_to_uint` converts a byte arrays to an u64 in best effort.
@@ -166,7 +166,7 @@ pub fn bytes_to_uint(ctx: &mut EvalContext, bytes: &[u8]) -> Result<u64> {
     let s = str::from_utf8(bytes)?.trim();
     let vs = get_valid_int_prefix(ctx, s)?;
     bytes_to_uint_without_context(vs.as_bytes())
-        .map_err(|_| Error::Overflow(gen_overflow_msg("BIGINT UNSIGNED", &vs)))
+        .map_err(|_| Error::Overflow("BIGINT UNSIGNED".into(), vs.into()))
 }
 
 fn bytes_to_f64_without_context(bytes: &[u8]) -> Result<f64> {

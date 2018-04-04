@@ -185,8 +185,8 @@ mod test {
     use tipb::expression::ScalarFuncSig;
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::Duration;
-    use coprocessor::dag::expr::{Error, EvalContext, Expression};
-    use coprocessor::dag::expr::test::{datum_expr, fncall_expr, str2dec};
+    use coprocessor::dag::expr::{EvalContext, Expression};
+    use coprocessor::dag::expr::test::{check_overflow, datum_expr, fncall_expr, str2dec};
 
     #[test]
     fn test_logic_op() {
@@ -407,13 +407,6 @@ mod test {
             let op = Expression::build(&mut ctx, fncall_expr(op, &[arg1])).unwrap();
             let res = op.eval_int(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
-        }
-    }
-
-    fn check_overflow(e: Error) -> Result<(), ()> {
-        match e {
-            Error::Overflow(_) => Ok(()),
-            _ => Err(()),
         }
     }
 
