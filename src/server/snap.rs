@@ -208,6 +208,8 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
 
     let f = stream.into_future().map_err(|_| ()).and_then(
         move |(head, chunks)| -> Box<Future<Item = (), Error = ()> + Send> {
+            // Whether the stream is empty or the snapshot is corrupted,
+            // we can let sender delete it simply by return Ok here.
             let context = match get_context_from_head_chunk(head, &snap_mgr) {
                 Ok(context) => context,
                 Err(_) => return box future::ok(()),
@@ -238,7 +240,9 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
             });
 
             box recv_chunks.then(move |result| {
-                let result = result.and_then(finish_context);
+                // If we meets internal error, returns Ok in order to
+                // let sender delete the corrupted snapshot.
+                let result = result.and_then(finish_context).or(Ok(()));
                 snap_mgr.deregister(&context_key, &SnapEntry::Receiving);
                 result
             })
