@@ -24,6 +24,7 @@
 #![allow(needless_pass_by_value)]
 #![allow(unreadable_literal)]
 
+extern crate crc;
 extern crate futures;
 extern crate futures_cpupool;
 extern crate grpcio as grpc;
@@ -33,6 +34,7 @@ extern crate kvproto;
 #[macro_use]
 extern crate log;
 extern crate protobuf;
+extern crate raft;
 extern crate rand;
 extern crate rocksdb;
 extern crate tempdir;
@@ -40,10 +42,10 @@ extern crate test;
 #[macro_use]
 extern crate tikv;
 extern crate tipb;
+extern crate tokio_timer;
 extern crate toml;
 extern crate uuid;
 
-mod raft;
 mod raftstore;
 mod raftstore_cases;
 mod coprocessor;

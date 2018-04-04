@@ -92,7 +92,7 @@ fn test_server_down_peers() {
 fn test_pending_peers<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
-    pd_client.disable_default_rule();
+    pd_client.disable_default_operator();
 
     let region_id = cluster.run_conf_change();
 

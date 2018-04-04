@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::boxed::FnBox;
-use kvproto::coprocessor::Response;
 mod metrics;
 mod service;
 mod raft_client;
@@ -27,6 +25,11 @@ pub mod resolve;
 pub mod snap;
 pub mod debug;
 
+use std::fmt::{Debug, Formatter, Result as FormatResult};
+
+use futures::{stream, Future, Sink, Stream};
+use futures::sync::{mpsc, oneshot};
+
 pub use self::config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Error, Result};
 pub use self::server::Server;
@@ -35,4 +38,48 @@ pub use self::node::{create_raft_storage, Node};
 pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::raft_client::RaftClient;
 
-pub type OnResponse = Box<FnBox(Response) + Send>;
+pub enum OnResponse<T> {
+    Unary(oneshot::Sender<T>),
+    Streaming(mpsc::Sender<T>),
+}
+
+impl<T: Send + Debug + 'static> OnResponse<T> {
+    pub fn is_streaming(&self) -> bool {
+        match *self {
+            OnResponse::Unary(_) => false,
+            OnResponse::Streaming(_) => true,
+        }
+    }
+
+    pub fn respond(self, resp: T) {
+        match self {
+            OnResponse::Unary(sender) => {
+                let _ = sender.send(resp);
+            }
+            OnResponse::Streaming(sender) => {
+                // `stream::once` never blocks, and our sender is a mpsc::channel::Sender so
+                // that we can safely `wait()` here.
+                let _ = sender.send_all(stream::once(Ok(resp))).wait();
+            }
+        }
+    }
+
+    pub fn respond_stream<S>(self, s: S) -> impl Future<Item = (), Error = mpsc::SendError<T>>
+    where
+        S: Stream<Item = T, Error = mpsc::SendError<T>>,
+    {
+        match self {
+            OnResponse::Unary(_) => unreachable!(),
+            OnResponse::Streaming(sender) => sender.send_all(s).map(|_| ()),
+        }
+    }
+}
+
+impl<T> Debug for OnResponse<T> {
+    fn fmt(&self, f: &mut Formatter) -> FormatResult {
+        match *self {
+            OnResponse::Unary(_) => write!(f, "Unary"),
+            OnResponse::Streaming(_) => write!(f, "Streaming"),
+        }
+    }
+}

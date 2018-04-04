@@ -22,6 +22,8 @@ use tikv::util::HandyRwLock;
 use super::util::new_raft_storage_with_store_count;
 use tikv::storage::config::Config;
 use tikv::storage::engine;
+use tikv::server::readpool::{self, ReadPool};
+use tikv::util::worker::FutureWorker;
 
 #[derive(Clone)]
 pub struct AssertionStorage {
@@ -31,9 +33,13 @@ pub struct AssertionStorage {
 
 impl Default for AssertionStorage {
     fn default() -> AssertionStorage {
+        let pd_worker = FutureWorker::new("test future worker");
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+            || storage::ReadPoolContext::new(pd_worker.scheduler())
+        });
         AssertionStorage {
             ctx: Context::new(),
-            store: SyncStorage::new(&Config::default()),
+            store: SyncStorage::new(&Config::default(), read_pool),
         }
     }
 }
@@ -63,7 +69,11 @@ impl AssertionStorage {
         self.ctx.set_region_id(region.get_id());
         self.ctx.set_region_epoch(region.get_region_epoch().clone());
         self.ctx.set_peer(leader.clone());
-        self.store = SyncStorage::from_engine(engine, &Config::default());
+        let pd_worker = FutureWorker::new("test future worker");
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+            || storage::ReadPoolContext::new(pd_worker.scheduler())
+        });
+        self.store = SyncStorage::from_engine(engine, &Config::default(), read_pool);
     }
 
     pub fn get_none(&self, key: &[u8], ts: u64) {

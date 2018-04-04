@@ -14,7 +14,8 @@
 use sys_info;
 
 use util::collections::HashMap;
-use util::config::{self, ReadableSize};
+use util::config::{self, ReadableDuration, ReadableSize};
+use coprocessor::DEFAULT_REQUEST_MAX_HANDLE_SECS;
 use util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
 use super::Result;
 
@@ -43,6 +44,9 @@ pub const DEFAULT_MAX_RUNNING_TASK_COUNT: usize = 2 as usize * 1000;
 // Number of rows in each chunk.
 pub const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
 
+// Number of rows in each chunk for streaming coprocessor.
+pub const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -65,7 +69,10 @@ pub struct Config {
     pub end_point_max_tasks: usize,
     pub end_point_stack_size: ReadableSize,
     pub end_point_recursion_limit: u32,
+    pub end_point_stream_channel_size: usize,
     pub end_point_batch_row_limit: usize,
+    pub end_point_stream_batch_row_limit: usize,
+    pub end_point_request_max_handle_duration: ReadableDuration,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
 
@@ -96,7 +103,12 @@ impl Default for Config {
             end_point_max_tasks: DEFAULT_MAX_RUNNING_TASK_COUNT,
             end_point_stack_size: ReadableSize::mb(DEFAULT_ENDPOINT_STACK_SIZE_MB),
             end_point_recursion_limit: 1000,
+            end_point_stream_channel_size: 8,
             end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,
+            end_point_stream_batch_row_limit: DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT,
+            end_point_request_max_handle_duration: ReadableDuration::secs(
+                DEFAULT_REQUEST_MAX_HANDLE_SECS,
+            ),
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
         }
@@ -137,6 +149,12 @@ impl Config {
 
         if self.end_point_recursion_limit < 100 {
             return Err(box_err!("server.end-point-recursion-limit is too small"));
+        }
+
+        if self.end_point_request_max_handle_duration.as_secs() < DEFAULT_REQUEST_MAX_HANDLE_SECS {
+            return Err(box_err!(
+                "server.end-point-request-max-handle-secs is too small."
+            ));
         }
 
         for (k, v) in &self.labels {
@@ -182,6 +200,7 @@ fn validate_label(s: &str, tp: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use util::config::ReadableDuration;
 
     #[test]
     fn test_config_validate() {
@@ -204,6 +223,10 @@ mod tests {
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.end_point_recursion_limit = 0;
+        assert!(invalid_cfg.validate().is_err());
+
+        let mut invalid_cfg = cfg.clone();
+        invalid_cfg.end_point_request_max_handle_duration = ReadableDuration::secs(0);
         assert!(invalid_cfg.validate().is_err());
 
         invalid_cfg = Config::default();

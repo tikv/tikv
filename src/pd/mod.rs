@@ -34,7 +34,7 @@ use futures::Future;
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = Box<Future<Item = T, Error = Error> + Send>;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct RegionStat {
     pub down_peers: Vec<pdpb::PeerStats>,
     pub pending_peers: Vec<metapb::Peer>,
@@ -187,6 +187,11 @@ pub trait PdClient: Send + Sync {
     fn scatter_region(&self, _: RegionInfo) -> Result<()> {
         unimplemented!();
     }
+
+    // Register a handler to the client, it will be invoked after reconnecting to PD.
+    //
+    // Please note that this method should only be called once.
+    fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, _: F) {}
 }
 
 const REQUEST_TIMEOUT: u64 = 2; // 2s

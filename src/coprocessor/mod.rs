@@ -13,19 +13,21 @@
 
 mod endpoint;
 mod metrics;
-mod local_metrics;
 mod dag;
 mod statistics;
+mod checksum;
+pub mod local_metrics;
 pub mod codec;
 
+pub use self::endpoint::err_resp;
 use std::result;
 use std::error;
+use std::time::Duration;
 
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::errorpb;
 
 use storage::{engine, mvcc, txn};
-use util::time::Instant;
 
 quick_error! {
     #[derive(Debug)]
@@ -38,7 +40,7 @@ quick_error! {
             description("key is locked")
             display("locked {:?}", l)
         }
-        Outdated(deadline: Instant, now: Instant, tag: &'static str) {
+        Outdated(elapsed: Duration, tag: &'static str) {
             description("request is outdated")
         }
         Full(allow: usize) {
@@ -85,5 +87,7 @@ impl From<txn::Error> for Error {
     }
 }
 
-pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask, REQ_TYPE_DAG,
+pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask,
+                         DEFAULT_REQUEST_MAX_HANDLE_SECS, REQ_TYPE_CHECKSUM, REQ_TYPE_DAG,
                          SINGLE_GROUP};
+pub use self::dag::{ScanOn, Scanner};

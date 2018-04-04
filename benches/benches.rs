@@ -22,6 +22,7 @@ extern crate kvproto;
 extern crate log;
 extern crate mio;
 extern crate protobuf;
+extern crate raft;
 extern crate rand;
 extern crate rocksdb;
 extern crate tempdir;

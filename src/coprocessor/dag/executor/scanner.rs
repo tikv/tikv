@@ -89,7 +89,6 @@ impl Scanner {
 
         self.statistics_cache.add(self.scanner.get_statistics());
         self.scanner = Self::range_scanner(store, self.scan_mode, self.key_only, &self.range)?;
-
         Ok(())
     }
 
@@ -105,7 +104,7 @@ impl Scanner {
         };
 
         let (key, value) = match kv {
-            Some((key, value)) => (box_try!(key.raw()), value),
+            Some((k, v)) => (box_try!(k.raw()), v),
             None => {
                 self.no_more = true;
                 return Ok(None);
@@ -113,14 +112,12 @@ impl Scanner {
         };
 
         if self.range.start > key || self.range.end <= key {
-            debug!(
+            panic!(
                 "key: {} out of range [{}, {})",
                 escape(&key),
                 escape(self.range.get_start()),
                 escape(self.range.get_end())
             );
-            self.no_more = true;
-            return Ok(None);
         }
 
         self.seek_key = match (self.scan_mode, self.scan_on) {
@@ -129,12 +126,37 @@ impl Scanner {
             (ScanMode::Backward, ScanOn::Index) => key.clone(),
             _ => unreachable!(),
         };
+
         Ok(Some((key, value)))
     }
 
-    pub fn collect_statistics_into(self, stats: &mut Statistics) {
+    pub fn start_scan(&self, range: &mut KeyRange) {
+        assert!(!self.no_more);
+        let cur_seek_key = self.seek_key.clone();
+        match self.scan_mode {
+            ScanMode::Forward => range.set_start(cur_seek_key),
+            ScanMode::Backward => range.set_end(cur_seek_key),
+            _ => unreachable!(),
+        };
+    }
+
+    pub fn stop_scan(&self, range: &mut KeyRange) -> bool {
+        if self.no_more {
+            return false;
+        }
+        let cur_seek_key = self.seek_key.clone();
+        match self.scan_mode {
+            ScanMode::Forward => range.set_end(cur_seek_key),
+            ScanMode::Backward => range.set_start(cur_seek_key),
+            _ => unreachable!(),
+        };
+        true
+    }
+
+    pub fn collect_statistics_into(&mut self, stats: &mut Statistics) {
         stats.add(&self.statistics_cache);
-        stats.add(self.scanner.get_statistics());
+        self.statistics_cache = Statistics::default();
+        self.scanner.collect_statistics_into(stats);
     }
 }
 
@@ -254,6 +276,10 @@ pub mod test {
         }
 
         fn init_data(&mut self, kv_data: &[(Vec<u8>, Vec<u8>)]) {
+            if kv_data.is_empty() {
+                return;
+            }
+
             // do prewrite.
             let txn_motifies = {
                 let mut txn = MvccTxn::new(

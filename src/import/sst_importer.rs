@@ -21,8 +21,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crc::crc32::{self, Hasher32};
 use uuid::Uuid;
 use kvproto::importpb::*;
+use rocksdb::{IngestExternalFileOptions, DB};
 
 use util::collections::HashMap;
+use util::rocksdb::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
 
 use super::{Error, Result};
 
@@ -120,6 +122,23 @@ impl SSTImporter {
             }
         }
     }
+
+    pub fn ingest(&self, meta: &SSTMeta, db: &DB) -> Result<()> {
+        match self.dir.ingest(meta, db) {
+            Ok(_) => {
+                info!("ingest {:?}", meta);
+                Ok(())
+            }
+            Err(e) => {
+                error!("ingest {:?}: {:?}", meta, e);
+                Err(e)
+            }
+        }
+    }
+
+    pub fn list_ssts(&self) -> Result<Vec<SSTMeta>> {
+        self.dir.list_ssts()
+    }
 }
 
 // TODO: Add size and rate limit.
@@ -184,6 +203,35 @@ impl ImportDir {
             fs::remove_file(&path.clone)?;
         }
         Ok(path)
+    }
+
+    fn ingest(&self, meta: &SSTMeta, db: &DB) -> Result<()> {
+        let path = self.join(meta)?;
+        let cf = meta.get_cf_name();
+        prepare_sst_for_ingestion(&path.save, &path.clone)?;
+        validate_sst_for_ingestion(db, cf, &path.clone, meta.get_length(), meta.get_crc32())?;
+
+        let handle = get_cf_handle(db, cf)?;
+        let mut opts = IngestExternalFileOptions::new();
+        opts.move_files(true);
+        db.ingest_external_file_cf(handle, &opts, &[path.clone.to_str().unwrap()])?;
+        Ok(())
+    }
+
+    fn list_ssts(&self) -> Result<Vec<SSTMeta>> {
+        let mut ssts = Vec::new();
+        for e in fs::read_dir(&self.root_dir)? {
+            let e = e?;
+            if !e.file_type()?.is_file() {
+                continue;
+            }
+            let path = e.path();
+            match path_to_sst_meta(&path) {
+                Ok(sst) => ssts.push(sst),
+                Err(e) => error!("{}: {:?}", path.to_str().unwrap(), e),
+            }
+        }
+        Ok(ssts)
     }
 }
 
@@ -301,12 +349,42 @@ fn sst_meta_to_path(meta: &SSTMeta) -> Result<PathBuf> {
     )))
 }
 
+fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SSTMeta> {
+    let path = path.as_ref();
+    let file_name = match path.file_name().and_then(|n| n.to_str()) {
+        Some(name) => name,
+        None => return Err(Error::InvalidSSTPath(path.to_owned())),
+    };
+
+    // A valid file name should be in the format:
+    // "{uuid}_{region_id}_{region_epoch.conf_ver}_{region_epoch.version}.sst"
+    if !file_name.ends_with(SST_SUFFIX) {
+        return Err(Error::InvalidSSTPath(path.to_owned()));
+    }
+    let elems: Vec<_> = file_name
+        .trim_right_matches(SST_SUFFIX)
+        .split('_')
+        .collect();
+    if elems.len() != 4 {
+        return Err(Error::InvalidSSTPath(path.to_owned()));
+    }
+
+    let mut meta = SSTMeta::new();
+    let uuid = Uuid::parse_str(elems[0])?;
+    meta.set_uuid(uuid.as_bytes().to_vec());
+    meta.set_region_id(elems[1].parse()?);
+    meta.mut_region_epoch().set_conf_ver(elems[2].parse()?);
+    meta.mut_region_epoch().set_version(elems[3].parse()?);
+    Ok(meta)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use import::test_helpers::*;
 
     use tempdir::TempDir;
+    use util::rocksdb::new_engine;
 
     #[test]
     fn test_import_dir() {
@@ -338,6 +416,40 @@ mod tests {
             assert!(!path.save.exists());
             assert!(!path.clone.exists());
         }
+
+        // Test ImportDir::ingest()
+
+        let db_path = temp_dir.path().join("db");
+        let db = new_engine(db_path.to_str().unwrap(), &["default"], None).unwrap();
+
+        let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
+
+        let mut ingested = Vec::new();
+
+        for (i, &range) in cases.iter().enumerate() {
+            let path = temp_dir.path().join(format!("{}.sst", i));
+            let (meta, data) = gen_sst_file(&path, range);
+
+            let mut f = dir.create(&meta).unwrap();
+            f.append(&data).unwrap();
+            f.finish().unwrap();
+
+            dir.ingest(&meta, &db).unwrap();
+            check_db_range(&db, range);
+
+            ingested.push(meta);
+        }
+
+        let ssts = dir.list_ssts().unwrap();
+        assert_eq!(ssts.len(), ingested.len());
+        for sst in &ssts {
+            ingested
+                .iter()
+                .find(|s| s.get_uuid() == sst.get_uuid())
+                .unwrap();
+            dir.delete(sst).unwrap();
+        }
+        assert!(dir.list_ssts().unwrap().is_empty());
     }
 
     #[test]
@@ -398,5 +510,8 @@ mod tests {
         let path = sst_meta_to_path(&meta).unwrap();
         let expected_path = format!("{}_1_2_3.sst", uuid);
         assert_eq!(path.to_str().unwrap(), &expected_path);
+
+        let new_meta = path_to_sst_meta(path).unwrap();
+        assert_eq!(meta, new_meta);
     }
 }

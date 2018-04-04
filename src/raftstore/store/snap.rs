@@ -22,7 +22,7 @@ use std::cmp::Reverse;
 
 use protobuf::Message;
 use rocksdb::{CFHandle, Writable, WriteBatch, DB};
-use kvproto::eraftpb::Snapshot as RaftSnapshot;
+use raft::eraftpb::Snapshot as RaftSnapshot;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 
