@@ -961,7 +961,7 @@ impl ApplyDelegate {
                 let mut exists = false;
                 if let Some(p) = util::find_peer_mut(&mut region, store_id) {
                     exists = true;
-                    if !p.get_is_learner() {
+                    if !p.get_is_learner() || p.get_id() != peer.get_id() {
                         error!(
                             "{} can't add duplicated peer {:?} to region {:?}",
                             self.tag, peer, self.region

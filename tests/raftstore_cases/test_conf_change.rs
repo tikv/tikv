@@ -622,6 +622,14 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.add_peer(r1, new_learner_peer(4, 10));
     pd_client.must_add_peer(r1, new_peer(5, 100)); // For ensure the last is proposed.
     pd_client.must_have_peer(r1, new_peer(4, 10));
+
+    // Add peer with different id on store which already has learner.
+    pd_client.must_remove_peer(r1, new_peer(4, 10));
+    pd_client.must_add_peer(r1, new_learner_peer(4, 11));
+    pd_client.add_peer(r1, new_learner_peer(4, 12));
+    pd_client.must_none_peer(r1, new_learner_peer(4, 12));
+    pd_client.add_peer(r1, new_peer(4, 13));
+    pd_client.must_none_peer(r1, new_peer(4, 13));
 }
 
 #[test]
