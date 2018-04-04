@@ -96,7 +96,6 @@ pub fn convert_float_to_uint(fval: f64, upper_bound: u64, tp: u8) -> Result<u64>
 
 /// `bytes_to_int_without_context` converts a byte arrays to an i64
 /// in best effort, but without context.
-/// Note that it does NOT handle overflow.
 pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
     // trim
     let mut trimed = bytes.iter().skip_while(|&&b| b == b' ' || b == b'\t');
@@ -356,10 +355,10 @@ mod test {
         let invalid_cases: Vec<&'static [u8]> =
             vec![b"9223372036854775809", b"-9223372036854775810"];
         for bs in invalid_cases {
-            let t = super::bytes_to_int_without_context(bs);
-            if !t.is_err() {
-                panic!("expect convert {:?} to overflow, but got {:?}", bs, t);
-            }
+            match super::bytes_to_int_without_context(bs) {
+                Err(Error::Overflow(_, _)) => {}
+                res => panic!("expect convert {:?} to overflow, but got {:?}", bs, res),
+            };
         }
     }
 
@@ -389,10 +388,10 @@ mod test {
 
         let invalid_cases: Vec<&'static [u8]> = vec![b"18446744073709551616"];
         for bs in invalid_cases {
-            let t = super::bytes_to_uint_without_context(bs);
-            if !t.is_err() {
-                panic!("expect convert {:?} to overflow, but got {:?}", bs, t);
-            }
+            match super::bytes_to_uint_without_context(bs) {
+                Err(Error::Overflow(_, _)) => {}
+                res => panic!("expect convert {:?} to overflow, but got {:?}", bs, res),
+            };
         }
     }
 
