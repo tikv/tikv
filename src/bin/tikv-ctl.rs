@@ -227,14 +227,13 @@ trait DebugExecutor {
                 println!("key: {}", escape(&key));
                 if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
                     let lock_info = mvcc.get_lock();
-                    if start_ts.map_or(true, |ts| lock_info.get_lock_version() == ts) {
-                        // FIXME: "lock type" is lost in kvproto.
+                    if start_ts.map_or(true, |ts| lock_info.get_start_ts() == ts) {
                         println!("\tlock cf value: {:?}", lock_info);
                     }
                 }
                 if cfs.contains(&CF_DEFAULT) {
                     for value_info in mvcc.get_values() {
-                        if commit_ts.map_or(true, |ts| value_info.get_ts() == ts) {
+                        if commit_ts.map_or(true, |ts| value_info.get_start_ts() == ts) {
                             println!("\tdefault cf value: {:?}", value_info);
                         }
                     }
@@ -244,7 +243,6 @@ trait DebugExecutor {
                         if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts)
                             && commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
                         {
-                            // FIXME: short_value is lost in kvproto.
                             println!("\t write cf value: {:?}", write_info);
                         }
                     }

@@ -442,6 +442,8 @@
 # key-path = ""
 
 [import]
+# the directory to store importing kv data.
+# import-dir = "/tmp/tikv/import"
 # number of threads to handle RPC requests.
 # num-threads = 8
 # stream channel window size, stream will be blocked on channel full.

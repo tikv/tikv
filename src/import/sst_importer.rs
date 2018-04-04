@@ -469,7 +469,7 @@ mod tests {
 
         {
             let mut f = ImportFile::create(meta.clone(), path.clone()).unwrap();
-            // Cannot create the same again.
+            // Cannot create the same file again.
             assert!(ImportFile::create(meta.clone(), path.clone()).is_err());
             f.append(data).unwrap();
             // Invalid crc32 and length.

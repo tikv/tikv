@@ -400,6 +400,7 @@ fn test_serde_custom_tikv_config() {
         override_ssl_target: "".to_owned(),
     };
     value.import = ImportConfig {
+        import_dir: "/abc".to_owned(),
         num_threads: 123,
         stream_channel_window: 123,
     };
