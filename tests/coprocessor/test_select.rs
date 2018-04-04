@@ -878,7 +878,7 @@ fn test_stream_batch_row_limit() {
 
     let resps = handle_streaming_select(&end_point, req, check_range);
     assert_eq!(resps.len(), 3);
-    let expected_output_counts = vec![vec![2 as i64, -1], vec![2 as i64, -1], vec![1 as i64, -1]];
+    let expected_output_counts = vec![vec![2 as i64], vec![2 as i64], vec![1 as i64]];
     for (i, resp) in resps.into_iter().enumerate() {
         // For now, we only support default encode type.
         assert_eq!(resp.get_encode_type(), EncodeType::TypeDefault);
@@ -2248,7 +2248,7 @@ fn test_output_counts() {
 
     let req = DAGSelect::from(&product.table).build();
     let resp = handle_select(&end_point, req);
-    assert_eq!(resp.get_output_counts(), [data.len() as i64, -1]);
+    assert_eq!(resp.get_output_counts(), [data.len() as i64]);
 
     end_point.stop().unwrap().join().unwrap();
 }
