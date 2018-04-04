@@ -206,6 +206,8 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
         Ok(())
     };
 
+    let stream = stream.map_err(|e| error!("receive snapshot chunks from gRPC fail: {}", e));
+
     let f = stream.into_future().map_err(|_| ()).and_then(
         move |(head, chunks)| -> Box<Future<Item = (), Error = ()> + Send> {
             // Whether the stream is empty or the snapshot is corrupted,
@@ -222,7 +224,7 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
             let context_key = context.key.clone();
             snap_mgr.register(context.key.clone(), SnapEntry::Receiving);
 
-            let chunks = chunks.map_err(|_| ());
+            let chunks = chunks.map_err(|_| false);
             let recv_chunks = chunks.fold(context, move |mut context, mut chunk| {
                 let data = chunk.take_data();
                 if !data.is_empty() {
@@ -230,21 +232,22 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
                     if let Err(e) = file.write_all(&data) {
                         let path = file.path();
                         error!("{} failed to write snapshot file {}: {}", key, path, e);
-                        return Err(());
+                        return Err(true);
                     }
                 } else {
                     error!("{} receive chunk with empty data", context.key);
-                    return Err(());
+                    return Err(true);
                 }
                 Ok(context)
             });
 
             box recv_chunks.then(move |result| {
-                // If we meets internal error, returns Ok in order to
-                // let sender delete the corrupted snapshot.
-                let result = result.and_then(finish_context).or(Ok(()));
-                snap_mgr.deregister(&context_key, &SnapEntry::Receiving);
-                result
+                defer!(snap_mgr.deregister(&context_key, &SnapEntry::Receiving));
+                match result {
+                    Ok(context) => finish_context(context),
+                    Err(true) => Ok(()), // let sender delete the snapshot simply.
+                    Err(false) => Err(()),
+                }
             })
         },
     );
