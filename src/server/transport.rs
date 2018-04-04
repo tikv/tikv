@@ -291,12 +291,12 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
                 rep.report(SnapshotStatus::Finish);
             }
         };
-        if let Err(e) = self.snap_scheduler.schedule(SnapTask::SendTo {
+        if let Err(e) = self.snap_scheduler.schedule(SnapTask::Send {
             addr: addr.to_owned(),
             msg: msg,
             cb: cb,
         }) {
-            if let SnapTask::SendTo { cb, .. } = e.into_inner() {
+            if let SnapTask::Send { cb, .. } = e.into_inner() {
                 error!(
                     "channel is unavaliable, failed to schedule snapshot to {}",
                     addr
