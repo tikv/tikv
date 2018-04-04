@@ -60,46 +60,35 @@ fn open_log_file(path: &str) -> io::Result<File> {
 #[derive(Clone, Copy)]
 enum RotateType {
     ByDay,
-    BySize,
+    BySize(usize),
 }
 
 struct RotatingFileLoggerCore {
     rotate_type: RotateType,
-    rotate_size: Option<usize>,
     rotate_time: Option<Tm>,
     file_path: String,
     file: File,
 }
 
 impl RotatingFileLoggerCore {
-    fn new(
-        path: &str,
-        rotate_type: RotateType,
-        rotate_size: Option<usize>,
-    ) -> io::Result<RotatingFileLoggerCore> {
+    fn new(path: &str, rotate_type: RotateType) -> io::Result<RotatingFileLoggerCore> {
         let file = open_log_file(path)?;
 
         let mut ret = RotatingFileLoggerCore {
             rotate_type: rotate_type,
-            rotate_size: None,
             rotate_time: None,
             file_path: path.to_string(),
             file: file,
         };
         match rotate_type {
             RotateType::ByDay => {
-                assert!(rotate_size.is_none());
                 let file_attr = fs::metadata(path).unwrap();
                 let file_modified_time = file_attr.modified().unwrap();
                 let rotate_time = compute_rotate_time(systemtime_to_tm(file_modified_time));
                 ret.rotate_time = Some(rotate_time);
                 Ok(ret)
             }
-            RotateType::BySize => {
-                assert!(rotate_size.is_some());
-                ret.rotate_size = rotate_size;
-                Ok(ret)
-            }
+            _ => Ok(ret),
         }
     }
 
@@ -110,8 +99,8 @@ impl RotatingFileLoggerCore {
     fn should_rotate(&mut self) -> bool {
         match self.rotate_type {
             RotateType::ByDay => time::now() > *self.rotate_time.as_ref().unwrap(),
-            RotateType::BySize => match fs::metadata(&self.file_path) {
-                Ok(metadata) => metadata.len() as usize >= *self.rotate_size.as_ref().unwrap(),
+            RotateType::BySize(s) => match fs::metadata(&self.file_path) {
+                Ok(metadata) => metadata.len() as usize >= s,
                 _ => false,
             },
         }
@@ -128,12 +117,12 @@ impl RotatingFileLoggerCore {
                 );
                 self.update_rotate_time();
             }
-            RotateType::BySize => {
+            RotateType::BySize(_) => {
                 let now = match now {
                     Some(now) => now,
                     None => time::now(),
                 };
-                s.push_str(&time::strftime("%Y%m%d%H%M%S", &now).unwrap());
+                s.push_str(&time::strftime("%Y%m%d_%H%M%S", &now).unwrap());
             }
         }
         fs::rename(&self.file_path, &s).unwrap();
@@ -157,12 +146,12 @@ pub struct RotatingFileLogger {
 
 impl RotatingFileLogger {
     pub fn new(file_path: &str, rotate_size: Option<usize>) -> io::Result<RotatingFileLogger> {
-        let rotate_type = if rotate_size.map_or(false, |s| s > 0) {
-            RotateType::BySize
-        } else {
-            RotateType::ByDay
+        let rotate_type = match rotate_size {
+            Some(s) => RotateType::BySize(s),
+            None => RotateType::ByDay,
         };
-        let core = RotatingFileLoggerCore::new(file_path, rotate_type, rotate_size)?;
+
+        let core = RotatingFileLoggerCore::new(file_path, rotate_type)?;
         let ret = RotatingFileLogger {
             core: Mutex::new(core),
         };
@@ -234,7 +223,7 @@ mod tests {
         let time_in_sec = one_day_ago.sec as u64;
         utime::set_file_times(&log_file, time_in_sec, time_in_sec).unwrap();
         // initialize the logger
-        let mut core = RotatingFileLoggerCore::new(&log_file, RotateType::ByDay, None).unwrap();
+        let mut core = RotatingFileLoggerCore::new(&log_file, RotateType::ByDay).unwrap();
         assert!(core.should_rotate());
         core.do_rotate(None);
         // check the rotated file exist
@@ -266,14 +255,14 @@ mod tests {
             file.write_all(b"abcdefg").unwrap();
         }
         // initialize the logger
-        let mut core = RotatingFileLoggerCore::new(&log_file, RotateType::BySize, Some(7)).unwrap();
+        let mut core = RotatingFileLoggerCore::new(&log_file, RotateType::BySize(7)).unwrap();
         assert!(core.should_rotate());
         let t = time::now();
         core.do_rotate(Some(t));
         // check the rotated file exist
         let mut rotated_file = log_file.clone();
         rotated_file.push_str(".");
-        rotated_file.push_str(&time::strftime("%Y%m%d%H%M%S", &t).unwrap());
+        rotated_file.push_str(&time::strftime("%Y%m%d_%H%M%S", &t).unwrap());
         assert!(file_exists(&rotated_file));
         assert!(!core.should_rotate());
 
