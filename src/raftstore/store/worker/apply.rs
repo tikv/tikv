@@ -994,6 +994,7 @@ impl ApplyDelegate {
                     .inc();
 
                 if let Some(p) = util::remove_peer(&mut region, store_id) {
+                    // Considering `is_learner` flag in `Peer` here is by design.
                     if &p != peer {
                         error!(
                             "{} remove unmatched peer: expect: {:?}, get {:?}, ignore",

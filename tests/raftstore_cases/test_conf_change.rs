@@ -609,7 +609,7 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_4, b"k2", b"v2");
 
     // Remove learner (4, 10) from region 1.
-    pd_client.must_remove_peer(r1, new_peer(4, 10));
+    pd_client.must_remove_peer(r1, new_learner_peer(4, 10));
     pd_client.must_add_peer(r1, new_learner_peer(4, 10));
     must_get_equal(&engine_4, b"k2", b"v2");
 
