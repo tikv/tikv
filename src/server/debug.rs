@@ -332,11 +332,7 @@ impl Debugger {
         Ok(res)
     }
 
-    pub fn remove_failed_stores(
-        &self,
-        store_ids: Vec<u64>,
-        region_ids: Option<Vec<u64>>,
-    ) -> Result<()> {
+    pub fn remove_failed_stores(&self, store_ids: Vec<u64>, region_ids: Vec<u64>) -> Result<()> {
         let store_id = self.get_store_id()?;
         if store_ids.iter().any(|&s| s == store_id) {
             let msg = format!("Store {} in the failed list", store_id);
@@ -347,7 +343,7 @@ impl Debugger {
         let store_ids = HashSet::<u64>::from_iter(store_ids);
 
         {
-            let do_task = |key: &[u8], value: &[u8]| {
+            let remove_stores = |key: &[u8], value: &[u8]| {
                 let (_, suffix_type) = box_try!(keys::decode_region_meta_key(key));
                 if suffix_type != keys::REGION_STATE_SUFFIX {
                     return Ok(());
@@ -380,12 +376,12 @@ impl Debugger {
                 Ok(())
             };
 
-            if let Some(region_ids) = region_ids {
+            if !region_ids.is_empty() {
                 let kv = &self.engines.kv_engine;
                 for region_id in region_ids {
                     let key = keys::region_state_key(region_id);
                     if let Some(value) = box_try!(kv.get_value_cf(CF_RAFT, &key)) {
-                        box_try!(do_task(&key, &value));
+                        box_try!(remove_stores(&key, &value));
                     } else {
                         let msg = format!("No such region {} on the store", region_id);
                         return Err(Error::Other(msg.into()));
@@ -397,7 +393,7 @@ impl Debugger {
                     keys::REGION_META_MIN_KEY,
                     keys::REGION_META_MAX_KEY,
                     false,
-                    &mut |key, value| do_task(key, value).map(|_| true)
+                    &mut |key, value| remove_stores(key, value).map(|_| true)
                 ));
             }
         }
@@ -1017,11 +1013,11 @@ mod tests {
         // region 2 with peers at stores 21, 22, 23.
         init_region_state(engine, 2, &[21, 22, 23]);
 
-        assert!(
-            debugger
-                .remove_failed_stores(vec![13, 14, 23], None)
-                .is_ok()
-        );
+        let result = debugger.remove_failed_stores(vec![13, 14, 21, 23], vec![1]);
+        assert!(result.is_ok());
+        let result = debugger.remove_failed_stores(vec![13, 14, 23], vec![]);
+        assert!(result.is_ok());
+
         let region_state = get_region_state(engine, 1);
         assert_eq!(region_state.get_region().get_peers().len(), 2);
         let region_state = get_region_state(engine, 2);
@@ -1029,7 +1025,7 @@ mod tests {
 
         // Should fail when the store itself is in the failed list.
         init_region_state(engine, 3, &[100, 31, 32, 33]);
-        assert!(debugger.remove_failed_stores(vec![100], None).is_err());
+        assert!(debugger.remove_failed_stores(vec![100], vec![]).is_err());
     }
 
     #[test]
