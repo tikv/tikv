@@ -342,5 +342,6 @@ cert-path = "invalid path"
 key-path = "invalid path"
 
 [import]
+import-dir = "/abc"
 num-threads = 123
 stream-channel-window = 123

@@ -227,14 +227,13 @@ trait DebugExecutor {
                 println!("key: {}", escape(&key));
                 if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
                     let lock_info = mvcc.get_lock();
-                    if start_ts.map_or(true, |ts| lock_info.get_lock_version() == ts) {
-                        // FIXME: "lock type" is lost in kvproto.
+                    if start_ts.map_or(true, |ts| lock_info.get_start_ts() == ts) {
                         println!("\tlock cf value: {:?}", lock_info);
                     }
                 }
                 if cfs.contains(&CF_DEFAULT) {
                     for value_info in mvcc.get_values() {
-                        if commit_ts.map_or(true, |ts| value_info.get_ts() == ts) {
+                        if commit_ts.map_or(true, |ts| value_info.get_start_ts() == ts) {
                             println!("\tdefault cf value: {:?}", value_info);
                         }
                     }
@@ -244,7 +243,6 @@ trait DebugExecutor {
                         if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts)
                             && commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
                         {
-                            // FIXME: short_value is lost in kvproto.
                             println!("\t write cf value: {:?}", write_info);
                         }
                     }
@@ -370,6 +368,14 @@ trait DebugExecutor {
     fn compact(&self, db: DBType, cf: &str, from: Option<Vec<u8>>, to: Option<Vec<u8>>) {
         let from = from.unwrap_or_default();
         let to = to.unwrap_or_default();
+        self.do_compact(db, cf, from, to);
+    }
+
+    fn compact_region(&self, db: DBType, cf: &str, region_id: u64) {
+        let region_local = self.get_region_info(region_id).region_local_state.unwrap();
+        let r = region_local.get_region();
+        let from = keys::data_key(r.get_start_key());
+        let to = keys::data_end_key(r.get_end_key());
         self.do_compact(db, cf, from, to);
     }
 
@@ -964,6 +970,13 @@ fn main() {
                         .long("to")
                         .takes_value(true)
                         .help("set the end raw key, in escaped form"),
+                )
+                .arg(
+                    Arg::with_name("region")
+                    .short("r")
+                    .long("region")
+                    .takes_value(true)
+                    .help("set the region id"),
                 ),
         )
         .subcommand(
@@ -1168,7 +1181,11 @@ fn main() {
         let cf = matches.value_of("cf").unwrap();
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
-        debug_executor.compact(db_type, cf, from_key, to_key);
+        if let Some(region) = matches.value_of("region") {
+            debug_executor.compact_region(db_type, cf, region.parse().unwrap());
+        } else {
+            debug_executor.compact(db_type, cf, from_key, to_key);
+        }
     } else if let Some(matches) = matches.subcommand_matches("tombstone") {
         let regions = matches
             .values_of("regions")
