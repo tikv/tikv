@@ -67,6 +67,7 @@ pub enum Modify {
     Delete(CfName, Key),
     Put(CfName, Key, Value),
     DeleteRange(CfName, Key, Key),
+    UnsafeCleanupRange(Key, Key),
 }
 
 pub trait Engine: Send + Debug {

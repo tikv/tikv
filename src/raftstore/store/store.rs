@@ -588,7 +588,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         box_try!(self.cleanup_sst_worker.start(cleanup_sst_runner));
 
         let (tx, rx) = mpsc::channel();
-        let apply_runner = ApplyRunner::new(self, tx, self.cfg.sync_log, self.cfg.use_delete_range);
+        let apply_runner = ApplyRunner::new(
+            self,
+            tx,
+            self.cfg.sync_log,
+            self.cfg.use_delete_range,
+            self.apply_scheduler(),
+        );
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
 

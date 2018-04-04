@@ -51,6 +51,7 @@ mod raftlog_gc;
 mod metrics;
 mod consistency_check;
 mod cleanup_sst;
+mod sub_apply;
 pub mod apply;
 
 pub use self::region::{Runner as RegionRunner, Task as RegionTask};
@@ -59,5 +60,6 @@ pub use self::compact::{Runner as CompactRunner, Task as CompactTask};
 pub use self::raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask};
 pub use self::consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask};
 pub use self::cleanup_sst::{Runner as CleanupSSTRunner, Task as CleanupSSTTask};
+pub use self::sub_apply::{Runner as SubApplyRunner, Task as SubApplyTask};
 pub use self::apply::{Apply, ApplyMetrics, ApplyRes, Proposal, RegionProposal, Registration,
                       Runner as ApplyRunner, Task as ApplyTask, TaskRes as ApplyTaskRes};

@@ -13,6 +13,7 @@
 
 #![allow(dead_code)]
 
+use std::u64;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -34,11 +35,12 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerR
                           CommitMergeRequest, RaftCmdRequest, RaftCmdResponse, Request, Response};
 use kvproto::importpb::SSTMeta;
 
-use util::worker::Runnable;
+use util::worker::{Runnable, Scheduler, Worker};
 use util::{escape, rocksdb, MustConsumeVec};
 use util::time::{duration_to_sec, Instant, SlowTimer};
 use util::collections::HashMap;
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use storage::types::Key;
 use raft::NO_LIMIT;
 use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
@@ -49,6 +51,7 @@ use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply
                                      write_peer_state};
 use raftstore::store::peer::{check_epoch, Peer};
 use raftstore::store::metrics::*;
+use raftstore::store::worker::{SubApplyRunner, SubApplyTask};
 use import::SSTImporter;
 
 use super::metrics::*;
@@ -242,10 +245,16 @@ struct ApplyContextCore<'a> {
     sync_log_hint: bool,
     exec_ctx: Option<ExecContext>,
     use_delete_range: bool,
+    use_sub_apply: bool,
+    sub_apply_scheduler: Option<Scheduler<SubApplyTask>>,
 }
 
 impl<'a> ApplyContextCore<'a> {
-    pub fn new(host: &'a CoprocessorHost, importer: &'a SSTImporter) -> ApplyContextCore<'a> {
+    pub fn new(
+        host: &'a CoprocessorHost,
+        importer: &'a SSTImporter,
+        sub_apply_scheduler: Option<Scheduler<SubApplyTask>>,
+    ) -> ApplyContextCore<'a> {
         ApplyContextCore {
             host: host,
             importer: importer,
@@ -261,6 +270,8 @@ impl<'a> ApplyContextCore<'a> {
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: false,
+            use_sub_apply: true,
+            sub_apply_scheduler: sub_apply_scheduler,
         }
     }
 
@@ -277,6 +288,26 @@ impl<'a> ApplyContextCore<'a> {
     pub fn use_delete_range(mut self, use_delete_range: bool) -> ApplyContextCore<'a> {
         self.use_delete_range = use_delete_range;
         self
+    }
+
+    pub fn enable_sub_apply(&mut self) {
+        self.use_sub_apply = true;
+    }
+
+    pub fn disable_sub_apply(&mut self) {
+        self.use_sub_apply = false;
+    }
+
+    pub fn sub_apply_enabled(&self) -> bool {
+        self.use_sub_apply
+    }
+
+    pub fn schedule_sub_task(&self, task: SubApplyTask) {
+        self.sub_apply_scheduler
+            .as_ref()
+            .unwrap()
+            .schedule(task)
+            .unwrap_or_else(|e| panic!("schedule sub task failed, error: {:?}", e));
     }
 
     /// Prepare for applying entries for `delegate`.
@@ -469,15 +500,31 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
     // Some commands may modify keys covered by the current write batch, so we
     // must write the current write batch to the engine first.
     for req in cmd.get_requests() {
-        if req.has_delete_range() {
-            return true;
-        }
-        if req.has_ingest_sst() {
+        if req.has_delete_range() || req.has_ingest_sst() || req.has_unsafe_cleanup_range() {
             return true;
         }
     }
 
     false
+}
+
+#[derive(Debug)]
+struct PausePoint {
+    pub cur_cb: Option<Callback>,
+    pub cur_resp: Option<RaftCmdResponse>,
+    pub results: Vec<ExecResult>,
+    pub remain_entries: Vec<Entry>,
+}
+
+impl PausePoint {
+    pub fn new() -> PausePoint {
+        PausePoint {
+            cur_cb: None,
+            cur_resp: None,
+            results: vec![],
+            remain_entries: vec![],
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -503,6 +550,8 @@ pub struct ApplyDelegate {
     pending_cmds: PendingCmdQueue,
     metrics: ApplyMetrics,
     last_merge_version: u64,
+
+    pause_point: Option<PausePoint>,
 }
 
 impl ApplyDelegate {
@@ -526,7 +575,33 @@ impl ApplyDelegate {
             pending_cmds: Default::default(),
             metrics: Default::default(),
             last_merge_version: 0,
+            pause_point: None,
         }
+    }
+
+    fn pause(&mut self) {
+        self.pause_point = Some(PausePoint::new());
+    }
+
+    fn is_pause(&self) -> bool {
+        self.pause_point.is_some()
+    }
+
+    fn stash_cb(&mut self, cb: Option<Callback>, resp: RaftCmdResponse) {
+        assert!(self.is_pause());
+        self.pause_point.as_mut().unwrap().cur_cb = cb;
+        self.pause_point.as_mut().unwrap().cur_resp = Some(resp);
+    }
+
+    fn stash_ctx(&mut self, results: Vec<ExecResult>, entries: Vec<Entry>) {
+        assert!(self.is_pause());
+        self.pause_point.as_mut().unwrap().results = results;
+        self.pause_point.as_mut().unwrap().remain_entries = entries;
+    }
+
+    fn take_pause_point(&mut self) -> PausePoint {
+        assert!(self.is_pause());
+        self.pause_point.take().unwrap()
     }
 
     pub fn region_id(&self) -> u64 {
@@ -546,13 +621,13 @@ impl ApplyDelegate {
             return;
         }
         apply_ctx.prepare_for(self);
-        apply_ctx.committed_count += committed_entries.len();
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
         apply_ctx.committed_count += committed_entries.len();
         let mut results = vec![];
-        for entry in committed_entries {
+        let mut pos = 0;
+        for (i, entry) in committed_entries.iter().enumerate() {
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
                 break;
@@ -576,9 +651,20 @@ impl ApplyDelegate {
             if let Some(res) = res {
                 results.push(res);
             }
+
+            if self.is_pause() {
+                pos = i;
+                break;
+            }
         }
 
-        apply_ctx.finish_for(self, results);
+        if self.is_pause() {
+            let remain_entries: Vec<Entry> = committed_entries[pos + 1..].to_owned();
+            apply_ctx.committed_count -= remain_entries.len();
+            self.stash_ctx(results, remain_entries);
+        } else {
+            apply_ctx.finish_for(self, results);
+        }
     }
 
     fn update_metrics(&mut self, apply_ctx: &ApplyContextCore) {
@@ -607,7 +693,7 @@ impl ApplyDelegate {
     fn handle_raft_entry_normal(
         &mut self,
         apply_ctx: &mut ApplyContext,
-        entry: Entry,
+        entry: &Entry,
     ) -> Option<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
@@ -643,7 +729,7 @@ impl ApplyDelegate {
     fn handle_raft_entry_conf_change(
         &mut self,
         apply_ctx: &mut ApplyContext,
-        entry: Entry,
+        entry: &Entry,
     ) -> Option<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
@@ -720,7 +806,11 @@ impl ApplyDelegate {
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
-        apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, resp);
+        if self.is_pause() {
+            self.stash_cb(cmd_cb, resp);
+        } else {
+            apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, resp);
+        }
 
         exec_result
     }
@@ -1295,7 +1385,9 @@ impl ApplyDelegate {
                 )
             }),
         };
+        ctx.disable_sub_apply();
         delegate.handle_raft_committed_entries(ctx, entries);
+        ctx.enable_sub_apply();
         *exist_region = delegate.region.clone();
         *ctx.delegates.get_mut(&region_id).unwrap() = Some(delegate);
         ctx.apply_res.last_mut().unwrap().merged = true;
@@ -1501,9 +1593,8 @@ impl ApplyDelegate {
             let mut resp = match cmd_type {
                 CmdType::Put => self.handle_put(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
-                CmdType::DeleteRange => {
-                    self.handle_delete_range(req, &mut ranges, ctx.use_delete_range)
-                }
+                CmdType::DeleteRange => self.handle_delete_range(ctx, req, &mut ranges),
+                CmdType::UnsafeCleanupRange => self.handle_unsafe_cleanup_range(ctx, req),
                 CmdType::IngestSST => self.handle_ingest_sst(ctx, req, &mut ssts),
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
@@ -1547,6 +1638,8 @@ impl ApplyDelegate {
     }
 
     fn handle_put(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
+        assert!(!self.is_pause());
+
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         check_data_key(key, &self.region)?;
 
@@ -1589,6 +1682,8 @@ impl ApplyDelegate {
     }
 
     fn handle_delete(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
+        assert!(!self.is_pause());
+
         let key = req.get_delete().get_key();
         check_data_key(key, &self.region)?;
 
@@ -1623,67 +1718,23 @@ impl ApplyDelegate {
 
     fn handle_delete_range(
         &mut self,
+        ctx: &ApplyContext,
         req: &Request,
         ranges: &mut Vec<Range>,
-        use_delete_range: bool,
     ) -> Result<Response> {
-        let s_key = req.get_delete_range().get_start_key();
-        let e_key = req.get_delete_range().get_end_key();
-        if !e_key.is_empty() && s_key >= e_key {
-            return Err(box_err!(
-                "invalid delete range command, start_key: {:?}, end_key: {:?}",
-                s_key,
-                e_key
-            ));
-        }
-        check_data_key(s_key, &self.region)?;
-        let end_key = keys::data_end_key(e_key);
-        let region_end_key = keys::data_end_key(self.region.get_end_key());
-        if end_key > region_end_key {
-            return Err(Error::KeyNotInRegion(e_key.to_vec(), self.region.clone()));
-        }
+        assert!(!self.is_pause());
 
-        let resp = Response::new();
-        let mut cf = req.get_delete_range().get_cf();
-        if cf.is_empty() {
-            cf = CF_DEFAULT;
-        }
-        if ALL_CFS.iter().find(|x| **x == cf).is_none() {
-            return Err(box_err!("invalid delete range command, cf: {:?}", cf));
-        }
-        let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
+        let cf = Self::convert_cf(req.get_delete_range().get_cf())?;
+        let (start_key, end_key) = self.convert_range(
+            req.get_delete_range().get_start_key(),
+            req.get_delete_range().get_end_key(),
+        )?;
 
-        let start_key = keys::data_key(s_key);
-        // Use delete_files_in_range to drop as many sst files as possible, this
-        // is a way to reclaim disk space quickly after drop a table/index.
-        self.engine
-            .delete_files_in_range_cf(handle, &start_key, &end_key, /* include_end */ false)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete files in range [{}, {}): {:?}",
-                    self.tag,
-                    escape(&start_key),
-                    escape(&end_key),
-                    e
-                )
-            });
-
-        // Delete all remaining keys.
-        util::delete_all_in_range_cf(&self.engine, cf, &start_key, &end_key, use_delete_range)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                    self.tag,
-                    escape(&start_key),
-                    escape(&end_key),
-                    cf,
-                    e
-                );
-            });
+        self.cleanup_range_cf(ctx, cf, &start_key, &end_key);
 
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
-        Ok(resp)
+        Ok(Response::new())
     }
 
     fn handle_ingest_sst(
@@ -1692,6 +1743,8 @@ impl ApplyDelegate {
         req: &Request,
         ssts: &mut Vec<SSTMeta>,
     ) -> Result<Response> {
+        assert!(!self.is_pause());
+
         let sst = req.get_ingest_sst().get_sst();
 
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
@@ -1708,6 +1761,102 @@ impl ApplyDelegate {
         });
 
         ssts.push(sst.clone());
+        Ok(Response::new())
+    }
+
+    fn convert_range(&self, s_key: &[u8], e_key: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+        // start key must less than end key, the maximum end key is empty.
+        if !e_key.is_empty() && s_key >= e_key {
+            return Err(box_err!(
+                "invalid start_key: {:?}, end_key: {:?}",
+                s_key,
+                e_key
+            ));
+        }
+
+        // check start key
+        check_data_key(s_key, &self.region)?;
+        let start_key = keys::data_key(s_key);
+
+        // check end key
+        let end_key = keys::data_end_key(e_key);
+        let region_end_key = keys::data_end_key(self.region.get_end_key());
+        if end_key > region_end_key {
+            return Err(Error::KeyNotInRegion(e_key.to_vec(), self.region.clone()));
+        }
+
+        Ok((start_key, end_key))
+    }
+
+    fn convert_cf(cf: &str) -> Result<&str> {
+        if cf.is_empty() {
+            Ok(CF_DEFAULT)
+        } else if ALL_CFS.iter().find(|x| **x == cf).is_none() {
+            Err(box_err!("invalid unsafe cleanup command, cf: {:?}", cf))
+        } else {
+            Ok(cf)
+        }
+    }
+
+    fn cleanup_range_cf(&mut self, ctx: &ApplyContext, cf: &str, start_key: &[u8], end_key: &[u8]) {
+        let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
+        self.engine
+            .delete_files_in_range_cf(handle, start_key, end_key, /* include_end */ false)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to delete files in range [{}, {}): {:?}",
+                    self.tag,
+                    escape(start_key),
+                    escape(end_key),
+                    e
+                )
+            });
+
+        // Delete all remaining keys.
+        util::delete_all_in_range_cf(&self.engine, cf, start_key, end_key, ctx.use_delete_range)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
+                    self.tag,
+                    escape(start_key),
+                    escape(end_key),
+                    cf,
+                    e
+                );
+            });
+    }
+
+    fn handle_unsafe_cleanup_range(
+        &mut self,
+        ctx: &ApplyContext,
+        req: &Request,
+    ) -> Result<Response> {
+        let (start_key, end_key) = self.convert_range(
+            req.get_unsafe_cleanup_range().get_start_key(),
+            req.get_unsafe_cleanup_range().get_end_key(),
+        )?;
+
+        if ctx.sub_apply_enabled() {
+            self.pause();
+            ctx.schedule_sub_task(SubApplyTask::UnsafeCleanupRange {
+                region_id: self.region.get_id(),
+                start_key: start_key,
+                end_key: end_key,
+            });
+        } else {
+            for cf in ALL_CFS {
+                let start = if *cf == CF_WRITE {
+                    let mut key = Key::from_encoded(start_key.clone());
+                    key.append_ts(u64::MAX);
+                    key.encoded().to_owned()
+                } else {
+                    start_key.clone()
+                };
+
+                self.cleanup_range_cf(ctx, cf, &start, &end_key);
+            }
+        }
+
         Ok(Response::new())
     }
 }
@@ -1914,12 +2063,17 @@ pub struct Destroy {
     region_id: u64,
 }
 
+pub struct Resume {
+    region_id: u64,
+}
+
 /// region related task.
 pub enum Task {
     Applies(ApplyBatch),
     Registration(Registration),
     Proposals(Vec<RegionProposal>),
     Destroy(Destroy),
+    Resume(Resume),
 }
 
 impl Task {
@@ -1939,6 +2093,12 @@ impl Task {
             region_id: region_id,
         })
     }
+
+    pub fn resume(region_id: u64) -> Task {
+        Task::Resume(Resume {
+            region_id: region_id,
+        })
+    }
 }
 
 impl Display for Task {
@@ -1950,6 +2110,7 @@ impl Display for Task {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
             Task::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
+            Task::Resume(ref r) => write!(f, "[region {}] resume", r.region_id),
         }
     }
 }
@@ -1993,6 +2154,7 @@ pub struct Runner {
     sync_log: bool,
     use_delete_range: bool,
     tag: String,
+    sub_apply_worker: Worker<SubApplyTask>,
 }
 
 impl Runner {
@@ -2001,12 +2163,19 @@ impl Runner {
         notifier: Sender<TaskRes>,
         sync_log: bool,
         use_delete_range: bool,
+        ch: Scheduler<Task>,
     ) -> Runner {
         let mut delegates =
             HashMap::with_capacity_and_hasher(store.get_peers().len(), Default::default());
         for (&region_id, p) in store.get_peers() {
             delegates.insert(region_id, Some(ApplyDelegate::from_peer(p)));
         }
+
+        // Start sub_apply_worker to handle time cost request asynchronously.
+        let mut sub_apply_worker = Worker::new("sub apply worker");
+        let sub_apply_runner = SubApplyRunner::new(store.kv_engine(), use_delete_range, ch);
+        sub_apply_worker.start(sub_apply_runner).unwrap();
+
         Runner {
             db: store.kv_engine(),
             raft_db: store.raft_engine(),
@@ -2017,14 +2186,18 @@ impl Runner {
             sync_log: sync_log,
             use_delete_range: use_delete_range,
             tag: format!("[store {}]", store.store_id()),
+            sub_apply_worker: sub_apply_worker,
         }
     }
 
     fn handle_applies(&mut self, applys: Vec<Apply>) {
         let t = SlowTimer::new();
 
-        let mut core = ApplyContextCore::new(self.host.as_ref(), self.importer.as_ref())
-            .apply_res_capacity(applys.len())
+        let mut core = ApplyContextCore::new(
+            self.host.as_ref(),
+            self.importer.as_ref(),
+            Some(self.sub_apply_worker.scheduler()),
+        ).apply_res_capacity(applys.len())
             .use_delete_range(self.use_delete_range)
             .enable_sync_log(self.sync_log);
         for apply in applys {
@@ -2144,6 +2317,58 @@ impl Runner {
         }
     }
 
+    fn handle_resume(&mut self, r: Resume) {
+        let mut delegate = match self.delegates.get_mut(&r.region_id) {
+            Some(e) => e.take().unwrap(),
+            None => panic!("[region {}] is missing", r.region_id),
+        };
+        assert!(delegate.is_pause());
+
+        let mut core = ApplyContextCore::new(
+            self.host.as_ref(),
+            self.importer.as_ref(),
+            Some(self.sub_apply_worker.scheduler()),
+        ).use_delete_range(self.use_delete_range)
+            .enable_sync_log(self.sync_log);
+
+        // Resume the region.
+        let mut pause_point = delegate.take_pause_point();
+        core.prepare_for(&delegate);
+        core.cbs.last_mut().unwrap().push(
+            pause_point.cur_cb.take(),
+            pause_point.cur_resp.take().unwrap(),
+        );
+        core.finish_for(&mut delegate, pause_point.results);
+
+        // Handle remain entries.
+        let apply = Apply::new(r.region_id, delegate.term, pause_point.remain_entries);
+        delegate.metrics = ApplyMetrics::default();
+        delegate.term = apply.term;
+
+        {
+            let mut ctx = ApplyContext::new(&mut core, &mut self.delegates);
+            delegate.handle_raft_committed_entries(&mut ctx, apply.entries);
+        }
+
+        if delegate.pending_remove {
+            delegate.destroy();
+            self.delegates.remove(&apply.region_id);
+        } else {
+            *self.delegates.get_mut(&apply.region_id).unwrap() = Some(delegate);
+        }
+
+        // Write to engine
+        // raftsotre.sync-log = true means we need prevent data loss when power failure.
+        // take raft log gc for example, we write kv WAL first, then write raft WAL,
+        // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
+        // so we use sync-log flag here.
+        core.write_to_db(&self.db);
+
+        if !core.apply_res.is_empty() {
+            self.notifier.send(TaskRes::Applys(core.apply_res)).unwrap();
+        }
+    }
+
     fn handle_shutdown(&mut self) {
         for p in self.delegates.values_mut() {
             p.as_mut().unwrap().clear_pending_commands();
@@ -2162,6 +2387,7 @@ impl Runnable<Task> for Runner {
             Task::Proposals(props) => self.handle_proposals(props),
             Task::Registration(s) => self.handle_registration(s),
             Task::Destroy(d) => self.handle_destroy(d),
+            Task::Resume(r) => self.handle_resume(r),
         }
     }
 
@@ -2213,7 +2439,7 @@ mod tests {
         tx: Sender<TaskRes>,
     ) -> Runner {
         Runner {
-            db: db,
+            db: Arc::clone(&db),
             raft_db: raft_db,
             host: host,
             importer: importer,
@@ -2222,6 +2448,7 @@ mod tests {
             sync_log: false,
             tag: "".to_owned(),
             use_delete_range: true,
+            sub_apply_worker: Worker::new("sub apply worker"),
         }
     }
 
@@ -2574,7 +2801,7 @@ mod tests {
         let obs = ApplyObserver::default();
         host.registry
             .register_query_observer(1, Box::new(obs.clone()));
-        let mut core = ApplyContextCore::new(&host, &importer).use_delete_range(true);
+        let mut core = ApplyContextCore::new(&host, &importer, None).use_delete_range(true);
         let mut apply_ctx = ApplyContext::new(&mut core, &mut delegates);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         apply_ctx.write_to_db(&db);
@@ -2678,6 +2905,7 @@ mod tests {
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
 
+        // DeleteRange
         let delete_range_entry = EntryBuilder::new(7, 3)
             .delete_range(b"", b"")
             .epoch(1, 3)
@@ -2690,9 +2918,9 @@ mod tests {
         assert_eq!(db.get(&dk_k3).unwrap().unwrap(), b"v1");
 
         let delete_range_entry = EntryBuilder::new(8, 3)
-            .delete_range_cf(CF_DEFAULT, b"", b"k5")
-            .delete_range_cf(CF_LOCK, b"", b"k5")
-            .delete_range_cf(CF_WRITE, b"", b"k5")
+            .delete_range_cf(CF_DEFAULT, b"", b"k3")
+            .delete_range_cf(CF_LOCK, b"", b"k3")
+            .delete_range_cf(CF_WRITE, b"", b"k3")
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
@@ -2702,7 +2930,7 @@ mod tests {
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         assert!(db.get(&dk_k1).unwrap().is_none());
         assert!(db.get(&dk_k2).unwrap().is_none());
-        assert!(db.get(&dk_k3).unwrap().is_none());
+        assert!(db.get(&dk_k3).unwrap().is_some());
 
         // UploadSST
         let sst_path = import_dir.path().join("test.sst");
@@ -2831,7 +3059,7 @@ mod tests {
         delegate2.apply_state.set_applied_index(1);
 
         let host = CoprocessorHost::default();
-        let mut core = ApplyContextCore::new(&host, &importer);
+        let mut core = ApplyContextCore::new(&host, &importer, None);
         let (tx, rx) = mpsc::channel();
         core.prepare_for(&delegate1);
         assert_eq!(core.last_applied_index, 3);

@@ -559,7 +559,8 @@ mod tests {
     use kvproto::kvrpcpb::IsolationLevel;
     use rocksdb::{self, Writable, WriteBatch, DB};
     use std::sync::Arc;
-    use storage::{make_key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use storage::{make_key, Key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT,
+                  CF_WRITE};
     use storage::engine::Modify;
     use storage::mvcc::{MvccReader, MvccTxn};
     use tempdir::TempDir;
@@ -642,6 +643,21 @@ mod tests {
                         let k2 = keys::data_key(k2.encoded());
                         let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();
                         wb.delete_range_cf(handle, &k1, &k2).unwrap();
+                    }
+                    Modify::UnsafeCleanupRange(k1, k2) => {
+                        let k1 = keys::data_key(k1.encoded());
+                        let k2 = keys::data_key(k2.encoded());
+                        for cf in ALL_CFS {
+                            let k1 = if *cf == CF_WRITE {
+                                let k1 = Key::from_encoded(k1.clone());
+                                let k1 = k1.append_ts(u64::MAX);
+                                k1.encoded().clone()
+                            } else {
+                                k1.clone()
+                            };
+                            let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();
+                            wb.delete_range_cf(handle, &k1, &k2).unwrap();
+                        }
                     }
                 }
             }

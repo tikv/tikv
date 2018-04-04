@@ -778,6 +778,24 @@ impl Storage {
         Ok(())
     }
 
+    pub fn async_unsafe_cleanup_range(
+        &self,
+        ctx: Context,
+        start_key: Key,
+        end_key: Key,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        self.engine.async_write(
+            &ctx,
+            vec![Modify::UnsafeCleanupRange(start_key, end_key)],
+            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+        )?;
+        KV_COMMAND_COUNTER_VEC
+            .with_label_values(&["unsafe_cleanup_range"])
+            .inc();
+        Ok(())
+    }
+
     pub fn async_cleanup(
         &self,
         ctx: Context,
