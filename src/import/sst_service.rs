@@ -66,37 +66,39 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
     ) {
         let label = "upload";
         let timer = Instant::now_coarse();
-
-        let token = self.importer.token();
-        let import1 = Arc::clone(&self.importer);
-        let import2 = Arc::clone(&self.importer);
+        let import = Arc::clone(&self.importer);
         let bounded_stream = mpsc::spawn(stream, &self.threads, self.cfg.stream_channel_window);
 
         ctx.spawn(
             self.threads.spawn(
                 bounded_stream
-                    .map_err(Error::from)
-                    .for_each(move |chunk| {
-                        let start = Instant::now_coarse();
-                        if chunk.has_meta() {
-                            import1.create(token, chunk.get_meta())?;
-                        }
-                        if !chunk.get_data().is_empty() {
-                            let data = chunk.get_data();
-                            import1.append(token, data)?;
-                            IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
-                        }
-                        IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
-                        Ok(())
+                    .into_future()
+                    .map_err(|(e, _)| Error::from(e))
+                    .and_then(move |(chunk, stream)| {
+                        let meta = match chunk {
+                            Some(ref chunk) if chunk.has_meta() => chunk.get_meta(),
+                            _ => return Err(Error::InvalidChunk),
+                        };
+                        let file = import.create(meta)?;
+                        Ok((file, stream))
                     })
-                    .then(move |res| match res {
-                        Ok(_) => import2.finish(token),
-                        Err(e) => {
-                            if let Some(f) = import2.remove(token) {
-                                error!("remove {:?}: {:?}", f, e);
-                            }
-                            Err(e)
-                        }
+                    .and_then(move |(file, stream)| {
+                        stream
+                            .map_err(Error::from)
+                            .fold(file, |mut file, chunk| {
+                                let start = Instant::now_coarse();
+                                let data = chunk.get_data();
+                                if data.is_empty() {
+                                    return future::err(Error::InvalidChunk);
+                                }
+                                if let Err(e) = file.append(data) {
+                                    return future::err(e);
+                                }
+                                IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
+                                IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
+                                future::ok(file)
+                            })
+                            .and_then(|mut file| file.finish())
                     })
                     .map(|_| UploadResponse::new())
                     .then(move |res| send_rpc_response!(res, sink, label, timer)),
