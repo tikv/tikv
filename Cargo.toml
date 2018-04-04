@@ -82,7 +82,8 @@ git = "https://github.com/pingcap/murmur3.git"
 git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
-git = "https://github.com/pingcap/kvproto.git"
+git = "https://github.com/Connor1996/kvproto.git"
+branch = "learner"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
@@ -104,6 +105,7 @@ features = ["secure"]
 
 [replace]
 "protobuf:1.4.1" = { git = "https://github.com/stepancheg/rust-protobuf.git" }
+"grpcio:0.2.1" = { git = "https://github.com/pingcap/grpc-rs.git" }
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with

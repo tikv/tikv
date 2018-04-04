@@ -23,7 +23,7 @@ use futures::{Future, Stream};
 use futures::future::{err, ok};
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
-use kvproto::metapb;
+use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
 use raft::eraftpb;
 use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
@@ -111,7 +111,12 @@ impl Operator {
         match *self {
             Operator::AddPeer { ref peer, .. } => {
                 if let Either::Left(ref peer) = *peer {
-                    new_pd_change_peer(eraftpb::ConfChangeType::AddNode, peer.clone())
+                    let conf_change_type = if peer.get_is_learner() {
+                        eraftpb::ConfChangeType::AddLearnerNode
+                    } else {
+                        eraftpb::ConfChangeType::AddNode
+                    };
+                    new_pd_change_peer(conf_change_type, peer.clone())
                 } else {
                     pdpb::RegionHeartbeatResponse::new()
                 }
@@ -406,16 +411,22 @@ impl Cluster {
         let cur_region_peer_len = cur_region.get_peers().len();
 
         if conf_ver > cur_conf_ver {
-            // If ConfVer changed, TiKV has added/removed one peer already.
-            // So pd and TiKV can't have same peer count and can only have
-            // only one different peer.
-            // E.g, we can't meet following cases:
-            // 1) pd is (1, 2, 3), TiKV is (1)
-            // 2) pd is (1), TiKV is (1, 2, 3)
-            // 3) pd is (1, 2), TiKV is (3)
-            // 4) pd id (1), TiKV is (2, 3)
-
-            if cur_region_peer_len > region_peer_len {
+            if region_peer_len == cur_region_peer_len {
+                // For promote learner to voter.
+                let get_learners =
+                    |r: &Region| r.get_peers().iter().filter(|p| p.get_is_learner()).count();
+                let region_learner_len = get_learners(&region);
+                let cur_region_learner_len = get_learners(&cur_region);
+                assert_eq!(cur_region_learner_len, region_learner_len + 1);
+            } else if cur_region_peer_len > region_peer_len {
+                // If ConfVer changed, TiKV has added/removed one peer already.
+                // So pd and TiKV can't have same peer count and can only have
+                // only one different peer.
+                // E.g, we can't meet following cases:
+                // 1) pd is (1, 2, 3), TiKV is (1)
+                // 2) pd is (1), TiKV is (1, 2, 3)
+                // 3) pd is (1, 2), TiKV is (3)
+                // 4) pd id (1), TiKV is (2, 3)
                 // must pd is (1, 2), TiKV is (1)
                 assert_eq!(cur_region_peer_len - region_peer_len, 1);
                 let peers = setdiff_peers(&cur_region, &region);
@@ -588,6 +599,7 @@ fn must_same_peers(left: &metapb::Region, right: &metapb::Region) {
     for peer in left.get_peers() {
         let p = find_peer(right, peer.get_store_id()).unwrap();
         assert_eq!(p.get_id(), peer.get_id());
+        assert_eq!(p.get_is_learner(), peer.get_is_learner());
     }
 }
 
@@ -694,19 +706,18 @@ impl TestPdClient {
     pub fn must_have_peer(&self, region_id: u64, peer: metapb::Peer) {
         for _ in 1..500 {
             sleep_ms(10);
-
             let region = match self.get_region_by_id(region_id).wait().unwrap() {
                 Some(region) => region,
                 None => continue,
             };
 
             if let Some(p) = find_peer(&region, peer.get_store_id()) {
-                if p.get_id() == peer.get_id() {
+                if p == &peer {
                     return;
                 }
+                continue;
             }
         }
-
         let region = self.get_region_by_id(region_id).wait().unwrap();
         panic!("region {:?} has no peer {:?}", region, peer);
     }
@@ -714,17 +725,16 @@ impl TestPdClient {
     pub fn must_none_peer(&self, region_id: u64, peer: metapb::Peer) {
         for _ in 1..500 {
             sleep_ms(10);
-
             let region = match self.get_region_by_id(region_id).wait().unwrap() {
                 Some(region) => region,
                 None => continue,
             };
-
-            if find_peer(&region, peer.get_store_id()).is_none() {
-                return;
+            match find_peer(&region, peer.get_store_id()) {
+                None => return,
+                Some(p) if p != &peer => return,
+                _ => continue,
             }
         }
-
         let region = self.get_region_by_id(region_id).wait().unwrap();
         panic!("region {:?} has peer {:?}", region, peer);
     }
@@ -766,12 +776,12 @@ impl TestPdClient {
 
     pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.add_peer(region_id, peer.clone());
-        self.must_have_peer(region_id, peer);
+        self.must_have_peer(region_id, peer.clone());
     }
 
     pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.remove_peer(region_id, peer.clone());
-        self.must_none_peer(region_id, peer);
+        self.must_none_peer(region_id, peer.clone());
     }
 
     pub fn must_merge(&self, from: u64, target: u64) {

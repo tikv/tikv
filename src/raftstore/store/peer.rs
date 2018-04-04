@@ -281,7 +281,6 @@ impl Peer {
 
         let store_id = store.store_id();
         let sched = store.snap_scheduler();
-        let peer_cache = FlatMap::default();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
 
         let ps = PeerStorage::new(
@@ -320,7 +319,7 @@ impl Peer {
             proposals: Default::default(),
             apply_proposals: vec![],
             pending_reads: Default::default(),
-            peer_cache: RefCell::new(peer_cache),
+            peer_cache: RefCell::new(FlatMap::default()),
             peer_heartbeats: FlatMap::default(),
             peers_start_pending_time: vec![],
             coprocessor_host: Arc::clone(&store.coprocessor_host),
@@ -519,9 +518,7 @@ impl Peer {
     {
         for msg in msgs {
             let msg_type = msg.get_msg_type();
-
             self.send_raft_message(msg, trans)?;
-
             match msg_type {
                 MessageType::MsgAppend => metrics.append += 1,
                 MessageType::MsgAppendResponse => metrics.append_resp += 1,
@@ -572,7 +569,8 @@ impl Peer {
         }
 
         // Insert heartbeats in case that some peers never response heartbeats.
-        for peer in self.region().get_peers().to_owned() {
+        let region = self.raft_group.get_store().get_region();
+        for peer in region.get_peers() {
             self.peer_heartbeats
                 .entry(peer.get_id())
                 .or_insert_with(Instant::now);
@@ -601,7 +599,9 @@ impl Peer {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
         let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
-        for (id, progress) in status.progress {
+
+        let progresses = status.progress.iter().chain(&status.learner_progress);
+        for (&id, progress) in progresses {
             if id == self.peer.get_id() {
                 continue;
             }
@@ -1219,7 +1219,8 @@ impl Peer {
         healthy
     }
 
-    /// Check whether it's safe to propose the specified conf change request.
+    /// Validate the `ConfChange` request and check whether it's safe to
+    /// propose the specified conf change request.
     /// It's safe iff at least the quorum of the Raft group is still healthy
     /// right after that conf change is applied.
     /// Define the total number of nodes in current Raft cluster to be `total`.
@@ -1232,9 +1233,19 @@ impl Peer {
     ///    the peer to be removed should not be the leader.
     fn check_conf_change(&self, cmd: &RaftCmdRequest) -> Result<()> {
         let change_peer = apply::get_change_peer_cmd(cmd).unwrap();
-
         let change_type = change_peer.get_change_type();
         let peer = change_peer.get_peer();
+
+        match (change_type, peer.get_is_learner()) {
+            (ConfChangeType::AddNode, true) | (ConfChangeType::AddLearnerNode, false) => {
+                warn!(
+                    "{} conf change type: {:?}, but got peer {:?}",
+                    self.tag, change_type, peer
+                );
+                return Err(box_err!("invalid conf change request"));
+            }
+            _ => {}
+        }
 
         if change_type == ConfChangeType::RemoveNode && !self.cfg.allow_remove_leader
             && peer.get_id() == self.peer_id()
@@ -1255,15 +1266,27 @@ impl Peer {
 
         match change_type {
             ConfChangeType::AddNode => {
-                status.progress.insert(peer.get_id(), Progress::default());
+                if let Some(mut progress) = status.learner_progress.remove(&peer.get_id()) {
+                    // For promote learner to voter.
+                    progress.is_learner = false;
+                    status.progress.insert(peer.get_id(), progress);
+                } else {
+                    status.progress.insert(peer.get_id(), Progress::default());
+                }
             }
             ConfChangeType::RemoveNode => {
+                if peer.get_is_learner() {
+                    // If the node is a learner, we can return directly.
+                    return Ok(());
+                }
                 if status.progress.remove(&peer.get_id()).is_none() {
                     // It's always safe to remove a unexisting node.
                     return Ok(());
                 }
             }
-            ConfChangeType::AddLearnerNode => unimplemented!(),
+            ConfChangeType::AddLearnerNode => {
+                return Ok(());
+            }
         }
         let healthy = self.count_healthy_node(status.progress.values());
         let quorum_after_change = raft::quorum(status.progress.len());
@@ -1541,7 +1564,6 @@ impl Peer {
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
 
         let change_peer = apply::get_change_peer_cmd(&req).unwrap();
-
         let mut cc = eraftpb::ConfChange::new();
         cc.set_change_type(change_peer.get_change_type());
         cc.set_node_id(change_peer.get_peer().get_id());
@@ -1708,7 +1730,6 @@ impl Peer {
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
 
         let from_peer = self.peer.clone();
-
         let to_peer = match self.get_peer_from_cache(msg.get_to()) {
             Some(p) => p,
             None => {

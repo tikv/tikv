@@ -591,6 +591,39 @@ fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_remove_peer(region_id, new_peer(2, 2));
 }
 
+fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    assert_eq!(cluster.get(b"k1"), Some(b"v1".to_vec()));
+
+    // Add voter (2, 2) to region 1.
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    // Add learner (4, 10) to region 1.
+    let engine_4 = cluster.get_engine(4);
+    pd_client.must_add_peer(r1, new_learner_peer(4, 10));
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&engine_4, b"k1", b"v1");
+    must_get_equal(&engine_4, b"k2", b"v2");
+
+    // Remove learner (4, 10) from region 1.
+    pd_client.must_remove_peer(r1, new_learner_peer(4, 10));
+    pd_client.must_add_peer(r1, new_learner_peer(4, 10));
+    must_get_equal(&engine_4, b"k2", b"v2");
+
+    // Promote learner (4 ,10) to voter.
+    pd_client.must_add_peer(r1, new_peer(4, 10));
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&engine_4, b"k3", b"v3");
+
+    // Add learner on store which already has peer.
+    pd_client.add_peer(r1, new_learner_peer(4, 10));
+    pd_client.must_add_peer(r1, new_peer(5, 100)); // For ensure the last is proposed.
+    pd_client.must_have_peer(r1, new_peer(4, 10));
+}
+
 #[test]
 fn test_node_conf_change_safe() {
     let count = 5;
@@ -636,4 +669,11 @@ fn test_conf_change_remove_leader() {
         "{:?}",
         res
     );
+}
+
+#[test]
+fn test_node_learner_conf_change() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_learner_conf_change(&mut cluster);
 }
