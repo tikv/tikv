@@ -384,8 +384,9 @@ pub struct Store {
 
 impl Store {
     fn new(engine: Box<Engine>) -> Store {
+        let pd_worker = FutureWorker::new("test future worker");
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(None)
+            || storage::ReadPoolContext::new(pd_worker.scheduler())
         });
         Store {
             store: SyncStorage::from_engine(engine, &Default::default(), read_pool),
