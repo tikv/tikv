@@ -13,6 +13,7 @@
 
 #![allow(dead_code)]
 
+use std::u64;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -39,6 +40,7 @@ use util::{escape, rocksdb, MustConsumeVec};
 use util::time::{duration_to_sec, Instant, SlowTimer};
 use util::collections::HashMap;
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use storage::types::Key;
 use raft::NO_LIMIT;
 use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
@@ -243,6 +245,7 @@ struct ApplyContextCore<'a> {
     sync_log_hint: bool,
     exec_ctx: Option<ExecContext>,
     use_delete_range: bool,
+    use_sub_apply: bool,
     sub_apply_scheduler: Option<Scheduler<SubApplyTask>>,
 }
 
@@ -267,6 +270,7 @@ impl<'a> ApplyContextCore<'a> {
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: false,
+            use_sub_apply: true,
             sub_apply_scheduler: sub_apply_scheduler,
         }
     }
@@ -284,6 +288,18 @@ impl<'a> ApplyContextCore<'a> {
     pub fn use_delete_range(mut self, use_delete_range: bool) -> ApplyContextCore<'a> {
         self.use_delete_range = use_delete_range;
         self
+    }
+
+    pub fn enable_sub_apply(&mut self) {
+        self.use_sub_apply = true;
+    }
+
+    pub fn disable_sub_apply(&mut self) {
+        self.use_sub_apply = false;
+    }
+
+    pub fn sub_apply_enabled(&self) -> bool {
+        self.use_sub_apply
     }
 
     pub fn schedule_sub_task(&self, task: SubApplyTask) {
@@ -1369,7 +1385,9 @@ impl ApplyDelegate {
                 )
             }),
         };
+        ctx.disable_sub_apply();
         delegate.handle_raft_committed_entries(ctx, entries);
+        ctx.enable_sub_apply();
         *exist_region = delegate.region.clone();
         *ctx.delegates.get_mut(&region_id).unwrap() = Some(delegate);
         ctx.apply_res.last_mut().unwrap().merged = true;
@@ -1575,9 +1593,7 @@ impl ApplyDelegate {
             let mut resp = match cmd_type {
                 CmdType::Put => self.handle_put(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
-                CmdType::DeleteRange => {
-                    self.handle_delete_range(req, &mut ranges, ctx.use_delete_range)
-                }
+                CmdType::DeleteRange => self.handle_delete_range(ctx, req, &mut ranges),
                 CmdType::UnsafeCleanupRange => self.handle_unsafe_cleanup_range(ctx, req),
                 CmdType::IngestSST => self.handle_ingest_sst(ctx, req, &mut ssts),
                 // Readonly commands are handled in raftstore directly.
@@ -1702,9 +1718,9 @@ impl ApplyDelegate {
 
     fn handle_delete_range(
         &mut self,
+        ctx: &ApplyContext,
         req: &Request,
         ranges: &mut Vec<Range>,
-        use_delete_range: bool,
     ) -> Result<Response> {
         assert!(!self.is_pause());
 
@@ -1714,33 +1730,7 @@ impl ApplyDelegate {
             req.get_delete_range().get_end_key(),
         )?;
 
-        // Use delete_files_in_range to drop as many sst files as possible, this
-        // is a way to reclaim disk space quickly after drop a table/index.
-        let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
-        self.engine
-            .delete_files_in_range_cf(handle, &start_key, &end_key, /* include_end */ false)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete files in range [{}, {}): {:?}",
-                    self.tag,
-                    escape(&start_key),
-                    escape(&end_key),
-                    e
-                )
-            });
-
-        // Delete all remaining keys.
-        util::delete_all_in_range_cf(&self.engine, cf, &start_key, &end_key, use_delete_range)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                    self.tag,
-                    escape(&start_key),
-                    escape(&end_key),
-                    cf,
-                    e
-                );
-            });
+        self.cleanup_range_cf(ctx, cf, &start_key, &end_key);
 
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
@@ -1808,6 +1798,34 @@ impl ApplyDelegate {
         }
     }
 
+    fn cleanup_range_cf(&mut self, ctx: &ApplyContext, cf: &str, start_key: &[u8], end_key: &[u8]) {
+        let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
+        self.engine
+            .delete_files_in_range_cf(handle, start_key, end_key, /* include_end */ false)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to delete files in range [{}, {}): {:?}",
+                    self.tag,
+                    escape(start_key),
+                    escape(end_key),
+                    e
+                )
+            });
+
+        // Delete all remaining keys.
+        util::delete_all_in_range_cf(&self.engine, cf, start_key, end_key, ctx.use_delete_range)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
+                    self.tag,
+                    escape(start_key),
+                    escape(end_key),
+                    cf,
+                    e
+                );
+            });
+    }
+
     fn handle_unsafe_cleanup_range(
         &mut self,
         ctx: &ApplyContext,
@@ -1818,12 +1836,26 @@ impl ApplyDelegate {
             req.get_unsafe_cleanup_range().get_end_key(),
         )?;
 
-        self.pause();
-        ctx.schedule_sub_task(SubApplyTask::UnsafeCleanupRange {
-            region_id: self.region.get_id(),
-            start_key: start_key,
-            end_key: end_key,
-        });
+        if ctx.sub_apply_enabled() {
+            self.pause();
+            ctx.schedule_sub_task(SubApplyTask::UnsafeCleanupRange {
+                region_id: self.region.get_id(),
+                start_key: start_key,
+                end_key: end_key,
+            });
+        } else {
+            for cf in ALL_CFS {
+                let start = if *cf == CF_WRITE {
+                    let mut key = Key::from_encoded(start_key.clone());
+                    key.append_ts(u64::MAX);
+                    key.encoded().to_owned()
+                } else {
+                    start_key.clone()
+                };
+
+                self.cleanup_range_cf(ctx, cf, &start, &end_key);
+            }
+        }
 
         Ok(Response::new())
     }
