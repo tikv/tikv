@@ -959,7 +959,7 @@ impl ApplyDelegate {
                     .inc();
 
                 let mut exists = false;
-                if let Some(p) = util::find_mut_peer(&mut region, store_id) {
+                if let Some(p) = util::find_peer_mut(&mut region, store_id) {
                     exists = true;
                     if !p.get_is_learner() {
                         error!(

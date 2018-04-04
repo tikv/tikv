@@ -598,8 +598,7 @@ fn must_same_peers(left: &metapb::Region, right: &metapb::Region) {
     assert_eq!(left.get_peers().len(), right.get_peers().len());
     for peer in left.get_peers() {
         let p = find_peer(right, peer.get_store_id()).unwrap();
-        assert_eq!(p.get_id(), peer.get_id());
-        assert_eq!(p.get_is_learner(), peer.get_is_learner());
+        assert_eq!(p, peer);
     }
 }
 
@@ -715,7 +714,6 @@ impl TestPdClient {
                 if p == &peer {
                     return;
                 }
-                continue;
             }
         }
         let region = self.get_region_by_id(region_id).wait().unwrap();
@@ -781,7 +779,7 @@ impl TestPdClient {
 
     pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.remove_peer(region_id, peer.clone());
-        self.must_none_peer(region_id, peer.clone());
+        self.must_none_peer(region_id, peer);
     }
 
     pub fn must_merge(&self, from: u64, target: u64) {
