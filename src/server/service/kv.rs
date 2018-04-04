@@ -11,11 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::Write;
 use std::iter::{self, FromIterator};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use mio::Token;
 use grpc::{ClientStreamingSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
            RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
 use futures::{future, stream, Future, Sink, Stream};
@@ -31,7 +27,6 @@ use prometheus::Histogram;
 
 use util::worker::Scheduler;
 use util::collections::HashMap;
-use util::buf::PipeBuffer;
 use util::future::paired_future_callback;
 use storage::{self, Key, Mutation, Options, Storage, Value};
 use storage::txn::Error as TxnError;
@@ -57,7 +52,6 @@ pub struct Service<T: RaftStoreRouter + 'static> {
     ch: T,
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
-    token: Arc<AtomicUsize>, // TODO: remove it.
     recursion_limit: u32,
     metrics: Metrics,
     stream_channel_size: usize,
@@ -137,7 +131,6 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
             end_point_scheduler: end_point_scheduler,
             ch: ch,
             snap_scheduler: snap_scheduler,
-            token: Arc::new(AtomicUsize::new(1)),
             recursion_limit: recursion_limit,
             metrics: Metrics::new(),
             stream_channel_size: stream_channel_size,
@@ -1068,42 +1061,15 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         stream: RequestStream<SnapshotChunk>,
         sink: ClientStreamingSink<Done>,
     ) {
-        let token = Token(self.token.fetch_add(1, Ordering::SeqCst));
-        let sched = self.snap_scheduler.clone();
-        let sched2 = sched.clone();
-        ctx.spawn(
-            stream
-                .map_err(Error::from)
-                .for_each(move |mut chunk| {
-                    let res = if chunk.has_message() {
-                        sched
-                            .schedule(SnapTask::Register(token, chunk.take_message()))
-                            .map_err(Error::from)
-                    } else if !chunk.get_data().is_empty() {
-                        // TODO: Remove PipeBuffer or take good use of it.
-                        let mut b = PipeBuffer::new(chunk.get_data().len());
-                        b.write_all(chunk.get_data()).unwrap();
-                        sched
-                            .schedule(SnapTask::Write(token, b))
-                            .map_err(Error::from)
-                    } else {
-                        Err(box_err!("empty chunk"))
-                    };
-                    future::result(res)
-                })
-                .then(move |res| {
-                    let res = match res {
-                        Ok(_) => sched2.schedule(SnapTask::Close(token)),
-                        Err(e) => {
-                            error!("receive snapshot err: {}", e);
-                            sched2.schedule(SnapTask::Discard(token))
-                        }
-                    };
-                    future::result(res.map_err(Error::from))
-                })
-                .and_then(|_| sink.success(Done::new()).map_err(Error::from))
-                .then(|_| future::ok::<_, ()>(())),
-        );
+        let task = SnapTask::Recv { stream, sink };
+        if let Err(e) = self.snap_scheduler.schedule(task) {
+            let sink = match e.into_inner() {
+                SnapTask::Recv { sink, .. } => sink,
+                _ => unreachable!(),
+            };
+            let status = RpcStatus::new(RpcStatusCode::ResourceExhausted, None);
+            ctx.spawn(sink.fail(status).map_err(|_| ()));
+        }
     }
 
     fn mvcc_get_by_key(
