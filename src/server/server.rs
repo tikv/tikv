@@ -262,6 +262,7 @@ mod tests {
 
     #[test]
     fn test_peer_resolve() {
+        // http proxy may broke this test. Remove them before running the test.
         env::remove_var("http_proxy");
         env::remove_var("https_proxy");
         let mut cfg = Config::default();
