@@ -274,7 +274,7 @@ impl SnapContext {
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
-        self.destroy_overlap_ranges(&start_key, &end_key);
+        self.cleanup_overlap_ranges(&start_key, &end_key);
         box_try!(util::delete_all_in_range(
             &self.kv_db,
             &start_key,
@@ -364,7 +364,7 @@ impl SnapContext {
         timer.observe_duration();
     }
 
-    fn handle_destroy(
+    fn cleanup_range(
         &mut self,
         region_id: u64,
         start_key: Vec<u8>,
@@ -403,14 +403,14 @@ impl SnapContext {
         }
     }
 
-    fn destroy_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) -> bool {
+    fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) -> bool {
         if self.clean_stale_peer_delay.as_secs() == 0 {
             return false;
         }
         let to_destroy = self.pending_delete_ranges
             .drain_overlap_ranges(start_key, end_key);
         for (region_id, s_key, e_key) in to_destroy {
-            self.handle_destroy(region_id, s_key, e_key, false /* use_delete_files */);
+            self.cleanup_range(region_id, s_key, e_key, false /* use_delete_files */);
         }
         true
     }
@@ -421,7 +421,7 @@ impl SnapContext {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
     ) -> bool {
-        if self.destroy_overlap_ranges(&start_key, &end_key) {
+        if self.cleanup_overlap_ranges(&start_key, &end_key) {
             info!(
                 "[region {}] register deleting data in [{}, {})",
                 region_id,
@@ -443,7 +443,7 @@ impl SnapContext {
         let now = time::Instant::now();
         let mut timeout_ranges = self.pending_delete_ranges.drain_timeout_ranges(now);
         for (region_id, start_key, end_key) in timeout_ranges.drain(..) {
-            self.handle_destroy(
+            self.cleanup_range(
                 region_id,
                 start_key,
                 end_key,
@@ -513,7 +513,7 @@ impl Runnable<Task> for Runner {
                     start_key.clone(),
                     end_key.clone(),
                 ) {
-                    self.ctx.handle_destroy(
+                    self.ctx.cleanup_range(
                         region_id,
                         start_key,
                         end_key,
