@@ -65,14 +65,30 @@ use clap::{App, Arg, ArgGroup};
 
 /// shortcut to bench a function.
 macro_rules! bench {
-    ($($stmt:stmt);+) => ({
-        use test::bench;
-        bench::benchmark(|b| {
-            b.iter(|| {
-                $($stmt);+
-            })
+    ($name:expr, $block:expr) => ({
+        use test::{self, bench};
+        use std::sync::mpsc::channel;
+        let desc = test::TestDesc {
+            name: test::TestName::DynTestName($name.into()),
+            ignore: false,
+            should_panic: test::ShouldPanic::No,
+            allow_fail: false,
+        };
+        let (tx, rx) = channel();
+        bench::benchmark(
+            desc,
+            tx,
+            false,
+            |b| {
+                b.iter($block)
+            },
+        );
+        let (_desc, result, _stdout) = rx.recv().unwrap();
+        match result {
+            test::TestResult::TrBench(samples) => samples,
+            _ => unreachable!(),
         }
-    )});
+    });
 }
 
 /// Same as print, but will flush automatically.

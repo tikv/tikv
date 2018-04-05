@@ -77,7 +77,7 @@ fn bench_tombstone_scan() -> BenchSamples {
     }
 
     kvs = KvGenerator::new(100, 1000);
-    bench!{
+    bench!("bench_tombstone_scan", || {
         let (k, _) = kvs.next().unwrap();
         assert!(store.scan(Context::new(),
                            Key::from_raw(&k),
@@ -86,7 +86,7 @@ fn bench_tombstone_scan() -> BenchSamples {
                            ts_generator.next().unwrap())
                      .unwrap()
                      .is_empty())
-    }
+    })
 }
 
 pub fn bench_engine() {

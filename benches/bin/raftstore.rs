@@ -58,10 +58,10 @@ fn bench_set<T: Simulator>(mut cluster: Cluster<T>, value_size: usize) -> BenchS
 
     let mut kvs = KvGenerator::new(100, value_size);
 
-    bench!{
-            let (k, v) = kvs.next().unwrap();
-            cluster.must_put(&k, &v)
-    }
+    bench!("bench_set", || {
+        let (k, v) = kvs.next().unwrap();
+        cluster.must_put(&k, &v)
+    })
 }
 
 fn bench_get<T: Simulator>(mut cluster: Cluster<T>) -> BenchSamples {
@@ -73,10 +73,10 @@ fn bench_get<T: Simulator>(mut cluster: Cluster<T>) -> BenchSamples {
         .map(|i| i.0)
         .chain(KvGenerator::new(100, 0).map(|i| i.0));
 
-    bench!{
-            let k = keys.next().unwrap();
-            cluster.get(&k)
-    }
+    bench!("bench_get", || {
+        let k = keys.next().unwrap();
+        cluster.get(&k)
+    })
 }
 
 fn bench_delete<T: Simulator>(mut cluster: Cluster<T>) -> BenchSamples {
@@ -88,10 +88,10 @@ fn bench_delete<T: Simulator>(mut cluster: Cluster<T>) -> BenchSamples {
         .map(|i| i.0)
         .chain(KvGenerator::new(100, 0).map(|i| i.0));
 
-    bench!{
-            let k = keys.next().unwrap();
-            cluster.must_delete(&k)
-    }
+    bench!("bench_delete", || {
+        let k = keys.next().unwrap();
+        cluster.must_delete(&k)
+    })
 }
 
 fn bench_raft_cluster<T, F>(factory: F, tag: &'static str)
