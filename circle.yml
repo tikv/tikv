@@ -6,7 +6,7 @@ machine:
     LDFLAGS: "-L$HOME/.local/lib"
     CPPFLAGS: "-I$HOME/.local/include"
     CXXFLAGS: "-I$HOME/.local/include"
-    RUSTC_DATE: "2018-01-12"
+    RUSTC_DATE: "2018-04-06"
     LOCAL_PREFIX: "$HOME/.local"
     # used by cargo
     RUST_TEST_THREADS: 1

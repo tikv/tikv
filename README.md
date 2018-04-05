@@ -23,12 +23,12 @@ Thanks to the internal optimization, TiKV and TiDB can work together to be the b
 
 ### Required Rust version
 
-Rust Nightly is required. TiKV is currently tested mainly with `rust-nightly-2018-01-12`, however we would like to track `nightly`, so please report new breakage.
+Rust Nightly is required. TiKV is currently tested mainly with `rust-nightly-2018-04-06`, however we would like to track `nightly`, so please report new breakage.
 
 ```bash
 # Get rustup from rustup.rs, then in your `tikv` folder:
-rustup override set nightly-2018-01-12
-cargo +nightly-2018-01-12 install rustfmt-nightly --version 0.3.4
+rustup override set nightly-2018-04-06
+rustup component add rustfmt-preview
 ```
 
 ### Tikv-server software stack
