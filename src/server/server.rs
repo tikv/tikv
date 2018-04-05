@@ -197,6 +197,7 @@ mod tests {
     use std::env;
 
     use super::*;
+
     use super::super::{Config, Result};
     use super::super::transport::RaftStoreRouter;
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
@@ -267,8 +268,9 @@ mod tests {
         let storage_cfg = StorageConfig::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
+        let pd_worker = FutureWorker::new("test future worker");
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(None)
+            || storage::ReadPoolContext::new(pd_worker.scheduler())
         });
         let mut storage = Storage::new(&storage_cfg, read_pool).unwrap();
         storage.start(&storage_cfg).unwrap();

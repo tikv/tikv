@@ -18,7 +18,7 @@ use std::result;
 
 use futures::sync::oneshot::Canceled;
 use grpc::Error as GrpcError;
-use uuid::ParseError;
+use uuid::{ParseError, Uuid};
 
 use raftstore::errors::Error as RaftStoreError;
 use util::codec::Error as CodecError;
@@ -82,6 +82,13 @@ quick_error! {
         TokenNotFound(token: usize) {
             display("Token {} not found", token)
         }
+        EngineInUse(uuid: Uuid) {
+            display("Engine {} is in use", uuid)
+        }
+        EngineNotFound(uuid: Uuid) {
+            display("Engine {} not found", uuid)
+        }
+        InvalidChunk {}
     }
 }
 
