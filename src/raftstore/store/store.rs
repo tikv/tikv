@@ -1709,8 +1709,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let min_index = peer.get_min_progress() + 1;
             let low = cmp::max(min_index, state.get_min_index());
             // TODO: move this into raft module.
-            // +1 to include the PrepareMerge proposal.
-            let entries = if low >= state.get_commit() + 1 {
+            // > over >= to include the PrepareMerge proposal.
+            let entries = if low > state.get_commit() {
                 vec![]
             } else {
                 self.region_peers[&region.get_id()]

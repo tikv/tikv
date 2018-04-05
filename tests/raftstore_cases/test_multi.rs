@@ -140,7 +140,7 @@ fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize
         cluster.stop_node(i);
     }
     if let Some(leader) = cluster.leader_of_region(1) {
-        if leader.get_store_id() >= half + 1 {
+        if leader.get_store_id() > half {
             cluster.stop_node(leader.get_store_id());
         }
     }
