@@ -415,10 +415,24 @@ impl Debugger {
             let cf = vec[0];
             let config_name = vec[1];
             validate_db_and_cf(db, cf)?;
+
             let handle = box_try!(get_cf_handle(rocksdb, cf));
-            let mut opt = Vec::new();
-            opt.push((config_name, config_value));
-            box_try!(rocksdb.set_options_cf(handle, &opt));
+            // currently we can't modify block_cache_capacity via set_options_cf
+            if config_name == "block_cache_capacity" {
+                let opt = rocksdb.get_options_cf(handle);
+                let capacity = config_value.parse::<u64>();
+                if capacity.is_err() {
+                    return Err(Error::InvalidArgument(format!(
+                        "bad argument: {}",
+                        config_value
+                    )));
+                }
+                box_try!(opt.set_block_cache_capacity(capacity.unwrap()));
+            } else {
+                let mut opt = Vec::new();
+                opt.push((config_name, config_value));
+                box_try!(rocksdb.set_options_cf(handle, &opt));
+            }
         } else {
             return Err(Error::InvalidArgument(format!(
                 "bad argument: {}",
