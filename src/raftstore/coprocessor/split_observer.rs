@@ -50,7 +50,7 @@ impl SplitObserver {
         let region_start_key = ctx.region().get_start_key();
 
         let key = encode_bytes(&key);
-        if &*key <= region_start_key {
+        if *key <= *region_start_key {
             return Err("no need to split".to_owned());
         }
 
