@@ -535,10 +535,7 @@ impl Cluster {
             operator = self.handle_heartbeat_max_peer_count(&region, &leader);
         }
 
-        if operator.is_none() {
-            return None;
-        }
-        let operator = operator.unwrap();
+        let operator = operator?;
         debug!(
             "[region {}] schedule {:?} to {:?}, region: {:?}",
             region_id, operator, leader, region

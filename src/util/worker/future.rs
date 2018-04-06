@@ -179,13 +179,11 @@ impl<T: Display + Send + 'static> Worker<T> {
     pub fn stop(&mut self) -> Option<thread::JoinHandle<()>> {
         // close sender explicitly so the background thread will exit.
         info!("stoping {}", self.scheduler.name);
-        if self.handle.is_none() {
-            return None;
-        }
+        let handle = self.handle.take()?;
         if let Err(e) = self.scheduler.sender.unbounded_send(None) {
             warn!("failed to stop worker thread: {:?}", e);
         }
-        self.handle.take()
+        Some(handle)
     }
 }
 
