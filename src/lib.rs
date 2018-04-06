@@ -33,6 +33,9 @@
 #![allow(new_without_default_derive)]
 #![allow(verbose_bit_mask)]
 #![allow(implicit_hasher)]
+// Currently this raises some false positives, so we allow it:
+// https://github.com/rust-lang-nursery/rust-clippy/issues/2638
+#![allow(nonminimal_bool)]
 
 extern crate alloc;
 extern crate backtrace;
