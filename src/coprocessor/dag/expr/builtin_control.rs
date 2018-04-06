@@ -22,7 +22,7 @@ where
     F: FnMut(usize) -> Result<Option<T>>,
 {
     let arg0 = f(0)?;
-    if !arg0.is_none() {
+    if arg0.is_some() {
         return Ok(arg0);
     }
     f(1)
