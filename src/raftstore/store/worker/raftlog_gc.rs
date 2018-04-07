@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::store::keys;
 use raftstore::store::engine::Iterable;
+use raftstore::store::keys;
 use util::worker::Runnable;
 
 use rocksdb::{Writable, WriteBatch, DB};
-use std::sync::Arc;
-use std::fmt::{self, Display, Formatter};
 use std::error;
+use std::fmt::{self, Display, Formatter};
+use std::sync::Arc;
 use std::sync::mpsc::Sender;
 
 pub struct Task {
@@ -100,9 +100,7 @@ impl Runner {
         self.ch
             .as_ref()
             .unwrap()
-            .send(TaskRes {
-                collected,
-            })
+            .send(TaskRes { collected })
             .unwrap();
     }
 }
@@ -133,12 +131,12 @@ impl Runnable<Task> for Runner {
 
 #[cfg(test)]
 mod test {
+    use super::*;
     use std::sync::mpsc;
     use std::time::Duration;
-    use util::rocksdb::new_engine;
-    use tempdir::TempDir;
     use storage::CF_DEFAULT;
-    use super::*;
+    use tempdir::TempDir;
+    use util::rocksdb::new_engine;
 
     #[test]
     fn test_gc_raft_log() {

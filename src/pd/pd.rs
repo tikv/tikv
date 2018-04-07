@@ -11,33 +11,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
 use std::fmt::{self, Display, Formatter};
+use std::sync::Arc;
 
 use futures::Future;
 use tokio_core::reactor::Handle;
 
+use fs2;
 use kvproto::metapb;
-use raft::eraftpb::ConfChangeType;
+use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest};
 use kvproto::raft_serverpb::RaftMessage;
-use kvproto::pdpb;
+use raft::eraftpb::ConfChangeType;
 use rocksdb::DB;
-use fs2;
 
-use util::worker::FutureRunnable as Runnable;
-use util::escape;
-use util::transport::SendCh;
-use util::rocksdb::*;
+use super::metrics::*;
 use pd::{PdClient, RegionStat};
-use raftstore::store::Msg;
-use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
-use raftstore::store::store::StoreInfo;
+use prometheus::local::LocalHistogram;
 use raftstore::store::Callback;
+use raftstore::store::Msg;
+use raftstore::store::store::StoreInfo;
+use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
 use storage::FlowStatistics;
 use util::collections::HashMap;
-use prometheus::local::LocalHistogram;
-use super::metrics::*;
+use util::escape;
+use util::rocksdb::*;
+use util::transport::SendCh;
+use util::worker::FutureRunnable as Runnable;
 
 // Use an asynchronous thread to tell pd something.
 pub enum Task {

@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, Mutex};
-use std::thread::{self, Builder, JoinHandle};
-use std::io;
+use prometheus::IntGauge;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
-use prometheus::IntGauge;
+use std::io;
+use std::sync::{Arc, Mutex};
+use std::thread::{self, Builder, JoinHandle};
 
 use futures::Stream;
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
@@ -195,8 +195,8 @@ mod test {
     use std::time::Instant;
 
     use futures::Future;
-    use tokio_timer::Timer;
     use tokio_core::reactor::Handle;
+    use tokio_timer::Timer;
 
     use super::*;
 

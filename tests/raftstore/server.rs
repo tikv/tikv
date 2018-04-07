@@ -12,35 +12,35 @@
 // limitations under the License.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{mpsc, Arc, RwLock};
 use std::path::Path;
-use std::time::Duration;
+use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
+use std::time::Duration;
 
 use grpc::{EnvBuilder, Error as GrpcError};
 use tempdir::TempDir;
 
+use kvproto::raft_cmdpb::*;
+use kvproto::raft_serverpb::{self, RaftMessage};
 use tikv::config::TiKvConfig;
+use tikv::import::{ImportSSTService, SSTImporter};
+use tikv::raftstore::coprocessor::CoprocessorHost;
+use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager};
+use tikv::raftstore::{store, Result};
+use tikv::server::readpool::ReadPool;
+use tikv::server::resolve::{self, Task as ResolveTask};
+use tikv::server::transport::RaftStoreRouter;
+use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient,
                    Server, ServerTransport};
-use tikv::server::resolve::{self, Task as ResolveTask};
-use tikv::server::transport::ServerRaftStoreRouter;
-use tikv::server::readpool::ReadPool;
-use tikv::raftstore::{store, Result};
-use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager};
-use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::server::transport::RaftStoreRouter;
-use tikv::util::transport::SendCh;
-use tikv::util::security::SecurityManager;
-use tikv::util::worker::{FutureWorker, Worker};
 use tikv::storage::{self, Engine};
-use tikv::import::{ImportSSTService, SSTImporter};
-use kvproto::raft_serverpb::{self, RaftMessage};
-use kvproto::raft_cmdpb::*;
+use tikv::util::security::SecurityManager;
+use tikv::util::transport::SendCh;
+use tikv::util::worker::{FutureWorker, Worker};
 
+use super::cluster::{Cluster, Simulator};
 use super::pd::TestPdClient;
 use super::transport_simulate::*;
-use super::cluster::{Cluster, Simulator};
 use super::util::create_test_engine;
 
 type SimulateStoreTransport = SimulateTransport<StoreMsg, ServerRaftStoreRouter>;

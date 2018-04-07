@@ -17,9 +17,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crc::crc32::{self, Hasher32};
-use uuid::Uuid;
 use kvproto::importpb::*;
 use rocksdb::{IngestExternalFileOptions, DB};
+use uuid::Uuid;
 
 use util::rocksdb::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
 

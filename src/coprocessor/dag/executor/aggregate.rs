@@ -14,9 +14,9 @@
 use std::cmp::Ordering;
 use tipb::expression::ExprType;
 
+use coprocessor::Result;
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::Decimal;
-use coprocessor::Result;
 
 use super::super::expr::{eval_arith, EvalContext};
 
@@ -248,10 +248,7 @@ struct Extremum {
 
 impl Extremum {
     fn new(ord: Ordering) -> Extremum {
-        Extremum {
-            datum: None,
-            ord,
-        }
+        Extremum { datum: None, ord }
     }
 }
 
@@ -283,9 +280,9 @@ impl AggrFunc for Extremum {
 
 #[cfg(test)]
 mod test {
-    use std::{i64, u64};
-    use std::ops::Add;
     use coprocessor::dag::expr::EvalContext;
+    use std::ops::Add;
+    use std::{i64, u64};
 
     use super::*;
 

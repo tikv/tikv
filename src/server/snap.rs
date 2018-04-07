@@ -11,28 +11,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{self, Display, Formatter};
 use std::boxed::FnBox;
-use std::time::{Duration, Instant};
+use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use futures::{future, Async, Future, Poll, Stream};
 use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 use grpc::{ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus,
            RpcStatusCode, WriteFlags};
-use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::raft_serverpb::RaftMessage;
+use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb_grpc::TikvClient;
 
 use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use util::DeferContext;
-use util::worker::Runnable;
 use util::security::SecurityManager;
+use util::worker::Runnable;
 
 use super::metrics::*;
-use super::{Error, Result};
 use super::transport::RaftStoreRouter;
+use super::{Error, Result};
 
 pub type Callback = Box<FnBox(Result<()>) + Send>;
 

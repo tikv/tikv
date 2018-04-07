@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::{self, Write};
 use std::fmt::Arguments;
+use std::io::{self, Write};
 
 use grpc;
-use time;
 use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
+use time;
 
 pub use log::LogLevelFilter;
 

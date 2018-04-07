@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Instant;
 use std::boxed::FnBox;
 use std::fmt;
+use std::time::Instant;
 
-use kvproto::raft_serverpb::RaftMessage;
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
-use kvproto::metapb::RegionEpoch;
 use kvproto::importpb::SSTMeta;
+use kvproto::metapb::RegionEpoch;
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use kvproto::raft_serverpb::RaftMessage;
 
 use raft::SnapshotStatus;
 use util::escape;

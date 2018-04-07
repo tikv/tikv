@@ -88,14 +88,14 @@ impl AdminObserver for SplitObserver {
 #[cfg(test)]
 mod test {
     use super::*;
-    use raftstore::coprocessor::ObserverContext;
-    use raftstore::coprocessor::AdminObserver;
+    use byteorder::{BigEndian, WriteBytesExt};
+    use coprocessor::codec::{datum, table, Datum};
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
-    use coprocessor::codec::{datum, table, Datum};
-    use util::codec::number::NumberEncoder;
+    use raftstore::coprocessor::AdminObserver;
+    use raftstore::coprocessor::ObserverContext;
     use util::codec::bytes::encode_bytes;
-    use byteorder::{BigEndian, WriteBytesExt};
+    use util::codec::number::NumberEncoder;
 
     fn new_split_request(key: &[u8]) -> AdminRequest {
         let mut req = AdminRequest::new();

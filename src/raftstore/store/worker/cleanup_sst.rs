@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use kvproto::importpb::SSTMeta;
 
-use pd::PdClient;
 use import::SSTImporter;
+use pd::PdClient;
 use raftstore::store::Msg;
 use raftstore::store::util::is_epoch_stale;
 use util::transport::SendCh;

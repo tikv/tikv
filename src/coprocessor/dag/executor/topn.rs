@@ -11,17 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::usize;
-use std::sync::Arc;
 use std::cell::RefCell;
+use std::sync::Arc;
+use std::usize;
 use std::vec::IntoIter;
 
 use tipb::executor::TopN;
-use tipb::schema::ColumnInfo;
 use tipb::expression::ByItem;
+use tipb::schema::ColumnInfo;
 
-use coprocessor::codec::datum::Datum;
 use coprocessor::Result;
+use coprocessor::codec::datum::Datum;
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 
 use super::topn_heap::TopNHeap;
@@ -174,8 +174,8 @@ impl Executor for TopNExecutor {
 
 #[cfg(test)]
 pub mod test {
-    use std::sync::Arc;
     use std::cell::RefCell;
+    use std::sync::Arc;
 
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
@@ -183,16 +183,16 @@ pub mod test {
     use tipb::expression::{Expr, ExprType};
 
     use coprocessor::codec::Datum;
-    use coprocessor::codec::table::{self, RowColsDict};
     use coprocessor::codec::mysql::types;
-    use util::collections::HashMap;
+    use coprocessor::codec::table::{self, RowColsDict};
     use util::codec::number::NumberEncoder;
+    use util::collections::HashMap;
 
     use storage::SnapshotStore;
 
-    use super::*;
-    use super::super::table_scan::TableScanExecutor;
     use super::super::scanner::test::{get_range, new_col_info, TestStore};
+    use super::super::table_scan::TableScanExecutor;
+    use super::*;
 
     fn new_order_by(offset: i64, desc: bool) -> ByItem {
         let mut item = ByItem::new();

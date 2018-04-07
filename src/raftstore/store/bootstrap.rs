@@ -11,16 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::{Writable, WriteBatch, DB};
-use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
-use kvproto::metapb;
-use raftstore::Result;
-use super::keys;
 use super::engine::{Iterable, Mutable};
+use super::keys;
 use super::peer_storage::{write_initial_apply_state, write_initial_raft_state};
 use super::store::Engines;
-use util::rocksdb;
+use kvproto::metapb;
+use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
+use raftstore::Result;
+use rocksdb::{Writable, WriteBatch, DB};
 use storage::{CF_DEFAULT, CF_RAFT};
+use util::rocksdb;
 
 const INIT_EPOCH_VER: u64 = 1;
 const INIT_EPOCH_CONF_VER: u64 = 1;
@@ -138,10 +138,10 @@ mod tests {
     use tempdir::TempDir;
 
     use super::*;
-    use util::rocksdb;
     use raftstore::store::engine::Peekable;
     use raftstore::store::{keys, Engines};
     use storage::CF_DEFAULT;
+    use util::rocksdb;
 
     #[test]
     fn test_bootstrap() {

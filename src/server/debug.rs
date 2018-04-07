@@ -11,34 +11,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{error, result};
-use std::cmp::Ordering;
-use std::sync::Arc;
-use std::rc::Rc;
 use std::cell::RefCell;
-use std::iter::FromIterator;
+use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::iter::FromIterator;
+use std::rc::Rc;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::{error, result};
 
 use protobuf::{self, Message, RepeatedField};
 
-use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
-use kvproto::metapb::Region;
-use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::debugpb::{DB as DBType, MODULE};
-use raft::eraftpb::Entry;
+use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
+use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
+use raft::eraftpb::Entry;
+use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
 
 use raft::{self, quorum, RawNode};
+use raftstore::store::engine::{IterOption, Mutable};
+use raftstore::store::util as raftstore_util;
 use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
 use raftstore::store::{init_apply_state, init_raft_state, write_peer_state};
-use raftstore::store::util as raftstore_util;
-use raftstore::store::engine::{IterOption, Mutable};
-use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use storage::types::{truncate_ts, Key};
 use storage::mvcc::{Lock, LockType, Write, WriteType};
-use util::escape;
+use storage::types::{truncate_ts, Key};
+use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::config::ReadableSize;
+use util::escape;
 use util::rocksdb::{compact_range, get_cf_handle};
 use util::worker::Worker;
 
@@ -675,19 +675,19 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch)
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::iter::FromIterator;
+    use std::sync::Arc;
 
+    use kvproto::metapb::{Peer, Region};
     use raft::eraftpb::EntryType;
     use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
-    use kvproto::metapb::{Peer, Region};
     use tempdir::TempDir;
 
-    use raftstore::store::engine::Mutable;
-    use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use storage::mvcc::{Lock, LockType};
-    use util::rocksdb::{self as rocksdb_util, CFOptions};
     use super::*;
+    use raftstore::store::engine::Mutable;
+    use storage::mvcc::{Lock, LockType};
+    use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use util::rocksdb::{self as rocksdb_util, CFOptions};
 
     fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
         let cf_raft = engine.cf_handle(CF_RAFT).unwrap();

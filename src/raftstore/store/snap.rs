@@ -11,32 +11,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{error, result, str, thread, time, u64};
-use std::io::{self, ErrorKind, Read, Write};
+use std::cmp::Reverse;
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, Metadata};
-use std::sync::{Arc, RwLock};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
-use std::cmp::Reverse;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
+use std::{error, result, str, thread, time, u64};
 
-use protobuf::Message;
-use rocksdb::{CFHandle, Writable, WriteBatch, DB};
-use raft::eraftpb::Snapshot as RaftSnapshot;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
+use protobuf::Message;
+use raft::eraftpb::Snapshot as RaftSnapshot;
+use rocksdb::{CFHandle, Writable, WriteBatch, DB};
 
 use raftstore::Result as RaftStoreResult;
 use raftstore::errors::Error as RaftStoreError;
 use raftstore::store::Msg;
 use raftstore::store::util::check_key_in_region;
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use util::transport::SendCh;
-use util::io_limiter::{IOLimiter, LimitWriter};
 use util::HandyRwLock;
-use util::collections::{HashMap, HashMapEntry as Entry};
 use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
+use util::collections::{HashMap, HashMapEntry as Entry};
+use util::io_limiter::{IOLimiter, LimitWriter};
 use util::rocksdb::{prepare_sst_for_ingestion, validate_sst_for_ingestion};
+use util::transport::SendCh;
 
 use raftstore::store::engine::{Iterable, Snapshot as DbSnapshot};
 use raftstore::store::keys::{self, enc_end_key, enc_start_key};
@@ -217,17 +217,17 @@ pub fn retry_delete_snapshot(
     false
 }
 
+use crc::crc32::{self, Digest, Hasher32};
+use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
+use protobuf::RepeatedField;
+use rocksdb::{DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter};
 use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
 use std::time::Instant;
-use crc::crc32::{self, Digest, Hasher32};
-use protobuf::RepeatedField;
-use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
-use rocksdb::{DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter};
-use util::rocksdb;
-use util::time::duration_to_sec;
 use util::file::{delete_file_if_exist, file_exists, get_file_size, calc_crc32};
+use util::rocksdb;
 use util::rocksdb::get_fastest_supported_compression_type;
+use util::time::duration_to_sec;
 
 pub const SNAPSHOT_VERSION: u64 = 2;
 const META_FILE_SUFFIX: &str = ".meta";
@@ -1443,29 +1443,29 @@ impl SnapManagerBuilder {
 
 #[cfg(test)]
 mod test {
-    use std::io::{self, Read, Seek, SeekFrom, Write};
-    use std::fs::{self, File, OpenOptions};
-    use std::sync::*;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::Arc;
-    use tempdir::TempDir;
     use protobuf::Message;
+    use std::fs::{self, File, OpenOptions};
+    use std::io::{self, Read, Seek, SeekFrom, Write};
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::*;
+    use tempdir::TempDir;
 
     use super::{ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder, Snapshot,
                 SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS,
                 SNAP_GEN_PREFIX};
 
-    use std::path::PathBuf;
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta};
     use rocksdb::DB;
+    use std::path::PathBuf;
 
+    use raftstore::Result;
+    use raftstore::store::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
+    use raftstore::store::keys;
+    use raftstore::store::peer_storage::JOB_STATUS_RUNNING;
     use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use util::{rocksdb, HandyRwLock};
-    use raftstore::Result;
-    use raftstore::store::keys;
-    use raftstore::store::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
-    use raftstore::store::peer_storage::JOB_STATUS_RUNNING;
 
     const TEST_STORE_ID: u64 = 1;
     const TEST_KEY: &[u8] = b"akey";

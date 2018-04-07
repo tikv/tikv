@@ -11,24 +11,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock};
-use std::sync::mpsc::Sender;
-use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::RaftCmdRequest;
+use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, RwLock};
 
-use util::transport::SendCh;
-use util::HandyRwLock;
-use util::worker::Scheduler;
-use util::collections::HashSet;
-use raft::SnapshotStatus;
-use raftstore::store::{BatchReadCallback, Callback, Msg as StoreMsg, SignificantMsg, Transport};
-use raftstore::Result as RaftStoreResult;
-use server::raft_client::RaftClient;
-use server::Result;
-use super::snap::Task as SnapTask;
-use super::resolve::StoreAddrResolver;
 use super::metrics::*;
+use super::resolve::StoreAddrResolver;
+use super::snap::Task as SnapTask;
+use raft::SnapshotStatus;
+use raftstore::Result as RaftStoreResult;
+use raftstore::store::{BatchReadCallback, Callback, Msg as StoreMsg, SignificantMsg, Transport};
+use server::Result;
+use server::raft_client::RaftClient;
+use util::HandyRwLock;
+use util::collections::HashSet;
+use util::transport::SendCh;
+use util::worker::Scheduler;
 
 pub trait RaftStoreRouter: Send + Clone {
     /// Send StoreMsg, retry if failed. Try times may vary from implementation.

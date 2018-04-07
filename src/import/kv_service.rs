@@ -13,18 +13,18 @@
 
 use std::sync::Arc;
 
-use uuid::Uuid;
-use grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use futures::sync::mpsc;
 use futures::{Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
+use grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::importpb::*;
 use kvproto::importpb_grpc::*;
+use uuid::Uuid;
 
 use util::time::Instant;
 
-use super::service::*;
 use super::metrics::*;
+use super::service::*;
 use super::{Config, Error, KVImporter};
 
 #[derive(Clone)]

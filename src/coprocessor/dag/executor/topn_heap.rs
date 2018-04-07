@@ -11,15 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::usize;
+use std::cell::RefCell;
+use std::cmp::{self, Ordering};
 use std::collections::BinaryHeap;
 use std::sync::Arc;
-use std::cmp::{self, Ordering};
-use std::cell::RefCell;
+use std::usize;
 use tipb::expression::ByItem;
 
-use coprocessor::codec::table::RowColsDict;
 use coprocessor::codec::datum::Datum;
+use coprocessor::codec::table::RowColsDict;
 use coprocessor::dag::expr::{EvalContext, Result};
 
 const HEAP_MAX_CAPACITY: usize = 1024;
@@ -186,16 +186,16 @@ impl PartialOrd for SortRow {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::cell::RefCell;
+    use std::sync::Arc;
 
     use tipb::expression::{ByItem, Expr, ExprType};
 
-    use util::collections::HashMap;
-    use util::codec::number::*;
     use coprocessor::codec::Datum;
     use coprocessor::codec::table::RowColsDict;
     use coprocessor::dag::expr::EvalContext;
+    use util::codec::number::*;
+    use util::collections::HashMap;
 
     use super::*;
 

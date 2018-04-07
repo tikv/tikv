@@ -32,32 +32,32 @@
 //! to the scheduler.
 
 use std::fmt::{self, Debug, Display, Formatter};
-use std::time::Duration;
-use std::thread;
 use std::hash::{Hash, Hasher};
-use std::u64;
 use std::mem;
+use std::thread;
+use std::time::Duration;
+use std::u64;
 
+use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 use prometheus::HistogramTimer;
 use prometheus::local::{LocalHistogramVec, LocalIntCounter};
-use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
-use storage::{Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
-              Statistics, StatisticsSummary, StorageCb};
+use storage::engine::{self, Callback as EngineCallback, CbContext, Error as EngineError, Modify,
+                      Result as EngineResult};
 use storage::mvcc::{Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write,
                     MAX_TXN_WRITE_SIZE};
 use storage::{Key, KvPair, MvccInfo, Value, CMD_TAG_GC};
-use storage::engine::{self, Callback as EngineCallback, CbContext, Error as EngineError, Modify,
-                      Result as EngineResult};
+use storage::{Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
+              Statistics, StatisticsSummary, StorageCb};
+use util::collections::HashMap;
 use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
 use util::time::SlowTimer;
-use util::collections::HashMap;
 use util::worker::{self, Runnable, ScheduleError};
 
-use super::Result;
-use super::Error;
-use super::latch::{Latches, Lock};
 use super::super::metrics::*;
+use super::Error;
+use super::Result;
+use super::latch::{Latches, Lock};
 
 pub const CMD_BATCH_SIZE: usize = 256;
 // TODO: make it configurable.
@@ -1496,10 +1496,10 @@ pub fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
 mod tests {
     use super::*;
     use kvproto::kvrpcpb::Context;
-    use util::collections::HashMap;
+    use storage::mvcc;
     use storage::txn::latch::*;
     use storage::{make_key, Command, Mutation, Options};
-    use storage::mvcc;
+    use util::collections::HashMap;
 
     #[test]
     fn test_command_latches() {

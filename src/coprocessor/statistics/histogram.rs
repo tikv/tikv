@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::mem;
 use protobuf::RepeatedField;
+use std::mem;
 use tipb::analyze;
 
 /// Bucket is an element of histogram.
@@ -165,10 +165,10 @@ impl Histogram {
 
 #[cfg(test)]
 mod test {
-    use std::iter::repeat;
+    use super::*;
     use coprocessor::codec::datum;
     use coprocessor::codec::datum::Datum;
-    use super::*;
+    use std::iter::repeat;
 
     #[test]
     fn test_histogram() {

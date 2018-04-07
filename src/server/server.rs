@@ -11,28 +11,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
+use std::sync::{Arc, RwLock};
 
 use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
-use kvproto::tikvpb_grpc::*;
 use kvproto::debugpb_grpc::create_debug;
 use kvproto::importpb_grpc::create_import_sst;
+use kvproto::tikvpb_grpc::*;
 
 use import::ImportSSTService;
-use util::worker::{Builder as WorkerBuilder, FutureScheduler, Worker};
-use util::security::SecurityManager;
-use storage::Storage;
 use raftstore::store::{Engines, SnapManager};
+use storage::Storage;
+use util::security::SecurityManager;
+use util::worker::{Builder as WorkerBuilder, FutureScheduler, Worker};
 
+use super::raft_client::RaftClient;
+use super::resolve::StoreAddrResolver;
+use super::service::*;
+use super::snap::{Runner as SnapHandler, Task as SnapTask};
+use super::transport::{RaftStoreRouter, ServerTransport};
 use super::{Config, Result};
 use coprocessor::{EndPointHost, EndPointTask};
-use super::service::*;
-use super::transport::{RaftStoreRouter, ServerTransport};
-use super::resolve::StoreAddrResolver;
-use super::snap::{Runner as SnapHandler, Task as SnapTask};
-use super::raft_client::RaftClient;
 use pd::PdTask;
 
 const DEFAULT_COPROCESSOR_BATCH: usize = 256;
@@ -190,25 +190,25 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-    use std::sync::*;
-    use std::sync::mpsc::*;
     use std::sync::atomic::*;
+    use std::sync::mpsc::*;
+    use std::sync::*;
+    use std::time::Duration;
 
     use super::*;
 
-    use super::super::{Config, Result};
-    use super::super::transport::RaftStoreRouter;
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
-    use storage::{self, Config as StorageConfig, Storage};
+    use super::super::transport::RaftStoreRouter;
+    use super::super::{Config, Result};
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::Result as RaftStoreResult;
     use raftstore::store::Msg as StoreMsg;
-    use raftstore::store::*;
     use raftstore::store::transport::Transport;
-    use util::worker::FutureWorker;
-    use util::security::SecurityConfig;
+    use raftstore::store::*;
     use server::readpool::{self, ReadPool};
+    use storage::{self, Config as StorageConfig, Storage};
+    use util::security::SecurityConfig;
+    use util::worker::FutureWorker;
 
     #[derive(Clone)]
     struct MockResolver {

@@ -25,22 +25,22 @@ Briefly speaking, this is a mpsc (multiple-producer-single-consumer) model.
 
 */
 
-mod metrics;
 mod future;
+mod metrics;
 
-use std::{io, usize};
-use std::sync::{Arc, Mutex};
-use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
+use prometheus::IntGauge;
+use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::error::Error;
+use std::sync::{Arc, Mutex};
+use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::Duration;
-use prometheus::IntGauge;
+use std::{io, usize};
 
-use util::time::{Instant, SlowTimer};
-use util::timer::Timer;
 use self::metrics::*;
 use crossbeam_channel::{self, Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError};
+use util::time::{Instant, SlowTimer};
+use util::timer::Timer;
 
 pub use self::future::Runnable as FutureRunnable;
 pub use self::future::Scheduler as FutureScheduler;
@@ -394,8 +394,8 @@ impl<T: Display + Send + 'static> Worker<T> {
 
 #[cfg(test)]
 mod test {
-    use std::thread;
     use std::sync::mpsc;
+    use std::thread;
     use std::time::Duration;
 
     use super::*;

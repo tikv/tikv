@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::{Duration, SystemTime};
-use std::thread::{self, Builder, JoinHandle};
-use std::sync::mpsc::{self, Sender};
-use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::cmp::Ordering;
+use std::ops::{Add, AddAssign, Sub, SubAssign};
+use std::sync::mpsc::{self, Sender};
+use std::thread::{self, Builder, JoinHandle};
+use std::time::{Duration, SystemTime};
 
 use time::{Duration as TimeDuration, Timespec};
 
@@ -150,10 +150,10 @@ impl Drop for Monitor {
     }
 }
 
+use self::inner::monotonic_coarse_now;
+use self::inner::monotonic_now;
 /// `monotonic_raw_now` returns the monotonic raw time since some unspecified starting point.
 pub use self::inner::monotonic_raw_now;
-use self::inner::monotonic_now;
-use self::inner::monotonic_coarse_now;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 const MILLISECOND_PER_SECOND: i64 = 1_000;
@@ -161,8 +161,8 @@ const NANOSECONDS_PER_MILLISECOND: i64 = 1_000_000;
 
 #[cfg(not(target_os = "linux"))]
 mod inner {
-    use time::{self, Timespec};
     use super::NANOSECONDS_PER_SECOND;
+    use time::{self, Timespec};
 
     pub fn monotonic_raw_now() -> Timespec {
         // TODO Add monotonic raw clock time impl for macos and windows
@@ -186,9 +186,9 @@ mod inner {
 
 #[cfg(target_os = "linux")]
 mod inner {
+    use libc;
     use std::io;
     use time::Timespec;
-    use libc;
 
     pub fn monotonic_raw_now() -> Timespec {
         get_time(libc::CLOCK_MONOTONIC_RAW)
@@ -386,14 +386,14 @@ impl Sub<Instant> for Instant {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, SystemTime};
-    use std::thread;
-    use std::ops::Sub;
-    use std::f64;
     use super::*;
+    use std::f64;
+    use std::ops::Sub;
+    use std::thread;
+    use std::time::{Duration, SystemTime};
 
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn test_time_monitor() {

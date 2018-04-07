@@ -11,18 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::collections::hash_map::Entry;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::sync::{Arc, RwLock};
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use tokio_timer::Timer;
-use futures::{Future, Stream};
 use futures::future::{err, ok};
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use futures::{Future, Stream};
+use tokio_timer::Timer;
 
+use super::util::*;
 use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
 use raft::eraftpb;
@@ -30,7 +31,6 @@ use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::util::{escape, Either, HandyRwLock};
-use super::util::*;
 
 struct Store {
     store: metapb::Store,

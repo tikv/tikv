@@ -11,15 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::usize;
-use std::time::Duration;
-use std::sync::{Arc, Condvar, Mutex};
-use std::thread::{Builder, JoinHandle};
-use std::marker::PhantomData;
 use std::boxed::FnBox;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::fmt::Write;
+use std::marker::PhantomData;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::{Builder, JoinHandle};
+use std::time::Duration;
+use std::usize;
 
 pub const DEFAULT_TASKS_PER_TICK: usize = 10000;
 const DEFAULT_QUEUE_CAPACITY: usize = 1000;
@@ -324,10 +324,10 @@ where
 mod test {
     use super::*;
 
-    use std::time::Duration;
+    use std::sync::atomic::{AtomicIsize, Ordering};
     use std::sync::mpsc::{channel, Sender};
     use std::sync::{Arc, Mutex};
-    use std::sync::atomic::{AtomicIsize, Ordering};
+    use std::time::Duration;
 
     #[test]
     fn test_get_task_count() {

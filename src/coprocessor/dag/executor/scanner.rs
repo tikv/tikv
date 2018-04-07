@@ -13,10 +13,10 @@
 
 use kvproto::coprocessor::KeyRange;
 
-use coprocessor::endpoint::prefix_next;
 use coprocessor::codec::table::truncate_as_row_key;
-use storage::{Key, ScanMode, SnapshotStore, Statistics, StoreScanner, Value};
+use coprocessor::endpoint::prefix_next;
 use storage::txn::Result;
+use storage::{Key, ScanMode, SnapshotStore, Statistics, StoreScanner, Value};
 use util::escape;
 
 #[derive(Copy, Clone)]
@@ -167,15 +167,15 @@ pub mod test {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use tipb::schema::ColumnInfo;
 
-    use coprocessor::codec::mysql::types;
     use coprocessor::codec::datum::{self, Datum};
+    use coprocessor::codec::mysql::types;
     use coprocessor::codec::table;
     use coprocessor::endpoint::prefix_next;
-    use util::collections::HashMap;
-    use util::codec::number::NumberEncoder;
+    use storage::engine::{self, Engine, Modify, TEMP_DIR};
     use storage::mvcc::MvccTxn;
     use storage::{make_key, Mutation, Options, Snapshot, SnapshotStore, ALL_CFS};
-    use storage::engine::{self, Engine, Modify, TEMP_DIR};
+    use util::codec::number::NumberEncoder;
+    use util::collections::HashMap;
 
     use super::*;
 

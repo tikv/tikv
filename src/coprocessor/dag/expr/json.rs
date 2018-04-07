@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
-use std::collections::BTreeMap;
+use super::{Error, EvalContext, Expression, FnCall, Result};
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::Json;
 use coprocessor::codec::mysql::json::{parse_json_path_expr, ModifyType, PathExpression};
-use super::{Error, EvalContext, Expression, FnCall, Result};
+use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 impl FnCall {
     #[inline]
@@ -199,11 +199,11 @@ impl<'a> JsonFuncArgsParser<'a> {
 
 #[cfg(test)]
 mod test {
-    use tipb::expression::ScalarFuncSig;
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::Json;
-    use coprocessor::dag::expr::{EvalContext, Expression};
     use coprocessor::dag::expr::test::{datum_expr, fncall_expr, make_null_datums};
+    use coprocessor::dag::expr::{EvalContext, Expression};
+    use tipb::expression::ScalarFuncSig;
 
     #[test]
     fn test_json_type() {

@@ -93,11 +93,11 @@ extern crate zipf;
 #[macro_use]
 pub mod util;
 pub mod config;
-pub mod storage;
-pub mod raftstore;
-pub mod pd;
-pub mod server;
 pub mod coprocessor;
 pub mod import;
+pub mod pd;
+pub mod raftstore;
+pub mod server;
+pub mod storage;
 
 pub use storage::Storage;

@@ -41,33 +41,33 @@ extern crate tikv;
 extern crate tokio_timer;
 
 #[allow(dead_code)]
-#[path = "../../tests/util/mod.rs"]
-mod test_util;
-#[allow(dead_code)]
-#[path = "../../tests/raftstore/util.rs"]
-mod util;
-#[allow(dead_code)]
 #[path = "../../tests/raftstore/cluster.rs"]
 mod cluster;
 #[path = "../../tests/raftstore/node.rs"]
 mod node;
-#[path = "../../tests/raftstore/server.rs"]
-mod server;
 #[allow(dead_code)]
 #[path = "../../tests/raftstore/pd.rs"]
 mod pd;
+#[path = "../../tests/raftstore/server.rs"]
+mod server;
+#[allow(dead_code)]
+#[path = "../../tests/util/mod.rs"]
+mod test_util;
 #[allow(dead_code)]
 #[path = "../../tests/raftstore/transport_simulate.rs"]
 mod transport_simulate;
+#[allow(dead_code)]
+#[path = "../../tests/raftstore/util.rs"]
+mod util;
 
-use test::BenchSamples;
 use clap::{App, Arg, ArgGroup};
+use test::BenchSamples;
 
 /// shortcut to bench a function.
 macro_rules! bench {
-    ($name:expr, $block:expr) => ({
-        use test::{self, bench};
+    ($name:expr, $block:expr) => {{
         use std::sync::mpsc::channel;
+        use test::{self, bench};
         let desc = test::TestDesc {
             name: test::TestName::DynTestName($name.into()),
             ignore: false,
@@ -75,20 +75,13 @@ macro_rules! bench {
             allow_fail: false,
         };
         let (tx, rx) = channel();
-        bench::benchmark(
-            desc,
-            tx,
-            false,
-            |b| {
-                b.iter($block)
-            },
-        );
+        bench::benchmark(desc, tx, false, |b| b.iter($block));
         let (_desc, result, _stdout) = rx.recv().unwrap();
         match result {
             test::TestResult::TrBench(samples) => samples,
             _ => unreachable!(),
         }
-    });
+    }};
 }
 
 /// Same as print, but will flush automatically.
@@ -103,8 +96,8 @@ macro_rules! printf {
 #[allow(dead_code)]
 mod utils;
 
-mod raftstore;
 mod mvcc;
+mod raftstore;
 
 fn print_result(smp: BenchSamples) {
     println!("{}", test::fmt_bench_samples(&smp));

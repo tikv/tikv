@@ -11,20 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use kvproto::coprocessor::KeyRange;
 use std::io::Write;
 use std::{cmp, u8};
 use tipb::schema::ColumnInfo;
-use kvproto::coprocessor::KeyRange;
 
 use coprocessor::dag::expr::EvalContext;
-use util::escape;
 use util::collections::{HashMap, HashSet};
+use util::escape;
 
-use util::codec::number::{NumberDecoder, NumberEncoder};
-use util::codec::bytes::BytesDecoder;
 use super::datum::DatumDecoder;
-use super::{datum, Datum, Result};
 use super::mysql::{types, Duration, Time};
+use super::{datum, Datum, Result};
+use util::codec::bytes::BytesDecoder;
+use util::codec::number::{NumberDecoder, NumberEncoder};
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -292,19 +292,13 @@ pub struct RowColsDict {
 
 impl RowColMeta {
     pub fn new(offset: usize, length: usize) -> RowColMeta {
-        RowColMeta {
-            offset,
-            length,
-        }
+        RowColMeta { offset, length }
     }
 }
 
 impl RowColsDict {
     pub fn new(cols: HashMap<i64, RowColMeta>, value: Vec<u8>) -> RowColsDict {
-        RowColsDict {
-            value,
-            cols,
-        }
+        RowColsDict { value, cols }
     }
 
     pub fn len(&self) -> usize {
@@ -398,8 +392,8 @@ mod test {
 
     use tipb::schema::ColumnInfo;
 
-    use coprocessor::codec::mysql::types;
     use coprocessor::codec::datum::{self, Datum, DatumDecoder};
+    use coprocessor::codec::mysql::types;
     use util::codec::number::NumberEncoder;
     use util::collections::{HashMap, HashSet};
 

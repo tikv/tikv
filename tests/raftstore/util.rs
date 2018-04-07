@@ -11,33 +11,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{mpsc, Arc};
-use std::time::Duration;
-use std::thread;
 use std::path::Path;
+use std::sync::{mpsc, Arc};
+use std::thread;
+use std::time::Duration;
 
 use tempdir::TempDir;
 
-use rocksdb::{CompactionJobInfo, DB};
 use protobuf;
+use rocksdb::{CompactionJobInfo, DB};
 
 use kvproto::metapb::{self, RegionEpoch};
-use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
-use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
 use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
+use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
+use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
 use raft::eraftpb::ConfChangeType;
 
+use tikv::config::{ReadPoolConfig, TiKvConfig};
+use tikv::raftstore::store::Msg as StoreMsg;
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Config as ServerConfig;
 use tikv::server::readpool::Config as ReadPoolInstanceConfig;
 use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
+use tikv::util::config::*;
 use tikv::util::escape;
 use tikv::util::rocksdb::{self, CompactionListener};
-use tikv::util::config::*;
-use tikv::config::{ReadPoolConfig, TiKvConfig};
 use tikv::util::transport::SendCh;
-use tikv::raftstore::store::Msg as StoreMsg;
 
 use super::cluster::{Cluster, Simulator};
 

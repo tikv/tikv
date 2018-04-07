@@ -13,11 +13,11 @@
 
 use rocksdb::DB;
 
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::Region;
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
-use util::transport::{RetryableSendCh, Sender};
 use raftstore::store::msg::Msg;
+use util::transport::{RetryableSendCh, Sender};
 
 use super::*;
 
@@ -45,7 +45,10 @@ pub struct Registry {
 macro_rules! push {
     ($p:expr, $t:ident, $vec:expr) => {
         $t.start();
-        let e = Entry { priority: $p, observer: $t };
+        let e = Entry {
+            priority: $p,
+            observer: $t,
+        };
         let vec = &mut $vec;
         vec.push(e);
         vec.sort_by(|l, r| l.priority.cmp(&r.priority));
@@ -264,10 +267,10 @@ impl CoprocessorHost {
 
 #[cfg(test)]
 mod test {
-    use raftstore::coprocessor::*;
-    use std::sync::*;
-    use std::sync::atomic::*;
     use protobuf::RepeatedField;
+    use raftstore::coprocessor::*;
+    use std::sync::atomic::*;
+    use std::sync::*;
 
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse,
@@ -336,19 +339,19 @@ mod test {
     }
 
     macro_rules! assert_all {
-        ($target:expr, $expect:expr) => ({
+        ($target:expr, $expect:expr) => {{
             for (c, e) in ($target).iter().zip($expect) {
                 assert_eq!(c.load(Ordering::SeqCst), *e);
             }
-        })
+        }};
     }
 
     macro_rules! set_all {
-        ($target:expr, $v:expr) => ({
+        ($target:expr, $v:expr) => {{
             for v in $target {
                 v.store($v, Ordering::SeqCst);
             }
-        })
+        }};
     }
 
     #[test]

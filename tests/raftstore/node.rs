@@ -12,31 +12,31 @@
 // limitations under the License.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{mpsc, Arc, RwLock};
 use std::ops::Deref;
 use std::path::Path;
+use std::sync::{mpsc, Arc, RwLock};
 
 use tempdir::TempDir;
 
 use super::cluster::{Cluster, Simulator};
-use tikv::server::Node;
-use tikv::raftstore::store::*;
-use kvproto::metapb;
-use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::{self, RaftMessage};
-use raft::eraftpb::MessageType;
-use tikv::config::TiKvConfig;
-use tikv::raftstore::Result;
-use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::util::HandyRwLock;
-use tikv::util::worker::FutureWorker;
-use tikv::util::transport::SendCh;
-use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
-use raft::SnapshotStatus;
-use tikv::import::SSTImporter;
 use super::pd::TestPdClient;
 use super::transport_simulate::*;
 use super::util::create_test_engine;
+use kvproto::metapb;
+use kvproto::raft_cmdpb::*;
+use kvproto::raft_serverpb::{self, RaftMessage};
+use raft::SnapshotStatus;
+use raft::eraftpb::MessageType;
+use tikv::config::TiKvConfig;
+use tikv::import::SSTImporter;
+use tikv::raftstore::Result;
+use tikv::raftstore::coprocessor::CoprocessorHost;
+use tikv::raftstore::store::*;
+use tikv::server::Node;
+use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
+use tikv::util::HandyRwLock;
+use tikv::util::transport::SendCh;
+use tikv::util::worker::FutureWorker;
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,

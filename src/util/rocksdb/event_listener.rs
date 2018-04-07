@@ -101,10 +101,7 @@ impl CompactionListener {
         ch: Box<Fn(CompactedEvent) + Send + Sync>,
         filter: Option<Filter>,
     ) -> CompactionListener {
-        CompactionListener {
-            ch,
-            filter,
-        }
+        CompactionListener { ch, filter }
     }
 }
 

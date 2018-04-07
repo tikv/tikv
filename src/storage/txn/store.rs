@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use storage::{Key, KvPair, ScanMode, Snapshot, Statistics, Value};
-use storage::mvcc::{Error as MvccError, MvccReader};
 use super::{Error, Result};
 use kvproto::kvrpcpb::IsolationLevel;
+use storage::mvcc::{Error as MvccError, MvccReader};
+use storage::{Key, KvPair, ScanMode, Snapshot, Statistics, Value};
 
 pub struct SnapshotStore {
     snapshot: Box<Snapshot>,
@@ -173,11 +173,11 @@ impl StoreScanner {
 
 #[cfg(test)]
 mod test {
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
     use super::SnapshotStore;
+    use kvproto::kvrpcpb::{Context, IsolationLevel};
+    use storage::engine::{self, Engine, Snapshot, TEMP_DIR};
     use storage::mvcc::MvccTxn;
     use storage::{make_key, KvPair, Mutation, Options, ScanMode, Statistics, Value, ALL_CFS};
-    use storage::engine::{self, Engine, Snapshot, TEMP_DIR};
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: u64 = 10;

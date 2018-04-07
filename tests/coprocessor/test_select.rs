@@ -11,31 +11,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use futures::sync::{mpsc as futures_mpsc, oneshot};
+use futures::{Future, Stream};
 use std::collections::{BTreeMap, HashMap};
-use std::{cmp, mem};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::i64;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
-use futures::{Future, Stream};
-use futures::sync::{mpsc as futures_mpsc, oneshot};
+use std::{cmp, mem};
 
-use tikv::coprocessor::*;
-use kvproto::kvrpcpb::Context;
-use tikv::coprocessor::codec::{datum, table, Datum};
-use tikv::coprocessor::codec::datum::DatumDecoder;
-use tikv::util::codec::number::*;
-use tikv::server::{Config, OnResponse};
-use tikv::server::readpool::{self, ReadPool};
-use tikv::storage::{self, Key, Mutation, ALL_CFS};
-use tikv::storage::engine::{self, Engine, TEMP_DIR};
-use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
 use kvproto::coprocessor::{KeyRange, Request, Response};
-use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
-use tipb::executor::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
-use tipb::schema::{self, ColumnInfo};
-use tipb::expression::{ByItem, Expr, ExprType, ScalarFuncSig};
+use kvproto::kvrpcpb::Context;
 use protobuf::{Message, RepeatedField};
+use tikv::coprocessor::codec::datum::DatumDecoder;
+use tikv::coprocessor::codec::{datum, table, Datum};
+use tikv::coprocessor::*;
+use tikv::server::readpool::{self, ReadPool};
+use tikv::server::{Config, OnResponse};
+use tikv::storage::engine::{self, Engine, TEMP_DIR};
+use tikv::storage::{self, Key, Mutation, ALL_CFS};
+use tikv::util::codec::number::*;
+use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
+use tipb::executor::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
+use tipb::expression::{ByItem, Expr, ExprType, ScalarFuncSig};
+use tipb::schema::{self, ColumnInfo};
+use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 
 use raftstore::util::MAX_LEADER_LEASE;
 use storage::sync_storage::SyncStorage;
@@ -351,10 +351,7 @@ struct Delete<'a> {
 
 impl<'a> Delete<'a> {
     fn new(store: &'a mut Store, table: &'a Table) -> Delete<'a> {
-        Delete {
-            store,
-            table,
-        }
+        Delete { store, table }
     }
 
     fn execute(self, id: i64, row: Vec<Datum>) {

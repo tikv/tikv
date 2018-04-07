@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use std::io::{Result, Write};
-use std::sync::Arc;
 use std::option::Option;
+use std::sync::Arc;
 
 use rocksdb::RateLimiter;
 
@@ -70,10 +70,7 @@ pub struct LimitWriter<'a, T: Write + 'a> {
 
 impl<'a, T: Write + 'a> LimitWriter<'a, T> {
     pub fn new(limiter: Option<Arc<IOLimiter>>, writer: &'a mut T) -> LimitWriter<'a, T> {
-        LimitWriter {
-            limiter,
-            writer,
-        }
+        LimitWriter { limiter, writer }
     }
 }
 
@@ -108,10 +105,10 @@ impl<'a, T: Write + 'a> Write for LimitWriter<'a, T> {
 
 #[cfg(test)]
 mod test {
-    use tempdir::TempDir;
     use std::fs::File;
     use std::io::{Read, Write};
     use std::sync::Arc;
+    use tempdir::TempDir;
 
     use super::{IOLimiter, LimitWriter, SNAP_MAX_BYTES_PER_TIME};
 

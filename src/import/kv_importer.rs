@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs;
 use std::fmt;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use uuid::Uuid;
 use kvproto::importpb::*;
+use uuid::Uuid;
 
 use config::DbConfig;
 use util::collections::HashMap;

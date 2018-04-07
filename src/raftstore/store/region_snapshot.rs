@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-use std::cmp;
-use rocksdb::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use kvproto::metapb::Region;
+use rocksdb::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
+use std::cmp;
+use std::sync::Arc;
 
+use raftstore::Result;
 use raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
 use raftstore::store::{keys, util, PeerStorage};
-use raftstore::Result;
 
 /// Snapshot of a region.
 ///
@@ -311,13 +311,13 @@ impl RegionIterator {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::path::Path;
     use std::rc::Rc;
     use std::sync::Arc;
-    use std::path::Path;
 
-    use tempdir::TempDir;
-    use rocksdb::{Writable, DB};
     use kvproto::metapb::{Peer, Region};
+    use rocksdb::{Writable, DB};
+    use tempdir::TempDir;
 
     use raftstore::Result;
     use raftstore::store::engine::*;

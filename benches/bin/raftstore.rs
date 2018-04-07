@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test::BenchSamples;
-use test_util::*;
 use cluster::*;
 use node::new_node_cluster;
 use server::new_server_cluster;
+use test::BenchSamples;
+use test_util::*;
 
 use rocksdb::{Writable, WriteBatch, DB};
 use tikv::raftstore::store::*;

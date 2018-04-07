@@ -11,24 +11,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cmp::Ordering;
 use std::mem;
 use std::sync::Arc;
-use std::cmp::Ordering;
 
-use tipb::schema::ColumnInfo;
 use tipb::executor::Aggregation;
 use tipb::expression::{Expr, ExprType};
+use tipb::schema::ColumnInfo;
 
-use util::collections::{OrderMap, OrderMapEntry};
-use coprocessor::codec::table::RowColsDict;
-use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
-use coprocessor::endpoint::SINGLE_GROUP;
-use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use coprocessor::Result;
+use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
+use coprocessor::codec::table::RowColsDict;
+use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use coprocessor::endpoint::SINGLE_GROUP;
+use util::collections::{OrderMap, OrderMapEntry};
 
+use super::ExecutorMetrics;
 use super::aggregate::{self, AggrFunc};
 use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
-use super::ExecutorMetrics;
 
 struct AggFuncExpr {
     args: Vec<Expression>,
@@ -411,12 +411,12 @@ mod test {
     use util::codec::number::NumberEncoder;
     use util::collections::HashMap;
 
-    use super::*;
-    use super::super::table_scan::TableScanExecutor;
     use super::super::index_scan::IndexScanExecutor;
     use super::super::index_scan::test::IndexTestWrapper;
     use super::super::scanner::test::{get_range, new_col_info, Data, TestStore};
+    use super::super::table_scan::TableScanExecutor;
     use super::super::topn::test::gen_table_data;
+    use super::*;
 
     #[inline]
     fn build_expr(tp: ExprType, id: Option<i64>, child: Option<Expr>) -> Expr {

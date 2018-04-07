@@ -107,21 +107,21 @@ mod tests {
     use std::sync::Arc;
     use std::sync::mpsc;
 
-    use tempdir::TempDir;
-    use rocksdb::Writable;
     use kvproto::metapb::Peer;
-    use rocksdb::{ColumnFamilyOptions, DBOptions};
     use kvproto::metapb::Region;
+    use rocksdb::Writable;
+    use rocksdb::{ColumnFamilyOptions, DBOptions};
+    use tempdir::TempDir;
 
-    use storage::ALL_CFS;
     use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
-    use util::rocksdb::{new_engine_opt, CFOptions};
-    use util::worker::Runnable;
-    use util::transport::RetryableSendCh;
+    use storage::ALL_CFS;
     use util::config::ReadableSize;
+    use util::rocksdb::{new_engine_opt, CFOptions};
+    use util::transport::RetryableSendCh;
+    use util::worker::Runnable;
 
-    use raftstore::coprocessor::{Config, CoprocessorHost};
     use super::*;
+    use raftstore::coprocessor::{Config, CoprocessorHost};
 
     #[test]
     fn test_split_check() {

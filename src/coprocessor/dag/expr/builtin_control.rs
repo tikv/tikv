@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
 use super::{EvalContext, FnCall, Result};
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
 use coprocessor::dag::expr::Expression;
+use std::borrow::Cow;
 
 fn if_null<F, T>(mut f: F) -> Result<Option<T>>
 where
@@ -234,8 +234,8 @@ mod test {
 
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::{Duration, Json, Time};
-    use coprocessor::dag::expr::{EvalContext, Expression};
     use coprocessor::dag::expr::test::{col_expr, datum_expr, fncall_expr, str2dec};
+    use coprocessor::dag::expr::{EvalContext, Expression};
 
     #[test]
     fn test_if_null() {

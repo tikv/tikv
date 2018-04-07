@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod properties;
-pub mod event_listener;
 pub mod engine_metrics;
+pub mod event_listener;
 pub mod metrics_flusher;
+pub mod properties;
 pub mod stats;
 
 pub use self::event_listener::{CompactedEvent, CompactionListener, EventListener};
@@ -22,18 +22,18 @@ pub use self::metrics_flusher::MetricsFlusher;
 
 use std::fs::{self, File};
 use std::path::Path;
-use std::sync::Arc;
 use std::str::FromStr;
+use std::sync::Arc;
 
-use storage::{ALL_CFS, CF_DEFAULT};
-use rocksdb::{ColumnFamilyOptions, CompactOptions, DBCompressionType, DBOptions, Range,
-              SliceTransform, DB};
 use rocksdb::rocksdb::supported_compression;
 use rocksdb::set_external_sst_file_global_seq_no;
+use rocksdb::{ColumnFamilyOptions, CompactOptions, DBCompressionType, DBOptions, Range,
+              SliceTransform, DB};
+use storage::{ALL_CFS, CF_DEFAULT};
+use util::file::{copy_and_sync, calc_crc32};
+use util::rocksdb;
 use util::rocksdb::engine_metrics::{ROCKSDB_COMPRESSION_RATIO_AT_LEVEL,
                                     ROCKSDB_CUR_SIZE_ALL_MEM_TABLES, ROCKSDB_TOTAL_SST_FILES_SIZE};
-use util::rocksdb;
-use util::file::{copy_and_sync, calc_crc32};
 
 pub use rocksdb::CFHandle;
 
@@ -75,10 +75,7 @@ pub struct CFOptions<'a> {
 
 impl<'a> CFOptions<'a> {
     pub fn new(cf: &'a str, options: ColumnFamilyOptions) -> CFOptions<'a> {
-        CFOptions {
-            cf,
-            options,
-        }
+        CFOptions { cf, options }
     }
 }
 
@@ -242,9 +239,7 @@ pub struct FixedSuffixSliceTransform {
 
 impl FixedSuffixSliceTransform {
     pub fn new(suffix_len: usize) -> FixedSuffixSliceTransform {
-        FixedSuffixSliceTransform {
-            suffix_len,
-        }
+        FixedSuffixSliceTransform { suffix_len }
     }
 }
 
@@ -270,9 +265,7 @@ pub struct FixedPrefixSliceTransform {
 
 impl FixedPrefixSliceTransform {
     pub fn new(prefix_len: usize) -> FixedPrefixSliceTransform {
-        FixedPrefixSliceTransform {
-            prefix_len,
-        }
+        FixedPrefixSliceTransform { prefix_len }
     }
 }
 
@@ -442,8 +435,8 @@ mod tests {
     use super::*;
     use rocksdb::{ColumnFamilyOptions, DBOptions, EnvOptions, IngestExternalFileOptions,
                   SstFileWriter, Writable, DB};
-    use tempdir::TempDir;
     use storage::CF_DEFAULT;
+    use tempdir::TempDir;
 
     #[test]
     fn test_check_and_open() {

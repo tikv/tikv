@@ -11,17 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use fail;
+use futures::sync::oneshot;
+use futures::{future, stream, Future, Stream};
+use futures_cpupool::{Builder, CpuPool};
 use grpc::{Error as GrpcError, WriteFlags};
 use grpc::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
-use futures::{future, stream, Future, Stream};
-use futures::sync::oneshot;
-use futures_cpupool::{Builder, CpuPool};
-use protobuf::text_format::print_to_string;
-use kvproto::debugpb_grpc;
 use kvproto::debugpb::*;
+use kvproto::debugpb_grpc;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader,
                           RegionDetailResponse, StatusCmdType, StatusRequest};
-use fail;
+use protobuf::text_format::print_to_string;
 
 use raftstore::store::Engines;
 use raftstore::store::msg::Callback;

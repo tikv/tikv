@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::DB;
 use raftstore::store::{util, Msg};
+use rocksdb::DB;
 use util::transport::{RetryableSendCh, Sender};
 
-use super::super::{Coprocessor, ObserverContext, SplitCheckObserver};
 use super::super::metrics::*;
+use super::super::{Coprocessor, ObserverContext, SplitCheckObserver};
 use super::Status;
 
 #[derive(Default)]
@@ -125,19 +125,19 @@ mod tests {
     use std::sync::Arc;
     use std::sync::mpsc;
 
-    use tempdir::TempDir;
-    use rocksdb::Writable;
     use kvproto::metapb::Peer;
-    use rocksdb::{ColumnFamilyOptions, DBOptions};
     use kvproto::metapb::Region;
+    use rocksdb::Writable;
+    use rocksdb::{ColumnFamilyOptions, DBOptions};
+    use tempdir::TempDir;
 
-    use storage::ALL_CFS;
     use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
-    use util::rocksdb::{new_engine_opt, CFOptions};
-    use util::worker::Runnable;
-    use util::transport::RetryableSendCh;
-    use util::properties::SizePropertiesCollectorFactory;
+    use storage::ALL_CFS;
     use util::config::ReadableSize;
+    use util::properties::SizePropertiesCollectorFactory;
+    use util::rocksdb::{new_engine_opt, CFOptions};
+    use util::transport::RetryableSendCh;
+    use util::worker::Runnable;
 
     use raftstore::coprocessor::{Config, CoprocessorHost};
 

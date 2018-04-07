@@ -11,18 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{self, Display, Formatter};
-use std::error;
 use std::collections::VecDeque;
+use std::error;
+use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
-use util::worker::Runnable;
-use util::rocksdb;
-use util::escape;
-use util::rocksdb::compact_range;
-use util::properties::MvccProperties;
 use rocksdb::{CFHandle, Range, DB};
 use storage::CF_WRITE;
+use util::escape;
+use util::properties::MvccProperties;
+use util::rocksdb;
+use util::rocksdb::compact_range;
+use util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
 
@@ -234,19 +234,19 @@ fn collect_ranges_need_compact(
 
 #[cfg(test)]
 mod test {
-    use std::time::Duration;
     use std::thread::sleep;
+    use std::time::Duration;
 
     use tempdir::TempDir;
 
+    use raftstore::store::keys::data_key;
     use rocksdb::{self, Writable, WriteBatch, DB};
-    use storage::types::Key as MvccKey;
     use storage::mvcc::{Write, WriteType};
+    use storage::types::Key as MvccKey;
     use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use util::properties::MvccPropertiesCollectorFactory;
     use util::rocksdb::new_engine;
     use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
-    use util::properties::MvccPropertiesCollectorFactory;
-    use raftstore::store::keys::data_key;
 
     use super::*;
 

@@ -11,62 +11,62 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{cmp, thread, u64};
-use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
-use std::rc::Rc;
+use protobuf::{self, Message, RepeatedField};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
+use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
 use std::time::{Duration, Instant};
+use std::{cmp, thread, u64};
 use time::{self, Timespec};
-use protobuf::{self, Message, RepeatedField};
 
-use rocksdb::{CompactionJobInfo, WriteBatch, DB};
-use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
+use rocksdb::rocksdb_options::WriteOptions;
+use rocksdb::{CompactionJobInfo, WriteBatch, DB};
 
+use kvproto::importpb::SSTMeta;
 use kvproto::metapb;
 use kvproto::pdpb::StoreStats;
-use kvproto::raft_serverpb::{MergeState, PeerState, RaftMessage, RaftSnapshotData,
-                             RaftTruncatedState, RegionLocalState};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse,
                           StatusCmdType, StatusResponse};
-use kvproto::importpb::SSTMeta;
-use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
+use kvproto::raft_serverpb::{MergeState, PeerState, RaftMessage, RaftSnapshotData,
+                             RaftTruncatedState, RegionLocalState};
 use raft::eraftpb::{ConfChangeType, MessageType};
+use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
-use util::{escape, rocksdb};
-use util::time::{duration_to_sec, SlowTimer};
-use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
-use util::transport::SendCh;
+use pd::{PdClient, PdRunner, PdTask};
+use raftstore::coprocessor::CoprocessorHost;
+use raftstore::coprocessor::split_observer::SplitObserver;
+use raftstore::{Error, Result};
+use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::RingQueue;
 use util::collections::{HashMap, HashSet};
 use util::rocksdb::{CompactedEvent, CompactionListener};
 use util::sys as util_sys;
-use pd::{PdClient, PdRunner, PdTask};
-use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use raftstore::{Error, Result};
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::coprocessor::split_observer::SplitObserver;
+use util::time::{duration_to_sec, SlowTimer};
+use util::transport::SendCh;
+use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
+use util::{escape, rocksdb};
 
-use import::SSTImporter;
+use super::cmd_resp::{bind_term, new_error};
+use super::config::Config;
+use super::engine::{Iterable, Mutable, Peekable, Snapshot as EngineSnapshot};
+use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
+use super::local_metrics::RaftMetrics;
+use super::metrics::*;
+use super::msg::{Callback, ReadResponse};
+use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
+use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
+use super::transport::Transport;
+use super::worker::apply::{ChangePeer, ExecResult};
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, CleanupSSTTask,
                     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
                     RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
                     SplitCheckTask};
-use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
-use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
-use super::engine::{Iterable, Mutable, Peekable, Snapshot as EngineSnapshot};
-use super::config::Config;
-use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
-use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
-use super::msg::{Callback, ReadResponse};
-use super::cmd_resp::{bind_term, new_error};
-use super::transport::Transport;
-use super::metrics::*;
-use super::local_metrics::RaftMetrics;
+use import::SSTImporter;
 
 type Key = Vec<u8>;
 
@@ -1388,9 +1388,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // We can't destroy a peer which is applying snapshot.
         assert!(!p.is_applying_snapshot());
         self.pending_cross_snap.remove(&region_id);
-        let task = PdTask::DestroyPeer {
-            region_id,
-        };
+        let task = PdTask::DestroyPeer { region_id };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
         }
@@ -2609,10 +2607,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             capacity: self.cfg.capacity.0,
         };
 
-        let task = PdTask::StoreHeartbeat {
-            stats,
-            store_info,
-        };
+        let task = PdTask::StoreHeartbeat { stats, store_info };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
         }

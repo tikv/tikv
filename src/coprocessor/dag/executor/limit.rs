@@ -16,10 +16,10 @@
 
 use tipb::executor::Limit;
 
+use super::ExecutorMetrics;
 use coprocessor::Result;
 use coprocessor::dag::executor::{Executor, Row};
 use coprocessor::dag::expr::EvalWarnings;
-use super::ExecutorMetrics;
 
 pub struct LimitExecutor<'a> {
     limit: u64,
@@ -75,14 +75,14 @@ mod test {
     use protobuf::RepeatedField;
     use tipb::executor::TableScan;
 
-    use coprocessor::codec::mysql::types;
     use coprocessor::codec::datum::Datum;
+    use coprocessor::codec::mysql::types;
     use storage::SnapshotStore;
 
-    use super::*;
-    use super::super::table_scan::TableScanExecutor;
     use super::super::scanner::test::{get_range, new_col_info, TestStore};
+    use super::super::table_scan::TableScanExecutor;
     use super::super::topn::test::gen_table_data;
+    use super::*;
 
     #[test]
     fn test_limit_executor() {

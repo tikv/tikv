@@ -179,8 +179,8 @@ lazy_static! {
 
 #[cfg(test)]
 mod tests {
-    use std::thread;
     use std::sync;
+    use std::thread;
 
     use libc;
 

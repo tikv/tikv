@@ -14,11 +14,11 @@
 pub mod bytes;
 pub mod number;
 
+use protobuf;
+use std::error;
 use std::io;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
-use std::error;
-use protobuf;
 
 quick_error! {
     #[derive(Debug)]

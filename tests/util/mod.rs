@@ -12,10 +12,10 @@
 // limitations under the License.
 
 use rand::{self, Rng, ThreadRng};
-use std::io::{self, Write};
 use std::env;
 use std::fmt::Arguments;
 use std::fs::File;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 

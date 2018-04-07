@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::Read;
 use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 
 use crc::crc32::{self, Hasher32};
-use uuid::Uuid;
-use rocksdb::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
 use kvproto::importpb::*;
+use rocksdb::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
+use uuid::Uuid;
 
 use raftstore::store::keys;
 

@@ -12,24 +12,24 @@
 // limitations under the License.
 
 use std::cmp;
-use std::i32;
 use std::fmt;
+use std::i32;
 use std::ops::Deref;
-use std::sync::Arc;
 use std::path::Path;
+use std::sync::Arc;
 
 use uuid::Uuid;
 
+use kvproto::importpb::*;
 use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, DBOptions, Writable, WriteBatch as RawBatch,
               DB};
-use kvproto::importpb::*;
 
 use config::DbConfig;
 use storage::CF_DEFAULT;
 use storage::types::Key;
 use util::config::MB;
-use util::rocksdb::{new_engine_opt, CFOptions};
 use util::rocksdb::properties::SizePropertiesCollectorFactory;
+use util::rocksdb::{new_engine_opt, CFOptions};
 
 use super::Result;
 

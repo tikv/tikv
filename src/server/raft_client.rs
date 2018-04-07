@@ -22,10 +22,10 @@ use grpc::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 
+use super::metrics::*;
+use super::{Config, Error, Result};
 use util::collections::HashMap;
 use util::security::SecurityManager;
-use super::{Config, Error, Result};
-use super::metrics::*;
 
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: usize = 10 * 1024 * 1024;

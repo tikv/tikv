@@ -17,12 +17,12 @@ use test::BenchSamples;
 #[path = "../../tests/storage/sync_storage.rs"]
 mod sync_storage;
 
-use test_util::*;
-use tikv::storage::{self, Key, Mutation};
-use tikv::server::readpool::{self, ReadPool};
-use tikv::util::worker::FutureWorker;
-use kvproto::kvrpcpb::Context;
 use self::sync_storage::SyncStorage;
+use kvproto::kvrpcpb::Context;
+use test_util::*;
+use tikv::server::readpool::{self, ReadPool};
+use tikv::storage::{self, Key, Mutation};
+use tikv::util::worker::FutureWorker;
 
 use super::print_result;
 
@@ -79,13 +79,18 @@ fn bench_tombstone_scan() -> BenchSamples {
     kvs = KvGenerator::new(100, 1000);
     bench!("bench_tombstone_scan", || {
         let (k, _) = kvs.next().unwrap();
-        assert!(store.scan(Context::new(),
-                           Key::from_raw(&k),
-                           1,
-                           false,
-                           ts_generator.next().unwrap())
-                     .unwrap()
-                     .is_empty())
+        assert!(
+            store
+                .scan(
+                    Context::new(),
+                    Key::from_raw(&k),
+                    1,
+                    false,
+                    ts_generator.next().unwrap()
+                )
+                .unwrap()
+                .is_empty()
+        )
     })
 }
 

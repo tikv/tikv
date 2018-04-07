@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Duration as StdDuration;
-use time::{self, Tm};
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::{str, i64, u64};
 use std::io::Write;
+use std::time::Duration as StdDuration;
+use std::{str, i64, u64};
+use time::{self, Tm};
 
 use super::super::Result;
 use super::{check_fsp, parse_frac, Decimal};
@@ -277,9 +277,9 @@ impl Ord for Duration {
 
 #[cfg(test)]
 mod test {
+    use super::*;
     use coprocessor::codec::mysql::MAX_FSP;
     use util::escape;
-    use super::*;
 
     #[test]
     fn test_parse() {

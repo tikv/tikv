@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use std::cmp::{Ord, Ordering, Reverse};
-use std::time::Duration;
 use std::collections::BinaryHeap;
+use std::time::Duration;
 
 use util::time::Instant;
 
@@ -88,8 +88,8 @@ impl<T> Ord for TimeoutTask<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc::{self, Sender};
     use std::sync::mpsc::RecvTimeoutError;
+    use std::sync::mpsc::{self, Sender};
     use util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
 
     #[derive(Debug, PartialEq, Eq, Copy, Clone)]

@@ -16,8 +16,8 @@ use std::sync::Arc;
 use tipb::executor::Selection;
 use tipb::schema::ColumnInfo;
 
-use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use coprocessor::Result;
+use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 
 use super::{inflate_with_col_for_dag, Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
 
@@ -106,15 +106,15 @@ mod tests {
     use tipb::executor::TableScan;
     use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
-    use coprocessor::codec::mysql::types;
     use coprocessor::codec::datum::Datum;
+    use coprocessor::codec::mysql::types;
     use storage::SnapshotStore;
     use util::codec::number::NumberEncoder;
 
-    use super::*;
-    use super::super::topn::test::gen_table_data;
     use super::super::scanner::test::{get_range, new_col_info, TestStore};
     use super::super::table_scan::TableScanExecutor;
+    use super::super::topn::test::gen_table_data;
+    use super::*;
 
     fn new_const_expr() -> Expr {
         let mut expr = Expr::new();

@@ -11,17 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::str::{self, FromStr};
 use std::io::Write;
 use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
+use std::str::{self, FromStr};
 use std::{cmp, mem, i32, i64, u32, u64};
-use std::cmp::Ordering;
 
 use byteorder::ReadBytesExt;
 
-use coprocessor::dag::expr::EvalContext;
 use coprocessor::codec::{convert, Error, Result, TEN_POW};
+use coprocessor::dag::expr::EvalContext;
 
 // TODO: We should use same Error in mod `coprocessor`.
 use coprocessor::dag::expr::Error as ExprError;
@@ -119,10 +119,12 @@ const FRAC_MAX: &[u32] = &[
 const NOT_FIXED_DEC: u8 = 31;
 
 macro_rules! word_cnt {
-    ($len:expr) => (word_cnt!($len, u8));
-    ($len:expr, $t:ty) => ({
+    ($len:expr) => {
+        word_cnt!($len, u8)
+    };
+    ($len:expr, $t:ty) => {{
         (($len) + DIGITS_PER_WORD as $t - 1) / DIGITS_PER_WORD as $t
-    })
+    }};
 }
 
 /// Return the first encoded decimal's length.
@@ -1709,40 +1711,45 @@ impl Display for Decimal {
 }
 
 macro_rules! write_u8 {
-    ($writer:ident, $b:expr, $written:ident) => ({
+    ($writer:ident, $b:expr, $written:ident) => {{
         let mut b = $b;
         if $written == 0 {
             b ^= 0x80;
         }
-        try!($writer.write_all(&[b]));
+        $writer.write_all(&[b])?;
         $written += 1;
-    })
+    }};
 }
 
 macro_rules! write_word {
-    ($writer:expr, $word:expr, $size:expr, $written:ident) => ({
+    ($writer:expr, $word:expr, $size:expr, $written:ident) => {{
         let word = $word;
         let size = $size;
         let mut data: [u8; 4] = match size {
             1 => [word as u8, 0, 0, 0],
             2 => [(word >> 8) as u8, word as u8, 0, 0],
             3 => [(word >> 16) as u8, (word >> 8) as u8, word as u8, 0],
-            4 => [(word >> 24) as u8, (word >> 16) as u8, (word >> 8) as u8, word as u8],
-            _ => unreachable!()
+            4 => [
+                (word >> 24) as u8,
+                (word >> 16) as u8,
+                (word >> 8) as u8,
+                word as u8,
+            ],
+            _ => unreachable!(),
         };
         if $written == 0 {
             data[0] ^= 0x80;
         }
-        try!(($writer).write_all(&data[..size as usize]));
+        ($writer).write_all(&data[..size as usize])?;
         $written += size;
-    })
+    }};
 }
 
 macro_rules! read_word {
-    ($reader:ident, $size:expr, $readed:ident) => ({
+    ($reader:ident, $size:expr, $readed:ident) => {{
         let buf = &mut [0; 4];
         let size = $size;
-        try!($reader.read_exact(&mut buf[..size as usize]));
+        $reader.read_exact(&mut buf[..size as usize])?;
         if $readed == 0 {
             buf[0] ^= 0x80;
             $readed += size;
@@ -1759,12 +1766,12 @@ macro_rules! read_word {
                 }
             }
             4 => {
-                ((i32::from(buf[0] as i8) << 24) + (i32::from(buf[1]) << 16) +
-                 (i32::from(buf[2]) << 8) + i32::from(buf[3])) as u32
+                ((i32::from(buf[0] as i8) << 24) + (i32::from(buf[1]) << 16)
+                    + (i32::from(buf[2]) << 8) + i32::from(buf[3])) as u32
             }
             _ => unreachable!(),
         }
-    })
+    }};
 }
 
 pub trait DecimalEncoder: Write {
@@ -2082,13 +2089,17 @@ mod test {
     use super::*;
     use super::{DEFAULT_DIV_FRAC_INCR, WORD_BUF_LEN};
 
+    use std::cmp::Ordering;
     use std::f64;
     use std::iter::repeat;
-    use std::cmp::Ordering;
 
     macro_rules! assert_f64_eq {
-        ($l:expr, $r:expr) => (assert!(($l - $r).abs() < f64::EPSILON));
-        ($tag:expr, $l:expr, $r:expr) => (assert!(($l - $r).abs() < f64::EPSILON, $tag));
+        ($l:expr, $r:expr) => {
+            assert!(($l - $r).abs() < f64::EPSILON)
+        };
+        ($tag:expr, $l:expr, $r:expr) => {
+            assert!(($l - $r).abs() < f64::EPSILON, $tag)
+        };
     }
 
     #[test]

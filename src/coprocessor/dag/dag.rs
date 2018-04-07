@@ -13,16 +13,16 @@
 
 use std::sync::Arc;
 
-use tipb::schema::ColumnInfo;
-use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message as PbMsg, RepeatedField};
+use tipb::schema::ColumnInfo;
+use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 
-use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
+use coprocessor::codec::mysql;
 use coprocessor::dag::expr::EvalConfig;
-use coprocessor::{Error, Result};
 use coprocessor::endpoint::{get_pk, ReqContext};
+use coprocessor::{Error, Result};
 use storage::{Snapshot, SnapshotStore};
 
 use super::executor::{build_exec, Executor, ExecutorMetrics, Row};

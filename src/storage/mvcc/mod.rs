@@ -11,18 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod lock;
+mod metrics;
 mod reader;
 mod txn;
-mod lock;
 mod write;
-mod metrics;
 
-use std::io;
-use std::error;
-pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
-pub use self::reader::MvccReader;
 pub use self::lock::{Lock, LockType};
+pub use self::reader::MvccReader;
+pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use self::write::{Write, WriteType};
+use std::error;
+use std::io;
 use util::escape;
 
 quick_error! {
@@ -115,9 +115,7 @@ impl Error {
                 primary: primary.to_owned(),
             }),
             Error::KeyVersion => Some(Error::KeyVersion),
-            Error::Committed { commit_ts } => Some(Error::Committed {
-                commit_ts,
-            }),
+            Error::Committed { commit_ts } => Some(Error::Committed { commit_ts }),
             Error::Io(_) | Error::Other(_) => None,
         }
     }

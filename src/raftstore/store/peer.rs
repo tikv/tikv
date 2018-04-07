@@ -11,48 +11,48 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::{cmp, mem, slice};
+use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::{cmp, mem, slice};
 
-use time::Timespec;
-use rocksdb::{WriteBatch, DB};
-use rocksdb::rocksdb_options::WriteOptions;
-use protobuf::{self, Message};
 use kvproto::metapb;
-use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
+use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
                           RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftMessage};
-use kvproto::pdpb::PeerStats;
+use protobuf::{self, Message};
+use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
+use rocksdb::rocksdb_options::WriteOptions;
+use rocksdb::{WriteBatch, DB};
+use time::Timespec;
 
 use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
            INVALID_INDEX, NO_LIMIT};
-use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
-use raftstore::store::worker::{apply, Proposal, RegionProposal};
 use raftstore::store::worker::apply::ExecResult;
 use raftstore::store::worker::{Apply, ApplyRes, ApplyTask};
+use raftstore::store::worker::{apply, Proposal, RegionProposal};
+use raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
+use raftstore::{Error, Result};
 
 use util::MustConsumeVec;
-use util::worker::{FutureWorker, Scheduler};
-use util::time::{duration_to_sec, monotonic_raw_now};
 use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
+use util::time::{duration_to_sec, monotonic_raw_now};
+use util::worker::{FutureWorker, Scheduler};
 
 use pd::{PdTask, INVALID_ID};
 
-use super::store::{DestroyPeerJob, Store, StoreStat};
-use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
-use super::util::{self, Lease, LeaseState};
 use super::cmd_resp;
-use super::transport::Transport;
 use super::engine::Snapshot;
-use super::metrics::*;
 use super::local_metrics::{RaftMessageMetrics, RaftMetrics, RaftProposeMetrics, RaftReadyMetrics};
+use super::metrics::*;
+use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
+use super::store::{DestroyPeerJob, Store, StoreStat};
+use super::transport::Transport;
+use super::util::{self, Lease, LeaseState};
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;

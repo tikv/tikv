@@ -11,23 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use byteorder::{ReadBytesExt, WriteBytesExt};
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::{str, i64};
-use std::io::Write;
-use std::str::FromStr;
-use std::mem;
 use std::fmt::{self, Debug, Display, Formatter};
-use byteorder::{ReadBytesExt, WriteBytesExt};
+use std::io::Write;
+use std::mem;
+use std::str::FromStr;
+use std::{str, i64};
 
-use util::escape;
-use util::codec::{bytes, number};
-use util::codec::number::NumberDecoder;
-use util::codec::bytes::BytesEncoder;
-use coprocessor::dag::expr::EvalContext;
-use super::{convert, Result};
 use super::mysql::{self, parse_json_path_expr, Decimal, DecimalDecoder, DecimalEncoder, Duration,
                    Json, JsonDecoder, JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP};
+use super::{convert, Result};
+use coprocessor::dag::expr::EvalContext;
+use util::codec::bytes::BytesEncoder;
+use util::codec::number::NumberDecoder;
+use util::codec::{bytes, number};
+use util::escape;
 
 pub const NIL_FLAG: u8 = 0;
 const BYTES_FLAG: u8 = 1;

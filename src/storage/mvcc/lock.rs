@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::super::types::Value;
+use super::{Error, Result};
 use byteorder::ReadBytesExt;
 use storage::{Mutation, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
-use util::codec::number::{MAX_VAR_U64_LEN, NumberDecoder, NumberEncoder};
 use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
-use super::{Error, Result};
-use super::super::types::Value;
+use util::codec::number::{MAX_VAR_U64_LEN, NumberDecoder, NumberEncoder};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LockType {
@@ -114,8 +114,7 @@ impl Lock {
 
         let flag = b.read_u8()?;
         assert_eq!(
-            flag,
-            SHORT_VALUE_PREFIX,
+            flag, SHORT_VALUE_PREFIX,
             "invalid flag [{:?}] in write",
             flag
         );
@@ -135,8 +134,8 @@ impl Lock {
 
 #[cfg(test)]
 mod tests {
-    use storage::{make_key, Mutation};
     use super::*;
+    use storage::{make_key, Mutation};
 
     #[test]
     fn test_lock_type() {
@@ -157,33 +156,21 @@ mod tests {
         for (i, (mutation, lock_type, flag)) in tests.drain(..).enumerate() {
             let lt = LockType::from_mutation(&mutation);
             assert_eq!(
-                lt,
-                lock_type,
+                lt, lock_type,
                 "#{}, expect from_mutation({:?}) returns {:?}, but got {:?}",
-                i,
-                mutation,
-                lock_type,
-                lt
+                i, mutation, lock_type, lt
             );
             let f = lock_type.to_u8();
             assert_eq!(
-                f,
-                flag,
+                f, flag,
                 "#{}, expect {:?}.to_u8() returns {:?}, but got {:?}",
-                i,
-                lock_type,
-                flag,
-                f
+                i, lock_type, flag, f
             );
             let lt = LockType::from_u8(flag).unwrap();
             assert_eq!(
-                lt,
-                lock_type,
+                lt, lock_type,
                 "#{}, expect from_u8({:?}) returns {:?}, but got {:?})",
-                i,
-                flag,
-                lock_type,
-                lt
+                i, flag, lock_type, lt
             );
         }
     }

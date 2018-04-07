@@ -11,18 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use kvproto::metapb::Region;
+use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
+use protobuf::RepeatedField;
 use raft::StateRole;
 use rocksdb::DB;
-use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
-use kvproto::metapb::Region;
-use protobuf::RepeatedField;
 
-pub mod dispatcher;
-pub mod split_observer;
 pub mod config;
+pub mod dispatcher;
 mod error;
 mod metrics;
 mod split_check;
+pub mod split_observer;
 
 pub use self::config::Config;
 pub use self::dispatcher::{CoprocessorHost, Registry};

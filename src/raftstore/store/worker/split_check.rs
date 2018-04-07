@@ -11,23 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-use std::fmt::{self, Display, Formatter};
-use std::collections::BinaryHeap;
 use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+use std::fmt::{self, Display, Formatter};
+use std::sync::Arc;
 
-use rocksdb::{DBIterator, DB};
-use kvproto::metapb::RegionEpoch;
 use kvproto::metapb::Region;
+use kvproto::metapb::RegionEpoch;
+use rocksdb::{DBIterator, DB};
 
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::{keys, Callback, Msg};
-use raftstore::store::engine::{IterOption, Iterable};
 use raftstore::Result;
+use raftstore::coprocessor::CoprocessorHost;
+use raftstore::store::engine::{IterOption, Iterable};
+use raftstore::store::{keys, Callback, Msg};
+use storage::{CfName, LARGE_CFS};
 use util::escape;
 use util::transport::{RetryableSendCh, Sender};
 use util::worker::Runnable;
-use storage::{CfName, LARGE_CFS};
 
 use super::metrics::*;
 
@@ -95,10 +95,7 @@ impl<'a> MergedIterator<'a> {
             }
             iters.push(iter);
         }
-        Ok(MergedIterator {
-            iters,
-            heap,
-        })
+        Ok(MergedIterator { iters, heap })
     }
 
     fn next(&mut self) -> Option<KeyEntry> {

@@ -75,9 +75,6 @@ impl PdMocker for Split {
         info!("[Split] resps {:?}", resps);
 
         let mut inner = self.inner.lock().unwrap();
-        *inner = Some(Inner {
-            resps,
-            idx: 0,
-        })
+        *inner = Some(Inner { resps, idx: 0 })
     }
 }

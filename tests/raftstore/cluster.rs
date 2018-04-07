@@ -12,30 +12,30 @@
 // limitations under the License.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{self, Arc, RwLock};
 use std::path::Path;
+use std::sync::{self, Arc, RwLock};
 use std::time::*;
 use std::{result, thread};
 
+use futures::Future;
 use rocksdb::DB;
 use tempdir::TempDir;
-use futures::Future;
 
-use tikv::raftstore::{Error, Result};
-use tikv::raftstore::store::*;
-use tikv::config::TiKvConfig;
-use tikv::storage::CF_DEFAULT;
-use super::util::*;
-use kvproto::pdpb;
-use kvproto::raft_cmdpb::*;
-use kvproto::metapb::{self, RegionEpoch};
-use kvproto::raft_serverpb::RaftMessage;
-use kvproto::errorpb::Error as PbError;
-use tikv::pd::PdClient;
-use tikv::util::{escape, rocksdb, HandyRwLock};
-use tikv::util::transport::SendCh;
 use super::pd::TestPdClient;
 use super::transport_simulate::*;
+use super::util::*;
+use kvproto::errorpb::Error as PbError;
+use kvproto::metapb::{self, RegionEpoch};
+use kvproto::pdpb;
+use kvproto::raft_cmdpb::*;
+use kvproto::raft_serverpb::RaftMessage;
+use tikv::config::TiKvConfig;
+use tikv::pd::PdClient;
+use tikv::raftstore::store::*;
+use tikv::raftstore::{Error, Result};
+use tikv::storage::CF_DEFAULT;
+use tikv::util::transport::SendCh;
+use tikv::util::{escape, rocksdb, HandyRwLock};
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id

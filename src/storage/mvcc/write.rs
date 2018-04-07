@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use byteorder::ReadBytesExt;
-use util::codec::number::{MAX_VAR_U64_LEN, NumberDecoder, NumberEncoder};
-use storage::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use super::super::types::Value;
 use super::lock::LockType;
 use super::{Error, Result};
-use super::super::types::Value;
+use byteorder::ReadBytesExt;
+use storage::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use util::codec::number::{MAX_VAR_U64_LEN, NumberDecoder, NumberEncoder};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WriteType {
@@ -100,8 +100,7 @@ impl Write {
 
         let flag = b.read_u8()?;
         assert_eq!(
-            flag,
-            SHORT_VALUE_PREFIX,
+            flag, SHORT_VALUE_PREFIX,
             "invalid flag [{:?}] in write",
             flag
         );
@@ -139,34 +138,22 @@ mod tests {
             if lock_type.is_some() {
                 let wt = WriteType::from_lock_type(lock_type.unwrap());
                 assert_eq!(
-                    wt,
-                    write_type,
+                    wt, write_type,
                     "#{}, expect from_lock_type({:?}) returns {:?}, but got {:?}",
-                    i,
-                    lock_type,
-                    write_type,
-                    wt
+                    i, lock_type, write_type, wt
                 );
             }
             let f = write_type.to_u8();
             assert_eq!(
-                f,
-                flag,
+                f, flag,
                 "#{}, expect {:?}.to_u8() returns {:?}, but got {:?}",
-                i,
-                write_type,
-                flag,
-                f
+                i, write_type, flag, f
             );
             let wt = WriteType::from_u8(flag).unwrap();
             assert_eq!(
-                wt,
-                write_type,
+                wt, write_type,
                 "#{}, expect from_u8({:?}) returns {:?}, but got {:?}",
-                i,
-                flag,
-                write_type,
-                wt
+                i, flag, write_type, wt
             );
         }
     }

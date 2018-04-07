@@ -15,18 +15,18 @@ use std::option::Option;
 use std::{fmt, u64};
 
 use kvproto::metapb;
-use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use kvproto::raft_serverpb::RaftMessage;
 use protobuf::{self, Message, MessageStatic};
-use raftstore::{Error, Result};
+use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raftstore::store::keys;
+use raftstore::{Error, Result};
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
 use storage::{Key, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
 use util::properties::SizeProperties;
-use util::{rocksdb as rocksdb_util, Either};
 use util::time::monotonic_raw_now;
+use util::{rocksdb as rocksdb_util, Either};
 
 use super::engine::{IterOption, Iterable};
 use super::peer_storage;
@@ -405,12 +405,12 @@ mod tests {
     use tempdir::TempDir;
     use time::Duration as TimeDuration;
 
+    use super::*;
     use raftstore::store::peer_storage;
+    use storage::{Key, ALL_CFS};
     use util::properties::SizePropertiesCollectorFactory;
     use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
     use util::time::monotonic_raw_now;
-    use storage::{Key, ALL_CFS};
-    use super::*;
 
     #[test]
     fn test_lease() {

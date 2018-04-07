@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use byteorder::{BigEndian, ReadBytesExt};
+use std::iter::Peekable;
 use std::mem;
 use std::vec::IntoIter;
-use std::iter::Peekable;
-use byteorder::{BigEndian, ReadBytesExt};
 
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::IndexScan;
@@ -25,9 +25,9 @@ use coprocessor::endpoint::is_point;
 use coprocessor::{Error, Result};
 use storage::{Key, SnapshotStore};
 
-use super::{Executor, Row};
-use super::scanner::{ScanOn, Scanner};
 use super::ExecutorMetrics;
+use super::scanner::{ScanOn, Scanner};
+use super::{Executor, Row};
 
 pub struct IndexScanExecutor {
     store: SnapshotStore,
@@ -261,20 +261,20 @@ impl Executor for IndexScanExecutor {
 
 #[cfg(test)]
 pub mod test {
-    use std::i64;
     use byteorder::{BigEndian, WriteBytesExt};
+    use std::i64;
 
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
     use tipb::schema::ColumnInfo;
 
-    use coprocessor::codec::mysql::types;
     use coprocessor::codec::datum::{self, Datum};
-    use util::collections::HashMap;
+    use coprocessor::codec::mysql::types;
     use storage::SnapshotStore;
+    use util::collections::HashMap;
 
-    use super::*;
     use super::super::scanner::test::{new_col_info, Data, TestStore};
+    use super::*;
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;

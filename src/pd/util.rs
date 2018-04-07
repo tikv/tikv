@@ -11,27 +11,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashSet;
 use std::result;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::time::Instant;
 use std::time::Duration;
-use std::collections::HashSet;
+use std::time::Instant;
 
-use futures::{task, Async, Future, Poll, Stream};
-use futures::task::Task;
 use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
+use futures::task::Task;
+use futures::{task, Async, Future, Poll, Stream};
 use grpc::{CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
            Result as GrpcResult};
-use tokio_timer::Timer;
 use kvproto::pdpb::{ErrorType, GetMembersRequest, GetMembersResponse, Member,
                     RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader};
 use kvproto::pdpb_grpc::PdClient;
+use tokio_timer::Timer;
 
-use util::{Either, HandyRwLock};
-use util::security::SecurityManager;
 use super::{Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
+use util::security::SecurityManager;
+use util::{Either, HandyRwLock};
 
 pub struct Inner {
     env: Arc<Environment>,

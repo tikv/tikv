@@ -11,29 +11,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::thread;
-use std::sync::{mpsc, Arc};
-use std::sync::mpsc::Receiver;
-use std::time::Duration;
 use std::process;
+use std::sync::mpsc::Receiver;
+use std::sync::{mpsc, Arc};
+use std::thread;
+use std::time::Duration;
 
 use mio::EventLoop;
 
-use pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
-use kvproto::raft_serverpb::StoreIdent;
+use super::Result;
+use super::transport::RaftStoreRouter;
+use import::SSTImporter;
 use kvproto::metapb;
+use kvproto::raft_serverpb::StoreIdent;
+use pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use protobuf::RepeatedField;
-use util::transport::SendCh;
-use util::worker::FutureWorker;
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::store::{self, keys, Config as StoreConfig, Engines, Msg, Peekable, SignificantMsg,
                        SnapManager, Store, StoreChannel, Transport};
-use super::Result;
-use import::SSTImporter;
 use server::Config as ServerConfig;
-use storage::{self, Config as StorageConfig, RaftKv, Storage};
-use super::transport::RaftStoreRouter;
 use server::readpool::ReadPool;
+use storage::{self, Config as StorageConfig, RaftKv, Storage};
+use util::transport::SendCh;
+use util::worker::FutureWorker;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -399,9 +399,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use raftstore::store::keys;
     use super::check_region_epoch;
     use kvproto::metapb;
+    use raftstore::store::keys;
 
     #[test]
     fn test_check_region_epoch() {

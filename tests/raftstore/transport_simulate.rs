@@ -13,19 +13,19 @@
 
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
-use tikv::raftstore::{Error, Result};
 use tikv::raftstore::store::{Msg as StoreMsg, SignificantMsg, Transport};
-use tikv::server::transport::*;
+use tikv::raftstore::{Error, Result};
 use tikv::server::StoreAddrResolver;
+use tikv::server::transport::*;
 use tikv::util::{transport, Either, HandyRwLock};
 
 use rand;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, RwLock};
-use std::sync::mpsc::Sender;
 use std::marker::PhantomData;
-use std::{thread, time, usize};
 use std::sync::atomic::*;
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex, RwLock};
+use std::{thread, time, usize};
 
 pub trait Channel<M>: Send + Clone {
     fn send(&self, m: M) -> Result<()>;

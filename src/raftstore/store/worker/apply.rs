@@ -13,43 +13,43 @@
 
 #![allow(dead_code)]
 
-use std::sync::Arc;
-use std::sync::mpsc::Sender;
+use std::cmp;
+use std::collections::VecDeque;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
-use std::collections::VecDeque;
-use std::cmp;
+use std::sync::Arc;
+use std::sync::mpsc::Sender;
 
-use rocksdb::{Writable, WriteBatch, DB};
-use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::RepeatedField;
+use rocksdb::rocksdb_options::WriteOptions;
+use rocksdb::{Writable, WriteBatch, DB};
 use uuid::Uuid;
 
+use kvproto::importpb::SSTMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region};
-use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
-use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState,
-                             RegionLocalState};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType,
                           CommitMergeRequest, RaftCmdRequest, RaftCmdResponse, Request, Response};
-use kvproto::importpb::SSTMeta;
+use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState,
+                             RegionLocalState};
+use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
 
-use util::worker::Runnable;
-use util::{escape, rocksdb, MustConsumeVec};
-use util::time::{duration_to_sec, Instant, SlowTimer};
-use util::collections::HashMap;
-use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use import::SSTImporter;
 use raft::NO_LIMIT;
-use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::{cmd_resp, keys, util, Store};
-use raftstore::store::msg::Callback;
 use raftstore::store::engine::{Mutable, Peekable, Snapshot};
+use raftstore::store::metrics::*;
+use raftstore::store::msg::Callback;
+use raftstore::store::peer::{check_epoch, Peer};
 use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply_state,
                                      write_peer_state};
-use raftstore::store::peer::{check_epoch, Peer};
-use raftstore::store::metrics::*;
-use import::SSTImporter;
+use raftstore::store::{cmd_resp, keys, util, Store};
+use raftstore::{Error, Result};
+use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use util::collections::HashMap;
+use util::time::{duration_to_sec, Instant, SlowTimer};
+use util::worker::Runnable;
+use util::{escape, rocksdb, MustConsumeVec};
 
 use super::metrics::*;
 
@@ -859,7 +859,12 @@ struct ExecContext {
 }
 
 impl ExecContext {
-    pub fn new(apply_state: RaftApplyState, req: RaftCmdRequest, index: u64, term: u64) -> ExecContext {
+    pub fn new(
+        apply_state: RaftApplyState,
+        req: RaftCmdRequest,
+        index: u64,
+        term: u64,
+    ) -> ExecContext {
         ExecContext {
             apply_state,
             req: Rc::new(req),
@@ -1861,13 +1866,7 @@ impl ApplyDelegate {
         let index = verify_req.get_index();
         let hash = verify_req.get_hash().to_vec();
         let resp = AdminResponse::new();
-        Ok((
-            resp,
-            Some(ExecResult::VerifyHash {
-                index,
-                hash,
-            }),
-        ))
+        Ok((resp, Some(ExecResult::VerifyHash { index, hash })))
     }
 }
 
@@ -1972,9 +1971,7 @@ impl Task {
     }
 
     pub fn destroy(region_id: u64) -> Task {
-        Task::Destroy(Destroy {
-            region_id,
-        })
+        Task::Destroy(Destroy { region_id })
     }
 }
 
@@ -2209,17 +2206,17 @@ impl Runnable<Task> for Runner {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::*;
     use std::sync::atomic::*;
+    use std::sync::*;
     use std::time::*;
 
-    use tempdir::TempDir;
-    use rocksdb::{Writable, WriteBatch, DB};
-    use protobuf::Message;
     use kvproto::metapb::RegionEpoch;
     use kvproto::raft_cmdpb::*;
+    use protobuf::Message;
     use raftstore::coprocessor::*;
     use raftstore::store::msg::WriteResponse;
+    use rocksdb::{Writable, WriteBatch, DB};
+    use tempdir::TempDir;
 
     use super::*;
     use import::test_helpers::*;
@@ -2461,10 +2458,7 @@ mod tests {
             let mut entry = Entry::new();
             entry.set_index(index);
             entry.set_term(term);
-            EntryBuilder {
-                entry,
-                req,
-            }
+            EntryBuilder { entry, req }
         }
 
         fn capture_resp(

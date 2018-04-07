@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use time::{self, Timespec, Tm};
+use std::fmt::Arguments;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::fmt::Arguments;
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use time::{self, Timespec, Tm};
 
 use super::logger::LogWriter;
 
@@ -139,10 +139,10 @@ impl Drop for RotatingFileLogger {
 
 #[cfg(test)]
 mod tests {
-    use time::{self, Timespec};
-    use std::io::prelude::*;
     use std::fs::OpenOptions;
+    use std::io::prelude::*;
     use std::path::Path;
+    use time::{self, Timespec};
 
     use tempdir::TempDir;
     use utime;

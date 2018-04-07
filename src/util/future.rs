@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::boxed;
 use futures::sync::oneshot;
+use std::boxed;
 
 /// Generated a paired future and callback so that when callback is being called, its result
 /// is automatically passed as a future result.

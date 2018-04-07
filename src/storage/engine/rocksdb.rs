@@ -11,20 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ops::Deref;
-use std::fmt::{self, Debug, Display, Formatter};
-use std::sync::{Arc, Mutex};
-use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
-use kvproto::kvrpcpb::Context;
-use storage::{CfName, Key, Value, CF_DEFAULT};
-use raftstore::store::engine::{IterOption, Peekable, SyncSnapshot as RocksSnapshot};
-use util::escape;
-use util::rocksdb;
-use util::worker::{Runnable, Scheduler, Worker};
-use util::rocksdb::CFOptions;
 use super::{BatchCallback, Callback, CbContext, Cursor, Engine, Error, Iterator as EngineIterator,
             Modify, Result, ScanMode, Snapshot, TEMP_DIR};
+use kvproto::kvrpcpb::Context;
+use raftstore::store::engine::{IterOption, Peekable, SyncSnapshot as RocksSnapshot};
+use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
+use std::fmt::{self, Debug, Display, Formatter};
+use std::ops::Deref;
+use std::sync::{Arc, Mutex};
+use storage::{CfName, Key, Value, CF_DEFAULT};
 use tempdir::TempDir;
+use util::escape;
+use util::rocksdb;
+use util::rocksdb::CFOptions;
+use util::worker::{Runnable, Scheduler, Worker};
 
 enum Task {
     Write(Vec<Modify>, Callback<()>),
@@ -105,10 +105,7 @@ impl EngineRocksdb {
         box_try!(worker.start(Runner(Arc::new(db))));
         Ok(EngineRocksdb {
             sched: worker.scheduler(),
-            core: Arc::new(Mutex::new(EngineRocksdbCore {
-                temp_dir,
-                worker,
-            })),
+            core: Arc::new(Mutex::new(EngineRocksdbCore { temp_dir, worker })),
         })
     }
 

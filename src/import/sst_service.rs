@@ -13,21 +13,21 @@
 
 use std::sync::Arc;
 
-use grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
-use futures::{future, Future, Stream};
 use futures::sync::mpsc;
+use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
+use grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::importpb::*;
 use kvproto::importpb_grpc::*;
 use kvproto::raft_cmdpb::*;
 
-use util::future::paired_future_callback;
-use util::time::Instant;
 use raftstore::store::Callback;
 use server::transport::RaftStoreRouter;
+use util::future::paired_future_callback;
+use util::time::Instant;
 
-use super::service::*;
 use super::metrics::*;
+use super::service::*;
 use super::{Config, Error, SSTImporter};
 
 #[derive(Clone)]

@@ -11,34 +11,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::iter::{self, FromIterator};
+use futures::sync::{mpsc as futures_mpsc, oneshot};
+use futures::{future, stream, Future, Sink, Stream};
 use grpc::{ClientStreamingSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
            RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
-use futures::{future, stream, Future, Sink, Stream};
-use futures::sync::{mpsc as futures_mpsc, oneshot};
-use protobuf::RepeatedField;
-use kvproto::tikvpb_grpc;
-use kvproto::raft_serverpb::*;
-use kvproto::kvrpcpb;
-use kvproto::kvrpcpb::*;
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
+use kvproto::kvrpcpb;
+use kvproto::kvrpcpb::*;
+use kvproto::raft_serverpb::*;
+use kvproto::tikvpb_grpc;
 use prometheus::Histogram;
+use protobuf::RepeatedField;
+use std::iter::{self, FromIterator};
 
-use util::worker::Scheduler;
+use coprocessor::local_metrics::BasicLocalMetrics;
+use coprocessor::{err_resp, EndPointTask, RequestTask};
+use raftstore::store::{Callback, Msg as StoreMessage};
+use server::metrics::*;
+use server::snap::Task as SnapTask;
+use server::transport::RaftStoreRouter;
+use server::{Error, OnResponse};
+use storage::engine::Error as EngineError;
+use storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
+use storage::txn::Error as TxnError;
+use storage::{self, Key, Mutation, Options, Storage, Value};
 use util::collections::HashMap;
 use util::future::paired_future_callback;
-use storage::{self, Key, Mutation, Options, Storage, Value};
-use storage::txn::Error as TxnError;
-use storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
-use storage::engine::Error as EngineError;
-use server::transport::RaftStoreRouter;
-use server::snap::Task as SnapTask;
-use server::metrics::*;
-use server::{Error, OnResponse};
-use raftstore::store::{Callback, Msg as StoreMessage};
-use coprocessor::{err_resp, EndPointTask, RequestTask};
-use coprocessor::local_metrics::BasicLocalMetrics;
+use util::worker::Scheduler;
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 

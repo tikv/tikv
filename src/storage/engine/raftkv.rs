@@ -13,26 +13,26 @@
 
 use std::fmt::{self, Debug, Formatter};
 use std::io::Error as IoError;
-use std::time::Duration;
 use std::result;
+use std::time::Duration;
 
-use kvproto::raft_cmdpb::{CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest,
-                          RaftCmdResponse, RaftRequestHeader, Request, Response};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
+use kvproto::raft_cmdpb::{CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest,
+                          RaftCmdResponse, RaftRequestHeader, Request, Response};
 use protobuf::RepeatedField;
 
-use server::transport::RaftStoreRouter;
-use raftstore::store::{self, Callback as StoreCallback, ReadResponse, WriteResponse};
-use raftstore::errors::Error as RaftServerError;
-use raftstore::store::{RegionIterator, RegionSnapshot};
-use raftstore::store::engine::Peekable;
-use raftstore::store::engine::IterOption;
-use rocksdb::TablePropertiesCollection;
-use storage::{self, engine, CfName, Key, Value, CF_DEFAULT};
+use super::metrics::*;
 use super::{BatchCallback, Callback, CbContext, Cursor, Engine, Iterator as EngineIterator,
             Modify, ScanMode, Snapshot};
-use super::metrics::*;
+use raftstore::errors::Error as RaftServerError;
+use raftstore::store::engine::IterOption;
+use raftstore::store::engine::Peekable;
+use raftstore::store::{self, Callback as StoreCallback, ReadResponse, WriteResponse};
+use raftstore::store::{RegionIterator, RegionSnapshot};
+use rocksdb::TablePropertiesCollection;
+use server::transport::RaftStoreRouter;
+use storage::{self, engine, CfName, Key, Value, CF_DEFAULT};
 
 quick_error! {
     #[derive(Debug)]

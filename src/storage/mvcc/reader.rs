@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
-use storage::{Key, Value, CF_LOCK, CF_WRITE};
-use super::{Error, Result};
 use super::lock::Lock;
 use super::write::{Write, WriteType};
+use super::{Error, Result};
+use kvproto::kvrpcpb::IsolationLevel;
 use raftstore::store::engine::IterOption;
 use std::u64;
-use kvproto::kvrpcpb::IsolationLevel;
+use storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
+use storage::{Key, Value, CF_LOCK, CF_WRITE};
 use util::properties::MvccProperties;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
@@ -309,8 +309,7 @@ impl MvccReader {
 
         while ok {
             if Write::parse(cursor.value())?.start_ts == ts {
-                return Ok(Some(Key::from_encoded(cursor.key().to_vec())
-                    .truncate_ts()?));
+                return Ok(Some(Key::from_encoded(cursor.key().to_vec()).truncate_ts()?));
             }
             ok = cursor.next(&mut self.statistics.write);
         }
@@ -554,19 +553,19 @@ impl MvccReader {
 
 #[cfg(test)]
 mod tests {
-    use std::u64;
-    use kvproto::metapb::{Peer, Region};
     use kvproto::kvrpcpb::IsolationLevel;
-    use rocksdb::{self, Writable, WriteBatch, DB};
-    use std::sync::Arc;
-    use storage::{make_key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use storage::engine::Modify;
-    use storage::mvcc::{MvccReader, MvccTxn};
-    use tempdir::TempDir;
+    use kvproto::metapb::{Peer, Region};
     use raftstore::store::RegionSnapshot;
     use raftstore::store::keys;
-    use util::rocksdb::{self as rocksdb_util, CFOptions};
+    use rocksdb::{self, Writable, WriteBatch, DB};
+    use std::sync::Arc;
+    use std::u64;
+    use storage::engine::Modify;
+    use storage::mvcc::{MvccReader, MvccTxn};
+    use storage::{make_key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use tempdir::TempDir;
     use util::properties::{MvccProperties, MvccPropertiesCollectorFactory};
+    use util::rocksdb::{self as rocksdb_util, CFOptions};
 
     struct RegionEngine {
         db: Arc<DB>,
