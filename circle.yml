@@ -6,7 +6,6 @@ machine:
     LDFLAGS: "-L$HOME/.local/lib"
     CPPFLAGS: "-I$HOME/.local/include"
     CXXFLAGS: "-I$HOME/.local/include"
-    RUSTC_DATE: "2018-04-06"
     LOCAL_PREFIX: "$HOME/.local"
     # used by cargo
     RUST_TEST_THREADS: 1
@@ -37,12 +36,13 @@ dependencies:
           mv cmake-3.10.0-Linux-x86_64 $HOME/.local/cmake
       fi
     - |
+      RUST_VERSION=`tail -n 1 RUST_VERSION`
       if [[ ! -e $HOME/.cargo ]]; then
         curl https://sh.rustup.rs -sSf |
-          sh -s -- --no-modify-path --default-toolchain "nightly-${RUSTC_DATE}" -y;
-        rustup default "nightly-${RUSTC_DATE}";
+          sh -s -- --no-modify-path --default-toolchain ${RUST_VERSION} -y;
+        rustup default ${RUST_VERSION};
       else
-        rustup default "nightly-${RUSTC_DATE}";
+        rustup default ${RUST_VERSION};
       fi
     - make -f ci-build/Makefile prepare-rustfmt
     - |
