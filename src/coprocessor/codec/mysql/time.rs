@@ -414,7 +414,12 @@ impl Time {
         let mut frac_str = "";
         let mut need_adjust = false;
         let parts = Time::parse_datetime_format(s);
-        let (mut y, m, d, h, minute, sec): (i32, u32, u32, u32, u32, u32) = match *parts.as_slice()
+        let (mut year,
+             month,
+             day,
+             hour,
+             minute,
+             sec): (i32, u32, u32, u32, u32, u32) = match *parts.as_slice()
         {
             [s1] => {
                 need_adjust = s1.len() == 12 || s1.len() == 6;
@@ -462,32 +467,32 @@ impl Time {
         };
 
         if need_adjust || parts[0].len() == 2 {
-            if y >= 0 && y <= 69 {
-                y += 2000;
-            } else if y >= 70 && y <= 99 {
-                y += 1900;
+            if year >= 0 && year <= 69 {
+                year += 2000;
+            } else if year >= 70 && year <= 99 {
+                year += 1900;
             }
         }
 
         let frac = parse_frac(frac_str.as_bytes(), fsp)?;
-        if y == 0 && m == 0 && d == 0 && h == 0 && minute == 0 && sec == 0 {
+        if year == 0 && month == 0 && day == 0 && hour == 0 && minute == 0 && sec == 0 {
             return Ok(zero_datetime(tz));
         }
         // it won't happen until 10000
-        if y < 0 || y > 9999 {
-            return Err(box_err!("unsupport year: {}", y));
+        if year < 0 || year > 9999 {
+            return Err(box_err!("unsupport year: {}", year));
         }
-        let t = ymd_hms_nanos(
+        let time = ymd_hms_nanos(
             tz,
-            y,
-            m,
-            d,
-            h,
+            year,
+            month,
+            day,
+            hour,
             minute,
             sec,
             frac * TEN_POW[9 - fsp as usize],
         )?;
-        Time::new(t, types::DATETIME as u8, fsp as i8)
+        Time::new(time, types::DATETIME as u8, fsp as i8)
     }
 
     /// Get time from packed u64. When `tp` is `TIMESTAMP`, the packed time should

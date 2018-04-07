@@ -630,38 +630,38 @@ impl Datum {
     }
 
     // `checked_int_div` computes the result of a / b, both a and b are integer.
-    pub fn checked_int_div(self, _: &mut EvalContext, d: Datum) -> Result<Datum> {
-        match d {
+    pub fn checked_int_div(self, _: &mut EvalContext, datum: Datum) -> Result<Datum> {
+        match datum {
             Datum::I64(0) | Datum::U64(0) => return Ok(Datum::Null),
             _ => {}
         }
-        match (self, d) {
-            (Datum::I64(l), Datum::I64(r)) => match l.checked_div(r) {
-                None => Err(box_err!("{} intdiv {} overflow", l, r)),
+        match (self, datum) {
+            (Datum::I64(left), Datum::I64(right)) => match left.checked_div(right) {
+                None => Err(box_err!("{} intdiv {} overflow", left, right)),
                 Some(res) => Ok(Datum::I64(res)),
             },
-            (Datum::I64(l), Datum::U64(r)) => if l < 0 {
-                if l.overflowing_neg().0 as u64 >= r {
-                    Err(box_err!("{} intdiv {} overflow", l, r))
+            (Datum::I64(left), Datum::U64(right)) => if left < 0 {
+                if left.overflowing_neg().0 as u64 >= right {
+                    Err(box_err!("{} intdiv {} overflow", left, right))
                 } else {
                     Ok(Datum::U64(0))
                 }
             } else {
-                Ok(Datum::U64(l as u64 / r))
+                Ok(Datum::U64(left as u64 / right))
             },
-            (Datum::U64(l), Datum::I64(r)) => if r < 0 {
-                if l != 0 && r.overflowing_neg().0 as u64 <= l {
-                    Err(box_err!("{} intdiv {} overflow", l, r))
+            (Datum::U64(left), Datum::I64(right)) => if right < 0 {
+                if left != 0 && right.overflowing_neg().0 as u64 <= left {
+                    Err(box_err!("{} intdiv {} overflow", left, right))
                 } else {
                     Ok(Datum::U64(0))
                 }
             } else {
-                Ok(Datum::U64(l / r as u64))
+                Ok(Datum::U64(left / right as u64))
             },
-            (Datum::U64(l), Datum::U64(r)) => Ok(Datum::U64(l / r)),
-            (l, r) => {
-                let a = l.into_dec()?;
-                let b = r.into_dec()?;
+            (Datum::U64(left), Datum::U64(right)) => Ok(Datum::U64(left / right)),
+            (left, right) => {
+                let a = left.into_dec()?;
+                let b = right.into_dec()?;
                 match a / b {
                     None => Ok(Datum::Null),
                     Some(res) => {
