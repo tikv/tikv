@@ -18,6 +18,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::iter::FromIterator;
 use std::collections::HashSet;
+use std::str::FromStr;
 
 use protobuf::{self, Message, RepeatedField};
 
@@ -417,17 +418,17 @@ impl Debugger {
             validate_db_and_cf(db, cf)?;
 
             let handle = box_try!(get_cf_handle(rocksdb, cf));
-            // currently we can't modify block_cache_capacity via set_options_cf
-            if config_name == "block_cache_capacity" {
+            // currently we can't modify block_cache_size via set_options_cf
+            if config_name == "block_cache_size" {
                 let opt = rocksdb.get_options_cf(handle);
-                let capacity = config_value.parse::<u64>();
+                let capacity = ReadableSize::from_str(config_value);
                 if capacity.is_err() {
                     return Err(Error::InvalidArgument(format!(
-                        "bad argument: {}",
-                        config_value
+                        "bad block cache size: {:?}",
+                        capacity.unwrap_err()
                     )));
                 }
-                box_try!(opt.set_block_cache_capacity(capacity.unwrap()));
+                box_try!(opt.set_block_cache_capacity(capacity.unwrap().0));
             } else {
                 let mut opt = Vec::new();
                 opt.push((config_name, config_value));
