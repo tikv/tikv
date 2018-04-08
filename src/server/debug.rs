@@ -23,7 +23,7 @@ use protobuf::{self, Message, RepeatedField};
 
 use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
 use kvproto::metapb::Region;
-use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
+use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::debugpb::{DB as DBType, MODULE};
 use raft::eraftpb::Entry;
 use kvproto::raft_serverpb::*;
@@ -33,9 +33,9 @@ use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerS
 use raftstore::store::{init_apply_state, init_raft_state, write_peer_state};
 use raftstore::store::util as raftstore_util;
 use raftstore::store::engine::{IterOption, Mutable};
-use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use storage::types::{truncate_ts, Key};
-use storage::mvcc::{Lock, Write, WriteType};
+use storage::mvcc::{Lock, LockType, Write, WriteType};
 use util::escape;
 use util::config::ReadableSize;
 use util::rocksdb::{compact_range, get_cf_handle};
@@ -477,29 +477,32 @@ impl MvccInfoIterator {
         })
     }
 
-    fn next_lock(&mut self) -> Result<Option<(Vec<u8>, LockInfo)>> {
+    fn next_lock(&mut self) -> Result<Option<(Vec<u8>, MvccLock)>> {
         let mut iter = &mut self.lock_iter;
         if let Some((key, value)) = <&mut DBIterator as Iterator>::next(&mut iter) {
             let lock = box_try!(Lock::parse(&value));
-            let mut lock_info = LockInfo::default();
-            lock_info.set_primary_lock(lock.primary);
-            lock_info.set_lock_version(lock.ts);
-            lock_info.set_lock_ttl(lock.ttl);
-            lock_info.set_key(key.clone());
+            let mut lock_info = MvccLock::default();
+            match lock.lock_type {
+                LockType::Put => lock_info.set_field_type(Op::Put),
+                LockType::Delete => lock_info.set_field_type(Op::Del),
+                LockType::Lock => lock_info.set_field_type(Op::Lock),
+            }
+            lock_info.set_start_ts(lock.ts);
+            lock_info.set_primary(lock.primary);
+            lock_info.set_short_value(lock.short_value.unwrap_or_default());
             return Ok(Some((key, lock_info)));
         };
         Ok(None)
     }
 
-    fn next_default(&mut self) -> Result<Option<(Vec<u8>, RepeatedField<ValueInfo>)>> {
+    fn next_default(&mut self) -> Result<Option<(Vec<u8>, RepeatedField<MvccValue>)>> {
         if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.default_iter) {
             let mut values = Vec::with_capacity(vec_kv.len());
             for (key, value) in vec_kv {
-                let mut value_info = ValueInfo::default();
-                value_info.set_is_short_value(is_short_value(&value));
-                value_info.set_value(value);
+                let mut value_info = MvccValue::default();
                 let encoded_key = Key::from_encoded(keys::origin_key(&key).to_owned());
-                value_info.set_ts(box_try!(encoded_key.decode_ts()));
+                value_info.set_start_ts(box_try!(encoded_key.decode_ts()));
+                value_info.set_value(value);
                 values.push(value_info);
             }
             return Ok(Some((prefix, RepeatedField::from_vec(values))));
@@ -507,21 +510,22 @@ impl MvccInfoIterator {
         Ok(None)
     }
 
-    fn next_write(&mut self) -> Result<Option<(Vec<u8>, RepeatedField<WriteInfo>)>> {
+    fn next_write(&mut self) -> Result<Option<(Vec<u8>, RepeatedField<MvccWrite>)>> {
         if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.write_iter) {
             let mut writes = Vec::with_capacity(vec_kv.len());
             for (key, value) in vec_kv {
                 let write = box_try!(Write::parse(&value));
-                let mut write_info = WriteInfo::default();
-                write_info.set_start_ts(write.start_ts);
+                let mut write_info = MvccWrite::default();
                 match write.write_type {
                     WriteType::Put => write_info.set_field_type(Op::Put),
                     WriteType::Delete => write_info.set_field_type(Op::Del),
                     WriteType::Lock => write_info.set_field_type(Op::Lock),
                     WriteType::Rollback => write_info.set_field_type(Op::Rollback),
                 }
+                write_info.set_start_ts(write.start_ts);
                 let encoded_key = Key::from_encoded(keys::origin_key(&key).to_owned());
                 write_info.set_commit_ts(box_try!(encoded_key.decode_ts()));
+                write_info.set_short_value(write.short_value.unwrap_or_default());
                 writes.push(write_info);
             }
             return Ok(Some((prefix, RepeatedField::from_vec(writes))));
