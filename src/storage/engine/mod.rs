@@ -35,7 +35,8 @@ use super::super::raftstore::store::engine::IterOption;
 // only used for rocksdb without persistent.
 pub const TEMP_DIR: &str = "";
 
-const SEEK_BOUND: usize = 30;
+const SEEK_BOUND_NEXT: usize = 8;
+const SEEK_BOUND_PREV: usize = 6;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
 const STAT_TOTAL: &str = "total";
@@ -155,11 +156,11 @@ pub trait Iterator {
 }
 
 macro_rules! near_loop {
-    ($cond:expr, $fallback:expr, $st:expr) => ({
+    ($cond:expr, $fallback:expr, $bound:expr, $st:expr) => ({
         let mut cnt = 0;
         while $cond {
             cnt += 1;
-            if cnt >= SEEK_BOUND {
+            if cnt >= $bound {
                 $st.over_seek_bound += 1;
                 return $fallback;
             }
@@ -355,6 +356,7 @@ impl Cursor {
             near_loop!(
                 self.prev(statistics) && self.iter.key() > key.encoded().as_slice(),
                 self.seek(key, statistics),
+                SEEK_BOUND_PREV,
                 statistics
             );
             if self.iter.valid() {
@@ -370,6 +372,7 @@ impl Cursor {
             near_loop!(
                 self.next(statistics) && self.iter.key() < key.encoded().as_slice(),
                 self.seek(key, statistics),
+                SEEK_BOUND_NEXT,
                 statistics
             );
         }
@@ -439,6 +442,7 @@ impl Cursor {
             near_loop!(
                 self.next(statistics) && self.iter.key() < key.encoded().as_slice(),
                 self.seek_for_prev(key, statistics),
+                SEEK_BOUND_NEXT,
                 statistics
             );
             if self.iter.valid() {
@@ -453,6 +457,7 @@ impl Cursor {
             near_loop!(
                 self.prev(statistics) && self.iter.key() > key.encoded().as_slice(),
                 self.seek_for_prev(key, statistics),
+                SEEK_BOUND_PREV,
                 statistics
             );
         }
@@ -598,7 +603,7 @@ pub type Result<T> = result::Result<T, Error>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::SEEK_BOUND;
+    use super::SEEK_BOUND_NEXT;
     use tempdir::TempDir;
     use storage::{make_key, CfName, CF_DEFAULT};
     use util::codec::bytes;
@@ -803,7 +808,7 @@ mod tests {
             .near_seek(&make_key(b"z\x00"), &mut statistics)
             .unwrap());
         // Insert many key-values between 'x' and 'z' then near_seek will fallback to seek.
-        for i in 0..super::SEEK_BOUND {
+        for i in 0..super::SEEK_BOUND_NEXT {
             let key = format!("y{}", i);
             must_put(engine, key.as_bytes(), b"3");
         }
@@ -816,7 +821,7 @@ mod tests {
 
         must_delete(engine, b"x");
         must_delete(engine, b"z");
-        for i in 0..super::SEEK_BOUND {
+        for i in 0..super::SEEK_BOUND_NEXT {
             let key = format!("y{}", i);
             must_delete(engine, key.as_bytes());
         }
@@ -872,14 +877,14 @@ mod tests {
     ) {
         let mut cursor = snapshot.iter(IterOption::default(), mode).unwrap();
         let mut near_cursor = snapshot.iter(IterOption::default(), mode).unwrap();
-        let limit = (SEEK_BOUND * 10 + 50 - 1) * 2;
+        let limit = (SEEK_BOUND_NEXT * 10 + 50 - 1) * 2;
 
-        for (_, mut i) in (start..SEEK_BOUND * 30)
+        for (_, mut i) in (start..SEEK_BOUND_NEXT * 30)
             .enumerate()
             .filter(|&(i, _)| i % step == 0)
         {
             if seek_mode != SeekMode::Normal {
-                i = SEEK_BOUND * 30 - 1 - i;
+                i = SEEK_BOUND_NEXT * 30 - 1 - i;
             }
             let key = format!("key_{:03}", i);
             let seek_key = make_key(key.as_bytes());
@@ -936,46 +941,46 @@ mod tests {
     fn test_linear() {
         let dir = TempDir::new("rocksdb_test").unwrap();
         let e = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
-        for i in 50..50 + SEEK_BOUND * 10 {
+        for i in 50..50 + SEEK_BOUND_NEXT * 10 {
             let key = format!("key_{}", i * 2);
             let value = format!("value_{}", i);
             must_put(e.as_ref(), key.as_bytes(), value.as_bytes());
         }
         let snapshot = e.snapshot(&Context::new()).unwrap();
 
-        for step in 1..SEEK_BOUND * 3 {
+        for step in 1..SEEK_BOUND_NEXT * 3 {
             for start in 0..10 {
                 test_linear_seek(
                     snapshot.as_ref(),
                     ScanMode::Forward,
                     SeekMode::Normal,
-                    start * SEEK_BOUND,
+                    start * SEEK_BOUND_NEXT,
                     step,
                 );
                 test_linear_seek(
                     snapshot.as_ref(),
                     ScanMode::Backward,
                     SeekMode::Reverse,
-                    start * SEEK_BOUND,
+                    start * SEEK_BOUND_NEXT,
                     step,
                 );
                 test_linear_seek(
                     snapshot.as_ref(),
                     ScanMode::Backward,
                     SeekMode::ForPrev,
-                    start * SEEK_BOUND,
+                    start * SEEK_BOUND_NEXT,
                     step,
                 );
             }
         }
         for &seek_mode in &[SeekMode::Reverse, SeekMode::Normal, SeekMode::ForPrev] {
-            for step in 1..SEEK_BOUND * 3 {
+            for step in 1..SEEK_BOUND_NEXT * 3 {
                 for start in 0..10 {
                     test_linear_seek(
                         snapshot.as_ref(),
                         ScanMode::Mixed,
                         seek_mode,
-                        start * SEEK_BOUND,
+                        start * SEEK_BOUND_NEXT,
                         step,
                     );
                 }
