@@ -195,7 +195,7 @@ impl Sum {
             v => v,
         };
         let res = match self.res.take() {
-            Some(b) => box_try!(eval_arith(ctx, v, b, Datum::checked_add)),
+            Some(b) => eval_arith(ctx, v, b, Datum::checked_add)?,
             None => v,
         };
         self.res = Some(res);
@@ -214,7 +214,7 @@ impl AggrFunc for Sum {
         match res {
             Datum::Null | Datum::F64(_) => collector.push(res),
             _ => {
-                let d = box_try!(res.into_dec());
+                let d = res.into_dec()?;
                 collector.push(Datum::Dec(d));
             }
         }
@@ -267,7 +267,7 @@ impl AggrFunc for Extremum {
             return Ok(());
         }
         if let Some(ref d) = self.datum {
-            if box_try!(d.cmp(ctx, &args[0])) != self.ord {
+            if d.cmp(ctx, &args[0])? != self.ord {
                 return Ok(());
             }
         }

@@ -43,16 +43,16 @@ impl AggFuncExpr {
     }
 
     fn build(ctx: &mut EvalContext, mut expr: Expr) -> Result<AggFuncExpr> {
-        let args = box_try!(Expression::batch_build(
-            ctx,
-            expr.take_children().into_vec()
-        ));
+        let args = Expression::batch_build(ctx, expr.take_children().into_vec())?;
         let tp = expr.get_tp();
         Ok(AggFuncExpr { args: args, tp: tp })
     }
 
     fn eval_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Vec<Datum>> {
-        let res: Vec<Datum> = box_try!(self.args.iter().map(|v| v.eval(ctx, row)).collect());
+        let mut res = Vec::with_capacity(self.args.len());
+        for arg in &self.args {
+            res.push(arg.eval(ctx, row)?);
+        }
         Ok(res)
     }
 }
@@ -102,7 +102,7 @@ impl HashAggExecutor {
         visitor.batch_visit(&aggr_func)?;
         let mut ctx = EvalContext::new(eval_config);
         Ok(HashAggExecutor {
-            group_by: box_try!(Expression::batch_build(&mut ctx, group_by)),
+            group_by: Expression::batch_build(&mut ctx, group_by)?,
             aggr_func: AggFuncExpr::batch_build(&mut ctx, aggr_func)?,
             group_key_aggrs: OrderMap::new(),
             cursor: 0,
@@ -123,7 +123,7 @@ impl HashAggExecutor {
         }
         let mut vals = Vec::with_capacity(self.group_by.len());
         for expr in &self.group_by {
-            let v = box_try!(expr.eval(&mut self.ctx, row));
+            let v = expr.eval(&mut self.ctx, row)?;
             vals.push(v);
         }
         let res = box_try!(datum::encode_value(&vals));
@@ -330,7 +330,7 @@ impl StreamAggExecutor {
             executed: false,
             agg_exprs: exprs,
             agg_funcs: funcs,
-            group_by_exprs: box_try!(Expression::batch_build(&mut ctx, group_bys)),
+            group_by_exprs: Expression::batch_build(&mut ctx, group_bys)?,
             ctx: ctx,
             related_cols_offset: visitor.column_offsets(),
             cols: columns,
@@ -351,9 +351,8 @@ impl StreamAggExecutor {
         let mut tmp_group_row = Vec::with_capacity(self.group_by_exprs.len());
         let mut matched = !self.is_first_group;
         for (i, expr) in self.group_by_exprs.iter().enumerate() {
-            let v = box_try!(expr.eval(&mut self.ctx, row));
-            if matched && box_try!(v.cmp(&mut self.ctx, &self.cur_group_row[i])) != Ordering::Equal
-            {
+            let v = expr.eval(&mut self.ctx, row)?;
+            if matched && v.cmp(&mut self.ctx, &self.cur_group_row[i])? != Ordering::Equal {
                 matched = false;
             }
             tmp_group_row.push(v);
