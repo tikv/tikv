@@ -700,6 +700,8 @@ impl Snap {
         for cf in SNAPSHOT_CFS {
             self.switch_to_cf_file(cf)?;
             let (cf_key_count, cf_size) = if plain_file_used(cf) {
+                // If the relative files are deleted after `Snap::new` and
+                // `init_for_building`, the file could be None.
                 let file = match self.cf_files[self.cf_index].file.as_mut() {
                     Some(f) => f,
                     None => {
