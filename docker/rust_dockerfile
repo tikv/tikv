@@ -39,14 +39,17 @@ ENV PATH $GOPATH/bin:$GOROOT/bin:$PATH
 RUN go get golang.org/x/tools/go/gcimporter15 \
 	&& go get github.com/golang/lint/golint
 
-RUN curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain nightly-2018-01-12 -y \
-	&& /root/.cargo/bin/rustup default nightly-2018-01-12 \
-	&& /root/.cargo/bin/cargo install --vers 0.3.4 --force rustfmt-nightly
+RUN curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain none -y
 
-# cache dep package
 RUN curl -L https://github.com/pingcap/tikv/archive/master.tar.gz -o /root/master.tar.gz \
-	&& cd /root && tar xf master.tar.gz && cd tikv-master && /root/.cargo/bin/cargo fetch \
-	&& cd /root && rm -rf master.tar.gz tikv-master
+	&& cd /root && tar xf master.tar.gz \
+	&& cd /root && rm -rf master.tar.gz
+
+RUN cd /root/tikv-master \
+	&& /root/.cargo/bin/rustup default $(tail -n 1 RUST_VERSION) \
+	&& /root/.cargo/bin/rustup component add rustfmt-preview --toolchain $(tail -n 1 RUST_VERSION) \
+    && /root/.cargo/bin/cargo fetch \
+    && rm -rf /root/tikv-master
 
 ENV PATH /root/.cargo/bin/:$PATH
 ENV LIBRARY_PATH /usr/local/lib:$LIBRARY_PATH
