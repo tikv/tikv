@@ -700,7 +700,13 @@ impl Snap {
         for cf in SNAPSHOT_CFS {
             self.switch_to_cf_file(cf)?;
             let (cf_key_count, cf_size) = if plain_file_used(cf) {
-                let file = self.cf_files[self.cf_index].file.as_mut().unwrap();
+                let file = match self.cf_files[self.cf_index].file.as_mut() {
+                    Some(f) => f,
+                    None => {
+                        let e = box_err!("cf_file is none for cf {}", cf);
+                        return Err(RaftStoreError::Snapshot(e));
+                    }
+                };
                 build_plain_cf_file(file, snap, cf, &begin_key, &end_key)?
             } else {
                 let mut key_count = 0;
