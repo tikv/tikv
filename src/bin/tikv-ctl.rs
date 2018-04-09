@@ -434,7 +434,7 @@ trait DebugExecutor {
                 process::exit(-1);
             })
             .collect();
-        self.verify_regions(regions);
+        self.recover_regions(regions);
     }
 
     fn get_all_meta_regions(&self) -> Vec<u64>;
@@ -458,7 +458,7 @@ trait DebugExecutor {
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
 
-    fn verify_regions(&self, regions: Vec<Region>);
+    fn recover_regions(&self, regions: Vec<Region>);
 
     fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str);
 
@@ -582,7 +582,7 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only avaliable for local mode");
     }
 
-    fn verify_regions(&self, _: Vec<Region>) {
+    fn recover_regions(&self, _: Vec<Region>) {
         unimplemented!("only avaliable for local mode");
     }
 
@@ -675,8 +675,8 @@ impl DebugExecutor for Debugger {
         }
     }
 
-    fn verify_regions(&self, regions: Vec<Region>) {
-        let ret = self.verify_regions(regions)
+    fn recover_regions(&self, regions: Vec<Region>) {
+        let ret = self.recover_regions(regions)
             .unwrap_or_else(|e| perror_and_exit("Debugger::verify regions", e));
         if ret.is_empty() {
             println!("success!");

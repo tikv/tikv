@@ -258,13 +258,13 @@ impl Debugger {
         Ok(errors)
     }
 
-    pub fn verify_regions(&self, regions: Vec<Region>) -> Result<Vec<(u64, Error)>> {
+    pub fn recover_regions(&self, regions: Vec<Region>) -> Result<Vec<(u64, Error)>> {
         let db = &self.engines.kv_engine;
 
         let mut errors = Vec::with_capacity(regions.len());
         for region in regions {
             let region_id = region.get_id();
-            if let Err(e) = self.verify_region(db, region) {
+            if let Err(e) = self.recover_region(db, region) {
                 errors.push((region_id, e));
             }
         }
@@ -272,7 +272,7 @@ impl Debugger {
         Ok(errors)
     }
 
-    fn verify_region(&self, db: &Arc<DB>, region: Region) -> Result<()> {
+    fn recover_region(&self, db: &Arc<DB>, region: Region) -> Result<()> {
         let wb = WriteBatch::new();
 
         let mut region_verifier = box_try!(MvccChecker::new(
@@ -502,7 +502,7 @@ impl MvccChecker {
             let readopts = IterOption::new(Some(from.clone()), Some(to), false).build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(Arc::clone(&db), handle, readopts);
-            iter.seek(SeekKey::from(from.as_ref()));
+            iter.seek(SeekKey::Start);
             Ok(iter)
         };
 
