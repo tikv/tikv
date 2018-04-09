@@ -101,8 +101,7 @@ impl Context {
             for (tag, count) in details {
                 self.scan_details
                     .with_label_values(&[cmd, cf, tag])
-                    .inc_by(count as f64)
-                    .unwrap();
+                    .inc_by(count as f64);
             }
         }
     }

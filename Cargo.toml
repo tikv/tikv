@@ -88,7 +88,7 @@ git = "https://github.com/pingcap/kvproto.git"
 git = "https://github.com/pingcap/tipb.git"
 
 [dependencies.prometheus]
-version = "0.3"
+version = "0.4"
 default-features = false
 features = ["nightly", "push", "process"]
 

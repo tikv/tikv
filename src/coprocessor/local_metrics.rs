@@ -80,8 +80,7 @@ impl ExecLocalMetrics {
             for (tag, count) in details {
                 self.scan_details
                     .with_label_values(&[type_str, cf, tag])
-                    .inc_by(count as f64)
-                    .unwrap();
+                    .inc_by(count as f64);
             }
         }
         // flow statistics group by region

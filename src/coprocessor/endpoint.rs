@@ -833,8 +833,7 @@ fn err_multi_resp(e: Error, count: usize, metrics: &mut BasicLocalMetrics) -> Re
     metrics
         .error_cnt
         .with_label_values(&[tag])
-        .inc_by(count)
-        .unwrap();
+        .inc_by(count);
     resp
 }
 

@@ -2239,8 +2239,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         PEER_GC_RAFT_LOG_COUNTER
-            .inc_by(total_gc_logs as f64)
-            .unwrap();
+            .inc_by(total_gc_logs as f64);
         self.register_raft_gc_log_tick(event_loop);
     }
 

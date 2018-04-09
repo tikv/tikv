@@ -188,7 +188,7 @@ impl RaftClient {
         });
 
         if counter > 0 {
-            RAFT_MESSAGE_FLUSH_COUNTER.inc_by(counter as f64).unwrap();
+            RAFT_MESSAGE_FLUSH_COUNTER.inc_by(counter as f64);
         }
     }
 }

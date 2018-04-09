@@ -64,14 +64,12 @@ impl ScanCounter {
         if self.point > 0 {
             metrics
                 .with_label_values(&["point"])
-                .inc_by(self.point as f64)
-                .unwrap();
+                .inc_by(self.point as f64);
         }
         if self.range > 0 {
             metrics
                 .with_label_values(&["range"])
-                .inc_by(self.range as f64)
-                .unwrap();
+                .inc_by(self.range as f64);
         }
     }
 }
@@ -101,27 +99,21 @@ impl ExecCounter {
     pub fn consume(self, metrics: &mut LocalCounterVec) {
         metrics
             .with_label_values(&["tblscan"])
-            .inc_by(self.table_scan as f64)
-            .unwrap();
+            .inc_by(self.table_scan as f64);
         metrics
             .with_label_values(&["idxscan"])
-            .inc_by(self.index_scan as f64)
-            .unwrap();
+            .inc_by(self.index_scan as f64);
         metrics
             .with_label_values(&["selection"])
-            .inc_by(self.selection as f64)
-            .unwrap();
+            .inc_by(self.selection as f64);
         metrics
             .with_label_values(&["topn"])
-            .inc_by(self.topn as f64)
-            .unwrap();
+            .inc_by(self.topn as f64);
         metrics
             .with_label_values(&["limit"])
-            .inc_by(self.limit as f64)
-            .unwrap();
+            .inc_by(self.limit as f64);
         metrics
             .with_label_values(&["aggregation"])
-            .inc_by(self.aggregation as f64)
-            .unwrap();
+            .inc_by(self.aggregation as f64);
     }
 }

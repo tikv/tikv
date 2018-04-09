@@ -33,43 +33,37 @@ impl RaftReadyMetrics {
         if self.message > 0 {
             STORE_RAFT_READY_COUNTER_VEC
                 .with_label_values(&["message"])
-                .inc_by(self.message as f64)
-                .unwrap();
+                .inc_by(self.message as f64);
             self.message = 0;
         }
         if self.commit > 0 {
             STORE_RAFT_READY_COUNTER_VEC
                 .with_label_values(&["commit"])
-                .inc_by(self.commit as f64)
-                .unwrap();
+                .inc_by(self.commit as f64);
             self.commit = 0;
         }
         if self.append > 0 {
             STORE_RAFT_READY_COUNTER_VEC
                 .with_label_values(&["append"])
-                .inc_by(self.append as f64)
-                .unwrap();
+                .inc_by(self.append as f64);
             self.append = 0;
         }
         if self.snapshot > 0 {
             STORE_RAFT_READY_COUNTER_VEC
                 .with_label_values(&["snapshot"])
-                .inc_by(self.snapshot as f64)
-                .unwrap();
+                .inc_by(self.snapshot as f64);
             self.snapshot = 0;
         }
         if self.pending_region > 0 {
             STORE_RAFT_READY_COUNTER_VEC
                 .with_label_values(&["pending_region"])
-                .inc_by(self.pending_region as f64)
-                .unwrap();
+                .inc_by(self.pending_region as f64);
             self.pending_region = 0;
         }
         if self.has_ready_region > 0 {
             STORE_RAFT_READY_COUNTER_VEC
                 .with_label_values(&["has_ready_region"])
-                .inc_by(self.has_ready_region as f64)
-                .unwrap();
+                .inc_by(self.has_ready_region as f64);
             self.has_ready_region = 0;
         }
     }
@@ -96,64 +90,55 @@ impl RaftMessageMetrics {
         if self.append > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
                 .with_label_values(&["append"])
-                .inc_by(self.append as f64)
-                .unwrap();
+                .inc_by(self.append as f64);
             self.append = 0;
         }
         if self.append_resp > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
                 .with_label_values(&["append_resp"])
-                .inc_by(self.append_resp as f64)
-                .unwrap();
+                .inc_by(self.append_resp as f64);
             self.append_resp = 0;
         }
         if self.vote > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
                 .with_label_values(&["vote"])
-                .inc_by(self.vote as f64)
-                .unwrap();
+                .inc_by(self.vote as f64);
             self.vote = 0;
         }
         if self.vote_resp > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
                 .with_label_values(&["vote_resp"])
-                .inc_by(self.vote_resp as f64)
-                .unwrap();
+                .inc_by(self.vote_resp as f64);
             self.vote_resp = 0;
         }
         if self.snapshot > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
                 .with_label_values(&["snapshot"])
-                .inc_by(self.snapshot as f64)
-                .unwrap();
+                .inc_by(self.snapshot as f64);
             self.snapshot = 0;
         }
         if self.heartbeat > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
                 .with_label_values(&["heartbeat"])
-                .inc_by(self.heartbeat as f64)
-                .unwrap();
+                .inc_by(self.heartbeat as f64);
             self.heartbeat = 0;
         }
         if self.heartbeat_resp > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
                 .with_label_values(&["heartbeat_resp"])
-                .inc_by(self.heartbeat_resp as f64)
-                .unwrap();
+                .inc_by(self.heartbeat_resp as f64);
             self.heartbeat_resp = 0;
         }
         if self.transfer_leader > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
                 .with_label_values(&["transfer_leader"])
-                .inc_by(self.transfer_leader as f64)
-                .unwrap();
+                .inc_by(self.transfer_leader as f64);
             self.transfer_leader = 0;
         }
         if self.timeout_now > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
                 .with_label_values(&["timeout_now"])
-                .inc_by(self.timeout_now as f64)
-                .unwrap();
+                .inc_by(self.timeout_now as f64);
             self.timeout_now = 0;
         }
     }
@@ -176,57 +161,49 @@ impl RaftMessageDropMetrics {
         if self.mismatch_store_id > 0 {
             STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
                 .with_label_values(&["mismatch_store_id"])
-                .inc_by(self.mismatch_store_id as f64)
-                .unwrap();
+                .inc_by(self.mismatch_store_id as f64);
             self.mismatch_store_id = 0;
         }
         if self.mismatch_region_epoch > 0 {
             STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
                 .with_label_values(&["mismatch_region_epoch"])
-                .inc_by(self.mismatch_region_epoch as f64)
-                .unwrap();
+                .inc_by(self.mismatch_region_epoch as f64);
             self.mismatch_region_epoch = 0;
         }
         if self.stale_msg > 0 {
             STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
                 .with_label_values(&["stale_msg"])
-                .inc_by(self.stale_msg as f64)
-                .unwrap();
+                .inc_by(self.stale_msg as f64);
             self.stale_msg = 0;
         }
         if self.region_overlap > 0 {
             STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
                 .with_label_values(&["region_overlap"])
-                .inc_by(self.region_overlap as f64)
-                .unwrap();
+                .inc_by(self.region_overlap as f64);
             self.region_overlap = 0;
         }
         if self.region_no_peer > 0 {
             STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
                 .with_label_values(&["region_no_peer"])
-                .inc_by(self.region_no_peer as f64)
-                .unwrap();
+                .inc_by(self.region_no_peer as f64);
             self.region_no_peer = 0;
         }
         if self.region_tombstone_peer > 0 {
             STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
                 .with_label_values(&["region_tombstone_peer"])
-                .inc_by(self.region_tombstone_peer as f64)
-                .unwrap();
+                .inc_by(self.region_tombstone_peer as f64);
             self.region_tombstone_peer = 0;
         }
         if self.region_nonexistent > 0 {
             STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
                 .with_label_values(&["region_nonexistent"])
-                .inc_by(self.region_nonexistent as f64)
-                .unwrap();
+                .inc_by(self.region_nonexistent as f64);
             self.region_nonexistent = 0;
         }
         if self.applying_snap > 0 {
             STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
                 .with_label_values(&["applying_snap"])
-                .inc_by(self.applying_snap as f64)
-                .unwrap();
+                .inc_by(self.applying_snap as f64);
             self.applying_snap = 0;
         }
     }
@@ -265,43 +242,37 @@ impl RaftProposeMetrics {
         if self.all > 0 {
             PEER_PROPOSAL_COUNTER_VEC
                 .with_label_values(&["all"])
-                .inc_by(self.all as f64)
-                .unwrap();
+                .inc_by(self.all as f64);
             self.all = 0;
         }
         if self.local_read > 0 {
             PEER_PROPOSAL_COUNTER_VEC
                 .with_label_values(&["local_read"])
-                .inc_by(self.local_read as f64)
-                .unwrap();
+                .inc_by(self.local_read as f64);
             self.local_read = 0;
         }
         if self.read_index > 0 {
             PEER_PROPOSAL_COUNTER_VEC
                 .with_label_values(&["read_index"])
-                .inc_by(self.read_index as f64)
-                .unwrap();
+                .inc_by(self.read_index as f64);
             self.read_index = 0;
         }
         if self.normal > 0 {
             PEER_PROPOSAL_COUNTER_VEC
                 .with_label_values(&["normal"])
-                .inc_by(self.normal as f64)
-                .unwrap();
+                .inc_by(self.normal as f64);
             self.normal = 0;
         }
         if self.transfer_leader > 0 {
             PEER_PROPOSAL_COUNTER_VEC
                 .with_label_values(&["transfer_leader"])
-                .inc_by(self.transfer_leader as f64)
-                .unwrap();
+                .inc_by(self.transfer_leader as f64);
             self.transfer_leader = 0;
         }
         if self.conf_change > 0 {
             PEER_PROPOSAL_COUNTER_VEC
                 .with_label_values(&["conf_change"])
-                .inc_by(self.conf_change as f64)
-                .unwrap();
+                .inc_by(self.conf_change as f64);
             self.conf_change = 0;
         }
         self.request_wait_time.flush();

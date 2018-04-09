@@ -935,8 +935,7 @@ impl ThreadContext for SchedContext {
                 for (tag, count) in details {
                     KV_COMMAND_SCAN_DETAILS
                         .with_label_values(&[cmd, cf, tag])
-                        .inc_by(count as f64)
-                        .unwrap();
+                        .inc_by(count as f64);
                 }
             }
         }

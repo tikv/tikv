@@ -260,8 +260,7 @@ fn poll<R, T, U>(
                 .sub(batch.len() as f64);
             WORKER_HANDLED_TASK_VEC
                 .with_label_values(&[&name])
-                .inc_by(batch.len() as f64)
-                .unwrap();
+                .inc_by(batch.len() as f64);
             runner.run_batch(&mut batch);
             batch.clear();
         }
