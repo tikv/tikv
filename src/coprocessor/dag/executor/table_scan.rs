@@ -38,7 +38,7 @@ pub struct TableScanExecutor {
     scan_range: KeyRange,
     scanner: Option<Scanner>,
     // The number of scan keys for each range.
-    counts: Vec<i64>,
+    counts: Option<Vec<i64>>,
     metrics: ExecutorMetrics,
     first_collect: bool,
 }
@@ -62,11 +62,7 @@ impl TableScanExecutor {
             key_ranges.reverse();
         }
 
-        let counts = if collect {
-            Vec::with_capacity(key_ranges.len())
-        } else {
-            Vec::default()
-        };
+        let counts = if collect { Some(Vec::default()) } else { None };
 
         Ok(TableScanExecutor {
             store: store,
@@ -123,22 +119,22 @@ impl Executor for TableScanExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
-                if let Some(last) = self.counts.last_mut() {
-                    *last += 1;
+                if let Some(counts) = self.counts.as_mut() {
+                    counts.last_mut().map_or((), |val| *val = *val + 1);
                 }
                 return Ok(Some(row));
             }
 
             if let Some(range) = self.key_ranges.next() {
-                if self.counts.capacity() > 0 {
-                    self.counts.push(0);
-                }
+                if let Some(counts) = self.counts.as_mut() {
+                    counts.push(0)
+                };
                 self.current_range = Some(range.clone());
                 if is_point(&range) {
                     self.metrics.scan_counter.inc_point();
                     if let Some(row) = self.get_row_from_point(range)? {
-                        if let Some(last) = self.counts.last_mut() {
-                            *last += 1;
+                        if let Some(counts) = self.counts.as_mut() {
+                            counts.last_mut().map_or((), |val| *val = *val + 1);
                         }
                         return Ok(Some(row));
                     }
@@ -198,15 +194,9 @@ impl Executor for TableScanExecutor {
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
-        let cursor = self.counts.len();
-        if cursor == 0 {
-            return;
-        }
-        let mut u: Vec<_> = self.counts.drain(0..cursor - 1).collect();
-        counts.append(&mut u);
-        if !self.counts.is_empty() {
-            counts.push(self.counts[0]);
-            self.counts[0] = 0;
+        if let Some(cur_counts) = self.counts.as_mut() {
+            counts.append(cur_counts);
+            cur_counts.push(0);
         }
     }
 
