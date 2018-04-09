@@ -22,7 +22,7 @@ use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{self, Datum};
 use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::endpoint::get_pk;
-use coprocessor::dag::expr::EvalContext;
+use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings};
 use coprocessor::{Error, Result};
 use storage::SnapshotStore;
 use util::codec::number::NumberDecoder;
@@ -137,6 +137,12 @@ pub trait Executor {
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>);
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics);
 
+    /// Only executors with eval computation need to implement `take_eval_warnings`
+    /// It returns warnings happened during eval computation.
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        None
+    }
+
     /// Only `TableScan` and `IndexScan` need to implement `start_scan`.
     fn start_scan(&mut self) {}
 
@@ -158,7 +164,7 @@ pub fn build_exec(
     execs: Vec<executor::Executor>,
     store: SnapshotStore,
     ranges: Vec<KeyRange>,
-    ctx: Arc<EvalContext>,
+    ctx: Arc<EvalConfig>,
 ) -> Result<DAGExecutor> {
     let mut execs = execs.into_iter();
     let first = execs
@@ -244,7 +250,7 @@ fn build_first_executor(
 }
 
 pub fn inflate_with_col_for_dag(
-    ctx: &EvalContext,
+    ctx: &mut EvalContext,
     values: &RowColsDict,
     columns: &[ColumnInfo],
     offsets: &[usize],

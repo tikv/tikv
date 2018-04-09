@@ -43,7 +43,7 @@ use grpcio::{ChannelBuilder, Environment};
 use protobuf::RepeatedField;
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::raft_serverpb::PeerState;
+use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::metapb::Region;
 use raft::eraftpb::{ConfChange, Entry, EntryType};
 use kvproto::kvrpcpb::MvccInfo;
@@ -227,14 +227,13 @@ trait DebugExecutor {
                 println!("key: {}", escape(&key));
                 if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
                     let lock_info = mvcc.get_lock();
-                    if start_ts.map_or(true, |ts| lock_info.get_lock_version() == ts) {
-                        // FIXME: "lock type" is lost in kvproto.
+                    if start_ts.map_or(true, |ts| lock_info.get_start_ts() == ts) {
                         println!("\tlock cf value: {:?}", lock_info);
                     }
                 }
                 if cfs.contains(&CF_DEFAULT) {
                     for value_info in mvcc.get_values() {
-                        if commit_ts.map_or(true, |ts| value_info.get_ts() == ts) {
+                        if commit_ts.map_or(true, |ts| value_info.get_start_ts() == ts) {
                             println!("\tdefault cf value: {:?}", value_info);
                         }
                     }
@@ -244,7 +243,6 @@ trait DebugExecutor {
                         if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts)
                             && commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
                         {
-                            // FIXME: short_value is lost in kvproto.
                             println!("\t write cf value: {:?}", write_info);
                         }
                     }
@@ -373,6 +371,14 @@ trait DebugExecutor {
         self.do_compact(db, cf, from, to);
     }
 
+    fn compact_region(&self, db: DBType, cf: &str, region_id: u64) {
+        let region_local = self.get_region_info(region_id).region_local_state.unwrap();
+        let r = region_local.get_region();
+        let from = keys::data_key(r.get_start_key());
+        let to = keys::data_end_key(r.get_end_key());
+        self.do_compact(db, cf, from, to);
+    }
+
     fn print_bad_regions(&self);
 
     fn set_region_tombstone_after_remove_peer(
@@ -402,6 +408,9 @@ trait DebugExecutor {
         self.set_region_tombstone(regions);
     }
 
+    /// Recover the cluster when given `store_ids` are failed.
+    fn remove_fail_stores(&self, store_ids: Vec<u64>);
+
     fn check_region_consistency(&self, _: u64);
 
     fn check_local_mode(&self);
@@ -426,6 +435,9 @@ trait DebugExecutor {
     fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>);
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
+
+    fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str);
+
     fn dump_metrics(&self, tags: Vec<&str>);
 }
 
@@ -550,12 +562,26 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only avaliable for local mode");
     }
 
+    fn remove_fail_stores(&self, _: Vec<u64>) {
+        self.check_local_mode();
+    }
+
     fn check_region_consistency(&self, region_id: u64) {
         let mut req = RegionConsistencyCheckRequest::new();
         req.set_region_id(region_id);
         self.check_region_consistency(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::check_region_consistency", e));
         println!("success!");
+    }
+
+    fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str) {
+        let mut req = ModifyTikvConfigRequest::new();
+        req.set_module(module);
+        req.set_config_name(config_name.to_owned());
+        req.set_config_value(config_value.to_owned());
+        self.modify_tikv_config(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::modify_tikv_config", e));
+        println!("success");
     }
 }
 
@@ -633,11 +659,23 @@ impl DebugExecutor for Debugger {
         println!("all regions are healthy")
     }
 
+    fn remove_fail_stores(&self, store_ids: Vec<u64>) {
+        println!("removing stores {:?} from configrations...", store_ids);
+        self.remove_failed_stores(store_ids)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
+        println!("success");
+    }
+
     fn dump_metrics(&self, _tags: Vec<&str>) {
         unimplemented!("only avaliable for online mode");
     }
 
     fn check_region_consistency(&self, _: u64) {
+        eprintln!("only support remote mode");
+        process::exit(-1);
+    }
+
+    fn modify_tikv_config(&self, _: MODULE, _: &str, _: &str) {
         eprintln!("only support remote mode");
         process::exit(-1);
     }
@@ -932,6 +970,13 @@ fn main() {
                         .long("to")
                         .takes_value(true)
                         .help("set the end raw key, in escaped form"),
+                )
+                .arg(
+                    Arg::with_name("region")
+                    .short("r")
+                    .long("region")
+                    .takes_value(true)
+                    .help("set the region id"),
                 ),
         )
         .subcommand(
@@ -961,22 +1006,39 @@ fn main() {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("unsafe-recover")
+                .about("unsafe recover the cluster when majority replicas are failed")
+                .subcommand(
+                    SubCommand::with_name("remove-fail-stores").arg(
+                        Arg::with_name("stores")
+                            .required(true)
+                            .takes_value(true)
+                            .multiple(true)
+                            .use_delimiter(true)
+                            .require_delimiter(true)
+                            .value_delimiter(",")
+                            .help("failed store id list"),
+                    ),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("metrics")
                 .about("print the metrics")
                 .arg(
-                Arg::with_name("tag")
-                    .short("t")
-                    .long("tag")
-                    .takes_value(true)
-                    .multiple(true)
-                    .use_delimiter(true)
-                    .require_delimiter(true)
-                    .value_delimiter(",")
-                    .default_value(METRICS_PROMETHEUS)
-                    .help(
-                        "set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not specified, print prometheus",
-                    ),
-            ),)
+                    Arg::with_name("tag")
+                        .short("t")
+                        .long("tag")
+                        .takes_value(true)
+                        .multiple(true)
+                        .use_delimiter(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
+                        .default_value(METRICS_PROMETHEUS)
+                        .help(
+                            "set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not specified, print prometheus",
+                        ),
+                ),
+            )
             .subcommand(
             SubCommand::with_name("consistency-check")
                 .about("force consistency-check for a specified region")
@@ -988,8 +1050,38 @@ fn main() {
                         .help("the target region"),
                 ),
         )
+        .subcommand(SubCommand::with_name("bad-regions").about("get all regions with corrupt raft"))
         .subcommand(
-            SubCommand::with_name("bad-regions").about("get all regions with corrupt raft"),
+            SubCommand::with_name("modify-tikv-config")
+                .about("modify tikv config, eg. ./tikv-ctl -h ip:port -m kvdb -n default.disable_auto_compactions -v true")
+                .arg(
+                    Arg::with_name("module")
+                        .short("m")
+                        .takes_value(true)
+                        .help("module of the tikv, eg. kvdb or raftdb"),
+                )
+                .arg(
+                    Arg::with_name("config_name")
+                        .short("n")
+                        .takes_value(true)
+                        .help("config name of the module, for kvdb or raftdb, you can choose \
+                            max_background_jobs to modify db options or default.disable_auto_compactions to modify column family(cf) options, \
+                            and so on, default stands for default cf, \
+                            for kvdb, default|write|lock|raft can be chosen, for raftdb, default can be chosen"),
+                )
+                .arg(
+                    Arg::with_name("config_value")
+                        .short("v")
+                        .takes_value(true)
+                        .help("config value of the module, eg. 8 for max_background_jobs or true for disable_auto_compactions"),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("dump-snap-meta").about("dump snapshot meta file")
+            .arg(Arg::with_name("file")
+                 .short("f").long("file")
+                 .takes_value(true)
+                 .help("meta file path"))
         );
     let matches = app.clone().get_matches();
 
@@ -1007,6 +1099,11 @@ fn main() {
         (None, None) => {}
         _ => unreachable!(),
     };
+
+    if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
+        let path = matches.value_of("file").unwrap();
+        return dump_snap_meta_file(path);
+    }
 
     let db = matches.value_of("db");
     let raft_db = matches.value_of("raftdb");
@@ -1072,7 +1169,11 @@ fn main() {
         let cf = matches.value_of("cf").unwrap();
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
-        debug_executor.compact(db_type, cf, from_key, to_key);
+        if let Some(region) = matches.value_of("region") {
+            debug_executor.compact_region(db_type, cf, region.parse().unwrap());
+        } else {
+            debug_executor.compact(db_type, cf, from_key, to_key);
+        }
     } else if let Some(matches) = matches.subcommand_matches("tombstone") {
         let regions = matches
             .values_of("regions")
@@ -1087,16 +1188,45 @@ fn main() {
             panic!("invalid pd configuration: {:?}", e);
         }
         debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
+    } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
+        if let Some(matches) = matches.subcommand_matches("remove-fail-stores") {
+            let stores = matches.values_of("stores").unwrap();
+            match stores.map(|s| s.parse()).collect::<Result<Vec<u64>, _>>() {
+                Ok(store_ids) => debug_executor.remove_fail_stores(store_ids),
+                Err(e) => perror_and_exit("parse store id list", e),
+            }
+        }
     } else if let Some(matches) = matches.subcommand_matches("consistency-check") {
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
         debug_executor.check_region_consistency(region_id);
     } else if matches.subcommand_matches("bad-regions").is_some() {
         debug_executor.print_bad_regions();
+    } else if let Some(matches) = matches.subcommand_matches("modify-tikv-config") {
+        let module = matches.value_of("module").unwrap();
+        let config_name = matches.value_of("config_name").unwrap();
+        let config_value = matches.value_of("config_value").unwrap();
+        debug_executor.modify_tikv_config(get_module_type(module), config_name, config_value);
     } else if let Some(matches) = matches.subcommand_matches("metrics") {
         let tags = Vec::from_iter(matches.values_of("tag").unwrap());
         debug_executor.dump_metrics(tags)
     } else {
         let _ = app.print_help();
+    }
+}
+
+fn get_module_type(module: &str) -> MODULE {
+    match module {
+        "kvdb" => MODULE::KVDB,
+        "raftdb" => MODULE::RAFTDB,
+        "readpool" => MODULE::READPOOL,
+        "server" => MODULE::SERVER,
+        "storage" => MODULE::STORAGE,
+        "ps" => MODULE::PD,
+        "metric" => MODULE::METRIC,
+        "coprocessor" => MODULE::COPROCESSOR,
+        "security" => MODULE::SECURITY,
+        "import" => MODULE::IMPORT,
+        _ => MODULE::UNUSED,
     }
 }
 
@@ -1148,4 +1278,22 @@ fn new_security_mgr(matches: &ArgMatches) -> Arc<SecurityManager> {
     cfg.cert_path = cert_path.unwrap().to_owned();
     cfg.key_path = key_path.unwrap().to_owned();
     Arc::new(SecurityManager::new(&cfg).expect("failed to initialize security manager"))
+}
+
+fn dump_snap_meta_file(path: &str) {
+    let mut f =
+        File::open(path).unwrap_or_else(|e| panic!("open file {} failed, error {:?}", path, e));
+    let mut content = Vec::new();
+    f.read_to_end(&mut content)
+        .unwrap_or_else(|e| panic!("read meta file error {:?}", e));
+
+    let mut meta = SnapshotMeta::new();
+    meta.merge_from_bytes(&content)
+        .unwrap_or_else(|e| panic!("parse from bytes error {:?}", e));
+    for cf_file in meta.get_cf_files() {
+        println!(
+            "cf {}, size {}, checksum: {}",
+            cf_file.cf, cf_file.size, cf_file.checksum
+        );
+    }
 }

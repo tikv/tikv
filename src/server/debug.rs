@@ -16,24 +16,27 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::iter::FromIterator;
+use std::collections::HashSet;
+use std::str::FromStr;
 
-use protobuf::{self, RepeatedField};
+use protobuf::{self, Message, RepeatedField};
 
 use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
 use kvproto::metapb::Region;
-use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
-use kvproto::debugpb::DB as DBType;
+use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
+use kvproto::debugpb::{DB as DBType, MODULE};
 use raft::eraftpb::Entry;
 use kvproto::raft_serverpb::*;
 
-use raft::{self, RawNode};
+use raft::{self, quorum, RawNode};
 use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
 use raftstore::store::{init_apply_state, init_raft_state, write_peer_state};
 use raftstore::store::util as raftstore_util;
-use raftstore::store::engine::IterOption;
-use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use raftstore::store::engine::{IterOption, Mutable};
+use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use storage::types::{truncate_ts, Key};
-use storage::mvcc::{Lock, Write, WriteType};
+use storage::mvcc::{Lock, LockType, Write, WriteType};
 use util::escape;
 use util::config::ReadableSize;
 use util::rocksdb::{compact_range, get_cf_handle};
@@ -330,6 +333,60 @@ impl Debugger {
         Ok(res)
     }
 
+    pub fn remove_failed_stores(&self, store_ids: Vec<u64>) -> Result<()> {
+        let store_id = self.get_store_id()?;
+        if store_ids.iter().any(|&s| s == store_id) {
+            let msg = format!("Store {} in the failed list", store_id);
+            return Err(Error::Other(msg.into()));
+        }
+        let wb = WriteBatch::new();
+        let handle = box_try!(get_cf_handle(self.engines.kv_engine.as_ref(), CF_RAFT));
+        let store_ids = HashSet::<u64>::from_iter(store_ids);
+        box_try!(self.engines.kv_engine.scan_cf(
+            CF_RAFT,
+            keys::REGION_META_MIN_KEY,
+            keys::REGION_META_MAX_KEY,
+            false,
+            &mut |key, value| {
+                let (_, suffix_type) = box_try!(keys::decode_region_meta_key(key));
+                if suffix_type != keys::REGION_STATE_SUFFIX {
+                    return Ok(true);
+                }
+
+                let mut region_state = RegionLocalState::new();
+                box_try!(region_state.merge_from_bytes(value));
+                if region_state.get_state() == PeerState::Tombstone {
+                    return Ok(true);
+                }
+
+                let mut new_peers = region_state.get_region().get_peers().to_owned();
+                new_peers.retain(|peer| !store_ids.contains(&peer.get_store_id()));
+                let new_peers_len = new_peers.len();
+                let old_peers_len = region_state.get_region().get_peers().len();
+
+                if new_peers_len < quorum(old_peers_len) {
+                    let region_id = region_state.get_region().get_id();
+                    let old_peers = region_state.mut_region().take_peers();
+                    info!(
+                        "region {} change peers from {:?}, to {:?}",
+                        region_id, old_peers, new_peers
+                    );
+                    // We need to leave epoch untouched to avoid inconsistency.
+                    region_state
+                        .mut_region()
+                        .set_peers(RepeatedField::from_vec(new_peers));
+                    box_try!(wb.put_msg_cf(handle, key, &region_state));
+                }
+                Ok(true)
+            },
+        ));
+
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        box_try!(self.engines.kv_engine.write_opt(wb, &write_opts));
+        Ok(())
+    }
+
     pub fn get_store_id(&self) -> Result<u64> {
         let db = &self.engines.kv_engine;
         db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
@@ -338,6 +395,52 @@ impl Debugger {
                 Some(ident) => Ok(ident.get_store_id()),
                 None => Err(Error::NotFound("No store ident key".to_owned())),
             })
+    }
+
+    pub fn modify_tikv_config(
+        &self,
+        module: MODULE,
+        config_name: &str,
+        config_value: &str,
+    ) -> Result<()> {
+        let db = match module {
+            MODULE::KVDB => DBType::KV,
+            MODULE::RAFTDB => DBType::RAFT,
+            _ => return Err(Error::NotFound(format!("unsupported module: {:?}", module))),
+        };
+        let rocksdb = self.get_db_from_type(db)?;
+        let vec: Vec<&str> = config_name.split('.').collect();
+        if vec.len() == 1 {
+            box_try!(rocksdb.set_db_options(&[(config_name, config_value)]));
+        } else if vec.len() == 2 {
+            let cf = vec[0];
+            let config_name = vec[1];
+            validate_db_and_cf(db, cf)?;
+
+            let handle = box_try!(get_cf_handle(rocksdb, cf));
+            // currently we can't modify block_cache_size via set_options_cf
+            if config_name == "block_cache_size" {
+                let opt = rocksdb.get_options_cf(handle);
+                let capacity = ReadableSize::from_str(config_value);
+                if capacity.is_err() {
+                    return Err(Error::InvalidArgument(format!(
+                        "bad block cache size: {:?}",
+                        capacity.unwrap_err()
+                    )));
+                }
+                box_try!(opt.set_block_cache_capacity(capacity.unwrap().0));
+            } else {
+                let mut opt = Vec::new();
+                opt.push((config_name, config_value));
+                box_try!(rocksdb.set_options_cf(handle, &opt));
+            }
+        } else {
+            return Err(Error::InvalidArgument(format!(
+                "bad argument: {}",
+                config_name
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -375,29 +478,32 @@ impl MvccInfoIterator {
         })
     }
 
-    fn next_lock(&mut self) -> Result<Option<(Vec<u8>, LockInfo)>> {
+    fn next_lock(&mut self) -> Result<Option<(Vec<u8>, MvccLock)>> {
         let mut iter = &mut self.lock_iter;
         if let Some((key, value)) = <&mut DBIterator as Iterator>::next(&mut iter) {
             let lock = box_try!(Lock::parse(&value));
-            let mut lock_info = LockInfo::default();
-            lock_info.set_primary_lock(lock.primary);
-            lock_info.set_lock_version(lock.ts);
-            lock_info.set_lock_ttl(lock.ttl);
-            lock_info.set_key(key.clone());
+            let mut lock_info = MvccLock::default();
+            match lock.lock_type {
+                LockType::Put => lock_info.set_field_type(Op::Put),
+                LockType::Delete => lock_info.set_field_type(Op::Del),
+                LockType::Lock => lock_info.set_field_type(Op::Lock),
+            }
+            lock_info.set_start_ts(lock.ts);
+            lock_info.set_primary(lock.primary);
+            lock_info.set_short_value(lock.short_value.unwrap_or_default());
             return Ok(Some((key, lock_info)));
         };
         Ok(None)
     }
 
-    fn next_default(&mut self) -> Result<Option<(Vec<u8>, RepeatedField<ValueInfo>)>> {
+    fn next_default(&mut self) -> Result<Option<(Vec<u8>, RepeatedField<MvccValue>)>> {
         if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.default_iter) {
             let mut values = Vec::with_capacity(vec_kv.len());
             for (key, value) in vec_kv {
-                let mut value_info = ValueInfo::default();
-                value_info.set_is_short_value(is_short_value(&value));
-                value_info.set_value(value);
+                let mut value_info = MvccValue::default();
                 let encoded_key = Key::from_encoded(keys::origin_key(&key).to_owned());
-                value_info.set_ts(box_try!(encoded_key.decode_ts()));
+                value_info.set_start_ts(box_try!(encoded_key.decode_ts()));
+                value_info.set_value(value);
                 values.push(value_info);
             }
             return Ok(Some((prefix, RepeatedField::from_vec(values))));
@@ -405,21 +511,22 @@ impl MvccInfoIterator {
         Ok(None)
     }
 
-    fn next_write(&mut self) -> Result<Option<(Vec<u8>, RepeatedField<WriteInfo>)>> {
+    fn next_write(&mut self) -> Result<Option<(Vec<u8>, RepeatedField<MvccWrite>)>> {
         if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.write_iter) {
             let mut writes = Vec::with_capacity(vec_kv.len());
             for (key, value) in vec_kv {
                 let write = box_try!(Write::parse(&value));
-                let mut write_info = WriteInfo::default();
-                write_info.set_start_ts(write.start_ts);
+                let mut write_info = MvccWrite::default();
                 match write.write_type {
                     WriteType::Put => write_info.set_field_type(Op::Put),
                     WriteType::Delete => write_info.set_field_type(Op::Del),
                     WriteType::Lock => write_info.set_field_type(Op::Lock),
                     WriteType::Rollback => write_info.set_field_type(Op::Rollback),
                 }
+                write_info.set_start_ts(write.start_ts);
                 let encoded_key = Key::from_encoded(keys::origin_key(&key).to_owned());
                 write_info.set_commit_ts(box_try!(encoded_key.decode_ts()));
+                write_info.set_short_value(write.short_value.unwrap_or_default());
                 writes.push(write_info);
             }
             return Ok(Some((prefix, RepeatedField::from_vec(writes))));
@@ -556,7 +663,13 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch)
         return Err(box_err!("The peer is still in target peers"));
     }
 
-    box_try!(write_peer_state(db, wb, &region, PeerState::Tombstone));
+    box_try!(write_peer_state(
+        db,
+        wb,
+        &region,
+        PeerState::Tombstone,
+        None
+    ));
     Ok(())
 }
 
@@ -565,9 +678,9 @@ mod tests {
     use std::sync::Arc;
     use std::iter::FromIterator;
 
-    use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
-    use kvproto::metapb::{self, Peer};
     use raft::eraftpb::EntryType;
+    use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
+    use kvproto::metapb::{Peer, Region};
     use tempdir::TempDir;
 
     use raftstore::store::engine::Mutable;
@@ -759,7 +872,7 @@ mod tests {
 
         let region_id = 1;
         let region_state_key = keys::region_state_key(region_id);
-        let mut region = metapb::Region::new();
+        let mut region = Region::new();
         region.set_id(region_id);
         region.set_start_key(b"a".to_vec());
         region.set_end_key(b"zz".to_vec());
@@ -887,6 +1000,28 @@ mod tests {
     }
 
     #[test]
+    fn test_remove_failed_stores() {
+        let debugger = new_debugger();
+        debugger.set_store_id(100);
+        let engine = debugger.engines.kv_engine.as_ref();
+
+        // region 1 with peers at stores 11, 12, 13 and 14.
+        init_region_state(engine, 1, &[11, 12, 13, 14]);
+        // region 2 with peers at stores 21, 22, 23.
+        init_region_state(engine, 2, &[21, 22, 23]);
+
+        assert!(debugger.remove_failed_stores(vec![13, 14, 23]).is_ok());
+        let region_state = get_region_state(engine, 1);
+        assert_eq!(region_state.get_region().get_peers().len(), 2);
+        let region_state = get_region_state(engine, 2);
+        assert_eq!(region_state.get_region().get_peers().len(), 3);
+
+        // Should fail when the store itself is in the failed list.
+        init_region_state(engine, 3, &[100, 31, 32, 33]);
+        assert!(debugger.remove_failed_stores(vec![100]).is_err());
+    }
+
+    #[test]
     fn test_bad_regions() {
         let debugger = new_debugger();
         let kv_engine = debugger.engines.kv_engine.as_ref();
@@ -908,7 +1043,7 @@ mod tests {
                     let region = region_state.mut_region();
                     region.set_id(region_id);
                     let peers = peers.iter().enumerate().map(|(i, &sid)| {
-                        let mut peer = metapb::Peer::new();
+                        let mut peer = Peer::new();
                         peer.id = i as u64;
                         peer.store_id = sid;
                         peer
@@ -959,5 +1094,28 @@ mod tests {
         for (i, (region_id, _)) in bad_regions.into_iter().enumerate() {
             assert_eq!(region_id, (10 + i) as u64);
         }
+    }
+
+    #[test]
+    fn test_modify_tikv_config() {
+        let debugger = new_debugger();
+        let engine = &debugger.engines.kv_engine;
+
+        let db_opts = engine.get_db_options();
+        assert_eq!(db_opts.get_max_background_jobs(), 2);
+        debugger
+            .modify_tikv_config(MODULE::KVDB, "max_background_jobs", "8")
+            .unwrap();
+        let db_opts = engine.get_db_options();
+        assert_eq!(db_opts.get_max_background_jobs(), 8);
+
+        let cf = engine.cf_handle(CF_DEFAULT).unwrap();
+        let cf_opts = engine.get_options_cf(cf);
+        assert_eq!(cf_opts.get_disable_auto_compactions(), false);
+        debugger
+            .modify_tikv_config(MODULE::KVDB, "default.disable_auto_compactions", "true")
+            .unwrap();
+        let cf_opts = engine.get_options_cf(cf);
+        assert_eq!(cf_opts.get_disable_auto_compactions(), true);
     }
 }

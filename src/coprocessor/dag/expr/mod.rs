@@ -22,14 +22,16 @@ mod arithmetic;
 mod math;
 mod json;
 mod time;
+mod ctx;
+pub use self::ctx::*;
 
 use std::{error, io, str};
 use std::borrow::Cow;
 use std::string::FromUtf8Error;
 use std::str::Utf8Error;
 
-use chrono::FixedOffset;
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
+use tipb::select;
 
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Res, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
@@ -39,58 +41,6 @@ use coprocessor::codec::{self, Datum};
 use util;
 use util::codec::number::NumberDecoder;
 use util::codec::Error as CError;
-
-/// Flags are used by `DAGRequest.flags` to handle execution mode, like how to handle
-/// truncate error.
-/// `FLAG_IGNORE_TRUNCATE` indicates if truncate error should be ignored.
-/// Read-only statements should ignore truncate error, write statements should not ignore
-/// truncate error.
-pub const FLAG_IGNORE_TRUNCATE: u64 = 1;
-/// `FLAG_TRUNCATE_AS_WARNING` indicates if truncate error should be returned as warning.
-/// This flag only matters if `FLAG_IGNORE_TRUNCATE` is not set, in strict sql mode, truncate error
-/// should be returned as error, in non-strict sql mode, truncate error should be saved as warning.
-pub const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
-
-#[derive(Debug)]
-/// Some global variables needed in an evaluation.
-pub struct EvalContext {
-    /// timezone to use when parse/calculate time.
-    pub tz: FixedOffset,
-    pub ignore_truncate: bool,
-    pub truncate_as_warning: bool,
-}
-
-impl Default for EvalContext {
-    fn default() -> EvalContext {
-        EvalContext {
-            tz: FixedOffset::east(0),
-            ignore_truncate: false,
-            truncate_as_warning: false,
-        }
-    }
-}
-
-const ONE_DAY: i64 = 3600 * 24;
-
-impl EvalContext {
-    pub fn new(tz_offset: i64, flags: u64) -> Result<EvalContext> {
-        if tz_offset <= -ONE_DAY || tz_offset >= ONE_DAY {
-            return Err(Error::Eval(format!("invalid tz offset {}", tz_offset)));
-        }
-        let tz = match FixedOffset::east_opt(tz_offset as i32) {
-            None => return Err(Error::Eval(format!("invalid tz offset {}", tz_offset))),
-            Some(tz) => tz,
-        };
-
-        let e = EvalContext {
-            tz: tz,
-            ignore_truncate: (flags & FLAG_IGNORE_TRUNCATE) > 0,
-            truncate_as_warning: (flags & FLAG_TRUNCATE_AS_WARNING) > 0,
-        };
-
-        Ok(e)
-    }
-}
 
 quick_error! {
     #[derive(Debug)]
@@ -119,9 +69,9 @@ quick_error! {
             description("Unknown signature")
             display("Unknown signature: {:?}", sig)
         }
-        Truncated {
+        Truncated(s:String) {
             description("Truncated")
-            display("error Truncated")
+            display("{}",s)
         }
         Overflow {
             description("Overflow")
@@ -137,6 +87,14 @@ quick_error! {
             description(err.description())
             display("unknown error {:?}", err)
         }
+    }
+}
+
+impl Into<select::Error> for Error {
+    fn into(self) -> select::Error {
+        let mut err = select::Error::new();
+        err.set_msg(format!("{:?}", self));
+        err
     }
 }
 
@@ -157,7 +115,7 @@ impl<T> Into<Result<T>> for Res<T> {
     fn into(self) -> Result<T> {
         match self {
             Res::Ok(t) => Ok(t),
-            Res::Truncated(_) => Err(Error::Truncated),
+            Res::Truncated(_) => Err(Error::Truncated("Truncated".into())),
             Res::Overflow(_) => Err(Error::Overflow),
         }
     }
@@ -218,7 +176,7 @@ impl Expression {
     }
 
     #[allow(match_same_arms)]
-    fn eval_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    fn eval_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_int(),
             Expression::ColumnRef(ref column) => column.eval_int(row),
@@ -226,7 +184,7 @@ impl Expression {
         }
     }
 
-    fn eval_real(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    fn eval_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_real(),
             Expression::ColumnRef(ref column) => column.eval_real(row),
@@ -237,7 +195,7 @@ impl Expression {
     #[allow(match_same_arms)]
     fn eval_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         match *self {
@@ -249,7 +207,7 @@ impl Expression {
 
     fn eval_string<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         match *self {
@@ -261,7 +219,7 @@ impl Expression {
 
     fn eval_string_and_decode<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, str>>> {
         let bytes = try_opt!(self.eval_string(ctx, row));
@@ -278,7 +236,7 @@ impl Expression {
 
     fn eval_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         match *self {
@@ -290,7 +248,7 @@ impl Expression {
 
     fn eval_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         match *self {
@@ -302,7 +260,7 @@ impl Expression {
 
     fn eval_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         match *self {
@@ -333,7 +291,7 @@ impl Expression {
 }
 
 impl Expression {
-    pub fn eval(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Datum> {
+    pub fn eval(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Datum> {
         match *self {
             Expression::Constant(ref constant) => Ok(constant.eval()),
             Expression::ColumnRef(ref column) => Ok(column.eval(row)),
@@ -341,7 +299,7 @@ impl Expression {
         }
     }
 
-    pub fn batch_build(ctx: &EvalContext, exprs: Vec<Expr>) -> Result<Vec<Self>> {
+    pub fn batch_build(ctx: &mut EvalContext, exprs: Vec<Expr>) -> Result<Vec<Self>> {
         let mut data = Vec::with_capacity(exprs.len());
         for expr in exprs {
             let ex = Expression::build(ctx, expr)?;
@@ -350,7 +308,7 @@ impl Expression {
         Ok(data)
     }
 
-    pub fn build(ctx: &EvalContext, mut expr: Expr) -> Result<Self> {
+    pub fn build(ctx: &mut EvalContext, mut expr: Expr) -> Result<Self> {
         let tp = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
@@ -377,7 +335,7 @@ impl Expression {
                 .and_then(|i| {
                     let fsp = tp.get_decimal() as i8;
                     let t = tp.get_tp() as u8;
-                    Time::from_packed_u64(i, t, fsp, &ctx.tz)
+                    Time::from_packed_u64(i, t, fsp, &ctx.cfg.tz)
                 })
                 .map(|t| Expression::new_const(Datum::Time(t), tp))
                 .map_err(Error::from),
@@ -425,9 +383,9 @@ impl Expression {
 }
 
 #[inline]
-pub fn eval_arith<F>(ctx: &EvalContext, left: Datum, right: Datum, f: F) -> Result<Datum>
+pub fn eval_arith<F>(ctx: &mut EvalContext, left: Datum, right: Datum, f: F) -> Result<Datum>
 where
-    F: FnOnce(Datum, &EvalContext, Datum) -> codec::Result<Datum>,
+    F: FnOnce(Datum, &mut EvalContext, Datum) -> codec::Result<Datum>,
 {
     let left = left.into_arith(ctx)?;
     let right = right.into_arith(ctx)?;
@@ -443,12 +401,13 @@ where
 #[cfg(test)]
 mod test {
     use std::{i64, u64};
+    use std::sync::Arc;
     use coprocessor::codec::{convert, mysql, Datum};
     use coprocessor::codec::mysql::{charset, types, Decimal, DecimalEncoder, Duration, Json, Time};
     use coprocessor::codec::mysql::json::JsonEncoder;
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
     use util::codec::number::{self, NumberEncoder};
-    use super::{Error, EvalContext, Expression};
+    use super::{Error, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
@@ -554,8 +513,7 @@ mod test {
 
     #[test]
     fn test_expression_eval() {
-        let mut ctx = EvalContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         let cases = vec![
             (
                 ScalarFuncSig::CastStringAsReal,
@@ -595,8 +553,8 @@ mod test {
                 .set_decimal(convert::UNSPECIFIED_LENGTH as i32);
             ex.mut_field_type()
                 .set_flen(convert::UNSPECIFIED_LENGTH as i32);
-            let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval(&ctx, &cols).unwrap();
+            let e = Expression::build(&mut ctx, ex).unwrap();
+            let res = e.eval(&mut ctx, &cols).unwrap();
             if let Datum::F64(_) = exp {
                 assert_eq!(format!("{}", res), format!("{}", exp));
             } else {
@@ -619,8 +577,8 @@ mod test {
             if flag.is_some() {
                 ex.mut_field_type().set_flag(flag.unwrap() as u32);
             }
-            let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval(&ctx, &cols).unwrap();
+            let e = Expression::build(&mut ctx, ex).unwrap();
+            let res = e.eval(&mut ctx, &cols).unwrap();
             assert_eq!(res, exp);
         }
     }

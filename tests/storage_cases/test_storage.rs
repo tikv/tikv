@@ -24,6 +24,7 @@ use tikv::storage::engine::{Engine, EngineRocksdb, TEMP_DIR};
 use tikv::storage::txn::{GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::server::readpool::{self, ReadPool};
+use tikv::util::worker::FutureWorker;
 
 use super::assert_storage::AssertionStorage;
 use std::u64;
@@ -891,8 +892,9 @@ fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
 fn test_conflict_commands_on_fault_engine() {
     let engine = EngineRocksdb::new(TEMP_DIR, ALL_CFS, None).unwrap();
     let box_engine = engine.clone();
+    let pd_worker = FutureWorker::new("test future worker");
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-        || storage::ReadPoolContext::new(None)
+        || storage::ReadPoolContext::new(pd_worker.scheduler())
     });
     let config = Default::default();
     let mut store = SyncStorage::prepare(box_engine, &config, read_pool);
