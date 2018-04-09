@@ -165,6 +165,7 @@ fn send_snap(
             drop(deregister);
             drop(client);
             result.map(|s| {
+                fail_point!("snapshot_delete_after_send");
                 s.snap.delete();
                 // TODO: improve it after rustc resolves the bug.
                 // Call `info` in the closure directly will cause rustc

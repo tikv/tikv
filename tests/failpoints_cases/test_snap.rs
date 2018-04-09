@@ -216,38 +216,31 @@ fn test_generate_snapshot() {
     // so that index and term won't be chagned any more.
     thread::sleep(Duration::from_secs(1));
 
-    let on_resolve_fp = "transport_snapshot_on_resolve";
-    let on_send_store_fp = "transport_on_send_store";
-
-    fail::cfg(on_resolve_fp, "return(6)").unwrap();
-    fail::cfg(on_send_store_fp, "return(6)").unwrap();
+    fail::cfg("snapshot_delete_after_send", "pause").unwrap();
 
     // Let store 6 inform leader to generate a snapshot.
     cluster.run_node(6);
-    thread::sleep(Duration::from_millis(500));
+    must_get_equal(&cluster.get_engine(6), b"k1", b"v1");
     cluster.stop_node(6);
-    thread::sleep(Duration::from_millis(500));
 
     fail::cfg("snapshot_before_enter_do_build", "return").unwrap();
     fail::cfg("snapshot_after_enter_do_build", "return").unwrap();
     fail::cfg("snapshot_enter_do_build", "pause").unwrap();
     cluster.run_node(7);
 
-    fail::cfg(on_resolve_fp, "off").unwrap();
-    fail::cfg(on_send_store_fp, "off").unwrap();
+    fail::cfg("snapshot_delete_after_send", "off").unwrap();
 
     // The snapshot exists when we call Snap::new and init_for_building but
     // not exists when we call Snap::do_build. TiKV shouldn't panic in this case.
     fail::cfg("snapshot_before_enter_do_build", "off").unwrap();
-    fail::cfg("snapshot_after_enter_do_build", "off").unwrap();
     fail::cfg("snapshot_enter_do_build", "pause").unwrap();
     must_get_none(&cluster.get_engine(7), b"k1");
 
+    fail::cfg("snapshot_after_enter_do_build", "off").unwrap();
     fail::cfg("snapshot_enter_do_build", "off").unwrap();
     must_get_equal(&cluster.get_engine(7), b"k1", b"v1");
 
-    fail::remove(on_resolve_fp);
-    fail::remove(on_send_store_fp);
+    fail::remove("snapshot_delete_after_send");
     fail::remove("snapshot_enter_do_build");
     fail::remove("snapshot_before_enter_do_build");
     fail::remove("snapshot_after_enter_do_build");
