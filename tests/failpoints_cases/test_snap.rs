@@ -14,7 +14,6 @@
 use std::*;
 use std::fs::File;
 use std::path::Path;
-use std::collections::HashMap;
 use std::io::{Seek, SeekFrom};
 use std::time::*;
 use std::sync::{Arc, Mutex};
@@ -22,14 +21,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use protobuf::{Message, RepeatedField};
 
-use rocksdb::{ColumnFamilyOptions, DBCompressionType, EnvOptions, SstFileWriter};
-
 use fail;
 use tikv::util::HandyRwLock;
 use tikv::util::config::*;
 use tikv::util::file::calc_crc32;
 use tikv::util::codec::bytes::BytesEncoder;
-use tikv::util::rocksdb::get_fastest_supported_compression_type;
 use tikv::raftstore::Result;
 use tikv::raftstore::store::SnapKey;
 use raft::eraftpb::MessageType;
@@ -217,34 +213,33 @@ fn test_generate_snapshot() {
     cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
 
+    // Generate an empty snapshot and try to send it when add_peer.
     // We can easily know term and index of region 1.
     let key = SnapKey::new(1, 6, 8);
     let snap_dir = &cluster.sim.rl().snap_paths[&1];
-    let mut data = HashMap::new();
-    data.insert("k1".to_owned(), "v1".to_owned());
-    gen_mock_snapshot(key, snap_dir.path(), data);
+    gen_mock_snapshot(key, snap_dir.path());
 
+    fail::cfg("snapshot_before_enter_do_build", "return").unwrap();
     fail::cfg("snapshot_enter_do_build", "pause").unwrap();
 
     pd_client.must_add_peer(1, new_peer(2, 2));
 
-    let del_path = snap_dir.path().join("*");
     fs::remove_file(snap_dir.path().join("gen_1_6_8.meta")).unwrap();
     fs::remove_file(snap_dir.path().join("gen_1_6_8_lock.sst")).unwrap();
-    fs::remove_file(snap_dir.path().join("gen_1_6_8_default.sst")).unwrap();
 
+    fail::cfg("snapshot_before_enter_do_build", "off").unwrap();
     fail::cfg("snapshot_enter_do_build", "pause").unwrap();
     must_get_none(&cluster.get_engine(2), b"k1");
 
     fail::cfg("snapshot_enter_do_build", "off").unwrap();
-    thread::sleep(Duration::from_millis(1000));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
+    fail::remove("snapshot_before_enter_do_build");
     fail::remove("snapshot_enter_do_build");
 }
 
-// Generate a snapshot with given kv pairs for a specified SnapKey.
-fn gen_mock_snapshot(key: SnapKey, snap_dir: &Path, data: HashMap<String, String>) {
+// Generate an empty snapshot for a specified SnapKey.
+fn gen_mock_snapshot(key: SnapKey, snap_dir: &Path) {
     let mut meta = Vec::new();
     // The order of 3 cfs is sensitive.
     for &cf in &["default", "lock", "write"] {
@@ -256,19 +251,6 @@ fn gen_mock_snapshot(key: SnapKey, snap_dir: &Path, data: HashMap<String, String
             let mut f = File::create(&p).unwrap();
             f.encode_compact_bytes(b"").unwrap();
             file_size = f.seek(SeekFrom::Current(0)).unwrap();
-            checksum = calc_crc32(&p).unwrap();
-        } else if cf == "default" {
-            let mut cf_options = ColumnFamilyOptions::default();
-            cf_options.compression(get_fastest_supported_compression_type());
-            cf_options.compression_per_level(&[]);
-            cf_options.bottommost_compression(DBCompressionType::Disable);
-            let mut writer = SstFileWriter::new(EnvOptions::new(), cf_options);
-            writer.open(p.to_str().unwrap()).unwrap();
-
-            data.iter().for_each(|(k, v)| {
-                writer.put(k.as_bytes(), v.as_bytes()).unwrap();
-            });
-            file_size = writer.finish().unwrap().file_size();
             checksum = calc_crc32(&p).unwrap();
         }
 

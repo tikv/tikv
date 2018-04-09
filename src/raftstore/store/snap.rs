@@ -672,7 +672,16 @@ impl Snap {
         stat: &mut SnapshotStatistics,
         deleter: Box<SnapshotDeleter>,
     ) -> RaftStoreResult<()> {
-        fail_point!("snapshot_enter_do_build");
+        {
+            let fail_point_before_enter = || {
+                fail_point!("snapshot_before_enter_do_build", |_| {
+                    assert!(self.exists());
+                });
+            };
+            fail_point_before_enter();
+            fail_point!("snapshot_enter_do_build");
+        }
+
         if self.exists() {
             match self.validate(snap.get_db()) {
                 Ok(()) => return Ok(()),
