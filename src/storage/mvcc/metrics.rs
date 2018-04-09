@@ -29,15 +29,15 @@ lazy_static! {
              exponential_buckets(1.0, 2.0, 10).unwrap()
         ).unwrap();
 
-    pub static ref MVCC_CONFLICT_COUNTER: CounterVec =
-        register_counter_vec!(
+    pub static ref MVCC_CONFLICT_COUNTER: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_storage_mvcc_conflict_counter",
             "Total number of conflict error",
             &["type"]
         ).unwrap();
 
-    pub static ref MVCC_DUPLICATE_CMD_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
+    pub static ref MVCC_DUPLICATE_CMD_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_storage_mvcc_duplicate_cmd_counter",
             "Total number of duplicated commands",
             &["type"]

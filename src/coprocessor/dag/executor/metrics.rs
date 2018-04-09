@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::local::LocalCounterVec;
+use prometheus::local::LocalIntCounterVec;
 use storage::engine::Statistics;
 
 /// `ExecutorMetrics` is metrics collected from executors group by request.
@@ -60,16 +60,16 @@ impl ScanCounter {
         other.point = 0;
     }
 
-    pub fn consume(self, metrics: &mut LocalCounterVec) {
+    pub fn consume(self, metrics: &mut LocalIntCounterVec) {
         if self.point > 0 {
             metrics
                 .with_label_values(&["point"])
-                .inc_by(self.point as f64);
+                .inc_by(self.point as i64);
         }
         if self.range > 0 {
             metrics
                 .with_label_values(&["range"])
-                .inc_by(self.range as f64);
+                .inc_by(self.range as i64);
         }
     }
 }
@@ -96,24 +96,20 @@ impl ExecCounter {
         *other = ExecCounter::default();
     }
 
-    pub fn consume(self, metrics: &mut LocalCounterVec) {
+    pub fn consume(self, metrics: &mut LocalIntCounterVec) {
         metrics
             .with_label_values(&["tblscan"])
-            .inc_by(self.table_scan as f64);
+            .inc_by(self.table_scan);
         metrics
             .with_label_values(&["idxscan"])
-            .inc_by(self.index_scan as f64);
+            .inc_by(self.index_scan);
         metrics
             .with_label_values(&["selection"])
-            .inc_by(self.selection as f64);
-        metrics
-            .with_label_values(&["topn"])
-            .inc_by(self.topn as f64);
-        metrics
-            .with_label_values(&["limit"])
-            .inc_by(self.limit as f64);
+            .inc_by(self.selection);
+        metrics.with_label_values(&["topn"]).inc_by(self.topn);
+        metrics.with_label_values(&["limit"]).inc_by(self.limit);
         metrics
             .with_label_values(&["aggregation"])
-            .inc_by(self.aggregation as f64);
+            .inc_by(self.aggregation);
     }
 }

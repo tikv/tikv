@@ -39,7 +39,7 @@ use std::u64;
 use std::mem;
 
 use prometheus::HistogramTimer;
-use prometheus::local::{LocalCounter, LocalHistogramVec};
+use prometheus::local::{LocalHistogramVec, LocalIntCounter};
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
 use storage::{Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
@@ -904,8 +904,8 @@ struct SchedContext {
     processing_read_duration: LocalHistogramVec,
     processing_write_duration: LocalHistogramVec,
     command_keyread_duration: LocalHistogramVec,
-    command_gc_skipped_counter: LocalCounter,
-    command_gc_empty_range_counter: LocalCounter,
+    command_gc_skipped_counter: LocalIntCounter,
+    command_gc_empty_range_counter: LocalIntCounter,
 }
 
 impl Default for SchedContext {
@@ -935,7 +935,7 @@ impl ThreadContext for SchedContext {
                 for (tag, count) in details {
                     KV_COMMAND_SCAN_DETAILS
                         .with_label_values(&[cmd, cf, tag])
-                        .inc_by(count as f64);
+                        .inc_by(count as i64);
                 }
             }
         }
@@ -965,8 +965,8 @@ impl Scheduler {
         if self.cmd_ctxs.insert(cid, ctx).is_some() {
             panic!("command cid={} shouldn't exist", cid);
         }
-        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as f64);
-        SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as f64);
+        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as i64);
+        SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as i64);
     }
 
     fn remove_ctx(&mut self, cid: u64) -> RunningCtx {
@@ -978,8 +978,8 @@ impl Scheduler {
         if ctx.tag == CMD_TAG_GC {
             self.has_gc_command = false;
         }
-        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as f64);
-        SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as f64);
+        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as i64);
+        SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as i64);
         ctx
     }
 

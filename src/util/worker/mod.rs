@@ -257,10 +257,10 @@ fn poll<R, T, U>(
             counter.fetch_sub(batch.len(), Ordering::SeqCst);
             WORKER_PENDING_TASK_VEC
                 .with_label_values(&[&name])
-                .sub(batch.len() as f64);
+                .sub(batch.len() as i64);
             WORKER_HANDLED_TASK_VEC
                 .with_label_values(&[&name])
-                .inc_by(batch.len() as f64);
+                .inc_by(batch.len() as i64);
             runner.run_batch(&mut batch);
             batch.clear();
         }

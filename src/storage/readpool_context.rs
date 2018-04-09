@@ -13,7 +13,7 @@
 
 use std::fmt;
 use std::mem;
-use prometheus::local::{LocalCounterVec, LocalHistogramTimer, LocalHistogramVec};
+use prometheus::local::{LocalHistogramTimer, LocalHistogramVec, LocalIntCounterVec};
 
 use server::readpool;
 use util::futurepool;
@@ -32,10 +32,10 @@ pub struct Context {
     processing_read_duration: LocalHistogramVec,
     command_keyreads: LocalHistogramVec,
     // TODO: kv_command_counter, raw_command_counter, command_pri_counter can be merged together.
-    kv_command_counter: LocalCounterVec,
-    raw_command_counter: LocalCounterVec,
-    command_pri_counter: LocalCounterVec,
-    scan_details: LocalCounterVec,
+    kv_command_counter: LocalIntCounterVec,
+    raw_command_counter: LocalIntCounterVec,
+    command_pri_counter: LocalIntCounterVec,
+    scan_details: LocalIntCounterVec,
 
     read_flow_stats: HashMap<u64, storage::FlowStatistics>,
 }
@@ -101,7 +101,7 @@ impl Context {
             for (tag, count) in details {
                 self.scan_details
                     .with_label_values(&[cmd, cf, tag])
-                    .inc_by(count as f64);
+                    .inc_by(count as i64);
             }
         }
     }

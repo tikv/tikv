@@ -241,10 +241,10 @@ impl CacheQueryStats {
     pub fn flush(&mut self) {
         RAFT_ENTRY_FETCHES
             .with_label_values(&["hit"])
-            .inc_by(self.hit as f64);
+            .inc_by(self.hit as i64);
         RAFT_ENTRY_FETCHES
             .with_label_values(&["miss"])
-            .inc_by(self.miss as f64);
+            .inc_by(self.miss as i64);
         self.hit = 0;
         self.miss = 0;
     }
