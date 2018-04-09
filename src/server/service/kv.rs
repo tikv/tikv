@@ -666,7 +666,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let keys = req.take_keys().into_vec();
         let future = self.storage
-            .async_raw_batch_get(req.take_context(), keys)
+            .async_raw_batch_get(req.take_context(), req.take_cf(), keys)
             .then(|v| {
                 let mut resp = RawBatchGetResponse::new();
                 if let Some(err) = extract_region_error(&v) {
@@ -729,6 +729,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let future = self.storage
             .async_raw_batch_scan(
                 req.take_context(),
+                req.take_cf(),
                 req.take_ranges().into_vec(),
                 req.get_each_limit() as usize,
                 req.get_key_only(),
@@ -805,7 +806,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .collect();
         let (cb, future) = paired_future_callback();
         let res = self.storage
-            .async_raw_batch_put(req.take_context(), pairs, cb);
+            .async_raw_batch_put(req.take_context(), req.take_cf(), pairs, cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -883,7 +884,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let keys = req.take_keys().into_vec();
         let (cb, future) = paired_future_callback();
         let res = self.storage
-            .async_raw_batch_delete(req.take_context(), keys, cb);
+            .async_raw_batch_delete(req.take_context(), req.take_cf(), keys, cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
