@@ -1837,6 +1837,9 @@ impl ApplyDelegate {
         )?;
 
         if ctx.sub_apply_enabled() {
+            EXPENSIVE_APPLY_TASK_COUNTER_VEC
+                .with_label_values(&["unsafe_cleanup_range", "sub-apply"])
+                .inc();
             self.pause();
             ctx.schedule_sub_task(SubApplyTask::UnsafeCleanupRange {
                 region_id: self.region.get_id(),
@@ -1844,6 +1847,9 @@ impl ApplyDelegate {
                 end_key: end_key,
             });
         } else {
+            EXPENSIVE_APPLY_TASK_COUNTER_VEC
+                .with_label_values(&["unsafe_cleanup_range", "apply"])
+                .inc();
             for cf in ALL_CFS {
                 let start = if *cf == CF_WRITE {
                     let mut key = Key::from_encoded(start_key.clone());
