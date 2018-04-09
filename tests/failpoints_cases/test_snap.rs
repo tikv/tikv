@@ -192,12 +192,6 @@ fn test_server_snapshot_on_resolve_failure() {
 
 #[test]
 fn test_generate_snapshot() {
-    let on_resolve_fp = "transport_snapshot_on_resolve";
-    let on_send_store_fp = "transport_on_send_store";
-
-    if ::std::env::var("CI").is_ok() && ::std::env::var("LOG_FILE").is_ok() {
-        ::util::init_log();
-    }
     let _guard = ::setup();
 
     let mut cluster = new_server_cluster(1, 7);
@@ -221,6 +215,9 @@ fn test_generate_snapshot() {
     // Sleep for a while to ensure logs are compacted
     // so that index and term won't be chagned any more.
     thread::sleep(Duration::from_secs(1));
+
+    let on_resolve_fp = "transport_snapshot_on_resolve";
+    let on_send_store_fp = "transport_on_send_store";
 
     fail::cfg(on_resolve_fp, "return(6)").unwrap();
     fail::cfg(on_send_store_fp, "return(6)").unwrap();
