@@ -221,12 +221,13 @@ pub fn region_on_same_stores(lhs: &metapb::Region, rhs: &metapb::Region) -> bool
     if lhs.get_peers().len() != rhs.get_peers().len() {
         return false;
     }
+
     // Because every store can only have one replica for the same region,
     // so just one round check is enough.
     lhs.get_peers().iter().all(|lp| {
-        rhs.get_peers()
-            .iter()
-            .any(|rp| rp.get_store_id() == lp.get_store_id())
+        rhs.get_peers().iter().any(|rp| {
+            rp.get_store_id() == lp.get_store_id() && rp.get_is_learner() == lp.get_is_learner()
+        })
     })
 }
 
@@ -750,20 +751,31 @@ mod tests {
     #[test]
     fn test_on_same_store() {
         let cases = vec![
-            (vec![2, 3, 4], vec![1, 2, 3], false),
-            (vec![2, 3, 1], vec![1, 2, 3], true),
-            (vec![2, 3, 4], vec![1, 2], false),
-            (vec![1, 2, 3], vec![1, 2, 3], true),
+            (vec![2, 3, 4], vec![], vec![1, 2, 3], vec![], false),
+            (vec![2, 3, 1], vec![], vec![1, 2, 3], vec![], true),
+            (vec![2, 3, 4], vec![], vec![1, 2], vec![], false),
+            (vec![1, 2, 3], vec![], vec![1, 2, 3], vec![], true),
+            (vec![1, 3], vec![2, 4], vec![1, 2], vec![3, 4], false),
+            (vec![1, 3], vec![2, 4], vec![1, 3], vec![], false),
+            (vec![1, 3], vec![2, 4], vec![], vec![2, 4], false),
+            (vec![1, 3], vec![2, 4], vec![3, 1], vec![4, 2], true),
         ];
 
-        for (s1, s2, exp) in cases {
+        for (s1, s2, s3, s4, exp) in cases {
             let mut r1 = metapb::Region::new();
             for (store_id, peer_id) in s1.into_iter().zip(0..) {
                 r1.mut_peers().push(new_peer(store_id, peer_id));
             }
+            for (store_id, peer_id) in s2.into_iter().zip(0..) {
+                r1.mut_peers().push(new_learner_peer(store_id, peer_id));
+            }
+
             let mut r2 = metapb::Region::new();
-            for (store_id, peer_id) in s2.into_iter().zip(5..) {
+            for (store_id, peer_id) in s3.into_iter().zip(10..) {
                 r2.mut_peers().push(new_peer(store_id, peer_id));
+            }
+            for (store_id, peer_id) in s4.into_iter().zip(10..) {
+                r2.mut_peers().push(new_learner_peer(store_id, peer_id));
             }
             let res = super::region_on_same_stores(&r1, &r2);
             assert_eq!(res, exp, "{:?} vs {:?}", r1, r2);
