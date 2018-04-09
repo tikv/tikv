@@ -42,7 +42,7 @@ impl SelectionExecutor {
         visitor.batch_visit(&conditions)?;
         let mut ctx = EvalContext::new(eval_cfg);
         Ok(SelectionExecutor {
-            conditions: box_try!(Expression::batch_build(&mut ctx, conditions)),
+            conditions: Expression::batch_build(&mut ctx, conditions)?,
             cols: columns_info,
             related_cols_offset: visitor.column_offsets(),
             ctx: ctx,
@@ -64,8 +64,8 @@ impl Executor for SelectionExecutor {
                 row.handle,
             )?;
             for filter in &self.conditions {
-                let val = box_try!(filter.eval(&mut self.ctx, &cols));
-                if !box_try!(val.into_bool(&mut self.ctx)).unwrap_or(false) {
+                let val = filter.eval(&mut self.ctx, &cols)?;
+                if !val.into_bool(&mut self.ctx)?.unwrap_or(false) {
                     continue 'next;
                 }
             }

@@ -34,12 +34,10 @@ struct OrderBy {
 
 impl OrderBy {
     fn new(ctx: &mut EvalContext, mut order_by: Vec<ByItem>) -> Result<OrderBy> {
-        let exprs: Vec<Expression> = box_try!(
-            order_by
-                .iter_mut()
-                .map(|v| Expression::build(ctx, v.take_expr()))
-                .collect()
-        );
+        let mut exprs = Vec::with_capacity(order_by.len());
+        for v in &mut order_by {
+            exprs.push(Expression::build(ctx, v.take_expr())?);
+        }
         Ok(OrderBy {
             items: Arc::new(order_by),
             exprs: exprs,
@@ -47,7 +45,10 @@ impl OrderBy {
     }
 
     fn eval(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Vec<Datum>> {
-        let res: Vec<Datum> = box_try!(self.exprs.iter().map(|v| v.eval(ctx, row)).collect());
+        let mut res = Vec::with_capacity(self.exprs.len());
+        for expr in &self.exprs {
+            res.push(expr.eval(ctx, row)?);
+        }
         Ok(res)
     }
 }
