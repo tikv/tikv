@@ -161,7 +161,7 @@ impl Default for Config {
             allow_remove_leader: false,
             merge_max_log_gap: 10,
             merge_check_tick_interval: ReadableDuration::secs(10),
-            use_delete_range: true,
+            use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
 
             // They are preserved for compatibility check.
