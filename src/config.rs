@@ -47,6 +47,7 @@ const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
+const LOG_MIN_SIZE: u64 = 10 * MB as u64;
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
@@ -723,6 +724,7 @@ impl Default for ReadPoolConfig {
 pub struct TiKvConfig {
     #[serde(with = "LogLevel")] pub log_level: LogLevelFilter,
     pub log_file: String,
+    pub log_rotate_size: ReadableSize,
     pub readpool: ReadPoolConfig,
     pub server: ServerConfig,
     pub storage: StorageConfig,
@@ -741,6 +743,7 @@ impl Default for TiKvConfig {
         TiKvConfig {
             log_level: LogLevelFilter::Info,
             log_file: "".to_owned(),
+            log_rotate_size: ReadableSize::mb(0),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
@@ -778,6 +781,12 @@ impl TiKvConfig {
         }
         if !db_exist(&kv_db_path) && db_exist(&self.raft_store.raftdb_path) {
             return Err("default rocksdb not exist, buf raftdb exist".into());
+        }
+        if self.log_rotate_size.0 > 0 && self.log_rotate_size.0 < LOG_MIN_SIZE {
+            return Err(format!(
+                "log rotate size {} is less than log min size {}",
+                self.log_rotate_size.0, LOG_MIN_SIZE,
+            ).into());
         }
 
         self.rocksdb.validate()?;

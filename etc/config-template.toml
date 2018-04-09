@@ -9,6 +9,9 @@
 # log-level = "info"
 # file to store log, write to stderr if it's empty.
 # log-file = ""
+# log will rotate by day in default. If log-rotate-size > 0,
+# log will rotate by size.
+# log-rotate-size = "0MB"
 
 [readpool.storage]
 # size of thread pool for high-priority read operations

@@ -96,13 +96,14 @@ fn init_log(config: &TiKvConfig) {
             fatal!("failed to initial log: {:?}", e);
         });
     } else {
-        let w = RotatingFileLogger::new(&config.log_file).unwrap_or_else(|e| {
-            fatal!(
-                "failed to initial log with file {:?}: {:?}",
-                config.log_file,
-                e
-            );
-        });
+        let w = RotatingFileLogger::new(&config.log_file, Some(config.log_rotate_size.0 as usize))
+            .unwrap_or_else(|e| {
+                fatal!(
+                    "failed to initial log with file {:?}: {:?}",
+                    config.log_file,
+                    e
+                );
+            });
         logger::init_log(w, config.log_level).unwrap_or_else(|e| {
             fatal!("failed to initial log: {:?}", e);
         });
