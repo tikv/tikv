@@ -120,7 +120,7 @@ impl Executor for TableScanExecutor {
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
                 if let Some(counts) = self.counts.as_mut() {
-                    counts.last_mut().map_or((), |val| *val = *val + 1);
+                    counts.last_mut().map_or((), |val| *val += 1);
                 }
                 return Ok(Some(row));
             }
@@ -134,7 +134,7 @@ impl Executor for TableScanExecutor {
                     self.metrics.scan_counter.inc_point();
                     if let Some(row) = self.get_row_from_point(range)? {
                         if let Some(counts) = self.counts.as_mut() {
-                            counts.last_mut().map_or((), |val| *val = *val + 1);
+                            counts.last_mut().map_or((), |val| *val += 1);
                         }
                         return Ok(Some(row));
                     }
