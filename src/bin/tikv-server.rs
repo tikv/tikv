@@ -122,7 +122,7 @@ fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
 
     info!("start prometheus client");
 
-    util::monitor_threads("tikv")
+    util::metrics::monitor_threads("tikv")
         .unwrap_or_else(|e| fatal!("failed to start monitor thread: {:?}", e));
 
     util::metrics::run_prometheus(cfg.interval.0, &cfg.address, &push_job);
