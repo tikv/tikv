@@ -50,9 +50,6 @@ pub mod jemalloc;
 pub use self::rocksdb::properties;
 pub use self::rocksdb::stats as rocksdb_stats;
 
-#[cfg(target_os = "linux")]
-mod thread_metrics;
-
 pub const NO_LIMIT: u64 = u64::MAX;
 
 pub trait AssertSend: Send {}
@@ -356,14 +353,6 @@ pub fn print_tikv_info() {
     info!("Git Commit Branch: {}", branch);
     info!("UTC Build Time:    {}", date);
     info!("Rustc Version:     {}", rustc);
-}
-
-#[cfg(target_os = "linux")]
-pub use self::thread_metrics::monitor_threads;
-
-#[cfg(not(target_os = "linux"))]
-pub fn monitor_threads<S: Into<String>>(_: S) -> io::Result<()> {
-    Ok(())
 }
 
 /// A simple ring queue with fixed capacity.

@@ -384,8 +384,9 @@ pub struct Store {
 
 impl Store {
     fn new(engine: Box<Engine>) -> Store {
+        let pd_worker = FutureWorker::new("test future worker");
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(None)
+            || storage::ReadPoolContext::new(pd_worker.scheduler())
         });
         Store {
             store: SyncStorage::from_engine(engine, &Default::default(), read_pool),
@@ -2113,12 +2114,9 @@ fn test_handle_truncate() {
         let req = DAGSelect::from(&product.table)
             .where_expr(cond.clone())
             .build();
-        let (tx, rx) = oneshot::channel();
-        let on_resp = OnResponse::Unary(tx);
-        let req = RequestTask::new(req, on_resp, 100).unwrap();
-        end_point.schedule(EndPointTask::Request(req)).unwrap();
-        let resp = rx.wait().unwrap();
-        assert!(!resp.get_other_error().is_empty());
+        let mut resp = handle_select(&end_point, req);
+        assert!(resp.has_error());
+        assert!(resp.get_warnings().is_empty());
     }
 
     end_point.stop().unwrap().join().unwrap();
