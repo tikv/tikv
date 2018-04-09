@@ -680,8 +680,13 @@ impl Snap {
             };
             fail_point_before_enter();
             fail_point!("snapshot_enter_do_build");
+            let fail_point_after_enter = || {
+                fail_point!("snapshot_after_enter_do_build", |_| {
+                    assert!(!self.exists());
+                });
+            };
+            fail_point_after_enter();
         }
-
         if self.exists() {
             match self.validate(snap.get_db()) {
                 Ok(()) => return Ok(()),

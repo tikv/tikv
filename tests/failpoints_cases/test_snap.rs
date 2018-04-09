@@ -12,24 +12,16 @@
 // limitations under the License.
 
 use std::*;
-use std::fs::File;
-use std::path::Path;
-use std::io::{Seek, SeekFrom};
 use std::time::*;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
-use protobuf::{Message, RepeatedField};
 
 use fail;
-use tikv::util::HandyRwLock;
 use tikv::util::config::*;
-use tikv::util::file::calc_crc32;
-use tikv::util::codec::bytes::BytesEncoder;
 use tikv::raftstore::Result;
-use tikv::raftstore::store::SnapKey;
 use raft::eraftpb::MessageType;
-use kvproto::raft_serverpb::{RaftMessage, SnapshotCFFile, SnapshotMeta};
+use kvproto::raft_serverpb::RaftMessage;
 
 use raftstore::cluster::Simulator;
 use raftstore::transport_simulate::*;
@@ -200,12 +192,15 @@ fn test_server_snapshot_on_resolve_failure() {
 
 #[test]
 fn test_generate_snapshot() {
+    let on_resolve_fp = "transport_snapshot_on_resolve";
+    let on_send_store_fp = "transport_on_send_store";
+
     if ::std::env::var("CI").is_ok() && ::std::env::var("LOG_FILE").is_ok() {
         ::util::init_log();
     }
     let _guard = ::setup();
 
-    let mut cluster = new_server_cluster(1, 4);
+    let mut cluster = new_server_cluster(1, 7);
     configure_for_snapshot(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -213,56 +208,50 @@ fn test_generate_snapshot() {
     cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
 
-    // Generate an empty snapshot and try to send it when add_peer.
-    // We can easily know term and index of region 1.
-    let key = SnapKey::new(1, 6, 8);
-    let snap_dir = &cluster.sim.rl().snap_paths[&1];
-    gen_mock_snapshot(key, snap_dir.path());
+    for store_id in 2..8 {
+        if store_id >= 6 {
+            // Stop 6 and 7 first to avoid receiving snapshots.
+            cluster.stop_node(store_id);
+        }
+        pd_client.must_add_peer(1, new_peer(store_id, store_id));
+        if store_id < 6 {
+            must_get_equal(&cluster.get_engine(store_id), b"k1", b"v1");
+        }
+    }
+    // Sleep for a while to ensure logs are compacted
+    // so that index and term won't be chagned any more.
+    thread::sleep(Duration::from_secs(1));
+
+    fail::cfg(on_resolve_fp, "return(6)").unwrap();
+    fail::cfg(on_send_store_fp, "return(6)").unwrap();
+
+    // Let store 6 inform leader to generate a snapshot.
+    cluster.run_node(6);
+    thread::sleep(Duration::from_millis(500));
+    cluster.stop_node(6);
+    thread::sleep(Duration::from_millis(500));
 
     fail::cfg("snapshot_before_enter_do_build", "return").unwrap();
+    fail::cfg("snapshot_after_enter_do_build", "return").unwrap();
     fail::cfg("snapshot_enter_do_build", "pause").unwrap();
+    cluster.run_node(7);
 
-    pd_client.must_add_peer(1, new_peer(2, 2));
+    fail::cfg(on_resolve_fp, "off").unwrap();
+    fail::cfg(on_send_store_fp, "off").unwrap();
 
-    fs::remove_file(snap_dir.path().join("gen_1_6_8.meta")).unwrap();
-    fs::remove_file(snap_dir.path().join("gen_1_6_8_lock.sst")).unwrap();
-
+    // The snapshot exists when we call Snap::new and init_for_building but
+    // not exists when we call Snap::do_build. TiKV shouldn't panic in this case.
     fail::cfg("snapshot_before_enter_do_build", "off").unwrap();
+    fail::cfg("snapshot_after_enter_do_build", "off").unwrap();
     fail::cfg("snapshot_enter_do_build", "pause").unwrap();
-    must_get_none(&cluster.get_engine(2), b"k1");
+    must_get_none(&cluster.get_engine(7), b"k1");
 
     fail::cfg("snapshot_enter_do_build", "off").unwrap();
-    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(7), b"k1", b"v1");
 
-    fail::remove("snapshot_before_enter_do_build");
+    fail::remove(on_resolve_fp);
+    fail::remove(on_send_store_fp);
     fail::remove("snapshot_enter_do_build");
-}
-
-// Generate an empty snapshot for a specified SnapKey.
-fn gen_mock_snapshot(key: SnapKey, snap_dir: &Path) {
-    let mut meta = Vec::new();
-    // The order of 3 cfs is sensitive.
-    for &cf in &["default", "lock", "write"] {
-        let p = format!("gen_{}_{}_{}_{}.sst", key.region_id, key.term, key.idx, cf);
-        let p = snap_dir.join(p);
-
-        let (mut file_size, mut checksum) = (0, 0);
-        if cf == "lock" {
-            let mut f = File::create(&p).unwrap();
-            f.encode_compact_bytes(b"").unwrap();
-            file_size = f.seek(SeekFrom::Current(0)).unwrap();
-            checksum = calc_crc32(&p).unwrap();
-        }
-
-        let mut cf_file_meta = SnapshotCFFile::new();
-        cf_file_meta.set_cf(cf.to_owned());
-        cf_file_meta.set_size(file_size);
-        cf_file_meta.set_checksum(checksum);
-        meta.push(cf_file_meta);
-    }
-    let mut snapshot_meta = SnapshotMeta::new();
-    snapshot_meta.set_cf_files(RepeatedField::from_vec(meta));
-    let p = format!("gen_{}_{}_{}.meta", key.region_id, key.term, key.idx);
-    let mut f = File::create(snap_dir.join(p)).unwrap();
-    snapshot_meta.write_to_writer(&mut f).unwrap();
+    fail::remove("snapshot_before_enter_do_build");
+    fail::remove("snapshot_after_enter_do_build");
 }
