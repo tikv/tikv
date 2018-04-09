@@ -160,13 +160,13 @@ pub struct ReadyContext<'a, T: 'a> {
 }
 
 impl<'a, T> ReadyContext<'a, T> {
-    pub fn new(metrics: &'a mut RaftMetrics, t: &'a T, cap: usize) -> ReadyContext<'a, T> {
+    pub fn new(metrics: &'a mut RaftMetrics, trans: &'a T, cap: usize) -> ReadyContext<'a, T> {
         ReadyContext {
             kv_wb: WriteBatch::new(),
             raft_wb: WriteBatch::with_capacity(DEFAULT_APPEND_WB_SIZE),
             sync_log: false,
-            metrics: metrics,
-            trans: t,
+            metrics,
+            trans,
             ready_res: Vec::with_capacity(cap),
         }
     }
@@ -331,7 +331,7 @@ impl Peer {
             raft_engine: store.raft_engine(),
             peer: util::new_peer(store_id, peer_id),
             region_id: region.get_id(),
-            raft_group: raft_group,
+            raft_group,
             proposals: Default::default(),
             apply_proposals: vec![],
             pending_reads: Default::default(),
@@ -348,7 +348,7 @@ impl Peer {
             marked_to_be_checked: false,
             pending_merge: None,
             leader_missing_time: Some(Instant::now()),
-            tag: tag,
+            tag,
             last_applying_idx: applied_index,
             last_compacted_idx: 0,
             consistency_state: ConsistencyState {
@@ -359,7 +359,7 @@ impl Peer {
             raft_log_size_hint: 0,
             raft_entry_max_size: cfg.raft_entry_max_size.0,
             leader_lease: Lease::new(cfg.raft_store_max_leader_lease()),
-            cfg: cfg,
+            cfg,
             pending_messages: vec![],
             peer_stat: PeerStat::default(),
         };
@@ -407,8 +407,8 @@ impl Peer {
         };
         self.pending_remove = true;
         Some(DestroyPeerJob {
-            async_remove: async_remove,
-            initialized: initialized,
+            async_remove,
+            initialized,
             region_id: self.region_id,
             peer: self.peer.clone(),
         })
@@ -1398,12 +1398,12 @@ impl Peer {
             return false;
         }
 
-        let mut v = MustConsumeVec::with_capacity("callback of index read", 1);
-        v.push((req, cb));
+        let mut cmds = MustConsumeVec::with_capacity("callback of index read", 1);
+        cmds.push((req, cb));
         self.pending_reads.reads.push_back(ReadIndexRequest {
-            id: id,
-            cmds: v,
-            renew_lease_time: renew_lease_time,
+            id,
+            cmds,
+            renew_lease_time,
         });
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
@@ -1412,7 +1412,7 @@ impl Peer {
             let req = RaftCmdRequest::new();
             if let Ok(index) = self.propose_normal(req, metrics) {
                 let meta = ProposalMeta {
-                    index: index,
+                    index,
                     term: self.term(),
                     renew_lease_time: Some(renew_lease_time),
                 };

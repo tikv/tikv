@@ -250,7 +250,7 @@ impl Extremum {
     fn new(ord: Ordering) -> Extremum {
         Extremum {
             datum: None,
-            ord: ord,
+            ord,
         }
     }
 }

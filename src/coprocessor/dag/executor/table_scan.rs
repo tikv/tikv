@@ -65,14 +65,14 @@ impl TableScanExecutor {
         let counts = if collect { Some(Vec::default()) } else { None };
 
         Ok(TableScanExecutor {
-            store: store,
-            desc: desc,
-            col_ids: col_ids,
+            store,
+            desc,
+            col_ids,
             key_ranges: key_ranges.into_iter().peekable(),
             current_range: None,
             scan_range: KeyRange::default(),
             scanner: None,
-            counts: counts,
+            counts,
             metrics: Default::default(),
             first_collect: true,
         })
@@ -258,9 +258,9 @@ mod test {
             TableScanTestWrapper {
                 data: test_data,
                 store: test_store,
-                table_scan: table_scan,
+                table_scan,
                 ranges: key_ranges,
-                cols: cols,
+                cols,
             }
         }
     }

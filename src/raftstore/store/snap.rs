@@ -106,9 +106,9 @@ impl SnapKey {
     #[inline]
     pub fn new(region_id: u64, term: u64, idx: u64) -> SnapKey {
         SnapKey {
-            region_id: region_id,
-            term: term,
-            idx: idx,
+            region_id,
+            term,
+            idx,
         }
     }
 
@@ -351,10 +351,10 @@ impl Snap {
             let tmp_path = dir_path.join(format!("{}{}", filename, TMP_FILE_SUFFIX));
             let clone_path = dir_path.join(format!("{}{}", filename, CLONE_FILE_SUFFIX));
             let cf_file = CfFile {
-                cf: cf,
-                path: path,
-                tmp_path: tmp_path,
-                clone_path: clone_path,
+                cf,
+                path,
+                tmp_path,
+                clone_path,
                 ..Default::default()
             };
             cf_files.push(cf_file);
@@ -371,12 +371,12 @@ impl Snap {
 
         let mut s = Snap {
             key: key.clone(),
-            display_path: display_path,
-            cf_files: cf_files,
+            display_path,
+            cf_files,
             cf_index: 0,
-            meta_file: meta_file,
-            size_track: size_track,
-            limiter: limiter,
+            meta_file,
+            size_track,
+            limiter,
         };
 
         // load snapshot meta if meta_file exists
@@ -1434,9 +1434,9 @@ impl SnapManagerBuilder {
                 registry: map![],
                 snap_size: Arc::new(RwLock::new(0)),
             })),
-            ch: ch,
-            limiter: limiter,
-            max_total_size: max_total_size,
+            ch,
+            limiter,
+            max_total_size,
         }
     }
 }
@@ -1581,7 +1581,7 @@ mod test {
         let mut cf_file = Vec::with_capacity(super::SNAPSHOT_CFS.len());
         for (i, cf) in super::SNAPSHOT_CFS.iter().enumerate() {
             let f = super::CfFile {
-                cf: cf,
+                cf,
                 size: 100 * (i + 1) as u64,
                 checksum: 1000 * (i + 1) as u32,
                 ..Default::default()

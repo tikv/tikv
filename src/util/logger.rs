@@ -36,8 +36,8 @@ pub fn init_log<W: LogWriter + Sync + Send + 'static>(
         filter.set(level);
         grpc::redirect_log();
         Box::new(Logger {
-            level: level,
-            writer: writer,
+            level,
+            writer,
             tikv_only: false,
         })
     })
@@ -51,8 +51,8 @@ pub fn init_log_for_tikv_only<W: LogWriter + Sync + Send + 'static>(
         filter.set(level);
         grpc::redirect_log();
         Box::new(Logger {
-            level: level,
-            writer: writer,
+            level,
+            writer,
             tikv_only: true,
         })
     })

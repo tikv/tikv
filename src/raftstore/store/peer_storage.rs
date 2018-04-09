@@ -479,19 +479,19 @@ impl PeerStorage {
         let last_term = init_last_term(&raft_engine, region, &raft_state, &apply_state)?;
 
         Ok(PeerStorage {
-            kv_engine: kv_engine,
-            raft_engine: raft_engine,
+            kv_engine,
+            raft_engine,
             region: region.clone(),
-            raft_state: raft_state,
-            apply_state: apply_state,
+            raft_state,
+            apply_state,
             snap_state: RefCell::new(SnapState::Relax),
-            region_sched: region_sched,
+            region_sched,
             snap_tried_cnt: RefCell::new(0),
-            tag: tag,
+            tag,
             applied_index_term: RAFT_INIT_LOG_TERM,
-            last_term: last_term,
+            last_term,
             cache: EntryCache::default(),
-            stats: stats,
+            stats,
         })
     }
 
@@ -511,12 +511,12 @@ impl PeerStorage {
             );
 
             return Ok(RaftState {
-                hard_state: hard_state,
+                hard_state,
                 conf_state: ConfState::default(),
             });
         }
         Ok(RaftState {
-            hard_state: hard_state,
+            hard_state,
             conf_state: conf_state_from_region(&self.region),
         })
     }
@@ -995,7 +995,7 @@ impl PeerStorage {
         self.set_snap_state(SnapState::Applying(Arc::clone(&status)));
         let task = RegionTask::Apply {
             region_id: self.get_region_id(),
-            status: status,
+            status,
         };
         // TODO: gracefully remove region instead.
         self.region_sched
@@ -1099,7 +1099,7 @@ impl PeerStorage {
         self.region = snap_region;
 
         Some(ApplySnapResult {
-            prev_region: prev_region,
+            prev_region,
             region: self.region.clone(),
         })
     }

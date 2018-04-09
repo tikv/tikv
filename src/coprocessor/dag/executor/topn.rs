@@ -40,7 +40,7 @@ impl OrderBy {
         }
         Ok(OrderBy {
             items: Arc::new(order_by),
-            exprs: exprs,
+            exprs,
         })
     }
 
@@ -69,25 +69,25 @@ impl TopNExecutor {
     pub fn new(
         mut meta: TopN,
         eval_cfg: Arc<EvalConfig>,
-        columns_info: Arc<Vec<ColumnInfo>>,
+        cols: Arc<Vec<ColumnInfo>>,
         src: Box<Executor + Send>,
     ) -> Result<TopNExecutor> {
         let order_by = meta.take_order_by().into_vec();
 
-        let mut visitor = ExprColumnRefVisitor::new(columns_info.len());
+        let mut visitor = ExprColumnRefVisitor::new(cols.len());
         for by_item in &order_by {
             visitor.visit(by_item.get_expr())?;
         }
         let mut eval_ctx = EvalContext::new(Arc::clone(&eval_cfg));
         let order_by = OrderBy::new(&mut eval_ctx, order_by)?;
         Ok(TopNExecutor {
-            order_by: order_by,
-            cols: columns_info,
+            order_by,
+            cols,
             related_cols_offset: visitor.column_offsets(),
             iter: None,
             eval_ctx: Some(eval_ctx),
             eval_warnings: None,
-            src: src,
+            src,
             limit: meta.get_limit() as usize,
             first_collect: true,
         })

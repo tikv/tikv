@@ -76,8 +76,8 @@ pub struct CFOptions<'a> {
 impl<'a> CFOptions<'a> {
     pub fn new(cf: &'a str, options: ColumnFamilyOptions) -> CFOptions<'a> {
         CFOptions {
-            cf: cf,
-            options: options,
+            cf,
+            options,
         }
     }
 }
@@ -243,7 +243,7 @@ pub struct FixedSuffixSliceTransform {
 impl FixedSuffixSliceTransform {
     pub fn new(suffix_len: usize) -> FixedSuffixSliceTransform {
         FixedSuffixSliceTransform {
-            suffix_len: suffix_len,
+            suffix_len,
         }
     }
 }
@@ -271,7 +271,7 @@ pub struct FixedPrefixSliceTransform {
 impl FixedPrefixSliceTransform {
     pub fn new(prefix_len: usize) -> FixedPrefixSliceTransform {
         FixedPrefixSliceTransform {
-            prefix_len: prefix_len,
+            prefix_len,
         }
     }
 }

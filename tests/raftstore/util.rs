@@ -115,7 +115,7 @@ pub fn new_store_cfg() -> Config {
 
 pub fn new_server_config(cluster_id: u64) -> ServerConfig {
     ServerConfig {
-        cluster_id: cluster_id,
+        cluster_id,
         addr: "127.0.0.1:0".to_owned(),
         grpc_concurrency: 1,
         // Considering connection selection algo is involved, maybe

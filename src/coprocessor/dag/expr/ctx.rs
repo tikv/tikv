@@ -72,7 +72,7 @@ impl EvalConfig {
         };
 
         let e = EvalConfig {
-            tz: tz,
+            tz,
             ignore_truncate: (flags & FLAG_IGNORE_TRUNCATE) > 0,
             truncate_as_warning: (flags & FLAG_TRUNCATE_AS_WARNING) > 0,
             overflow_as_warning: (flags & FLAG_OVERFLOW_AS_WARNING) > 0,
@@ -106,7 +106,7 @@ pub struct EvalWarnings {
 impl EvalWarnings {
     fn new(max_warning_cnt: usize) -> EvalWarnings {
         EvalWarnings {
-            max_warning_cnt: max_warning_cnt,
+            max_warning_cnt,
             warning_cnt: 0,
             warnings: Vec::with_capacity(max_warning_cnt),
         }
@@ -143,8 +143,8 @@ impl Default for EvalContext {
         let cfg = Arc::new(EvalConfig::default());
         let warnings = cfg.new_eval_warnings();
         EvalContext {
-            cfg: cfg,
-            warnings: warnings,
+            cfg,
+            warnings,
         }
     }
 }
@@ -154,8 +154,8 @@ impl EvalContext {
     pub fn new(cfg: Arc<EvalConfig>) -> EvalContext {
         let warnings = cfg.new_eval_warnings();
         EvalContext {
-            cfg: cfg,
-            warnings: warnings,
+            cfg,
+            warnings,
         }
     }
 

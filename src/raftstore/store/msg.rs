@@ -229,8 +229,8 @@ impl Msg {
     pub fn new_raft_cmd(request: RaftCmdRequest, callback: Callback) -> Msg {
         Msg::RaftCmd {
             send_time: Instant::now(),
-            request: request,
-            callback: callback,
+            request,
+            callback,
         }
     }
 
@@ -240,15 +240,15 @@ impl Msg {
     ) -> Msg {
         Msg::BatchRaftSnapCmds {
             send_time: Instant::now(),
-            batch: batch,
+            batch,
             on_finished: Callback::BatchRead(on_finished),
         }
     }
 
     pub fn new_half_split_region(region_id: u64, region_epoch: RegionEpoch) -> Msg {
         Msg::HalfSplitRegion {
-            region_id: region_id,
-            region_epoch: region_epoch,
+            region_id,
+            region_epoch,
         }
     }
 }

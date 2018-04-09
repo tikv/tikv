@@ -64,9 +64,9 @@ impl<T: RaftStoreRouter> Service<T> {
             .create();
         let debugger = Debugger::new(engines);
         Service {
-            pool: pool,
-            debugger: debugger,
-            raft_router: raft_router,
+            pool,
+            debugger,
+            raft_router,
         }
     }
 

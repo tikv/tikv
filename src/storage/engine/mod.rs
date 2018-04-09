@@ -309,7 +309,7 @@ pub struct Cursor {
 impl Cursor {
     pub fn new(iter: Box<Iterator + Send>, mode: ScanMode) -> Cursor {
         Cursor {
-            iter: iter,
+            iter,
             scan_mode: mode,
             min_key: None,
             max_key: None,
@@ -873,14 +873,14 @@ mod tests {
         snapshot: &Snapshot,
         mode: ScanMode,
         seek_mode: SeekMode,
-        start: usize,
+        start_idx: usize,
         step: usize,
     ) {
         let mut cursor = snapshot.iter(IterOption::default(), mode).unwrap();
         let mut near_cursor = snapshot.iter(IterOption::default(), mode).unwrap();
         let limit = (SEEK_BOUND * 10 + 50 - 1) * 2;
 
-        for (_, mut i) in (start..SEEK_BOUND * 30)
+        for (_, mut i) in (start_idx..(SEEK_BOUND * 30))
             .enumerate()
             .filter(|&(i, _)| i % step == 0)
         {

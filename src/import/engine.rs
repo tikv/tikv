@@ -46,7 +46,7 @@ impl Engine {
         };
         Ok(Engine {
             db: Arc::new(db),
-            uuid: uuid,
+            uuid,
         })
     }
 

@@ -82,8 +82,8 @@ pub struct Engines {
 impl Engines {
     pub fn new(kv_engine: Arc<DB>, raft_engine: Arc<DB>) -> Engines {
         Engines {
-            kv_engine: kv_engine,
-            raft_engine: raft_engine,
+            kv_engine,
+            raft_engine,
         }
     }
 }
@@ -229,7 +229,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             store: meta,
             kv_engine: engines.kv_engine,
             raft_engine: engines.raft_engine,
-            sendch: sendch,
+            sendch,
             significant_msg_receiver: ch.significant_msg_receiver,
             region_peers: HashMap::default(),
             merging_regions: Some(vec![]),
@@ -238,7 +238,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             region_worker: Worker::new("snapshot worker"),
             raftlog_gc_worker: Worker::new("raft gc worker"),
             compact_worker: Worker::new("compact worker"),
-            pd_worker: pd_worker,
+            pd_worker,
             consistency_check_worker: Worker::new("consistency check worker"),
             cleanup_sst_worker: Worker::new("cleanup sst worker"),
             apply_worker: Worker::new("apply worker"),
@@ -247,15 +247,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             region_ranges: BTreeMap::new(),
             pending_snapshot_regions: vec![],
             pending_cross_snap: HashMap::default(),
-            trans: trans,
-            pd_client: pd_client,
+            trans,
+            pd_client,
             coprocessor_host: Arc::new(coprocessor_host),
-            importer: importer,
+            importer,
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
             entry_cache_metries: Rc::new(RefCell::new(CacheQueryStats::default())),
             pending_votes: RingQueue::with_capacity(PENDING_VOTES_CAP),
-            tag: tag,
+            tag,
             start_time: time::get_time(),
             is_busy: false,
             store_stat: StoreStat::default(),
@@ -1389,7 +1389,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         assert!(!p.is_applying_snapshot());
         self.pending_cross_snap.remove(&region_id);
         let task = PdTask::DestroyPeer {
-            region_id: region_id,
+            region_id,
         };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
@@ -2374,7 +2374,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // Schedule the task.
             let cf_names = vec![CF_DEFAULT.to_owned(), CF_WRITE.to_owned()];
             if let Err(e) = self.compact_worker.schedule(CompactTask::CheckAndCompact {
-                cf_names: cf_names,
+                cf_names,
                 ranges: ranges_need_check,
                 tombstones_threshold: self.cfg.region_compact_min_tombstones,
             }) {
@@ -2400,7 +2400,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region = peer.region();
         let task = PdTask::AskSplit {
             region: region.clone(),
-            split_key: split_key,
+            split_key,
             peer: peer.peer.clone(),
             right_derive: self.cfg.right_derive_when_split,
             callback: cb,
@@ -2610,8 +2610,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
 
         let task = PdTask::StoreHeartbeat {
-            stats: stats,
-            store_info: store_info,
+            stats,
+            store_info,
         };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
@@ -3435,7 +3435,7 @@ mod tests {
         index_handles.add(b"c".to_vec(), index_handle3);
         let size_prop = SizeProperties {
             total_size: 12 * 1024,
-            index_handles: index_handles,
+            index_handles,
         };
         let event = CompactedEvent {
             cf: "default".to_owned(),

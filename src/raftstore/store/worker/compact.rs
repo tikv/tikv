@@ -85,7 +85,7 @@ pub struct Runner {
 
 impl Runner {
     pub fn new(engine: Arc<DB>) -> Runner {
-        Runner { engine: engine }
+        Runner { engine }
     }
 
     pub fn compact_range_cf(

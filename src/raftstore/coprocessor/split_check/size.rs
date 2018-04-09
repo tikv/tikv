@@ -66,8 +66,8 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
         };
 
         let res = Msg::ApproximateRegionSize {
-            region_id: region_id,
-            region_size: region_size,
+            region_id,
+            region_size,
         };
         if let Err(e) = self.ch.try_send(res) {
             error!(

@@ -156,8 +156,8 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
         }
     }
     Ok(PathExpression {
-        legs: legs,
-        flags: flags,
+        legs,
+        flags,
     })
 }
 

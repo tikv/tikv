@@ -120,8 +120,8 @@ impl Duration {
     pub fn new(dur: StdDuration, neg: bool, fsp: i8) -> Result<Duration> {
         check_dur(&dur)?;
         Ok(Duration {
-            dur: dur,
-            neg: neg,
+            dur,
+            neg,
             fsp: check_fsp(fsp)?,
         })
     }

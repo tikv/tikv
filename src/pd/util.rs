@@ -103,12 +103,12 @@ impl LeaderClient {
         LeaderClient {
             timer: Timer::default(),
             inner: Arc::new(RwLock::new(Inner {
-                env: env,
+                env,
                 hb_sender: Either::Left(Some(tx)),
                 hb_receiver: Either::Left(Some(rx)),
-                client: client,
-                members: members,
-                security_mgr: security_mgr,
+                client,
+                members,
+                security_mgr,
                 on_reconnect: None,
 
                 last_update: Instant::now(),
@@ -135,7 +135,7 @@ impl LeaderClient {
         inner.on_reconnect = Some(f);
     }
 
-    pub fn request<Req, Resp, F>(&self, req: Req, f: F, retry: usize) -> Request<Req, Resp, F>
+    pub fn request<Req, Resp, F>(&self, req: Req, func: F, retry: usize) -> Request<Req, Resp, F>
     where
         Req: Clone + 'static,
         F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
@@ -147,9 +147,9 @@ impl LeaderClient {
                 timer: self.timer.clone(),
                 inner: Arc::clone(&self.inner),
             },
-            req: req,
+            req,
             resp: None,
-            func: f,
+            func,
         }
     }
 

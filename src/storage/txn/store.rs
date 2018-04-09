@@ -31,10 +31,10 @@ impl SnapshotStore {
         fill_cache: bool,
     ) -> SnapshotStore {
         SnapshotStore {
-            snapshot: snapshot,
-            start_ts: start_ts,
-            isolation_level: isolation_level,
-            fill_cache: fill_cache,
+            snapshot,
+            start_ts,
+            isolation_level,
+            fill_cache,
         }
     }
 
@@ -93,7 +93,7 @@ impl SnapshotStore {
         );
         reader.set_key_only(key_only);
         Ok(StoreScanner {
-            reader: reader,
+            reader,
             start_ts: self.start_ts,
         })
     }
@@ -200,10 +200,10 @@ mod test {
             let ctx = Context::new();
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut store = TestStore {
-                keys: keys,
-                snapshot: snapshot,
-                ctx: ctx,
-                engine: engine,
+                keys,
+                snapshot,
+                ctx,
+                engine,
             };
             store.init_data();
             store

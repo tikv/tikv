@@ -52,10 +52,10 @@ impl<C: PdClient> Runner<C> {
         pd_client: Arc<C>,
     ) -> Runner<C> {
         Runner {
-            store_id: store_id,
-            store_ch: store_ch,
-            importer: importer,
-            pd_client: pd_client,
+            store_id,
+            store_ch,
+            importer,
+            pd_client,
         }
     }
 

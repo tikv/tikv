@@ -49,10 +49,10 @@ impl<Router: RaftStoreRouter> ImportSSTService<Router> {
             .pool_size(cfg.num_threads)
             .create();
         ImportSSTService {
-            cfg: cfg,
-            router: router,
-            threads: threads,
-            importer: importer,
+            cfg,
+            router,
+            threads,
+            importer,
         }
     }
 }

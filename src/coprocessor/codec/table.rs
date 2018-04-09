@@ -293,17 +293,17 @@ pub struct RowColsDict {
 impl RowColMeta {
     pub fn new(offset: usize, length: usize) -> RowColMeta {
         RowColMeta {
-            offset: offset,
-            length: length,
+            offset,
+            length,
         }
     }
 }
 
 impl RowColsDict {
-    pub fn new(cols: HashMap<i64, RowColMeta>, val: Vec<u8>) -> RowColsDict {
+    pub fn new(cols: HashMap<i64, RowColMeta>, value: Vec<u8>) -> RowColsDict {
         RowColsDict {
-            value: val,
-            cols: cols,
+            value,
+            cols,
         }
     }
 

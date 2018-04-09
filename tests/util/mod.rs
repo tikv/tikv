@@ -34,8 +34,8 @@ pub struct KvGenerator {
 impl KvGenerator {
     pub fn new(key_len: usize, value_len: usize) -> KvGenerator {
         KvGenerator {
-            key_len: key_len,
-            value_len: value_len,
+            key_len,
+            value_len,
             rng: rand::thread_rng(),
         }
     }

@@ -65,8 +65,8 @@ pub struct PendingCmd {
 impl PendingCmd {
     fn new(index: u64, term: u64, cb: Callback) -> PendingCmd {
         PendingCmd {
-            index: index,
-            term: term,
+            index,
+            term,
             cb: Some(cb),
         }
     }
@@ -145,9 +145,9 @@ pub struct Range {
 impl Range {
     fn new(cf: String, start_key: Vec<u8>, end_key: Vec<u8>) -> Range {
         Range {
-            cf: cf,
-            start_key: start_key,
-            end_key: end_key,
+            cf,
+            start_key,
+            end_key,
         }
     }
 }
@@ -247,8 +247,8 @@ struct ApplyContextCore<'a> {
 impl<'a> ApplyContextCore<'a> {
     pub fn new(host: &'a CoprocessorHost, importer: &'a SSTImporter) -> ApplyContextCore<'a> {
         ApplyContextCore {
-            host: host,
-            importer: importer,
+            host,
+            importer,
             wb: None,
             cbs: MustConsumeVec::new("callback of apply context"),
             merged_regions: vec![],
@@ -859,12 +859,12 @@ struct ExecContext {
 }
 
 impl ExecContext {
-    pub fn new(state: RaftApplyState, req: RaftCmdRequest, index: u64, term: u64) -> ExecContext {
+    pub fn new(apply_state: RaftApplyState, req: RaftCmdRequest, index: u64, term: u64) -> ExecContext {
         ExecContext {
-            apply_state: state,
+            apply_state,
             req: Rc::new(req),
-            index: index,
-            term: term,
+            index,
+            term,
         }
     }
 }
@@ -1078,7 +1078,7 @@ impl ApplyDelegate {
             Some(ExecResult::ChangePeer(ChangePeer {
                 conf_change: Default::default(),
                 peer: peer.clone(),
-                region: region,
+                region,
             })),
         ))
     }
@@ -1255,7 +1255,7 @@ impl ApplyDelegate {
         Ok((
             AdminResponse::new(),
             Some(ExecResult::PrepareMerge {
-                region: region,
+                region,
                 state: merging_state,
             }),
         ))
@@ -1413,7 +1413,7 @@ impl ApplyDelegate {
         Ok((
             resp,
             Some(ExecResult::CommitMerge {
-                region: region,
+                region,
                 source: source_region.to_owned(),
             }),
         ))
@@ -1460,7 +1460,7 @@ impl ApplyDelegate {
         Ok((
             resp,
             Some(ExecResult::RollbackMerge {
-                region: region,
+                region,
                 commit: rollback.get_commit(),
             }),
         ))
@@ -1519,7 +1519,7 @@ impl ApplyDelegate {
             resp,
             Some(ExecResult::CompactLog {
                 state: apply_state.get_truncated_state().clone(),
-                first_index: first_index,
+                first_index,
             }),
         ))
     }
@@ -1573,9 +1573,9 @@ impl ApplyDelegate {
 
         assert!(ranges.is_empty() || ssts.is_empty());
         let exec_res = if !ranges.is_empty() {
-            Some(ExecResult::DeleteRange { ranges: ranges })
+            Some(ExecResult::DeleteRange { ranges })
         } else if !ssts.is_empty() {
-            Some(ExecResult::IngestSST { ssts: ssts })
+            Some(ExecResult::IngestSST { ssts })
         } else {
             None
         };
@@ -1864,8 +1864,8 @@ impl ApplyDelegate {
         Ok((
             resp,
             Some(ExecResult::VerifyHash {
-                index: index,
-                hash: hash,
+                index,
+                hash,
             }),
         ))
     }
@@ -1880,9 +1880,9 @@ pub struct Apply {
 impl Apply {
     pub fn new(region_id: u64, term: u64, entries: Vec<Entry>) -> Apply {
         Apply {
-            region_id: region_id,
-            term: term,
-            entries: entries,
+            region_id,
+            term,
+            entries,
         }
     }
 }
@@ -1918,10 +1918,10 @@ pub struct Proposal {
 impl Proposal {
     pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback) -> Proposal {
         Proposal {
-            is_conf_change: is_conf_change,
-            index: index,
-            term: term,
-            cb: cb,
+            is_conf_change,
+            index,
+            term,
+            cb,
         }
     }
 }
@@ -1935,9 +1935,9 @@ pub struct RegionProposal {
 impl RegionProposal {
     pub fn new(id: u64, region_id: u64, props: Vec<Proposal>) -> RegionProposal {
         RegionProposal {
-            id: id,
-            region_id: region_id,
-            props: props,
+            id,
+            region_id,
+            props,
         }
     }
 }
@@ -1973,7 +1973,7 @@ impl Task {
 
     pub fn destroy(region_id: u64) -> Task {
         Task::Destroy(Destroy {
-            region_id: region_id,
+            region_id,
         })
     }
 }
@@ -2049,10 +2049,10 @@ impl Runner {
             raft_db: store.raft_engine(),
             host: Arc::clone(&store.coprocessor_host),
             importer: Arc::clone(&store.importer),
-            delegates: delegates,
-            notifier: notifier,
-            sync_log: sync_log,
-            use_delete_range: use_delete_range,
+            delegates,
+            notifier,
+            sync_log,
+            use_delete_range,
             tag: format!("[store {}]", store.store_id()),
         }
     }
@@ -2250,10 +2250,10 @@ mod tests {
         tx: Sender<TaskRes>,
     ) -> Runner {
         Runner {
-            db: db,
-            raft_db: raft_db,
-            host: host,
-            importer: importer,
+            db,
+            raft_db,
+            host,
+            importer,
             delegates: HashMap::default(),
             notifier: tx,
             sync_log: false,
@@ -2462,8 +2462,8 @@ mod tests {
             entry.set_index(index);
             entry.set_term(term);
             EntryBuilder {
-                entry: entry,
-                req: req,
+                entry,
+                req,
             }
         }
 

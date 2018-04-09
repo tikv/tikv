@@ -61,7 +61,7 @@ impl Snapshot {
         unsafe {
             Snapshot {
                 snap: db.unsafe_snap(),
-                db: db,
+                db,
             }
         }
     }
@@ -195,10 +195,10 @@ impl IterOption {
         fill_cache: bool,
     ) -> IterOption {
         IterOption {
-            lower_bound: lower_bound,
-            upper_bound: upper_bound,
+            lower_bound,
+            upper_bound,
             prefix_same_as_start: false,
-            fill_cache: fill_cache,
+            fill_cache,
             seek_mode: SeekMode::TotalOrder,
         }
     }

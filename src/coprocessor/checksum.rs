@@ -46,8 +46,8 @@ impl ChecksumContext {
             ctx.fill_cache,
         );
         ChecksumContext {
-            req: req,
-            store: store,
+            req,
+            store,
             ranges: ranges.into_iter(),
             scanner: None,
         }

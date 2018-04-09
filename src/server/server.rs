@@ -132,15 +132,15 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 
         let svr = Server {
             env: Arc::clone(&env),
-            grpc_server: grpc_server,
+            grpc_server,
             local_addr: addr,
-            trans: trans,
-            raft_router: raft_router,
-            storage: storage,
-            end_point_worker: end_point_worker,
-            snap_mgr: snap_mgr,
-            snap_worker: snap_worker,
-            pd_scheduler: pd_scheduler,
+            trans,
+            raft_router,
+            storage,
+            end_point_worker,
+            snap_mgr,
+            snap_worker,
+            pd_scheduler,
         };
 
         Ok(svr)
@@ -276,8 +276,8 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
         let router = TestRaftStoreRouter {
-            tx: tx,
-            significant_msg_sender: significant_msg_sender,
+            tx,
+            significant_msg_sender,
         };
 
         let addr = Arc::new(Mutex::new(None));

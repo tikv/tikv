@@ -31,7 +31,7 @@ pub struct HalfStatus {
 impl HalfStatus {
     fn new(each_bucket_size: u64) -> HalfStatus {
         HalfStatus {
-            each_bucket_size: each_bucket_size,
+            each_bucket_size,
             ..Default::default()
         }
     }
@@ -68,7 +68,7 @@ impl HalfCheckObserver {
             half_split_bucket_size = bucket_size_limit;
         }
         HalfCheckObserver {
-            half_split_bucket_size: half_split_bucket_size,
+            half_split_bucket_size,
         }
     }
 }

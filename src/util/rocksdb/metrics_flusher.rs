@@ -33,10 +33,10 @@ pub struct MetricsFlusher {
 impl MetricsFlusher {
     pub fn new(engines: Engines, interval: Duration) -> MetricsFlusher {
         MetricsFlusher {
-            engines: engines,
+            engines,
             handle: None,
             sender: None,
-            interval: interval,
+            interval,
         }
     }
 

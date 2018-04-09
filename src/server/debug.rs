@@ -311,7 +311,7 @@ impl Debugger {
                 max_inflight_msgs: 256,
                 applied: apply_state.get_applied_index(),
                 check_quorum: true,
-                tag: tag,
+                tag,
                 skip_bcast_commit: true,
                 ..Default::default()
             };
@@ -470,7 +470,7 @@ impl MvccInfoIterator {
             Ok(iter)
         };
         Ok(MvccInfoIterator {
-            limit: limit,
+            limit,
             count: 0,
             lock_iter: gen_iter(CF_LOCK)?,
             default_iter: gen_iter(CF_DEFAULT)?,

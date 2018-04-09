@@ -110,11 +110,11 @@ impl<C: Context + Default + 'static> ThreadPoolBuilder<C, DefaultContextFactory>
 impl<C: Context + 'static, F: ContextFactory<C>> ThreadPoolBuilder<C, F> {
     pub fn new(name: String, factory: F) -> ThreadPoolBuilder<C, F> {
         ThreadPoolBuilder {
-            name: name,
+            name,
             thread_count: DEFAULT_THREAD_COUNT,
             tasks_per_tick: DEFAULT_TASKS_PER_TICK,
             stack_size: None,
-            factory: factory,
+            factory,
             _ctx: PhantomData,
         }
     }
@@ -196,9 +196,9 @@ where
         }
 
         ThreadPool {
-            state: state,
-            threads: threads,
-            task_count: task_count,
+            state,
+            threads,
+            task_count,
         }
     }
 
@@ -265,11 +265,11 @@ where
         ctx: C,
     ) -> Worker<C> {
         Worker {
-            state: state,
-            task_count: task_count,
-            tasks_per_tick: tasks_per_tick,
+            state,
+            task_count,
+            tasks_per_tick,
             task_counter: 0,
-            ctx: ctx,
+            ctx,
         }
     }
 
@@ -404,7 +404,7 @@ mod test {
 
         let f = TestContextFactory {
             counter: Arc::new(AtomicIsize::new(0)),
-            tx: tx,
+            tx,
         };
         let ctx = f.create();
         let name = thd_name!("test_tasks_with_contexts");
@@ -456,7 +456,7 @@ mod test {
 
         let f = TestContextFactory {
             counter: Arc::new(AtomicIsize::new(0)),
-            tx: tx,
+            tx,
         };
         let ctx = f.create();
         let name = thd_name!("test_tasks_tick");

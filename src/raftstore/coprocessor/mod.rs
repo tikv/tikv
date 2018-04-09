@@ -48,7 +48,7 @@ pub struct ObserverContext<'a> {
 impl<'a> ObserverContext<'a> {
     pub fn new(region: &Region) -> ObserverContext {
         ObserverContext {
-            region: region,
+            region,
             bypass: false,
         }
     }

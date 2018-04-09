@@ -34,7 +34,7 @@ impl KVImporter {
     pub fn new(cfg: Config, opts: DbConfig) -> Result<KVImporter> {
         let dir = EngineDir::new(&cfg.import_dir, opts)?;
         Ok(KVImporter {
-            dir: dir,
+            dir,
             engines: Mutex::new(HashMap::default()),
         })
     }
@@ -114,9 +114,9 @@ impl EngineDir {
             fs::create_dir_all(&temp_dir)?;
         }
         Ok(EngineDir {
-            opts: opts,
-            root_dir: root_dir,
-            temp_dir: temp_dir,
+            opts,
+            root_dir,
+            temp_dir,
         })
     }
 
@@ -166,8 +166,8 @@ impl EngineFile {
     fn new(uuid: Uuid, path: EnginePath, opts: DbConfig) -> Result<EngineFile> {
         let engine = Engine::new(&path.temp, uuid, opts)?;
         Ok(EngineFile {
-            uuid: uuid,
-            path: path,
+            uuid,
+            path,
             engine: Some(engine),
         })
     }

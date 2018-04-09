@@ -282,16 +282,16 @@ impl Expression {
                     .map(|children| {
                         Expression::ScalarFn(FnCall {
                             sig: expr.get_sig(),
-                            children: children,
-                            tp: tp,
+                            children,
+                            tp,
                         })
                     })
             }
             ExprType::ColumnRef => {
                 let offset = expr.get_val().decode_i64().map_err(Error::from)? as usize;
                 let column = Column {
-                    offset: offset,
-                    tp: tp,
+                    offset,
+                    tp,
                 };
                 Ok(Expression::ColumnRef(column))
             }

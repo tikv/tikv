@@ -114,10 +114,10 @@ impl<T: Simulator> Cluster<T> {
             leaders: HashMap::new(),
             paths: vec![],
             dbs: vec![],
-            count: count,
+            count,
             engines: HashMap::new(),
-            sim: sim,
-            pd_client: pd_client,
+            sim,
+            pd_client,
         }
     }
 

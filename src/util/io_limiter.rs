@@ -71,8 +71,8 @@ pub struct LimitWriter<'a, T: Write + 'a> {
 impl<'a, T: Write + 'a> LimitWriter<'a, T> {
     pub fn new(limiter: Option<Arc<IOLimiter>>, writer: &'a mut T) -> LimitWriter<'a, T> {
         LimitWriter {
-            limiter: limiter,
-            writer: writer,
+            limiter,
+            writer,
         }
     }
 }

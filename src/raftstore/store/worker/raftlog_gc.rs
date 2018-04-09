@@ -60,7 +60,7 @@ pub struct Runner {
 
 impl Runner {
     pub fn new(ch: Option<Sender<TaskRes>>) -> Runner {
-        Runner { ch: ch }
+        Runner { ch }
     }
 
     /// Do the gc job and return the count of log collected.
@@ -101,7 +101,7 @@ impl Runner {
             .as_ref()
             .unwrap()
             .send(TaskRes {
-                collected: collected,
+                collected,
             })
             .unwrap();
     }
@@ -162,7 +162,7 @@ mod test {
             (
                 Task {
                     raft_engine: Arc::clone(&raft_db),
-                    region_id: region_id,
+                    region_id,
                     start_idx: 0,
                     end_idx: 10,
                 },
@@ -173,7 +173,7 @@ mod test {
             (
                 Task {
                     raft_engine: Arc::clone(&raft_db),
-                    region_id: region_id,
+                    region_id,
                     start_idx: 0,
                     end_idx: 50,
                 },
@@ -184,7 +184,7 @@ mod test {
             (
                 Task {
                     raft_engine: Arc::clone(&raft_db),
-                    region_id: region_id,
+                    region_id,
                     start_idx: 50,
                     end_idx: 50,
                 },
@@ -195,7 +195,7 @@ mod test {
             (
                 Task {
                     raft_engine: Arc::clone(&raft_db),
-                    region_id: region_id,
+                    region_id,
                     start_idx: 50,
                     end_idx: 60,
                 },

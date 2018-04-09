@@ -77,8 +77,8 @@ struct DAGChunkSpliter {
 impl DAGChunkSpliter {
     fn new(chunks: Vec<Chunk>, col_cnt: usize) -> DAGChunkSpliter {
         DAGChunkSpliter {
-            chunks: chunks,
-            col_cnt: col_cnt,
+            chunks,
+            col_cnt,
             datums: Vec::with_capacity(0),
         }
     }
@@ -305,8 +305,8 @@ struct Insert<'a> {
 impl<'a> Insert<'a> {
     fn new(store: &'a mut Store, table: &'a Table) -> Insert<'a> {
         Insert {
-            store: store,
-            table: table,
+            store,
+            table,
             values: BTreeMap::new(),
         }
     }
@@ -352,8 +352,8 @@ struct Delete<'a> {
 impl<'a> Delete<'a> {
     fn new(store: &'a mut Store, table: &'a Table) -> Delete<'a> {
         Delete {
-            store: store,
-            table: table,
+            store,
+            table,
         }
     }
 
@@ -480,10 +480,10 @@ impl ProductTable {
             .build();
 
         ProductTable {
-            id: id,
-            name: name,
-            count: count,
-            table: table,
+            id,
+            name,
+            count,
+            table,
         }
     }
 }

@@ -38,9 +38,9 @@ pub enum Task {
 impl Task {
     pub fn compute_hash(region: Region, index: u64, snap: Snapshot) -> Task {
         Task::ComputeHash {
-            region: region,
-            index: index,
-            snap: snap,
+            region,
+            index,
+            snap,
         }
     }
 }
@@ -61,7 +61,7 @@ pub struct Runner<C: MsgSender> {
 
 impl<C: MsgSender> Runner<C> {
     pub fn new(ch: C) -> Runner<C> {
-        Runner { ch: ch }
+        Runner { ch }
     }
 
     fn compute_hash(&mut self, region: Region, index: u64, snap: Snapshot) {
@@ -110,8 +110,8 @@ impl<C: MsgSender> Runner<C> {
         let mut checksum = Vec::with_capacity(4);
         checksum.write_u32::<BigEndian>(sum).unwrap();
         let msg = Msg::ComputeHashResult {
-            region_id: region_id,
-            index: index,
+            region_id,
+            index,
             hash: checksum,
         };
         if let Err(e) = self.ch.try_send(msg) {

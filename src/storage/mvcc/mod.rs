@@ -89,8 +89,8 @@ impl Error {
             } => Some(Error::KeyIsLocked {
                 key: key.clone(),
                 primary: primary.clone(),
-                ts: ts,
-                ttl: ttl,
+                ts,
+                ttl,
             }),
             Error::BadFormatLock => Some(Error::BadFormatLock),
             Error::BadFormatWrite => Some(Error::BadFormatWrite),
@@ -99,8 +99,8 @@ impl Error {
                 commit_ts,
                 ref key,
             } => Some(Error::TxnLockNotFound {
-                start_ts: start_ts,
-                commit_ts: commit_ts,
+                start_ts,
+                commit_ts,
                 key: key.to_owned(),
             }),
             Error::WriteConflict {
@@ -109,14 +109,14 @@ impl Error {
                 ref key,
                 ref primary,
             } => Some(Error::WriteConflict {
-                start_ts: start_ts,
-                conflict_ts: conflict_ts,
+                start_ts,
+                conflict_ts,
                 key: key.to_owned(),
                 primary: primary.to_owned(),
             }),
             Error::KeyVersion => Some(Error::KeyVersion),
             Error::Committed { commit_ts } => Some(Error::Committed {
-                commit_ts: commit_ts,
+                commit_ts,
             }),
             Error::Io(_) | Error::Other(_) => None,
         }

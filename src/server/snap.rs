@@ -174,8 +174,8 @@ fn send_snap(
                 // Call `info` in the closure directly will cause rustc
                 // panic with `Cannot create local mono-item for DefId`.
                 SendStat {
-                    key: key,
-                    total_size: total_size,
+                    key,
+                    total_size,
                     elapsed: timer.elapsed(),
                 }
             })
@@ -220,7 +220,7 @@ impl RecvSnapContext {
         };
 
         Ok(RecvSnapContext {
-            key: key,
+            key,
             file: snap,
             raft_msg: meta,
         })
@@ -308,14 +308,14 @@ impl<R: RaftStoreRouter + 'static> Runner<R> {
         security_mgr: Arc<SecurityManager>,
     ) -> Runner<R> {
         Runner {
-            env: env,
-            snap_mgr: snap_mgr,
+            env,
+            snap_mgr,
             pool: CpuPoolBuilder::new()
                 .name_prefix(thd_name!("snap sender"))
                 .pool_size(DEFAULT_POOL_SIZE)
                 .create(),
             raft_router: r,
-            security_mgr: security_mgr,
+            security_mgr,
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
         }

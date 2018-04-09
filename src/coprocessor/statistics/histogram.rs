@@ -30,10 +30,10 @@ struct Bucket {
 impl Bucket {
     fn new(count: u64, upper_bound: Vec<u8>, lower_bound: Vec<u8>, repeats: u64) -> Bucket {
         Bucket {
-            count: count,
-            upper_bound: upper_bound,
-            lower_bound: lower_bound,
-            repeats: repeats,
+            count,
+            upper_bound,
+            lower_bound,
+            repeats,
         }
     }
 
@@ -78,7 +78,7 @@ impl Histogram {
     pub fn new(buckets_num: usize) -> Histogram {
         Histogram {
             per_bucket_limit: 1,
-            buckets_num: buckets_num,
+            buckets_num,
             ..Default::default()
         }
     }

@@ -30,7 +30,7 @@ pub struct CopFlowStatistics {
 impl CopFlowStatistics {
     pub fn new(sender: FutureScheduler<PdTask>) -> CopFlowStatistics {
         CopFlowStatistics {
-            sender: sender,
+            sender,
             data: Default::default(),
         }
     }

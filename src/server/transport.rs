@@ -75,9 +75,9 @@ pub trait RaftStoreRouter: Send + Clone {
         status: SnapshotStatus,
     ) -> RaftStoreResult<()> {
         self.significant_send(SignificantMsg::SnapshotStatus {
-            region_id: region_id,
-            to_peer_id: to_peer_id,
-            status: status,
+            region_id,
+            to_peer_id,
+            status,
         })
     }
 }
@@ -94,8 +94,8 @@ impl ServerRaftStoreRouter {
         significant_msg_sender: Sender<SignificantMsg>,
     ) -> ServerRaftStoreRouter {
         ServerRaftStoreRouter {
-            ch: ch,
-            significant_msg_sender: significant_msg_sender,
+            ch,
+            significant_msg_sender,
         }
     }
 }
@@ -172,11 +172,11 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         resolver: S,
     ) -> ServerTransport<T, S> {
         ServerTransport {
-            raft_client: raft_client,
-            snap_scheduler: snap_scheduler,
-            raft_router: raft_router,
+            raft_client,
+            snap_scheduler,
+            raft_router,
             resolving: Arc::new(RwLock::new(Default::default())),
-            resolver: resolver,
+            resolver,
         }
     }
 
@@ -293,8 +293,8 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         };
         if let Err(e) = self.snap_scheduler.schedule(SnapTask::Send {
             addr: addr.to_owned(),
-            msg: msg,
-            cb: cb,
+            msg,
+            cb,
         }) {
             if let SnapTask::Send { cb, .. } = e.into_inner() {
                 error!(
@@ -313,9 +313,9 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
 
         SnapshotReporter {
             raft_router: self.raft_router.clone(),
-            region_id: region_id,
-            to_peer_id: to_peer_id,
-            to_store_id: to_store_id,
+            region_id,
+            to_peer_id,
+            to_store_id,
         }
     }
 

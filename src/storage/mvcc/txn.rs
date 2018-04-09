@@ -48,7 +48,7 @@ impl MvccTxn {
         MvccTxn {
             // Todo: use session variable to indicate fill cache or not
             reader: MvccReader::new(snapshot, mode, fill_cache, None, None, isolation_level),
-            start_ts: start_ts,
+            start_ts,
             writes: vec![],
             write_size: 0,
         }
@@ -199,7 +199,7 @@ impl MvccTxn {
                         );
                         Err(Error::TxnLockNotFound {
                             start_ts: self.start_ts,
-                            commit_ts: commit_ts,
+                            commit_ts,
                             key: key.encoded().to_owned(),
                         })
                     }

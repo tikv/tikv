@@ -43,12 +43,12 @@ impl SortRow {
         err: Arc<RefCell<Option<String>>>,
     ) -> SortRow {
         SortRow {
-            handle: handle,
-            data: data,
-            key: key,
-            order_cols: order_cols,
+            handle,
+            data,
+            key,
+            order_cols,
             eval_ctx: ctx,
-            err: err,
+            err,
         }
     }
 
@@ -105,9 +105,9 @@ impl TopNHeap {
         let cap = cmp::min(limit, HEAP_MAX_CAPACITY);
         Ok(TopNHeap {
             rows: BinaryHeap::with_capacity(cap),
-            limit: limit,
+            limit,
             err: Arc::new(RefCell::new(None)),
-            ctx: ctx,
+            ctx,
         })
     }
 

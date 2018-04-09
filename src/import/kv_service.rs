@@ -41,9 +41,9 @@ impl ImportKVService {
             .pool_size(cfg.num_threads)
             .create();
         ImportKVService {
-            cfg: cfg,
-            threads: threads,
-            importer: importer,
+            cfg,
+            threads,
+            importer,
         }
     }
 }

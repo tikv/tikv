@@ -68,16 +68,16 @@ impl IndexScanExecutor {
         let col_ids = cols.iter().map(|c| c.get_column_id()).collect();
         let counts = if collect { Some(Vec::default()) } else { None };
         Ok(IndexScanExecutor {
-            store: store,
-            desc: desc,
-            col_ids: col_ids,
-            pk_col: pk_col,
+            store,
+            desc,
+            col_ids,
+            pk_col,
             key_ranges: key_ranges.into_iter().peekable(),
             current_range: None,
             scan_range: KeyRange::default(),
             scanner: None,
-            unique: unique,
-            counts: counts,
+            unique,
+            counts,
             metrics: Default::default(),
             first_collect: true,
         })
@@ -91,9 +91,9 @@ impl IndexScanExecutor {
         box_try!(table::check_table_ranges(&key_ranges));
         let col_ids: Vec<i64> = (0..cols).collect();
         Ok(IndexScanExecutor {
-            store: store,
+            store,
             desc: false,
-            col_ids: col_ids,
+            col_ids,
             pk_col: None,
             key_ranges: key_ranges.into_iter().peekable(),
             current_range: None,
@@ -352,9 +352,9 @@ pub mod test {
             kv_data.push((idx_key, value));
         }
         Data {
-            kv_data: kv_data,
-            expect_rows: expect_rows,
-            cols: cols,
+            kv_data,
+            expect_rows,
+            cols,
         }
     }
 
@@ -403,9 +403,9 @@ pub mod test {
             IndexTestWrapper {
                 data: test_data,
                 store: test_store,
-                scan: scan,
+                scan,
                 ranges: key_ranges,
-                cols: cols,
+                cols,
             }
         }
     }

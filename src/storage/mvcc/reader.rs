@@ -50,17 +50,17 @@ impl MvccReader {
         isolation_level: IsolationLevel,
     ) -> MvccReader {
         MvccReader {
-            snapshot: snapshot,
+            snapshot,
             statistics: Statistics::default(),
             data_cursor: None,
             lock_cursor: None,
             write_cursor: None,
-            scan_mode: scan_mode,
-            isolation_level: isolation_level,
+            scan_mode,
+            isolation_level,
             key_only: false,
-            fill_cache: fill_cache,
-            lower_bound: lower_bound,
-            upper_bound: upper_bound,
+            fill_cache,
+            lower_bound,
+            upper_bound,
         }
     }
 
@@ -577,7 +577,7 @@ mod tests {
         pub fn new(db: Arc<DB>, region: Region) -> RegionEngine {
             RegionEngine {
                 db: Arc::clone(&db),
-                region: region,
+                region,
             }
         }
 

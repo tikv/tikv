@@ -164,7 +164,7 @@ struct JsonFuncArgsParser<'a> {
 impl<'a> JsonFuncArgsParser<'a> {
     #[inline]
     fn new(row: &'a [Datum]) -> Self {
-        JsonFuncArgsParser { row: row }
+        JsonFuncArgsParser { row }
     }
 
     fn get_path_expr(

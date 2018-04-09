@@ -116,11 +116,11 @@ where
         let ch = SendCh::new(event_loop.channel(), "raftstore");
         Node {
             cluster_id: cfg.cluster_id,
-            store: store,
+            store,
             store_cfg: store_cfg.clone(),
             store_handle: None,
-            pd_client: pd_client,
-            ch: ch,
+            pd_client,
+            ch,
         }
     }
 

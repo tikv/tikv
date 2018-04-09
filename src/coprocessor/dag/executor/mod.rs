@@ -58,7 +58,7 @@ impl ExprColumnRefVisitor {
     pub fn new(cols_len: usize) -> ExprColumnRefVisitor {
         ExprColumnRefVisitor {
             cols_offset: HashSet::default(),
-            cols_len: cols_len,
+            cols_len,
         }
     }
 
@@ -102,8 +102,8 @@ pub struct Row {
 impl Row {
     pub fn new(handle: i64, data: RowColsDict) -> Row {
         Row {
-            handle: handle,
-            data: data,
+            handle,
+            data,
         }
     }
 
@@ -214,8 +214,8 @@ pub fn build_exec(
     }
     Ok(DAGExecutor {
         exec: src,
-        columns: columns,
-        has_aggr: has_aggr,
+        columns,
+        has_aggr,
     })
 }
 

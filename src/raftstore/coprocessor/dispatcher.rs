@@ -143,7 +143,7 @@ impl CoprocessorHost {
                 Box::new(TableCheckObserver::default()),
             );
         }
-        CoprocessorHost { registry: registry }
+        CoprocessorHost { registry }
     }
 
     /// Call all prepose hooks until bypass is set to true.

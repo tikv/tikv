@@ -322,8 +322,8 @@ pub struct Time {
 impl Time {
     pub fn new(time: DateTime<FixedOffset>, tp: u8, fsp: i8) -> Result<Time> {
         Ok(Time {
-            time: time,
-            tp: tp,
+            time,
+            tp,
             fsp: check_fsp(fsp)?,
         })
     }

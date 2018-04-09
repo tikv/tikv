@@ -32,7 +32,7 @@ impl<T> Timer<T> {
     pub fn add_task(&mut self, timeout: Duration, task: T) {
         let task = TimeoutTask {
             next_tick: Instant::now() + timeout,
-            task: task,
+            task,
         };
         self.pending.push(Reverse(task));
     }

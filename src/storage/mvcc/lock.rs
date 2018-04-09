@@ -74,11 +74,11 @@ impl Lock {
         short_value: Option<Value>,
     ) -> Lock {
         Lock {
-            lock_type: lock_type,
-            primary: primary,
-            ts: ts,
-            ttl: ttl,
-            short_value: short_value,
+            lock_type,
+            primary,
+            ts,
+            ttl,
+            short_value,
         }
     }
 

@@ -63,7 +63,7 @@ impl DAGContext {
         Ok(DAGContext {
             columns: dag_executor.columns,
             has_aggr: dag_executor.has_aggr,
-            req_ctx: req_ctx,
+            req_ctx,
             exec: dag_executor.exec,
             output_offsets: req.take_output_offsets(),
         })

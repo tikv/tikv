@@ -177,10 +177,10 @@ pub struct Runner<T: PdClient> {
 impl<T: PdClient> Runner<T> {
     pub fn new(store_id: u64, pd_client: Arc<T>, ch: SendCh<Msg>, db: Arc<DB>) -> Runner<T> {
         Runner {
-            store_id: store_id,
-            pd_client: pd_client,
-            ch: ch,
-            db: db,
+            store_id,
+            pd_client,
+            ch,
+            db,
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
             store_stat: StoreStat::default(),
@@ -559,13 +559,13 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     region,
                     peer,
                     RegionStat {
-                        down_peers: down_peers,
-                        pending_peers: pending_peers,
+                        down_peers,
+                        pending_peers,
                         written_bytes: written_bytes_delta,
                         written_keys: written_keys_delta,
                         read_bytes: read_bytes_delta,
                         read_keys: read_keys_delta,
-                        approximate_size: approximate_size,
+                        approximate_size,
                     },
                 )
             }

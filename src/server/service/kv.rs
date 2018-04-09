@@ -127,13 +127,13 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
         stream_channel_size: usize,
     ) -> Service<T> {
         Service {
-            storage: storage,
-            end_point_scheduler: end_point_scheduler,
-            ch: ch,
-            snap_scheduler: snap_scheduler,
-            recursion_limit: recursion_limit,
+            storage,
+            end_point_scheduler,
+            ch,
+            snap_scheduler,
+            recursion_limit,
             metrics: Metrics::new(),
-            stream_channel_size: stream_channel_size,
+            stream_channel_size,
         }
     }
 

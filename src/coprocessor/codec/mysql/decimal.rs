@@ -868,11 +868,11 @@ impl Decimal {
     /// create a new decimal for internal usage.
     fn new(int_cnt: u8, frac_cnt: u8, negative: bool) -> Decimal {
         Decimal {
-            int_cnt: int_cnt,
-            frac_cnt: frac_cnt,
+            int_cnt,
+            frac_cnt,
             precision: 0,
             result_frac_cnt: 0,
-            negative: negative,
+            negative,
             word_buf: Box::new([0; 9]),
         }
     }

@@ -30,7 +30,7 @@ impl FMSketch {
     pub fn new(max_size: usize) -> FMSketch {
         FMSketch {
             mask: 0,
-            max_size: max_size,
+            max_size,
             hash_set: HashSet::with_capacity(max_size + 1),
         }
     }
@@ -106,8 +106,8 @@ mod test {
             let count = 100000;
             let rc = generate_samples(count);
             TestData {
-                samples: samples,
-                rc: rc,
+                samples,
+                rc,
                 pk: (0..count as i64).map(Datum::I64).collect(),
             }
         }

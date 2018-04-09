@@ -31,7 +31,7 @@ impl Retry {
         info!("[Retry] return Ok(_) every {:?} times", retry);
 
         Retry {
-            retry: retry,
+            retry,
             count: AtomicUsize::new(0),
         }
     }

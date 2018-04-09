@@ -113,7 +113,7 @@ pub struct PdStoreAddrResolver {
 
 impl PdStoreAddrResolver {
     pub fn new(sched: Scheduler<Task>) -> PdStoreAddrResolver {
-        PdStoreAddrResolver { sched: sched }
+        PdStoreAddrResolver { sched }
     }
 }
 
@@ -124,7 +124,7 @@ where
     let mut worker = Worker::new("store address resolve worker");
 
     let runner = Runner {
-        pd_client: pd_client,
+        pd_client,
         store_addrs: HashMap::default(),
     };
     box_try!(worker.start(runner));
@@ -137,8 +137,8 @@ where
 impl StoreAddrResolver for PdStoreAddrResolver {
     fn resolve(&self, store_id: u64, cb: Callback) -> Result<()> {
         let task = Task {
-            store_id: store_id,
-            cb: cb,
+            store_id,
+            cb,
         };
         box_try!(self.sched.schedule(task));
         Ok(())
@@ -239,7 +239,7 @@ mod tests {
     fn new_runner(store: metapb::Store) -> Runner<MockPdClient> {
         let client = MockPdClient {
             start: Instant::now(),
-            store: store,
+            store,
         };
         Runner {
             pd_client: Arc::new(client),

@@ -77,7 +77,7 @@ impl ServerCluster {
         ServerCluster {
             metas: HashMap::new(),
             addrs: HashMap::new(),
-            pd_client: pd_client,
+            pd_client,
             storages: HashMap::new(),
             snap_paths: HashMap::new(),
             raft_client: RaftClient::new(env, Arc::new(Config::default()), security_mgr),
@@ -215,11 +215,11 @@ impl Simulator for ServerCluster {
             node_id,
             ServerMeta {
                 store_ch: node.get_sendch(),
-                node: node,
-                server: server,
+                node,
+                server,
                 router: sim_router,
                 sim_trans: simulate_trans,
-                worker: worker,
+                worker,
             },
         );
         self.addrs.insert(node_id, format!("{}", addr));

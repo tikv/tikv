@@ -394,9 +394,9 @@ pub struct Options {
 impl Options {
     pub fn new(lock_ttl: u64, skip_constraint_check: bool, key_only: bool) -> Options {
         Options {
-            lock_ttl: lock_ttl,
-            skip_constraint_check: skip_constraint_check,
-            key_only: key_only,
+            lock_ttl,
+            skip_constraint_check,
+            key_only,
         }
     }
 }
@@ -433,9 +433,9 @@ impl Storage {
         let worker_scheduler = worker.lock().unwrap().scheduler();
         Ok(Storage {
             read_pool,
-            engine: engine,
-            worker: worker,
-            worker_scheduler: worker_scheduler,
+            engine,
+            worker,
+            worker_scheduler,
             gc_ratio_threshold: config.gc_ratio_threshold,
             max_key_size: config.max_key_size,
         })
@@ -486,7 +486,7 @@ impl Storage {
         fail_point!("storage_drop_message", |_| Ok(()));
         box_try!(
             self.worker_scheduler
-                .schedule(Msg::RawCmd { cmd: cmd, cb: cb })
+                .schedule(Msg::RawCmd { cmd, cb })
         );
         Ok(())
     }
@@ -691,8 +691,8 @@ impl Storage {
 
     pub fn async_pause(&self, ctx: Context, duration: u64, callback: Callback<()>) -> Result<()> {
         let cmd = Command::Pause {
-            ctx: ctx,
-            duration: duration,
+            ctx,
+            duration,
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         Ok(())
@@ -715,11 +715,11 @@ impl Storage {
             }
         }
         let cmd = Command::Prewrite {
-            ctx: ctx,
-            mutations: mutations,
-            primary: primary,
-            start_ts: start_ts,
-            options: options,
+            ctx,
+            mutations,
+            primary,
+            start_ts,
+            options,
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Booleans(callback))?;
@@ -736,10 +736,10 @@ impl Storage {
         callback: Callback<()>,
     ) -> Result<()> {
         let cmd = Command::Commit {
-            ctx: ctx,
-            keys: keys,
-            lock_ts: lock_ts,
-            commit_ts: commit_ts,
+            ctx,
+            keys,
+            lock_ts,
+            commit_ts,
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
@@ -787,9 +787,9 @@ impl Storage {
         callback: Callback<()>,
     ) -> Result<()> {
         let cmd = Command::Cleanup {
-            ctx: ctx,
-            key: key,
-            start_ts: start_ts,
+            ctx,
+            key,
+            start_ts,
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
@@ -805,9 +805,9 @@ impl Storage {
         callback: Callback<()>,
     ) -> Result<()> {
         let cmd = Command::Rollback {
-            ctx: ctx,
-            keys: keys,
-            start_ts: start_ts,
+            ctx,
+            keys,
+            start_ts,
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
@@ -824,14 +824,14 @@ impl Storage {
         callback: Callback<Vec<LockInfo>>,
     ) -> Result<()> {
         let cmd = Command::ScanLock {
-            ctx: ctx,
-            max_ts: max_ts,
+            ctx,
+            max_ts,
             start_key: if start_key.is_empty() {
                 None
             } else {
                 Some(Key::from_raw(&start_key))
             },
-            limit: limit,
+            limit,
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Locks(callback))?;
@@ -846,8 +846,8 @@ impl Storage {
         callback: Callback<()>,
     ) -> Result<()> {
         let cmd = Command::ResolveLock {
-            ctx: ctx,
-            txn_status: txn_status,
+            ctx,
+            txn_status,
             scan_key: None,
             key_locks: vec![],
         };
@@ -859,8 +859,8 @@ impl Storage {
 
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
         let cmd = Command::Gc {
-            ctx: ctx,
-            safe_point: safe_point,
+            ctx,
+            safe_point,
             ratio_threshold: self.gc_ratio_threshold,
             scan_key: None,
             keys: vec![],
@@ -1296,7 +1296,7 @@ impl Storage {
         key: Key,
         callback: Callback<MvccInfo>,
     ) -> Result<()> {
-        let cmd = Command::MvccByKey { ctx: ctx, key: key };
+        let cmd = Command::MvccByKey { ctx, key };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::MvccInfoByKey(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
@@ -1310,8 +1310,8 @@ impl Storage {
         callback: Callback<Option<(Key, MvccInfo)>>,
     ) -> Result<()> {
         let cmd = Command::MvccByStartTs {
-            ctx: ctx,
-            start_ts: start_ts,
+            ctx,
+            start_ts,
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::MvccInfoByStartTs(callback))?;

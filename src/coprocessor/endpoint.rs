@@ -123,7 +123,7 @@ impl FromIterator<(ThreadId, CopContext)> for CopContextPool {
             cop_ctxs.insert(thread_id, cop_ctx);
         }
         let cop_ctxs = Arc::new(cop_ctxs);
-        CopContextPool { cop_ctxs: cop_ctxs }
+        CopContextPool { cop_ctxs }
     }
 }
 
@@ -160,13 +160,13 @@ pub struct Host {
 impl Host {
     pub fn new(
         engine: Box<Engine>,
-        scheduler: Scheduler<Task>,
+        sched: Scheduler<Task>,
         cfg: &Config,
         pd_task_sender: FutureScheduler<PdTask>,
     ) -> Host {
         Host {
-            engine: engine,
-            sched: scheduler,
+            engine,
+            sched,
             reqs: HashMap::default(),
             last_req_id: 0,
             pool: Host::create_executor_pool(
@@ -618,11 +618,11 @@ impl RequestTask {
         let start_time = Instant::now_coarse();
 
         let req_ctx = ReqContext {
-            start_time: start_time,
+            start_time,
             deadline: start_time,
             isolation_level: req.get_context().get_isolation_level(),
             fill_cache: !req.get_context().get_not_fill_cache(),
-            table_scan: table_scan,
+            table_scan,
         };
 
         let request_tracker = RequestTracker {
@@ -652,10 +652,10 @@ impl RequestTask {
             .inc();
 
         Ok(RequestTask {
-            req: req,
-            cop_req: cop_req,
+            req,
+            cop_req,
             ctx: req_ctx,
-            on_resp: on_resp,
+            on_resp,
             tracker: request_tracker,
         })
     }

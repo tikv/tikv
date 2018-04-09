@@ -70,9 +70,9 @@ pub struct Write {
 impl Write {
     pub fn new(write_type: WriteType, start_ts: u64, short_value: Option<Value>) -> Write {
         Write {
-            write_type: write_type,
-            start_ts: start_ts,
-            short_value: short_value,
+            write_type,
+            start_ts,
+            short_value,
         }
     }
 

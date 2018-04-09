@@ -70,9 +70,9 @@ impl RotatingFileLoggerCore {
         let file_modified_time = file_attr.modified().unwrap();
         let rollover_time = compute_rollover_time(systemtime_to_tm(file_modified_time));
         let ret = RotatingFileLoggerCore {
-            rollover_time: rollover_time,
+            rollover_time,
             file_path: path.to_string(),
-            file: file,
+            file,
         };
         Ok(ret)
     }

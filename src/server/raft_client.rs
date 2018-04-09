@@ -97,7 +97,7 @@ impl Conn {
         Conn {
             stream: tx,
             buffer: Some(Vec::with_capacity(PRESERVED_MSG_BUFFER_COUNT)),
-            store_id: store_id,
+            store_id,
             alive: alive1,
 
             _client: client,
@@ -122,11 +122,11 @@ impl RaftClient {
         security_mgr: Arc<SecurityManager>,
     ) -> RaftClient {
         RaftClient {
-            env: env,
+            env,
             conns: HashMap::default(),
             addrs: HashMap::default(),
-            cfg: cfg,
-            security_mgr: security_mgr,
+            cfg,
+            security_mgr,
         }
     }
 

@@ -33,7 +33,7 @@ impl<'a> LimitExecutor<'a> {
         LimitExecutor {
             limit: limit.get_limit(),
             cursor: 0,
-            src: src,
+            src,
             first_collect: true,
         }
     }

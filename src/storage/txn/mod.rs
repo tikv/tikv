@@ -74,8 +74,8 @@ impl Error {
                 start_ts,
                 commit_ts,
             } => Some(Error::InvalidTxnTso {
-                start_ts: start_ts,
-                commit_ts: commit_ts,
+                start_ts,
+                commit_ts,
             }),
             Error::Other(_) | Error::ProtoBuf(_) | Error::Io(_) => None,
         }

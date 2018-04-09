@@ -61,9 +61,9 @@ pub enum Task {
 impl Task {
     pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task {
         Task::Destroy {
-            region_id: region_id,
-            start_key: start_key,
-            end_key: end_key,
+            region_id,
+            start_key,
+            end_key,
         }
     }
 }
@@ -288,11 +288,11 @@ impl Runner {
                 .thread_count(GENERATE_POOL_SIZE)
                 .build(),
             ctx: SnapContext {
-                kv_db: kv_db,
-                raft_db: raft_db,
-                mgr: mgr,
-                batch_size: batch_size,
-                use_delete_range: use_delete_range,
+                kv_db,
+                raft_db,
+                mgr,
+                batch_size,
+                use_delete_range,
             },
         }
     }

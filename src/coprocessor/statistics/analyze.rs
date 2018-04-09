@@ -50,9 +50,9 @@ impl AnalyzeContext {
             req_ctx.fill_cache,
         );
         AnalyzeContext {
-            req: req,
+            req,
             snap: Some(snap),
-            ranges: ranges,
+            ranges,
         }
     }
 
@@ -177,7 +177,7 @@ impl SampleBuilder {
         Ok(SampleBuilder {
             data: table_scanner,
             cols: meta.take_columns().to_vec(),
-            col_len: col_len,
+            col_len,
             max_bucket_size: req.get_bucket_size() as usize,
             max_fm_sketch_size: req.get_sketch_size() as usize,
             max_sample_size: req.get_sample_size() as usize,

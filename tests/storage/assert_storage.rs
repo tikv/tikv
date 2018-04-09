@@ -51,8 +51,8 @@ impl AssertionStorage {
     ) -> (Cluster<ServerCluster>, AssertionStorage) {
         let (cluster, store, ctx) = new_raft_storage_with_store_count(count, key);
         let storage = AssertionStorage {
-            ctx: ctx,
-            store: store,
+            ctx,
+            store,
         };
         (cluster, storage)
     }

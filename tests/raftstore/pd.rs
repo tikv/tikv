@@ -234,7 +234,7 @@ impl Cluster {
         meta.set_max_peer_count(5);
 
         Cluster {
-            meta: meta,
+            meta,
             stores: HashMap::new(),
             regions: BTreeMap::new(),
             region_id_keys: HashMap::new(),
@@ -641,7 +641,7 @@ pub struct TestPdClient {
 impl TestPdClient {
     pub fn new(cluster_id: u64) -> TestPdClient {
         TestPdClient {
-            cluster_id: cluster_id,
+            cluster_id,
             cluster: Arc::new(RwLock::new(Cluster::new(cluster_id))),
             timer: Timer::default(),
         }

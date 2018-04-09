@@ -54,8 +54,8 @@ pub struct RegionInfo {
 impl RegionInfo {
     pub fn new(region: metapb::Region, leader: Option<metapb::Peer>) -> RegionInfo {
         RegionInfo {
-            region: region,
-            leader: leader,
+            region,
+            leader,
         }
     }
 }

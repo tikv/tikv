@@ -85,7 +85,7 @@ impl SnapshotNotifier {
     pub fn new(notifier: Sender<()>, ready_notify: Arc<AtomicBool>) -> SnapshotNotifier {
         SnapshotNotifier {
             notifier: Mutex::new(notifier),
-            ready_notify: ready_notify,
+            ready_notify,
             pending_notify: AtomicUsize::new(0),
         }
     }

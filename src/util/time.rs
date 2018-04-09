@@ -55,7 +55,7 @@ impl SlowTimer {
 
     pub fn from(slow_time: Duration) -> SlowTimer {
         SlowTimer {
-            slow_time: slow_time,
+            slow_time,
             t: Instant::now_coarse(),
         }
     }
@@ -119,7 +119,7 @@ impl Monitor {
             .unwrap();
 
         Monitor {
-            tx: tx,
+            tx,
             handle: Some(h),
         }
     }

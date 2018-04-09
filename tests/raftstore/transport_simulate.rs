@@ -90,7 +90,7 @@ pub struct DropPacketFilter {
 
 impl DropPacketFilter {
     pub fn new(rate: u32) -> DropPacketFilter {
-        DropPacketFilter { rate: rate }
+        DropPacketFilter { rate }
     }
 }
 
@@ -108,7 +108,7 @@ pub struct DelayFilter {
 
 impl DelayFilter {
     pub fn new(duration: time::Duration) -> DelayFilter {
-        DelayFilter { duration: duration }
+        DelayFilter { duration }
     }
 }
 
@@ -241,7 +241,7 @@ pub struct PartitionFilterFactory {
 
 impl PartitionFilterFactory {
     pub fn new(s1: Vec<u64>, s2: Vec<u64>) -> PartitionFilterFactory {
-        PartitionFilterFactory { s1: s1, s2: s2 }
+        PartitionFilterFactory { s1, s2 }
     }
 }
 
@@ -268,7 +268,7 @@ pub struct IsolationFilterFactory {
 
 impl IsolationFilterFactory {
     pub fn new(node_id: u64) -> IsolationFilterFactory {
-        IsolationFilterFactory { node_id: node_id }
+        IsolationFilterFactory { node_id }
     }
 }
 
@@ -356,8 +356,8 @@ impl Filter<RaftMessage> for RegionPacketFilter {
 impl RegionPacketFilter {
     pub fn new(region_id: u64, store_id: u64) -> RegionPacketFilter {
         RegionPacketFilter {
-            region_id: region_id,
-            store_id: store_id,
+            region_id,
+            store_id,
             direction: Direction::Both,
             msg_type: None,
             block: Either::Right(Arc::new(AtomicBool::new(true))),
@@ -532,7 +532,7 @@ impl LeadingDuplicatedSnapshotFilter {
     pub fn new(stale: Arc<AtomicBool>) -> LeadingDuplicatedSnapshotFilter {
         LeadingDuplicatedSnapshotFilter {
             dropped: AtomicBool::new(false),
-            stale: stale,
+            stale,
             last_msg: Mutex::new(None),
         }
     }

@@ -137,7 +137,7 @@ impl NodeCluster {
     pub fn new(pd_client: Arc<TestPdClient>) -> NodeCluster {
         NodeCluster {
             trans: ChannelTransport::new(),
-            pd_client: pd_client,
+            pd_client,
             nodes: HashMap::new(),
             simulate_trans: HashMap::new(),
         }

@@ -106,8 +106,8 @@ impl EngineRocksdb {
         Ok(EngineRocksdb {
             sched: worker.scheduler(),
             core: Arc::new(Mutex::new(EngineRocksdbCore {
-                temp_dir: temp_dir,
-                worker: worker,
+                temp_dir,
+                worker,
             })),
         })
     }
