@@ -926,6 +926,21 @@ mod tests {
     }
 
     #[test]
+    fn test_set_req_deadline() {
+        let mut ctx = ReqContext {
+            start_time: Instant::now_coarse(),
+            deadline: Instant::now_coarse(),
+            isolation_level: IsolationLevel::RC,
+            fill_cache: true,
+            table_scan: true,
+        };
+
+        assert!(ctx.check_if_outdated().is_err());
+        ctx.set_max_handle_duration(Duration::from_secs(1));
+        assert!(ctx.check_if_outdated().is_ok());
+    }
+
+    #[test]
     fn test_req_outdated() {
         let mut worker = WorkerBuilder::new("test-endpoint").batch_size(30).create();
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
