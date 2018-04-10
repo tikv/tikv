@@ -333,7 +333,11 @@ impl Debugger {
         Ok(res)
     }
 
-    pub fn remove_failed_stores(&self, store_ids: Vec<u64>, region_ids: Vec<u64>) -> Result<()> {
+    pub fn remove_failed_stores(
+        &self,
+        store_ids: Vec<u64>,
+        region_ids: Option<Vec<u64>>,
+    ) -> Result<()> {
         let store_id = self.get_store_id()?;
         if store_ids.iter().any(|&s| s == store_id) {
             let msg = format!("Store {} in the failed list", store_id);
@@ -377,7 +381,7 @@ impl Debugger {
                 Ok(())
             };
 
-            if !region_ids.is_empty() {
+            if let Some(region_ids) = region_ids {
                 let kv = &self.engines.kv_engine;
                 for region_id in region_ids {
                     let key = keys::region_state_key(region_id);
@@ -1028,19 +1032,23 @@ mod tests {
         // region 2 with peers at stores 21, 22, 23.
         init_region_state(engine, 2, &[21, 22, 23]);
 
-        let result = debugger.remove_failed_stores(vec![13, 14, 21, 23], vec![1]);
-        assert!(result.is_ok());
-        let result = debugger.remove_failed_stores(vec![13, 14, 23], vec![]);
-        assert!(result.is_ok());
-
+        debugger
+            .remove_failed_stores(vec![13, 14, 21, 23], Some(vec![1]))
+            .unwrap();
         let region_state = get_region_state(engine, 1);
         assert_eq!(region_state.get_region().get_peers().len(), 2);
         let region_state = get_region_state(engine, 2);
         assert_eq!(region_state.get_region().get_peers().len(), 3);
 
+        debugger
+            .remove_failed_stores(vec![13, 14, 23], None)
+            .unwrap();
+        let region_state = get_region_state(engine, 2);
+        assert_eq!(region_state.get_region().get_peers().len(), 3);
+
         // Should fail when the store itself is in the failed list.
         init_region_state(engine, 3, &[100, 31, 32, 33]);
-        assert!(debugger.remove_failed_stores(vec![100], vec![]).is_err());
+        assert!(debugger.remove_failed_stores(vec![100], None).is_err());
     }
 
     #[test]
