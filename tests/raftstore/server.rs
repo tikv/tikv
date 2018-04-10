@@ -14,13 +14,15 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, RwLock};
 use std::path::Path;
+use std::time::Duration;
+use std::thread;
 
-use grpc::EnvBuilder;
+use grpc::{EnvBuilder, Error as GrpcError};
 use tempdir::TempDir;
 
 use tikv::config::TiKvConfig;
-use tikv::server::{Server, ServerTransport};
-use tikv::server::{create_raft_storage, Config, Node, PdStoreAddrResolver, RaftClient};
+use tikv::server::{create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient,
+                   Server, ServerTransport};
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::readpool::ReadPool;
@@ -147,18 +149,27 @@ impl Simulator for ServerCluster {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
-        let mut server = Server::new(
-            &server_cfg,
-            &security_mgr,
-            cfg.coprocessor.region_split_size.0 as usize,
-            store.clone(),
-            sim_router.clone(),
-            resolver,
-            snap_mgr.clone(),
-            pd_worker.scheduler(),
-            Some(engines.clone()),
-            Some(import_service),
-        ).unwrap();
+        let mut server = None;
+        for _ in 0..100 {
+            server = Some(Server::new(
+                &server_cfg,
+                &security_mgr,
+                cfg.coprocessor.region_split_size.0 as usize,
+                store.clone(),
+                sim_router.clone(),
+                resolver.clone(),
+                snap_mgr.clone(),
+                pd_worker.scheduler(),
+                Some(engines.clone()),
+                Some(import_service.clone()),
+            ));
+            if let Some(Err(Error::Grpc(GrpcError::BindFail(ref addr, ref port)))) = server {
+                debug!("fail to create a server: bind fail {:?}", (addr, port));
+                thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+        }
+        let mut server = server.unwrap().unwrap();
         let addr = server.listening_addr();
         cfg.server.addr = format!("{}", addr);
         let trans = server.transport();
