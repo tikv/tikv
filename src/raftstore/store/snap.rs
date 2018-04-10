@@ -614,14 +614,19 @@ impl Snap {
         }
     }
 
-    fn add_kv(&mut self, k: &[u8], v: &[u8]) -> io::Result<()> {
+    fn add_kv(&mut self, k: &[u8], v: &[u8]) -> RaftStoreResult<()> {
         let cf_file = &mut self.cf_files[self.cf_index];
-        let writer = cf_file.sst_writer.as_mut().unwrap();
-        if let Err(e) = writer.put(k, v) {
-            return Err(io::Error::new(ErrorKind::Other, e));
+        if let Some(writer) = cf_file.sst_writer.as_mut() {
+            if let Err(e) = writer.put(k, v) {
+                let io_error = io::Error::new(ErrorKind::Other, e);
+                return Err(RaftStoreError::from(io_error));
+            }
+            cf_file.kv_count += 1;
+            Ok(())
+        } else {
+            let e = box_err!("can't find sst writer");
+            Err(RaftStoreError::Snapshot(e))
         }
-        cf_file.kv_count += 1;
-        Ok(())
     }
 
     fn save_cf_files(&mut self) -> io::Result<()> {

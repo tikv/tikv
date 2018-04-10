@@ -202,9 +202,9 @@ fn test_generate_snapshot() {
     cluster.run();
     cluster.stop_node(4);
     cluster.stop_node(5);
-    cluster.must_put(b"k2", b"v2");
+    (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
     // Sleep for a while to ensure all logs are compacted.
-    thread::sleep(Duration::from_millis(500));
+    thread::sleep(Duration::from_millis(100));
 
     fail::cfg("snapshot_delete_after_send", "pause").unwrap();
 
@@ -214,9 +214,12 @@ fn test_generate_snapshot() {
 
     fail::cfg("snapshot_enter_do_build", "pause").unwrap();
     cluster.run_node(5);
+    thread::sleep(Duration::from_millis(100));
+
+    fail::cfg("snapshot_delete_after_send", "off").unwrap();
+    thread::sleep(Duration::from_millis(100));
 
     // The task is droped so that we can't get the snapshot on store 5.
-    fail::cfg("snapshot_delete_after_send", "off").unwrap();
     fail::cfg("snapshot_enter_do_build", "pause").unwrap();
     must_get_none(&cluster.get_engine(5), b"k2");
 
