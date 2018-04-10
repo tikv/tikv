@@ -65,6 +65,8 @@ pub struct Config {
     pub grpc_concurrent_stream: usize,
     pub grpc_raft_conn_num: usize,
     pub grpc_stream_initial_window_size: ReadableSize,
+    pub grpc_keepalive_time: ReadableDuration,
+    pub grpc_keepalive_timeout: ReadableDuration,
     pub end_point_concurrency: usize,
     pub end_point_max_tasks: usize,
     pub end_point_stack_size: ReadableSize,
@@ -99,6 +101,10 @@ impl Default for Config {
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
             grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
             grpc_stream_initial_window_size: ReadableSize(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE),
+            // There will be a heartbeat every secs, it's weird a connection will be idle for more
+            // than 10 senconds.
+            grpc_keepalive_time: ReadableDuration::secs(10),
+            grpc_keepalive_timeout: ReadableDuration::secs(3),
             end_point_concurrency: concurrency,
             end_point_max_tasks: DEFAULT_MAX_RUNNING_TASK_COUNT,
             end_point_stack_size: ReadableSize::mb(DEFAULT_ENDPOINT_STACK_SIZE_MB),
