@@ -58,7 +58,7 @@ pub struct ServerCluster {
     metas: HashMap<u64, ServerMeta>,
     addrs: HashMap<u64, String>,
     pub storages: HashMap<u64, Box<Engine>>,
-    pub snap_paths: HashMap<u64, TempDir>,
+    snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient,
 }
