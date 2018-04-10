@@ -199,7 +199,7 @@ fn test_generate_snapshot() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
-    cluster.run_conf_change();
+    cluster.run();
     cluster.must_put(b"k1", b"v1");
 
     for store_id in 2..6 {
