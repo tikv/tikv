@@ -276,7 +276,7 @@ pub trait Iterable {
     fn new_iterator_cf(&self, &str, iter_opt: IterOption) -> Result<DBIterator<&DB>>;
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
-    fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: &mut F) -> Result<()>
+    fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: F) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
@@ -292,7 +292,7 @@ pub trait Iterable {
         start_key: &[u8],
         end_key: &[u8],
         fill_cache: bool,
-        f: &mut F,
+        f: F,
     ) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
@@ -317,7 +317,7 @@ pub trait Iterable {
     }
 }
 
-fn scan_impl<F>(mut it: DBIterator<&DB>, start_key: &[u8], f: &mut F) -> Result<()>
+fn scan_impl<F>(mut it: DBIterator<&DB>, start_key: &[u8], mut f: F) -> Result<()>
 where
     F: FnMut(&[u8], &[u8]) -> Result<bool>,
 {
@@ -518,7 +518,7 @@ mod tests {
 
         let mut data = vec![];
         engine
-            .scan(b"", &[0xFF, 0xFF], false, &mut |key, value| {
+            .scan(b"", &[0xFF, 0xFF], false, |key, value| {
                 data.push((key.to_vec(), value.to_vec()));
                 Ok(true)
             })
@@ -533,7 +533,7 @@ mod tests {
         data.clear();
 
         engine
-            .scan_cf(cf, b"", &[0xFF, 0xFF], false, &mut |key, value| {
+            .scan_cf(cf, b"", &[0xFF, 0xFF], false, |key, value| {
                 data.push((key.to_vec(), value.to_vec()));
                 Ok(true)
             })
@@ -556,7 +556,7 @@ mod tests {
 
         let mut index = 0;
         engine
-            .scan(b"", &[0xFF, 0xFF], false, &mut |key, value| {
+            .scan(b"", &[0xFF, 0xFF], false, |key, value| {
                 data.push((key.to_vec(), value.to_vec()));
                 index += 1;
                 Ok(index != 1)
@@ -576,7 +576,7 @@ mod tests {
 
         data.clear();
 
-        snap.scan(b"", &[0xFF, 0xFF], false, &mut |key, value| {
+        snap.scan(b"", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
             Ok(true)
         }).unwrap();
