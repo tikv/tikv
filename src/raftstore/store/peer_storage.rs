@@ -1154,7 +1154,7 @@ pub fn fetch_entries_to(
         &start_key,
         &end_key,
         true, // fill_cache
-        &mut |_, value| {
+        |_, value| {
             let mut entry = Entry::new();
             entry.merge_from_bytes(value)?;
 
@@ -1201,7 +1201,7 @@ pub fn clear_meta(
     let mut first_index = last_index + 1;
     let begin_log_key = keys::raft_log_key(region_id, 0);
     let end_log_key = keys::raft_log_key(region_id, first_index);
-    raft_engine.scan(&begin_log_key, &end_log_key, false, &mut |key, _| {
+    raft_engine.scan(&begin_log_key, &end_log_key, false, |key, _| {
         first_index = keys::raft_log_index(key).unwrap();
         Ok(false)
     })?;
@@ -1520,7 +1520,7 @@ mod test {
         );
         store
             .kv_engine
-            .scan_cf(CF_RAFT, &meta_start, &meta_end, false, &mut |_, _| {
+            .scan_cf(CF_RAFT, &meta_start, &meta_end, false, |_, _| {
                 count += 1;
                 Ok(true)
             })
@@ -1532,7 +1532,7 @@ mod test {
         );
         store
             .kv_engine
-            .scan_cf(CF_RAFT, &raft_start, &raft_end, false, &mut |_, _| {
+            .scan_cf(CF_RAFT, &raft_start, &raft_end, false, |_, _| {
                 count += 1;
                 Ok(true)
             })
@@ -1540,7 +1540,7 @@ mod test {
 
         store
             .raft_engine
-            .scan(&raft_start, &raft_end, false, &mut |_, _| {
+            .scan(&raft_start, &raft_end, false, |_, _| {
                 count += 1;
                 Ok(true)
             })

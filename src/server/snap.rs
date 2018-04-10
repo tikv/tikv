@@ -153,7 +153,10 @@ fn send_snap(
         }
     };
 
-    let cb = ChannelBuilder::new(env);
+    let cb = ChannelBuilder::new(env)
+        .keepalive_time(Duration::from_secs(60))
+        .keepalive_timeout(Duration::from_secs(3));
+
     let channel = security_mgr.connect(cb, addr);
     let client = TikvClient::new(channel);
     let (sink, receiver) = client.snapshot()?;
