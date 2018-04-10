@@ -28,7 +28,7 @@ const INIT_EPOCH_CONF_VER: u64 = 1;
 // check no any data in range [start_key, end_key)
 fn is_range_empty(engine: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<bool> {
     let mut count: u32 = 0;
-    engine.scan_cf(cf, start_key, end_key, false, &mut |_, _| {
+    engine.scan_cf(cf, start_key, end_key, false, |_, _| {
         count += 1;
         Ok(false)
     })?;
