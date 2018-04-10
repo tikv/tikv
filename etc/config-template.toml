@@ -160,7 +160,7 @@
 # consistency-check-interval = 0
 
 # Use delete range to drop a large number of continuous keys.
-# use-delete-range = true
+# use-delete-range = false
 
 # delay time before deleting a stale peer
 # clean-stale-peer-delay = "5m"
