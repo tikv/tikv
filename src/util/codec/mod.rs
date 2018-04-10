@@ -75,3 +75,40 @@ impl From<FromUtf8Error> for Error {
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::str;
+    use protobuf;
+    use super::*;
+
+    #[test]
+    fn test_error_maybe_clone() {
+        let e = Error::Io(io::Error::new(io::ErrorKind::UnexpectedEof, ""));
+        assert!(e.maybe_clone().is_none());
+
+        let e = Error::KeyPadding;
+        assert!(e.maybe_clone().is_some());
+
+        let e = Error::KeyLength;
+        assert!(e.maybe_clone().is_some());
+
+        let e = Error::KeyNotFound;
+        assert!(e.maybe_clone().is_some());
+
+        let e = Error::InvalidDataType("".to_owned());
+        assert!(e.maybe_clone().is_some());
+
+        let v = vec![0, 128];
+        let e = Error::Encoding(str::from_utf8(&v).unwrap_err());
+        assert!(e.maybe_clone().is_some());
+
+        let e =
+            Error::Protobuf(protobuf::error::ProtobufError::MessageNotInitialized { message: "" });
+        assert!(e.maybe_clone().is_none());
+
+        let e = Error::Other(box_err!(""));
+        assert!(e.maybe_clone().is_none());
+    }
+}
