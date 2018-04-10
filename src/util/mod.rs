@@ -454,7 +454,9 @@ impl<T> Drop for MustConsumeVec<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::*;
+    use super::*;
+    use protobuf::Message;
+    use raft::eraftpb::Entry;
     use std::net::{AddrParseError, SocketAddr};
     use std::rc::Rc;
     use std::*;
