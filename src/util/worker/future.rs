@@ -105,7 +105,7 @@ where
     {
         let f = rx.take_while(|t| Ok(t.is_some())).for_each(|t| {
             runner.run(t.unwrap(), &handle);
-            WORKER_PENDING_TASK_VEC.with_label_values(&[&name]).sub(1);
+            WORKER_PENDING_TASK_VEC.with_label_values(&[&name]).dec();
             WORKER_HANDLED_TASK_VEC.with_label_values(&[&name]).inc();
             Ok(())
         });

@@ -644,7 +644,7 @@ impl RequestTask {
 
         COPR_PENDING_REQS
             .with_label_values(&[request_tracker.scan_tag, request_tracker.pri_str])
-            .add(1);
+            .inc();
 
         Ok(RequestTask {
             req: req,
