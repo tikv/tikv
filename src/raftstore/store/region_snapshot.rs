@@ -71,13 +71,7 @@ impl RegionSnapshot {
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
-    pub fn scan<F>(
-        &self,
-        start_key: &[u8],
-        end_key: &[u8],
-        fill_cache: bool,
-        f: &mut F,
-    ) -> Result<()>
+    pub fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: F) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
@@ -93,7 +87,7 @@ impl RegionSnapshot {
         start_key: &[u8],
         end_key: &[u8],
         fill_cache: bool,
-        f: &mut F,
+        f: F,
     ) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
@@ -103,7 +97,7 @@ impl RegionSnapshot {
         self.scan_impl(self.iter_cf(cf, iter_opt)?, start_key, f)
     }
 
-    fn scan_impl<F>(&self, mut it: RegionIterator, start_key: &[u8], f: &mut F) -> Result<()>
+    fn scan_impl<F>(&self, mut it: RegionIterator, start_key: &[u8], mut f: F) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
@@ -421,7 +415,7 @@ mod tests {
 
         let snap = RegionSnapshot::new(&store);
         let mut data = vec![];
-        snap.scan(b"a2", &[0xFF, 0xFF], false, &mut |key, value| {
+        snap.scan(b"a2", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
             Ok(true)
         }).unwrap();
@@ -467,7 +461,7 @@ mod tests {
         }
 
         data.clear();
-        snap.scan(b"a2", &[0xFF, 0xFF], false, &mut |key, value| {
+        snap.scan(b"a2", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
             Ok(false)
         }).unwrap();
@@ -491,7 +485,7 @@ mod tests {
         let store = new_peer_storage(Arc::clone(&engine), Arc::clone(&raft_engine), &region);
         let snap = RegionSnapshot::new(&store);
         data.clear();
-        snap.scan(b"", &[0xFF, 0xFF], false, &mut |key, value| {
+        snap.scan(b"", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
             Ok(true)
         }).unwrap();

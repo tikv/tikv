@@ -2747,14 +2747,14 @@ mod tests {
         let sst_range = (0, 100);
         let (mut meta1, data1) = gen_sst_file(&sst_path, sst_range);
         meta1.set_region_epoch(sst_epoch);
-        importer.create(1, &meta1).unwrap();
-        importer.append(1, &data1).unwrap();
-        importer.finish(1).unwrap();
+        let mut file1 = importer.create(&meta1).unwrap();
+        file1.append(&data1).unwrap();
+        file1.finish().unwrap();
         let (mut meta2, data2) = gen_sst_file(&sst_path, sst_range);
         meta2.mut_region_epoch().set_version(1234);
-        importer.create(2, &meta2).unwrap();
-        importer.append(2, &data2).unwrap();
-        importer.finish(2).unwrap();
+        let mut file2 = importer.create(&meta2).unwrap();
+        file2.append(&data2).unwrap();
+        file2.finish().unwrap();
 
         // IngestSST
         let put_ok = EntryBuilder::new(9, 3)

@@ -15,98 +15,37 @@ use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crc::crc32::{self, Hasher32};
 use uuid::Uuid;
 use kvproto::importpb::*;
 use rocksdb::{IngestExternalFileOptions, DB};
 
-use util::collections::HashMap;
 use util::rocksdb::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
 
 use super::{Error, Result};
 
-pub type Token = usize;
-
 pub struct SSTImporter {
     dir: ImportDir,
-    token: AtomicUsize,
-    files: Mutex<HashMap<Token, ImportFile>>,
 }
 
 impl SSTImporter {
     pub fn new<P: AsRef<Path>>(root: P) -> Result<SSTImporter> {
         Ok(SSTImporter {
             dir: ImportDir::new(root)?,
-            token: AtomicUsize::new(1),
-            files: Mutex::new(HashMap::default()),
         })
     }
 
-    pub fn token(&self) -> Token {
-        self.token.fetch_add(1, Ordering::SeqCst)
-    }
-
-    fn insert(&self, token: Token, file: ImportFile) {
-        let mut files = self.files.lock().unwrap();
-        assert!(files.insert(token, file).is_none());
-    }
-
-    pub fn remove(&self, token: Token) -> Option<ImportFile> {
-        let mut files = self.files.lock().unwrap();
-        files.remove(&token)
-    }
-
-    pub fn create(&self, token: Token, meta: &SSTMeta) -> Result<()> {
-        let mut files = self.files.lock().unwrap();
-        if files.contains_key(&token) {
-            return Err(Error::TokenExists(token));
-        }
-
+    pub fn create(&self, meta: &SSTMeta) -> Result<ImportFile> {
         match self.dir.create(meta) {
             Ok(f) => {
                 info!("create {:?}", f);
-                files.insert(token, f);
-                Ok(())
+                Ok(f)
             }
             Err(e) => {
                 error!("create {:?}: {:?}", meta, e);
                 Err(e)
             }
-        }
-    }
-
-    pub fn append(&self, token: Token, data: &[u8]) -> Result<()> {
-        match self.remove(token) {
-            Some(mut f) => match f.append(data) {
-                Ok(_) => {
-                    self.insert(token, f);
-                    Ok(())
-                }
-                Err(e) => {
-                    error!("append {:?}: {:?}", f, e);
-                    Err(e)
-                }
-            },
-            None => Err(Error::TokenNotFound(token)),
-        }
-    }
-
-    pub fn finish(&self, token: Token) -> Result<()> {
-        match self.remove(token) {
-            Some(mut f) => match f.finish() {
-                Ok(_) => {
-                    info!("finish {:?}", f);
-                    Ok(())
-                }
-                Err(e) => {
-                    error!("finish {:?}: {:?}", f, e);
-                    Err(e)
-                }
-            },
-            None => Err(Error::TokenNotFound(token)),
         }
     }
 
@@ -276,13 +215,13 @@ impl ImportFile {
         })
     }
 
-    fn append(&mut self, data: &[u8]) -> Result<()> {
+    pub fn append(&mut self, data: &[u8]) -> Result<()> {
         self.file.as_mut().unwrap().write_all(data)?;
         self.digest.write(data);
         Ok(())
     }
 
-    fn finish(&mut self) -> Result<()> {
+    pub fn finish(&mut self) -> Result<()> {
         self.validate()?;
         self.file.take().unwrap().sync_all()?;
         if self.path.save.exists() {

@@ -614,7 +614,7 @@ impl Peer {
                     {
                         let now = Instant::now();
                         self.peers_start_pending_time.push((id, now));
-                        warn!("{} peer {} start pending at {}", self.tag, id, now);
+                        warn!("{} peer {} start pending at {:?}", self.tag, id, now);
                     }
                 }
             }
