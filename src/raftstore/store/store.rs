@@ -280,7 +280,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut raft_wb = WriteBatch::new();
         let mut applying_regions = vec![];
         let mut prepare_merge = vec![];
-        kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, &mut |key, value| {
+        kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
             let (region_id, suffix) = keys::decode_region_meta_key(key)?;
             if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);

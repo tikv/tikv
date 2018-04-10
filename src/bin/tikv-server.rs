@@ -72,7 +72,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
-use tikv::import::{ImportSSTService, SSTImporter};
+use tikv::import::{ImportKVServer, ImportSSTService, SSTImporter};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -122,7 +122,7 @@ fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
 
     info!("start prometheus client");
 
-    util::monitor_threads("tikv")
+    util::metrics::monitor_threads("tikv")
         .unwrap_or_else(|e| fatal!("failed to start monitor thread: {:?}", e));
 
     util::metrics::run_prometheus(cfg.interval.0, &cfg.address, &push_job);
@@ -283,7 +283,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     server
         .start(server_cfg, security_mgr)
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
-    signal_handler::handle_signal(engines);
+    signal_handler::handle_signal(Some(engines));
 
     // Stop.
     server
@@ -297,6 +297,19 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     if let Some(Err(e)) = worker.stop().map(|j| j.join()) {
         info!("ignore failure when stopping resolver: {:?}", e);
     }
+}
+
+fn run_import_server(cfg: &TiKvConfig) {
+    let mut metric = cfg.metric.clone();
+    metric.job = "import-server".to_owned();
+    initial_metric(&metric, None);
+
+    let mut server = ImportKVServer::new(cfg);
+    server.start();
+    info!("import server started");
+    signal_handler::handle_signal(None);
+    server.shutdown();
+    info!("import server shutdown");
 }
 
 fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches) {
@@ -350,7 +363,7 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
         config.raft_store.capacity = capacity;
     }
 
-    if matches.is_present("import-mode") {
+    if matches.is_present("import-mode") || matches.is_present("import-server") {
         config.tune_for_import_mode();
     }
 }
@@ -526,6 +539,12 @@ fn main() {
     check_system_config(&config);
 
     configure_grpc_poll_strategy();
+
+    // Run as import server.
+    if matches.is_present("import-server") {
+        run_import_server(&config);
+        return;
+    }
 
     let security_mgr = Arc::new(
         SecurityManager::new(&config.security)

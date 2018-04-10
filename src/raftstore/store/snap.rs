@@ -712,7 +712,7 @@ impl Snap {
                     .as_ref()
                     .map_or(0 as i64, |l| l.get_max_bytes_per_time());
                 let mut bytes: i64 = 0;
-                snap.scan_cf(cf, &begin_key, &end_key, false, &mut |key, value| {
+                snap.scan_cf(cf, &begin_key, &end_key, false, |key, value| {
                     let l = key.len() + value.len();
                     if let Some(ref limiter) = self.limiter {
                         if bytes >= base {
@@ -765,7 +765,7 @@ pub fn build_plain_cf_file<E: BytesEncoder>(
 ) -> RaftStoreResult<(usize, usize)> {
     let mut cf_key_count = 0;
     let mut cf_size = 0;
-    snap.scan_cf(cf, start_key, end_key, false, &mut |key, value| {
+    snap.scan_cf(cf, start_key, end_key, false, |key, value| {
         cf_key_count += 1;
         cf_size += key.len() + value.len();
         encoder.encode_compact_bytes(key)?;
@@ -1521,7 +1521,7 @@ mod test {
                 &keys::data_key(b"a"),
                 &keys::data_key(b"z"),
                 false,
-                &mut |_, _| {
+                |_, _| {
                     kv_count += 1;
                     Ok(true)
                 },

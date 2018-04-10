@@ -14,15 +14,16 @@
 use std::thread;
 use std::time::Duration;
 
-use prometheus::{self, CounterVec, Encoder, TextEncoder};
+use prometheus::{self, Encoder, TextEncoder};
 
-lazy_static! {
-    pub static ref CHANNEL_FULL_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
-            "tikv_channel_full_total",
-            "Total number of channel full errors.",
-            &["type"]
-        ).unwrap();
+#[cfg(target_os = "linux")]
+mod threads;
+#[cfg(target_os = "linux")]
+pub use self::threads::monitor_threads;
+
+#[cfg(not(target_os = "linux"))]
+pub fn monitor_threads<S: Into<String>>(_: S) -> io::Result<()> {
+    Ok(())
 }
 
 /// `run_prometheus` runs a background prometheus client.
