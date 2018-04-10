@@ -200,13 +200,6 @@ fn test_generate_snapshot() {
     pd_client.disable_default_operator();
 
     cluster.run();
-    cluster.must_put(b"k1", b"v1");
-
-    for store_id in 2..6 {
-        pd_client.must_add_peer(1, new_peer(store_id, store_id));
-        must_get_equal(&cluster.get_engine(store_id), b"k1", b"v1");
-    }
-
     cluster.stop_node(4);
     cluster.stop_node(5);
     cluster.must_put(b"k2", b"v2");
