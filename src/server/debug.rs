@@ -18,6 +18,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::iter::FromIterator;
 use std::collections::HashSet;
+use std::str::FromStr;
 
 use protobuf::{self, Message, RepeatedField};
 
@@ -106,7 +107,7 @@ impl Debugger {
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
         let mut regions = Vec::with_capacity(128);
-        box_try!(db.scan_cf(cf, start_key, end_key, false, &mut |key, _| {
+        box_try!(db.scan_cf(cf, start_key, end_key, false, |key, _| {
             let (id, suffix) = keys::decode_region_meta_key(key)?;
             if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);
@@ -202,7 +203,7 @@ impl Debugger {
                         start_key,
                         end_key,
                         false,
-                        &mut |_, v| {
+                        |_, v| {
                             size += v.len();
                             Ok(true)
                         }
@@ -393,7 +394,7 @@ impl Debugger {
                     keys::REGION_META_MIN_KEY,
                     keys::REGION_META_MAX_KEY,
                     false,
-                    &mut |key, value| remove_stores(key, value).map(|_| true)
+                    |key, value| remove_stores(key, value).map(|_| true)
                 ));
             }
         }
@@ -433,10 +434,24 @@ impl Debugger {
             let cf = vec[0];
             let config_name = vec[1];
             validate_db_and_cf(db, cf)?;
+
             let handle = box_try!(get_cf_handle(rocksdb, cf));
-            let mut opt = Vec::new();
-            opt.push((config_name, config_value));
-            box_try!(rocksdb.set_options_cf(handle, &opt));
+            // currently we can't modify block_cache_size via set_options_cf
+            if config_name == "block_cache_size" {
+                let opt = rocksdb.get_options_cf(handle);
+                let capacity = ReadableSize::from_str(config_value);
+                if capacity.is_err() {
+                    return Err(Error::InvalidArgument(format!(
+                        "bad block cache size: {:?}",
+                        capacity.unwrap_err()
+                    )));
+                }
+                box_try!(opt.set_block_cache_capacity(capacity.unwrap().0));
+            } else {
+                let mut opt = Vec::new();
+                opt.push((config_name, config_value));
+                box_try!(rocksdb.set_options_cf(handle, &opt));
+            }
         } else {
             return Err(Error::InvalidArgument(format!(
                 "bad argument: {}",
