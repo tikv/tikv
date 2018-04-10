@@ -385,7 +385,10 @@ fn connect(
     info!("connect to PD endpoint: {:?}", addr);
     let addr = addr.trim_left_matches("http://")
         .trim_left_matches("https://");
-    let cb = ChannelBuilder::new(env);
+    let cb = ChannelBuilder::new(env)
+        .keepalive_time(Duration::from_secs(10))
+        .keepalive_timeout(Duration::from_secs(3));
+
     let channel = security_mgr.connect(cb, addr);
     let client = PdClient::new(channel);
     let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
