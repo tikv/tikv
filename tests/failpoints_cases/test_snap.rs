@@ -194,7 +194,7 @@ fn test_server_snapshot_on_resolve_failure() {
 fn test_generate_snapshot() {
     let _guard = ::setup();
 
-    let mut cluster = new_server_cluster(1, 7);
+    let mut cluster = new_server_cluster(1, 5);
     configure_for_snapshot(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -202,46 +202,34 @@ fn test_generate_snapshot() {
     cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
 
-    for store_id in 2..8 {
-        if store_id >= 6 {
-            // Stop 6 and 7 first to avoid receiving snapshots.
-            cluster.stop_node(store_id);
-        }
+    for store_id in 2..6 {
         pd_client.must_add_peer(1, new_peer(store_id, store_id));
-        if store_id < 6 {
-            must_get_equal(&cluster.get_engine(store_id), b"k1", b"v1");
-        }
+        must_get_equal(&cluster.get_engine(store_id), b"k1", b"v1");
     }
-    // Sleep for a while to ensure logs are compacted
-    // so that index and term won't be chagned any more.
-    thread::sleep(Duration::from_secs(1));
+
+    cluster.stop_node(4);
+    cluster.stop_node(5);
+    cluster.must_put(b"k2", b"v2");
+    // Sleep for a while to ensure all logs are compacted.
+    thread::sleep(Duration::from_millis(500));
 
     fail::cfg("snapshot_delete_after_send", "pause").unwrap();
 
-    // Let store 6 inform leader to generate a snapshot.
-    cluster.run_node(6);
-    must_get_equal(&cluster.get_engine(6), b"k1", b"v1");
-    cluster.stop_node(6);
+    // Let store 4 inform leader to generate a snapshot.
+    cluster.run_node(4);
+    must_get_equal(&cluster.get_engine(4), b"k2", b"v2");
 
-    fail::cfg("snapshot_before_enter_do_build", "return").unwrap();
-    fail::cfg("snapshot_after_enter_do_build", "return").unwrap();
     fail::cfg("snapshot_enter_do_build", "pause").unwrap();
-    cluster.run_node(7);
+    cluster.run_node(5);
 
+    // The task is droped so that we can't get the snapshot on store 5.
     fail::cfg("snapshot_delete_after_send", "off").unwrap();
-
-    // The snapshot exists when we call Snap::new and init_for_building but
-    // not exists when we call Snap::do_build. TiKV shouldn't panic in this case.
-    fail::cfg("snapshot_before_enter_do_build", "off").unwrap();
     fail::cfg("snapshot_enter_do_build", "pause").unwrap();
-    must_get_none(&cluster.get_engine(7), b"k1");
+    must_get_none(&cluster.get_engine(5), b"k2");
 
-    fail::cfg("snapshot_after_enter_do_build", "off").unwrap();
     fail::cfg("snapshot_enter_do_build", "off").unwrap();
-    must_get_equal(&cluster.get_engine(7), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(5), b"k2", b"v2");
 
-    fail::remove("snapshot_delete_after_send");
     fail::remove("snapshot_enter_do_build");
-    fail::remove("snapshot_before_enter_do_build");
-    fail::remove("snapshot_after_enter_do_build");
+    fail::remove("snapshot_delete_after_send");
 }
