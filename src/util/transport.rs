@@ -16,9 +16,18 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::mpsc;
 use std::time::Duration;
-use super::metrics::*;
 
 use mio;
+use prometheus::CounterVec;
+
+lazy_static! {
+    pub static ref CHANNEL_FULL_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_channel_full_total",
+            "Total number of channel full errors.",
+            &["type"]
+        ).unwrap();
+}
 
 const MAX_SEND_RETRY_CNT: usize = 5;
 
