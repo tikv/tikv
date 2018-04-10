@@ -612,7 +612,9 @@ impl Peer {
                         .iter()
                         .any(|&(pid, _)| pid == id)
                     {
-                        self.peers_start_pending_time.push((id, Instant::now()));
+                        let now = Instant::now();
+                        self.peers_start_pending_time.push((id, now));
+                        warn!("{} peer {} start pending at {}", self.tag, id, now);
                     }
                 }
             }
@@ -1236,6 +1238,7 @@ impl Peer {
         let change_type = change_peer.get_change_type();
         let peer = change_peer.get_peer();
 
+        // Check the request itself is valid or not.
         match (change_type, peer.get_is_learner()) {
             (ConfChangeType::AddNode, true) | (ConfChangeType::AddLearnerNode, false) => {
                 warn!(

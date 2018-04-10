@@ -381,6 +381,7 @@ pub fn is_sibling_regions(lhs: &metapb::Region, rhs: &metapb::Region) -> bool {
 }
 
 pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
+    // Here `learners` means learner peers, and `nodes` means voter peers.
     let mut conf_state = ConfState::new();
     for p in region.get_peers() {
         if p.get_is_learner() {
