@@ -430,7 +430,7 @@ impl Debugger {
             keys::REGION_META_MIN_KEY,
             keys::REGION_META_MAX_KEY,
             false,
-            &mut |key, value| {
+            |key, value| {
                 let (_, suffix_type) = box_try!(keys::decode_region_meta_key(key));
                 if suffix_type != keys::REGION_STATE_SUFFIX {
                     return Ok(true);
