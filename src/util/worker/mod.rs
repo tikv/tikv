@@ -504,7 +504,8 @@ mod test {
             if v.is_empty() {
                 break;
             }
-            sum += v.into_iter().fold(0, |a, b| a + b);
+            let result: u64 = v.into_iter().sum();
+            sum += result;
         }
         assert_eq!(sum, 50 * 20);
         assert!(rx.recv().is_err());
