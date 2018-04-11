@@ -16,7 +16,7 @@ use std::thread::{self, Builder, JoinHandle};
 use std::io;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
-use prometheus::Gauge;
+use prometheus::IntGauge;
 
 use futures::Stream;
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
@@ -53,14 +53,14 @@ pub trait Runnable<T: Display> {
 pub struct Scheduler<T> {
     name: Arc<String>,
     sender: UnboundedSender<Option<T>>,
-    metrics_pending_count: Gauge,
+    metrics_pending_task_count: IntGauge,
 }
 
 impl<T: Display> Scheduler<T> {
     fn new<S: Into<String>>(name: S, sender: UnboundedSender<Option<T>>) -> Scheduler<T> {
         let name = name.into();
         Scheduler {
-            metrics_pending_count: WORKER_PENDING_TASK_VEC.with_label_values(&[&name]),
+            metrics_pending_task_count: WORKER_PENDING_TASK_VEC.with_label_values(&[&name]),
             name: Arc::new(name),
             sender: sender,
         }
@@ -74,7 +74,7 @@ impl<T: Display> Scheduler<T> {
         if let Err(err) = self.sender.unbounded_send(Some(task)) {
             return Err(Stopped(err.into_inner().unwrap()));
         }
-        self.metrics_pending_count.inc();
+        self.metrics_pending_task_count.inc();
         Ok(())
     }
 }
@@ -84,7 +84,7 @@ impl<T: Display> Clone for Scheduler<T> {
         Scheduler {
             name: Arc::clone(&self.name),
             sender: self.sender.clone(),
-            metrics_pending_count: self.metrics_pending_count.clone(),
+            metrics_pending_task_count: self.metrics_pending_task_count.clone(),
         }
     }
 }
@@ -104,16 +104,16 @@ where
 {
     let current_thread = thread::current();
     let name = current_thread.name().unwrap();
-    let metrics_pending_count = WORKER_PENDING_TASK_VEC.with_label_values(&[name]);
-    let metrics_handled_count = WORKER_HANDLED_TASK_VEC.with_label_values(&[name]);
+    let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[name]);
+    let metrics_handled_task_count = WORKER_HANDLED_TASK_VEC.with_label_values(&[name]);
 
     let mut core = Core::new().unwrap();
     let handle = core.handle();
     {
         let f = rx.take_while(|t| Ok(t.is_some())).for_each(|t| {
             runner.run(t.unwrap(), &handle);
-            metrics_pending_count.dec();
-            metrics_handled_count.inc();
+            metrics_pending_task_count.dec();
+            metrics_handled_task_count.inc();
             Ok(())
         });
         // `UnboundedReceiver` never returns an error.

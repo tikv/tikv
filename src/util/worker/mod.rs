@@ -35,7 +35,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::error::Error;
 use std::time::Duration;
-use prometheus::Gauge;
+use prometheus::IntGauge;
 
 use util::time::{Instant, SlowTimer};
 use util::timer::Timer;
@@ -137,7 +137,7 @@ pub struct Scheduler<T> {
     name: Arc<String>,
     counter: Arc<AtomicUsize>,
     sender: Sender<Option<T>>,
-    metrics_pending_count: Gauge,
+    metrics_pending_task_count: IntGauge,
 }
 
 impl<T: Display> Scheduler<T> {
@@ -147,7 +147,7 @@ impl<T: Display> Scheduler<T> {
     {
         let name = name.into();
         Scheduler {
-            metrics_pending_count: WORKER_PENDING_TASK_VEC.with_label_values(&[&name]),
+            metrics_pending_task_count: WORKER_PENDING_TASK_VEC.with_label_values(&[&name]),
             name: Arc::new(name),
             counter: Arc::new(counter),
             sender: sender,
@@ -167,7 +167,7 @@ impl<T: Display> Scheduler<T> {
             }
         }
         self.counter.fetch_add(1, Ordering::SeqCst);
-        self.metrics_pending_count.inc();
+        self.metrics_pending_task_count.inc();
         Ok(())
     }
 
@@ -183,7 +183,7 @@ impl<T> Clone for Scheduler<T> {
             name: Arc::clone(&self.name),
             counter: Arc::clone(&self.counter),
             sender: self.sender.clone(),
-            metrics_pending_count: self.metrics_pending_count.clone(),
+            metrics_pending_task_count: self.metrics_pending_task_count.clone(),
         }
     }
 }
@@ -261,8 +261,8 @@ fn poll<R, T, U>(
 {
     let current_thread = thread::current();
     let name = current_thread.name().unwrap();
-    let metrics_pending_count = WORKER_PENDING_TASK_VEC.with_label_values(&[name]);
-    let metrics_handled_count = WORKER_HANDLED_TASK_VEC.with_label_values(&[name]);
+    let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[name]);
+    let metrics_handled_task_count = WORKER_HANDLED_TASK_VEC.with_label_values(&[name]);
 
     let mut batch = Vec::with_capacity(batch_size);
     let mut keep_going = true;
@@ -273,10 +273,10 @@ fn poll<R, T, U>(
 
         keep_going = fill_task_batch(&rx, &mut batch, batch_size, timeout);
         if !batch.is_empty() {
-            counter.fetch_sub(batch.len(), Ordering::SeqCst);
-            metrics_pending_count.sub(batch.len() as f64);
-            metrics_handled_count.inc_by(batch.len() as f64).unwrap();
             runner.run_batch(&mut batch);
+            counter.fetch_sub(batch.len(), Ordering::SeqCst);
+            metrics_pending_task_count.sub(batch.len() as i64);
+            metrics_handled_task_count.inc_by(batch.len() as i64);
             batch.clear();
         }
 

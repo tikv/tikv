@@ -14,28 +14,28 @@
 use prometheus::*;
 
 lazy_static! {
-    pub static ref KV_COMMAND_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
+    pub static ref KV_COMMAND_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_storage_command_total",
             "Total number of commands received.",
             &["type"]
         ).unwrap();
 
-    pub static ref SCHED_STAGE_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
+    pub static ref SCHED_STAGE_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_scheduler_stage_total",
             "Total number of commands on each stage.",
             &["type", "stage"]
         ).unwrap();
 
-    pub static ref SCHED_WRITING_BYTES_GAUGE: Gauge =
-        register_gauge!(
+    pub static ref SCHED_WRITING_BYTES_GAUGE: IntGauge =
+        register_int_gauge!(
             "tikv_scheduler_writing_bytes",
             "Total number of writing kv."
         ).unwrap();
 
-    pub static ref SCHED_CONTEX_GAUGE: Gauge =
-        register_gauge!(
+    pub static ref SCHED_CONTEX_GAUGE: IntGauge =
+        register_int_gauge!(
             "tikv_scheduler_contex_total",
             "Total number of pending commands."
         ).unwrap();
@@ -72,15 +72,15 @@ lazy_static! {
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
-    pub static ref SCHED_TOO_BUSY_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
+    pub static ref SCHED_TOO_BUSY_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_scheduler_too_busy_total",
             "Total count of scheduler too busy",
             &["type"]
         ).unwrap();
 
-    pub static ref SCHED_COMMANDS_PRI_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
+    pub static ref SCHED_COMMANDS_PRI_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_scheduler_commands_pri_total",
             "Total count of different priority commands",
             &["priority"]
@@ -94,28 +94,28 @@ lazy_static! {
             exponential_buckets(1.0, 2.0, 21).unwrap()
         ).unwrap();
 
-    pub static ref KV_COMMAND_SCAN_DETAILS: CounterVec =
-        register_counter_vec!(
+    pub static ref KV_COMMAND_SCAN_DETAILS: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_scheduler_kv_scan_details",
             "Bucketed counter of kv keys scan details for each cf",
             &["req","cf","tag"]
         ).unwrap();
 
-    pub static ref RAWKV_COMMAND_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
+    pub static ref RAWKV_COMMAND_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_storage_rawkv_command_total",
             "Total number of rawkv commands received.",
             &["type"]
         ).unwrap();
 
-    pub static ref KV_COMMAND_GC_EMPTY_RANGE_COUNTER: Counter =
-        register_counter!(
+    pub static ref KV_COMMAND_GC_EMPTY_RANGE_COUNTER: IntCounter =
+        register_int_counter!(
             "tikv_storage_gc_empty_range_total",
             "Total number of empty range found by gc"
         ).unwrap();
 
-    pub static ref KV_COMMAND_GC_SKIPPED_COUNTER: Counter =
-        register_counter!(
+    pub static ref KV_COMMAND_GC_SKIPPED_COUNTER: IntCounter =
+        register_int_counter!(
             "tikv_storage_gc_skipped_counter",
             "Total number of gc command skipped owing to optimization"
         ).unwrap();

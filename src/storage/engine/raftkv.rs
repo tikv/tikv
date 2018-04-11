@@ -424,8 +424,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         let batch_size = batch.len();
         ASYNC_REQUESTS_COUNTER_VEC
             .with_label_values(&["snapshot", "all"])
-            .inc_by(batch_size as f64)
-            .unwrap();
+            .inc_by(batch_size as i64);
         let req_timer = ASYNC_REQUESTS_DURATIONS_VEC
             .with_label_values(&["snapshot"])
             .start_coarse_timer();
@@ -474,8 +473,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 let tag = get_tag_from_error(&e);
                 ASYNC_REQUESTS_COUNTER_VEC
                     .with_label_values(&["snapshot", tag])
-                    .inc_by(batch_size as f64)
-                    .unwrap();
+                    .inc_by(batch_size as i64);
                 e.into()
             })
     }

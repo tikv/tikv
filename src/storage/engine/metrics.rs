@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{exponential_buckets, CounterVec, HistogramVec};
+use prometheus::{exponential_buckets, HistogramVec, IntCounterVec};
 
 lazy_static! {
-    pub static ref ASYNC_REQUESTS_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
+    pub static ref ASYNC_REQUESTS_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_storage_engine_async_request_total",
             "Total number of engine asynchronous requests",
             &["type", "status"]
