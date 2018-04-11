@@ -22,10 +22,27 @@ use std::thread;
 use std::time::Duration;
 use futures::Future;
 use futures_cpupool::{self as cpupool, CpuFuture, CpuPool};
+use prometheus::{Counter, CounterVec, Gauge, GaugeVec};
 
 use util;
 use util::time::Instant;
 use util::collections::HashMap;
+
+lazy_static! {
+    pub static ref FUTUREPOOL_RUNNING_TASK_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_futurepool_pending_task_total",
+            "Total number of future_pool running tasks.",
+            &["prefix"]
+        ).unwrap();
+
+    pub static ref FUTUREPOOL_FINISHED_TASK_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_futurepool_finished_task_total",
+            "Total number of future_pool finished tasks.",
+            &["prefix"]
+        ).unwrap();
+}
 
 pub trait Context: fmt::Debug + Send {
     /// Will be invoked periodically (no less than specified interval).
@@ -112,11 +129,21 @@ impl<T: Context> ContextDelegators<T> {
 }
 
 /// A future thread pool that supports `on_tick` for each thread.
-#[derive(Debug)]
 pub struct FuturePool<T: Context + 'static> {
     pool: CpuPool,
     context_delegators: ContextDelegators<T>,
     running_task_count: Arc<AtomicUsize>,
+    metrics_running_count: Gauge,
+    metrics_finished_count: Counter,
+}
+
+impl<T: Context + 'static> fmt::Debug for FuturePool<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        f.debug_struct("FuturePool")
+            .field("pool", &self.pool)
+            .field("context_delegators", &self.context_delegators)
+            .finish()
+    }
 }
 
 impl<T: Context + 'static> Clone for FuturePool<T> {
@@ -125,6 +152,8 @@ impl<T: Context + 'static> Clone for FuturePool<T> {
             pool: self.pool.clone(),
             context_delegators: self.context_delegators.clone(),
             running_task_count: Arc::clone(&self.running_task_count),
+            metrics_running_count: self.metrics_running_count.clone(),
+            metrics_finished_count: self.metrics_finished_count.clone(),
         }
     }
 }
@@ -180,6 +209,8 @@ impl<T: Context + 'static> FuturePool<T> {
             pool,
             context_delegators: ContextDelegators::new(contexts),
             running_task_count: Arc::new(AtomicUsize::new(0)),
+            metrics_running_count: FUTUREPOOL_RUNNING_TASK_VEC.with_label_values(&[name_prefix]),
+            metrics_finished_count: FUTUREPOOL_FINISHED_TASK_VEC.with_label_values(&[name_prefix]),
         }
     }
 
@@ -197,17 +228,22 @@ impl<T: Context + 'static> FuturePool<T> {
         F::Error: Send + 'static,
     {
         let running_task_count = Arc::clone(&self.running_task_count);
+        let metrics_running_count = self.metrics_running_count.clone();
+        let metrics_finished_count = self.metrics_finished_count.clone();
         let delegators = self.context_delegators.clone();
         let func = move || {
             future_factory(delegators.clone()).then(move |r| {
                 let delegator = delegators.get_current_thread_delegator();
                 delegator.on_task_finish();
                 running_task_count.fetch_sub(1, Ordering::Release);
+                metrics_running_count.dec();
+                metrics_finished_count.inc();
                 r
             })
         };
 
         self.running_task_count.fetch_add(1, Ordering::Release);
+        self.metrics_running_count.inc();
         self.pool.spawn_fn(func)
     }
 }
