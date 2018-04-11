@@ -72,28 +72,28 @@ quick_error! {
 }
 
 impl Error {
-    pub fn gen_overflow(data: &str, range: String) -> Error {
+    pub fn overflow(data: &str, range: String) -> Error {
         let msg = format!("{} value is out of range in {:?}", data, range);
         Error::Eval(msg, ERR_DATA_OUT_OF_RANGE)
     }
 
-    pub fn gen_truncated_wrong_val(data_type: &str, val: String) -> Error {
+    pub fn truncated_wrong_val(data_type: &str, val: String) -> Error {
         let msg = format!("Truncated incorrect {} value: '{}'", data_type, val);
         Error::Eval(msg, ERR_TRUNCATE_WRONG_VALUE)
     }
 
-    pub fn gen_cast_neg_int_as_unsigned() -> Error {
+    pub fn cast_neg_int_as_unsigned() -> Error {
         let msg = "Cast to unsigned converted negative integer to it's positive complement";
         Error::Eval(msg.into(), ERR_UNKNOWN)
     }
 
-    pub fn gen_cast_as_signed_overflow() -> Error {
+    pub fn cast_as_signed_overflow() -> Error {
         let msg =
             "Cast to signed converted positive out-of-range integer to it's negative complement";
         Error::Eval(msg.into(), ERR_UNKNOWN)
     }
 
-    pub fn gen_unknown_timezone(tz: i64) -> Error {
+    pub fn unknown_timezone(tz: i64) -> Error {
         let msg = format!("unknown or incorrect time zone: {}", tz);
         Error::Eval(msg, ERR_UNKNOWN_TIMEZONE)
     }
@@ -135,7 +135,7 @@ impl<T> Into<Result<T>> for Res<T> {
         match self {
             Res::Ok(t) => Ok(t),
             Res::Truncated(_) => Err(Error::Truncated("Data Truncated".into())),
-            Res::Overflow(_) => Err(Error::gen_overflow("", "".into())),
+            Res::Overflow(_) => Err(Error::overflow("", "".into())),
         }
     }
 }

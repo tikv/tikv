@@ -96,12 +96,12 @@ impl FnCall {
         if mysql::has_unsigned_flag(u64::from(self.children[0].get_tp().get_flag())) {
             let uval = val as u64;
             if uval > i64::MAX as u64 + 1 {
-                return Err(Error::gen_overflow("BIGINT", format!("-{}", uval)));
+                return Err(Error::overflow("BIGINT", format!("-{}", uval)));
             } else if uval == i64::MAX as u64 + 1 {
                 return Ok(Some(i64::MIN));
             }
         } else if val == i64::MIN {
-            return Err(Error::gen_overflow("BIGINT", format!("-{}", val)));
+            return Err(Error::overflow("BIGINT", format!("-{}", val)));
         }
         Ok(Some(-val))
     }

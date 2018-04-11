@@ -24,10 +24,7 @@ impl FnCall {
         let rhs = try_opt!(self.children[1].eval_real(ctx, row));
         let res = lhs + rhs;
         if !res.is_finite() {
-            return Err(Error::gen_overflow(
-                "DOUBLE",
-                format!("({} + {})", lhs, rhs),
-            ));
+            return Err(Error::overflow("DOUBLE", format!("({} + {})", lhs, rhs)));
         }
         Ok(Some(res))
     }
@@ -71,7 +68,7 @@ impl FnCall {
         } else {
             "BIGINT"
         };
-        res.ok_or_else(|| Error::gen_overflow(data_type, format!("({} + {})", lhs, rhs)))
+        res.ok_or_else(|| Error::overflow(data_type, format!("({} + {})", lhs, rhs)))
             .map(Some)
     }
 
@@ -80,10 +77,7 @@ impl FnCall {
         let rhs = try_opt!(self.children[1].eval_real(ctx, row));
         let res = lhs - rhs;
         if !res.is_finite() {
-            return Err(Error::gen_overflow(
-                "DOUBLE",
-                format!("({} - {})", lhs, rhs),
-            ));
+            return Err(Error::overflow("DOUBLE", format!("({} - {})", lhs, rhs)));
         }
         Ok(Some(res))
     }
@@ -121,14 +115,11 @@ impl FnCall {
             (false, true) => if lhs >= 0 {
                 (lhs as u64).checked_sub(rhs as u64).map(|t| t as i64)
             } else {
-                return Err(Error::gen_overflow(
-                    data_type,
-                    format!("({} - {})", lhs, rhs),
-                ));
+                return Err(Error::overflow(data_type, format!("({} - {})", lhs, rhs)));
             },
             (false, false) => lhs.checked_sub(rhs),
         };
-        res.ok_or_else(|| Error::gen_overflow(data_type, format!("({} - {})", lhs, rhs)))
+        res.ok_or_else(|| Error::overflow(data_type, format!("({} - {})", lhs, rhs)))
             .map(Some)
     }
 
@@ -137,10 +128,7 @@ impl FnCall {
         let rhs = try_opt!(self.children[1].eval_real(ctx, row));
         let res = lhs * rhs;
         if !res.is_finite() {
-            return Err(Error::gen_overflow(
-                "DOUBLE",
-                format!("({} * {})", lhs, rhs),
-            ));
+            return Err(Error::overflow("DOUBLE", format!("({} * {})", lhs, rhs)));
         }
         Ok(Some(res))
     }
@@ -174,7 +162,7 @@ impl FnCall {
             (true, false) => u64_mul_i64(lhs, rhs),
             (false, true) => u64_mul_i64(rhs, lhs),
         };
-        res.ok_or_else(|| Error::gen_overflow("BIGINT UNSIGNED", format!("({} * {})", lhs, rhs)))
+        res.ok_or_else(|| Error::overflow("BIGINT UNSIGNED", format!("({} * {})", lhs, rhs)))
             .map(Some)
     }
 
@@ -186,10 +174,7 @@ impl FnCall {
         }
         let res = lhs / rhs;
         if res.is_infinite() {
-            Err(Error::gen_overflow(
-                "DOUBLE",
-                format!("({} / {})", lhs, rhs),
-            ))
+            Err(Error::overflow("DOUBLE", format!("({} / {})", lhs, rhs)))
         } else {
             Ok(Some(res))
         }
@@ -202,7 +187,7 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
         let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
-        let overflow = Error::gen_overflow("DECIMAL", format!("({} / {})", lhs, rhs));
+        let overflow = Error::overflow("DECIMAL", format!("({} / {})", lhs, rhs));
         match lhs.into_owned() / rhs.into_owned() {
             Some(v) => match v {
                 Res::Ok(v) => Ok(Some(Cow::Owned(v))),
