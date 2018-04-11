@@ -16,6 +16,7 @@ use std::thread::{self, Builder, JoinHandle};
 use std::io;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
+use prometheus::Gauge;
 
 use futures::Stream;
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
@@ -52,12 +53,15 @@ pub trait Runnable<T: Display> {
 pub struct Scheduler<T> {
     name: Arc<String>,
     sender: UnboundedSender<Option<T>>,
+    metrics_pending_count: Gauge,
 }
 
 impl<T: Display> Scheduler<T> {
     fn new<S: Into<String>>(name: S, sender: UnboundedSender<Option<T>>) -> Scheduler<T> {
+        let name = name.into();
         Scheduler {
-            name: Arc::new(name.into()),
+            metrics_pending_count: WORKER_PENDING_TASK_VEC.with_label_values(&[&name]),
+            name: Arc::new(name),
             sender: sender,
         }
     }
@@ -70,9 +74,7 @@ impl<T: Display> Scheduler<T> {
         if let Err(err) = self.sender.unbounded_send(Some(task)) {
             return Err(Stopped(err.into_inner().unwrap()));
         }
-        WORKER_PENDING_TASK_VEC
-            .with_label_values(&[&self.name])
-            .inc();
+        self.metrics_pending_count.inc();
         Ok(())
     }
 }
@@ -82,6 +84,7 @@ impl<T: Display> Clone for Scheduler<T> {
         Scheduler {
             name: Arc::clone(&self.name),
             sender: self.sender.clone(),
+            metrics_pending_count: self.metrics_pending_count.clone(),
         }
     }
 }
@@ -99,14 +102,18 @@ where
     R: Runnable<T> + Send + 'static,
     T: Display + Send + 'static,
 {
-    let name = thread::current().name().unwrap().to_owned();
+    let current_thread = thread::current();
+    let name = current_thread.name().unwrap();
+    let metrics_pending_count = WORKER_PENDING_TASK_VEC.with_label_values(&[name]);
+    let metrics_handled_count = WORKER_HANDLED_TASK_VEC.with_label_values(&[name]);
+
     let mut core = Core::new().unwrap();
     let handle = core.handle();
     {
         let f = rx.take_while(|t| Ok(t.is_some())).for_each(|t| {
             runner.run(t.unwrap(), &handle);
-            WORKER_PENDING_TASK_VEC.with_label_values(&[&name]).sub(1.0);
-            WORKER_HANDLED_TASK_VEC.with_label_values(&[&name]).inc();
+            metrics_pending_count.dec();
+            metrics_handled_count.inc();
             Ok(())
         });
         // `UnboundedReceiver` never returns an error.
