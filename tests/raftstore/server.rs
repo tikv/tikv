@@ -166,6 +166,7 @@ impl Simulator for ServerCluster {
             match server {
                 Some(Ok(_)) => break,
                 Some(Err(Error::Grpc(GrpcError::BindFail(ref addr, ref port)))) => {
+                    // Servers may meet the error, when we restart them.
                     debug!("fail to create a server: bind fail {:?}", (addr, port));
                     thread::sleep(Duration::from_millis(100));
                     continue;
