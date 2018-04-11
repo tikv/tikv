@@ -78,8 +78,6 @@ bench:
 	RUST_BACKTRACE=1 cargo run --release --bin bench-tikv --features "${ENABLE_FEATURES}"
 
 format:
-	# TODO: Remove this, but the circle.ci has rustfmt cached
-	cargo uninstall rustfmt-nightly || \
 	cargo fmt --all -- --write-mode diff >/dev/null || \
 	cargo fmt --all
 
