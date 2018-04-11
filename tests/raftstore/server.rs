@@ -163,10 +163,15 @@ impl Simulator for ServerCluster {
                 Some(engines.clone()),
                 Some(import_service.clone()),
             ));
-            if let Some(Err(Error::Grpc(GrpcError::BindFail(ref addr, ref port)))) = server {
-                debug!("fail to create a server: bind fail {:?}", (addr, port));
-                thread::sleep(Duration::from_millis(100));
-                continue;
+            match server {
+                Some(Ok(_)) => break,
+                Some(Err(Error::Grpc(GrpcError::BindFail(ref addr, ref port)))) => {
+                    debug!("fail to create a server: bind fail {:?}", (addr, port));
+                    thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+                Some(Err(ref e)) => panic!("fail to create a server: {:?}", e),
+                None => unreachable!(),
             }
         }
         let mut server = server.unwrap().unwrap();
