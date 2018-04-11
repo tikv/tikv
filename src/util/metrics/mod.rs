@@ -17,14 +17,14 @@ use std::time::Duration;
 use prometheus::{self, Encoder, TextEncoder};
 
 #[cfg(target_os = "linux")]
-mod threads;
+mod threads_linux;
 #[cfg(target_os = "linux")]
-pub use self::threads::monitor_threads;
+pub use self::threads_linux::monitor_threads;
 
 #[cfg(not(target_os = "linux"))]
-pub fn monitor_threads<S: Into<String>>(_: S) -> io::Result<()> {
-    Ok(())
-}
+mod threads_dummy;
+#[cfg(not(target_os = "linux"))]
+pub use self::threads_dummy::monitor_threads;
 
 /// `run_prometheus` runs a background prometheus client.
 pub fn run_prometheus(
