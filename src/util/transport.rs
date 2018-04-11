@@ -18,11 +18,11 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use mio;
-use prometheus::CounterVec;
+use prometheus::IntCounterVec;
 
 lazy_static! {
-    pub static ref CHANNEL_FULL_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
+    pub static ref CHANNEL_FULL_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_channel_full_total",
             "Total number of channel full errors.",
             &["type"]
