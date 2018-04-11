@@ -58,6 +58,7 @@ impl DAGContext {
             store,
             ranges,
             Arc::new(eval_cfg),
+            req.get_collect_range_counts(),
         )?;
         Ok(DAGContext {
             columns: dag_executor.columns,
