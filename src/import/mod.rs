@@ -12,23 +12,29 @@
 // limitations under the License.
 
 mod config;
-mod engine;
+#[allow(dead_code)]
+mod common;
+#[allow(dead_code)]
+mod client;
 mod errors;
+mod engine;
+#[allow(dead_code)]
+mod prepare;
 mod metrics;
 #[macro_use]
 mod service;
-mod kv_importer;
 mod kv_server;
 mod kv_service;
-mod sst_importer;
+mod kv_importer;
 mod sst_service;
+mod sst_importer;
 
 pub mod test_helpers;
 
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
-pub use self::kv_importer::KVImporter;
 pub use self::kv_server::ImportKVServer;
 pub use self::kv_service::ImportKVService;
-pub use self::sst_importer::SSTImporter;
+pub use self::kv_importer::KVImporter;
 pub use self::sst_service::ImportSSTService;
+pub use self::sst_importer::SSTImporter;

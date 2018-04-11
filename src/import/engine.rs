@@ -28,10 +28,11 @@ use config::DbConfig;
 use storage::CF_DEFAULT;
 use storage::types::Key;
 use util::config::MB;
-use util::rocksdb::properties::SizePropertiesCollectorFactory;
+use util::rocksdb::properties::{SizeProperties, SizePropertiesCollectorFactory};
 use util::rocksdb::{new_engine_opt, CFOptions};
 
 use super::Result;
+use super::common::*;
 
 pub struct Engine {
     db: Arc<DB>,
@@ -69,6 +70,17 @@ impl Engine {
 
         Ok(size)
     }
+
+    pub fn get_size_properties(&self) -> Result<SizeProperties> {
+        let mut res = SizeProperties::default();
+        let collection = self.get_properties_of_all_tables()?;
+        for (_, v) in &*collection {
+            let props = SizeProperties::decode(v.user_collected_properties())?;
+            res.total_size += props.total_size;
+            res.index_handles.extend(props.index_handles.clone());
+        }
+        Ok(res)
+    }
 }
 
 impl Deref for Engine {
@@ -86,6 +98,40 @@ impl fmt::Debug for Engine {
             .field("path", &self.path().to_owned())
             .finish()
     }
+}
+
+/// Calculate subranges with approximately equal size from the size properties.
+/// The `max_ranges` limits the maximum number of subranges it should returns.
+/// The `min_range_size` limits the minimum size of a subrange.
+pub fn get_approximate_ranges(
+    props: &SizeProperties,
+    max_ranges: usize,
+    min_range_size: usize,
+) -> Vec<RangeInfo> {
+    let range_size = (props.total_size as usize + max_ranges - 1) / max_ranges;
+    let range_size = cmp::max(range_size, min_range_size);
+
+    let mut size = 0;
+    let mut start = RANGE_MIN;
+    let mut ranges = Vec::new();
+    for (i, (k, v)) in props.index_handles.iter().enumerate() {
+        size += v.size as usize;
+        let end = if i == (props.index_handles.len() - 1) {
+            // Index range end is inclusive, so we need to use RANGE_MAX as
+            // the last range end.
+            RANGE_MAX
+        } else {
+            k
+        };
+        if size >= range_size || i == (props.index_handles.len() - 1) {
+            let range = RangeInfo::new(start, end, size);
+            ranges.push(range);
+            size = 0;
+            start = end;
+        }
+    }
+
+    ranges
 }
 
 fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions) {
@@ -168,5 +214,49 @@ mod tests {
             let key = new_encoded_key(i, commit_ts);
             assert_eq!(engine.get(&key).unwrap().unwrap(), &[i]);
         }
+    }
+
+    const SIZE_INDEX_DISTANCE: usize = 4 * 1024 * 1024;
+
+    #[test]
+    fn test_approximate_ranges() {
+        let (_dir, engine) = new_engine();
+
+        let num_files = 3;
+        let num_entries = 3;
+        for i in 0..num_files {
+            for j in 0..num_entries {
+                // (0, 3, 6), (1, 4, 7), (2, 5, 8)
+                let k = [i + j * num_files];
+                let v = vec![0u8; SIZE_INDEX_DISTANCE - k.len()];
+                engine.put(&k, &v).unwrap();
+                engine.flush(true).unwrap();
+            }
+        }
+
+        let props = engine.get_size_properties().unwrap();
+
+        let ranges = get_approximate_ranges(&props, 1, 0);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, RANGE_MIN.to_owned());
+        assert_eq!(ranges[0].end, RANGE_MAX.to_owned());
+
+        let ranges = get_approximate_ranges(&props, 3, 0);
+        assert_eq!(ranges.len(), 3);
+        assert_eq!(ranges[0].start, RANGE_MIN.to_owned());
+        assert_eq!(ranges[0].end, vec![2]);
+        assert_eq!(ranges[1].start, vec![2]);
+        assert_eq!(ranges[1].end, vec![5]);
+        assert_eq!(ranges[2].start, vec![5]);
+        assert_eq!(ranges[2].end, RANGE_MAX.to_owned());
+
+        let ranges = get_approximate_ranges(&props, 4, SIZE_INDEX_DISTANCE * 4);
+        assert_eq!(ranges.len(), 3);
+        assert_eq!(ranges[0].start, RANGE_MIN.to_owned());
+        assert_eq!(ranges[0].end, vec![3]);
+        assert_eq!(ranges[1].start, vec![3]);
+        assert_eq!(ranges[1].end, vec![7]);
+        assert_eq!(ranges[2].start, vec![7]);
+        assert_eq!(ranges[2].end, RANGE_MAX.to_owned());
     }
 }
