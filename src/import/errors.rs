@@ -76,12 +76,6 @@ quick_error! {
         InvalidSSTPath(path: PathBuf) {
             display("Invalid SST path {:?}", path)
         }
-        TokenExists(token: usize) {
-            display("Token {} exists", token)
-        }
-        TokenNotFound(token: usize) {
-            display("Token {} not found", token)
-        }
         EngineInUse(uuid: Uuid) {
             display("Engine {} is in use", uuid)
         }
