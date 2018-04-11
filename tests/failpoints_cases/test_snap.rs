@@ -217,7 +217,7 @@ fn test_generate_snapshot() {
     thread::sleep(Duration::from_millis(100));
 
     fail::cfg("snapshot_delete_after_send", "off").unwrap();
-    thread::sleep(Duration::from_millis(100));
+    must_empty_dir(cluster.get_snap_dir(1));
 
     // The task is droped so that we can't get the snapshot on store 5.
     fail::cfg("snapshot_enter_do_build", "pause").unwrap();
@@ -228,4 +228,16 @@ fn test_generate_snapshot() {
 
     fail::remove("snapshot_enter_do_build");
     fail::remove("snapshot_delete_after_send");
+}
+
+fn must_empty_dir(path: String) {
+    for _ in 0..100 {
+        let snap_dir = fs::read_dir(&path).unwrap();
+        if snap_dir.count() > 0 {
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+        return;
+    }
+    panic!("the directory {:?} should be empty", path);
 }
