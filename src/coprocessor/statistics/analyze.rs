@@ -173,7 +173,7 @@ impl SampleBuilder {
 
         let mut meta = TableScan::new();
         meta.set_columns(cols_info);
-        let table_scanner = TableScanExecutor::new(&meta, ranges, snap)?;
+        let table_scanner = TableScanExecutor::new(&meta, ranges, snap, false)?;
         Ok(SampleBuilder {
             data: table_scanner,
             cols: meta.take_columns().to_vec(),
