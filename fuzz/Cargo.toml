@@ -1,0 +1,30 @@
+
+[package]
+name = "tikv-fuzz"
+version = "0.0.1"
+authors = ["Automatically generated"]
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies.tikv]
+path = ".."
+[dependencies.libfuzzer-sys]
+git = "https://github.com/rust-fuzz/libfuzzer-sys.git"
+
+[dependencies]
+# HACK: A dummy dependency,
+# it's only for building TiKV which depends on an unpublished protobuf.
+protobuf = "1.5.1"
+[replace."protobuf:1.5.1"]
+git = "https://github.com/pingcap/rust-protobuf.git"
+branch = "fuzz-build"
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "codec_bytes"
+path = "fuzz_targets/codec_bytes.rs"
