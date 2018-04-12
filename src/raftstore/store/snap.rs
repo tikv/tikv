@@ -614,14 +614,19 @@ impl Snap {
         }
     }
 
-    fn add_kv(&mut self, k: &[u8], v: &[u8]) -> io::Result<()> {
+    fn add_kv(&mut self, k: &[u8], v: &[u8]) -> RaftStoreResult<()> {
         let cf_file = &mut self.cf_files[self.cf_index];
-        let writer = cf_file.sst_writer.as_mut().unwrap();
-        if let Err(e) = writer.put(k, v) {
-            return Err(io::Error::new(ErrorKind::Other, e));
+        if let Some(writer) = cf_file.sst_writer.as_mut() {
+            if let Err(e) = writer.put(k, v) {
+                let io_error = io::Error::new(ErrorKind::Other, e);
+                return Err(RaftStoreError::from(io_error));
+            }
+            cf_file.kv_count += 1;
+            Ok(())
+        } else {
+            let e = box_err!("can't find sst writer");
+            Err(RaftStoreError::Snapshot(e))
         }
-        cf_file.kv_count += 1;
-        Ok(())
     }
 
     fn save_cf_files(&mut self) -> io::Result<()> {
@@ -672,6 +677,7 @@ impl Snap {
         stat: &mut SnapshotStatistics,
         deleter: Box<SnapshotDeleter>,
     ) -> RaftStoreResult<()> {
+        fail_point!("snapshot_enter_do_build");
         if self.exists() {
             match self.validate(snap.get_db()) {
                 Ok(()) => return Ok(()),
@@ -700,7 +706,15 @@ impl Snap {
         for cf in SNAPSHOT_CFS {
             self.switch_to_cf_file(cf)?;
             let (cf_key_count, cf_size) = if plain_file_used(cf) {
-                let file = self.cf_files[self.cf_index].file.as_mut().unwrap();
+                // If the relative files are deleted after `Snap::new` and
+                // `init_for_building`, the file could be None.
+                let file = match self.cf_files[self.cf_index].file.as_mut() {
+                    Some(f) => f,
+                    None => {
+                        let e = box_err!("cf_file is none for cf {}", cf);
+                        return Err(RaftStoreError::Snapshot(e));
+                    }
+                };
                 build_plain_cf_file(file, snap, cf, &begin_key, &end_key)?
             } else {
                 let mut key_count = 0;
