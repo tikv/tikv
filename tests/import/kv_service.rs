@@ -66,7 +66,7 @@ fn test_kv_service() {
     close.set_uuid(uuid.clone());
 
     // Write an engine before it is opened.
-    let resp = send_write(&client, &head, &batch).unwrap();
+    let resp = send_write_head(&client, &head).unwrap();
     assert!(resp.get_error().has_engine_not_found());
 
     // Close an engine before it it opened.
@@ -101,5 +101,13 @@ fn send_write(
         .collect();
     let (tx, rx) = client.write().unwrap();
     let stream = stream::iter_ok(reqs);
+    stream.forward(tx).and_then(|_| rx).wait()
+}
+
+fn send_write_head(client: &ImportKvClient, head: &WriteHead) -> Result<WriteResponse> {
+    let mut req = WriteRequest::new();
+    req.set_head(head.clone());
+    let (tx, rx) = client.write().unwrap();
+    let stream = stream::once(Ok((req, WriteFlags::default())));
     stream.forward(tx).and_then(|_| rx).wait()
 }
