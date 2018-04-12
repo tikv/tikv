@@ -46,15 +46,15 @@ lazy_static! {
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
-    pub static ref COPR_REQ_ERROR: CounterVec =
-        register_counter_vec!(
+    pub static ref COPR_REQ_ERROR: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_coprocessor_request_error",
             "Total number of push down request error.",
             &["reason"]
         ).unwrap();
 
-    pub static ref COPR_PENDING_REQS: GaugeVec =
-        register_gauge_vec!(
+    pub static ref COPR_PENDING_REQS: IntGaugeVec =
+        register_int_gauge_vec!(
             "tikv_coprocessor_pending_request",
             "Total number of pending push down request.",
             &["req", "priority"]
@@ -68,22 +68,22 @@ lazy_static! {
             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
 
-     pub static ref COPR_SCAN_DETAILS: CounterVec =
-         register_counter_vec!(
+     pub static ref COPR_SCAN_DETAILS: IntCounterVec =
+         register_int_counter_vec!(
              "tikv_coprocessor_scan_details",
              "Bucketed counter of coprocessor scan details for each CF",
              &["req", "cf", "tag"]
          ).unwrap();
 
-    pub static ref COPR_EXECUTOR_COUNT: CounterVec =
-        register_counter_vec!(
+    pub static ref COPR_EXECUTOR_COUNT: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_coprocessor_executor_count",
             "Total number of each executor",
             &["type"]
         ).unwrap();
 
-    pub static ref COPR_GET_OR_SCAN_COUNT: CounterVec =
-        register_counter_vec!(
+    pub static ref COPR_GET_OR_SCAN_COUNT: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_coprocessor_get_or_scan_count",
             "Total number of rocksdb query of get or scan count",
             &["type"]
