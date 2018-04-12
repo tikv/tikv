@@ -21,22 +21,22 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref PD_HEARTBEAT_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
+    pub static ref PD_HEARTBEAT_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_pd_heartbeat_message_total",
             "Total number of PD heartbeat messages.",
             &["type"]
         ).unwrap();
 
-    pub static ref PD_VALIDATE_PEER_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
+    pub static ref PD_VALIDATE_PEER_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_pd_validate_peer_total",
             "Total number of pd worker validate peer task.",
             &["type"]
         ).unwrap();
 
-    pub static ref STORE_SIZE_GAUGE_VEC: GaugeVec =
-        register_gauge_vec!(
+    pub static ref STORE_SIZE_GAUGE_VEC: IntGaugeVec =
+        register_int_gauge_vec!(
             "tikv_store_size_bytes",
             "Size of storage.",
             &["type"]
