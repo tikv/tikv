@@ -48,8 +48,7 @@ pub const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
 pub const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Config {
     #[serde(skip)] pub cluster_id: u64,
 

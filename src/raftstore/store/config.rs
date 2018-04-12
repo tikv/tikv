@@ -20,8 +20,7 @@ use raftstore::{coprocessor, Result};
 use util::config::{ReadableDuration, ReadableSize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Config {
     // true for high reliability, prevent data loss when power failure.
     pub sync_log: bool,

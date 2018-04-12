@@ -14,8 +14,7 @@
 use std::error::Error;
 
 #[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Config {
     pub endpoints: Vec<String>,
 }

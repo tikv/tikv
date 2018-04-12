@@ -15,8 +15,7 @@ use util::config::ReadableSize;
 use super::Result;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Config {
     /// When it is true, it will try to split a region with table prefix if
     /// that region crosses tables.

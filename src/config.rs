@@ -388,8 +388,7 @@ impl RaftCfConfig {
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct DbConfig {
     #[serde(with = "config::recovery_mode_serde")] pub wal_recovery_mode: DBRecoveryMode,
     pub wal_dir: String,
@@ -570,8 +569,7 @@ impl RaftDefaultCfConfig {
 // If we set same env parameter in different instance, we may overwrite other instance's config.
 // So we only set max_background_jobs in default rocksdb.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct RaftDbConfig {
     #[serde(with = "config::recovery_mode_serde")] pub wal_recovery_mode: DBRecoveryMode,
     pub wal_dir: String,
@@ -673,8 +671,7 @@ impl RaftDbConfig {
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct MetricConfig {
     pub interval: ReadableDuration,
     pub address: String,
@@ -704,8 +701,7 @@ pub enum LogLevel {
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
     pub storage: ReadPoolInstanceConfig,
 }
@@ -719,8 +715,7 @@ impl Default for ReadPoolConfig {
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct TiKvConfig {
     #[serde(with = "LogLevel")] pub log_level: LogLevelFilter,
     pub log_file: String,
@@ -1031,5 +1026,13 @@ mod test {
         assert!(tikv_cfg.validate().is_err());
         tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur * 2);
         tikv_cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn test_unknown_fields() {
+        let tikv_cfg = TiKvConfig::default();
+        let mut dump = toml::to_string_pretty(&tikv_cfg).unwrap();
+        dump += "\n\n[unknown]\nkey = \"value\"";
+        assert!(toml::from_str::<TiKvConfig>(&dump).is_err());
     }
 }

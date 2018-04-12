@@ -32,8 +32,7 @@ const DEFAULT_SCHED_CONCURRENCY: usize = 102400;
 const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Config {
     pub data_dir: String,
     pub gc_ratio_threshold: f64,

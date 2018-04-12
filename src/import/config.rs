@@ -15,8 +15,7 @@ use std::error::Error;
 use std::result::Result;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Config {
     pub import_dir: String,
     pub num_threads: usize,

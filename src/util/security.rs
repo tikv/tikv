@@ -20,8 +20,7 @@ use grpc::{Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder,
            ServerCredentialsBuilder};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct SecurityConfig {
     pub ca_path: String,
     pub cert_path: String,
