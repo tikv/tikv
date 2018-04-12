@@ -11,18 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{exponential_buckets, CounterVec, Gauge, Histogram, HistogramVec};
+use prometheus::{exponential_buckets, Gauge, Histogram, HistogramVec, IntCounterVec};
 
 lazy_static! {
-    pub static ref SNAP_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
+    pub static ref SNAP_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_raftstore_snapshot_total",
             "Total number of raftstore snapshot processed.",
             &["type", "status"]
         ).unwrap();
 
-    pub static ref CHECK_SPILT_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
+    pub static ref CHECK_SPILT_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_raftstore_check_split_total",
             "Total number of raftstore split check.",
             &["type"]
