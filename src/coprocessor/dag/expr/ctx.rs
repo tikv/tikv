@@ -177,9 +177,9 @@ impl EvalContext {
         Err(err)
     }
 
-    /// handle_over_flow treats ErrOverflow as warnings or returns the error
-    /// based on the cfg.handle_over_flow state.
-    pub fn handle_over_flow(&mut self, err: Error) -> Result<()> {
+    /// handle_overflow treats ErrOverflow as warnings or returns the error
+    /// based on the cfg.handle_overflow state.
+    pub fn handle_overflow(&mut self, err: Error) -> Result<()> {
         if self.cfg.overflow_as_warning {
             self.warnings.append_warning(err);
             Ok(())
@@ -194,12 +194,12 @@ impl EvalContext {
         orig_err: Error,
         negitive: bool,
     ) -> Result<i64> {
-        if !self.cfg.in_select_stmt | !self.cfg.overflow_as_warning {
+        if !self.cfg.in_select_stmt || !self.cfg.overflow_as_warning {
             return Err(orig_err);
         }
-        let orig_str = String::from_utf8_lossy(bytes).into_owned();
+        let orig_str = String::from_utf8_lossy(bytes);
         self.warnings
-            .append_warning(Error::truncated_wrong_val("INTEGER", orig_str));
+            .append_warning(Error::truncated_wrong_val("INTEGER", &orig_str));
         if negitive {
             Ok(i64::MIN)
         } else {

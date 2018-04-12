@@ -50,10 +50,10 @@ impl FnCall {
 
         if overflow {
             if !ctx.cfg.overflow_as_warning {
-                return Err(Error::overflow("CastDecimalAsInt", format!("{}", val)));
+                return Err(Error::overflow("CastDecimalAsInt", &format!("{}", val)));
             }
             ctx.warnings
-                .append_warning(Error::truncated_wrong_val("DECIMAL", format!("{}", val)));
+                .append_warning(Error::truncated_wrong_val("DECIMAL", &format!("{}", val)));
         }
         Ok(Some(res))
     }
@@ -88,7 +88,7 @@ impl FnCall {
         match res {
             Ok(v) => Ok(Some(v)),
             Err(CError::Overflow(data, range)) => {
-                ctx.overflow_from_cast_str_as_int(&val, Error::overflow(&data, range), is_negative)
+                ctx.overflow_from_cast_str_as_int(&val, Error::overflow(&data, &range), is_negative)
                     .map(Some)
             }
             Err(e) => Err(e.into()),
@@ -439,7 +439,7 @@ impl FnCall {
         match Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8) {
             Ok(dur) => Ok(Some(Cow::Owned(dur))),
             Err(CError::Overflow(_, _)) => {
-                ctx.handle_over_flow(Error::overflow("Duration", format!("{}", val)))?;
+                ctx.handle_overflow(Error::overflow("Duration", &format!("{}", val)))?;
                 Ok(None)
             }
             Err(e) => Err(e.into()),

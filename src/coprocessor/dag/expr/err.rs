@@ -72,12 +72,12 @@ quick_error! {
 }
 
 impl Error {
-    pub fn overflow(data: &str, range: String) -> Error {
-        let msg = format!("{} value is out of range in {:?}", data, range);
+    pub fn overflow(data: &str, expr: &str) -> Error {
+        let msg = format!("{} value is out of range in {:?}", data, expr);
         Error::Eval(msg, ERR_DATA_OUT_OF_RANGE)
     }
 
-    pub fn truncated_wrong_val(data_type: &str, val: String) -> Error {
+    pub fn truncated_wrong_val(data_type: &str, val: &str) -> Error {
         let msg = format!("Truncated incorrect {} value: '{}'", data_type, val);
         Error::Eval(msg, ERR_TRUNCATE_WRONG_VALUE)
     }
@@ -135,7 +135,7 @@ impl<T> Into<Result<T>> for Res<T> {
         match self {
             Res::Ok(t) => Ok(t),
             Res::Truncated(_) => Err(Error::Truncated("Data Truncated".into())),
-            Res::Overflow(_) => Err(Error::overflow("", "".into())),
+            Res::Overflow(_) => Err(Error::overflow("", "")),
         }
     }
 }
