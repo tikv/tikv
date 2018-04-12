@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::i64;
+
 use prometheus::{exponential_buckets, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec};
 use rocksdb::{DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType,
               HistogramData, DB};
@@ -73,7 +75,6 @@ pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::NoFileOpens,
     TickerType::NoFileErrors,
     TickerType::StallMicros,
-    TickerType::NoIterators,
     TickerType::BloomFilterPrefixChecked,
     TickerType::BloomFilterPrefixUseful,
     TickerType::WalFileSynced,
@@ -115,312 +116,314 @@ pub const ENGINE_HIST_TYPES: &[HistType] = &[
 ];
 
 pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
+    let v = value as i64;
+    if v < 0 {
+        warn!("engine ticker {:?} is overflow {}", t, value);
+        return;
+    }
+
     match t {
         TickerType::BlockCacheMiss => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_miss"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BlockCacheHit => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_hit"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BlockCacheAdd => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_add"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BlockCacheAddFailures => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_add_failures"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BlockCacheIndexMiss => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_index_miss"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BlockCacheIndexHit => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_index_hit"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BlockCacheIndexAdd => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_index_add"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BlockCacheIndexBytesInsert => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_index_bytes_insert"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BlockCacheIndexBytesEvict => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_index_bytes_evict"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BlockCacheFilterMiss => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_filter_miss"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BlockCacheFilterHit => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_filter_hit"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BlockCacheFilterAdd => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_filter_add"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BlockCacheFilterBytesInsert => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_filter_bytes_insert"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BlockCacheFilterBytesEvict => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_filter_bytes_evict"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BlockCacheDataMiss => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_data_miss"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BlockCacheDataHit => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_data_hit"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BlockCacheDataAdd => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_data_add"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BlockCacheDataBytesInsert => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_data_bytes_insert"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BlockCacheByteRead => {
             STORE_ENGINE_FLOW_VEC
                 .with_label_values(&[name, "block_cache_byte_read"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BlockCacheByteWrite => {
             STORE_ENGINE_FLOW_VEC
                 .with_label_values(&[name, "block_cache_byte_write"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BloomFilterUseful => {
             STORE_ENGINE_BLOOM_EFFICIENCY_VEC
                 .with_label_values(&[name, "bloom_useful"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::MemtableHit => {
             STORE_ENGINE_MEMTABLE_EFFICIENCY_VEC
                 .with_label_values(&[name, "memtable_hit"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::MemtableMiss => {
             STORE_ENGINE_MEMTABLE_EFFICIENCY_VEC
                 .with_label_values(&[name, "memtable_miss"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::GetHitL0 => {
             STORE_ENGINE_GET_SERVED_VEC
                 .with_label_values(&[name, "get_hit_l0"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::GetHitL1 => {
             STORE_ENGINE_GET_SERVED_VEC
                 .with_label_values(&[name, "get_hit_l1"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::GetHitL2AndUp => {
             STORE_ENGINE_GET_SERVED_VEC
                 .with_label_values(&[name, "get_hit_l2_and_up"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::CompactionKeyDropNewerEntry => {
             STORE_ENGINE_COMPACTION_DROP_VEC
                 .with_label_values(&[name, "compaction_key_drop_newer_entry"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::CompactionKeyDropObsolete => {
             STORE_ENGINE_COMPACTION_DROP_VEC
                 .with_label_values(&[name, "compaction_key_drop_obsolete"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::CompactionKeyDropRangeDel => {
             STORE_ENGINE_COMPACTION_DROP_VEC
                 .with_label_values(&[name, "compaction_key_drop_range_del"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::CompactionRangeDelDropObsolete => {
             STORE_ENGINE_COMPACTION_DROP_VEC
                 .with_label_values(&[name, "range_del_drop_obsolete"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::CompactionOptimizedDelDropObsolete => {
             STORE_ENGINE_COMPACTION_DROP_VEC
                 .with_label_values(&[name, "optimized_del_drop_obsolete"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::NumberKeysWritten => {
             STORE_ENGINE_FLOW_VEC
                 .with_label_values(&[name, "keys_written"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::NumberKeysRead => {
             STORE_ENGINE_FLOW_VEC
                 .with_label_values(&[name, "keys_read"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::NumberKeysUpdated => {
             STORE_ENGINE_FLOW_VEC
                 .with_label_values(&[name, "keys_updated"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BytesWritten => {
             STORE_ENGINE_FLOW_VEC
                 .with_label_values(&[name, "bytes_written"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BytesRead => {
             STORE_ENGINE_FLOW_VEC
                 .with_label_values(&[name, "bytes_read"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::NumberDbSeek => {
             STORE_ENGINE_LOCATE_VEC
                 .with_label_values(&[name, "number_db_seek"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::NumberDbNext => {
             STORE_ENGINE_LOCATE_VEC
                 .with_label_values(&[name, "number_db_next"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::NumberDbPrev => {
             STORE_ENGINE_LOCATE_VEC
                 .with_label_values(&[name, "number_db_prev"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::NumberDbSeekFound => {
             STORE_ENGINE_LOCATE_VEC
                 .with_label_values(&[name, "number_db_seek_found"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::NumberDbNextFound => {
             STORE_ENGINE_LOCATE_VEC
                 .with_label_values(&[name, "number_db_next_found"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::NumberDbPrevFound => {
             STORE_ENGINE_LOCATE_VEC
                 .with_label_values(&[name, "number_db_prev_found"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::IterBytesRead => {
             STORE_ENGINE_FLOW_VEC
                 .with_label_values(&[name, "iter_bytes_read"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::NoFileCloses => {
             STORE_ENGINE_FILE_STATUS_VEC
                 .with_label_values(&[name, "no_file_closes"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::NoFileOpens => {
             STORE_ENGINE_FILE_STATUS_VEC
                 .with_label_values(&[name, "no_file_opens"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::NoFileErrors => {
             STORE_ENGINE_FILE_STATUS_VEC
                 .with_label_values(&[name, "no_file_errors"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::StallMicros => {
             STORE_ENGINE_STALL_MICROS
                 .with_label_values(&[name])
-                .inc_by(value as i64);
-        }
-        TickerType::NoIterators => {
-            STORE_ENGINE_NO_ITERATORS
-                .with_label_values(&[name])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BloomFilterPrefixChecked => {
             STORE_ENGINE_BLOOM_EFFICIENCY_VEC
                 .with_label_values(&[name, "bloom_prefix_checked"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::BloomFilterPrefixUseful => {
             STORE_ENGINE_BLOOM_EFFICIENCY_VEC
                 .with_label_values(&[name, "bloom_prefix_useful"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::WalFileSynced => {
             STORE_ENGINE_WAL_FILE_SYNCED
                 .with_label_values(&[name])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::WalFileBytes => {
             STORE_ENGINE_FLOW_VEC
                 .with_label_values(&[name, "wal_file_bytes"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::WriteDoneBySelf => {
             STORE_ENGINE_WRITE_SERVED_VEC
                 .with_label_values(&[name, "write_done_by_self"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::WriteDoneByOther => {
             STORE_ENGINE_WRITE_SERVED_VEC
                 .with_label_values(&[name, "write_done_by_other"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::WriteTimeout => {
             STORE_ENGINE_WRITE_SERVED_VEC
                 .with_label_values(&[name, "write_timeout"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::WriteWithWAL => {
             STORE_ENGINE_WRITE_SERVED_VEC
                 .with_label_values(&[name, "write_with_wal"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::CompactReadBytes => {
             STORE_ENGINE_COMPACTION_FLOW_VEC
                 .with_label_values(&[name, "bytes_read"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::CompactWriteBytes => {
             STORE_ENGINE_COMPACTION_FLOW_VEC
                 .with_label_values(&[name, "bytes_written"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::FlushWriteBytes => {
             STORE_ENGINE_FLOW_VEC
                 .with_label_values(&[name, "flush_write_bytes"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::ReadAmpEstimateUsefulBytes => {
             STORE_ENGINE_READ_AMP_FLOW_VEC
                 .with_label_values(&[name, "read_amp_estimate_useful_bytes"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
         TickerType::ReadAmpTotalReadBytes => {
             STORE_ENGINE_READ_AMP_FLOW_VEC
                 .with_label_values(&[name, "read_amp_total_read_bytes"])
-                .inc_by(value as i64);
+                .inc_by(v);
         }
+        _ => {}
     }
 }
 
