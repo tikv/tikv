@@ -432,7 +432,7 @@ trait DebugExecutor {
         limit: u64,
     ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
 
-    fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>);
+    fn do_compaction(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>);
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
 
@@ -520,7 +520,7 @@ impl DebugExecutor for DebugClient {
         ) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
-    fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>) {
+    fn do_compaction(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>) {
         let mut req = CompactRequest::new();
         req.set_db(db);
         req.set_cf(cf.to_owned());
@@ -629,7 +629,7 @@ impl DebugExecutor for Debugger {
         Box::new(stream) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
-    fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>) {
+    fn do_compaction(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>) {
         self.compact(db, cf, &from, &to)
             .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
         println!("success!");
