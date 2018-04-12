@@ -555,19 +555,20 @@ mod test {
 
         let timeout = time::Instant::now() + delay;
         pending_delete_ranges.insert(id, b"a".to_vec(), b"c".to_vec(), timeout);
-        pending_delete_ranges.insert(id + 1, b"f".to_vec(), b"i".to_vec(), timeout);
         pending_delete_ranges.insert(id, b"m".to_vec(), b"n".to_vec(), timeout);
-        pending_delete_ranges.insert(id + 1, b"p".to_vec(), b"t".to_vec(), timeout);
         pending_delete_ranges.insert(id, b"x".to_vec(), b"z".to_vec(), timeout);
+        pending_delete_ranges.insert(id + 1, b"f".to_vec(), b"i".to_vec(), timeout);
+        pending_delete_ranges.insert(id + 1, b"p".to_vec(), b"t".to_vec(), timeout);
 
         assert_eq!(pending_delete_ranges.len(), 5);
 
         thread::sleep(delay / 2);
 
         let timeout = time::Instant::now() + delay;
-        let left = pending_delete_ranges.drain_overlap_ranges(&b"g".to_vec(), &b"q".to_vec());
+        let overlap_ranges =
+            pending_delete_ranges.drain_overlap_ranges(&b"g".to_vec(), &b"q".to_vec());
         assert_eq!(
-            left,
+            overlap_ranges,
             [
                 (id + 1, b"f".to_vec(), b"i".to_vec()),
                 (id, b"m".to_vec(), b"n".to_vec()),
