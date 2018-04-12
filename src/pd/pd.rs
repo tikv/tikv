@@ -319,10 +319,10 @@ impl<T: PdClient> Runner<T> {
 
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["capacity"])
-            .set(capacity as f64);
+            .set(capacity as i64);
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["available"])
-            .set(available as f64);
+            .set(available as i64);
 
         let f = self.pd_client.store_heartbeat(stats).map_err(|e| {
             error!("store heartbeat failed {:?}", e);
