@@ -70,7 +70,7 @@ fn test_serde_custom_tikv_config() {
         grpc_keepalive_timeout: ReadableDuration::secs(60),
         end_point_concurrency: None,
         end_point_max_tasks: 12,
-        end_point_stack_size: Some(ReadableSize::mb(5)),
+        end_point_stack_size: Some(ReadableSize::mb(12)),
         end_point_recursion_limit: 100,
         end_point_stream_channel_size: 16,
         end_point_batch_row_limit: 64,
