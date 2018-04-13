@@ -27,7 +27,6 @@ pub struct SelectionExecutor {
     related_cols_offset: Vec<usize>, // offset of related columns
     ctx: EvalContext,
     src: Box<Executor + Send>,
-    count: i64,
     first_collect: bool,
 }
 
@@ -48,7 +47,6 @@ impl SelectionExecutor {
             related_cols_offset: visitor.column_offsets(),
             ctx: ctx,
             src: src,
-            count: 0,
             first_collect: true,
         })
     }
@@ -71,7 +69,6 @@ impl Executor for SelectionExecutor {
                     continue 'next;
                 }
             }
-            self.count += 1;
             return Ok(Some(row));
         }
         Ok(None)
@@ -79,8 +76,6 @@ impl Executor for SelectionExecutor {
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
         self.src.collect_output_counts(counts);
-        counts.push(self.count);
-        self.count = 0;
     }
 
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
@@ -215,7 +210,8 @@ mod tests {
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
-        let inner_table_scan = TableScanExecutor::new(&table_scan, key_ranges, store).unwrap();
+        let inner_table_scan =
+            TableScanExecutor::new(&table_scan, key_ranges, store, false).unwrap();
 
         // selection executor
         let mut selection = Selection::new();
@@ -269,7 +265,8 @@ mod tests {
 
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let inner_table_scan = TableScanExecutor::new(&table_scan, key_ranges, store).unwrap();
+        let inner_table_scan =
+            TableScanExecutor::new(&table_scan, key_ranges, store, true).unwrap();
 
         // selection executor
         let mut selection = Selection::new();
@@ -297,8 +294,8 @@ mod tests {
         assert_eq!(selection_rows.len(), expect_row_handles.len());
         let result_row = selection_rows.iter().map(|r| r.handle).collect::<Vec<_>>();
         assert_eq!(result_row, expect_row_handles);
-        let expected_counts = vec![raw_data.len() as i64, expect_row_handles.len() as i64];
-        let mut counts = Vec::with_capacity(2);
+        let expected_counts = vec![raw_data.len() as i64];
+        let mut counts = Vec::with_capacity(1);
         selection_executor.collect_output_counts(&mut counts);
         assert_eq!(expected_counts, counts);
     }

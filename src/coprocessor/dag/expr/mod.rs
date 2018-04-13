@@ -23,103 +23,21 @@ mod math;
 mod json;
 mod time;
 mod ctx;
+mod err;
 pub use self::ctx::*;
+pub use self::err::*;
 
-use std::{error, io, str};
+use std::str;
 use std::borrow::Cow;
-use std::string::FromUtf8Error;
-use std::str::Utf8Error;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
-use tipb::select;
 
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Res, Time, MAX_FSP};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
 use coprocessor::codec::mysql::json::JsonDecoder;
 use coprocessor::codec::mysql::{charset, types};
 use coprocessor::codec::{self, Datum};
-use util;
 use util::codec::number::NumberDecoder;
-use util::codec::Error as CError;
-
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Io(err: io::Error) {
-            from()
-            description("io error")
-            display("I/O error: {}", err)
-            cause(err)
-        }
-        Type { has: &'static str, expected: &'static str } {
-            description("type error")
-            display("type error: cannot get {:?} result from {:?} expression", expected, has)
-        }
-        Codec(err: util::codec::Error) {
-            from()
-            description("codec error")
-            display("codec error: {}", err)
-            cause(err)
-        }
-        ColumnOffset(offset: usize) {
-            description("column offset not found")
-            display("illegal column offset: {}", offset)
-        }
-        UnknownSignature(sig: ScalarFuncSig) {
-            description("Unknown signature")
-            display("Unknown signature: {:?}", sig)
-        }
-        Truncated(s:String) {
-            description("Truncated")
-            display("{}",s)
-        }
-        Overflow {
-            description("Overflow")
-            display("error Overflow")
-        }
-        Eval(s: String) {
-            description("evaluation failed")
-            display("{}", s)
-        }
-        Other(err: Box<error::Error + Send + Sync>) {
-            from()
-            cause(err.as_ref())
-            description(err.description())
-            display("unknown error {:?}", err)
-        }
-    }
-}
-
-impl Into<select::Error> for Error {
-    fn into(self) -> select::Error {
-        let mut err = select::Error::new();
-        err.set_msg(format!("{:?}", self));
-        err
-    }
-}
-
-impl From<FromUtf8Error> for Error {
-    fn from(err: FromUtf8Error) -> Error {
-        Error::Codec(CError::Encoding(err.utf8_error()))
-    }
-}
-impl From<Utf8Error> for Error {
-    fn from(err: Utf8Error) -> Error {
-        Error::Codec(CError::Encoding(err))
-    }
-}
-
-pub type Result<T> = ::std::result::Result<T, Error>;
-
-impl<T> Into<Result<T>> for Res<T> {
-    fn into(self) -> Result<T> {
-        match self {
-            Res::Ok(t) => Ok(t),
-            Res::Truncated(_) => Err(Error::Truncated("Truncated".into())),
-            Res::Overflow(_) => Err(Error::Overflow),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
@@ -407,7 +325,8 @@ mod test {
     use coprocessor::codec::mysql::json::JsonEncoder;
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
     use util::codec::number::{self, NumberEncoder};
-    use super::{Error, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
+    use super::{Error, EvalConfig, EvalContext, Expression, ERR_DATA_OUT_OF_RANGE,
+                FLAG_IGNORE_TRUNCATE};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
@@ -421,9 +340,10 @@ mod test {
 
     #[inline]
     pub fn check_overflow(e: Error) -> Result<(), ()> {
-        match e {
-            Error::Overflow => Ok(()),
-            _ => Err(()),
+        if e.code() == ERR_DATA_OUT_OF_RANGE {
+            Ok(())
+        } else {
+            Err(())
         }
     }
 

@@ -71,7 +71,7 @@ impl Collector for ThreadsColletcor {
                 let past = cpu_total.get();
                 let delta = total - past;
                 if delta > 0.0 {
-                    cpu_total.inc_by(delta).unwrap();
+                    cpu_total.inc_by(delta);
                 }
             }
         }
