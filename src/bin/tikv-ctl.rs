@@ -415,7 +415,12 @@ trait DebugExecutor {
 
     fn check_local_mode(&self);
 
-    fn verify_all_regions(&self, mgr: Arc<SecurityManager>, cfg: &PdConfig, region_ids: Vec<u64>) {
+    fn recover_regions_mvcc(
+        &self,
+        mgr: Arc<SecurityManager>,
+        cfg: &PdConfig,
+        region_ids: Vec<u64>,
+    ) {
         self.check_local_mode();
         let rpc_client =
             RpcClient::new(cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
@@ -677,7 +682,7 @@ impl DebugExecutor for Debugger {
 
     fn recover_regions(&self, regions: Vec<Region>) {
         let ret = self.recover_regions(regions)
-            .unwrap_or_else(|e| perror_and_exit("Debugger::verify regions", e));
+            .unwrap_or_else(|e| perror_and_exit("Debugger::recover regions", e));
         if ret.is_empty() {
             println!("success!");
             return;
@@ -1047,8 +1052,8 @@ fn main() {
                 ),
         )
         .subcommand(
-            SubCommand::with_name("verify")
-                .about("verify all data of regions on one node")
+            SubCommand::with_name("recover-mvcc")
+                .about("recover mvcc data of regions on one node")
                 .arg(
                     Arg::with_name("regions")
                         .required(true)
@@ -1255,7 +1260,7 @@ fn main() {
             panic!("invalid pd configuration: {:?}", e);
         }
         debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
-    } else if let Some(matches) = matches.subcommand_matches("verify") {
+    } else if let Some(matches) = matches.subcommand_matches("recover-mvcc") {
         let regions = matches
             .values_of("regions")
             .unwrap()
@@ -1268,7 +1273,7 @@ fn main() {
         if let Err(e) = cfg.validate() {
             panic!("invalid pd configuration: {:?}", e);
         }
-        debug_executor.verify_all_regions(mgr, &cfg, regions);
+        debug_executor.recover_regions_mvcc(mgr, &cfg, regions);
     } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
         if let Some(matches) = matches.subcommand_matches("remove-fail-stores") {
             let stores = matches.values_of("stores").unwrap();

@@ -275,12 +275,12 @@ impl Debugger {
     fn recover_region(&self, db: &Arc<DB>, region: Region) -> Result<()> {
         let wb = WriteBatch::new();
 
-        let mut region_verifier = box_try!(MvccChecker::new(
+        let mut mvcc_checker = box_try!(MvccChecker::new(
             Arc::clone(db),
             region.get_start_key(),
             region.get_end_key()
         ));
-        region_verifier.check_mvcc(&wb)?;
+        mvcc_checker.check_mvcc(&wb)?;
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
@@ -288,9 +288,9 @@ impl Debugger {
 
         warn!(
             "total fix default: {}, lock: {}, write: {}",
-            region_verifier.default_fix_count,
-            region_verifier.lock_fix_count,
-            region_verifier.write_fix_count
+            mvcc_checker.default_fix_count,
+            mvcc_checker.lock_fix_count,
+            mvcc_checker.write_fix_count
         );
 
         Ok(())
