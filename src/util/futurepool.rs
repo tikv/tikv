@@ -32,7 +32,7 @@ lazy_static! {
     pub static ref FUTUREPOOL_PENDING_TASK_VEC: IntGaugeVec =
         register_int_gauge_vec!(
             "tikv_futurepool_pending_task_total",
-            "Total number of future_pool pending tasks.",
+            "Current future_pool pending + running tasks.",
             &["name"]
         ).unwrap();
 
