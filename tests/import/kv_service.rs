@@ -66,6 +66,7 @@ fn test_kv_service() {
     close.set_uuid(uuid.clone());
 
     // Write an engine before it is opened.
+    // Only send the write head here to avoid other gRPC errors.
     let resp = send_write_head(&client, &head).unwrap();
     assert!(resp.get_error().has_engine_not_found());
 
