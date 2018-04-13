@@ -222,8 +222,6 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
     }
 
     fn compact(&self, ctx: RpcContext, req: CompactRequest, sink: UnarySink<CompactResponse>) {
-        let TAG: &str = "debug_compact";
-
         let debugger = self.debugger.clone();
         let f = self.pool.spawn_fn(move || {
             debugger
@@ -235,7 +233,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
                 )
                 .map(|_| CompactResponse::default())
         });
-        self.handle_response(ctx, sink, f, TAG);
+        self.handle_response(ctx, sink, f, "debug_compact");
     }
 
     fn inject_fail_point(
@@ -334,8 +332,6 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
         req: RegionConsistencyCheckRequest,
         sink: UnarySink<RegionConsistencyCheckResponse>,
     ) {
-        let TAG: &str = "check_region_consistency";
-
         let region_id = req.get_region_id();
         let debugger = self.debugger.clone();
         let router1 = self.raft_router.clone();
@@ -347,7 +343,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
         let f = self.pool
             .spawn(consistency_check)
             .map(|_| RegionConsistencyCheckResponse::new());
-        self.handle_response(ctx, sink, f, TAG);
+        self.handle_response(ctx, sink, f, "check_region_consistency");
     }
 
     fn modify_tikv_config(

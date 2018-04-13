@@ -368,7 +368,7 @@ trait DebugExecutor {
     fn compact(&self, db: DBType, cf: &str, from: Option<Vec<u8>>, to: Option<Vec<u8>>) {
         let from = from.unwrap_or_default();
         let to = to.unwrap_or_default();
-        self.do_compact(db, cf, from, to);
+        self.do_compaction(db, cf, from, to);
     }
 
     fn compact_region(&self, db: DBType, cf: &str, region_id: u64) {
@@ -376,7 +376,7 @@ trait DebugExecutor {
         let r = region_local.get_region();
         let from = keys::data_key(r.get_start_key());
         let to = keys::data_end_key(r.get_end_key());
-        self.do_compact(db, cf, from, to);
+        self.do_compaction(db, cf, from, to);
     }
 
     fn print_bad_regions(&self);
@@ -1082,7 +1082,45 @@ fn main() {
                  .short("f").long("file")
                  .takes_value(true)
                  .help("meta file path"))
-        );
+        )
+        .subcommand(
+            SubCommand::with_name("compact-whole-cluster")
+                .about("compact whole cluster in a column family in a specified range")
+                .arg(
+                    Arg::with_name("pd")
+                        .short("p")
+                        .takes_value(true)
+                        .help("pd address"),
+                )
+                .arg(
+                    Arg::with_name("db")
+                        .short("d")
+                        .takes_value(true)
+                        .default_value("kv")
+                        .help("kv or raft"),
+                )
+                .arg(
+                    Arg::with_name("cf")
+                        .short("c")
+                        .takes_value(true)
+                        .default_value(CF_DEFAULT)
+                        .help("column family name, for kv db, can be default/write/lock/raft; for raft db, can only be default"),
+                )
+                .arg(
+                    Arg::with_name("from")
+                        .short("f")
+                        .long("from")
+                        .takes_value(true)
+                        .help("set the start raw key, in escaped form"),
+                )
+                .arg(
+                    Arg::with_name("to")
+                        .short("t")
+                        .long("to")
+                        .takes_value(true)
+                        .help("set the end raw key, in escaped form"),
+                ),
+    );
     let matches = app.clone().get_matches();
 
     let hex_key = matches.value_of("hex-to-escaped");
@@ -1100,9 +1138,19 @@ fn main() {
         _ => unreachable!(),
     };
 
+    let mgr = new_security_mgr(&matches);
+
     if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
         let path = matches.value_of("file").unwrap();
         return dump_snap_meta_file(path);
+    } else if let Some(matches) = matches.subcommand_matches("compact-whole-cluster") {
+        let pd = matches.value_of("pd").unwrap();
+        let db = matches.value_of("db").unwrap();
+        let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
+        let cf = matches.value_of("cf").unwrap();
+        let from_key = matches.value_of("from").map(|k| unescape(k));
+        let to_key = matches.value_of("to").map(|k| unescape(k));
+        return compact_whole_cluster(pd, db_type, cf, from_key, to_key, mgr);
     }
 
     let db = matches.value_of("db");
@@ -1110,7 +1158,6 @@ fn main() {
     let host = matches.value_of("host");
     let cfg_path = matches.value_of("config");
 
-    let mgr = new_security_mgr(&matches);
     let debug_executor = new_debug_executor(db, raft_db, host, cfg_path, Arc::clone(&mgr));
 
     if let Some(matches) = matches.subcommand_matches("print") {
@@ -1295,5 +1342,33 @@ fn dump_snap_meta_file(path: &str) {
             "cf {}, size {}, checksum: {}",
             cf_file.cf, cf_file.size, cf_file.checksum
         );
+    }
+}
+
+fn compact_whole_cluster(
+    pd: &str,
+    db_type: DBType,
+    cf: &str,
+    from: Option<Vec<u8>>,
+    to: Option<Vec<u8>>,
+    mgr: Arc<SecurityManager>,
+) {
+    let mut cfg = PdConfig::default();
+    cfg.endpoints.push(pd.to_owned());
+    if let Err(e) = cfg.validate() {
+        panic!("invalid pd configuration: {:?}", e);
+    }
+
+    let pd_client = RpcClient::new(&cfg, Arc::clone(&mgr))
+        .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+
+    let stores = pd_client
+        .get_all_stores()
+        .unwrap_or_else(|e| perror_and_exit("Get all cluster stores from PD failed", e));
+
+    for e in stores {
+        let debug_executor =
+            new_debug_executor(None, None, Some(&e.address), None, Arc::clone(&mgr));
+        debug_executor.compact(db_type, cf, from.clone(), to.clone());
     }
 }
