@@ -16,7 +16,7 @@ use std::borrow::Cow;
 
 use coprocessor::dag::expr::EvalContext;
 use super::mysql::Res;
-use super::Result;
+use super::{Error, Result};
 // `UNSPECIFIED_LENGTH` is unspecified length from FieldType
 pub const UNSPECIFIED_LENGTH: i32 = -1;
 
@@ -96,66 +96,76 @@ pub fn convert_float_to_uint(fval: f64, upper_bound: u64, tp: u8) -> Result<u64>
 
 /// `bytes_to_int_without_context` converts a byte arrays to an i64
 /// in best effort, but without context.
-/// Note that it does NOT handle overflow.
 pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
     // trim
     let mut trimed = bytes.iter().skip_while(|&&b| b == b' ' || b == b'\t');
     let mut negative = false;
-    let mut r = 0i64;
+    let mut r = Some(0i64);
     if let Some(&c) = trimed.next() {
         if c == b'-' {
             negative = true;
         } else if c >= b'0' && c <= b'9' {
-            r = i64::from(c) - i64::from(b'0');
+            r = Some(i64::from(c) - i64::from(b'0'));
         } else if c != b'+' {
             return Ok(0);
         }
 
-        r = trimed
-            .take_while(|&&c| c >= b'0' && c <= b'9')
-            .fold(r, |l, &r| l * 10 + i64::from(r - b'0'));
-        if negative {
-            r = -r;
+        for c in trimed.take_while(|&&c| c >= b'0' && c <= b'9') {
+            let cur = i64::from(*c - b'0');
+            r = r.and_then(|r| r.checked_mul(10)).and_then(|r| {
+                if negative {
+                    r.checked_sub(cur)
+                } else {
+                    r.checked_add(cur)
+                }
+            });
+
+            if r.is_none() {
+                break;
+            }
         }
     }
-    Ok(r)
+    r.ok_or_else(|| Error::Overflow("BIGINT".into(), "".into()))
 }
 
 /// `bytes_to_uint_without_context` converts a byte arrays to an iu64
 /// in best effort, but without context.
-/// Note that it does NOT handle overflow.
 pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
     // trim
     let mut trimed = bytes.iter().skip_while(|&&b| b == b' ' || b == b'\t');
-    let mut r = 0u64;
+    let mut r = Some(0u64);
     if let Some(&c) = trimed.next() {
         if c >= b'0' && c <= b'9' {
-            r = u64::from(c) - u64::from(b'0');
+            r = Some(u64::from(c) - u64::from(b'0'));
         } else if c != b'+' {
             return Ok(0);
         }
 
-        r = trimed
-            .take_while(|&&c| c >= b'0' && c <= b'9')
-            .fold(r, |l, &r| l * 10 + u64::from(r - b'0'));
+        for c in trimed.take_while(|&&c| c >= b'0' && c <= b'9') {
+            r = r.and_then(|r| r.checked_mul(10))
+                .and_then(|r| r.checked_add(u64::from(*c - b'0')));
+            if r.is_none() {
+                break;
+            }
+        }
     }
-    Ok(r)
+    r.ok_or_else(|| Error::Overflow("BIGINT UNSIGNED".into(), "".into()))
 }
 
 /// `bytes_to_int` converts a byte arrays to an i64 in best effort.
-/// TODO: handle overflow properly.
 pub fn bytes_to_int(ctx: &mut EvalContext, bytes: &[u8]) -> Result<i64> {
     let s = str::from_utf8(bytes)?.trim();
     let vs = get_valid_int_prefix(ctx, s)?;
     bytes_to_int_without_context(vs.as_bytes())
+        .map_err(|_| Error::Overflow("BIGINT".into(), vs.into()))
 }
 
 /// `bytes_to_uint` converts a byte arrays to an u64 in best effort.
-/// TODO: handle overflow properly.
 pub fn bytes_to_uint(ctx: &mut EvalContext, bytes: &[u8]) -> Result<u64> {
     let s = str::from_utf8(bytes)?.trim();
     let vs = get_valid_int_prefix(ctx, s)?;
     bytes_to_uint_without_context(vs.as_bytes())
+        .map_err(|_| Error::Overflow("BIGINT UNSIGNED".into(), vs.into()))
 }
 
 fn bytes_to_f64_without_context(bytes: &[u8]) -> Result<f64> {
@@ -331,6 +341,8 @@ mod test {
             (b"+1024", 1024),
             (b"-231", -231),
             (b"", 0),
+            (b"9223372036854775807", i64::MAX),
+            (b"-9223372036854775808", i64::MIN),
         ];
 
         for (bs, n) in tests {
@@ -338,6 +350,15 @@ mod test {
             if t != n {
                 panic!("expect convert {:?} to {}, but got {}", bs, n, t);
             }
+        }
+
+        let invalid_cases: Vec<&'static [u8]> =
+            vec![b"9223372036854775809", b"-9223372036854775810"];
+        for bs in invalid_cases {
+            match super::bytes_to_int_without_context(bs) {
+                Err(Error::Overflow(_, _)) => {}
+                res => panic!("expect convert {:?} to overflow, but got {:?}", bs, res),
+            };
         }
     }
 
@@ -363,6 +384,14 @@ mod test {
             if t != n {
                 panic!("expect convert {:?} to {}, but got {}", bs, n, t);
             }
+        }
+
+        let invalid_cases: Vec<&'static [u8]> = vec![b"18446744073709551616"];
+        for bs in invalid_cases {
+            match super::bytes_to_uint_without_context(bs) {
+                Err(Error::Overflow(_, _)) => {}
+                res => panic!("expect convert {:?} to overflow, but got {:?}", bs, res),
+            };
         }
     }
 
