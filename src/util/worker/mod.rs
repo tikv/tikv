@@ -21,7 +21,7 @@ A worker contains:
 - A runner (which should implement the `Runnable` trait): to run tasks one by one or in batch.
 - A scheduler: to send tasks to the runner, returns immediately.
 
-Simply speaking, this is a mpsc (multiple-producer-single-consumer) model.
+Briefly speaking, this is a mpsc (multiple-producer-single-consumer) model.
 
 */
 
