@@ -46,6 +46,10 @@ quick_error! {
             cause(err)
             description("enconding failed")
         }
+        Overflow(data:String,range:String){
+            description("overflow")
+            display("{},{}",data,range)
+        }
         Other(err: Box<error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
@@ -63,6 +67,9 @@ impl Error {
             Error::KeyNotFound => Some(Error::KeyNotFound),
             Error::InvalidDataType(ref r) => Some(Error::InvalidDataType(r.clone())),
             Error::Encoding(e) => Some(Error::Encoding(e)),
+            Error::Overflow(ref data, ref range) => {
+                Some(Error::Overflow(data.clone(), range.clone()))
+            }
             Error::Protobuf(_) | Error::Io(_) | Error::Other(_) => None,
         }
     }
