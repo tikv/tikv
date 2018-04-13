@@ -273,10 +273,13 @@ fn poll<R, T, U>(
 
         keep_going = fill_task_batch(&rx, &mut batch, batch_size, timeout);
         if !batch.is_empty() {
+            // batch will be cleared after `run_batch`, so we need to store its length
+            // before `run_batch`.
+            let batch_len = batch.len();
             runner.run_batch(&mut batch);
-            counter.fetch_sub(batch.len(), Ordering::SeqCst);
-            metrics_pending_task_count.sub(batch.len() as i64);
-            metrics_handled_task_count.inc_by(batch.len() as i64);
+            counter.fetch_sub(batch_len, Ordering::SeqCst);
+            metrics_pending_task_count.sub(batch_len as i64);
+            metrics_handled_task_count.inc_by(batch_len as i64);
             batch.clear();
         }
 
@@ -461,6 +464,8 @@ mod test {
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 60);
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 40);
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 50);
+        // task is handled before we update the busy status, so that we need some sleep.
+        thread::sleep(Duration::from_millis(100));
         assert!(!worker.is_busy());
         worker.stop().unwrap().join().unwrap();
         // now worker can't handle any task
