@@ -842,6 +842,35 @@ impl TiKvConfig {
             }
             self.raft_store.region_split_size = default_raft_store.region_split_size;
         }
+        if self.server.end_point_concurrency != None {
+            warn!(
+                "deprecated configuration, {} has been moved to {}",
+                "server.end_point_concurrency", "readpool.coprocessor.high/normal/low-concurrency",
+            );
+            warn!(
+                "override {} with {}, {:?}",
+                "readpool.coprocessor.high/normal/low-concurrency",
+                "server.end_point_concurrency",
+                self.server.end_point_concurrency
+            );
+            self.readpool.coprocessor.high_concurrency = self.server.end_point_concurrency.unwrap();
+            self.readpool.coprocessor.normal_concurrency =
+                self.server.end_point_concurrency.unwrap();
+            self.readpool.coprocessor.low_concurrency = self.server.end_point_concurrency.unwrap();
+        }
+        if self.server.end_point_stack_size != None {
+            warn!(
+                "deprecated configuration, {} has been moved to {}",
+                "server.end_point_stack_size", "readpool.coprocessor.stack_size",
+            );
+            warn!(
+                "override {} with {}, {:?}",
+                "readpool.coprocessor.stack_size",
+                "server.end_point_stack_size",
+                self.server.end_point_stack_size
+            );
+            self.readpool.coprocessor.stack_size = self.server.end_point_stack_size.unwrap();
+        }
     }
 
     pub fn tune_for_import_mode(&mut self) {
