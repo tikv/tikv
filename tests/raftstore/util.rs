@@ -41,7 +41,7 @@ use tikv::raftstore::store::Msg as StoreMsg;
 
 use super::cluster::{Cluster, Simulator};
 
-pub use tikv::raftstore::store::util::find_peer;
+pub use tikv::raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 
 pub const MAX_LEADER_LEASE: u64 = 250; // 250ms
 
@@ -268,13 +268,6 @@ pub fn new_prepare_merge(target_region: metapb::Region) -> AdminRequest {
     cmd.set_cmd_type(AdminCmdType::PrepareMerge);
     cmd.mut_prepare_merge().set_target(target_region);
     cmd
-}
-
-pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
-    let mut peer = metapb::Peer::new();
-    peer.set_store_id(store_id);
-    peer.set_id(peer_id);
-    peer
 }
 
 pub fn new_store(store_id: u64, addr: String) -> metapb::Store {

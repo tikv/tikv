@@ -108,7 +108,7 @@ impl Filter<RaftMessage> for SnapshotNotifier {
         while self.pending_notify.load(Ordering::SeqCst) > 0 {
             debug!("notify snapshot");
             self.pending_notify.fetch_sub(1, Ordering::SeqCst);
-            self.notifier.lock().unwrap().send(()).unwrap();
+            let _ = self.notifier.lock().unwrap().send(());
         }
         Ok(())
     }
@@ -120,7 +120,7 @@ impl Filter<RaftMessage> for SnapshotNotifier {
 // when the address is being resolved will leave follower's progress
 // stay in Snapshot forever.
 #[test]
-fn test_server_snapshot_on_reslove_failure() {
+fn test_server_snapshot_on_resolve_failure() {
     let _guard = ::setup();
     let mut cluster = new_server_cluster(1, 4);
     configure_for_snapshot(&mut cluster);
@@ -170,12 +170,74 @@ fn test_server_snapshot_on_reslove_failure() {
     must_get_none(&engine4, b"k1");
     cluster.sim.write().unwrap().clear_recv_filters(4);
 
-    // Remove the fail points, now snapshots should works fine.
-    fail::remove(on_resolve_fp);
+    // Remove the on_send_store_fp.
+    // Now it will resolve the store 4's address via heartbeat messages,
+    // so snapshots works fine.
+    //
+    // But keep the on_resolve_fp.
+    // Any snapshot messages that has been sent before will meet the
+    // injected resolve failure eventually.
+    // It perverts a race condition, remove the on_resolve_fp before snapshot
+    // messages meet the failpoint, that fails the test.
     fail::remove(on_send_store_fp);
 
     notify_rx.recv_timeout(Duration::from_secs(3)).unwrap();
     cluster.must_put(b"k2", b"v2");
     must_get_equal(&engine4, b"k1", b"v1");
     must_get_equal(&engine4, b"k2", b"v2");
+
+    // Clean up.
+    fail::remove(on_resolve_fp);
+}
+
+#[test]
+fn test_generate_snapshot() {
+    let _guard = ::setup();
+
+    let mut cluster = new_server_cluster(1, 5);
+    configure_for_snapshot(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.stop_node(4);
+    cluster.stop_node(5);
+    (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
+    // Sleep for a while to ensure all logs are compacted.
+    thread::sleep(Duration::from_millis(100));
+
+    fail::cfg("snapshot_delete_after_send", "pause").unwrap();
+
+    // Let store 4 inform leader to generate a snapshot.
+    cluster.run_node(4);
+    must_get_equal(&cluster.get_engine(4), b"k2", b"v2");
+
+    fail::cfg("snapshot_enter_do_build", "pause").unwrap();
+    cluster.run_node(5);
+    thread::sleep(Duration::from_millis(100));
+
+    fail::cfg("snapshot_delete_after_send", "off").unwrap();
+    must_empty_dir(cluster.get_snap_dir(1));
+
+    // The task is droped so that we can't get the snapshot on store 5.
+    fail::cfg("snapshot_enter_do_build", "pause").unwrap();
+    must_get_none(&cluster.get_engine(5), b"k2");
+
+    fail::cfg("snapshot_enter_do_build", "off").unwrap();
+    must_get_equal(&cluster.get_engine(5), b"k2", b"v2");
+
+    fail::remove("snapshot_enter_do_build");
+    fail::remove("snapshot_delete_after_send");
+}
+
+fn must_empty_dir(path: String) {
+    for _ in 0..100 {
+        let snap_dir = fs::read_dir(&path).unwrap();
+        if snap_dir.count() > 0 {
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+        return;
+    }
+    panic!("the directory {:?} should be empty", path);
 }

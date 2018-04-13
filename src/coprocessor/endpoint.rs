@@ -523,7 +523,7 @@ impl RequestTask {
 
         COPR_PENDING_REQS
             .with_label_values(&[request_tracker.scan_tag, request_tracker.pri_str])
-            .add(1.0);
+            .inc();
 
         Ok(RequestTask {
             req: req,
@@ -676,7 +676,6 @@ impl Runnable<Task> for Host {
 
 fn err_multi_resp(e: Error, count: usize, metrics: &mut BasicLocalMetrics) -> Response {
     let mut resp = Response::new();
-    let count = count as f64;
     let tag = match e {
         Error::Region(e) => {
             let tag = storage::get_tag_from_header(&e);
@@ -704,7 +703,7 @@ fn err_multi_resp(e: Error, count: usize, metrics: &mut BasicLocalMetrics) -> Re
             resp.set_region_error(errorpb);
             "full"
         }
-        Error::Other(_) => {
+        Error::Other(_) | Error::Eval(_) => {
             resp.set_other_error(format!("{}", e));
             "other"
         }
@@ -712,8 +711,7 @@ fn err_multi_resp(e: Error, count: usize, metrics: &mut BasicLocalMetrics) -> Re
     metrics
         .error_cnt
         .with_label_values(&[tag])
-        .inc_by(count)
-        .unwrap();
+        .inc_by(count as i64);
     resp
 }
 

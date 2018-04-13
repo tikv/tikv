@@ -14,13 +14,15 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, RwLock};
 use std::path::Path;
+use std::time::Duration;
+use std::thread;
 
-use grpc::EnvBuilder;
+use grpc::{EnvBuilder, Error as GrpcError};
 use tempdir::TempDir;
 
 use tikv::config::TiKvConfig;
-use tikv::server::{Server, ServerTransport};
-use tikv::server::{create_raft_storage, Config, Node, PdStoreAddrResolver, RaftClient};
+use tikv::server::{create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient,
+                   Server, ServerTransport};
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::readpool::ReadPool;
@@ -123,8 +125,9 @@ impl Simulator for ServerCluster {
         let (engines, path) = create_test_engine(engines, store_sendch.clone(), &cfg);
 
         // Create storage.
+        let pd_worker = FutureWorker::new("test future worker");
         let storage_read_pool = ReadPool::new("store-read", &cfg.readpool.storage, || {
-            || storage::ReadPoolContext::new(None)
+            || storage::ReadPoolContext::new(pd_worker.scheduler())
         });
         let mut store =
             create_raft_storage(sim_router.clone(), &cfg.storage, storage_read_pool).unwrap();
@@ -151,19 +154,33 @@ impl Simulator for ServerCluster {
         let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor, || {
             || coprocessor::ReadPoolContext::new(pd_worker.scheduler())
         });
-
-        let mut server = Server::new(
-            &server_cfg,
-            &security_mgr,
-            cfg.coprocessor.region_split_size.0 as usize,
-            store.clone(),
-            cop_read_pool,
-            sim_router.clone(),
-            resolver,
-            snap_mgr.clone(),
-            Some(engines.clone()),
-            Some(import_service),
-        ).unwrap();
+        let mut server = None;
+        for _ in 0..100 {
+            server = Some(Server::new(
+                &server_cfg,
+                &security_mgr,
+                cfg.coprocessor.region_split_size.0 as usize,
+                store.clone(),
+                cop_read_pool.clone(),
+                sim_router.clone(),
+                resolver.clone(),
+                snap_mgr.clone(),
+                Some(engines.clone()),
+                Some(import_service.clone()),
+            ));
+            match server {
+                Some(Ok(_)) => break,
+                Some(Err(Error::Grpc(GrpcError::BindFail(ref addr, ref port)))) => {
+                    // Servers may meet the error, when we restart them.
+                    debug!("fail to create a server: bind fail {:?}", (addr, port));
+                    thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+                Some(Err(ref e)) => panic!("fail to create a server: {:?}", e),
+                None => unreachable!(),
+            }
+        }
+        let mut server = server.unwrap().unwrap();
         let addr = server.listening_addr();
         cfg.server.addr = format!("{}", addr);
         let trans = server.transport();

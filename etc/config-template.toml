@@ -167,7 +167,7 @@
 # consistency-check-interval = 0
 
 # Use delete range to drop a large number of continuous keys.
-# use-delete-range = true
+# use-delete-range = false
 
 # Interval to cleanup import sst files.
 # cleanup-import-sst-interval = "10m"
@@ -449,6 +449,8 @@
 # key-path = ""
 
 [import]
+# the directory to store importing kv data.
+# import-dir = "/tmp/tikv/import"
 # number of threads to handle RPC requests.
 # num-threads = 8
 # stream channel window size, stream will be blocked on channel full.

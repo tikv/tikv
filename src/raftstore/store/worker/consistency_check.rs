@@ -78,7 +78,7 @@ impl<C: MsgSender> Runner<C> {
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         for cf in cf_names {
-            let res = snap.scan_cf(cf, &start_key, &end_key, false, &mut |k, v| {
+            let res = snap.scan_cf(cf, &start_key, &end_key, false, |k, v| {
                 digest.write(k);
                 digest.write(v);
                 Ok(true)

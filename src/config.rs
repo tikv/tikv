@@ -42,6 +42,7 @@ use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFa
 use util::rocksdb::{db_exist, CFOptions, EventListener, FixedPrefixSliceTransform,
                     FixedSuffixSliceTransform, NoopSliceTransform};
 use util::security::SecurityConfig;
+use util::time::duration_to_sec;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -791,6 +792,15 @@ impl TiKvConfig {
             return Err("default rocksdb not exist, buf raftdb exist".into());
         }
 
+        let expect_keepalive = self.raft_store.raft_heartbeat_interval() * 2;
+        if expect_keepalive > self.server.grpc_keepalive_time.0 {
+            return Err(format!(
+                "grpc_keepalive_time is too small, it should not less than the double of \
+                 raft tick interval (>= {})",
+                duration_to_sec(expect_keepalive)
+            ).into());
+        }
+
         self.rocksdb.validate()?;
         self.server.validate()?;
         self.raft_store.validate()?;
@@ -1021,5 +1031,16 @@ mod test {
         let mut tikv_cfg = TiKvConfig::default();
         tikv_cfg.storage.data_dir = pathbuf.as_path().to_str().unwrap().to_owned();
         assert!(check_and_persist_critical_config(&tikv_cfg).is_ok());
+    }
+
+    #[test]
+    fn test_keepalive_check() {
+        let mut tikv_cfg = TiKvConfig::default();
+        tikv_cfg.pd.endpoints = vec!["".to_owned()];
+        let dur = tikv_cfg.raft_store.raft_heartbeat_interval();
+        tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur);
+        assert!(tikv_cfg.validate().is_err());
+        tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur * 2);
+        tikv_cfg.validate().unwrap();
     }
 }

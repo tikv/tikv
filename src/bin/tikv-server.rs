@@ -38,27 +38,27 @@ extern crate signal;
 extern crate tikv;
 extern crate toml;
 
-mod signal_handler;
 #[cfg(unix)]
 mod profiling;
+#[macro_use]
+mod setup;
+use setup::*;
+mod signal_handler;
 
+use std::env;
 use std::process;
 use std::fs::File;
 use std::usize;
 use std::path::Path;
 use std::sync::{mpsc, Arc};
-use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
-use std::env;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use clap::{App, Arg, ArgMatches};
+use clap::{App, Arg};
 use fs2::FileExt;
 
-use tikv::config::{check_and_persist_critical_config, MetricConfig, TiKvConfig};
+use tikv::config::{check_and_persist_critical_config, TiKvConfig};
 use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
-use tikv::util::collections::HashMap;
-use tikv::util::logger::{self, StderrLogger};
-use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::security::SecurityManager;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::FutureWorker;
@@ -77,58 +77,6 @@ use tikv::coprocessor;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
-// A workaround for checking if log is initialized.
-static LOG_INITIALIZED: AtomicBool = ATOMIC_BOOL_INIT;
-
-macro_rules! fatal {
-    ($lvl:expr, $($arg:tt)+) => ({
-        if LOG_INITIALIZED.load(Ordering::SeqCst) {
-            error!($lvl, $($arg)+);
-        } else {
-            eprintln!($lvl, $($arg)+);
-        }
-        process::exit(1)
-    })
-}
-
-fn init_log(config: &TiKvConfig) {
-    if config.log_file.is_empty() {
-        logger::init_log(StderrLogger, config.log_level).unwrap_or_else(|e| {
-            fatal!("failed to initial log: {:?}", e);
-        });
-    } else {
-        let w = RotatingFileLogger::new(&config.log_file).unwrap_or_else(|e| {
-            fatal!(
-                "failed to initial log with file {:?}: {:?}",
-                config.log_file,
-                e
-            );
-        });
-        logger::init_log(w, config.log_level).unwrap_or_else(|e| {
-            fatal!("failed to initial log: {:?}", e);
-        });
-    }
-    LOG_INITIALIZED.store(true, Ordering::SeqCst);
-}
-
-fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
-    if cfg.interval.as_secs() == 0 || cfg.address.is_empty() {
-        return;
-    }
-
-    let mut push_job = cfg.job.clone();
-    if let Some(id) = node_id {
-        push_job.push_str(&format!("_{}", id));
-    }
-
-    info!("start prometheus client");
-
-    util::monitor_threads("tikv")
-        .unwrap_or_else(|e| fatal!("failed to start monitor thread: {:?}", e));
-
-    util::metrics::run_prometheus(cfg.interval.0, &cfg.address, &push_job);
-}
-
 fn check_system_config(config: &TiKvConfig) {
     if let Err(e) = util::config::check_max_open_fds(
         RESERVED_OPEN_FDS + (config.rocksdb.max_open_files + config.raftdb.max_open_files) as u64,
@@ -142,7 +90,7 @@ fn check_system_config(config: &TiKvConfig) {
 
     if cfg!(unix) && env::var("TZ").is_err() {
         env::set_var("TZ", ":/etc/localtime");
-        warn!("environment variable `TZ` is missing, use `/etc/localtime`");
+        warn!("environment variable `TZ` is missing, using `/etc/localtime`");
     }
 
     // check rocksdb data dir
@@ -197,7 +145,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     );
     let storage_read_pool = ReadPool::new("store-read", &cfg.readpool.storage, || {
         let pd_sender = pd_sender.clone();
-        move || storage::ReadPoolContext::new(Some(pd_sender.clone()))
+        move || storage::ReadPoolContext::new(pd_sender.clone())
     });
     let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage, storage_read_pool)
         .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
@@ -288,7 +236,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     server
         .start(server_cfg, security_mgr)
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
-    signal_handler::handle_signal(engines);
+    signal_handler::handle_signal(Some(engines));
 
     // Stop.
     server
@@ -301,74 +249,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .unwrap_or_else(|e| fatal!("failed to stop node: {:?}", e));
     if let Some(Err(e)) = worker.stop().map(|j| j.join()) {
         info!("ignore failure when stopping resolver: {:?}", e);
-    }
-}
-
-fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches) {
-    if let Some(level) = matches.value_of("log-level") {
-        config.log_level = logger::get_level_by_string(level);
-    }
-
-    if let Some(file) = matches.value_of("log-file") {
-        config.log_file = file.to_owned();
-    }
-
-    if let Some(addr) = matches.value_of("addr") {
-        config.server.addr = addr.to_owned();
-    }
-
-    if let Some(advertise_addr) = matches.value_of("advertise-addr") {
-        config.server.advertise_addr = advertise_addr.to_owned();
-    }
-
-    if let Some(data_dir) = matches.value_of("data-dir") {
-        config.storage.data_dir = data_dir.to_owned();
-    }
-
-    if let Some(endpoints) = matches.values_of("pd-endpoints") {
-        config.pd.endpoints = endpoints.map(|e| e.to_owned()).collect();
-    }
-
-    if let Some(labels_vec) = matches.values_of("labels") {
-        let mut labels = HashMap::default();
-        labels_vec
-            .map(|s| {
-                let mut parts = s.split('=');
-                let key = parts.next().unwrap().to_owned();
-                let value = match parts.next() {
-                    None => fatal!("invalid label: {:?}", s),
-                    Some(v) => v.to_owned(),
-                };
-                if parts.next().is_some() {
-                    fatal!("invalid label: {:?}", s);
-                }
-                labels.insert(key, value);
-            })
-            .count();
-        config.server.labels = labels;
-    }
-
-    if let Some(capacity_str) = matches.value_of("capacity") {
-        let capacity = capacity_str.parse().unwrap_or_else(|e| {
-            fatal!("invalid capacity: {}", e);
-        });
-        config.raft_store.capacity = capacity;
-    }
-
-    if matches.is_present("import-mode") {
-        config.tune_for_import_mode();
-    }
-}
-
-// Set gRPC event engine to epollsig.
-// See more: https://github.com/grpc/grpc/blob/486761d04e03a9183d8013eddd86c3134d52d459\
-//           /src/core/lib/iomgr/ev_posix.cc#L149
-fn configure_grpc_poll_strategy() {
-    const GRPC_POLL_STRATEGY: &str = "GRPC_POLL_STRATEGY";
-    const DEFAULT_ENGINE: &str = "epollsig";
-    if cfg!(target_os = "linux") && env::var(GRPC_POLL_STRATEGY).is_err() {
-        // Set to epollsig if it is not specified.
-        env::set_var(GRPC_POLL_STRATEGY, DEFAULT_ENGINE);
     }
 }
 

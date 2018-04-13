@@ -14,15 +14,15 @@
 use prometheus::*;
 
 lazy_static! {
-    pub static ref PEER_PROPOSAL_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
+    pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_raftstore_proposal_total",
             "Total number of proposal made.",
             &["type"]
         ).unwrap();
 
-    pub static ref PEER_ADMIN_CMD_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
+    pub static ref PEER_ADMIN_CMD_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_raftstore_admin_cmd_total",
             "Total number of admin cmd processed.",
             &["type", "status"]
@@ -49,43 +49,43 @@ lazy_static! {
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
-    pub static ref STORE_RAFT_READY_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
+    pub static ref STORE_RAFT_READY_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_raftstore_raft_ready_handled_total",
             "Total number of raft ready handled.",
             &["type"]
         ).unwrap();
 
-    pub static ref STORE_RAFT_SENT_MESSAGE_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
+    pub static ref STORE_RAFT_SENT_MESSAGE_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_raftstore_raft_sent_message_total",
             "Total number of raft ready sent messages.",
             &["type"]
         ).unwrap();
 
-    pub static ref STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
+    pub static ref STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_raftstore_raft_dropped_message_total",
             "Total number of raft dropped messages.",
             &["type"]
         ).unwrap();
 
-    pub static ref STORE_PD_HEARTBEAT_GAUGE_VEC: GaugeVec =
-        register_gauge_vec!(
+    pub static ref STORE_PD_HEARTBEAT_GAUGE_VEC: IntGaugeVec =
+        register_int_gauge_vec!(
             "tikv_pd_heartbeat_tick_total",
             "Total number of pd heartbeat ticks.",
             &["type"]
         ).unwrap();
 
-    pub static ref STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC: GaugeVec =
-        register_gauge_vec!(
+    pub static ref STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC: IntGaugeVec =
+        register_int_gauge_vec!(
             "tikv_raftstore_snapshot_traffic_total",
             "Total number of raftstore snapshot traffic.",
             &["type"]
         ).unwrap();
 
-    pub static ref STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER: CounterVec =
-        register_counter_vec!(
+    pub static ref STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_raftstore_snapshot_validation_failure_total",
             "Total number of raftstore snapshot validation failure.",
             &["type"]
@@ -107,8 +107,8 @@ lazy_static! {
                     2097152.0, 4194304.0, 8388608.0, 16777216.0]
         ).unwrap();
 
-    pub static ref REGION_HASH_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
+    pub static ref REGION_HASH_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_raftstore_hash_total",
             "Total number of hash has been computed.",
             &["type", "result"]
@@ -129,14 +129,14 @@ lazy_static! {
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
-    pub static ref PEER_GC_RAFT_LOG_COUNTER: Counter =
-        register_counter!(
+    pub static ref PEER_GC_RAFT_LOG_COUNTER: IntCounter =
+        register_int_counter!(
             "tikv_raftstore_gc_raft_log_total",
             "Total number of GC raft log."
         ).unwrap();
 
-    pub static ref UPDATE_REGION_SIZE_BY_COMPACTION_COUNTER: Counter =
-        register_counter!(
+    pub static ref UPDATE_REGION_SIZE_BY_COMPACTION_COUNTER: IntCounter =
+        register_int_counter!(
             "update_region_size_count_by_compaction",
             "Total number of update region size caused by compaction."
         ).unwrap();
@@ -194,8 +194,8 @@ lazy_static! {
              exponential_buckets(1024.0, 2.0, 22).unwrap() // 1024,1024*2^1,..,4G
         ).unwrap();
 
-    pub static ref RAFT_ENTRY_FETCHES: CounterVec =
-        register_counter_vec!(
+    pub static ref RAFT_ENTRY_FETCHES: IntCounterVec =
+        register_int_counter_vec!(
             "tikv_raftstore_entry_fetches",
             "Total number of raft entry fetches",
             &["type"]
@@ -209,8 +209,8 @@ lazy_static! {
                  20.0, 24.0, 32.0, 64.0, 128.0, 256.0]
         ).unwrap();
 
-    pub static ref LEADER_MISSING: Gauge =
-        register_gauge!(
+    pub static ref LEADER_MISSING: IntGauge =
+        register_int_gauge!(
             "tikv_raftstore_leader_missing",
             "Total number of leader missed region"
         ).unwrap();
