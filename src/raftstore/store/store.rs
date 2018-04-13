@@ -280,7 +280,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut raft_wb = WriteBatch::new();
         let mut applying_regions = vec![];
         let mut prepare_merge = vec![];
-        kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, &mut |key, value| {
+        kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
             let (region_id, suffix) = keys::decode_region_meta_key(key)?;
             if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);
@@ -2238,9 +2238,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        PEER_GC_RAFT_LOG_COUNTER
-            .inc_by(total_gc_logs as f64)
-            .unwrap();
+        PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as i64);
         self.register_raft_gc_log_tick(event_loop);
     }
 
@@ -2541,10 +2539,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
         STORE_PD_HEARTBEAT_GAUGE_VEC
             .with_label_values(&["leader"])
-            .set(f64::from(leader_count));
+            .set(leader_count);
         STORE_PD_HEARTBEAT_GAUGE_VEC
             .with_label_values(&["region"])
-            .set(self.region_peers.len() as f64);
+            .set(self.region_peers.len() as i64);
 
         self.register_pd_heartbeat_tick(event_loop);
     }
@@ -2572,10 +2570,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
             .with_label_values(&["sending"])
-            .set(snap_stats.sending_count as f64);
+            .set(snap_stats.sending_count as i64);
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
             .with_label_values(&["receiving"])
-            .set(snap_stats.receiving_count as f64);
+            .set(snap_stats.receiving_count as i64);
 
         let mut apply_snapshot_count = 0;
         for peer in self.region_peers.values_mut() {
@@ -2587,7 +2585,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_applying_snap_count(apply_snapshot_count as u32);
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
             .with_label_values(&["applying"])
-            .set(f64::from(apply_snapshot_count));
+            .set(apply_snapshot_count);
 
         stats.set_start_time(self.start_time.sec as u32);
 

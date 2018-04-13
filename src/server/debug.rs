@@ -107,7 +107,7 @@ impl Debugger {
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
         let mut regions = Vec::with_capacity(128);
-        box_try!(db.scan_cf(cf, start_key, end_key, false, &mut |key, _| {
+        box_try!(db.scan_cf(cf, start_key, end_key, false, |key, _| {
             let (id, suffix) = keys::decode_region_meta_key(key)?;
             if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);
@@ -203,7 +203,7 @@ impl Debugger {
                         start_key,
                         end_key,
                         false,
-                        &mut |_, v| {
+                        |_, v| {
                             size += v.len();
                             Ok(true)
                         }
@@ -385,7 +385,7 @@ impl Debugger {
             keys::REGION_META_MIN_KEY,
             keys::REGION_META_MAX_KEY,
             false,
-            &mut |key, value| {
+            |key, value| {
                 let (_, suffix_type) = box_try!(keys::decode_region_meta_key(key));
                 if suffix_type != keys::REGION_STATE_SUFFIX {
                     return Ok(true);
