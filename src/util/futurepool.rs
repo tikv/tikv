@@ -33,14 +33,14 @@ lazy_static! {
         register_int_gauge_vec!(
             "tikv_futurepool_pending_task_total",
             "Total number of future_pool pending tasks.",
-            &["prefix"]
+            &["name"]
         ).unwrap();
 
     pub static ref FUTUREPOOL_HANDLED_TASK_VEC: IntCounterVec =
         register_int_counter_vec!(
             "tikv_futurepool_handled_task_total",
             "Total number of future_pool handled tasks.",
-            &["prefix"]
+            &["name"]
         ).unwrap();
 }
 
