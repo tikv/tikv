@@ -39,7 +39,7 @@ impl FnCall {
     pub fn abs_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let n = try_opt!(self.children[0].eval_int(ctx, row));
         if n == i64::MIN {
-            return Err(Error::Overflow);
+            return Err(Error::overflow("BIGINT", &format!("abs({})", n)));
         }
         Ok(Some(n.abs()))
     }

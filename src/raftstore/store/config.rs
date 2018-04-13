@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::u64;
+use std::time::Duration;
 
 use time::Duration as TimeDuration;
 
@@ -161,7 +162,7 @@ impl Default for Config {
             allow_remove_leader: false,
             merge_max_log_gap: 10,
             merge_check_tick_interval: ReadableDuration::secs(10),
-            use_delete_range: true,
+            use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
 
             // They are preserved for compatibility check.
@@ -178,6 +179,10 @@ impl Config {
 
     pub fn raft_store_max_leader_lease(&self) -> TimeDuration {
         TimeDuration::from_std(self.raft_store_max_leader_lease.0).unwrap()
+    }
+
+    pub fn raft_heartbeat_interval(&self) -> Duration {
+        self.raft_base_tick_interval.0 * self.raft_heartbeat_ticks as u32
     }
 
     pub fn validate(&self) -> Result<()> {
