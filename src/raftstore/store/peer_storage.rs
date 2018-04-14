@@ -124,8 +124,8 @@ struct EntryCache {
 }
 
 impl EntryCache {
-    fn first_index(&self) -> u64 {
-        self.cache.front().map_or(u64::MAX, |e| e.get_index())
+    fn first_index(&self) -> Option<u64> {
+        self.cache.front().map(|e| e.get_index())
     }
 
     fn fetch_entries_to(
@@ -212,17 +212,13 @@ impl EntryCache {
     }
 
     pub fn compact_to(&mut self, idx: u64) {
-        let cache_first_idx = match self.cache.front() {
-            None => return,
-            Some(e) => e.get_index(),
-        };
-
+        let cache_first_idx = self.first_index().unwrap_or(u64::MAX);
         if cache_first_idx > idx {
             return;
         }
         let cache_last_idx = self.cache.back().unwrap().get_index();
         self.cache
-            .drain(..(cmp::min(cache_last_idx, idx) - cache_first_idx) as usize);
+            .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize);
         if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY
         {
             // So the peer storage doesn't have much writes since the proposal of compaction,
@@ -545,7 +541,7 @@ impl PeerStorage {
         if low == high {
             return Ok(ents);
         }
-        let cache_low = self.cache.first_index();
+        let cache_low = self.cache.first_index().unwrap_or(u64::MAX);
         let region_id = self.get_region_id();
         if high <= cache_low {
             // not overlap
@@ -789,6 +785,24 @@ impl PeerStorage {
 
     pub fn compact_to(&mut self, idx: u64) {
         self.cache.compact_to(idx);
+    }
+
+    pub fn maybe_gc_cache(&mut self, replicated_idx: u64, apply_idx: u64) {
+        if replicated_idx == apply_idx {
+            // The region is inactive, clear the cache immediately.
+            self.cache.compact_to(apply_idx + 1);
+        } else {
+            let cache_first_idx = match self.cache.first_index() {
+                None => return,
+                Some(idx) => idx,
+            };
+            if cache_first_idx > replicated_idx + 1 {
+                // Catching up log requires accessing fs already, let's optimize for
+                // the common case.
+                // Maybe gc to second least replicated_idx is better.
+                self.cache.compact_to(apply_idx + 1);
+            }
+        }
     }
 
     // Apply the peer with given snapshot.
