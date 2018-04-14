@@ -34,12 +34,10 @@ struct OrderBy {
 
 impl OrderBy {
     fn new(ctx: &mut EvalContext, mut order_by: Vec<ByItem>) -> Result<OrderBy> {
-        let exprs: Vec<Expression> = box_try!(
-            order_by
-                .iter_mut()
-                .map(|v| Expression::build(ctx, v.take_expr()))
-                .collect()
-        );
+        let mut exprs = Vec::with_capacity(order_by.len());
+        for v in &mut order_by {
+            exprs.push(Expression::build(ctx, v.take_expr())?);
+        }
         Ok(OrderBy {
             items: Arc::new(order_by),
             exprs: exprs,
@@ -47,7 +45,10 @@ impl OrderBy {
     }
 
     fn eval(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Vec<Datum>> {
-        let res: Vec<Datum> = box_try!(self.exprs.iter().map(|v| v.eval(ctx, row)).collect());
+        let mut res = Vec::with_capacity(self.exprs.len());
+        for expr in &self.exprs {
+            res.push(expr.eval(ctx, row)?);
+        }
         Ok(res)
     }
 }
@@ -61,7 +62,6 @@ pub struct TopNExecutor {
     eval_warnings: Option<EvalWarnings>,
     src: Box<Executor + Send>,
     limit: usize,
-    count: i64,
     first_collect: bool,
 }
 
@@ -89,7 +89,6 @@ impl TopNExecutor {
             eval_warnings: None,
             src: src,
             limit: meta.get_limit() as usize,
-            count: 0,
             first_collect: true,
         })
     }
@@ -144,18 +143,13 @@ impl Executor for TopNExecutor {
         }
         let iter = self.iter.as_mut().unwrap();
         match iter.next() {
-            Some(sort_row) => {
-                self.count += 1;
-                Ok(Some(sort_row))
-            }
+            Some(sort_row) => Ok(Some(sort_row)),
             None => Ok(None),
         }
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
         self.src.collect_output_counts(counts);
-        counts.push(self.count);
-        self.count = 0;
     }
 
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
@@ -436,7 +430,7 @@ pub mod test {
         // init TableScan
         let (snapshot, start_ts) = test_store.get_snapshot();
         let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, snap).unwrap();
+        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, snap, true).unwrap();
 
         // init TopN meta
         let mut ob_vec = Vec::with_capacity(2);
@@ -462,7 +456,7 @@ pub mod test {
         for (row, handle) in topn_rows.iter().zip(expect_row_handles) {
             assert_eq!(row.handle, handle);
         }
-        let expected_counts = vec![6, limit as i64];
+        let expected_counts = vec![3, 3];
         let mut counts = Vec::with_capacity(2);
         topn_ect.collect_output_counts(&mut counts);
         assert_eq!(expected_counts, counts);
@@ -510,7 +504,7 @@ pub mod test {
             topn,
             Arc::new(EvalConfig::default()),
             Arc::new(cis),
-            Box::new(TableScanExecutor::new(&table_scan, key_ranges, snap).unwrap()),
+            Box::new(TableScanExecutor::new(&table_scan, key_ranges, snap, false).unwrap()),
         ).unwrap();
         assert!(topn_ect.next().unwrap().is_none());
     }

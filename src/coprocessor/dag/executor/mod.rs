@@ -165,12 +165,13 @@ pub fn build_exec(
     store: SnapshotStore,
     ranges: Vec<KeyRange>,
     ctx: Arc<EvalConfig>,
+    collect: bool,
 ) -> Result<DAGExecutor> {
     let mut execs = execs.into_iter();
     let first = execs
         .next()
         .ok_or_else(|| Error::Other(box_err!("has no executor")))?;
-    let (mut src, columns) = build_first_executor(first, store, ranges)?;
+    let (mut src, columns) = build_first_executor(first, store, ranges, collect)?;
     let mut has_aggr = false;
     for mut exec in execs {
         let curr: Box<Executor + Send> = match exec.get_tp() {
@@ -224,11 +225,17 @@ fn build_first_executor(
     mut first: executor::Executor,
     store: SnapshotStore,
     ranges: Vec<KeyRange>,
+    collect: bool,
 ) -> Result<FirstExecutor> {
     match first.get_tp() {
         ExecType::TypeTableScan => {
             let cols = Arc::new(first.get_tbl_scan().get_columns().to_vec());
-            let ex = Box::new(TableScanExecutor::new(first.get_tbl_scan(), ranges, store)?);
+            let ex = Box::new(TableScanExecutor::new(
+                first.get_tbl_scan(),
+                ranges,
+                store,
+                collect,
+            )?);
             Ok((ex, cols))
         }
         ExecType::TypeIndexScan => {
@@ -239,6 +246,7 @@ fn build_first_executor(
                 ranges,
                 store,
                 unique,
+                collect,
             )?);
             Ok((ex, cols))
         }
