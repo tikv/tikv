@@ -403,13 +403,15 @@ impl SnapContext {
         }
     }
 
+    // if clean_stale_peer_delay is 0, it means we don't use DeleteFilesInRange to clean range,
+    // so there are no overlap ranges, return false; otherwise return true
     fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) -> bool {
         if self.clean_stale_peer_delay.as_secs() == 0 {
             return false;
         }
-        let to_destroy = self.pending_delete_ranges
+        let overlap_ranges = self.pending_delete_ranges
             .drain_overlap_ranges(start_key, end_key);
-        for (region_id, s_key, e_key) in to_destroy {
+        for (region_id, s_key, e_key) in overlap_ranges {
             self.cleanup_range(region_id, s_key, e_key, false /* use_delete_files */);
         }
         true
@@ -547,6 +549,16 @@ mod test {
 
     use super::PendingDeleteRanges;
 
+    fn insert_range(
+        pending_delete_ranges: &mut PendingDeleteRanges,
+        id: u64,
+        s: &str,
+        e: &str,
+        timeout: time::Instant,
+    ) {
+        pending_delete_ranges.insert(id, s.as_bytes().to_vec(), e.as_bytes().to_vec(), timeout);
+    }
+
     #[test]
     fn test_pending_delete_ranges() {
         let mut pending_delete_ranges = PendingDeleteRanges::default();
@@ -554,16 +566,19 @@ mod test {
         let id = 0;
 
         let timeout = time::Instant::now() + delay;
-        pending_delete_ranges.insert(id, b"a".to_vec(), b"c".to_vec(), timeout);
-        pending_delete_ranges.insert(id, b"m".to_vec(), b"n".to_vec(), timeout);
-        pending_delete_ranges.insert(id, b"x".to_vec(), b"z".to_vec(), timeout);
-        pending_delete_ranges.insert(id + 1, b"f".to_vec(), b"i".to_vec(), timeout);
-        pending_delete_ranges.insert(id + 1, b"p".to_vec(), b"t".to_vec(), timeout);
-
+        insert_range(&mut pending_delete_ranges, id, "a", "c", timeout);
+        insert_range(&mut pending_delete_ranges, id, "m", "n", timeout);
+        insert_range(&mut pending_delete_ranges, id, "x", "z", timeout);
+        insert_range(&mut pending_delete_ranges, id + 1, "f", "i", timeout);
+        insert_range(&mut pending_delete_ranges, id + 1, "p", "t", timeout);
         assert_eq!(pending_delete_ranges.len(), 5);
 
         thread::sleep(delay / 2);
 
+        //  a____c    f____i    m____n    p____t    x____z
+        //              g___________________q
+        // when we want to insert [g, q), we first extract overlap ranges,
+        // which are [f, i), [m, n), [p, t)
         let timeout = time::Instant::now() + delay;
         let overlap_ranges =
             pending_delete_ranges.drain_overlap_ranges(&b"g".to_vec(), &b"q".to_vec());
@@ -576,11 +591,12 @@ mod test {
             ]
         );
         assert_eq!(pending_delete_ranges.len(), 2);
-        pending_delete_ranges.insert(id + 2, b"g".to_vec(), b"q".to_vec(), timeout);
+        insert_range(&mut pending_delete_ranges, id + 2, "g", "q", timeout);
         assert_eq!(pending_delete_ranges.len(), 3);
 
         thread::sleep(delay / 2);
 
+        // at t1, [a, c) and [x, z) will timeout
         let now = time::Instant::now();
         let ranges = pending_delete_ranges.drain_timeout_ranges(now);
         assert_eq!(
@@ -594,6 +610,7 @@ mod test {
 
         thread::sleep(delay / 2);
 
+        // at t2, [g, q) will timeout
         let now = time::Instant::now();
         let ranges = pending_delete_ranges.drain_timeout_ranges(now);
         assert_eq!(ranges, [(id + 2, b"g".to_vec(), b"q".to_vec())]);
