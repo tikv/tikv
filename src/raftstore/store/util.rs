@@ -15,7 +15,7 @@ use std::option::Option;
 use std::{fmt, u64};
 
 use kvproto::metapb;
-use raft::eraftpb::{self, ConfChangeType, MessageType};
+use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use kvproto::raft_serverpb::RaftMessage;
 use protobuf::{self, Message, MessageStatic};
 use raftstore::{Error, Result};
@@ -32,13 +32,17 @@ use super::engine::{IterOption, Iterable};
 use super::peer_storage;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
-    for peer in region.get_peers() {
-        if peer.get_store_id() == store_id {
-            return Some(peer);
-        }
-    }
+    region
+        .get_peers()
+        .iter()
+        .find(|&p| p.get_store_id() == store_id)
+}
 
-    None
+pub fn find_peer_mut(region: &mut metapb::Region, store_id: u64) -> Option<&mut metapb::Peer> {
+    region
+        .mut_peers()
+        .iter_mut()
+        .find(|p| p.get_store_id() == store_id)
 }
 
 pub fn remove_peer(region: &mut metapb::Region, store_id: u64) -> Option<metapb::Peer> {
@@ -54,6 +58,13 @@ pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     let mut peer = metapb::Peer::new();
     peer.set_store_id(store_id);
     peer.set_id(peer_id);
+    peer
+}
+
+// a helper function to create learner peer easily.
+pub fn new_learner_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
+    let mut peer = new_peer(store_id, peer_id);
+    peer.set_is_learner(true);
     peer
 }
 
@@ -87,12 +98,13 @@ pub fn is_first_vote_msg(msg: &RaftMessage) -> bool {
 
 const STR_CONF_CHANGE_ADD_NODE: &str = "AddNode";
 const STR_CONF_CHANGE_REMOVE_NODE: &str = "RemoveNode";
+const STR_CONF_CHANGE_ADDLEARNER_NODE: &str = "AddLearner";
 
 pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str {
     match *conf_type {
         ConfChangeType::AddNode => STR_CONF_CHANGE_ADD_NODE,
         ConfChangeType::RemoveNode => STR_CONF_CHANGE_REMOVE_NODE,
-        ConfChangeType::AddLearnerNode => unimplemented!(),
+        ConfChangeType::AddLearnerNode => STR_CONF_CHANGE_ADDLEARNER_NODE,
     }
 }
 
@@ -222,12 +234,13 @@ pub fn region_on_same_stores(lhs: &metapb::Region, rhs: &metapb::Region) -> bool
     if lhs.get_peers().len() != rhs.get_peers().len() {
         return false;
     }
+
     // Because every store can only have one replica for the same region,
     // so just one round check is enough.
     lhs.get_peers().iter().all(|lp| {
-        rhs.get_peers()
-            .iter()
-            .any(|rp| rp.get_store_id() == lp.get_store_id())
+        rhs.get_peers().iter().any(|rp| {
+            rp.get_store_id() == lp.get_store_id() && rp.get_is_learner() == lp.get_is_learner()
+        })
     })
 }
 
@@ -380,6 +393,19 @@ pub fn is_sibling_regions(lhs: &metapb::Region, rhs: &metapb::Region) -> bool {
     false
 }
 
+pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
+    // Here `learners` means learner peers, and `nodes` means voter peers.
+    let mut conf_state = ConfState::new();
+    for p in region.get_peers() {
+        if p.get_is_learner() {
+            conf_state.mut_learners().push(p.get_id());
+        } else {
+            conf_state.mut_nodes().push(p.get_id());
+        }
+    }
+    conf_state
+}
+
 #[cfg(test)]
 mod tests {
     use std::process;
@@ -476,13 +502,32 @@ mod tests {
     }
 
     #[test]
+    fn test_conf_state_from_region() {
+        let mut region = metapb::Region::new();
+
+        let mut peer = metapb::Peer::new();
+        peer.set_id(1);
+        region.mut_peers().push(peer);
+
+        let mut peer = metapb::Peer::new();
+        peer.set_id(2);
+        peer.set_is_learner(true);
+        region.mut_peers().push(peer);
+
+        let cs = conf_state_from_region(&region);
+        assert!(cs.get_nodes().contains(&1));
+        assert!(cs.get_learners().contains(&2));
+    }
+
+    #[test]
     fn test_peer() {
         let mut region = metapb::Region::new();
         region.set_id(1);
         region.mut_peers().push(new_peer(1, 1));
+        region.mut_peers().push(new_learner_peer(2, 2));
 
-        assert!(find_peer(&region, 1).is_some());
-        assert!(find_peer(&region, 10).is_none());
+        assert!(!find_peer(&region, 1).unwrap().get_is_learner());
+        assert!(find_peer(&region, 2).unwrap().get_is_learner());
 
         assert!(remove_peer(&mut region, 1).is_some());
         assert!(remove_peer(&mut region, 1).is_none());
@@ -755,20 +800,31 @@ mod tests {
     #[test]
     fn test_on_same_store() {
         let cases = vec![
-            (vec![2, 3, 4], vec![1, 2, 3], false),
-            (vec![2, 3, 1], vec![1, 2, 3], true),
-            (vec![2, 3, 4], vec![1, 2], false),
-            (vec![1, 2, 3], vec![1, 2, 3], true),
+            (vec![2, 3, 4], vec![], vec![1, 2, 3], vec![], false),
+            (vec![2, 3, 1], vec![], vec![1, 2, 3], vec![], true),
+            (vec![2, 3, 4], vec![], vec![1, 2], vec![], false),
+            (vec![1, 2, 3], vec![], vec![1, 2, 3], vec![], true),
+            (vec![1, 3], vec![2, 4], vec![1, 2], vec![3, 4], false),
+            (vec![1, 3], vec![2, 4], vec![1, 3], vec![], false),
+            (vec![1, 3], vec![2, 4], vec![], vec![2, 4], false),
+            (vec![1, 3], vec![2, 4], vec![3, 1], vec![4, 2], true),
         ];
 
-        for (s1, s2, exp) in cases {
+        for (s1, s2, s3, s4, exp) in cases {
             let mut r1 = metapb::Region::new();
             for (store_id, peer_id) in s1.into_iter().zip(0..) {
                 r1.mut_peers().push(new_peer(store_id, peer_id));
             }
+            for (store_id, peer_id) in s2.into_iter().zip(0..) {
+                r1.mut_peers().push(new_learner_peer(store_id, peer_id));
+            }
+
             let mut r2 = metapb::Region::new();
-            for (store_id, peer_id) in s2.into_iter().zip(5..) {
+            for (store_id, peer_id) in s3.into_iter().zip(10..) {
                 r2.mut_peers().push(new_peer(store_id, peer_id));
+            }
+            for (store_id, peer_id) in s4.into_iter().zip(10..) {
+                r2.mut_peers().push(new_learner_peer(store_id, peer_id));
             }
             let res = super::region_on_same_stores(&r1, &r2);
             assert_eq!(res, exp, "{:?} vs {:?}", r1, r2);
