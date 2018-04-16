@@ -576,3 +576,24 @@ impl EngineIterator for RegionIterator {
         self.should_seekable(key.encoded()).map_err(From::from)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+    use storage::engine;
+
+    use super::*;
+
+    #[test]
+    fn test_get_tag_error() {
+        assert_eq!(
+            get_tag_from_error(&Error::Timeout(Duration::from_secs(0))),
+            "timeout"
+        );
+
+        assert_eq!(
+            get_tag_from_engine_error(&engine::Error::Timeout(Duration::from_secs(0))),
+            "timeout"
+        );
+    }
+}

@@ -118,3 +118,17 @@ pub fn get_level_by_string(lv: &str) -> LogLevelFilter {
         _ => LogLevelFilter::Info,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{get_level_by_string, LogLevelFilter};
+
+    #[test]
+    fn test_get_level_by_string() {
+        let filter = get_level_by_string("error");
+        assert_eq!(filter, LogLevelFilter::Error);
+
+        let filter = get_level_by_string("other");
+        assert_eq!(filter, LogLevelFilter::Info);
+    }
+}

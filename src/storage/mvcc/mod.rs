@@ -124,3 +124,58 @@ impl Error {
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use storage::engine;
+    use util::codec;
+    use super::*;
+
+    #[test]
+    fn test_error_maybe_clone() {
+        let e = Error::Engine(engine::Error::Other(box_err!("")));
+        assert!(e.maybe_clone().is_none());
+
+        let e = Error::Codec(codec::Error::Other(box_err!("")));
+        assert!(e.maybe_clone().is_none());
+
+        let e = Error::Io(io::Error::new(io::ErrorKind::UnexpectedEof, ""));
+        assert!(e.maybe_clone().is_none());
+
+        let e = Error::BadFormatLock;
+        assert!(e.maybe_clone().is_some());
+
+        let e = Error::BadFormatWrite;
+        assert!(e.maybe_clone().is_some());
+
+        let e = Error::KeyIsLocked {
+            key: vec![],
+            primary: vec![],
+            ts: 0,
+            ttl: 0,
+        };
+        assert!(e.maybe_clone().is_some());
+
+        let e = Error::TxnLockNotFound {
+            start_ts: 0,
+            commit_ts: 0,
+            key: vec![],
+        };
+        assert!(e.maybe_clone().is_some());
+
+        let e = Error::WriteConflict {
+            start_ts: 0,
+            conflict_ts: 0,
+            key: vec![],
+            primary: vec![],
+        };
+        assert!(e.maybe_clone().is_some());
+
+        let e = Error::KeyVersion;
+        assert!(e.maybe_clone().is_some());
+
+        let e = Error::Other(box_err!(""));
+        assert!(e.maybe_clone().is_none());
+    }
+}
