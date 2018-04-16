@@ -956,19 +956,24 @@ fn test_scan_detail() {
         init_data_with_details(Context::new(), engine, &product, &data, true, cfg)
     };
 
-    // for dag selection
-    let mut req = DAGSelect::from(&product.table).build();
-    req.mut_context().set_scan_detail(true);
-    req.mut_context().set_handle_time(true);
+    let reqs = vec![
+        DAGSelect::from(&product.table).build(),
+        DAGSelect::from_index(&product.table, product.name).build(),
+    ];
 
-    let resp = handle_request(&end_point, req);
-    assert!(resp.get_exec_details().has_handle_time());
+    for mut req in reqs.into_iter() {
+        req.mut_context().set_scan_detail(true);
+        req.mut_context().set_handle_time(true);
 
-    let scan_detail = resp.get_exec_details().get_scan_detail();
-    // Values would occur in data cf are inlined in write cf.
-    assert_eq!(scan_detail.get_write().get_total(), 5);
-    assert_eq!(scan_detail.get_write().get_processed(), 4);
-    assert_eq!(scan_detail.get_lock().get_total(), 1);
+        let resp = handle_request(&end_point, req);
+        assert!(resp.get_exec_details().has_handle_time());
+
+        let scan_detail = resp.get_exec_details().get_scan_detail();
+        // Values would occur in data cf are inlined in write cf.
+        assert_eq!(scan_detail.get_write().get_total(), 5);
+        assert_eq!(scan_detail.get_write().get_processed(), 4);
+        assert_eq!(scan_detail.get_lock().get_total(), 1);
+    }
 
     end_point.stop().unwrap().join().unwrap();
 }
