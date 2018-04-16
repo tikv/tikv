@@ -35,7 +35,6 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdRes
 use kvproto::importpb::SSTMeta;
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::eraftpb::{ConfChangeType, MessageType};
-use raftstore::{Error, Result};
 
 use util::{escape, rocksdb};
 use util::time::{duration_to_sec, SlowTimer};
