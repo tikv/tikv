@@ -57,6 +57,8 @@ use super::local_metrics::{RaftMessageMetrics, RaftMetrics, RaftProposeMetrics, 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
 
+const SHRINK_CACHE_CAPACITY: usize = 64;
+
 struct ReadIndexRequest {
     id: u64,
     cmds: MustConsumeVec<(RaftCmdRequest, Callback)>,
@@ -90,6 +92,13 @@ impl ReadIndexQueue {
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
             }
+        }
+    }
+
+    fn gc(&mut self) {
+        if self.reads.capacity() > SHRINK_CACHE_CAPACITY && self.reads.len() < SHRINK_CACHE_CAPACITY
+        {
+            self.reads.shrink_to_fit();
         }
     }
 }
@@ -131,6 +140,13 @@ impl ProposalQueue {
 
     fn clear(&mut self) {
         self.queue.clear();
+    }
+
+    fn gc(&mut self) {
+        if self.queue.capacity() > SHRINK_CACHE_CAPACITY && self.queue.len() < SHRINK_CACHE_CAPACITY
+        {
+            self.queue.shrink_to_fit();
+        }
     }
 }
 
@@ -895,6 +911,7 @@ impl Peer {
             // line won't be called twice for the same snapshot.
             self.raft_group.advance_apply(self.last_applying_idx);
         }
+        self.proposals.gc();
     }
 
     fn apply_reads(&mut self, ready: &Ready) {
@@ -986,6 +1003,7 @@ impl Peer {
             }
             self.pending_reads.ready_cnt = 0;
         }
+        self.pending_reads.gc();
     }
 
     fn renew_leader_lease(&mut self, ts: Timespec) {
