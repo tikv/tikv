@@ -940,6 +940,40 @@ fn test_select_after_lease() {
 }
 
 #[test]
+fn test_scan_detail() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let mut cfg = new_endpoint_test_config();
+        cfg.end_point_batch_row_limit = 100;
+        init_data_with_details(Context::new(), engine, &product, &data, true, cfg)
+    };
+
+    // for dag selection
+    let mut req = DAGSelect::from(&product.table).build();
+    req.mut_context().set_scan_detail(true);
+    req.mut_context().set_handle_time(true);
+
+    let resp = handle_request(&end_point, req);
+    assert!(resp.get_exec_details().has_handle_time());
+
+    let scan_detail = resp.get_exec_details().get_scan_detail();
+    // Values would occur in data cf are inlined in write cf.
+    assert_eq!(scan_detail.get_write().get_total(), 5);
+    assert_eq!(scan_detail.get_write().get_processed(), 4);
+    assert_eq!(scan_detail.get_lock().get_total(), 1);
+
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
 fn test_group_by() {
     let data = vec![
         (1, Some("name:0"), 2),

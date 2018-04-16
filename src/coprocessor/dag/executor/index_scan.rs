@@ -248,10 +248,10 @@ impl Executor for IndexScanExecutor {
     }
 
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        metrics.merge(&mut self.metrics);
         if let Some(scanner) = self.scanner.as_mut() {
             scanner.collect_statistics_into(&mut self.metrics.cf_stats);
         }
+        metrics.merge(&mut self.metrics);
         if self.first_collect {
             metrics.executor_count.index_scan += 1;
             self.first_collect = false;
