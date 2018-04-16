@@ -1018,4 +1018,27 @@ mod tests {
             s
         );
     }
+
+    #[test]
+    fn test_deconstruct_request_tracker() {
+        let mut worker = WorkerBuilder::new("test-endpoint").batch_size(1).create();
+        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let mut cfg = Config::default();
+        cfg.end_point_concurrency = 1;
+        let pd_worker = FutureWorker::new("test-pd-worker");
+        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
+        end_point.max_running_task_count = 1;
+        worker.start(end_point).unwrap();
+
+        let mut req = Request::new();
+        req.set_tp(REQ_TYPE_DAG);
+
+        let (tx, rx) = oneshot::channel();
+        let task = RequestTask::new(req, OnResponse::Unary(tx), 1000).unwrap();
+        worker.schedule(Task::Request(task)).unwrap();
+
+        let resp = rx.wait().unwrap();
+        assert!(format!("{:?}", resp.get_other_error()).contains("has no executor"));
+        worker.stop();
+    }
 }
