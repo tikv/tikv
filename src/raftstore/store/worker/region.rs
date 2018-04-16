@@ -403,8 +403,9 @@ impl SnapContext {
         }
     }
 
-    // if clean_stale_peer_delay is 0, it means we don't use DeleteFilesInRange to clean range,
-    // so there are no overlap ranges, return false; otherwise return true
+    // if clean_stale_peer_delay is 0, we don't use DeleteFilesInRange to clean range,
+    // return false means we don't clean overlap ranges
+    // return true means we have cleaned overlap ranges
     fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) -> bool {
         if self.clean_stale_peer_delay.as_secs() == 0 {
             return false;
