@@ -261,7 +261,7 @@ impl Host {
             CommandPri::Normal => &mut self.pool,
         };
         let pool = &pool_and_ctx_pool.pool;
-        let ctx_pool = pool_and_ctx_pool.contexts.clone();
+        tracker.ctx_pool(pool_and_ctx_pool.contexts.clone());
 
         match cop_req {
             CopRequest::DAG(dag) => {
@@ -272,7 +272,6 @@ impl Host {
                         return;
                     }
                 };
-                tracker.ctx_pool(ctx_pool);
                 if !on_resp.is_streaming() {
                     let batch_row_limit = self.batch_row_limit;
                     let do_request = move || {
@@ -313,7 +312,6 @@ impl Host {
             CopRequest::Analyze(analyze) => {
                 let ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx);
                 let mut exec_metrics = ExecutorMetrics::default();
-                tracker.ctx_pool(ctx_pool);
                 let do_request = move || {
                     tracker.record_wait();
                     let mut resp = ctx.handle_request(&mut exec_metrics).unwrap_or_else(|e| {
@@ -329,7 +327,6 @@ impl Host {
             CopRequest::Checksum(checksum) => {
                 let ctx = ChecksumContext::new(checksum, ranges, snap, &req_ctx);
                 let mut exec_metrics = ExecutorMetrics::default();
-                tracker.ctx_pool(ctx_pool);
                 let do_request = move || {
                     tracker.record_wait();
                     let mut resp = ctx.handle_request(&mut exec_metrics).unwrap_or_else(|e| {
@@ -530,6 +527,8 @@ impl Drop for RequestTracker {
                 self.first_range,
             );
         }
+
+        // `wait_time` is none means the request has not entered thread pool.
         if self.wait_time.is_none() {
             COPR_PENDING_REQS
                 .with_label_values(&[self.scan_tag, self.pri_str])
@@ -546,27 +545,27 @@ impl Drop for RequestTracker {
             return;
         }
 
-        if let Some(ctx_pool) = self.ctx_pool.take() {
-            let mut cop_ctx = ctx_pool.get_context().0.borrow_mut();
-            cop_ctx
-                .basic_local_metrics
-                .req_time
-                .with_label_values(&[self.scan_tag])
-                .observe(duration_to_sec(self.start.elapsed()));
-            cop_ctx
-                .basic_local_metrics
-                .handle_time
-                .with_label_values(&[self.scan_tag])
-                .observe(self.total_handle_time);
-            cop_ctx
-                .basic_local_metrics
-                .scan_keys
-                .with_label_values(&[self.scan_tag])
-                .observe(self.exec_metrics.cf_stats.total_op_count() as f64);
+        let ctx_pool = self.ctx_pool.take().unwrap();
+        let mut cop_ctx = ctx_pool.get_context().0.borrow_mut();
 
-            let exec_metrics = mem::replace(&mut self.exec_metrics, ExecutorMetrics::default());
-            cop_ctx.collect(self.region_id, self.scan_tag, exec_metrics);
-        }
+        cop_ctx
+            .basic_local_metrics
+            .req_time
+            .with_label_values(&[self.scan_tag])
+            .observe(duration_to_sec(self.start.elapsed()));
+        cop_ctx
+            .basic_local_metrics
+            .handle_time
+            .with_label_values(&[self.scan_tag])
+            .observe(self.total_handle_time);
+        cop_ctx
+            .basic_local_metrics
+            .scan_keys
+            .with_label_values(&[self.scan_tag])
+            .observe(self.exec_metrics.cf_stats.total_op_count() as f64);
+
+        let exec_metrics = mem::replace(&mut self.exec_metrics, ExecutorMetrics::default());
+        cop_ctx.collect(self.region_id, self.scan_tag, exec_metrics);
     }
 }
 
