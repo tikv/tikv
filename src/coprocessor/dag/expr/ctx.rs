@@ -29,6 +29,9 @@ pub const FLAG_IGNORE_TRUNCATE: u64 = 1;
 /// should be returned as error, in non-strict sql mode, truncate error should be saved as warning.
 pub const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
 
+// `FLAG_PAD_CHAR_TO_FULL_LENGTH` indicates if sql_mode 'PAD_CHAR_TO_FULL_LENGTH' is set.
+pub const FLAG_PAD_CHAR_TO_FULL_LENGTH: u64 = 1 << 2;
+
 // `FLAG_IN_SELECT_STMT` indicates if this is a SELECT statement.
 pub const FLAG_IN_SELECT_STMT: u64 = 1 << 5;
 /// `FLAG_OVERFLOW_AS_WARNING` indicates if overflow error should be returned as warning.
@@ -45,6 +48,7 @@ pub struct EvalConfig {
     pub truncate_as_warning: bool,
     pub overflow_as_warning: bool,
     pub in_select_stmt: bool,
+    pub pad_char_to_full_length: bool,
     pub max_warning_cnt: usize,
 }
 
@@ -56,6 +60,7 @@ impl Default for EvalConfig {
             truncate_as_warning: false,
             overflow_as_warning: false,
             in_select_stmt: false,
+            pad_char_to_full_length: false,
             max_warning_cnt: DEFAULT_MAX_WARNING_CNT,
         }
     }
@@ -77,6 +82,7 @@ impl EvalConfig {
             truncate_as_warning: (flags & FLAG_TRUNCATE_AS_WARNING) > 0,
             overflow_as_warning: (flags & FLAG_OVERFLOW_AS_WARNING) > 0,
             in_select_stmt: (flags & FLAG_IN_SELECT_STMT) > 0,
+            pad_char_to_full_length: (flags & FLAG_PAD_CHAR_TO_FULL_LENGTH) > 0,
             max_warning_cnt: DEFAULT_MAX_WARNING_CNT,
         };
 

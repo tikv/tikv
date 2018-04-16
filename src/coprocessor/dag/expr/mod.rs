@@ -130,7 +130,7 @@ impl Expression {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_string(),
-            Expression::ColumnRef(ref column) => column.eval_string(row),
+            Expression::ColumnRef(ref column) => column.eval_string(ctx, row),
             Expression::ScalarFn(ref f) => f.eval_bytes(ctx, row),
         }
     }
@@ -195,16 +195,8 @@ impl Expression {
     /// For Bit/Hex, we will get a wrong result if we convert it to int as a string value.
     /// For example, when convert `0b101` to int, the result should be 5, but we will get
     /// 101 if we regard it as a string.
-    fn is_hybrid_type(&self) -> bool {
-        match self.get_tp().get_tp() as u8 {
-            types::ENUM | types::BIT | types::SET => {
-                return true;
-            }
-            _ => {}
-        }
-        // TODO:For a constant, the field type will be inferred as `VARCHAR`
-        // when the kind of it is `HEX` or `BIT`.
-        false
+    pub fn is_hybrid_type(&self) -> bool {
+        types::is_hybrid_type(self.get_tp().get_tp() as u8)
     }
 }
 

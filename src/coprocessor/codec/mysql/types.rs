@@ -75,3 +75,9 @@ pub const BLOB: u8 = 252;
 pub const VAR_STRING: u8 = 253;
 pub const STRING: u8 = 254;
 pub const GEOMETRY: u8 = 255;
+
+/// `is_hybrid_type` checks whether a type is a hybrid type,
+/// which can represent different types of value in specific context.
+pub fn is_hybrid_type(tp: u8) -> bool {
+    tp == ENUM || tp == BIT || tp == SET
+}
