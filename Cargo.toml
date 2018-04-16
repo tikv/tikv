@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "2.0.0-rc.4.1"
+version = "2.0.0-rc.5"
 keywords = ["KV", "distributed-systems", "raft"]
 build = "build.rs"
 
@@ -91,7 +91,7 @@ git = "https://github.com/pingcap/kvproto.git"
 git = "https://github.com/pingcap/tipb.git"
 
 [dependencies.prometheus]
-version = "0.3"
+version = "0.4"
 default-features = false
 features = ["nightly", "push", "process"]
 
