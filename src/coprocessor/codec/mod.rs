@@ -39,6 +39,9 @@ macro_rules! invalid_type {
 }
 
 pub mod datum;
+//#[allow(dead_code, unused_variables)]
+#[allow(dead_code)]
+pub mod chunk;
 pub mod table;
 pub mod convert;
 pub mod mysql;
