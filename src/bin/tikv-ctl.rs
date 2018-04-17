@@ -212,6 +212,10 @@ trait DebugExecutor {
         start_ts: Option<u64>,
         commit_ts: Option<u64>,
     ) {
+        if !from.starts_with(b"z") || !to.as_ref().map_or(true, |t| t.starts_with(b"z")) {
+            eprintln!("from and to should start with \"z\"");
+            process::exit(-1);
+        }
         let to = to.unwrap_or_default();
         let limit = limit.unwrap_or_default();
         if to.is_empty() && limit == 0 {
@@ -824,6 +828,7 @@ fn main() {
                 .about("print the range db range")
                 .arg(
                     Arg::with_name("from")
+                        .required(true)
                         .short("f")
                         .long("from")
                         .takes_value(true)
@@ -831,6 +836,7 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("to")
+                        .conflicts_with("limit")
                         .short("t")
                         .long("to")
                         .takes_value(true)
@@ -838,6 +844,7 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("limit")
+                        .conflicts_with("to")
                         .long("limit")
                         .takes_value(true)
                         .help("set the scan limit"),
