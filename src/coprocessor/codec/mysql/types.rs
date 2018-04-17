@@ -77,7 +77,7 @@ pub const STRING: u8 = 254;
 pub const GEOMETRY: u8 = 255;
 
 /// `is_hybrid_type` checks whether a type is a hybrid type,
-/// which can represent different types of value in specific context.
+/// which can represent different types of values in specific context.
 pub fn is_hybrid_type(tp: u8) -> bool {
     tp == ENUM || tp == BIT || tp == SET
 }
