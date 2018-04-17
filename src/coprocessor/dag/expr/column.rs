@@ -63,7 +63,7 @@ impl Column {
         }
         let new_len = flen - cur_len + res.len();
         let mut s = res.into_owned();
-        s.resize(new_len, 0);
+        s.resize(new_len, b' ');
         Ok(Some(Cow::Owned(s)))
     }
 
@@ -183,5 +183,32 @@ mod test {
         let res = e.eval_string(&mut pad_char_ctx, &row).unwrap().unwrap();
         let s = str::from_utf8(res.as_ref()).unwrap();
         assert_eq!(s.chars().count(), flen as usize);
+    }
+
+    #[test]
+    fn test_hybried_type() {
+        let mut ctx = EvalContext::default();
+        let row = vec![Datum::I64(12)];
+        let hybrid_cases = vec![types::ENUM, types::BIT, types::SET];
+        let in_hybrid_cases = vec![types::JSON, types::NEW_DECIMAL, types::SHORT];
+        for tp in hybrid_cases {
+            let mut c = col_expr(0);
+            let mut field_tp = FieldType::new();
+            field_tp.set_tp(i32::from(tp));
+            c.set_field_type(field_tp);
+            let e = Expression::build(&mut ctx, c).unwrap();
+            let res = e.eval_string(&mut ctx, &row).unwrap().unwrap();
+            assert_eq!(res.as_ref(), b"12");
+        }
+
+        for tp in in_hybrid_cases {
+            let mut c = col_expr(0);
+            let mut field_tp = FieldType::new();
+            field_tp.set_tp(i32::from(tp));
+            c.set_field_type(field_tp);
+            let e = Expression::build(&mut ctx, c).unwrap();
+            let res = e.eval_string(&mut ctx, &row);
+            assert!(res.is_err());
+        }
     }
 }
