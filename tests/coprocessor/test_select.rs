@@ -952,7 +952,7 @@ fn test_scan_detail() {
     let (_, mut end_point) = {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
         let mut cfg = new_endpoint_test_config();
-        cfg.end_point_batch_row_limit = 100;
+        cfg.end_point_batch_row_limit = 50;
         init_data_with_details(Context::new(), engine, &product, &data, true, cfg)
     };
 
@@ -961,7 +961,7 @@ fn test_scan_detail() {
         DAGSelect::from_index(&product.table, product.name).build(),
     ];
 
-    for mut req in reqs.into_iter() {
+    for mut req in reqs {
         req.mut_context().set_scan_detail(true);
         req.mut_context().set_handle_time(true);
 
