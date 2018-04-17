@@ -138,72 +138,6 @@ pub mod compression_type_level_serde {
     }
 }
 
-pub mod order_map_serde {
-    use std::fmt;
-    use std::hash::Hash;
-    use std::marker::PhantomData;
-
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use serde::de::{MapAccess, Visitor};
-    use serde::ser::SerializeMap;
-
-    use util::collections::HashMap;
-
-    pub fn serialize<S, K, V>(m: &HashMap<K, V>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-        K: Serialize + Hash + Eq,
-        V: Serialize,
-    {
-        let mut s = serializer.serialize_map(Some(m.len()))?;
-        for (k, v) in m {
-            s.serialize_entry(k, v)?;
-        }
-        s.end()
-    }
-
-    pub fn deserialize<'de, D, K, V>(deserializer: D) -> Result<HashMap<K, V>, D::Error>
-    where
-        D: Deserializer<'de>,
-        K: Deserialize<'de> + Eq + Hash,
-        V: Deserialize<'de>,
-    {
-        struct MapVisitor<K, V> {
-            phantom: PhantomData<HashMap<K, V>>,
-        }
-
-        impl<'de, K, V> Visitor<'de> for MapVisitor<K, V>
-        where
-            K: Deserialize<'de> + Eq + Hash,
-            V: Deserialize<'de>,
-        {
-            type Value = HashMap<K, V>;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a map")
-            }
-
-            fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
-            where
-                M: MapAccess<'de>,
-            {
-                let mut map = HashMap::with_capacity_and_hasher(
-                    access.size_hint().unwrap_or(0),
-                    Default::default(),
-                );
-                while let Some((key, value)) = access.next_entry()? {
-                    map.insert(key, value);
-                }
-                Ok(map)
-            }
-        }
-
-        deserializer.deserialize_map(MapVisitor {
-            phantom: PhantomData,
-        })
-    }
-}
-
 macro_rules! numeric_enum_mod {
     ($name:ident $enum:ident { $($variant:ident = $value:expr, )* }) => {
         pub mod $name {
@@ -1032,7 +966,6 @@ mod test {
     use rocksdb::DBCompressionType;
     use tempdir::TempDir;
     use toml;
-
     use util::collections::HashMap;
 
     #[test]
@@ -1120,7 +1053,7 @@ mod test {
     fn test_parse_hash_map() {
         #[derive(Serialize, Deserialize)]
         struct MapHolder {
-            #[serde(with = "super::order_map_serde")] m: HashMap<String, String>,
+            m: HashMap<String, String>,
         }
 
         let legal_cases = vec![
