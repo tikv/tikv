@@ -966,7 +966,6 @@ mod test {
     use rocksdb::DBCompressionType;
     use tempdir::TempDir;
     use toml;
-    use util::collections::HashMap;
 
     #[test]
     fn test_readable_size() {
@@ -1047,31 +1046,6 @@ mod test {
             let src_str = format!("s = {:?}", src);
             assert!(toml::from_str::<SizeHolder>(&src_str).is_err(), "{}", src);
         }
-    }
-
-    #[test]
-    fn test_parse_hash_map() {
-        #[derive(Serialize, Deserialize)]
-        struct MapHolder {
-            m: HashMap<String, String>,
-        }
-
-        let legal_cases = vec![
-            (map![], ""),
-            (map!["k1".to_owned() => "v1".to_owned()], "k1 = \"v1\"\n"),
-        ];
-
-        for (src, exp) in legal_cases {
-            let m = MapHolder { m: src };
-            let res_str = toml::to_string(&m).unwrap();
-            let exp_str = format!("[m]\n{}", exp);
-            assert_eq!(res_str, exp_str);
-            let exp_m: MapHolder = toml::from_str(&exp_str).unwrap();
-            assert_eq!(m.m, exp_m.m);
-        }
-        // inline table should be supported.
-        let m: MapHolder = toml::from_str(r#"m = {"k1" = "v1"}"#).unwrap();
-        assert_eq!(&m.m["k1"], "v1");
     }
 
     #[test]
