@@ -241,7 +241,10 @@ impl Host {
     }
 
     fn handle_request(&mut self, snap: Box<Snapshot>, t: RequestTask) {
+        // Collect metrics into it before requests enter into execute pool.
+        // Otherwize collect into thread local contexts.
         let metrics = &mut self.basic_local_metrics;
+
         if let Err(e) = t.check_outdated() {
             let resp = err_resp(e, metrics);
             t.on_resp.respond(resp);
@@ -524,6 +527,8 @@ impl Drop for RequestTracker {
                 self.first_range,
             );
         }
+
+        // `wait_time` is none means the request has not entered thread pool.
         if self.wait_time.is_none() {
             COPR_PENDING_REQS
                 .with_label_values(&[self.scan_tag, self.pri_str])
@@ -1011,5 +1016,28 @@ mod tests {
             "parse should fail due to recursion limit {}",
             s
         );
+    }
+
+    #[test]
+    fn test_deconstruct_request_tracker() {
+        let mut worker = WorkerBuilder::new("test-endpoint").batch_size(1).create();
+        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let mut cfg = Config::default();
+        cfg.end_point_concurrency = 1;
+        let pd_worker = FutureWorker::new("test-pd-worker");
+        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
+        end_point.max_running_task_count = 1;
+        worker.start(end_point).unwrap();
+
+        let mut req = Request::new();
+        req.set_tp(REQ_TYPE_DAG);
+
+        let (tx, rx) = oneshot::channel();
+        let task = RequestTask::new(req, OnResponse::Unary(tx), 1000).unwrap();
+        worker.schedule(Task::Request(task)).unwrap();
+
+        let resp = rx.wait().unwrap();
+        assert!(format!("{:?}", resp.get_other_error()).contains("has no executor"));
+        worker.stop();
     }
 }
