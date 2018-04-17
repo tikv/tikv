@@ -27,6 +27,7 @@ extern crate rustc_serialize;
 extern crate tikv;
 extern crate toml;
 
+use std::thread;
 use std::fs::File;
 use std::io::Read;
 use std::{process, str, u64};
@@ -1085,7 +1086,7 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("compact-whole-cluster")
-                .about("compact whole cluster in a column family in a specified range")
+                .about("compact whole cluster in a specified range in multiple column families")
                 .arg(
                     Arg::with_name("pd")
                         .short("p")
@@ -1103,8 +1104,12 @@ fn main() {
                     Arg::with_name("cf")
                         .short("c")
                         .takes_value(true)
+                        .multiple(true)
+                        .use_delimiter(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
                         .default_value(CF_DEFAULT)
-                        .help("column family name, for kv db, can be default/write/lock/raft; for raft db, can only be default"),
+                        .help("column family names, for kv db, combine from default/lock/write; for raft db, can only be default"),
                 )
                 .arg(
                     Arg::with_name("from")
@@ -1147,10 +1152,10 @@ fn main() {
         let pd = matches.value_of("pd").unwrap();
         let db = matches.value_of("db").unwrap();
         let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
-        let cf = matches.value_of("cf").unwrap();
+        let cfs = Vec::from_iter(matches.values_of("cf").unwrap());
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
-        return compact_whole_cluster(pd, db_type, cf, from_key, to_key, mgr);
+        return compact_whole_cluster(pd, db_type, cfs, from_key, to_key, mgr);
     }
 
     let db = matches.value_of("db");
@@ -1348,7 +1353,7 @@ fn dump_snap_meta_file(path: &str) {
 fn compact_whole_cluster(
     pd: &str,
     db_type: DBType,
-    cf: &str,
+    cfs: Vec<&str>,
     from: Option<Vec<u8>>,
     to: Option<Vec<u8>>,
     mgr: Arc<SecurityManager>,
@@ -1366,9 +1371,22 @@ fn compact_whole_cluster(
         .get_all_stores()
         .unwrap_or_else(|e| perror_and_exit("Get all cluster stores from PD failed", e));
 
-    for e in stores {
-        let debug_executor =
-            new_debug_executor(None, None, Some(&e.address), None, Arc::clone(&mgr));
-        debug_executor.compact(db_type, cf, from.clone(), to.clone());
+    let mut handles = Vec::new();
+    for s in stores {
+        let mgr = Arc::clone(&mgr);
+        let addr = s.address.clone();
+        let (from, to) = (from.clone(), to.clone());
+        let cfs: Vec<String> = cfs.iter().map(|cf| cf.to_string().clone()).collect();
+        let h = thread::spawn(move || {
+            let debug_executor = new_debug_executor(None, None, Some(&addr), None, mgr);
+            for cf in cfs {
+                debug_executor.compact(db_type, cf.as_str(), from.clone(), to.clone());
+            }
+        });
+        handles.push(h);
+    }
+
+    for h in handles {
+        h.join().unwrap();
     }
 }
