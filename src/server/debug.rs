@@ -218,9 +218,9 @@ impl Debugger {
     }
 
     pub fn scan_mvcc(&self, start: &[u8], end: &[u8], limit: u64) -> Result<MvccInfoIterator> {
-        if !start.starts_with(b"z") || (!end.is_empty() && !d.starts_with(b"z")) {
+        if !start.starts_with(b"z") || (!end.is_empty() && !end.starts_with(b"z")) {
             return Err(Error::InvalidArgument(
-                "start and end should start with \"z\"",
+                "start and end should start with \"z\"".to_owned(),
             ));
         }
         if end.is_empty() && limit == 0 {
