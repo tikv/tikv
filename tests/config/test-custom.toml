@@ -18,6 +18,8 @@ grpc-concurrency = 123
 grpc-concurrent-stream = 1234
 grpc-raft-conn-num = 123
 grpc-stream-initial-window-size = 12345
+grpc-keepalive-time = "3s"
+grpc-keepalive-timeout = "1m"
 end-point-concurrency = 12
 end-point-max-tasks = 12
 end-point-stack-size = "12MB"
@@ -342,5 +344,6 @@ cert-path = "invalid path"
 key-path = "invalid path"
 
 [import]
+import-dir = "/abc"
 num-threads = 123
 stream-channel-window = 123

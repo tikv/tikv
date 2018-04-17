@@ -319,10 +319,10 @@ impl<T: PdClient> Runner<T> {
 
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["capacity"])
-            .set(capacity as f64);
+            .set(capacity as i64);
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["available"])
-            .set(available as f64);
+            .set(available as i64);
 
         let f = self.pd_client.store_heartbeat(stats).map_err(|e| {
             error!("store heartbeat failed {:?}", e);
@@ -558,15 +558,15 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     handle,
                     region,
                     peer,
-                    RegionStat::new(
-                        down_peers,
-                        pending_peers,
-                        written_bytes_delta,
-                        written_keys_delta,
-                        read_bytes_delta,
-                        read_keys_delta,
-                        approximate_size,
-                    ),
+                    RegionStat {
+                        down_peers: down_peers,
+                        pending_peers: pending_peers,
+                        written_bytes: written_bytes_delta,
+                        written_keys: written_keys_delta,
+                        read_bytes: read_bytes_delta,
+                        read_keys: read_keys_delta,
+                        approximate_size: approximate_size,
+                    },
                 )
             }
             Task::StoreHeartbeat { stats, store_info } => {

@@ -39,12 +39,12 @@ use std::u64;
 use std::mem;
 
 use prometheus::HistogramTimer;
-use prometheus::local::{LocalCounter, LocalHistogramVec};
+use prometheus::local::{LocalHistogramVec, LocalIntCounter};
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
 use storage::{Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
               Statistics, StatisticsSummary, StorageCb};
-use storage::mvcc::{Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, WriteType,
+use storage::mvcc::{Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write,
                     MAX_TXN_WRITE_SIZE};
 use storage::{Key, KvPair, MvccInfo, Value, CMD_TAG_GC};
 use storage::engine::{self, Callback as EngineCallback, CbContext, Error as EngineError, Modify,
@@ -366,7 +366,7 @@ pub struct Scheduler {
 }
 
 // Make clippy happy.
-type MultipleReturnValue = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, bool, Value)>);
+type MultipleReturnValue = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, Value)>);
 
 fn find_mvcc_infos_by_key(
     reader: &mut MvccReader,
@@ -378,26 +378,16 @@ fn find_mvcc_infos_by_key(
     let lock = reader.load_lock(key)?;
     loop {
         let opt = reader.seek_write(key, ts)?;
-        let short_value: Option<Value>;
         match opt {
-            Some((commit_ts, mut write)) => {
+            Some((commit_ts, write)) => {
                 ts = commit_ts - 1;
-                let write_type = write.write_type;
-                short_value = write.short_value.take();
                 writes.push((commit_ts, write));
-                if write_type != WriteType::Put {
-                    continue;
-                }
             }
             None => break,
         };
-        let write = &writes[writes.len() - 1].1;
-        if let Some(v) = short_value {
-            values.push((write.start_ts, true, v));
-        }
     }
     for (ts, v) in reader.scan_values_in_default(key)? {
-        values.push((ts, false, v));
+        values.push((ts, v));
     }
     Ok((lock, writes, values))
 }
@@ -914,8 +904,8 @@ struct SchedContext {
     processing_read_duration: LocalHistogramVec,
     processing_write_duration: LocalHistogramVec,
     command_keyread_duration: LocalHistogramVec,
-    command_gc_skipped_counter: LocalCounter,
-    command_gc_empty_range_counter: LocalCounter,
+    command_gc_skipped_counter: LocalIntCounter,
+    command_gc_empty_range_counter: LocalIntCounter,
 }
 
 impl Default for SchedContext {
@@ -945,8 +935,7 @@ impl ThreadContext for SchedContext {
                 for (tag, count) in details {
                     KV_COMMAND_SCAN_DETAILS
                         .with_label_values(&[cmd, cf, tag])
-                        .inc_by(count as f64)
-                        .unwrap();
+                        .inc_by(count as i64);
                 }
             }
         }
@@ -976,8 +965,8 @@ impl Scheduler {
         if self.cmd_ctxs.insert(cid, ctx).is_some() {
             panic!("command cid={} shouldn't exist", cid);
         }
-        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as f64);
-        SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as f64);
+        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as i64);
+        SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as i64);
     }
 
     fn remove_ctx(&mut self, cid: u64) -> RunningCtx {
@@ -989,8 +978,8 @@ impl Scheduler {
         if ctx.tag == CMD_TAG_GC {
             self.has_gc_command = false;
         }
-        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as f64);
-        SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as f64);
+        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as i64);
+        SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as i64);
         ctx
     }
 

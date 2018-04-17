@@ -23,14 +23,15 @@ use std::collections::VecDeque;
 use rocksdb::{Writable, WriteBatch, DB};
 use protobuf::Message;
 
-use kvproto::metapb::{self, Region};
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
+use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
+use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftLocalState,
                              RaftSnapshotData, RegionLocalState};
 use util::worker::Scheduler;
 use util::{self, rocksdb};
-use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 use raftstore::{Error, Result};
+use raftstore::store::util::conf_state_from_region;
 use super::worker::RegionTask;
 use super::keys::{self, enc_end_key, enc_start_key};
 use super::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
@@ -241,12 +242,10 @@ impl CacheQueryStats {
     pub fn flush(&mut self) {
         RAFT_ENTRY_FETCHES
             .with_label_values(&["hit"])
-            .inc_by(self.hit as f64)
-            .unwrap();
+            .inc_by(self.hit as i64);
         RAFT_ENTRY_FETCHES
             .with_label_values(&["miss"])
-            .inc_by(self.miss as f64)
-            .unwrap();
+            .inc_by(self.miss as i64);
         self.hit = 0;
         self.miss = 0;
     }
@@ -502,7 +501,6 @@ impl PeerStorage {
 
     pub fn initial_state(&self) -> raft::Result<RaftState> {
         let hard_state = self.raft_state.get_hard_state().clone();
-        let mut conf_state = ConfState::new();
         if hard_state == HardState::new() {
             assert!(
                 !self.is_initialized(),
@@ -514,17 +512,12 @@ impl PeerStorage {
 
             return Ok(RaftState {
                 hard_state: hard_state,
-                conf_state: conf_state,
+                conf_state: ConfState::default(),
             });
         }
-
-        for p in self.region.get_peers() {
-            conf_state.mut_nodes().push(p.get_id());
-        }
-
         Ok(RaftState {
             hard_state: hard_state,
-            conf_state: conf_state,
+            conf_state: conf_state_from_region(&self.region),
         })
     }
 
@@ -1154,7 +1147,7 @@ pub fn fetch_entries_to(
         &start_key,
         &end_key,
         true, // fill_cache
-        &mut |_, value| {
+        |_, value| {
             let mut entry = Entry::new();
             entry.merge_from_bytes(value)?;
 
@@ -1201,7 +1194,7 @@ pub fn clear_meta(
     let mut first_index = last_index + 1;
     let begin_log_key = keys::raft_log_key(region_id, 0);
     let end_log_key = keys::raft_log_key(region_id, first_index);
-    raft_engine.scan(&begin_log_key, &end_log_key, false, &mut |key, _| {
+    raft_engine.scan(&begin_log_key, &end_log_key, false, |key, _| {
         first_index = keys::raft_log_index(key).unwrap();
         Ok(false)
     })?;
@@ -1277,11 +1270,7 @@ pub fn do_snapshot(
     snapshot.mut_metadata().set_index(key.idx);
     snapshot.mut_metadata().set_term(key.term);
 
-    let mut conf_state = ConfState::new();
-    for p in state.get_region().get_peers() {
-        conf_state.mut_nodes().push(p.get_id());
-    }
-
+    let conf_state = conf_state_from_region(state.get_region());
     snapshot.mut_metadata().set_conf_state(conf_state);
 
     let mut s = mgr.get_snapshot_for_building(&key, snap)?;
@@ -1521,7 +1510,7 @@ mod test {
         );
         store
             .kv_engine
-            .scan_cf(CF_RAFT, &meta_start, &meta_end, false, &mut |_, _| {
+            .scan_cf(CF_RAFT, &meta_start, &meta_end, false, |_, _| {
                 count += 1;
                 Ok(true)
             })
@@ -1533,7 +1522,7 @@ mod test {
         );
         store
             .kv_engine
-            .scan_cf(CF_RAFT, &raft_start, &raft_end, false, &mut |_, _| {
+            .scan_cf(CF_RAFT, &raft_start, &raft_end, false, |_, _| {
                 count += 1;
                 Ok(true)
             })
@@ -1541,7 +1530,7 @@ mod test {
 
         store
             .raft_engine
-            .scan(&raft_start, &raft_end, false, &mut |_, _| {
+            .scan(&raft_start, &raft_end, false, |_, _| {
                 count += 1;
                 Ok(true)
             })

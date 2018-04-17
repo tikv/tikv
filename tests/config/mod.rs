@@ -66,6 +66,8 @@ fn test_serde_custom_tikv_config() {
         grpc_concurrent_stream: 1_234,
         grpc_raft_conn_num: 123,
         grpc_stream_initial_window_size: ReadableSize(12_345),
+        grpc_keepalive_time: ReadableDuration::secs(3),
+        grpc_keepalive_timeout: ReadableDuration::secs(60),
         end_point_concurrency: 12,
         end_point_max_tasks: 12,
         end_point_stack_size: ReadableSize::mb(12),
@@ -400,6 +402,7 @@ fn test_serde_custom_tikv_config() {
         override_ssl_target: "".to_owned(),
     };
     value.import = ImportConfig {
+        import_dir: "/abc".to_owned(),
         num_threads: 123,
         stream_channel_window: 123,
     };
