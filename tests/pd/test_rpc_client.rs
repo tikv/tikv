@@ -123,7 +123,7 @@ fn test_rpc_client() {
     assert_eq!(region_info.leader.unwrap(), peer);
 
     client
-        .store_heartbeat(pdpb::StoreStats::new())
+        .store_heartbeat(pdpb::StoreStats::new(), 0)
         .wait()
         .unwrap();
     client.ask_split(metapb::Region::new()).wait().unwrap();

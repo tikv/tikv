@@ -43,28 +43,7 @@ pub struct RegionStat {
     pub read_bytes: u64,
     pub read_keys: u64,
     pub approximate_size: u64,
-}
-
-impl RegionStat {
-    pub fn new(
-        down_peers: Vec<pdpb::PeerStats>,
-        pending_peers: Vec<metapb::Peer>,
-        written_bytes: u64,
-        written_keys: u64,
-        read_bytes: u64,
-        read_keys: u64,
-        approximate_size: u64,
-    ) -> RegionStat {
-        RegionStat {
-            down_peers: down_peers,
-            pending_peers: pending_peers,
-            written_bytes: written_bytes,
-            written_keys: written_keys,
-            read_bytes: read_bytes,
-            read_keys: read_keys,
-            approximate_size: approximate_size,
-        }
-    }
+    pub last_report_ts: u64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -178,7 +157,7 @@ pub trait PdClient: Send + Sync {
     fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse>;
 
     // Send store statistics regularly.
-    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<()>;
+    fn store_heartbeat(&self, stats: pdpb::StoreStats, last_report_ts: u64) -> PdFuture<()>;
 
     // Report pd the split region.
     fn report_split(&self, left: metapb::Region, right: metapb::Region) -> PdFuture<()>;

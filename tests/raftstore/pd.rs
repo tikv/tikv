@@ -992,7 +992,7 @@ impl PdClient for TestPdClient {
         Box::new(ok(resp))
     }
 
-    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<()> {
+    fn store_heartbeat(&self, stats: pdpb::StoreStats, _: u64) -> PdFuture<()> {
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
         }

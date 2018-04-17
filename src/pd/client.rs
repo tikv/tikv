@@ -302,7 +302,8 @@ impl PdClient for RpcClient {
         req.set_approximate_size(region_stat.approximate_size);
 
         let now = SystemTime::now();
-        let ts = now.duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let mut ts = now.duration_since(UNIX_EPOCH).unwrap().as_secs();
+        ts |= region_stat.last_report_ts << 32;
         req.set_timestamp(ts);
 
         let executor = |client: &RwLock<Inner>, req: pdpb::RegionHeartbeatRequest| {
@@ -381,13 +382,18 @@ impl PdClient for RpcClient {
             .execute()
     }
 
-    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<()> {
+    fn store_heartbeat(&self, stats: pdpb::StoreStats, last_report_ts: u64) -> PdFuture<()> {
         let timer = Instant::now();
 
         let mut req = pdpb::StoreHeartbeatRequest::new();
         req.set_header(self.header());
         req.set_stats(stats);
-
+        let mut ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        ts |= last_report_ts << 32;
+        req.set_timestamp(ts);
         let executor = move |client: &RwLock<Inner>, req: pdpb::StoreHeartbeatRequest| {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client

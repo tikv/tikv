@@ -220,7 +220,7 @@ mod tests {
         fn ask_split(&self, _: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
             unimplemented!();
         }
-        fn store_heartbeat(&self, _: pdpb::StoreStats) -> PdFuture<()> {
+        fn store_heartbeat(&self, _: pdpb::StoreStats, _: u64) -> PdFuture<()> {
             unimplemented!();
         }
         fn report_split(&self, _: metapb::Region, _: metapb::Region) -> PdFuture<()> {
