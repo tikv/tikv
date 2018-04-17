@@ -478,7 +478,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             })
     }
 
-    fn clone(&self) -> Box<Engine> {
+    fn clone_box(&self) -> Box<Engine> {
         Box::new(RaftKv::new(self.router.clone()))
     }
 }
