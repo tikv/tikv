@@ -401,6 +401,7 @@ impl Options {
     }
 }
 
+#[derive(Clone)]
 pub struct Storage {
     engine: Box<Engine>,
 
@@ -1316,19 +1317,6 @@ impl Storage {
         self.schedule(cmd, StorageCb::MvccInfoByStartTs(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
-    }
-}
-
-impl Clone for Storage {
-    fn clone(&self) -> Storage {
-        Storage {
-            read_pool: self.read_pool.clone(),
-            engine: self.engine.clone(),
-            worker: Arc::clone(&self.worker),
-            worker_scheduler: self.worker_scheduler.clone(),
-            gc_ratio_threshold: self.gc_ratio_threshold,
-            max_key_size: self.max_key_size,
-        }
     }
 }
 
