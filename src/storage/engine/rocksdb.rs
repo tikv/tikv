@@ -200,7 +200,7 @@ impl Engine for EngineRocksdb {
         Ok(())
     }
 
-    fn clone(&self) -> Box<Engine> {
+    fn clone_box(&self) -> Box<Engine> {
         box EngineRocksdb {
             core: Arc::clone(&self.core),
             sched: self.sched.clone(),
