@@ -31,7 +31,7 @@ use kvproto::raft_serverpb::*;
 
 use raft::{self, quorum, RawNode};
 use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
-use raftstore::store::{clear_meta, init_apply_state, init_raft_state, write_initial_apply_state,
+use raftstore::store::{init_apply_state, init_raft_state, write_initial_apply_state,
                        write_initial_raft_state, write_peer_state};
 use raftstore::store::util as raftstore_util;
 use raftstore::store::engine::{IterOption, Mutable};
@@ -389,33 +389,6 @@ impl Debugger {
         Ok(())
     }
 
-    pub fn remove_region(&self, region_id: u64) -> Result<()> {
-        let kv = self.engines.kv_engine.as_ref();
-        let raft = self.engines.raft_engine.as_ref();
-        let kv_wb = WriteBatch::new();
-        let raft_wb = WriteBatch::new();
-
-        let key = keys::raft_state_key(region_id);
-        let raft_state = match box_try!(raft.get_msg::<RaftLocalState>(&key)) {
-            Some(s) => s,
-            None => return Err(Error::Other("No RaftLocalState in RAFT rocksdb".into())),
-        };
-        box_try!(clear_meta(
-            kv,
-            raft,
-            &kv_wb,
-            &raft_wb,
-            region_id,
-            &raft_state
-        ));
-
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(true);
-        box_try!(kv.write_opt(kv_wb, &write_opts));
-        box_try!(raft.write_opt(raft_wb, &write_opts));
-        Ok(())
-    }
-
     pub fn recreate_region(&self, region: Region) -> Result<()> {
         let region_id = region.get_id();
         let kv = self.engines.kv_engine.as_ref();
@@ -424,6 +397,10 @@ impl Debugger {
         let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
         let kv_handle = box_try!(get_cf_handle(kv, CF_RAFT));
+
+        if region.get_start_key() >= region.get_end_key() && !region.get_end_key().is_empty() {
+            return Err(box_err!("Bad region: {:?}", region));
+        }
 
         box_try!(self.engines.kv_engine.scan_cf(
             CF_RAFT,
@@ -442,6 +419,7 @@ impl Debugger {
                     return Ok(true);
                 }
                 let exists_region = region_state.get_region();
+                println!("exists: {:?}", exists_region);
 
                 if !region_overlap(exists_region, &region) {
                     return Ok(true);
@@ -1263,5 +1241,45 @@ mod tests {
             .unwrap();
         let cf_opts = engine.get_options_cf(cf);
         assert_eq!(cf_opts.get_disable_auto_compactions(), true);
+    }
+
+    #[test]
+    fn test_recreate_region() {
+        let debugger = new_debugger();
+        let engine = debugger.engines.kv_engine.as_ref();
+
+        let metadata = vec![("", "g"), ("g", "m"), ("m", "")];
+
+        for (region_id, (start, end)) in metadata.into_iter().enumerate() {
+            let region_id = region_id as u64;
+            let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
+            let mut region = Region::new();
+            region.set_id(region_id);
+            region.set_start_key(start.to_owned().into_bytes());
+            region.set_end_key(end.to_owned().into_bytes());
+
+            let mut region_state = RegionLocalState::new();
+            region_state.set_state(PeerState::Normal);
+            region_state.set_region(region);
+            let key = keys::region_state_key(region_id);
+            engine.put_msg_cf(cf_raft, &key, &region_state).unwrap();
+        }
+
+        let remove_region_state = |region_id: u64| {
+            let key = keys::region_state_key(region_id);
+            let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
+            engine.delete_cf(cf_raft, &key).unwrap();
+        };
+
+        let mut region = Region::new();
+        region.set_id(100);
+
+        region.set_start_key(b"k".to_vec());
+        region.set_start_key(b"z".to_vec());
+        assert!(debugger.recreate_region(region.clone()).is_err());
+
+        remove_region_state(1);
+        remove_region_state(2);
+        assert!(debugger.recreate_region(region).is_ok());
     }
 }

@@ -411,11 +411,6 @@ trait DebugExecutor {
     /// Recover the cluster when given `store_ids` are failed.
     fn remove_fail_stores(&self, store_ids: Vec<u64>);
 
-    /// Remove all metadta of the given region. It should be used in some
-    /// prepare staging to simplify subsequent operations. In most cases,
-    /// `tombstone` the region is really needed.
-    fn remove_region(&self, region_id: u64);
-
     /// Recreate the region with metadata from pd, but alloc new id for it.
     fn recreate_region(&self, sec_mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64);
 
@@ -574,10 +569,6 @@ impl DebugExecutor for DebugClient {
         self.check_local_mode();
     }
 
-    fn remove_region(&self, _: u64) {
-        self.check_local_mode();
-    }
-
     fn recreate_region(&self, _: Arc<SecurityManager>, _: &PdConfig, _: u64) {
         self.check_local_mode();
     }
@@ -680,10 +671,6 @@ impl DebugExecutor for Debugger {
         self.remove_failed_stores(store_ids)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
         println!("success");
-    }
-
-    fn remove_region(&self, region_id: u64) {
-        self.remove_region(region_id).unwrap();
     }
 
     fn recreate_region(&self, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64) {
@@ -1085,17 +1072,6 @@ fn main() {
                 ),
         )
         .subcommand(
-            SubCommand::with_name("remove-region")
-                .about("remove all metadata of the region")
-                .arg(
-                    Arg::with_name("region")
-                        .required(true)
-                        .short("r")
-                        .takes_value(true)
-                        .help("the region id"),
-                ),
-        )
-        .subcommand(
             SubCommand::with_name("recreate-region")
                 .about("recreate a region with given metadata, but alloc new id for it")
                 .arg(
@@ -1292,9 +1268,6 @@ fn main() {
                 Err(e) => perror_and_exit("parse store id list", e),
             }
         }
-    } else if let Some(matches) = matches.subcommand_matches("remove-region") {
-        let region_id = matches.value_of("region").unwrap().parse().unwrap();
-        debug_executor.remove_region(region_id);
     } else if let Some(matches) = matches.subcommand_matches("recreate-region") {
         let mut pd_cfg = PdConfig::default();
         pd_cfg.endpoints = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
