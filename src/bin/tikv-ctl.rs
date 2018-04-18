@@ -203,6 +203,9 @@ trait DebugExecutor {
         }
     }
 
+    /// Dump mvcc infos for a given key range. The given `from` and `to` must
+    /// be raw key with `z` prefix. Both `to` and `limit` are `None` means
+    /// what we want is point query instead of range scan.
     fn dump_mvccs_infos(
         &self,
         from: Vec<u8>,
@@ -217,7 +220,7 @@ trait DebugExecutor {
             process::exit(-1);
         }
         let to = to.unwrap_or_default();
-        let limit = limit.unwrap_or_default();
+        let limit = limit.unwrap_or(1);
         if to.is_empty() && limit == 0 {
             eprintln!(r#"please pass "to" or "limit""#);
             process::exit(-1);
@@ -226,8 +229,15 @@ trait DebugExecutor {
             eprintln!("The region's from pos must greater than the to pos.");
             process::exit(-1);
         }
-        let scan_future = self.get_mvcc_infos(from, to, limit)
-            .for_each(move |(key, mvcc)| {
+        let scan_future = self.get_mvcc_infos(from.clone(), to, limit).for_each(
+            move |(key, mvcc)| {
+                if limit.unwrap_or(1) == 0 {
+                    // What we want is a point query.
+                    if key != from {
+                        println!("no mvcc infos for {}", escape(&from));
+                    }
+                }
+
                 println!("key: {}", escape(&key));
                 if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
                     let lock_info = mvcc.get_lock();
@@ -253,7 +263,8 @@ trait DebugExecutor {
                 }
                 println!();
                 future::ok::<(), String>(())
-            });
+            },
+        );
         if let Err(e) = scan_future.wait() {
             eprintln!("{}", e);
             process::exit(-1);
@@ -862,8 +873,8 @@ fn main() {
                         .help("set the scan commit_ts as filter"),
                 )
                 .arg(
-                    Arg::with_name("cf")
-                        .long("cf")
+                    Arg::with_name("show-cf")
+                        .long("show-cf")
                         .takes_value(true)
                         .multiple(true)
                         .use_delimiter(true)
@@ -1155,7 +1166,7 @@ fn main() {
         let from = unescape(matches.value_of("from").unwrap());
         let to = matches.value_of("to").map(|to| unescape(to));
         let limit = matches.value_of("limit").map(|s| s.parse().unwrap());
-        let cfs = Vec::from_iter(matches.values_of("cf").unwrap());
+        let cfs = Vec::from_iter(matches.values_of("show-cf").unwrap());
         let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
         let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
         debug_executor.dump_mvccs_infos(from, to, limit, cfs, start_ts, commit_ts);
@@ -1164,7 +1175,7 @@ fn main() {
         let cfs = Vec::from_iter(matches.values_of("cf").unwrap());
         let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
         let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
-        debug_executor.dump_mvccs_infos(from, None, Some(1), cfs, start_ts, commit_ts);
+        debug_executor.dump_mvccs_infos(from, None, None, cfs, start_ts, commit_ts);
     } else if let Some(matches) = matches.subcommand_matches("diff") {
         let region = matches.value_of("region").unwrap().parse().unwrap();
         let to_db = matches.value_of("to_db");
