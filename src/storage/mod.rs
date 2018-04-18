@@ -521,7 +521,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, false)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -576,7 +576,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, false)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -646,7 +646,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, false)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -723,7 +723,7 @@ impl Storage {
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Booleans(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -743,7 +743,7 @@ impl Storage {
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -773,7 +773,7 @@ impl Storage {
             .async_write(&ctx, modifies, box |(_, res): (_, engine::Result<_>)| {
                 callback(res.map_err(Error::from))
             })?;
-        KV_COMMAND_COUNTER_VEC
+        COMMAND_COUNTER_VEC
             .with_label_values(&["delete_range"])
             .inc();
         Ok(())
@@ -793,7 +793,7 @@ impl Storage {
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -811,7 +811,7 @@ impl Storage {
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -835,7 +835,7 @@ impl Storage {
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Locks(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -853,7 +853,7 @@ impl Storage {
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -867,7 +867,7 @@ impl Storage {
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -884,7 +884,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, true)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -935,7 +935,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, true)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -990,9 +990,7 @@ impl Storage {
             vec![Modify::Put(CF_DEFAULT, Key::from_encoded(key), value)],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
-        RAWKV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_put"])
-            .inc();
+        COMMAND_COUNTER_VEC.with_label_values(&["raw_put"]).inc();
         Ok(())
     }
 
@@ -1016,7 +1014,7 @@ impl Storage {
             .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
                 callback(res.map_err(Error::from))
             })?;
-        RAWKV_COMMAND_COUNTER_VEC
+        COMMAND_COUNTER_VEC
             .with_label_values(&["raw_batch_put"])
             .inc();
         Ok(())
@@ -1037,9 +1035,7 @@ impl Storage {
             vec![Modify::Delete(CF_DEFAULT, Key::from_encoded(key))],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
-        RAWKV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_delete"])
-            .inc();
+        COMMAND_COUNTER_VEC.with_label_values(&["raw_delete"]).inc();
         Ok(())
     }
 
@@ -1069,7 +1065,7 @@ impl Storage {
             ],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
-        RAWKV_COMMAND_COUNTER_VEC
+        COMMAND_COUNTER_VEC
             .with_label_values(&["raw_delete_range"])
             .inc();
         Ok(())
@@ -1094,7 +1090,7 @@ impl Storage {
             .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
                 callback(res.map_err(Error::from))
             })?;
-        RAWKV_COMMAND_COUNTER_VEC
+        COMMAND_COUNTER_VEC
             .with_label_values(&["raw_batch_delete"])
             .inc();
         Ok(())
@@ -1146,7 +1142,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, true)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -1225,7 +1221,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, true)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -1299,7 +1295,7 @@ impl Storage {
         let cmd = Command::MvccByKey { ctx: ctx, key: key };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::MvccInfoByKey(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -1315,7 +1311,7 @@ impl Storage {
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::MvccInfoByStartTs(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 }

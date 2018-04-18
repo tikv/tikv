@@ -14,7 +14,7 @@
 use prometheus::*;
 
 lazy_static! {
-    pub static ref KV_COMMAND_COUNTER_VEC: IntCounterVec =
+    pub static ref COMMAND_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
             "tikv_storage_command_total",
             "Total number of commands received.",
@@ -99,13 +99,6 @@ lazy_static! {
             "tikv_scheduler_kv_scan_details",
             "Bucketed counter of kv keys scan details for each cf",
             &["req","cf","tag"]
-        ).unwrap();
-
-    pub static ref RAWKV_COMMAND_COUNTER_VEC: IntCounterVec =
-        register_int_counter_vec!(
-            "tikv_storage_rawkv_command_total",
-            "Total number of rawkv commands received.",
-            &["type"]
         ).unwrap();
 
     pub static ref KV_COMMAND_GC_EMPTY_RANGE_COUNTER: IntCounter =
