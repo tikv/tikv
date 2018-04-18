@@ -231,7 +231,7 @@ fn test_generate_snapshot() {
 }
 
 fn must_empty_dir(path: String) {
-    for _ in 0..100 {
+    for _ in 0..200 {
         let snap_dir = fs::read_dir(&path).unwrap();
         if snap_dir.count() > 0 {
             thread::sleep(Duration::from_millis(10));
