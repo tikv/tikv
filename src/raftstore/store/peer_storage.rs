@@ -1963,6 +1963,12 @@ mod test {
         exp_res = (1..7).map(|i| new_entry(i, 8)).collect();
         validate_cache(&store, &exp_res);
         assert!(store.cache.cache.capacity() < cap as usize);
+
+        // compact all
+        store.compact_to(cap + 2);
+        validate_cache(&store, &[]);
+        // invalid compaction should be ignored.
+        store.compact_to(cap);
     }
 
     #[test]
