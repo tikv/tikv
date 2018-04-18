@@ -205,8 +205,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
         let future = future::result(debugger.scan_mvcc(&from, &to, limit))
             .map_err(|e| error_to_grpc_error("scan_mvcc", e))
             .and_then(|iter| {
-                #[allow(deprecated)]
-                stream::iter(iter)
+                stream::iter_result(iter)
                     .map_err(|e| error_to_grpc_error("scan_mvcc", e))
                     .map(|(key, mvcc_info)| {
                         let mut resp = ScanMvccResponse::new();

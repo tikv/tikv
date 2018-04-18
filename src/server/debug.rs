@@ -217,6 +217,7 @@ impl Debugger {
         }
     }
 
+    /// Scan MVCC Infos for given range `[start, end)`.
     pub fn scan_mvcc(&self, start: &[u8], end: &[u8], limit: u64) -> Result<MvccInfoIterator> {
         if !start.starts_with(b"z") || (!end.is_empty() && !end.starts_with(b"z")) {
             return Err(Error::InvalidArgument(
@@ -954,6 +955,10 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 7);
+
+        // Test scan with bad start, end or limit.
+        assert!(debugger.scan_mvcc(b"z", b"", 0).is_err());
+        assert!(debugger.scan_mvcc(b"z", b"x", 3).is_err());
     }
 
     #[test]

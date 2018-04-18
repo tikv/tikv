@@ -845,7 +845,6 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("to")
-                        .conflicts_with("limit")
                         .short("t")
                         .long("to")
                         .takes_value(true)
@@ -853,7 +852,6 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("limit")
-                        .conflicts_with("to")
                         .long("limit")
                         .takes_value(true)
                         .help("set the scan limit"),
