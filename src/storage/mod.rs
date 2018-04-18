@@ -1540,7 +1540,7 @@ mod tests {
         rx.recv().unwrap();
         expect_error(
             |e| match e {
-                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Other(..)))) => (),
+                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage.async_get(Context::new(), make_key(b"x"), 1).wait(),

@@ -38,6 +38,8 @@ pub struct MvccReader {
     lower_bound: Option<Vec<u8>>,
     upper_bound: Option<Vec<u8>>,
     isolation_level: IsolationLevel,
+    // set on when this reader is used for only one key and scan_mode is some.
+    use_prefix_seek: bool,
 }
 
 impl MvccReader {
@@ -48,6 +50,7 @@ impl MvccReader {
         lower_bound: Option<Vec<u8>>,
         upper_bound: Option<Vec<u8>>,
         isolation_level: IsolationLevel,
+        use_prefix_seek: bool,
     ) -> MvccReader {
         MvccReader {
             snapshot: snapshot,
@@ -61,6 +64,7 @@ impl MvccReader {
             fill_cache: fill_cache,
             lower_bound: lower_bound,
             upper_bound: upper_bound,
+            use_prefix_seek: use_prefix_seek,
         }
     }
 
@@ -158,7 +162,13 @@ impl MvccReader {
     ) -> Result<Option<(u64, Write)>> {
         if self.scan_mode.is_some() {
             if self.write_cursor.is_none() {
-                let iter_opt = IterOption::new(None, None, self.fill_cache);
+                let iter_opt = if self.use_prefix_seek {
+                    IterOption::new(None, None, self.fill_cache)
+                        .use_prefix_seek()
+                        .set_prefix_same_as_start(true)
+                } else {
+                    IterOption::new(None, None, self.fill_cache)
+                };
                 let iter = self.snapshot
                     .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false))?;
                 self.write_cursor = Some(iter);
@@ -698,7 +708,15 @@ mod tests {
         need_gc: bool,
     ) -> Option<MvccProperties> {
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let reader = MvccReader::new(Box::new(snap), None, false, None, None, IsolationLevel::SI);
+        let reader = MvccReader::new(
+            Box::new(snap),
+            None,
+            false,
+            None,
+            None,
+            IsolationLevel::SI,
+            false,
+        );
         assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
         reader.get_mvcc_properties(safe_point)
     }

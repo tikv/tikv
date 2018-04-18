@@ -41,11 +41,12 @@ impl SnapshotStore {
     pub fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
         let mut reader = MvccReader::new(
             self.snapshot.clone(),
-            None,
+            Some(ScanMode::Forward),
             self.fill_cache,
             None,
             None,
             self.isolation_level,
+            true,
         );
         let v = reader.get(key, self.start_ts)?;
         statistics.add(reader.get_statistics());
@@ -65,6 +66,7 @@ impl SnapshotStore {
             None,
             None,
             self.isolation_level,
+            false,
         );
         let mut results = Vec::with_capacity(keys.len());
         for k in keys {
@@ -90,6 +92,7 @@ impl SnapshotStore {
             lower_bound,
             upper_bound,
             self.isolation_level,
+            false,
         );
         reader.set_key_only(key_only);
         Ok(StoreScanner {
@@ -177,7 +180,7 @@ mod test {
     use super::SnapshotStore;
     use storage::mvcc::MvccTxn;
     use storage::{make_key, KvPair, Mutation, Options, ScanMode, Statistics, Value, ALL_CFS};
-    use storage::engine::{self, Engine, Snapshot, TEMP_DIR};
+    use storage::engine::{self, Engine, Modify, Snapshot, TEMP_DIR};
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: u64 = 10;
@@ -230,7 +233,7 @@ mod test {
                         &Options::default(),
                     ).unwrap();
                 }
-                self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
+                self.write(txn.into_modifies());
             }
             self.refresh_snapshot();
             // do commit
@@ -246,7 +249,7 @@ mod test {
                     let key = key.as_bytes();
                     txn.commit(&make_key(key), COMMIT_TS).unwrap();
                 }
-                self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
+                self.write(txn.into_modifies());
             }
             self.refresh_snapshot();
         }
@@ -264,6 +267,37 @@ mod test {
                 true,
             )
         }
+
+        fn must_prewrite_put(&mut self, key: &[u8], value: &[u8], pk: &[u8], ts: u64) {
+            let snapshot = self.engine.snapshot(&self.ctx).unwrap();
+            let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
+            txn.prewrite(
+                Mutation::Put((make_key(key), value.to_vec())),
+                pk,
+                &Options::default(),
+            ).unwrap();
+            self.write(txn.into_modifies());
+        }
+
+        fn must_commit(&mut self, key: &[u8], start_ts: u64, commit_ts: u64) {
+            let snapshot = self.engine.snapshot(&self.ctx).unwrap();
+            let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
+            txn.commit(&make_key(key), commit_ts).unwrap();
+            self.write(txn.into_modifies());
+        }
+
+        fn must_rollback(&mut self, key: &[u8], start_ts: u64) {
+            let snapshot = self.engine.snapshot(&self.ctx).unwrap();
+            let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
+            txn.rollback(&make_key(key)).unwrap();
+            self.write(txn.into_modifies());
+        }
+
+        fn write(&mut self, modifies: Vec<Modify>) {
+            if !modifies.is_empty() {
+                self.engine.write(&self.ctx, modifies).unwrap();
+            }
+        }
     }
 
     #[test]
@@ -277,6 +311,34 @@ mod test {
             let data = snapshot_store.get(&make_key(key), &mut statistics).unwrap();
             assert!(data.is_some(), "{:?} expect some, but got none", key);
         }
+    }
+
+    #[test]
+    fn test_snapshot_store_get_with_multi_rollback() {
+        let mut store = TestStore::new(1);
+        let k = b"k";
+        let (v1, v2, v3, v4) = (b"v1", b"v2", b"v3", b"v4");
+        // put k/v1 start_ts = 1, commit_ts = 2
+        store.must_prewrite_put(k, v1, k, 1);
+        store.must_commit(k, 1, 2);
+
+        // generate several rollback in write cf.
+        store.must_prewrite_put(k, v2, k, 3);
+        store.must_rollback(k, 3);
+        store.must_prewrite_put(k, v3, k, 5);
+        store.must_rollback(k, 5);
+        store.must_prewrite_put(k, v4, k, 7);
+        store.must_rollback(k, 7);
+
+        // use start_ts = 21 to get, travel all rollback marks and get committed value v1.
+        store.refresh_snapshot();
+        let snapshot_store = store.store();
+        let mut statistics = Statistics::default();
+        let data = snapshot_store.get(&make_key(k), &mut statistics).unwrap();
+        assert_eq!(statistics.write.processed, 4);
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.next, 3);
+        assert_eq!(data.unwrap(), v1);
     }
 
     #[test]
