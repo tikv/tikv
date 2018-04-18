@@ -79,7 +79,7 @@ pub struct Config {
     pub snap_max_total_size: ReadableSize,
 
     // Server labels to specify some attributes about this server.
-    #[serde(with = "config::order_map_serde")] pub labels: HashMap<String, String>,
+    pub labels: HashMap<String, String>,
 }
 
 impl Default for Config {
