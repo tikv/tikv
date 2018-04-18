@@ -117,8 +117,14 @@ pub trait Engine: Send + Debug {
         self.write(ctx, vec![Modify::Delete(cf, key)])
     }
 
-    /// Create a share Engine pointer.
-    fn clone(&self) -> Box<Engine + 'static>;
+    /// Create a shared Engine pointer.
+    fn clone_box(&self) -> Box<Engine + 'static>;
+}
+
+impl Clone for Box<Engine> {
+    fn clone(&self) -> Box<Engine> {
+        self.clone_box()
+    }
 }
 
 pub trait Snapshot: Send + Debug {
