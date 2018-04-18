@@ -217,6 +217,8 @@ impl EntryCache {
             return;
         }
         let cache_last_idx = self.cache.back().unwrap().get_index();
+        // Use `cache_last_idx + 1` to make sure cache can be cleared completely
+        // if neccessary.
         self.cache
             .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize);
         if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY
