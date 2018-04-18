@@ -949,9 +949,7 @@ impl ApplyDelegate {
         );
 
         // TODO: we should need more check, like peer validation, duplicated id, etc.
-        let exists = util::find_peer(&region, store_id).is_some();
         let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
-
         region.mut_region_epoch().set_conf_ver(conf_ver);
 
         match change_type {
@@ -960,26 +958,31 @@ impl ApplyDelegate {
                     .with_label_values(&["add_peer", "all"])
                     .inc();
 
-                if exists {
-                    error!(
-                        "{} can't add duplicated peer {:?} to region {:?}",
-                        self.tag, peer, self.region
-                    );
-                    return Err(box_err!(
-                        "can't add duplicated peer {:?} to region {:?}",
-                        peer,
-                        self.region
-                    ));
+                let mut exists = false;
+                if let Some(p) = util::find_peer_mut(&mut region, store_id) {
+                    exists = true;
+                    if !p.get_is_learner() || p.get_id() != peer.get_id() {
+                        error!(
+                            "{} can't add duplicated peer {:?} to region {:?}",
+                            self.tag, peer, self.region
+                        );
+                        return Err(box_err!(
+                            "can't add duplicated peer {:?} to region {:?}",
+                            peer,
+                            self.region
+                        ));
+                    } else {
+                        p.set_is_learner(false);
+                    }
                 }
-
-                // TODO: Do we allow adding peer in same node?
-
-                region.mut_peers().push(peer.clone());
+                if !exists {
+                    // TODO: Do we allow adding peer in same node?
+                    region.mut_peers().push(peer.clone());
+                }
 
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["add_peer", "success"])
                     .inc();
-
                 info!(
                     "{} add peer {:?} to region {:?}",
                     self.tag, peer, self.region
@@ -990,7 +993,25 @@ impl ApplyDelegate {
                     .with_label_values(&["remove_peer", "all"])
                     .inc();
 
-                if !exists {
+                if let Some(p) = util::remove_peer(&mut region, store_id) {
+                    // Considering `is_learner` flag in `Peer` here is by design.
+                    if &p != peer {
+                        error!(
+                            "{} remove unmatched peer: expect: {:?}, get {:?}, ignore",
+                            self.tag, peer, p
+                        );
+                        return Err(box_err!(
+                            "remove unmatched peer: expect: {:?}, get {:?}, ignore",
+                            peer,
+                            p
+                        ));
+                    }
+                    if self.id == peer.get_id() {
+                        // Remove ourself, we will destroy all region data later.
+                        // So we need not to apply following logs.
+                        self.pending_remove = true;
+                    }
+                } else {
                     error!(
                         "{} remove missing peer {:?} from region {:?}",
                         self.tag, peer, self.region
@@ -1002,18 +1023,9 @@ impl ApplyDelegate {
                     ));
                 }
 
-                if self.id == peer.get_id() {
-                    // Remove ourself, we will destroy all region data later.
-                    // So we need not to apply following logs.
-                    self.pending_remove = true;
-                }
-
-                util::remove_peer(&mut region, store_id).unwrap();
-
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["remove_peer", "success"])
                     .inc();
-
                 info!(
                     "{} remove {} from region:{:?}",
                     self.tag,
@@ -1021,7 +1033,32 @@ impl ApplyDelegate {
                     self.region
                 );
             }
-            ConfChangeType::AddLearnerNode => unimplemented!(),
+            ConfChangeType::AddLearnerNode => {
+                PEER_ADMIN_CMD_COUNTER_VEC
+                    .with_label_values(&["add_learner", "all"])
+                    .inc();
+
+                if util::find_peer(&region, store_id).is_some() {
+                    error!(
+                        "{} can't add duplicated learner {:?} to region {:?}",
+                        self.tag, peer, self.region
+                    );
+                    return Err(box_err!(
+                        "can't add duplicated learner {:?} to region {:?}",
+                        peer,
+                        self.region
+                    ));
+                }
+                region.mut_peers().push(peer.clone());
+
+                PEER_ADMIN_CMD_COUNTER_VEC
+                    .with_label_values(&["add_learner", "success"])
+                    .inc();
+                info!(
+                    "{} add learner {:?} to region {:?}",
+                    self.tag, peer, self.region
+                );
+            }
         }
 
         let state = if self.pending_remove {
