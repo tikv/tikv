@@ -419,7 +419,6 @@ impl Debugger {
                     return Ok(true);
                 }
                 let exists_region = region_state.get_region();
-                println!("exists: {:?}", exists_region);
 
                 if !region_overlap(exists_region, &region) {
                     return Ok(true);
@@ -1275,11 +1274,16 @@ mod tests {
         region.set_id(100);
 
         region.set_start_key(b"k".to_vec());
-        region.set_start_key(b"z".to_vec());
+        region.set_end_key(b"z".to_vec());
         assert!(debugger.recreate_region(region.clone()).is_err());
 
         remove_region_state(1);
         remove_region_state(2);
-        assert!(debugger.recreate_region(region).is_ok());
+        assert!(debugger.recreate_region(region.clone()).is_ok());
+        assert_eq!(get_region_state(engine, 100).get_region(), &region);
+
+        region.set_start_key(b"z".to_vec());
+        region.set_end_key(b"".to_vec());
+        assert!(debugger.recreate_region(region).is_err());
     }
 }
