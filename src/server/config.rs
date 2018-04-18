@@ -62,9 +62,7 @@ pub struct Config {
     pub grpc_stream_initial_window_size: ReadableSize,
     pub grpc_keepalive_time: ReadableDuration,
     pub grpc_keepalive_timeout: ReadableDuration,
-    pub end_point_concurrency: Option<usize>, // deprecated
     pub end_point_max_tasks: usize,
-    pub end_point_stack_size: Option<ReadableSize>, // deprecated
     pub end_point_recursion_limit: u32,
     pub end_point_stream_channel_size: usize,
     pub end_point_batch_row_limit: usize,
@@ -75,6 +73,16 @@ pub struct Config {
 
     // Server labels to specify some attributes about this server.
     pub labels: HashMap<String, String>,
+
+    // deprecated. use readpool.coprocessor.xx_concurrency.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub end_point_concurrency: Option<usize>,
+
+    // deprecated. use readpool.coprocessor.stack_size.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub end_point_stack_size: Option<ReadableSize>,
 }
 
 impl Default for Config {

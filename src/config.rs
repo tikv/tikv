@@ -845,18 +845,18 @@ impl TiKvConfig {
         if self.server.end_point_concurrency != None {
             warn!(
                 "deprecated configuration, {} has been moved to {}",
-                "server.end_point_concurrency", "readpool.coprocessor.high/normal/low-concurrency",
+                "server.end_point_concurrency", "readpool.coprocessor.xxx-concurrency",
             );
             warn!(
                 "override {} with {}, {:?}",
-                "readpool.coprocessor.high/normal/low-concurrency",
+                "readpool.coprocessor.xxx-concurrency",
                 "server.end_point_concurrency",
                 self.server.end_point_concurrency
             );
-            self.readpool.coprocessor.high_concurrency = self.server.end_point_concurrency.unwrap();
-            self.readpool.coprocessor.normal_concurrency =
-                self.server.end_point_concurrency.unwrap();
-            self.readpool.coprocessor.low_concurrency = self.server.end_point_concurrency.unwrap();
+            let concurrency = self.server.end_point_concurrency.unwrap();
+            self.readpool.coprocessor.high_concurrency = concurrency;
+            self.readpool.coprocessor.normal_concurrency = concurrency;
+            self.readpool.coprocessor.low_concurrency = concurrency;
         }
         if self.server.end_point_stack_size != None {
             warn!(

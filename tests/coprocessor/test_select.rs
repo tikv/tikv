@@ -942,7 +942,7 @@ fn test_scan_detail() {
     let product = ProductTable::new();
     let (_, mut end_point) = {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
-        let mut cfg = new_endpoint_test_config();
+        let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = 50;
         init_data_with_details(Context::new(), engine, &product, &data, true, cfg)
     };

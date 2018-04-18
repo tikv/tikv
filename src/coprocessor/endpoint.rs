@@ -816,12 +816,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let read_pool = ReadPool::new(
             "readpool",
-            &readpool::Config {
-                high_concurrency: 1,
-                normal_concurrency: 1,
-                low_concurrency: 1,
-                ..readpool::Config::default_for_test()
-            },
+            &readpool::Config::default_with_concurrency(1),
             || || ReadPoolContext::new(pd_worker.scheduler()),
         );
         let end_point = Host::new(engine, worker.scheduler(), &cfg, read_pool);
@@ -848,12 +843,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let read_pool = ReadPool::new(
             "readpool",
-            &readpool::Config {
-                high_concurrency: 1,
-                normal_concurrency: 1,
-                low_concurrency: 1,
-                ..readpool::Config::default_for_test()
-            },
+            &readpool::Config::default_with_concurrency(1),
             || || ReadPoolContext::new(pd_worker.scheduler()),
         );
         let mut end_point = Host::new(engine, worker.scheduler(), &cfg, read_pool);
@@ -919,10 +909,14 @@ mod tests {
     fn test_deconstruct_request_tracker() {
         let mut worker = WorkerBuilder::new("test-endpoint").batch_size(1).create();
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
-        let mut cfg = Config::default();
-        cfg.end_point_concurrency = 1;
+        let cfg = Config::default();
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
+        let read_pool = ReadPool::new(
+            "readpool",
+            &readpool::Config::default_with_concurrency(1),
+            || || ReadPoolContext::new(pd_worker.scheduler()),
+        );
+        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, read_pool);
         end_point.max_running_task_count = 1;
         worker.start(end_point).unwrap();
 
