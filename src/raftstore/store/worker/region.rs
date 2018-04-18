@@ -403,19 +403,14 @@ impl SnapContext {
         }
     }
 
-    // if clean_stale_peer_delay is 0, we don't use DeleteFilesInRange to clean range,
-    // return false means we don't clean overlap ranges since there isn't any
-    // return true means we have cleaned overlap ranges
-    fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) -> bool {
-        if self.clean_stale_peer_delay.as_secs() == 0 {
-            return false;
-        }
+    // if clean_stale_peer_delay is 0, nothing will be done,
+    // we don't check clean_stale_peer_delay here to avoid double check when insert_pending_delete_range is called
+    fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) {
         let overlap_ranges = self.pending_delete_ranges
             .drain_overlap_ranges(start_key, end_key);
         for (region_id, s_key, e_key) in overlap_ranges {
             self.cleanup_range(region_id, s_key, e_key, false /* use_delete_files */);
         }
-        true
     }
 
     fn insert_pending_delete_range(
@@ -424,20 +419,22 @@ impl SnapContext {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
     ) -> bool {
-        if self.cleanup_overlap_ranges(&start_key, &end_key) {
-            info!(
-                "[region {}] register deleting data in [{}, {})",
-                region_id,
-                escape(&start_key),
-                escape(&end_key),
-            );
-            let timeout = time::Instant::now() + self.clean_stale_peer_delay;
-            self.pending_delete_ranges
-                .insert(region_id, start_key, end_key, timeout);
-            true
-        } else {
-            false
+        if self.clean_stale_peer_delay.as_secs() == 0 {
+            return false;
         }
+
+        self.cleanup_overlap_ranges(&start_key, &end_key);
+
+        info!(
+            "[region {}] register deleting data in [{}, {})",
+            region_id,
+            escape(&start_key),
+            escape(&end_key),
+        );
+        let timeout = time::Instant::now() + self.clean_stale_peer_delay;
+        self.pending_delete_ranges
+            .insert(region_id, start_key, end_key, timeout);
+        true
     }
 
     fn clean_timeout_ranges(&mut self) {
@@ -507,10 +504,7 @@ impl Runnable<Task> for Runner {
                 end_key,
             } => {
                 // try to delay the range deletion because
-                // there might be a coprocessor request related to this range,
-                // if success, the range will be deleted later;
-                // if failed, it means the range deletion delay is 0,
-                // so we don't use delete files to delete range
+                // there might be a coprocessor request related to this range
                 if !self.ctx.insert_pending_delete_range(
                     region_id,
                     start_key.clone(),
