@@ -204,38 +204,35 @@ trait DebugExecutor {
     }
 
     /// Dump mvcc infos for a given key range. The given `from` and `to` must
-    /// be raw key with `z` prefix. Both `to` and `limit` are `None` means
+    /// be raw key with `z` prefix. Both `to` and `limit` are empty value means
     /// what we want is point query instead of range scan.
     fn dump_mvccs_infos(
         &self,
         from: Vec<u8>,
-        to: Option<Vec<u8>>,
-        limit: Option<u64>,
+        to: Vec<u8>,
+        mut limit: u64,
         cfs: Vec<&str>,
         start_ts: Option<u64>,
         commit_ts: Option<u64>,
     ) {
-        if !from.starts_with(b"z") || !to.as_ref().map_or(true, |t| t.starts_with(b"z")) {
+        if !from.starts_with(b"z") || (!to.is_empty() && !to.starts_with(b"z")) {
             eprintln!("from and to should start with \"z\"");
             process::exit(-1);
         }
-        let to = to.unwrap_or_default();
-        let limit = limit.unwrap_or(1);
-        if to.is_empty() && limit == 0 {
-            eprintln!(r#"please pass "to" or "limit""#);
-            process::exit(-1);
-        }
         if !to.is_empty() && to < from {
-            eprintln!("The region's from pos must greater than the to pos.");
+            eprintln!("\"to\" must be greater than \"from\"");
             process::exit(-1);
         }
+
+        let point_query = to.is_empty() && limit == 0;
+        if point_query {
+            limit = 1;
+        }
+
         let scan_future = self.get_mvcc_infos(from.clone(), to, limit).for_each(
             move |(key, mvcc)| {
-                if limit.unwrap_or(1) == 0 {
-                    // What we want is a point query.
-                    if key != from {
-                        println!("no mvcc infos for {}", escape(&from));
-                    }
+                if point_query && key != from {
+                    println!("no mvcc infos for {}", escape(&from));
                 }
 
                 println!("key: {}", escape(&key));
@@ -696,6 +693,7 @@ impl DebugExecutor for Debugger {
     }
 }
 
+#[allow(cyclomatic_complexity)]
 fn main() {
     let mut app = App::new("TiKV Ctl")
         .author("PingCAP")
@@ -1164,8 +1162,16 @@ fn main() {
         }
     } else if let Some(matches) = matches.subcommand_matches("scan") {
         let from = unescape(matches.value_of("from").unwrap());
-        let to = matches.value_of("to").map(|to| unescape(to));
-        let limit = matches.value_of("limit").map(|s| s.parse().unwrap());
+        let to = matches
+            .value_of("to")
+            .map_or_else(|| vec![], |to| unescape(to));
+        let limit = matches
+            .value_of("limit")
+            .map_or(0, |s| s.parse().expect("parse u64"));
+        if to.is_empty() && limit == 0 {
+            eprintln!(r#"please pass "to" or "limit""#);
+            process::exit(-1);
+        }
         let cfs = Vec::from_iter(matches.values_of("show-cf").unwrap());
         let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
         let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
@@ -1175,7 +1181,7 @@ fn main() {
         let cfs = Vec::from_iter(matches.values_of("cf").unwrap());
         let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
         let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
-        debug_executor.dump_mvccs_infos(from, None, None, cfs, start_ts, commit_ts);
+        debug_executor.dump_mvccs_infos(from, vec![], 0, cfs, start_ts, commit_ts);
     } else if let Some(matches) = matches.subcommand_matches("diff") {
         let region = matches.value_of("region").unwrap().parse().unwrap();
         let to_db = matches.value_of("to_db");
