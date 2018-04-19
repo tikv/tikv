@@ -791,7 +791,7 @@ fn main() {
                                 .conflicts_with_all(&["region", "index"])
                                 .short("k")
                                 .takes_value(true)
-                                .help("set the raw key, in escaped form"),
+                                .help("set the raw key (generally starts with \"z\"), in escaped form"),
                         ),
                 )
                 .subcommand(
@@ -841,14 +841,14 @@ fn main() {
                         .short("f")
                         .long("from")
                         .takes_value(true)
-                        .help("set the scan from raw key, in escaped format"),
+                        .help("set the scan from raw key (generally starts with \"z\"), in escaped format"),
                 )
                 .arg(
                     Arg::with_name("to")
                         .short("t")
                         .long("to")
                         .takes_value(true)
-                        .help("set the scan end raw key, in escaped format"),
+                        .help("set the scan end raw key (generally starts with \"z\"), in escaped format"),
                 )
                 .arg(
                     Arg::with_name("limit")
@@ -895,7 +895,7 @@ fn main() {
                         .required(true)
                         .short("k")
                         .takes_value(true)
-                        .help("set the query raw key, in escaped form"),
+                        .help("set the query raw key (generally starts with \"z\"), in escaped form"),
                 ),
         )
         .subcommand(
@@ -903,9 +903,10 @@ fn main() {
                 .about("print the mvcc value")
                 .arg(
                     Arg::with_name("key")
+                        .required(true)
                         .short("k")
                         .takes_value(true)
-                        .help("set the query raw key, in escaped form"),
+                        .help("set the query raw key (generally starts with \"z\"), in escaped form"),
                 )
                 .arg(
                     Arg::with_name("cf")
@@ -936,18 +937,23 @@ fn main() {
                 .about("diff two region keys")
                 .arg(
                     Arg::with_name("region")
+                        .required(true)
                         .short("r")
                         .takes_value(true)
                         .help("specify region id"),
                 )
                 .arg(
                     Arg::with_name("to_db")
+                        .required_unless("to_host")
+                        .conflicts_with("to_host")
                         .long("to-db")
                         .takes_value(true)
                         .help("to which db path"),
                 )
                 .arg(
                     Arg::with_name("to_host")
+                        .required_unless("to_db")
+                        .conflicts_with("to_db")
                         .long("to-host")
                         .takes_value(true)
                         .conflicts_with("to_db")
@@ -976,14 +982,14 @@ fn main() {
                         .short("f")
                         .long("from")
                         .takes_value(true)
-                        .help("set the start raw key, in escaped form"),
+                        .help("set the start raw key (generally starts with \"z\"), in escaped form"),
                 )
                 .arg(
                     Arg::with_name("to")
                         .short("t")
                         .long("to")
                         .takes_value(true)
-                        .help("set the end raw key, in escaped form"),
+                        .help("set the end raw key (generally starts with \"z\"), in escaped form"),
                 )
                 .arg(
                     Arg::with_name("region")
@@ -1070,12 +1076,14 @@ fn main() {
                 .about("modify tikv config, eg. ./tikv-ctl -h ip:port -m kvdb -n default.disable_auto_compactions -v true")
                 .arg(
                     Arg::with_name("module")
+                        .required(true)
                         .short("m")
                         .takes_value(true)
                         .help("module of the tikv, eg. kvdb or raftdb"),
                 )
                 .arg(
                     Arg::with_name("config_name")
+                        .required(true)
                         .short("n")
                         .takes_value(true)
                         .help("config name of the module, for kvdb or raftdb, you can choose \
@@ -1085,6 +1093,7 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("config_value")
+                        .required(true)
                         .short("v")
                         .takes_value(true)
                         .help("config value of the module, eg. 8 for max_background_jobs or true for disable_auto_compactions"),
@@ -1092,10 +1101,14 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("dump-snap-meta").about("dump snapshot meta file")
-            .arg(Arg::with_name("file")
-                 .short("f").long("file")
-                 .takes_value(true)
-                 .help("meta file path"))
+                .arg(
+                    Arg::with_name("file")
+                        .required(true)
+                        .short("f")
+                        .long("file")
+                        .takes_value(true)
+                        .help("meta file path"),
+                 ),
         );
     let matches = app.clone().get_matches();
 
