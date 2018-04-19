@@ -17,7 +17,7 @@ lazy_static! {
     pub static ref WORKER_PENDING_TASK_VEC: IntGaugeVec =
         register_int_gauge_vec!(
             "tikv_worker_pending_task_total",
-            "Total number of worker pending tasks.",
+            "Current worker pending + running tasks.",
             &["name"]
         ).unwrap();
 
