@@ -218,7 +218,7 @@ impl SampleBuilder {
     }
 }
 
-/// `SampleCollector` will collect Samples and calculate the count and ndv of an attribute.
+/// `SampleCollector` will collect Samples and calculate the count, ndv and total size of an attribute.
 #[derive(Clone)]
 struct SampleCollector {
     samples: Vec<Vec<u8>>,
@@ -228,6 +228,7 @@ struct SampleCollector {
     fm_sketch: FMSketch,
     cm_sketch: Option<CMSketch>,
     rng: ThreadRng,
+    total_size: u64,
 }
 
 impl SampleCollector {
@@ -245,6 +246,7 @@ impl SampleCollector {
             fm_sketch: FMSketch::new(max_fm_sketch_size),
             cm_sketch: CMSketch::new(cm_sketch_depth, cm_sketch_width),
             rng: thread_rng(),
+            total_size: 0,
         }
     }
 
@@ -257,6 +259,7 @@ impl SampleCollector {
         if let Some(c) = self.cm_sketch {
             s.set_cm_sketch(c.into_proto())
         }
+        s.set_total_size(self.total_size as i64);
         s
     }
 
@@ -270,6 +273,7 @@ impl SampleCollector {
         if let Some(c) = self.cm_sketch.as_mut() {
             c.insert(&data)
         }
+        self.total_size += data.len() as u64;
         if self.samples.len() < self.max_sample_size {
             self.samples.push(data);
             return;
@@ -307,6 +311,7 @@ mod test {
         assert_eq!(sample.samples.len(), max_sample_size);
         assert_eq!(sample.null_count, 1);
         assert_eq!(sample.count, 3);
-        assert_eq!(sample.cm_sketch.unwrap().count(), 3)
+        assert_eq!(sample.cm_sketch.unwrap().count(), 3);
+        assert_eq!(sample.total_size, 6)
     }
 }
