@@ -20,12 +20,10 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
 use std::time::{Duration, Instant};
 use std::{cmp, thread, u64};
-use time::{self, Timespec};
 
 use mio::{self, EventLoop, EventLoopConfig, Sender};
-use rocksdb::rocksdb_options::WriteOptions;
-use rocksdb::{CompactionJobInfo, WriteBatch, DB};
-
+use time::{self, Timespec};
+// use rocksdb::rocksdb_options::WriteOptions;
 use kvproto::importpb::SSTMeta;
 use kvproto::metapb;
 use kvproto::pdpb::StoreStats;
@@ -34,11 +32,12 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdRes
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftMessage, RaftSnapshotData,
                              RaftTruncatedState, RegionLocalState};
 use raft::eraftpb::{ConfChangeType, MessageType};
-use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
+use raft::{self, Ready, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
+use rocksdb::{CompactionJobInfo, WriteBatch, DB};
 
+use import::SSTImporter;
 use pd::{PdClient, PdRunner, PdTask};
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::coprocessor::split_observer::SplitObserver;
+use raftstore::coprocessor::{CoprocessorHost, split_observer::SplitObserver};
 use raftstore::{Error, Result};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::RingQueue;
@@ -58,16 +57,15 @@ use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use super::local_metrics::RaftMetrics;
 use super::metrics::*;
 use super::msg::{Callback, ReadResponse};
-use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
-use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
+use super::peer::{self, ConsistencyState, Peer, Readiness, ReadyContext, StaleState};
+use super::peer_storage::{self, ApplySnapResult, CacheQueryStats, InvokeContext};
 use super::transport::Transport;
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, CleanupSSTTask,
                     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
                     RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
-                    SplitCheckTask, STALE_PEER_CHECK_INTERVAL};
+                    PersistRunner, PersistTask, SplitCheckTask, STALE_PEER_CHECK_INTERVAL};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
-use import::SSTImporter;
 
 type Key = Vec<u8>;
 
@@ -161,6 +159,7 @@ pub struct Store<T, C: 'static> {
     cleanup_sst_worker: Worker<CleanupSSTTask>,
     pub apply_worker: Worker<ApplyTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
+    persist_worker: Worker<PersistTask>,
 
     last_compact_checked_key: Key,
 
@@ -244,6 +243,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             cleanup_sst_worker: Worker::new("cleanup sst worker"),
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
+            persist_worker: Worker::new("persist worker"),
             last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
             region_ranges: BTreeMap::new(),
             pending_snapshot_regions: vec![],
@@ -597,6 +597,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
 
+        let append_runner = PersistRunner::new(
+            self.store_id(),
+            Arc::clone(&self.kv_engine),
+            Arc::clone(&self.raft_engine),
+            self.sendch.clone(),
+            self.cfg.sync_log,
+        );
+        box_try!(self.persist_worker.start(append_runner));
+
         if let Err(e) = util_sys::pri::set_priority(util_sys::HIGH_PRI) {
             warn!("set priority for raftstore failed, error: {:?}", e);
         }
@@ -623,6 +632,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         handles.push(self.consistency_check_worker.stop());
         handles.push(self.cleanup_sst_worker.stop());
         handles.push(self.apply_worker.stop());
+        handles.push(self.persist_worker.stop());
 
         for h in handles {
             if let Some(h) = h {
@@ -682,7 +692,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         p.post_apply(&res, &mut self.pending_raft_groups, &mut self.store_stat);
                     }
                     self.store_stat.lock_cf_bytes_written += res.metrics.lock_cf_written_bytes;
-                    self.on_ready_result(res.region_id, res.merged, res.exec_res);
+                    self.on_ready_apply_result(res.region_id, res.merged, res.exec_res);
                 },
                 Ok(ApplyTaskRes::Destroy(p)) => {
                     let store_id = self.store_id();
@@ -1221,7 +1231,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.raft_metrics.ready.pending_region += pending_count as u64;
 
         let mut region_proposals = Vec::with_capacity(pending_count);
-        let (kv_wb, raft_wb, append_res, sync_log) = {
+        let (kv_wb, raft_wb, Readiness { persist, apply }, sync_log) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
                 if let Some(peer) = self.region_peers.get_mut(&region_id) {
@@ -1234,6 +1244,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             (ctx.kv_wb, ctx.raft_wb, ctx.ready_res, ctx.sync_log)
         };
 
+        self.raft_metrics.ready.has_ready_region += persist.len() as u64;
+
+        let persist_task = PersistTask {
+            kv_wb,
+            raft_wb,
+            persist,
+            sync_log,
+        };
+        self.persist_worker.schedule(persist_task).unwrap();
+
         if !region_proposals.is_empty() {
             self.apply_worker
                 .schedule(ApplyTask::Proposals(region_proposals))
@@ -1245,8 +1265,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.trans.flush();
         }
 
-        self.raft_metrics.ready.has_ready_region += append_res.len() as u64;
-
+        /*
         // apply_snapshot, peer_destroy will clear_meta, so we need write region state first.
         // otherwise, if program restart between two write, raft log will be removed,
         // but region state may not changed in disk.
@@ -1274,9 +1293,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 });
         }
         fail_point!("raft_after_save");
+        */
 
-        let mut ready_results = Vec::with_capacity(append_res.len());
-        for (mut ready, invoke_ctx) in append_res {
+        let ready_results = apply;
+        /*
+        for (mut ready, invoke_ctx) in persist {
             let region_id = invoke_ctx.region_id;
             let mut is_merging;
             let res = {
@@ -1299,6 +1320,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.raft_metrics
             .append_log
             .observe(duration_to_sec(t.elapsed()) as f64);
+        */
 
         slow_log!(
             t,
@@ -1314,14 +1336,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         if !ready_results.is_empty() {
             let mut apply_tasks = Vec::with_capacity(ready_results.len());
-            for (region_id, ready, res) in ready_results {
+            for (region_id, ready) in ready_results {
                 self.region_peers
                     .get_mut(&region_id)
                     .unwrap()
                     .handle_raft_ready_apply(ready, &mut apply_tasks);
+                /*
                 if let Some(apply_result) = res {
                     self.on_ready_apply_snapshot(apply_result);
                 }
+                */
             }
             self.apply_worker
                 .schedule(ApplyTask::applies(apply_tasks))
@@ -1898,7 +1922,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .insert(enc_end_key(&region), region.get_id());
     }
 
-    fn on_ready_result(&mut self, region_id: u64, merged: bool, exec_results: Vec<ExecResult>) {
+    fn on_ready_apply_result(
+        &mut self,
+        region_id: u64,
+        merged: bool,
+        exec_results: Vec<ExecResult>,
+    ) {
         // handle executing committed log results
         for result in exec_results {
             match result {
@@ -1934,6 +1963,46 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::IngestSST { ssts } => self.on_ingest_sst_result(ssts),
             }
         }
+    }
+
+    fn on_ready_persistence_result(&mut self, persist: Vec<(Ready, InvokeContext)>) {
+        debug!(
+            "{} async persist done, total ready count {}",
+            self.tag,
+            persist.len()
+        );
+        for (ready, invoke_ctx) in persist {
+            let region_id = invoke_ctx.region_id;
+            let peer_id = invoke_ctx.peer_id;
+            let mut is_merging;
+            let res = {
+                // TODO fix panic None, because it was removed via ConfChange::RemoveNode.
+                let peer = self.region_peers.get_mut(&region_id).unwrap();
+                if peer.peer.get_id() != peer_id {
+                    // Must advance on the same peer.
+                    info!(
+                        "{} {} skip stale raft ready result for {}",
+                        self.tag,
+                        peer.peer.get_id(),
+                        peer_id
+                    );
+                    return;
+                }
+                is_merging = peer.pending_merge.is_some();
+                peer.post_raft_ready_append(&mut self.raft_metrics, &self.trans, ready, invoke_ctx)
+            };
+            if is_merging && res.is_some() {
+                // After applying a snapshot, merge is rollbacked implicitly.
+                self.on_ready_rollback_merge(region_id, 0, None);
+            }
+            if let Some(apply_result) = res {
+                self.on_ready_apply_snapshot(apply_result);
+            }
+        }
+        // TODO: record append duration.
+        // self.raft_metrics
+        //     .append_log
+        //     .observe(duration_to_sec(t.elapsed()) as f64);
     }
 
     /// Check if a request is valid if it has valid prepare_merge/commit_merge proposal.
@@ -3239,6 +3308,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             } => self.on_schedule_half_split_region(region_id, &region_epoch),
             Msg::MergeFail { region_id } => self.on_merge_fail(region_id),
             Msg::ValidateSSTResult { invalid_ssts } => self.on_validate_sst_result(invalid_ssts),
+            Msg::Persistence { append_res } => self.on_ready_persistence_result(append_res),
         }
     }
 

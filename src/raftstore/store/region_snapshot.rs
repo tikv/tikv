@@ -343,6 +343,7 @@ mod tests {
     fn new_peer_storage(engine: Arc<DB>, raft_engine: Arc<DB>, r: &Region) -> PeerStorage {
         let metrics = Rc::new(RefCell::new(CacheQueryStats::default()));
         PeerStorage::new(
+            1,
             engine,
             raft_engine,
             r,

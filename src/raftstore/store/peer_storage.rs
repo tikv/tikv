@@ -259,6 +259,7 @@ pub struct PeerStorage {
     pub applied_index_term: u64,
     pub last_term: u64,
 
+    peer_id: u64,
     snap_state: RefCell<SnapState>,
     region_sched: Scheduler<RegionTask>,
     snap_tried_cnt: RefCell<usize>,
@@ -290,6 +291,7 @@ pub struct ApplySnapResult {
 
 pub struct InvokeContext {
     pub region_id: u64,
+    pub peer_id: u64,
     pub raft_state: RaftLocalState,
     pub apply_state: RaftApplyState,
     last_term: u64,
@@ -300,6 +302,7 @@ impl InvokeContext {
     pub fn new(store: &PeerStorage) -> InvokeContext {
         InvokeContext {
             region_id: store.get_region_id(),
+            peer_id: store.peer_id,
             raft_state: store.raft_state.clone(),
             apply_state: store.apply_state.clone(),
             last_term: store.last_term,
@@ -456,6 +459,7 @@ fn init_last_term(
 
 impl PeerStorage {
     pub fn new(
+        peer_id: u64,
         kv_engine: Arc<DB>,
         raft_engine: Arc<DB>,
         region: &metapb::Region,
@@ -482,6 +486,7 @@ impl PeerStorage {
             region: region.clone(),
             raft_state,
             apply_state,
+            peer_id,
             snap_state: RefCell::new(SnapState::Relax),
             region_sched,
             snap_tried_cnt: RefCell::new(0),
@@ -1428,7 +1433,7 @@ mod test {
         bootstrap::bootstrap_store(&engines, 1, 1).expect("");
         let region = bootstrap::prepare_bootstrap(&engines, 1, 1, 1).expect("");
         let metrics = Rc::new(RefCell::new(CacheQueryStats::default()));
-        PeerStorage::new(kv_db, raft_db, &region, sched, "".to_owned(), metrics).unwrap()
+        PeerStorage::new(1, kv_db, raft_db, &region, sched, "".to_owned(), metrics).unwrap()
     }
 
     fn new_storage_from_ents(

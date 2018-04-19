@@ -338,6 +338,7 @@ impl Debugger {
 
             let tag = format!("[region {}] {}", region.get_id(), peer_id);
             let peer_storage = box_try!(PeerStorage::new(
+                peer_id,
                 Arc::clone(&self.engines.kv_engine),
                 Arc::clone(&self.engines.raft_engine),
                 region,

@@ -115,6 +115,10 @@ impl<T: Debug, C: Sender<T>> RetryableSendCh<T, C> {
         }
     }
 
+    pub fn into_inner(self) -> C {
+        self.ch
+    }
+
     /// Try send t with default try times.
     pub fn send(&self, t: T) -> Result<(), Error> {
         self.send_with_try_times(t, MAX_SEND_RETRY_CNT)

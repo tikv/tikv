@@ -24,26 +24,24 @@ use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdReq
                           RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftMessage};
 use protobuf::{self, Message};
-use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
+use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType, Snapshot as RaftSnapshot};
+use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
+           INVALID_INDEX, NO_LIMIT};
 use rocksdb::rocksdb_options::WriteOptions;
 use rocksdb::{WriteBatch, DB};
 use time::Timespec;
 
-use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
-           INVALID_INDEX, NO_LIMIT};
+use pd::{PdTask, INVALID_ID};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::worker::apply::ExecResult;
 use raftstore::store::worker::{Apply, ApplyRes, ApplyTask};
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
 use raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
-
 use util::MustConsumeVec;
 use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
 use util::time::{duration_to_sec, monotonic_raw_now};
 use util::worker::{FutureWorker, Scheduler};
-
-use pd::{PdTask, INVALID_ID};
 
 use super::cmd_resp;
 use super::engine::Snapshot;
@@ -150,13 +148,41 @@ impl ProposalQueue {
     }
 }
 
+#[derive(Default)]
+pub struct Readiness {
+    pub persist: Vec<(Ready, InvokeContext)>,
+    /// region_id and Ready
+    pub apply: Vec<(u64, Ready)>,
+}
+
+impl Readiness {
+    pub fn with_capacity(cap: usize) -> Readiness {
+        Readiness {
+            persist: Vec::with_capacity(cap),
+            apply: Vec::with_capacity(cap),
+        }
+    }
+
+    pub fn push(&mut self, mut rd: Ready, invoke_ctx: InvokeContext) {
+        let region_id = invoke_ctx.region_id;
+        let mut apply = Ready::default();
+        mem::swap(&mut apply.committed_entries, &mut rd.committed_entries);
+        mem::swap(&mut apply.read_states, &mut rd.read_states);
+        mem::swap(&mut apply.ss, &mut rd.ss);
+        apply.must_sync = rd.must_sync;
+        let persist = rd;
+        self.persist.push((persist, invoke_ctx));
+        self.apply.push((region_id, apply));
+    }
+}
+
 pub struct ReadyContext<'a, T: 'a> {
     pub kv_wb: WriteBatch,
     pub raft_wb: WriteBatch,
     pub sync_log: bool,
     pub metrics: &'a mut RaftMetrics,
     pub trans: &'a T,
-    pub ready_res: Vec<(Ready, InvokeContext)>,
+    pub ready_res: Readiness,
 }
 
 impl<'a, T> ReadyContext<'a, T> {
@@ -167,7 +193,7 @@ impl<'a, T> ReadyContext<'a, T> {
             sync_log: false,
             metrics,
             trans,
-            ready_res: Vec::with_capacity(cap),
+            ready_res: Readiness::with_capacity(cap),
         }
     }
 }
@@ -233,6 +259,7 @@ pub struct Peer {
     pub raft_log_size_hint: u64,
     // When entry exceed max size, reject to propose the entry.
     pub raft_entry_max_size: u64,
+    is_persisting: bool,
 
     apply_scheduler: Scheduler<ApplyTask>,
 
@@ -300,6 +327,7 @@ impl Peer {
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
 
         let ps = PeerStorage::new(
+            peer_id,
             store.kv_engine(),
             store.raft_engine(),
             region,
@@ -351,6 +379,7 @@ impl Peer {
             tag,
             last_applying_idx: applied_index,
             last_compacted_idx: 0,
+            is_persisting: false,
             consistency_state: ConsistencyState {
                 last_check_time: Instant::now(),
                 index: INVALID_INDEX,
@@ -787,6 +816,11 @@ impl Peer {
                 });
         }
 
+        if self.is_persisting {
+            // We have logs or region state that are persisting right now.
+            return;
+        }
+
         if self.has_pending_snapshot() && !self.ready_to_handle_pending_snap() {
             debug!(
                 "{} [apply_idx: {}, last_applying_idx: {}] is not ready to apply snapshot.",
@@ -832,16 +866,23 @@ impl Peer {
             }
         };
 
-        ctx.ready_res.push((ready, invoke_ctx));
+        if !ready.entries.is_empty() || ready.snapshot != RaftSnapshot::new() || ready.hs.is_some()
+        {
+            self.is_persisting = true;
+        }
+        ctx.ready_res.push(ready, invoke_ctx);
     }
 
     pub fn post_raft_ready_append<T: Transport>(
         &mut self,
         metrics: &mut RaftMetrics,
         trans: &T,
-        ready: &mut Ready,
+        mut ready: Ready,
         invoke_ctx: InvokeContext,
     ) -> Option<ApplySnapResult> {
+        // Async persistence done.
+        self.is_persisting = false;
+
         if invoke_ctx.has_snapshot() {
             // When apply snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;
@@ -860,6 +901,12 @@ impl Peer {
                     });
             }
         }
+
+        // Just advance hs, enties and snapshot.
+        assert!(ready.ss.is_none(), "{:?}", ready);
+        assert!(ready.read_states.is_empty(), "{:?}", ready);
+        assert!(ready.committed_entries.is_none(), "{:?}", ready);
+        self.raft_group.advance_append(ready);
 
         if apply_snap_result.is_some() {
             let reg = ApplyTask::register(self);
@@ -905,6 +952,10 @@ impl Peer {
 
         self.apply_reads(&ready);
 
+        // Just advance ss, read_stats and committed_enties.
+        assert!(ready.hs.is_none(), "{:?}", ready);
+        assert!(ready.snapshot == RaftSnapshot::default(), "{:?}", ready);
+        assert!(ready.entries.is_empty(), "{:?}", ready);
         self.raft_group.advance_append(ready);
         if self.is_applying_snapshot() {
             // Because we only handle raft ready when not applying snapshot, so following

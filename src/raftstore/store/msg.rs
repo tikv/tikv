@@ -20,7 +20,8 @@ use kvproto::metapb::RegionEpoch;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 
-use raft::SnapshotStatus;
+use raft::{Ready, SnapshotStatus};
+use raftstore::store::InvokeContext;
 use util::escape;
 use util::rocksdb::CompactedEvent;
 
@@ -181,6 +182,10 @@ pub enum Msg {
     ValidateSSTResult {
         invalid_ssts: Vec<SSTMeta>,
     },
+
+    Persistence {
+        append_res: Vec<(Ready, InvokeContext)>,
+    },
 }
 
 impl fmt::Debug for Msg {
@@ -221,6 +226,7 @@ impl fmt::Debug for Msg {
             }
             Msg::MergeFail { region_id } => write!(fmt, "MergeFail region_id {}", region_id),
             Msg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
+            Msg::Persistence { .. } => write!(fmt, "Persistence"),
         }
     }
 }
