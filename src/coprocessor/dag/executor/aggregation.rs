@@ -11,24 +11,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cmp::Ordering;
 use std::mem;
 use std::sync::Arc;
-use std::cmp::Ordering;
 
-use tipb::schema::ColumnInfo;
 use tipb::executor::Aggregation;
 use tipb::expression::{Expr, ExprType};
+use tipb::schema::ColumnInfo;
 
-use util::collections::{OrderMap, OrderMapEntry};
-use coprocessor::codec::table::RowColsDict;
-use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
-use coprocessor::endpoint::SINGLE_GROUP;
-use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use coprocessor::Result;
+use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
+use coprocessor::codec::table::RowColsDict;
+use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use coprocessor::endpoint::SINGLE_GROUP;
+use util::collections::{OrderMap, OrderMapEntry};
 
+use super::ExecutorMetrics;
 use super::aggregate::{self, AggrFunc};
 use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
-use super::ExecutorMetrics;
 
 struct AggFuncExpr {
     args: Vec<Expression>,
@@ -45,7 +45,7 @@ impl AggFuncExpr {
     fn build(ctx: &mut EvalContext, mut expr: Expr) -> Result<AggFuncExpr> {
         let args = Expression::batch_build(ctx, expr.take_children().into_vec())?;
         let tp = expr.get_tp();
-        Ok(AggFuncExpr { args: args, tp: tp })
+        Ok(AggFuncExpr { args, tp })
     }
 
     fn eval_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Vec<Datum>> {
@@ -90,11 +90,11 @@ impl HashAggExecutor {
     pub fn new(
         mut meta: Aggregation,
         eval_config: Arc<EvalConfig>,
-        columns: Arc<Vec<ColumnInfo>>,
+        cols: Arc<Vec<ColumnInfo>>,
         src: Box<Executor + Send>,
     ) -> Result<HashAggExecutor> {
         // collect all cols used in aggregation
-        let mut visitor = ExprColumnRefVisitor::new(columns.len());
+        let mut visitor = ExprColumnRefVisitor::new(cols.len());
         let group_by = meta.take_group_by().into_vec();
         visitor.batch_visit(&group_by)?;
         let aggr_func = meta.take_agg_func().into_vec();
@@ -106,10 +106,10 @@ impl HashAggExecutor {
             group_key_aggrs: OrderMap::new(),
             cursor: 0,
             executed: false,
-            ctx: ctx,
-            cols: columns,
+            ctx,
+            cols,
             related_cols_offset: visitor.column_offsets(),
-            src: src,
+            src,
             first_collect: true,
         })
     }
@@ -319,12 +319,12 @@ impl StreamAggExecutor {
         }
 
         Ok(StreamAggExecutor {
-            src: src,
+            src,
             executed: false,
             agg_exprs: exprs,
             agg_funcs: funcs,
             group_by_exprs: Expression::batch_build(&mut ctx, group_bys)?,
-            ctx: ctx,
+            ctx,
             related_cols_offset: visitor.column_offsets(),
             cols: columns,
             cur_group_row: Vec::with_capacity(group_len),
@@ -411,12 +411,12 @@ mod test {
     use util::codec::number::NumberEncoder;
     use util::collections::HashMap;
 
-    use super::*;
-    use super::super::table_scan::TableScanExecutor;
     use super::super::index_scan::IndexScanExecutor;
     use super::super::index_scan::test::IndexTestWrapper;
     use super::super::scanner::test::{get_range, new_col_info, Data, TestStore};
+    use super::super::table_scan::TableScanExecutor;
     use super::super::topn::test::gen_table_data;
+    use super::*;
 
     #[inline]
     fn build_expr(tp: ExprType, id: Option<i64>, child: Option<Expr>) -> Expr {
@@ -487,9 +487,9 @@ mod test {
             handle += 1;
         }
         Data {
-            kv_data: kv_data,
-            expect_rows: expect_rows,
-            cols: cols,
+            kv_data,
+            expect_rows,
+            cols,
         }
     }
 

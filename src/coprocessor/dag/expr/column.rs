@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
-use std::str;
+use super::{Column, EvalContext, Result};
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::{types, Decimal, Duration, Json, Time};
-use super::{Column, EvalContext, Result};
+use std::borrow::Cow;
+use std::str;
 
 impl Column {
     pub fn eval(&self, row: &[Datum]) -> Datum {
@@ -85,15 +85,15 @@ impl Column {
 
 #[cfg(test)]
 mod test {
-    use std::{str, u64};
     use std::sync::Arc;
+    use std::{str, u64};
 
     use tipb::expression::FieldType;
 
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::{types, Decimal, Duration, Json, Time};
-    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
     use coprocessor::dag::expr::test::col_expr;
+    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 
     #[derive(PartialEq, Debug)]
     struct EvalResults(
@@ -186,7 +186,7 @@ mod test {
     }
 
     #[test]
-    fn test_hybried_type() {
+    fn test_hybrid_type() {
         let mut ctx = EvalContext::default();
         let row = vec![Datum::I64(12)];
         let hybrid_cases = vec![types::ENUM, types::BIT, types::SET];

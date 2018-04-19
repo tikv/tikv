@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::result::Result as StdResult;
 use std::error::Error as StdError;
+use std::result::Result as StdResult;
 
 quick_error!{
     #[derive(Debug)]

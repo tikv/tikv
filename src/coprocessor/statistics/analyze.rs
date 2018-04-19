@@ -13,21 +13,21 @@
 
 use std::mem;
 
-use rand::{thread_rng, Rng, ThreadRng};
-use protobuf::{Message, RepeatedField};
 use kvproto::coprocessor::{KeyRange, Response};
+use protobuf::{Message, RepeatedField};
+use rand::{thread_rng, Rng, ThreadRng};
 use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
-use tipb::schema::ColumnInfo;
 use tipb::executor::TableScan;
+use tipb::schema::ColumnInfo;
 
+use super::cmsketch::CMSketch;
+use super::fmsketch::FMSketch;
+use super::histogram::Histogram;
+use coprocessor::codec::datum;
 use coprocessor::dag::executor::{Executor, ExecutorMetrics, IndexScanExecutor, TableScanExecutor};
 use coprocessor::endpoint::ReqContext;
-use coprocessor::codec::datum;
 use coprocessor::{Error, Result};
 use storage::{Snapshot, SnapshotStore};
-use super::fmsketch::FMSketch;
-use super::cmsketch::CMSketch;
-use super::histogram::Histogram;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext {
@@ -50,9 +50,9 @@ impl AnalyzeContext {
             req_ctx.fill_cache,
         );
         AnalyzeContext {
-            req: req,
+            req,
             snap: Some(snap),
-            ranges: ranges,
+            ranges,
         }
     }
 
@@ -177,7 +177,7 @@ impl SampleBuilder {
         Ok(SampleBuilder {
             data: table_scanner,
             cols: meta.take_columns().to_vec(),
-            col_len: col_len,
+            col_len,
             max_bucket_size: req.get_bucket_size() as usize,
             max_fm_sketch_size: req.get_sketch_size() as usize,
             max_sample_size: req.get_sample_size() as usize,
@@ -287,9 +287,9 @@ impl SampleCollector {
 
 #[cfg(test)]
 mod test {
+    use super::*;
     use coprocessor::codec::datum;
     use coprocessor::codec::datum::Datum;
-    use super::*;
 
     #[test]
     fn test_sample_collector() {

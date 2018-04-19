@@ -11,41 +11,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::hash_map::Entry;
+use std::collections::vec_deque::{Iter, VecDeque};
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::ops::Deref;
 use std::ops::DerefMut;
-use std::{slice, thread};
-use std::net::{SocketAddr, ToSocketAddrs};
-use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::collections::vec_deque::{Iter, VecDeque};
 use std::{io, u64};
+use std::{slice, thread};
 
-use rand::{self, ThreadRng};
 use protobuf::Message;
+use rand::{self, ThreadRng};
 
 #[macro_use]
 pub mod macros;
-pub mod logger;
-pub mod panic_hook;
-pub mod worker;
-pub mod codec;
-pub mod rocksdb;
-pub mod config;
 pub mod buf;
-pub mod transport;
+pub mod codec;
+pub mod collections;
+pub mod config;
 pub mod file;
 pub mod file_log;
-pub mod metrics;
-pub mod threadpool;
-pub mod collections;
-pub mod time;
-pub mod io_limiter;
-pub mod security;
-pub mod timer;
-pub mod sys;
 pub mod future;
 pub mod futurepool;
+pub mod io_limiter;
 pub mod jemalloc;
+pub mod logger;
+pub mod metrics;
+pub mod panic_hook;
+pub mod rocksdb;
+pub mod security;
+pub mod sys;
+pub mod threadpool;
+pub mod time;
+pub mod timer;
+pub mod transport;
+pub mod worker;
 
 pub use self::rocksdb::properties;
 pub use self::rocksdb::stats as rocksdb_stats;
@@ -370,7 +370,7 @@ impl<T> RingQueue<T> {
     pub fn with_capacity(cap: usize) -> RingQueue<T> {
         RingQueue {
             buf: VecDeque::with_capacity(cap),
-            cap: cap,
+            cap,
         }
     }
 
@@ -424,7 +424,7 @@ impl<T> MustConsumeVec<T> {
     #[inline]
     pub fn with_capacity(tag: &'static str, cap: usize) -> MustConsumeVec<T> {
         MustConsumeVec {
-            tag: tag,
+            tag,
             v: Vec::with_capacity(cap),
         }
     }
@@ -454,14 +454,13 @@ impl<T> Drop for MustConsumeVec<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::*;
+    use super::*;
+    use protobuf::Message;
+    use raft::eraftpb::Entry;
     use std::net::{AddrParseError, SocketAddr};
     use std::rc::Rc;
-    use std::*;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use raft::eraftpb::Entry;
-    use protobuf::Message;
-    use super::*;
+    use std::*;
 
     #[test]
     fn test_to_socket_addr() {
@@ -588,13 +587,9 @@ mod tests {
                         res.extend_from_slice(p2);
                         let exp: Vec<_> = (low..high).collect();
                         assert_eq!(
-                            res,
-                            exp,
+                            res, exp,
                             "[{}, {}) in {:?} with first: {}",
-                            low,
-                            high,
-                            v,
-                            first
+                            low, high, v, first
                         );
                     }
                 }

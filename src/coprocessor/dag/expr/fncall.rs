@@ -16,10 +16,10 @@ use std::usize;
 
 use tipb::expression::ScalarFuncSig;
 
+use super::compare::CmpOp;
+use super::{Error, EvalContext, FnCall, Result};
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::{self, Decimal, Duration, Json, Time};
-use super::{Error, EvalContext, FnCall, Result};
-use super::compare::CmpOp;
 
 impl FnCall {
     pub fn check_args(sig: ScalarFuncSig, args: usize) -> Result<()> {

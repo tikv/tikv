@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{mem, i64, u64};
 use std::sync::Arc;
+use std::{mem, i64, u64};
 
+use super::{Error, Result};
 use chrono::FixedOffset;
 use tipb::select;
-use super::{Error, Result};
 
 /// Flags are used by `DAGRequest.flags` to handle execution mode, like how to handle
 /// truncate error.
@@ -77,7 +77,7 @@ impl EvalConfig {
         };
 
         let e = EvalConfig {
-            tz: tz,
+            tz,
             ignore_truncate: (flags & FLAG_IGNORE_TRUNCATE) > 0,
             truncate_as_warning: (flags & FLAG_TRUNCATE_AS_WARNING) > 0,
             overflow_as_warning: (flags & FLAG_OVERFLOW_AS_WARNING) > 0,
@@ -112,7 +112,7 @@ pub struct EvalWarnings {
 impl EvalWarnings {
     fn new(max_warning_cnt: usize) -> EvalWarnings {
         EvalWarnings {
-            max_warning_cnt: max_warning_cnt,
+            max_warning_cnt,
             warning_cnt: 0,
             warnings: Vec::with_capacity(max_warning_cnt),
         }
@@ -148,10 +148,7 @@ impl Default for EvalContext {
     fn default() -> EvalContext {
         let cfg = Arc::new(EvalConfig::default());
         let warnings = cfg.new_eval_warnings();
-        EvalContext {
-            cfg: cfg,
-            warnings: warnings,
-        }
+        EvalContext { cfg, warnings }
     }
 }
 const ONE_DAY: i64 = 3600 * 24;
@@ -159,10 +156,7 @@ const ONE_DAY: i64 = 3600 * 24;
 impl EvalContext {
     pub fn new(cfg: Arc<EvalConfig>) -> EvalContext {
         let warnings = cfg.new_eval_warnings();
-        EvalContext {
-            cfg: cfg,
-            warnings: warnings,
-        }
+        EvalContext { cfg, warnings }
     }
 
     pub fn handle_truncate(&mut self, is_truncated: bool) -> Result<()> {
@@ -223,8 +217,8 @@ impl EvalContext {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn test_handle_truncate() {

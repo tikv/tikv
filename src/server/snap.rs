@@ -11,28 +11,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{self, Display, Formatter};
 use std::boxed::FnBox;
-use std::time::{Duration, Instant};
+use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use futures::{future, Async, Future, Poll, Stream};
 use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 use grpc::{ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus,
            RpcStatusCode, WriteFlags};
-use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::raft_serverpb::RaftMessage;
+use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb_grpc::TikvClient;
 
 use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use util::DeferContext;
-use util::worker::Runnable;
 use util::security::SecurityManager;
+use util::worker::Runnable;
 
 use super::metrics::*;
-use super::{Error, Result};
 use super::transport::RaftStoreRouter;
+use super::{Error, Result};
 
 pub type Callback = Box<FnBox(Result<()>) + Send>;
 
@@ -174,8 +174,8 @@ fn send_snap(
                 // Call `info` in the closure directly will cause rustc
                 // panic with `Cannot create local mono-item for DefId`.
                 SendStat {
-                    key: key,
-                    total_size: total_size,
+                    key,
+                    total_size,
                     elapsed: timer.elapsed(),
                 }
             })
@@ -220,7 +220,7 @@ impl RecvSnapContext {
         };
 
         Ok(RecvSnapContext {
-            key: key,
+            key,
             file: snap,
             raft_msg: meta,
         })
@@ -308,14 +308,14 @@ impl<R: RaftStoreRouter + 'static> Runner<R> {
         security_mgr: Arc<SecurityManager>,
     ) -> Runner<R> {
         Runner {
-            env: env,
-            snap_mgr: snap_mgr,
+            env,
+            snap_mgr,
             pool: CpuPoolBuilder::new()
                 .name_prefix(thd_name!("snap sender"))
                 .pool_size(DEFAULT_POOL_SIZE)
                 .create(),
             raft_router: r,
-            security_mgr: security_mgr,
+            security_mgr,
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
         }

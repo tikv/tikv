@@ -13,16 +13,16 @@
 
 use std::collections::HashMap;
 
+use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
+use protobuf;
+use rocksdb::DB;
 use tikv::raftstore::store::*;
 use tikv::storage::CF_RAFT;
 use tikv::util::config::*;
-use rocksdb::DB;
-use protobuf;
-use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
 
-use super::util::*;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
+use super::util::*;
 
 fn get_msg_cf_or_default<M>(engine: &DB, cf: &str, key: &[u8]) -> M
 where
