@@ -13,9 +13,9 @@
 
 use std::borrow::Cow;
 
+use super::{Column, Result};
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use super::{Column, Result};
 
 impl Column {
     pub fn eval(&self, row: &[Datum]) -> Datum {
@@ -60,11 +60,11 @@ impl Column {
 
 #[cfg(test)]
 mod test {
-    use std::u64;
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-    use coprocessor::dag::expr::{EvalContext, Expression};
     use coprocessor::dag::expr::test::col_expr;
+    use coprocessor::dag::expr::{EvalContext, Expression};
+    use std::u64;
 
     #[derive(PartialEq, Debug)]
     struct EvalResults(

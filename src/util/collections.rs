@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use fnv::FnvHashSet as HashSet;
 pub use fnv::FnvBuildHasher as BuildHasherDefault;
 pub use fnv::FnvHashMap as HashMap;
+pub use fnv::FnvHashSet as HashSet;
 pub use std::collections::hash_map::Entry as HashMapEntry;
 
 pub use flat_map::FlatMap;
 pub use flat_map::flat_map::{Entry as FlatMapEntry, Values as FlatMapValues};
-pub use indexmap::map::Entry as OrderMapEntry;
 pub use indexmap::IndexMap as OrderMap;
+pub use indexmap::map::Entry as OrderMapEntry;

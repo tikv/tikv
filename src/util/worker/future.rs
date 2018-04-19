@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, Mutex};
-use std::thread::{self, Builder, JoinHandle};
-use std::io;
+use prometheus::IntGauge;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
-use prometheus::IntGauge;
+use std::io;
+use std::sync::{Arc, Mutex};
+use std::thread::{self, Builder, JoinHandle};
 
 use futures::Stream;
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
@@ -62,7 +62,7 @@ impl<T: Display> Scheduler<T> {
         Scheduler {
             metrics_pending_task_count: WORKER_PENDING_TASK_VEC.with_label_values(&[&name]),
             name: Arc::new(name),
-            sender: sender,
+            sender,
         }
     }
 
@@ -179,13 +179,11 @@ impl<T: Display + Send + 'static> Worker<T> {
     pub fn stop(&mut self) -> Option<thread::JoinHandle<()>> {
         // close sender explicitly so the background thread will exit.
         info!("stoping {}", self.scheduler.name);
-        if self.handle.is_none() {
-            return None;
-        }
+        let handle = self.handle.take()?;
         if let Err(e) = self.scheduler.sender.unbounded_send(None) {
             warn!("failed to stop worker thread: {:?}", e);
         }
-        self.handle.take()
+        Some(handle)
     }
 }
 
@@ -197,8 +195,8 @@ mod test {
     use std::time::Instant;
 
     use futures::Future;
-    use tokio_timer::Timer;
     use tokio_core::reactor::Handle;
+    use tokio_timer::Timer;
 
     use super::*;
 

@@ -11,20 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::PathBuf;
-use std::io::Read;
 use std::fs::File;
+use std::io::Read;
+use std::path::PathBuf;
 
 use log::LogLevelFilter;
 use rocksdb::{CompactionPriority, DBCompactionStyle, DBCompressionType, DBRecoveryMode};
+use tikv::config::*;
+use tikv::import::Config as ImportConfig;
 use tikv::pd::Config as PdConfig;
+use tikv::raftstore::coprocessor::Config as CopConfig;
+use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::Config as ServerConfig;
 use tikv::server::readpool::Config as ReadPoolInstanceConfig;
-use tikv::raftstore::store::Config as RaftstoreConfig;
-use tikv::raftstore::coprocessor::Config as CopConfig;
-use tikv::config::*;
 use tikv::storage::Config as StorageConfig;
-use tikv::import::Config as ImportConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
 use tikv::util::security::SecurityConfig;
 

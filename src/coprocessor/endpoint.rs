@@ -11,43 +11,43 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{mem, usize};
-use std::time::Duration;
 use std::cell::RefMut;
+use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::fmt::{self, Debug, Display, Formatter};
+use std::time::Duration;
+use std::{mem, usize};
 
-use protobuf::{CodedInputStream, Message as PbMsg};
-use futures::{future, stream};
 use futures::sync::mpsc as futures_mpsc;
+use futures::{future, stream};
+use protobuf::{CodedInputStream, Message as PbMsg};
 
-use tipb::select::DAGRequest;
+use kvproto::coprocessor::{KeyRange, Request, Response};
+use kvproto::errorpb::{self, ServerIsBusy};
+use kvproto::kvrpcpb::{CommandPri, HandleTime, IsolationLevel};
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::checksum::{ChecksumRequest, ChecksumScanOn};
 use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
-use kvproto::coprocessor::{KeyRange, Request, Response};
-use kvproto::errorpb::{self, ServerIsBusy};
-use kvproto::kvrpcpb::{CommandPri, HandleTime, IsolationLevel};
+use tipb::select::DAGRequest;
 
-use util::time::{duration_to_sec, Instant};
-use util::worker::{Runnable, Scheduler};
+use server::readpool::{self, ReadPool};
+use server::{Config, OnResponse};
+use storage::engine::Error as EngineError;
+use storage::{self, engine, Engine, Snapshot};
 use util::collections::HashMap;
 use util::futurepool;
-use server::{Config, OnResponse};
-use server::readpool::{self, ReadPool};
-use storage::{self, engine, Engine, Snapshot};
-use storage::engine::Error as EngineError;
+use util::time::{duration_to_sec, Instant};
+use util::worker::{Runnable, Scheduler};
 
-use super::codec::mysql;
-use super::codec::datum::Datum;
-use super::dag::DAGContext;
-use super::statistics::analyze::AnalyzeContext;
 use super::checksum::ChecksumContext;
-use super::metrics::*;
-use super::local_metrics::BasicLocalMetrics;
+use super::codec::datum::Datum;
+use super::codec::mysql;
+use super::dag::DAGContext;
 use super::dag::executor::ExecutorMetrics;
+use super::local_metrics::BasicLocalMetrics;
+use super::metrics::*;
+use super::statistics::analyze::AnalyzeContext;
 use super::{Error, ReadPoolContext, Result};
 
 pub const REQ_TYPE_DAG: i64 = 103;
@@ -83,16 +83,16 @@ pub struct Host {
 impl Host {
     pub fn new(
         engine: Box<Engine>,
-        scheduler: Scheduler<Task>,
+        sched: Scheduler<Task>,
         cfg: &Config,
         pool: ReadPool<ReadPoolContext>,
     ) -> Host {
         Host {
-            engine: engine,
-            sched: scheduler,
+            engine,
+            sched,
             reqs: HashMap::default(),
             last_req_id: 0,
-            pool: pool,
+            pool,
             basic_local_metrics: BasicLocalMetrics::default(),
             max_running_task_count: cfg.end_point_max_tasks,
             batch_row_limit: cfg.end_point_batch_row_limit,
@@ -497,11 +497,11 @@ impl RequestTask {
         let start_time = Instant::now_coarse();
 
         let req_ctx = ReqContext {
-            start_time: start_time,
+            start_time,
             deadline: start_time,
             isolation_level: req.get_context().get_isolation_level(),
             fill_cache: !req.get_context().get_not_fill_cache(),
-            table_scan: table_scan,
+            table_scan,
         };
 
         let request_tracker = RequestTracker {
@@ -531,10 +531,10 @@ impl RequestTask {
             .inc();
 
         Ok(RequestTask {
-            req: req,
-            cop_req: cop_req,
+            req,
+            cop_req,
             ctx: req_ctx,
-            on_resp: on_resp,
+            on_resp,
             tracker: request_tracker,
         })
     }
@@ -780,14 +780,14 @@ pub fn get_req_pri_str(pri: CommandPri) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use storage::engine::{self, TEMP_DIR};
     use futures::Future;
     use futures::sync::oneshot;
+    use storage::engine::{self, TEMP_DIR};
 
     use kvproto::coprocessor::Request;
-    use tipb::select::DAGRequest;
-    use tipb::expression::Expr;
     use tipb::executor::Executor;
+    use tipb::expression::Expr;
+    use tipb::select::DAGRequest;
 
     use util::config::ReadableDuration;
     use util::time::Instant;

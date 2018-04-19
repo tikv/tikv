@@ -46,34 +46,34 @@ use setup::*;
 mod signal_handler;
 
 use std::env;
-use std::process;
 use std::fs::File;
-use std::usize;
 use std::path::Path;
-use std::sync::{mpsc, Arc};
+use std::process;
 use std::sync::atomic::Ordering;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
+use std::usize;
 
 use clap::{App, Arg};
 use fs2::FileExt;
 
 use tikv::config::{check_and_persist_critical_config, TiKvConfig};
-use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
+use tikv::coprocessor;
+use tikv::import::{ImportSSTService, SSTImporter};
+use tikv::pd::{PdClient, RpcClient};
+use tikv::raftstore::coprocessor::CoprocessorHost;
+use tikv::raftstore::store::{self, new_compaction_listener, Engines, SnapManagerBuilder};
+use tikv::server::readpool::ReadPool;
+use tikv::server::resolve;
+use tikv::server::transport::ServerRaftStoreRouter;
+use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
+use tikv::storage::{self, DEFAULT_ROCKSDB_SUB_DIR};
+use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use tikv::util::security::SecurityManager;
+use tikv::util::time::Monitor;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::FutureWorker;
-use tikv::storage::{self, DEFAULT_ROCKSDB_SUB_DIR};
-use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
-use tikv::server::transport::ServerRaftStoreRouter;
-use tikv::server::resolve;
-use tikv::server::readpool::ReadPool;
-use tikv::raftstore::store::{self, new_compaction_listener, Engines, SnapManagerBuilder};
-use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::pd::{PdClient, RpcClient};
-use tikv::util::time::Monitor;
-use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
-use tikv::import::{ImportSSTService, SSTImporter};
-use tikv::coprocessor;
+use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
