@@ -11,30 +11,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod column;
-mod constant;
-mod fncall;
+mod arithmetic;
 mod builtin_cast;
 mod builtin_control;
 mod builtin_op;
+mod column;
 mod compare;
-mod arithmetic;
-mod math;
-mod json;
-mod time;
+mod constant;
 mod ctx;
 mod err;
+mod fncall;
+mod json;
+mod math;
+mod time;
 pub use self::ctx::*;
 pub use self::err::*;
 
-use std::str;
 use std::borrow::Cow;
+use std::str;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
 use coprocessor::codec::mysql::json::JsonDecoder;
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::mysql::{charset, types};
 use coprocessor::codec::{self, Datum};
 use util::codec::number::NumberDecoder;
@@ -282,17 +282,14 @@ impl Expression {
                     .map(|children| {
                         Expression::ScalarFn(FnCall {
                             sig: expr.get_sig(),
-                            children: children,
-                            tp: tp,
+                            children,
+                            tp,
                         })
                     })
             }
             ExprType::ColumnRef => {
                 let offset = expr.get_val().decode_i64().map_err(Error::from)? as usize;
-                let column = Column {
-                    offset: offset,
-                    tp: tp,
-                };
+                let column = Column { offset, tp };
                 Ok(Expression::ColumnRef(column))
             }
             unhandled => Err(box_err!("can't handle {:?} expr in DAG mode", unhandled)),
@@ -318,15 +315,15 @@ where
 
 #[cfg(test)]
 mod test {
-    use std::{i64, u64};
-    use std::sync::Arc;
-    use coprocessor::codec::{convert, mysql, Datum};
-    use coprocessor::codec::mysql::{charset, types, Decimal, DecimalEncoder, Duration, Json, Time};
-    use coprocessor::codec::mysql::json::JsonEncoder;
-    use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
-    use util::codec::number::{self, NumberEncoder};
     use super::{Error, EvalConfig, EvalContext, Expression, ERR_DATA_OUT_OF_RANGE,
                 FLAG_IGNORE_TRUNCATE};
+    use coprocessor::codec::mysql::json::JsonEncoder;
+    use coprocessor::codec::mysql::{charset, types, Decimal, DecimalEncoder, Duration, Json, Time};
+    use coprocessor::codec::{convert, mysql, Datum};
+    use std::sync::Arc;
+    use std::{i64, u64};
+    use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
+    use util::codec::number::{self, NumberEncoder};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {

@@ -80,12 +80,12 @@ macro_rules! map {
 /// box try will box error first, and then do the same thing as try!.
 #[macro_export]
 macro_rules! box_try {
-    ($expr:expr) => ({
+    ($expr:expr) => {{
         match $expr {
             Ok(r) => r,
             Err(e) => return Err(box_err!(e)),
         }
-    })
+    }};
 }
 
 /// A shortcut to box an error.
@@ -109,14 +109,14 @@ macro_rules! box_err {
 // Maybe we should define a recover macro too.
 #[macro_export]
 macro_rules! recover_safe {
-    ($e:expr) => ({
-        use std::panic::{AssertUnwindSafe, catch_unwind};
+    ($e:expr) => {{
+        use std::panic::{catch_unwind, AssertUnwindSafe};
         use $crate::util::panic_hook;
         panic_hook::mute();
         let res = catch_unwind(AssertUnwindSafe($e));
         panic_hook::unmute();
         res
-    })
+    }};
 }
 
 /// Log slow operations with warn!.
@@ -131,11 +131,11 @@ macro_rules! slow_log {
 /// make a thread name with additional tag inheriting from current thread.
 #[macro_export]
 macro_rules! thd_name {
-    ($name:expr) => ({
-        $crate::util::get_tag_from_thread_name().map(|tag| {
-            format!("{}::{}", $name, tag)
-        }).unwrap_or_else(|| $name.to_owned())
-    });
+    ($name:expr) => {{
+        $crate::util::get_tag_from_thread_name()
+            .map(|tag| format!("{}::{}", $name, tag))
+            .unwrap_or_else(|| $name.to_owned())
+    }};
 }
 
 /// Simulating go's defer.
@@ -144,9 +144,9 @@ macro_rules! thd_name {
 /// When exiting the scope, its deferred calls are executed in last-in-first-out order.
 #[macro_export]
 macro_rules! defer {
-    ($t:expr) => (
+    ($t:expr) => {
         let __ctx = $crate::util::DeferContext::new(|| $t);
-    );
+    };
 }
 
 /// `wait_op!` waits for async operation. It returns `Option<Res>`
@@ -160,33 +160,31 @@ macro_rules! wait_op {
     ($expr:expr, $timeout:expr) => {
         wait_op!(IMPL $expr, Some($timeout))
     };
-    (IMPL $expr:expr, $timeout:expr) => {
-        {
-            use std::sync::mpsc;
-            let (tx, rx) = mpsc::channel();
-            let cb = box move |res| {
-                 // we don't care error actually.
-                let _ = tx.send(res);
-            };
-            $expr(cb)?;
-            match $timeout {
-                None => rx.recv().ok(),
-                Some(timeout) => rx.recv_timeout(timeout).ok()
-            }
+    (IMPL $expr:expr, $timeout:expr) => {{
+        use std::sync::mpsc;
+        let (tx, rx) = mpsc::channel();
+        let cb = box move |res| {
+            // we don't care error actually.
+            let _ = tx.send(res);
+        };
+        $expr(cb)?;
+        match $timeout {
+            None => rx.recv().ok(),
+            Some(timeout) => rx.recv_timeout(timeout).ok(),
         }
-    }
+    }};
 }
 
 /// `try_opt` check `Result<Option<T>>`, return early when met `Err` or `Ok(None)`.
 #[macro_export]
 macro_rules! try_opt {
-    ($expr:expr) => ({
+    ($expr:expr) => {{
         match $expr {
             Err(e) => return Err(e.into()),
             Ok(None) => return Ok(None),
             Ok(Some(res)) => res,
         }
-    });
+    }};
 }
 
 #[cfg(test)]

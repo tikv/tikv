@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::super::Result;
 use super::Json;
 use super::path_expr::{PathExpression, PathLeg};
-use super::super::Result;
 
 impl Json {
     // Remove elements from Json,
@@ -67,8 +67,8 @@ impl Json {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use super::super::path_expr::parse_json_path_expr;
+    use super::*;
 
     #[test]
     fn test_json_remove() {
