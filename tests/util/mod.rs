@@ -12,10 +12,10 @@
 // limitations under the License.
 
 use rand::{self, Rng, ThreadRng};
-use std::io::{self, Write};
 use std::env;
 use std::fmt::Arguments;
 use std::fs::File;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -34,8 +34,8 @@ pub struct KvGenerator {
 impl KvGenerator {
     pub fn new(key_len: usize, value_len: usize) -> KvGenerator {
         KvGenerator {
-            key_len: key_len,
-            value_len: value_len,
+            key_len,
+            value_len,
             rng: rand::thread_rng(),
         }
     }

@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::store::msg::Msg;
 use raftstore;
-use util::transport::SendCh;
+use raftstore::store::msg::Msg;
 use std::sync::mpsc::Sender;
+use util::transport::SendCh;
 
 pub trait MsgSender {
     fn send(&self, msg: Msg) -> raftstore::Result<()>;
@@ -44,20 +44,20 @@ impl MsgSender for Sender<Msg> {
     }
 }
 
+pub mod apply;
+mod cleanup_sst;
+mod compact;
+mod consistency_check;
+mod metrics;
+mod raftlog_gc;
 mod region;
 mod split_check;
-mod compact;
-mod raftlog_gc;
-mod metrics;
-mod consistency_check;
-mod cleanup_sst;
-pub mod apply;
 
-pub use self::region::{Runner as RegionRunner, Task as RegionTask};
-pub use self::split_check::{Runner as SplitCheckRunner, Task as SplitCheckTask};
-pub use self::compact::{Runner as CompactRunner, Task as CompactTask};
-pub use self::raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask};
-pub use self::consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask};
-pub use self::cleanup_sst::{Runner as CleanupSSTRunner, Task as CleanupSSTTask};
 pub use self::apply::{Apply, ApplyMetrics, ApplyRes, Proposal, RegionProposal, Registration,
                       Runner as ApplyRunner, Task as ApplyTask, TaskRes as ApplyTaskRes};
+pub use self::cleanup_sst::{Runner as CleanupSSTRunner, Task as CleanupSSTTask};
+pub use self::compact::{Runner as CompactRunner, Task as CompactTask};
+pub use self::consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask};
+pub use self::raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask};
+pub use self::region::{Runner as RegionRunner, Task as RegionTask};
+pub use self::split_check::{Runner as SplitCheckRunner, Task as SplitCheckTask};

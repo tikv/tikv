@@ -51,8 +51,8 @@ use std::sync::atomic::Ordering;
 use clap::{App, Arg, ArgMatches};
 
 use tikv::config::TiKvConfig;
-use tikv::util::{self, panic_hook};
 use tikv::import::ImportKVServer;
+use tikv::util::{self, panic_hook};
 
 fn main() {
     let long_version: String = {

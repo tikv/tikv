@@ -22,10 +22,10 @@ use grpc::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 
+use super::metrics::*;
+use super::{Config, Error, Result};
 use util::collections::HashMap;
 use util::security::SecurityManager;
-use super::{Config, Error, Result};
-use super::metrics::*;
 
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: usize = 10 * 1024 * 1024;
@@ -97,7 +97,7 @@ impl Conn {
         Conn {
             stream: tx,
             buffer: Some(Vec::with_capacity(PRESERVED_MSG_BUFFER_COUNT)),
-            store_id: store_id,
+            store_id,
             alive: alive1,
 
             _client: client,
@@ -122,11 +122,11 @@ impl RaftClient {
         security_mgr: Arc<SecurityManager>,
     ) -> RaftClient {
         RaftClient {
-            env: env,
+            env,
             conns: HashMap::default(),
             addrs: HashMap::default(),
-            cfg: cfg,
-            security_mgr: security_mgr,
+            cfg,
+            security_mgr,
         }
     }
 

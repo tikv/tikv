@@ -13,41 +13,41 @@
 
 use std::sync::Arc;
 
+use kvproto::coprocessor::KeyRange;
 use tipb::executor::{self, ExecType};
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
-use kvproto::coprocessor::KeyRange;
 
-use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{self, Datum};
+use coprocessor::codec::mysql;
 use coprocessor::codec::table::{RowColsDict, TableDecoder};
-use coprocessor::endpoint::get_pk;
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings};
+use coprocessor::endpoint::get_pk;
 use coprocessor::{Error, Result};
 use storage::SnapshotStore;
 use util::codec::number::NumberDecoder;
 use util::collections::HashSet;
 
-mod scanner;
-mod table_scan;
+mod aggregate;
+mod aggregation;
 mod index_scan;
+mod limit;
+mod scanner;
 mod selection;
+mod table_scan;
 mod topn;
 mod topn_heap;
-mod limit;
-mod aggregation;
-mod aggregate;
 
 mod metrics;
 
-pub use self::table_scan::TableScanExecutor;
-pub use self::index_scan::IndexScanExecutor;
-pub use self::selection::SelectionExecutor;
-pub use self::topn::TopNExecutor;
-pub use self::limit::LimitExecutor;
 pub use self::aggregation::{HashAggExecutor, StreamAggExecutor};
-pub use self::scanner::{ScanOn, Scanner};
+pub use self::index_scan::IndexScanExecutor;
+pub use self::limit::LimitExecutor;
 pub use self::metrics::*;
+pub use self::scanner::{ScanOn, Scanner};
+pub use self::selection::SelectionExecutor;
+pub use self::table_scan::TableScanExecutor;
+pub use self::topn::TopNExecutor;
 
 pub struct ExprColumnRefVisitor {
     cols_offset: HashSet<usize>,
@@ -58,7 +58,7 @@ impl ExprColumnRefVisitor {
     pub fn new(cols_len: usize) -> ExprColumnRefVisitor {
         ExprColumnRefVisitor {
             cols_offset: HashSet::default(),
-            cols_len: cols_len,
+            cols_len,
         }
     }
 
@@ -101,10 +101,7 @@ pub struct Row {
 
 impl Row {
     pub fn new(handle: i64, data: RowColsDict) -> Row {
-        Row {
-            handle: handle,
-            data: data,
-        }
+        Row { handle, data }
     }
 
     // get binary of each column in order of columns
@@ -214,8 +211,8 @@ pub fn build_exec(
     }
     Ok(DAGExecutor {
         exec: src,
-        columns: columns,
-        has_aggr: has_aggr,
+        columns,
+        has_aggr,
     })
 }
 

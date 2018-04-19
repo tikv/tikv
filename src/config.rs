@@ -13,15 +13,15 @@
 
 extern crate toml;
 
-use std::error::Error;
-use std::usize;
-use std::fs;
-use std::io::{Read, Write};
-use std::io::Error as IoError;
-use std::path::Path;
-use std::fmt;
 use std::cmp;
+use std::error::Error;
+use std::fmt;
+use std::fs;
 use std::i32;
+use std::io::Error as IoError;
+use std::io::{Read, Write};
+use std::path::Path;
+use std::usize;
 
 use log::LogLevelFilter;
 use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
@@ -29,12 +29,12 @@ use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBComp
 use sys_info;
 
 use import::Config as ImportConfig;
-use server::Config as ServerConfig;
-use server::readpool::Config as ReadPoolInstanceConfig;
 use pd::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::keys::region_raft_prefix_len;
+use server::Config as ServerConfig;
+use server::readpool::Config as ReadPoolInstanceConfig;
 use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
               DEFAULT_ROCKSDB_SUB_DIR};
 use util::config::{self, compression_type_level_serde, ReadableDuration, ReadableSize, GB, KB, MB};
@@ -106,7 +106,7 @@ macro_rules! cf_config {
             pub soft_pending_compaction_bytes_limit: ReadableSize,
             pub hard_pending_compaction_bytes_limit: ReadableSize,
         }
-    }
+    };
 }
 
 macro_rules! build_cf_opt {
@@ -116,11 +116,13 @@ macro_rules! build_cf_opt {
         block_base_opts.set_no_block_cache($opt.disable_block_cache);
         block_base_opts.set_lru_cache($opt.block_cache_size.0 as usize, -1, 0, 0.0);
         block_base_opts.set_cache_index_and_filter_blocks($opt.cache_index_and_filter_blocks);
-        block_base_opts.set_pin_l0_filter_and_index_blocks_in_cache(
-            $opt.pin_l0_filter_and_index_blocks);
+        block_base_opts
+            .set_pin_l0_filter_and_index_blocks_in_cache($opt.pin_l0_filter_and_index_blocks);
         if $opt.use_bloom_filter {
-            block_base_opts.set_bloom_filter($opt.bloom_filter_bits_per_key,
-                                             $opt.block_based_bloom_filter);
+            block_base_opts.set_bloom_filter(
+                $opt.bloom_filter_bits_per_key,
+                $opt.block_based_bloom_filter,
+            );
             block_base_opts.set_whole_key_filtering($opt.whole_key_filtering);
         }
         block_base_opts.set_read_amp_bytes_per_bit($opt.read_amp_bytes_per_bit);
@@ -168,7 +170,7 @@ macro_rules! tune_for_import_mode_cf {
         if $opt.block_cache_size.0 > GB {
             $opt.block_cache_size.0 = GB;
         }
-    }}
+    }};
 }
 
 cf_config!(DefaultCfConfig);
@@ -391,7 +393,8 @@ impl RaftCfConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
-    #[serde(with = "config::recovery_mode_serde")] pub wal_recovery_mode: DBRecoveryMode,
+    #[serde(with = "config::recovery_mode_serde")]
+    pub wal_recovery_mode: DBRecoveryMode,
     pub wal_dir: String,
     pub wal_ttl_seconds: u64,
     pub wal_size_limit: ReadableSize,
@@ -573,7 +576,8 @@ impl RaftDefaultCfConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct RaftDbConfig {
-    #[serde(with = "config::recovery_mode_serde")] pub wal_recovery_mode: DBRecoveryMode,
+    #[serde(with = "config::recovery_mode_serde")]
+    pub wal_recovery_mode: DBRecoveryMode,
     pub wal_dir: String,
     pub wal_ttl_seconds: u64,
     pub wal_size_limit: ReadableSize,
@@ -722,14 +726,16 @@ impl Default for ReadPoolConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
-    #[serde(with = "LogLevel")] pub log_level: LogLevelFilter,
+    #[serde(with = "LogLevel")]
+    pub log_level: LogLevelFilter,
     pub log_file: String,
     pub readpool: ReadPoolConfig,
     pub server: ServerConfig,
     pub storage: StorageConfig,
     pub pd: PdConfig,
     pub metric: MetricConfig,
-    #[serde(rename = "raftstore")] pub raft_store: RaftstoreConfig,
+    #[serde(rename = "raftstore")]
+    pub raft_store: RaftstoreConfig,
     pub coprocessor: CopConfig,
     pub rocksdb: DbConfig,
     pub raftdb: RaftDbConfig,

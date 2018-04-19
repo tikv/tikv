@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{self, str, i64, u64};
 use std::borrow::Cow;
+use std::{self, str, i64, u64};
 
-use coprocessor::dag::expr::EvalContext;
 use super::mysql::Res;
 use super::{Error, Result};
+use coprocessor::dag::expr::EvalContext;
 // `UNSPECIFIED_LENGTH` is unspecified length from FieldType
 pub const UNSPECIFIED_LENGTH: i32 = -1;
 
@@ -55,9 +55,9 @@ pub fn truncate_f64(mut f: f64, flen: u8, decimal: u8) -> Res<f64> {
 // `overflow` returns an overflowed error.
 #[macro_export]
 macro_rules! overflow {
-    ($val:ident, $bound:ident) => ({
+    ($val:ident, $bound:ident) => {{
         Err(box_err!("constant {} overflows {}", $val, $bound))
-    });
+    }};
 }
 
 // `convert_uint_to_int` converts an uint value to an int value.
@@ -318,11 +318,11 @@ const MAX_ZERO_COUNT: i64 = 20;
 #[cfg(test)]
 mod test {
     use std::f64::EPSILON;
-    use std::{isize, f64, i64, u64};
     use std::sync::Arc;
+    use std::{isize, f64, i64, u64};
 
-    use coprocessor::dag::expr::{EvalConfig, EvalContext, FLAG_IGNORE_TRUNCATE};
     use coprocessor::codec::mysql::types;
+    use coprocessor::dag::expr::{EvalConfig, EvalContext, FLAG_IGNORE_TRUNCATE};
 
     use super::*;
 
