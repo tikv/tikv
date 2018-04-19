@@ -273,7 +273,6 @@ pub struct Runner<T: PdClient> {
     db: Arc<DB>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
-    is_handle_reconnect_scheduled: bool,
 
     invalidate_cache: Arc<AtomicBool>,
     heartbeat_cache: HashMap<u64, RegionHeartbeatCache>,
@@ -281,17 +280,23 @@ pub struct Runner<T: PdClient> {
 
 impl<T: PdClient> Runner<T> {
     pub fn new(store_id: u64, pd_client: Arc<T>, ch: SendCh<Msg>, db: Arc<DB>) -> Runner<T> {
-        Runner {
+        let runner = Runner {
             store_id,
             pd_client,
             ch,
             db,
             is_hb_receiver_scheduled: false,
-            is_handle_reconnect_scheduled: false,
-            store_stat: StoreStat::default(),
             invalidate_cache: Arc::new(AtomicBool::new(false)),
+            store_stat: StoreStat::default(),
             heartbeat_cache: HashMap::default(),
-        }
+        };
+        let invalidate_cache = Arc::clone(&runner.invalidate_cache);
+        // Register PD reconnection handler.
+        runner
+            .pd_client
+            .handle_reconnect(move || invalidate_cache.store(true, Ordering::Relaxed));
+
+        runner
     }
 
     fn handle_ask_split(
@@ -339,20 +344,20 @@ impl<T: PdClient> Runner<T> {
             .or_insert_with(RegionHeartbeatCache::default);
         cache.merge_heartbeat(&self.db, hb_task);
 
-        self.store_stat
-            .region_bytes_written
-            .observe(cache.written_bytes_delta as f64);
-        self.store_stat
-            .region_keys_written
-            .observe(cache.written_keys_delta as f64);
-        self.store_stat
-            .region_bytes_read
-            .observe(cache.read_bytes_delta as f64);
-        self.store_stat
-            .region_keys_read
-            .observe(cache.read_keys_delta as f64);
-
         if let Some((region, peer, region_stat)) = cache.heartbeat() {
+            // Only observe active regions.
+            self.store_stat
+                .region_bytes_written
+                .observe(region_stat.written_bytes as f64);
+            self.store_stat
+                .region_keys_written
+                .observe(region_stat.written_keys as f64);
+            self.store_stat
+                .region_bytes_read
+                .observe(region_stat.read_bytes as f64);
+            self.store_stat
+                .region_keys_read
+                .observe(region_stat.read_keys as f64);
             debug!("[region {}] send changed heartbeat to pd", region_id);
             let f = self.pd_client
                 .region_heartbeat(region, peer, region_stat)
@@ -590,19 +595,12 @@ impl<T: PdClient> Runner<T> {
         self.is_hb_receiver_scheduled = true;
     }
 
-    fn handle_reconnect(&mut self) {
-        if self.is_handle_reconnect_scheduled {
-            if self.invalidate_cache.swap(false, Ordering::Relaxed) {
-                info!("invalidate region heartbeat cache");
-                self.heartbeat_cache
-                    .values_mut()
-                    .for_each(|cache| cache.valid = false);;
-            }
-        } else {
-            self.is_handle_reconnect_scheduled = true;
-            let invalidate_cache = Arc::clone(&self.invalidate_cache);
-            self.pd_client
-                .handle_reconnect(move || invalidate_cache.store(true, Ordering::Relaxed));
+    fn maybe_handle_reconnect(&mut self) {
+        if self.invalidate_cache.swap(false, Ordering::Relaxed) {
+            info!("invalidate region heartbeat cache");
+            self.heartbeat_cache
+                .values_mut()
+                .for_each(|cache| cache.valid = false);;
         }
     }
 
@@ -633,7 +631,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
         if !self.is_hb_receiver_scheduled {
             self.schedule_heartbeat_receiver(handle);
         }
-        self.handle_reconnect();
+        self.maybe_handle_reconnect();
 
         match task {
             Task::AskSplit {
