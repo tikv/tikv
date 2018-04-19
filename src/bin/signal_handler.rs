@@ -20,9 +20,9 @@ mod imp {
     use tikv::raftstore::store::Engines;
     use tikv::util::{metrics, rocksdb_stats};
 
-    pub fn handle_signal(engines: Engines) {
-        use signal::trap::Trap;
+    pub fn handle_signal(engines: Option<Engines>) {
         use nix::sys::signal::{SIGUSR1, SIGUSR2, SIGHUP, SIGINT, SIGTERM};
+        use signal::trap::Trap;
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]);
         for sig in trap {
             match sig {
@@ -33,8 +33,10 @@ mod imp {
                 SIGUSR1 => {
                     // Use SIGUSR1 to log metrics.
                     info!("{}", metrics::dump());
-                    info!("{:?}", rocksdb_stats::dump(&engines.kv_engine));
-                    info!("{:?}", rocksdb_stats::dump(&engines.raft_engine));
+                    if let Some(ref engines) = engines {
+                        info!("{:?}", rocksdb_stats::dump(&engines.kv_engine));
+                        info!("{:?}", rocksdb_stats::dump(&engines.raft_engine));
+                    }
                 }
                 SIGUSR2 => profiling::dump_prof(None),
                 // TODO: handle more signal
@@ -48,7 +50,7 @@ mod imp {
 mod imp {
     use tikv::raftstore::store::Engines;
 
-    pub fn handle_signal(_: Engines) {}
+    pub fn handle_signal(_: Option<Engines>) {}
 }
 
 pub use self::imp::handle_signal;

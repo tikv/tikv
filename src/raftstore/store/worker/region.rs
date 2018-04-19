@@ -13,28 +13,28 @@
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
-use std::sync::mpsc::SyncSender;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::SyncSender;
 use std::time::Instant;
 
-use rocksdb::{Writable, WriteBatch, DB};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
+use rocksdb::{Writable, WriteBatch, DB};
 
-use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
-use util::worker::Runnable;
-use util::{escape, rocksdb};
 use raftstore::store::engine::{Mutable, Snapshot};
 use raftstore::store::peer_storage::{JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING,
                                      JOB_STATUS_FAILED, JOB_STATUS_FINISHED, JOB_STATUS_PENDING,
                                      JOB_STATUS_RUNNING};
+use raftstore::store::snap::{Error, Result};
 use raftstore::store::{self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey,
                        SnapManager};
-use raftstore::store::snap::{Error, Result};
 use storage::CF_RAFT;
+use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
+use util::worker::Runnable;
+use util::{escape, rocksdb};
 
-use super::metrics::*;
 use super::super::util;
+use super::metrics::*;
 
 const GENERATE_POOL_SIZE: usize = 2;
 
@@ -61,9 +61,9 @@ pub enum Task {
 impl Task {
     pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task {
         Task::Destroy {
-            region_id: region_id,
-            start_key: start_key,
-            end_key: end_key,
+            region_id,
+            start_key,
+            end_key,
         }
     }
 }
@@ -288,11 +288,11 @@ impl Runner {
                 .thread_count(GENERATE_POOL_SIZE)
                 .build(),
             ctx: SnapContext {
-                kv_db: kv_db,
-                raft_db: raft_db,
-                mgr: mgr,
-                batch_size: batch_size,
-                use_delete_range: use_delete_range,
+                kv_db,
+                raft_db,
+                mgr,
+                batch_size,
+                use_delete_range,
             },
         }
     }

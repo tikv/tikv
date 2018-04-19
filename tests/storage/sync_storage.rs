@@ -11,15 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use futures::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use futures::Future;
 
-use tikv::util::collections::HashMap;
-use tikv::storage::{self, Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
-use tikv::storage::config::Config;
-use tikv::server::readpool::ReadPool;
 use kvproto::kvrpcpb::{Context, LockInfo};
+use tikv::server::readpool::ReadPool;
+use tikv::storage::config::Config;
+use tikv::storage::{self, Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
+use tikv::util::collections::HashMap;
 
 /// `SyncStorage` wraps `Storage` with sync API, usually used for testing.
 pub struct SyncStorage {
@@ -181,7 +181,9 @@ impl SyncStorage {
         start_key: Vec<u8>,
         limit: usize,
     ) -> Result<Vec<Result<KvPair>>> {
-        self.store.async_raw_scan(ctx, start_key, limit).wait()
+        self.store
+            .async_raw_scan(ctx, start_key, limit, false)
+            .wait()
     }
 }
 

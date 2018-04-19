@@ -14,8 +14,8 @@
 //! A module contains test cases of stale peers gc.
 use std::sync::Arc;
 
-use raft::eraftpb::MessageType;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
+use raft::eraftpb::MessageType;
 use tikv::raftstore::store::{keys, Peekable};
 use tikv::storage::CF_RAFT;
 

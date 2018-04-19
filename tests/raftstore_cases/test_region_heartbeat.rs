@@ -1,16 +1,16 @@
 use std::sync::Arc;
-use std::thread::sleep;
 use std::sync::mpsc;
+use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use tikv::util::HandyRwLock;
 use tikv::util::config::*;
 
-use super::util;
+use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
-use super::cluster::{Cluster, Simulator};
 use super::transport_simulate::*;
+use super::util;
 use super::util::*;
 
 fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<u64>) {

@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::mem;
 use std::sync::Arc;
+use std::{mem, i64, u64};
 
+use super::{Error, Result};
 use chrono::FixedOffset;
 use tipb::select;
-use super::{Error, Result};
 
 /// Flags are used by `DAGRequest.flags` to handle execution mode, like how to handle
 /// truncate error.
@@ -29,6 +29,16 @@ pub const FLAG_IGNORE_TRUNCATE: u64 = 1;
 /// should be returned as error, in non-strict sql mode, truncate error should be saved as warning.
 pub const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
 
+// `FLAG_PAD_CHAR_TO_FULL_LENGTH` indicates if sql_mode 'PAD_CHAR_TO_FULL_LENGTH' is set.
+pub const FLAG_PAD_CHAR_TO_FULL_LENGTH: u64 = 1 << 2;
+
+// `FLAG_IN_SELECT_STMT` indicates if this is a SELECT statement.
+pub const FLAG_IN_SELECT_STMT: u64 = 1 << 5;
+/// `FLAG_OVERFLOW_AS_WARNING` indicates if overflow error should be returned as warning.
+/// In strict sql mode, overflow error should be returned as error,
+/// in non-strict sql mode, overflow error should be saved as warning.
+pub const FLAG_OVERFLOW_AS_WARNING: u64 = 1 << 6;
+
 const DEFAULT_MAX_WARNING_CNT: usize = 64;
 #[derive(Debug)]
 pub struct EvalConfig {
@@ -36,6 +46,9 @@ pub struct EvalConfig {
     pub tz: FixedOffset,
     pub ignore_truncate: bool,
     pub truncate_as_warning: bool,
+    pub overflow_as_warning: bool,
+    pub in_select_stmt: bool,
+    pub pad_char_to_full_length: bool,
     pub max_warning_cnt: usize,
 }
 
@@ -45,6 +58,9 @@ impl Default for EvalConfig {
             tz: FixedOffset::east(0),
             ignore_truncate: false,
             truncate_as_warning: false,
+            overflow_as_warning: false,
+            in_select_stmt: false,
+            pad_char_to_full_length: false,
             max_warning_cnt: DEFAULT_MAX_WARNING_CNT,
         }
     }
@@ -53,17 +69,20 @@ impl Default for EvalConfig {
 impl EvalConfig {
     pub fn new(tz_offset: i64, flags: u64) -> Result<EvalConfig> {
         if tz_offset <= -ONE_DAY || tz_offset >= ONE_DAY {
-            return Err(Error::Eval(format!("invalid tz offset {}", tz_offset)));
+            return Err(Error::unknown_timezone(tz_offset));
         }
         let tz = match FixedOffset::east_opt(tz_offset as i32) {
-            None => return Err(Error::Eval(format!("invalid tz offset {}", tz_offset))),
+            None => return Err(Error::unknown_timezone(tz_offset)),
             Some(tz) => tz,
         };
 
         let e = EvalConfig {
-            tz: tz,
+            tz,
             ignore_truncate: (flags & FLAG_IGNORE_TRUNCATE) > 0,
             truncate_as_warning: (flags & FLAG_TRUNCATE_AS_WARNING) > 0,
+            overflow_as_warning: (flags & FLAG_OVERFLOW_AS_WARNING) > 0,
+            in_select_stmt: (flags & FLAG_IN_SELECT_STMT) > 0,
+            pad_char_to_full_length: (flags & FLAG_PAD_CHAR_TO_FULL_LENGTH) > 0,
             max_warning_cnt: DEFAULT_MAX_WARNING_CNT,
         };
 
@@ -93,13 +112,13 @@ pub struct EvalWarnings {
 impl EvalWarnings {
     fn new(max_warning_cnt: usize) -> EvalWarnings {
         EvalWarnings {
-            max_warning_cnt: max_warning_cnt,
+            max_warning_cnt,
             warning_cnt: 0,
             warnings: Vec::with_capacity(max_warning_cnt),
         }
     }
 
-    fn append_warning(&mut self, err: Error) {
+    pub fn append_warning(&mut self, err: Error) {
         self.warning_cnt += 1;
         if self.warnings.len() < self.max_warning_cnt {
             self.warnings.push(err.into());
@@ -122,17 +141,14 @@ impl EvalWarnings {
 /// Some global variables needed in an evaluation.
 pub struct EvalContext {
     pub cfg: Arc<EvalConfig>,
-    warnings: EvalWarnings,
+    pub warnings: EvalWarnings,
 }
 
 impl Default for EvalContext {
     fn default() -> EvalContext {
         let cfg = Arc::new(EvalConfig::default());
         let warnings = cfg.new_eval_warnings();
-        EvalContext {
-            cfg: cfg,
-            warnings: warnings,
-        }
+        EvalContext { cfg, warnings }
     }
 }
 const ONE_DAY: i64 = 3600 * 24;
@@ -140,10 +156,7 @@ const ONE_DAY: i64 = 3600 * 24;
 impl EvalContext {
     pub fn new(cfg: Arc<EvalConfig>) -> EvalContext {
         let warnings = cfg.new_eval_warnings();
-        EvalContext {
-            cfg: cfg,
-            warnings: warnings,
-        }
+        EvalContext { cfg, warnings }
     }
 
     pub fn handle_truncate(&mut self, is_truncated: bool) -> Result<()> {
@@ -164,6 +177,36 @@ impl EvalContext {
         Err(err)
     }
 
+    /// handle_overflow treats ErrOverflow as warnings or returns the error
+    /// based on the cfg.handle_overflow state.
+    pub fn handle_overflow(&mut self, err: Error) -> Result<()> {
+        if self.cfg.overflow_as_warning {
+            self.warnings.append_warning(err);
+            Ok(())
+        } else {
+            Err(err)
+        }
+    }
+
+    pub fn overflow_from_cast_str_as_int(
+        &mut self,
+        bytes: &[u8],
+        orig_err: Error,
+        negitive: bool,
+    ) -> Result<i64> {
+        if !self.cfg.in_select_stmt || !self.cfg.overflow_as_warning {
+            return Err(orig_err);
+        }
+        let orig_str = String::from_utf8_lossy(bytes);
+        self.warnings
+            .append_warning(Error::truncated_wrong_val("INTEGER", &orig_str));
+        if negitive {
+            Ok(i64::MIN)
+        } else {
+            Ok(u64::MAX as i64)
+        }
+    }
+
     pub fn take_warnings(&mut self) -> EvalWarnings {
         mem::replace(
             &mut self.warnings,
@@ -174,8 +217,8 @@ impl EvalContext {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn test_handle_truncate() {

@@ -12,25 +12,25 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
-use uuid::Uuid;
 use futures::{stream, Future, Stream};
 use tempdir::TempDir;
+use uuid::Uuid;
 
-use kvproto::kvrpcpb::*;
-use kvproto::tikvpb_grpc::*;
+use grpc::{ChannelBuilder, Environment, Result, WriteFlags};
 use kvproto::importpb::*;
 use kvproto::importpb_grpc::*;
-use grpc::{ChannelBuilder, Environment, Result, WriteFlags};
+use kvproto::kvrpcpb::*;
+use kvproto::tikvpb_grpc::*;
 
+use tikv::import::test_helpers::*;
 use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
-use tikv::import::test_helpers::*;
 
-use raftstore::server::*;
 use raftstore::cluster::Cluster;
+use raftstore::server::*;
 
 const CLEANUP_SST_MILLIS: u64 = 10;
 
@@ -75,27 +75,21 @@ fn test_upload_sst() {
     let crc32 = calc_data_crc32(&data);
     let length = data.len() as u64;
 
-    let mut upload = UploadRequest::new();
-    upload.set_data(data.clone());
-
     // Mismatch crc32
     let meta = new_sst_meta(0, length);
-    upload.set_meta(meta);
-    assert!(send_upload_sst(&import, &upload).is_err());
+    assert!(send_upload_sst(&import, &meta, &data).is_err());
 
     // Mismatch length
     let meta = new_sst_meta(crc32, 0);
-    upload.set_meta(meta);
-    assert!(send_upload_sst(&import, &upload).is_err());
+    assert!(send_upload_sst(&import, &meta, &data).is_err());
 
     let mut meta = new_sst_meta(crc32, length);
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
-    upload.set_meta(meta);
-    send_upload_sst(&import, &upload).unwrap();
+    send_upload_sst(&import, &meta, &data).unwrap();
 
     // Can't upload the same uuid file again.
-    assert!(send_upload_sst(&import, &upload).is_err());
+    assert!(send_upload_sst(&import, &meta, &data).is_err());
 }
 
 #[test]
@@ -109,10 +103,7 @@ fn test_ingest_sst() {
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
 
     // No region id and epoch.
-    let mut upload = UploadRequest::new();
-    upload.set_meta(meta.clone());
-    upload.set_data(data.clone());
-    send_upload_sst(&import, &upload).unwrap();
+    send_upload_sst(&import, &meta, &data).unwrap();
 
     let mut ingest = IngestRequest::new();
     ingest.set_context(ctx.clone());
@@ -123,10 +114,9 @@ fn test_ingest_sst() {
     // Set region id and epoch.
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
-    upload.set_meta(meta.clone());
-    send_upload_sst(&import, &upload).unwrap();
+    send_upload_sst(&import, &meta, &data).unwrap();
     // Cann't upload the same file again.
-    assert!(send_upload_sst(&import, &upload).is_err());
+    assert!(send_upload_sst(&import, &meta, &data).is_err());
 
     ingest.set_sst(meta.clone());
     let resp = import.ingest(&ingest).unwrap();
@@ -144,7 +134,7 @@ fn test_ingest_sst() {
     }
 
     // Upload the same file again to check if the ingested file has been deleted.
-    send_upload_sst(&import, &upload).unwrap();
+    send_upload_sst(&import, &meta, &data).unwrap();
 }
 
 #[test]
@@ -159,19 +149,16 @@ fn test_cleanup_sst() {
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
 
-    let mut upload = UploadRequest::new();
-    upload.set_meta(meta);
-    upload.set_data(data);
-    send_upload_sst(&import, &upload).unwrap();
+    send_upload_sst(&import, &meta, &data).unwrap();
 
     // Can not upload the same file when it exists.
-    assert!(send_upload_sst(&import, &upload).is_err());
+    assert!(send_upload_sst(&import, &meta, &data).is_err());
 
     // The uploaded SST should be deleted if the region split.
     let region = cluster.get_region(&[]);
     cluster.must_split(&region, &[100]);
 
-    check_sst_deleted(&import, &upload);
+    check_sst_deleted(&import, &meta, &data);
 
     let left = cluster.get_region(&[]);
     let right = cluster.get_region(&[100]);
@@ -182,17 +169,14 @@ fn test_cleanup_sst() {
     meta.set_region_id(left.get_id());
     meta.set_region_epoch(left.get_region_epoch().clone());
 
-    let mut upload = UploadRequest::new();
-    upload.set_meta(meta);
-    upload.set_data(data);
-    send_upload_sst(&import, &upload).unwrap();
+    send_upload_sst(&import, &meta, &data).unwrap();
 
     // The uploaded SST should be deleted if the region merged.
     cluster.pd_client.must_merge(left.get_id(), right.get_id());
     let res = cluster.pd_client.get_region_by_id(left.get_id());
     assert!(res.wait().unwrap().is_none());
 
-    check_sst_deleted(&import, &upload);
+    check_sst_deleted(&import, &meta, &data);
 }
 
 fn new_sst_meta(crc32: u32, length: u64) -> SSTMeta {
@@ -203,19 +187,31 @@ fn new_sst_meta(crc32: u32, length: u64) -> SSTMeta {
     m
 }
 
-fn send_upload_sst(client: &ImportSstClient, m: &UploadRequest) -> Result<UploadResponse> {
+fn send_upload_sst(
+    client: &ImportSstClient,
+    meta: &SSTMeta,
+    data: &[u8],
+) -> Result<UploadResponse> {
+    let mut r1 = UploadRequest::new();
+    r1.set_meta(meta.clone());
+    let mut r2 = UploadRequest::new();
+    r2.set_data(data.to_vec());
+    let reqs: Vec<_> = vec![r1, r2]
+        .into_iter()
+        .map(|r| (r, WriteFlags::default()))
+        .collect();
     let (tx, rx) = client.upload().unwrap();
-    let stream = stream::once({ Ok((m.clone(), WriteFlags::default().buffer_hint(true))) });
+    let stream = stream::iter_ok(reqs);
     stream.forward(tx).and_then(|_| rx).wait()
 }
 
-fn check_sst_deleted(client: &ImportSstClient, m: &UploadRequest) {
+fn check_sst_deleted(client: &ImportSstClient, meta: &SSTMeta, data: &[u8]) {
     for _ in 0..10 {
-        if send_upload_sst(client, m).is_ok() {
+        if send_upload_sst(client, meta, data).is_ok() {
             // If we can upload the file, it means the previous file has been deleted.
             return;
         }
         thread::sleep(Duration::from_millis(CLEANUP_SST_MILLIS));
     }
-    send_upload_sst(client, m).unwrap();
+    send_upload_sst(client, meta, data).unwrap();
 }

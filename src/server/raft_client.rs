@@ -22,10 +22,10 @@ use grpc::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 
+use super::metrics::*;
+use super::{Config, Error, Result};
 use util::collections::HashMap;
 use util::security::SecurityManager;
-use super::{Config, Error, Result};
-use super::metrics::*;
 
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: usize = 10 * 1024 * 1024;
@@ -59,6 +59,8 @@ impl Conn {
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
             .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
+            .keepalive_time(cfg.grpc_keepalive_time.0)
+            .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
             // hack: so it's different args, grpc will always create a new connection.
             .raw_cfg_int(
                 CString::new("random id").unwrap(),
@@ -95,7 +97,7 @@ impl Conn {
         Conn {
             stream: tx,
             buffer: Some(Vec::with_capacity(PRESERVED_MSG_BUFFER_COUNT)),
-            store_id: store_id,
+            store_id,
             alive: alive1,
 
             _client: client,
@@ -120,11 +122,11 @@ impl RaftClient {
         security_mgr: Arc<SecurityManager>,
     ) -> RaftClient {
         RaftClient {
-            env: env,
+            env,
             conns: HashMap::default(),
             addrs: HashMap::default(),
-            cfg: cfg,
-            security_mgr: security_mgr,
+            cfg,
+            security_mgr,
         }
     }
 
@@ -188,7 +190,7 @@ impl RaftClient {
         });
 
         if counter > 0 {
-            RAFT_MESSAGE_FLUSH_COUNTER.inc_by(counter as f64).unwrap();
+            RAFT_MESSAGE_FLUSH_COUNTER.inc_by(counter as i64);
         }
     }
 }

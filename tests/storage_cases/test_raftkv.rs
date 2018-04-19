@@ -1,16 +1,16 @@
-use std::thread;
 use std::sync::mpsc::channel;
+use std::thread;
 use std::time::Duration;
 
-use tikv::util::HandyRwLock;
+use kvproto::kvrpcpb::Context;
+use raftstore::server::new_server_cluster;
+use raftstore::transport_simulate::IsolationFilterFactory;
+use tikv::raftstore::store::engine::IterOption;
 use tikv::storage::engine::*;
 use tikv::storage::{CFStatistics, CfName, Key, CF_DEFAULT};
+use tikv::util::HandyRwLock;
 use tikv::util::codec::bytes;
 use tikv::util::escape;
-use kvproto::kvrpcpb::Context;
-use raftstore::transport_simulate::IsolationFilterFactory;
-use raftstore::server::new_server_cluster;
-use tikv::raftstore::store::engine::IterOption;
 
 use raftstore::util::MAX_LEADER_LEASE;
 

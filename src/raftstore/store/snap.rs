@@ -11,32 +11,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{error, result, str, thread, time, u64};
-use std::io::{self, ErrorKind, Read, Write};
+use std::cmp::Reverse;
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, Metadata};
-use std::sync::{Arc, RwLock};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
-use std::cmp::Reverse;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
+use std::{error, result, str, thread, time, u64};
 
-use protobuf::Message;
-use rocksdb::{CFHandle, Writable, WriteBatch, DB};
-use raft::eraftpb::Snapshot as RaftSnapshot;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
+use protobuf::Message;
+use raft::eraftpb::Snapshot as RaftSnapshot;
+use rocksdb::{CFHandle, Writable, WriteBatch, DB};
 
 use raftstore::Result as RaftStoreResult;
 use raftstore::errors::Error as RaftStoreError;
 use raftstore::store::Msg;
 use raftstore::store::util::check_key_in_region;
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use util::transport::SendCh;
-use util::io_limiter::{IOLimiter, LimitWriter};
 use util::HandyRwLock;
-use util::collections::{HashMap, HashMapEntry as Entry};
 use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
+use util::collections::{HashMap, HashMapEntry as Entry};
+use util::io_limiter::{IOLimiter, LimitWriter};
 use util::rocksdb::{prepare_sst_for_ingestion, validate_sst_for_ingestion};
+use util::transport::SendCh;
 
 use raftstore::store::engine::{Iterable, Snapshot as DbSnapshot};
 use raftstore::store::keys::{self, enc_end_key, enc_start_key};
@@ -106,9 +106,9 @@ impl SnapKey {
     #[inline]
     pub fn new(region_id: u64, term: u64, idx: u64) -> SnapKey {
         SnapKey {
-            region_id: region_id,
-            term: term,
-            idx: idx,
+            region_id,
+            term,
+            idx,
         }
     }
 
@@ -217,17 +217,17 @@ pub fn retry_delete_snapshot(
     false
 }
 
+use crc::crc32::{self, Digest, Hasher32};
+use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
+use protobuf::RepeatedField;
+use rocksdb::{DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter};
 use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
 use std::time::Instant;
-use crc::crc32::{self, Digest, Hasher32};
-use protobuf::RepeatedField;
-use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
-use rocksdb::{DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter};
-use util::rocksdb;
-use util::time::duration_to_sec;
 use util::file::{delete_file_if_exist, file_exists, get_file_size, calc_crc32};
+use util::rocksdb;
 use util::rocksdb::get_fastest_supported_compression_type;
+use util::time::duration_to_sec;
 
 pub const SNAPSHOT_VERSION: u64 = 2;
 const META_FILE_SUFFIX: &str = ".meta";
@@ -351,10 +351,10 @@ impl Snap {
             let tmp_path = dir_path.join(format!("{}{}", filename, TMP_FILE_SUFFIX));
             let clone_path = dir_path.join(format!("{}{}", filename, CLONE_FILE_SUFFIX));
             let cf_file = CfFile {
-                cf: cf,
-                path: path,
-                tmp_path: tmp_path,
-                clone_path: clone_path,
+                cf,
+                path,
+                tmp_path,
+                clone_path,
                 ..Default::default()
             };
             cf_files.push(cf_file);
@@ -371,12 +371,12 @@ impl Snap {
 
         let mut s = Snap {
             key: key.clone(),
-            display_path: display_path,
-            cf_files: cf_files,
+            display_path,
+            cf_files,
             cf_index: 0,
-            meta_file: meta_file,
-            size_track: size_track,
-            limiter: limiter,
+            meta_file,
+            size_track,
+            limiter,
         };
 
         // load snapshot meta if meta_file exists
@@ -614,14 +614,19 @@ impl Snap {
         }
     }
 
-    fn add_kv(&mut self, k: &[u8], v: &[u8]) -> io::Result<()> {
+    fn add_kv(&mut self, k: &[u8], v: &[u8]) -> RaftStoreResult<()> {
         let cf_file = &mut self.cf_files[self.cf_index];
-        let writer = cf_file.sst_writer.as_mut().unwrap();
-        if let Err(e) = writer.put(k, v) {
-            return Err(io::Error::new(ErrorKind::Other, e));
+        if let Some(writer) = cf_file.sst_writer.as_mut() {
+            if let Err(e) = writer.put(k, v) {
+                let io_error = io::Error::new(ErrorKind::Other, e);
+                return Err(RaftStoreError::from(io_error));
+            }
+            cf_file.kv_count += 1;
+            Ok(())
+        } else {
+            let e = box_err!("can't find sst writer");
+            Err(RaftStoreError::Snapshot(e))
         }
-        cf_file.kv_count += 1;
-        Ok(())
     }
 
     fn save_cf_files(&mut self) -> io::Result<()> {
@@ -672,6 +677,7 @@ impl Snap {
         stat: &mut SnapshotStatistics,
         deleter: Box<SnapshotDeleter>,
     ) -> RaftStoreResult<()> {
+        fail_point!("snapshot_enter_do_build");
         if self.exists() {
             match self.validate(snap.get_db()) {
                 Ok(()) => return Ok(()),
@@ -700,7 +706,15 @@ impl Snap {
         for cf in SNAPSHOT_CFS {
             self.switch_to_cf_file(cf)?;
             let (cf_key_count, cf_size) = if plain_file_used(cf) {
-                let file = self.cf_files[self.cf_index].file.as_mut().unwrap();
+                // If the relative files are deleted after `Snap::new` and
+                // `init_for_building`, the file could be None.
+                let file = match self.cf_files[self.cf_index].file.as_mut() {
+                    Some(f) => f,
+                    None => {
+                        let e = box_err!("cf_file is none for cf {}", cf);
+                        return Err(RaftStoreError::Snapshot(e));
+                    }
+                };
                 build_plain_cf_file(file, snap, cf, &begin_key, &end_key)?
             } else {
                 let mut key_count = 0;
@@ -709,7 +723,7 @@ impl Snap {
                     .as_ref()
                     .map_or(0 as i64, |l| l.get_max_bytes_per_time());
                 let mut bytes: i64 = 0;
-                snap.scan_cf(cf, &begin_key, &end_key, false, &mut |key, value| {
+                snap.scan_cf(cf, &begin_key, &end_key, false, |key, value| {
                     let l = key.len() + value.len();
                     if let Some(ref limiter) = self.limiter {
                         if bytes >= base {
@@ -762,7 +776,7 @@ pub fn build_plain_cf_file<E: BytesEncoder>(
 ) -> RaftStoreResult<(usize, usize)> {
     let mut cf_key_count = 0;
     let mut cf_size = 0;
-    snap.scan_cf(cf, start_key, end_key, false, &mut |key, value| {
+    snap.scan_cf(cf, start_key, end_key, false, |key, value| {
         cf_key_count += 1;
         cf_size += key.len() + value.len();
         encoder.encode_compact_bytes(key)?;
@@ -1420,38 +1434,38 @@ impl SnapManagerBuilder {
                 registry: map![],
                 snap_size: Arc::new(RwLock::new(0)),
             })),
-            ch: ch,
-            limiter: limiter,
-            max_total_size: max_total_size,
+            ch,
+            limiter,
+            max_total_size,
         }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::io::{self, Read, Seek, SeekFrom, Write};
-    use std::fs::{self, File, OpenOptions};
-    use std::sync::*;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::Arc;
-    use tempdir::TempDir;
     use protobuf::Message;
+    use std::fs::{self, File, OpenOptions};
+    use std::io::{self, Read, Seek, SeekFrom, Write};
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::*;
+    use tempdir::TempDir;
 
     use super::{ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder, Snapshot,
                 SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS,
                 SNAP_GEN_PREFIX};
 
-    use std::path::PathBuf;
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta};
     use rocksdb::DB;
+    use std::path::PathBuf;
 
+    use raftstore::Result;
+    use raftstore::store::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
+    use raftstore::store::keys;
+    use raftstore::store::peer_storage::JOB_STATUS_RUNNING;
     use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use util::{rocksdb, HandyRwLock};
-    use raftstore::Result;
-    use raftstore::store::keys;
-    use raftstore::store::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
-    use raftstore::store::peer_storage::JOB_STATUS_RUNNING;
 
     const TEST_STORE_ID: u64 = 1;
     const TEST_KEY: &[u8] = b"akey";
@@ -1518,7 +1532,7 @@ mod test {
                 &keys::data_key(b"a"),
                 &keys::data_key(b"z"),
                 false,
-                &mut |_, _| {
+                |_, _| {
                     kv_count += 1;
                     Ok(true)
                 },
@@ -1567,7 +1581,7 @@ mod test {
         let mut cf_file = Vec::with_capacity(super::SNAPSHOT_CFS.len());
         for (i, cf) in super::SNAPSHOT_CFS.iter().enumerate() {
             let f = super::CfFile {
-                cf: cf,
+                cf,
                 size: 100 * (i + 1) as u64,
                 checksum: 1000 * (i + 1) as u32,
                 ..Default::default()

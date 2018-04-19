@@ -11,26 +11,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::collections::hash_map::Entry;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::sync::{Arc, RwLock};
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use tokio_timer::Timer;
-use futures::{Future, Stream};
 use futures::future::{err, ok};
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use futures::{Future, Stream};
+use tokio_timer::Timer;
 
-use kvproto::metapb;
+use super::util::*;
+use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
 use raft::eraftpb;
 use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::util::{escape, Either, HandyRwLock};
-use super::util::*;
 
 struct Store {
     store: metapb::Store,
@@ -111,7 +111,12 @@ impl Operator {
         match *self {
             Operator::AddPeer { ref peer, .. } => {
                 if let Either::Left(ref peer) = *peer {
-                    new_pd_change_peer(eraftpb::ConfChangeType::AddNode, peer.clone())
+                    let conf_change_type = if peer.get_is_learner() {
+                        eraftpb::ConfChangeType::AddLearnerNode
+                    } else {
+                        eraftpb::ConfChangeType::AddNode
+                    };
+                    new_pd_change_peer(conf_change_type, peer.clone())
                 } else {
                     pdpb::RegionHeartbeatResponse::new()
                 }
@@ -231,7 +236,7 @@ impl Cluster {
         meta.set_max_peer_count(5);
 
         Cluster {
-            meta: meta,
+            meta,
             stores: HashMap::new(),
             regions: BTreeMap::new(),
             region_id_keys: HashMap::new(),
@@ -411,16 +416,22 @@ impl Cluster {
         let cur_region_peer_len = cur_region.get_peers().len();
 
         if conf_ver > cur_conf_ver {
-            // If ConfVer changed, TiKV has added/removed one peer already.
-            // So pd and TiKV can't have same peer count and can only have
-            // only one different peer.
-            // E.g, we can't meet following cases:
-            // 1) pd is (1, 2, 3), TiKV is (1)
-            // 2) pd is (1), TiKV is (1, 2, 3)
-            // 3) pd is (1, 2), TiKV is (3)
-            // 4) pd id (1), TiKV is (2, 3)
-
-            if cur_region_peer_len > region_peer_len {
+            if region_peer_len == cur_region_peer_len {
+                // For promote learner to voter.
+                let get_learners =
+                    |r: &Region| r.get_peers().iter().filter(|p| p.get_is_learner()).count();
+                let region_learner_len = get_learners(&region);
+                let cur_region_learner_len = get_learners(&cur_region);
+                assert_eq!(cur_region_learner_len, region_learner_len + 1);
+            } else if cur_region_peer_len > region_peer_len {
+                // If ConfVer changed, TiKV has added/removed one peer already.
+                // So pd and TiKV can't have same peer count and can only have
+                // only one different peer.
+                // E.g, we can't meet following cases:
+                // 1) pd is (1, 2, 3), TiKV is (1)
+                // 2) pd is (1), TiKV is (1, 2, 3)
+                // 3) pd is (1, 2), TiKV is (3)
+                // 4) pd id (1), TiKV is (2, 3)
                 // must pd is (1, 2), TiKV is (1)
                 assert_eq!(cur_region_peer_len - region_peer_len, 1);
                 let peers = setdiff_peers(&cur_region, &region);
@@ -529,10 +540,7 @@ impl Cluster {
             operator = self.handle_heartbeat_max_peer_count(&region, &leader);
         }
 
-        if operator.is_none() {
-            return None;
-        }
-        let operator = operator.unwrap();
+        let operator = operator?;
         debug!(
             "[region {}] schedule {:?} to {:?}, region: {:?}",
             region_id, operator, leader, region
@@ -593,7 +601,7 @@ fn must_same_peers(left: &metapb::Region, right: &metapb::Region) {
     assert_eq!(left.get_peers().len(), right.get_peers().len());
     for peer in left.get_peers() {
         let p = find_peer(right, peer.get_store_id()).unwrap();
-        assert_eq!(p.get_id(), peer.get_id());
+        assert_eq!(p, peer);
     }
 }
 
@@ -636,7 +644,7 @@ pub struct TestPdClient {
 impl TestPdClient {
     pub fn new(cluster_id: u64) -> TestPdClient {
         TestPdClient {
-            cluster_id: cluster_id,
+            cluster_id,
             cluster: Arc::new(RwLock::new(Cluster::new(cluster_id))),
             timer: Timer::default(),
         }
@@ -700,19 +708,17 @@ impl TestPdClient {
     pub fn must_have_peer(&self, region_id: u64, peer: metapb::Peer) {
         for _ in 1..500 {
             sleep_ms(10);
-
             let region = match self.get_region_by_id(region_id).wait().unwrap() {
                 Some(region) => region,
                 None => continue,
             };
 
             if let Some(p) = find_peer(&region, peer.get_store_id()) {
-                if p.get_id() == peer.get_id() {
+                if p == &peer {
                     return;
                 }
             }
         }
-
         let region = self.get_region_by_id(region_id).wait().unwrap();
         panic!("region {:?} has no peer {:?}", region, peer);
     }
@@ -720,17 +726,16 @@ impl TestPdClient {
     pub fn must_none_peer(&self, region_id: u64, peer: metapb::Peer) {
         for _ in 1..500 {
             sleep_ms(10);
-
             let region = match self.get_region_by_id(region_id).wait().unwrap() {
                 Some(region) => region,
                 None => continue,
             };
-
-            if find_peer(&region, peer.get_store_id()).is_none() {
-                return;
+            match find_peer(&region, peer.get_store_id()) {
+                None => return,
+                Some(p) if p != &peer => return,
+                _ => continue,
             }
         }
-
         let region = self.get_region_by_id(region_id).wait().unwrap();
         panic!("region {:?} has peer {:?}", region, peer);
     }
@@ -772,7 +777,7 @@ impl TestPdClient {
 
     pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.add_peer(region_id, peer.clone());
-        self.must_have_peer(region_id, peer);
+        self.must_have_peer(region_id, peer.clone());
     }
 
     pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {

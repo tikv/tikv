@@ -11,35 +11,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::fmt::{self, Display, Formatter};
 
+use fs2;
 use futures::Future;
-use tokio_core::reactor::Handle;
-
 use kvproto::metapb::{Peer, Region, RegionEpoch};
-use raft::eraftpb::ConfChangeType;
+use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest};
 use kvproto::raft_serverpb::RaftMessage;
-use kvproto::pdpb;
+use prometheus::local::LocalHistogram;
+use raft::eraftpb::ConfChangeType;
 use rocksdb::DB;
-use fs2;
+use tokio_core::reactor::Handle;
 
-use util::worker::FutureRunnable as Runnable;
-use util::escape;
-use util::transport::SendCh;
-use util::rocksdb::*;
-use raftstore::store::Msg;
-use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
-use raftstore::store::store::StoreInfo;
 use raftstore::store::Callback;
+use raftstore::store::Msg;
+use raftstore::store::store::StoreInfo;
+use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
 use storage::FlowStatistics;
 use util::collections::HashMap;
-use prometheus::local::LocalHistogram;
+use util::escape;
+use util::rocksdb::*;
+use util::transport::SendCh;
+use util::worker::FutureRunnable as Runnable;
 
-use super::{PdClient, RegionStat};
 use super::metrics::*;
+use super::{PdClient, RegionStat};
 
 // Use an asynchronous thread to tell pd something.
 #[derive(Debug)]
@@ -283,10 +282,10 @@ pub struct Runner<T: PdClient> {
 impl<T: PdClient> Runner<T> {
     pub fn new(store_id: u64, pd_client: Arc<T>, ch: SendCh<Msg>, db: Arc<DB>) -> Runner<T> {
         Runner {
-            store_id: store_id,
-            pd_client: pd_client,
-            ch: ch,
-            db: db,
+            store_id,
+            pd_client,
+            ch,
+            db,
             is_hb_receiver_scheduled: false,
             is_handle_reconnect_scheduled: false,
             store_stat: StoreStat::default(),
@@ -424,10 +423,10 @@ impl<T: PdClient> Runner<T> {
 
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["capacity"])
-            .set(capacity as f64);
+            .set(capacity as i64);
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["available"])
-            .set(available as f64);
+            .set(available as i64);
 
         let f = self.pd_client.store_heartbeat(stats).map_err(|e| {
             error!("store heartbeat failed {:?}", e);

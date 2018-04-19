@@ -11,22 +11,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::*;
-use std::time::*;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Mutex};
+use std::time::*;
+use std::*;
 
 use fail;
-use tikv::util::config::*;
-use tikv::raftstore::Result;
-use raft::eraftpb::MessageType;
 use kvproto::raft_serverpb::RaftMessage;
+use raft::eraftpb::MessageType;
+use tikv::raftstore::Result;
+use tikv::util::config::*;
 
 use raftstore::cluster::Simulator;
-use raftstore::transport_simulate::*;
 use raftstore::node::new_node_cluster;
 use raftstore::server::new_server_cluster;
+use raftstore::transport_simulate::*;
 use raftstore::util::*;
 
 #[test]
@@ -85,7 +85,7 @@ impl SnapshotNotifier {
     pub fn new(notifier: Sender<()>, ready_notify: Arc<AtomicBool>) -> SnapshotNotifier {
         SnapshotNotifier {
             notifier: Mutex::new(notifier),
-            ready_notify: ready_notify,
+            ready_notify,
             pending_notify: AtomicUsize::new(0),
         }
     }
@@ -188,4 +188,56 @@ fn test_server_snapshot_on_resolve_failure() {
 
     // Clean up.
     fail::remove(on_resolve_fp);
+}
+
+#[test]
+fn test_generate_snapshot() {
+    let _guard = ::setup();
+
+    let mut cluster = new_server_cluster(1, 5);
+    configure_for_snapshot(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.stop_node(4);
+    cluster.stop_node(5);
+    (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
+    // Sleep for a while to ensure all logs are compacted.
+    thread::sleep(Duration::from_millis(100));
+
+    fail::cfg("snapshot_delete_after_send", "pause").unwrap();
+
+    // Let store 4 inform leader to generate a snapshot.
+    cluster.run_node(4);
+    must_get_equal(&cluster.get_engine(4), b"k2", b"v2");
+
+    fail::cfg("snapshot_enter_do_build", "pause").unwrap();
+    cluster.run_node(5);
+    thread::sleep(Duration::from_millis(100));
+
+    fail::cfg("snapshot_delete_after_send", "off").unwrap();
+    must_empty_dir(cluster.get_snap_dir(1));
+
+    // The task is droped so that we can't get the snapshot on store 5.
+    fail::cfg("snapshot_enter_do_build", "pause").unwrap();
+    must_get_none(&cluster.get_engine(5), b"k2");
+
+    fail::cfg("snapshot_enter_do_build", "off").unwrap();
+    must_get_equal(&cluster.get_engine(5), b"k2", b"v2");
+
+    fail::remove("snapshot_enter_do_build");
+    fail::remove("snapshot_delete_after_send");
+}
+
+fn must_empty_dir(path: String) {
+    for _ in 0..100 {
+        let snap_dir = fs::read_dir(&path).unwrap();
+        if snap_dir.count() > 0 {
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+        return;
+    }
+    panic!("the directory {:?} should be empty", path);
 }

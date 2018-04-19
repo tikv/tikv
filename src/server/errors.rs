@@ -12,22 +12,22 @@
 // limitations under the License.
 
 use std::error;
-use std::result;
 use std::io::Error as IoError;
 use std::net::AddrParseError;
+use std::result;
 
 use futures::Canceled;
-use protobuf::ProtobufError;
 use grpc::Error as GrpcError;
+use protobuf::ProtobufError;
 
-use util::codec::Error as CodecError;
-use util::worker::ScheduleError;
-use raftstore::Error as RaftServerError;
-use storage::engine::Error as EngineError;
-use storage::Error as StorageError;
-use pd::Error as PdError;
 use super::snap::Task as SnapTask;
 use coprocessor::EndPointTask;
+use pd::Error as PdError;
+use raftstore::Error as RaftServerError;
+use storage::Error as StorageError;
+use storage::engine::Error as EngineError;
+use util::codec::Error as CodecError;
+use util::worker::ScheduleError;
 
 quick_error!{
     #[derive(Debug)]

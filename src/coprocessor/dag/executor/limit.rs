@@ -16,10 +16,10 @@
 
 use tipb::executor::Limit;
 
+use super::ExecutorMetrics;
 use coprocessor::Result;
 use coprocessor::dag::executor::{Executor, Row};
 use coprocessor::dag::expr::EvalWarnings;
-use super::ExecutorMetrics;
 
 pub struct LimitExecutor<'a> {
     limit: u64,
@@ -33,7 +33,7 @@ impl<'a> LimitExecutor<'a> {
         LimitExecutor {
             limit: limit.get_limit(),
             cursor: 0,
-            src: src,
+            src,
             first_collect: true,
         }
     }
@@ -75,14 +75,14 @@ mod test {
     use protobuf::RepeatedField;
     use tipb::executor::TableScan;
 
-    use coprocessor::codec::mysql::types;
     use coprocessor::codec::datum::Datum;
+    use coprocessor::codec::mysql::types;
     use storage::SnapshotStore;
 
-    use super::*;
-    use super::super::table_scan::TableScanExecutor;
     use super::super::scanner::test::{get_range, new_col_info, TestStore};
+    use super::super::table_scan::TableScanExecutor;
     use super::super::topn::test::gen_table_data;
+    use super::*;
 
     #[test]
     fn test_limit_executor() {
@@ -114,7 +114,7 @@ mod test {
         // init TableScan
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store).unwrap();
+        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store, false).unwrap();
 
         // init Limit meta
         let mut limit_meta = Limit::default();

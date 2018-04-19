@@ -48,14 +48,14 @@ extern crate tipb;
 extern crate tokio_timer;
 extern crate toml;
 
+#[cfg(not(feature = "no-fail"))]
+mod failpoints_cases;
 #[allow(dead_code)]
 mod raftstore;
 #[allow(dead_code)]
 mod storage;
 #[allow(dead_code)]
 mod util;
-#[cfg(not(feature = "no-fail"))]
-mod failpoints_cases;
 
 use std::sync::*;
 use std::{env, thread};

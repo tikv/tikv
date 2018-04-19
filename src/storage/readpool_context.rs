@@ -11,31 +11,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use prometheus::local::{LocalHistogramTimer, LocalHistogramVec, LocalIntCounterVec};
 use std::fmt;
 use std::mem;
-use prometheus::local::{LocalCounterVec, LocalHistogramTimer, LocalHistogramVec};
 
+use pd;
 use server::readpool;
+use storage;
+use util::collections::HashMap;
 use util::futurepool;
 use util::worker;
-use util::collections::HashMap;
-use pd;
-use storage;
 
 use super::metrics::*;
 
 pub struct Context {
-    pd_sender: Option<worker::FutureScheduler<pd::PdTask>>,
+    pd_sender: worker::FutureScheduler<pd::PdTask>,
 
     // TODO: command_duration, processing_read_duration, kv_command_counter can be merged together.
     command_duration: LocalHistogramVec,
     processing_read_duration: LocalHistogramVec,
     command_keyreads: LocalHistogramVec,
     // TODO: kv_command_counter, raw_command_counter, command_pri_counter can be merged together.
-    kv_command_counter: LocalCounterVec,
-    raw_command_counter: LocalCounterVec,
-    command_pri_counter: LocalCounterVec,
-    scan_details: LocalCounterVec,
+    kv_command_counter: LocalIntCounterVec,
+    raw_command_counter: LocalIntCounterVec,
+    command_pri_counter: LocalIntCounterVec,
+    scan_details: LocalIntCounterVec,
 
     read_flow_stats: HashMap<u64, storage::FlowStatistics>,
 }
@@ -47,7 +47,7 @@ impl fmt::Debug for Context {
 }
 
 impl Context {
-    pub fn new(pd_sender: Option<worker::FutureScheduler<pd::PdTask>>) -> Self {
+    pub fn new(pd_sender: worker::FutureScheduler<pd::PdTask>) -> Self {
         Context {
             pd_sender,
             command_duration: SCHED_HISTOGRAM_VEC.local(),
@@ -101,8 +101,7 @@ impl Context {
             for (tag, count) in details {
                 self.scan_details
                     .with_label_values(&[cmd, cf, tag])
-                    .inc_by(count as f64)
-                    .unwrap();
+                    .inc_by(count as i64);
             }
         }
     }
@@ -130,13 +129,12 @@ impl futurepool::Context for Context {
 
         // Report PD metrics
         if !self.read_flow_stats.is_empty() {
-            if let Some(ref sender) = self.pd_sender {
-                let mut read_stats = HashMap::default();
-                mem::swap(&mut read_stats, &mut self.read_flow_stats);
-                let result = sender.schedule(pd::PdTask::ReadStats { read_stats });
-                if let Err(e) = result {
-                    error!("Failed to send readpool read flow statistics: {:?}", e);
-                }
+            let mut read_stats = HashMap::default();
+            mem::swap(&mut read_stats, &mut self.read_flow_stats);
+            let result = self.pd_sender
+                .schedule(pd::PdTask::ReadStats { read_stats });
+            if let Err(e) = result {
+                error!("Failed to send readpool read flow statistics: {:?}", e);
             }
         }
     }
