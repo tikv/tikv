@@ -224,9 +224,9 @@ mod test {
     use super::*;
     use util::codec::Error;
 
-    use std::{f32, f64, i16, i32, i64, u16, u32, u64};
     use protobuf::CodedOutputStream;
     use std::io::ErrorKind;
+    use std::{f32, f64, i16, i32, i64, u16, u32, u64};
 
     const U16_TESTS: &[u16] = &[
         i16::MIN as u16,
@@ -334,15 +334,20 @@ mod test {
     // use macro to generate order tests for number codecs.
     macro_rules! test_order {
         ($arr:expr, $sorted:expr, $enc:ident, $dec:ident) => {
-            let mut encoded: Vec<_> = $arr.iter().map(|e| {
-                let mut buf = vec![];
-                buf.$enc(*e).unwrap();
-                buf
-            }).collect();
+            let mut encoded: Vec<_> = $arr.iter()
+                .map(|e| {
+                    let mut buf = vec![];
+                    buf.$enc(*e).unwrap();
+                    buf
+                })
+                .collect();
             encoded.sort();
-            let decoded: Vec<_> = encoded.iter().map(|b| b.as_slice().$dec().unwrap()).collect();
+            let decoded: Vec<_> = encoded
+                .iter()
+                .map(|b| b.as_slice().$dec().unwrap())
+                .collect();
             assert_eq!(decoded, $sorted);
-        }
+        };
     }
 
     // use macro to generate serialization tests for number codecs.
@@ -357,7 +362,7 @@ mod test {
                     assert_eq!(v, buf.as_slice().$dec().unwrap());
                 }
             }
-        }
+        };
     }
 
     // use macro to generate serialization and order tests for number codecs.
@@ -366,7 +371,7 @@ mod test {
             #[allow(unused_imports)]
             #[allow(float_cmp)]
             mod $enc {
-                use super::{I64_TESTS, U64_TESTS, U32_TESTS, U16_TESTS, F64_TESTS};
+                use super::{F64_TESTS, I64_TESTS, U16_TESTS, U32_TESTS, U64_TESTS};
                 use util::codec::number::*;
 
                 test_serialize!(serialize, $enc, $dec, $cases);
@@ -378,7 +383,7 @@ mod test {
                     test_order!($cases, ordered_case, $enc, $dec);
                 }
             }
-        }
+        };
     }
 
     test_codec!(encode_i64, decode_i64, |a, b| a.cmp(b), I64_TESTS);
@@ -453,7 +458,7 @@ mod test {
                 Err(Error::Io(e)) => assert_eq!(e.kind(), $k),
                 o => panic!("expect {:?}, got {:?}", $k, o),
             }
-        }
+        };
     }
 
     // generate bound check test for number codecs.
@@ -465,7 +470,7 @@ mod test {
                 check_error!(buf.as_mut_slice().$enc($case), ErrorKind::WriteZero);
                 check_error!(buf.as_slice().$dec(), ErrorKind::UnexpectedEof);
             }
-        }
+        };
     }
 
     test_eof!(i64_eof, encode_i64, decode_i64, 1);

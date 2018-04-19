@@ -13,15 +13,15 @@
 
 //! A module contains test cases for lease read on Raft leader.
 
-use std::thread;
 use std::sync::Arc;
 use std::sync::atomic::*;
+use std::thread;
 use std::time::*;
 
-use raft::eraftpb::{ConfChangeType, MessageType};
 use kvproto::raft_serverpb::RaftLocalState;
-use tikv::raftstore::store::keys;
+use raft::eraftpb::{ConfChangeType, MessageType};
 use tikv::raftstore::store::engine::Peekable;
+use tikv::raftstore::store::keys;
 use tikv::util::HandyRwLock;
 use tikv::util::config::*;
 

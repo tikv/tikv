@@ -13,8 +13,8 @@
 
 use rocksdb::{CompactOptions, Writable, DB};
 
-use tikv::storage::{CF_DEFAULT, CF_LOCK};
 use tikv::raftstore::store::keys;
+use tikv::storage::{CF_DEFAULT, CF_LOCK};
 
 use super::cluster::{Cluster, Simulator};
 use super::server::new_server_cluster;
