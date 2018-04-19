@@ -1085,13 +1085,13 @@ fn main() {
                  .help("meta file path"))
         )
         .subcommand(
-            SubCommand::with_name("compact-whole-cluster")
-                .about("compact whole cluster in a specified range in multiple column families")
+            SubCommand::with_name("compact-the-whole-cluster")
+                .about("compact the whole cluster in a specified range in one or more column families")
                 .arg(
                     Arg::with_name("pd")
                         .short("p")
                         .takes_value(true)
-                        .help("pd address"),
+                        .help("pd address, eg. 127.0.0.1:2379"),
                 )
                 .arg(
                     Arg::with_name("db")
