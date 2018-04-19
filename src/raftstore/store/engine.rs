@@ -11,19 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::option::Option;
-use std::ops::Deref;
-use std::sync::Arc;
 use std::fmt::{self, Debug, Formatter};
+use std::ops::Deref;
+use std::option::Option;
+use std::sync::Arc;
 
-use rocksdb::{CFHandle, DBIterator, DBVector, ReadOptions, Writable, WriteBatch, DB};
-use rocksdb::rocksdb_options::UnsafeSnap;
-use protobuf;
 use byteorder::{BigEndian, ByteOrder};
+use protobuf;
+use rocksdb::rocksdb_options::UnsafeSnap;
+use rocksdb::{CFHandle, DBIterator, DBVector, ReadOptions, Writable, WriteBatch, DB};
 use util::rocksdb;
 
-use raftstore::Result;
 use raftstore::Error;
+use raftstore::Result;
 
 pub struct Snapshot {
     db: Arc<DB>,
@@ -61,7 +61,7 @@ impl Snapshot {
         unsafe {
             Snapshot {
                 snap: db.unsafe_snap(),
-                db: db,
+                db,
             }
         }
     }
@@ -195,10 +195,10 @@ impl IterOption {
         fill_cache: bool,
     ) -> IterOption {
         IterOption {
-            lower_bound: lower_bound,
-            upper_bound: upper_bound,
+            lower_bound,
+            upper_bound,
             prefix_same_as_start: false,
-            fill_cache: fill_cache,
+            fill_cache,
             seek_mode: SeekMode::TotalOrder,
         }
     }
@@ -433,11 +433,11 @@ impl Mutable for WriteBatch {}
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use tempdir::TempDir;
-    use rocksdb::Writable;
     use super::*;
     use kvproto::metapb::Region;
+    use rocksdb::Writable;
+    use std::sync::Arc;
+    use tempdir::TempDir;
 
     #[test]
     fn test_base() {

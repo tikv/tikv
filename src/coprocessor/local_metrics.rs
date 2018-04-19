@@ -13,13 +13,13 @@
 
 use std::mem;
 
-use coprocessor::metrics::*;
 use coprocessor::dag::executor::ExecutorMetrics;
-use storage::engine::{FlowStatistics, Statistics};
+use coprocessor::metrics::*;
+use pd::PdTask;
 use prometheus::local::{LocalHistogramVec, LocalIntCounterVec};
+use storage::engine::{FlowStatistics, Statistics};
 use util::collections::HashMap;
 use util::worker::FutureScheduler;
-use pd::PdTask;
 
 /// `CopFlowStatistics` is for flow statistics, it would be reported to PD by flush.
 pub struct CopFlowStatistics {
@@ -30,7 +30,7 @@ pub struct CopFlowStatistics {
 impl CopFlowStatistics {
     pub fn new(sender: FutureScheduler<PdTask>) -> CopFlowStatistics {
         CopFlowStatistics {
-            sender: sender,
+            sender,
             data: Default::default(),
         }
     }

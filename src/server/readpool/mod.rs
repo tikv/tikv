@@ -14,11 +14,11 @@
 mod config;
 mod priority;
 
-use std::fmt;
-use std::error::Error;
-use std::time::Duration;
 use futures::Future;
 use futures_cpupool::CpuFuture;
+use std::error::Error;
+use std::fmt;
+use std::time::Duration;
 
 use util;
 use util::futurepool::{self, FuturePool};
@@ -148,12 +148,12 @@ impl Error for Full {
 
 #[cfg(test)]
 mod tests {
-    use std::error;
-    use std::result;
-    use std::fmt;
-    use std::thread;
-    use std::sync::mpsc::{channel, Sender};
     use futures::{future, Future};
+    use std::error;
+    use std::fmt;
+    use std::result;
+    use std::sync::mpsc::{channel, Sender};
+    use std::thread;
 
     pub use super::*;
 

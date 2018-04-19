@@ -11,16 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt;
-use storage::{is_short_value, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK,
-              CF_WRITE};
-use storage::engine::{Modify, ScanMode, Snapshot};
-use super::reader::MvccReader;
 use super::lock::{Lock, LockType};
+use super::metrics::*;
+use super::reader::MvccReader;
 use super::write::{Write, WriteType};
 use super::{Error, Result};
-use super::metrics::*;
 use kvproto::kvrpcpb::IsolationLevel;
+use std::fmt;
+use storage::engine::{Modify, ScanMode, Snapshot};
+use storage::{is_short_value, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK,
+              CF_WRITE};
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -48,7 +48,7 @@ impl MvccTxn {
         MvccTxn {
             // Todo: use session variable to indicate fill cache or not
             reader: MvccReader::new(snapshot, mode, fill_cache, None, None, isolation_level),
-            start_ts: start_ts,
+            start_ts,
             writes: vec![],
             write_size: 0,
         }
@@ -199,7 +199,7 @@ impl MvccTxn {
                         );
                         Err(Error::TxnLockNotFound {
                             start_ts: self.start_ts,
-                            commit_ts: commit_ts,
+                            commit_ts,
                             key: key.encoded().to_owned(),
                         })
                     }
@@ -334,13 +334,13 @@ impl MvccTxn {
 
 #[cfg(test)]
 mod tests {
-    use tempdir::TempDir;
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
-    use super::MvccTxn;
     use super::super::MvccReader;
     use super::super::write::{Write, WriteType};
-    use storage::{make_key, Mutation, Options, ScanMode, ALL_CFS, CF_WRITE, SHORT_VALUE_MAX_LEN};
+    use super::MvccTxn;
+    use kvproto::kvrpcpb::{Context, IsolationLevel};
     use storage::engine::{self, Engine, Modify, TEMP_DIR};
+    use storage::{make_key, Mutation, Options, ScanMode, ALL_CFS, CF_WRITE, SHORT_VALUE_MAX_LEN};
+    use tempdir::TempDir;
 
     fn gen_value(v: u8, len: usize) -> Vec<u8> {
         let mut value = Vec::with_capacity(len);
