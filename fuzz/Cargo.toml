@@ -1,8 +1,6 @@
-
 [package]
 name = "tikv-fuzz"
 version = "0.0.1"
-authors = ["Automatically generated"]
 publish = false
 
 [package.metadata]
