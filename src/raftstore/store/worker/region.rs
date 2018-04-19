@@ -274,9 +274,7 @@ impl SnapContext {
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
-        if self.clean_stale_peer_delay.as_secs() > 0 {
-            self.cleanup_overlap_ranges(&start_key, &end_key);
-        }
+        self.cleanup_overlap_ranges(&start_key, &end_key);
         box_try!(util::delete_all_in_range(
             &self.kv_db,
             &start_key,
@@ -405,8 +403,6 @@ impl SnapContext {
         }
     }
 
-    // should only be called after verifying clean_stale_peer_delay > 0,
-    // but it is fine calling this function when clean_stale_peer_delay == 0, nothing will be done
     fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) {
         let overlap_ranges = self.pending_delete_ranges
             .drain_overlap_ranges(start_key, end_key);
