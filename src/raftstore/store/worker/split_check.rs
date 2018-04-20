@@ -11,23 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-use std::fmt::{self, Display, Formatter};
-use std::collections::BinaryHeap;
 use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+use std::fmt::{self, Display, Formatter};
+use std::sync::Arc;
 
-use rocksdb::{DBIterator, DB};
-use kvproto::metapb::RegionEpoch;
 use kvproto::metapb::Region;
+use kvproto::metapb::RegionEpoch;
+use rocksdb::{DBIterator, DB};
 
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::{keys, Callback, Msg};
-use raftstore::store::engine::{IterOption, Iterable};
 use raftstore::Result;
+use raftstore::coprocessor::CoprocessorHost;
+use raftstore::store::engine::{IterOption, Iterable};
+use raftstore::store::{keys, Callback, Msg};
+use storage::{CfName, LARGE_CFS};
 use util::escape;
 use util::transport::{RetryableSendCh, Sender};
 use util::worker::Runnable;
-use storage::{CfName, LARGE_CFS};
 
 use super::metrics::*;
 
@@ -42,8 +42,8 @@ impl KeyEntry {
     fn new(key: Vec<u8>, pos: usize, value_size: usize) -> KeyEntry {
         KeyEntry {
             key: Some(key),
-            pos: pos,
-            value_size: value_size,
+            pos,
+            value_size,
         }
     }
 
@@ -95,10 +95,7 @@ impl<'a> MergedIterator<'a> {
             }
             iters.push(iter);
         }
-        Ok(MergedIterator {
-            iters: iters,
-            heap: heap,
-        })
+        Ok(MergedIterator { iters, heap })
     }
 
     fn next(&mut self) -> Option<KeyEntry> {
@@ -130,7 +127,7 @@ impl Task {
     pub fn new(region: &Region, auto_split: bool) -> Task {
         Task {
             region: region.clone(),
-            auto_split: auto_split,
+            auto_split,
         }
     }
 }
@@ -159,9 +156,9 @@ impl<C: Sender<Msg>> Runner<C> {
         coprocessor: Arc<CoprocessorHost>,
     ) -> Runner<C> {
         Runner {
-            engine: engine,
-            ch: ch,
-            coprocessor: coprocessor,
+            engine,
+            ch,
+            coprocessor,
         }
     }
 
@@ -243,12 +240,12 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
     }
 }
 
-fn new_split_region(region_id: u64, epoch: RegionEpoch, split_key: Vec<u8>) -> Msg {
-    let key = keys::origin_key(split_key.as_slice()).to_vec();
+fn new_split_region(region_id: u64, region_epoch: RegionEpoch, key: Vec<u8>) -> Msg {
+    let split_key = keys::origin_key(key.as_slice()).to_vec();
     Msg::SplitRegion {
-        region_id: region_id,
-        region_epoch: epoch,
-        split_key: key,
+        region_id,
+        region_epoch,
+        split_key,
         callback: Callback::None,
     }
 }

@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::{BufRead, ErrorKind, Read, Result, Write};
-use std::fmt::{self, Debug, Formatter};
 use alloc::raw_vec::RawVec;
+use std::fmt::{self, Debug, Formatter};
+use std::io::{BufRead, ErrorKind, Read, Result, Write};
 use std::{cmp, mem, ptr, slice};
 
 use util::escape;

@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod store;
-mod scheduler;
 mod latch;
+mod scheduler;
+mod store;
 
 use std::error;
 use std::io::Error as IoError;
@@ -74,8 +74,8 @@ impl Error {
                 start_ts,
                 commit_ts,
             } => Some(Error::InvalidTxnTso {
-                start_ts: start_ts,
-                commit_ts: commit_ts,
+                start_ts,
+                commit_ts,
             }),
             Error::Other(_) | Error::ProtoBuf(_) | Error::Io(_) => None,
         }

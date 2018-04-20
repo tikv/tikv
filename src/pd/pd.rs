@@ -11,33 +11,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
 use std::fmt::{self, Display, Formatter};
+use std::sync::Arc;
 
 use futures::Future;
 use tokio_core::reactor::Handle;
 
+use fs2;
 use kvproto::metapb;
-use raft::eraftpb::ConfChangeType;
+use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest};
 use kvproto::raft_serverpb::RaftMessage;
-use kvproto::pdpb;
+use raft::eraftpb::ConfChangeType;
 use rocksdb::DB;
-use fs2;
 
-use util::worker::FutureRunnable as Runnable;
-use util::escape;
-use util::transport::SendCh;
-use util::rocksdb::*;
+use super::metrics::*;
 use pd::{PdClient, RegionStat};
-use raftstore::store::Msg;
-use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
-use raftstore::store::store::StoreInfo;
+use prometheus::local::LocalHistogram;
 use raftstore::store::Callback;
+use raftstore::store::Msg;
+use raftstore::store::store::StoreInfo;
+use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
 use storage::FlowStatistics;
 use util::collections::HashMap;
-use prometheus::local::LocalHistogram;
-use super::metrics::*;
+use util::escape;
+use util::rocksdb::*;
+use util::transport::SendCh;
+use util::worker::FutureRunnable as Runnable;
 
 // Use an asynchronous thread to tell pd something.
 pub enum Task {
@@ -177,10 +177,10 @@ pub struct Runner<T: PdClient> {
 impl<T: PdClient> Runner<T> {
     pub fn new(store_id: u64, pd_client: Arc<T>, ch: SendCh<Msg>, db: Arc<DB>) -> Runner<T> {
         Runner {
-            store_id: store_id,
-            pd_client: pd_client,
-            ch: ch,
-            db: db,
+            store_id,
+            pd_client,
+            ch,
+            db,
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
             store_stat: StoreStat::default(),
@@ -559,13 +559,13 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     region,
                     peer,
                     RegionStat {
-                        down_peers: down_peers,
-                        pending_peers: pending_peers,
+                        down_peers,
+                        pending_peers,
                         written_bytes: written_bytes_delta,
                         written_keys: written_keys_delta,
                         read_bytes: read_bytes_delta,
                         read_keys: read_keys_delta,
-                        approximate_size: approximate_size,
+                        approximate_size,
                     },
                 )
             }

@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use byteorder::{BigEndian, ReadBytesExt};
+use std::iter::Peekable;
 use std::mem;
 use std::vec::IntoIter;
-use std::iter::Peekable;
-use byteorder::{BigEndian, ReadBytesExt};
 
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::IndexScan;
@@ -25,9 +25,9 @@ use coprocessor::endpoint::is_point;
 use coprocessor::{Error, Result};
 use storage::{Key, SnapshotStore};
 
-use super::{Executor, Row};
-use super::scanner::{ScanOn, Scanner};
 use super::ExecutorMetrics;
+use super::scanner::{ScanOn, Scanner};
+use super::{Executor, Row};
 
 pub struct IndexScanExecutor {
     store: SnapshotStore,
@@ -68,16 +68,16 @@ impl IndexScanExecutor {
         let col_ids = cols.iter().map(|c| c.get_column_id()).collect();
         let counts = if collect { Some(Vec::default()) } else { None };
         Ok(IndexScanExecutor {
-            store: store,
-            desc: desc,
-            col_ids: col_ids,
-            pk_col: pk_col,
+            store,
+            desc,
+            col_ids,
+            pk_col,
             key_ranges: key_ranges.into_iter().peekable(),
             current_range: None,
             scan_range: KeyRange::default(),
             scanner: None,
-            unique: unique,
-            counts: counts,
+            unique,
+            counts,
             metrics: Default::default(),
             first_collect: true,
         })
@@ -91,9 +91,9 @@ impl IndexScanExecutor {
         box_try!(table::check_table_ranges(&key_ranges));
         let col_ids: Vec<i64> = (0..cols).collect();
         Ok(IndexScanExecutor {
-            store: store,
+            store,
             desc: false,
-            col_ids: col_ids,
+            col_ids,
             pk_col: None,
             key_ranges: key_ranges.into_iter().peekable(),
             current_range: None,
@@ -261,20 +261,20 @@ impl Executor for IndexScanExecutor {
 
 #[cfg(test)]
 pub mod test {
-    use std::i64;
     use byteorder::{BigEndian, WriteBytesExt};
+    use std::i64;
 
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
     use tipb::schema::ColumnInfo;
 
-    use coprocessor::codec::mysql::types;
     use coprocessor::codec::datum::{self, Datum};
-    use util::collections::HashMap;
+    use coprocessor::codec::mysql::types;
     use storage::SnapshotStore;
+    use util::collections::HashMap;
 
-    use super::*;
     use super::super::scanner::test::{new_col_info, Data, TestStore};
+    use super::*;
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;
@@ -352,9 +352,9 @@ pub mod test {
             kv_data.push((idx_key, value));
         }
         Data {
-            kv_data: kv_data,
-            expect_rows: expect_rows,
-            cols: cols,
+            kv_data,
+            expect_rows,
+            cols,
         }
     }
 
@@ -403,9 +403,9 @@ pub mod test {
             IndexTestWrapper {
                 data: test_data,
                 store: test_store,
-                scan: scan,
+                scan,
                 ranges: key_ranges,
-                cols: cols,
+                cols,
             }
         }
     }

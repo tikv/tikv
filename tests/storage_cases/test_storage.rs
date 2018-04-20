@@ -11,19 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::channel;
-use std::time::Duration;
-use std::thread;
-use rand::random;
 use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::{Context, LockInfo};
-use tikv::storage::{self, make_key, Key, Mutation, ALL_CFS, CF_DEFAULT, CF_LOCK};
-use tikv::storage::engine::{Engine, EngineRocksdb, TEMP_DIR};
-use tikv::storage::txn::{GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
-use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
+use rand::random;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::channel;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use tikv::server::readpool::{self, ReadPool};
+use tikv::storage::engine::{Engine, EngineRocksdb, TEMP_DIR};
+use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
+use tikv::storage::txn::{GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
+use tikv::storage::{self, make_key, Key, Mutation, ALL_CFS, CF_DEFAULT, CF_LOCK};
 use tikv::util::worker::FutureWorker;
 
 use super::assert_storage::AssertionStorage;
@@ -891,7 +891,7 @@ fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
 #[test]
 fn test_conflict_commands_on_fault_engine() {
     let engine = EngineRocksdb::new(TEMP_DIR, ALL_CFS, None).unwrap();
-    let box_engine = engine.clone();
+    let box_engine = engine.clone_box();
     let pd_worker = FutureWorker::new("test future worker");
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
         || storage::ReadPoolContext::new(pd_worker.scheduler())

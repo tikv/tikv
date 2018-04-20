@@ -14,8 +14,8 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use protobuf::RepeatedField;
 use kvproto::pdpb::*;
+use protobuf::RepeatedField;
 
 use super::*;
 

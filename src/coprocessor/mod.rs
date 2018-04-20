@@ -11,26 +11,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod endpoint;
-mod metrics;
-mod dag;
-mod statistics;
 mod checksum;
-pub mod local_metrics;
 pub mod codec;
+mod dag;
+mod endpoint;
+pub mod local_metrics;
+mod metrics;
+mod statistics;
 
 pub use self::endpoint::err_resp;
-use std::result;
 use std::error;
+use std::result;
 use std::time::Duration;
 
-use kvproto::kvrpcpb::LockInfo;
 use kvproto::errorpb;
+use kvproto::kvrpcpb::LockInfo;
 use tipb::select;
 
+use self::dag::expr;
 use storage::{engine, mvcc, txn};
 use util;
-use self::dag::expr;
 
 quick_error! {
     #[derive(Debug)]
@@ -109,7 +109,7 @@ impl From<txn::Error> for Error {
     }
 }
 
+pub use self::dag::{ScanOn, Scanner};
 pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask,
                          DEFAULT_REQUEST_MAX_HANDLE_SECS, REQ_TYPE_CHECKSUM, REQ_TYPE_DAG,
                          SINGLE_GROUP};
-pub use self::dag::{ScanOn, Scanner};

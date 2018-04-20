@@ -14,16 +14,16 @@
 use std::thread;
 use std::time::Duration;
 
-use tikv::util::HandyRwLock;
-use tikv::storage::{self, make_key, Mutation};
-use tikv::storage::{engine, mvcc, txn, Key};
-use kvproto::kvrpcpb::Context;
-use raftstore::server::new_server_cluster;
-use raftstore::cluster::Cluster;
-use raftstore::server::ServerCluster;
-use raftstore::util::*;
 use super::sync_storage::SyncStorage;
 use super::util::new_raft_storage_with_store_count;
+use kvproto::kvrpcpb::Context;
+use raftstore::cluster::Cluster;
+use raftstore::server::ServerCluster;
+use raftstore::server::new_server_cluster;
+use raftstore::util::*;
+use tikv::storage::{self, make_key, Mutation};
+use tikv::storage::{engine, mvcc, txn, Key};
+use tikv::util::HandyRwLock;
 
 fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage, Context) {
     new_raft_storage_with_store_count(1, "")
