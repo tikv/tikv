@@ -22,15 +22,12 @@ use std::{error, result};
 
 use protobuf::{self, Message, RepeatedField};
 
-use rocksdb::{Kv, SeekKey, Writable, WriteBatch, WriteOptions, DB};
-use kvproto::metapb::Region;
-use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::debugpb::{DB as DBType, MODULE};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::Entry;
-use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
+use rocksdb::{Kv, SeekKey, Writable, WriteBatch, WriteOptions, DB};
 
 use raft::{self, quorum, RawNode};
 use raftstore::store::engine::{IterOption, Mutable};
@@ -944,8 +941,8 @@ mod tests {
     use super::*;
     use raftstore::store::engine::Mutable;
     use storage::mvcc::{Lock, LockType};
-    use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use util::rocksdb::{self as rocksdb_util, CFOptions, new_engine_opt};
+    use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use util::rocksdb::{self as rocksdb_util, new_engine_opt, CFOptions};
 
     fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
         let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
