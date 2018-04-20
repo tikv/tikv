@@ -11,16 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::*;
 use std::sync::Arc;
+use std::time::*;
 
 use fail;
 use futures::Future;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use tikv::pd::PdClient;
+use tikv::raftstore::store::Peekable;
 use tikv::raftstore::store::keys;
 use tikv::storage::CF_RAFT;
-use tikv::raftstore::store::Peekable;
 
 use raftstore::node::new_node_cluster;
 use raftstore::transport_simulate::*;

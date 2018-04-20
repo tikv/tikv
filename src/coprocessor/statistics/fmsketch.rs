@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
 use byteorder::{ByteOrder, LittleEndian};
 use murmur3::murmur3_x64_128;
+use std::collections::HashSet;
 use tipb::analyze;
 
 /// `FMSketch` is used to count the approximate number of distinct
@@ -30,7 +30,7 @@ impl FMSketch {
     pub fn new(max_size: usize) -> FMSketch {
         FMSketch {
             mask: 0,
-            max_size: max_size,
+            max_size,
             hash_set: HashSet::with_capacity(max_size + 1),
         }
     }
@@ -67,12 +67,12 @@ impl FMSketch {
 
 #[cfg(test)]
 mod test {
-    use std::iter::repeat;
+    use super::*;
+    use coprocessor::codec::Result;
     use coprocessor::codec::datum;
     use coprocessor::codec::datum::Datum;
-    use coprocessor::codec::Result;
+    use std::iter::repeat;
     use util::as_slice;
-    use super::*;
 
     struct TestData {
         samples: Vec<Datum>,
@@ -106,8 +106,8 @@ mod test {
             let count = 100000;
             let rc = generate_samples(count);
             TestData {
-                samples: samples,
-                rc: rc,
+                samples,
+                rc,
                 pk: (0..count as i64).map(Datum::I64).collect(),
             }
         }

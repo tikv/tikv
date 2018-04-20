@@ -17,10 +17,10 @@ use tikv::util::config::*;
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
+use super::pd::TestPdClient;
 use super::server::new_server_cluster;
 use super::util::*;
 use tikv::pd::PdClient;
-use super::pd::TestPdClient;
 
 fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);

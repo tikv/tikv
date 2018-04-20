@@ -11,34 +11,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::rc::Rc;
 use std::cell::RefCell;
-use std::{cmp, error, u64};
-use std::time::Instant;
 use std::collections::VecDeque;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::time::Instant;
+use std::{cmp, error, u64};
 
-use rocksdb::{Writable, WriteBatch, DB};
 use protobuf::Message;
+use rocksdb::{Writable, WriteBatch, DB};
 
-use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
-use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
+use super::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
+use super::keys::{self, enc_end_key, enc_start_key};
+use super::metrics::*;
+use super::peer::ReadyContext;
+use super::worker::RegionTask;
+use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftLocalState,
                              RaftSnapshotData, RegionLocalState};
+use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
+use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
+use raftstore::store::util::conf_state_from_region;
+use raftstore::{Error, Result};
+use storage::CF_RAFT;
 use util::worker::Scheduler;
 use util::{self, rocksdb};
-use raftstore::{Error, Result};
-use raftstore::store::util::conf_state_from_region;
-use super::worker::RegionTask;
-use super::keys::{self, enc_end_key, enc_start_key};
-use super::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
-use super::peer::ReadyContext;
-use super::metrics::*;
-use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
-use storage::CF_RAFT;
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -479,19 +479,19 @@ impl PeerStorage {
         let last_term = init_last_term(&raft_engine, region, &raft_state, &apply_state)?;
 
         Ok(PeerStorage {
-            kv_engine: kv_engine,
-            raft_engine: raft_engine,
+            kv_engine,
+            raft_engine,
             region: region.clone(),
-            raft_state: raft_state,
-            apply_state: apply_state,
+            raft_state,
+            apply_state,
             snap_state: RefCell::new(SnapState::Relax),
-            region_sched: region_sched,
+            region_sched,
             snap_tried_cnt: RefCell::new(0),
-            tag: tag,
+            tag,
             applied_index_term: RAFT_INIT_LOG_TERM,
-            last_term: last_term,
+            last_term,
             cache: EntryCache::default(),
-            stats: stats,
+            stats,
         })
     }
 
@@ -511,12 +511,12 @@ impl PeerStorage {
             );
 
             return Ok(RaftState {
-                hard_state: hard_state,
+                hard_state,
                 conf_state: ConfState::default(),
             });
         }
         Ok(RaftState {
-            hard_state: hard_state,
+            hard_state,
             conf_state: conf_state_from_region(&self.region),
         })
     }
@@ -995,7 +995,7 @@ impl PeerStorage {
         self.set_snap_state(SnapState::Applying(Arc::clone(&status)));
         let task = RegionTask::Apply {
             region_id: self.get_region_id(),
-            status: status,
+            status,
         };
         // TODO: gracefully remove region instead.
         self.region_sched
@@ -1099,7 +1099,7 @@ impl PeerStorage {
         self.region = snap_region;
 
         Some(ApplySnapResult {
-            prev_region: prev_region,
+            prev_region,
             region: self.region.clone(),
         })
     }
@@ -1379,27 +1379,27 @@ impl Storage for PeerStorage {
 
 #[cfg(test)]
 mod test {
-    use std::sync::*;
-    use std::sync::atomic::*;
-    use std::sync::mpsc::*;
-    use std::rc::Rc;
-    use std::cell::RefCell;
-    use std::time::Duration;
-    use std::path::Path;
-    use raft::eraftpb::{ConfState, Entry};
     use kvproto::raft_serverpb::RaftSnapshotData;
-    use raft::{Error as RaftError, StorageError};
-    use tempdir::*;
     use protobuf;
-    use raftstore::store::{bootstrap, Engines};
+    use raft::eraftpb::HardState;
+    use raft::eraftpb::{ConfState, Entry};
+    use raft::{Error as RaftError, StorageError};
+    use raftstore::store::local_metrics::RaftMetrics;
     use raftstore::store::worker::RegionRunner;
     use raftstore::store::worker::RegionTask;
-    use raftstore::store::local_metrics::RaftMetrics;
-    use util::worker::{Scheduler, Worker};
-    use util::rocksdb::new_engine;
-    use storage::{ALL_CFS, CF_DEFAULT};
-    use raft::eraftpb::HardState;
+    use raftstore::store::{bootstrap, Engines};
     use rocksdb::WriteBatch;
+    use std::cell::RefCell;
+    use std::path::Path;
+    use std::rc::Rc;
+    use std::sync::atomic::*;
+    use std::sync::mpsc::*;
+    use std::sync::*;
+    use std::time::Duration;
+    use storage::{ALL_CFS, CF_DEFAULT};
+    use tempdir::*;
+    use util::rocksdb::new_engine;
+    use util::worker::{Scheduler, Worker};
 
     use super::*;
 

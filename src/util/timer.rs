@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use std::cmp::{Ord, Ordering, Reverse};
-use std::time::Duration;
 use std::collections::BinaryHeap;
+use std::time::Duration;
 
 use util::time::Instant;
 
@@ -32,7 +32,7 @@ impl<T> Timer<T> {
     pub fn add_task(&mut self, timeout: Duration, task: T) {
         let task = TimeoutTask {
             next_tick: Instant::now() + timeout,
-            task: task,
+            task,
         };
         self.pending.push(Reverse(task));
     }
@@ -88,8 +88,8 @@ impl<T> Ord for TimeoutTask<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc::{self, Sender};
     use std::sync::mpsc::RecvTimeoutError;
+    use std::sync::mpsc::{self, Sender};
     use util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
 
     #[derive(Debug, PartialEq, Eq, Copy, Clone)]
