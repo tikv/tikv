@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
-use coprocessor::codec::Datum;
 use super::{EvalContext, FnCall, Result};
+use coprocessor::codec::Datum;
+use std::borrow::Cow;
 
 impl FnCall {
     #[inline]
@@ -35,11 +35,11 @@ impl FnCall {
 
 #[cfg(test)]
 mod test {
-    use tipb::expression::ScalarFuncSig;
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::Time;
     use coprocessor::dag::expr::test::{datum_expr, fncall_expr};
     use coprocessor::dag::expr::{EvalContext, Expression};
+    use tipb::expression::ScalarFuncSig;
     #[test]
     fn test_date_format() {
         let tests = vec![

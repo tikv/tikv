@@ -13,8 +13,8 @@
 
 #[cfg(unix)]
 mod jemalloc {
-    use std::{ptr, slice};
     use libc::{self, c_char, c_void};
+    use std::{ptr, slice};
 
     extern "C" {
         #[cfg_attr(target_os = "macos", link_name = "je_malloc_stats_print")]

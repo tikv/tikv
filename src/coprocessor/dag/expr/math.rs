@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::i64;
-use std::borrow::Cow;
+use super::{Error, EvalContext, FnCall, Result};
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::Decimal;
-use super::{Error, EvalContext, FnCall, Result};
+use std::borrow::Cow;
+use std::i64;
 
 impl FnCall {
     #[inline]
@@ -110,13 +110,13 @@ impl FnCall {
 
 #[cfg(test)]
 mod test {
-    use std::{f64, i64, u64};
-    use std::sync::Arc;
-    use tipb::expression::ScalarFuncSig;
-    use coprocessor::codec::{convert, mysql, Datum};
     use coprocessor::codec::mysql::types;
+    use coprocessor::codec::{convert, mysql, Datum};
     use coprocessor::dag::expr::test::{check_overflow, datum_expr, fncall_expr, str2dec};
     use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
+    use std::sync::Arc;
+    use std::{f64, i64, u64};
+    use tipb::expression::ScalarFuncSig;
 
     #[test]
     fn test_abs() {

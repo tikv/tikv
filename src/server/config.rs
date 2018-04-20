@@ -13,11 +13,11 @@
 
 use sys_info;
 
+use super::Result;
+use coprocessor::DEFAULT_REQUEST_MAX_HANDLE_SECS;
 use util::collections::HashMap;
 use util::config::{self, ReadableDuration, ReadableSize};
 use util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
-use coprocessor::DEFAULT_REQUEST_MAX_HANDLE_SECS;
-use super::Result;
 
 pub use raftstore::store::Config as RaftStoreConfig;
 pub use storage::Config as StorageConfig;
@@ -51,7 +51,8 @@ pub const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    #[serde(skip)] pub cluster_id: u64,
+    #[serde(skip)]
+    pub cluster_id: u64,
 
     // Server listening address.
     pub addr: String,
