@@ -11,15 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::i64;
 use std::slice::Iter;
-use std::cmp::Ordering;
-use std::borrow::Cow;
 
-use coprocessor::codec::{datum, mysql, Datum};
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use coprocessor::dag::expr::Expression;
 use super::{Error, EvalContext, FnCall, Result};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use coprocessor::codec::{datum, mysql, Datum};
+use coprocessor::dag::expr::Expression;
 
 const MAX_RECURSE_LEVEL: usize = 1024;
 
@@ -382,14 +382,14 @@ fn like(target: &[u8], pattern: &[u8], escape: u32, recurse_level: usize) -> Res
 
 #[cfg(test)]
 mod test {
+    use super::*;
+    use coprocessor::codec::Datum;
+    use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+    use coprocessor::dag::expr::test::{col_expr, datum_expr, fncall_expr};
+    use coprocessor::dag::expr::{EvalContext, Expression};
+    use protobuf::RepeatedField;
     use std::{i64, u64};
     use tipb::expression::{Expr, ExprType, ScalarFuncSig};
-    use protobuf::RepeatedField;
-    use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::{EvalContext, Expression};
-    use coprocessor::dag::expr::test::{col_expr, datum_expr, fncall_expr};
-    use super::*;
 
     #[test]
     fn test_cmp_i64_with_unsigned_flag() {

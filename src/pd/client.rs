@@ -15,20 +15,20 @@ use std::fmt;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use protobuf::RepeatedField;
-use futures::{future, Future, Sink, Stream};
 use futures::sync::mpsc;
+use futures::{future, Future, Sink, Stream};
 use grpc::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
+use protobuf::RepeatedField;
 
-use util::{Either, HandyRwLock};
+use super::metrics::*;
+use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
+use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
+use pd::{Config, PdFuture};
 use util::security::SecurityManager;
 use util::time::duration_to_sec;
-use pd::{Config, PdFuture};
-use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
-use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
-use super::metrics::*;
+use util::{Either, HandyRwLock};
 
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";

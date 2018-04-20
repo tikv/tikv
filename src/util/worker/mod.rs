@@ -25,22 +25,22 @@ Briefly speaking, this is a mpsc (multiple-producer-single-consumer) model.
 
 */
 
-mod metrics;
 mod future;
+mod metrics;
 
-use std::{io, usize};
-use std::sync::{Arc, Mutex};
-use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
+use prometheus::IntGauge;
+use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::error::Error;
+use std::sync::{Arc, Mutex};
+use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::Duration;
-use prometheus::IntGauge;
+use std::{io, usize};
 
-use util::time::{Instant, SlowTimer};
-use util::timer::Timer;
 use self::metrics::*;
 use crossbeam_channel::{self, Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError};
+use util::time::{Instant, SlowTimer};
+use util::timer::Timer;
 
 pub use self::future::Runnable as FutureRunnable;
 pub use self::future::Scheduler as FutureScheduler;
@@ -150,7 +150,7 @@ impl<T: Display> Scheduler<T> {
             metrics_pending_task_count: WORKER_PENDING_TASK_VEC.with_label_values(&[&name]),
             name: Arc::new(name),
             counter: Arc::new(counter),
-            sender: sender,
+            sender,
         }
     }
 
@@ -207,7 +207,7 @@ pub struct Builder<S: Into<String>> {
 impl<S: Into<String>> Builder<S> {
     pub fn new(name: S) -> Self {
         Builder {
-            name: name,
+            name,
             batch_size: 1,
             pending_capacity: usize::MAX,
         }
@@ -384,20 +384,18 @@ impl<T: Display + Send + 'static> Worker<T> {
     pub fn stop(&mut self) -> Option<thread::JoinHandle<()>> {
         // close sender explicitly so the background thread will exit.
         info!("stoping {}", self.scheduler.name);
-        if self.handle.is_none() {
-            return None;
-        }
+        let handle = self.handle.take()?;
         if let Err(e) = self.scheduler.sender.send(None) {
             warn!("failed to stop worker thread: {:?}", e);
         }
-        self.handle.take()
+        Some(handle)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::thread;
     use std::sync::mpsc;
+    use std::thread;
     use std::time::Duration;
 
     use super::*;
@@ -506,7 +504,8 @@ mod test {
             if v.is_empty() {
                 break;
             }
-            sum += v.into_iter().fold(0, |a, b| a + b);
+            let result: u64 = v.into_iter().sum();
+            sum += result;
         }
         assert_eq!(sum, 50 * 20);
         assert!(rx.recv().is_err());

@@ -12,25 +12,25 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
-use uuid::Uuid;
 use futures::{stream, Future, Stream};
 use tempdir::TempDir;
+use uuid::Uuid;
 
-use kvproto::kvrpcpb::*;
-use kvproto::tikvpb_grpc::*;
+use grpc::{ChannelBuilder, Environment, Result, WriteFlags};
 use kvproto::importpb::*;
 use kvproto::importpb_grpc::*;
-use grpc::{ChannelBuilder, Environment, Result, WriteFlags};
+use kvproto::kvrpcpb::*;
+use kvproto::tikvpb_grpc::*;
 
+use tikv::import::test_helpers::*;
 use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
-use tikv::import::test_helpers::*;
 
-use raftstore::server::*;
 use raftstore::cluster::Cluster;
+use raftstore::server::*;
 
 const CLEANUP_SST_MILLIS: u64 = 10;
 
