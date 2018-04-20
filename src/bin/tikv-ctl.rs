@@ -695,6 +695,8 @@ impl DebugExecutor for Debugger {
 
 #[allow(cyclomatic_complexity)]
 fn main() {
+    let raw_key_hint: &'static str = "raw key (generally starts with \"z\") in escaped form";
+
     let mut app = App::new("TiKV Ctl")
         .author("PingCAP")
         .about("Distributed transactional key value database powered by Rust and Raft")
@@ -791,7 +793,7 @@ fn main() {
                                 .conflicts_with_all(&["region", "index"])
                                 .short("k")
                                 .takes_value(true)
-                                .help("set the raw key (generally starts with \"z\"), in escaped form"),
+                                .help(raw_key_hint)
                         ),
                 )
                 .subcommand(
@@ -841,14 +843,14 @@ fn main() {
                         .short("f")
                         .long("from")
                         .takes_value(true)
-                        .help("set the scan from raw key (generally starts with \"z\"), in escaped format"),
+                        .help(raw_key_hint)
                 )
                 .arg(
                     Arg::with_name("to")
                         .short("t")
                         .long("to")
                         .takes_value(true)
-                        .help("set the scan end raw key (generally starts with \"z\"), in escaped format"),
+                        .help(raw_key_hint)
                 )
                 .arg(
                     Arg::with_name("limit")
@@ -895,7 +897,7 @@ fn main() {
                         .required(true)
                         .short("k")
                         .takes_value(true)
-                        .help("set the query raw key (generally starts with \"z\"), in escaped form"),
+                        .help(raw_key_hint)
                 ),
         )
         .subcommand(
@@ -906,7 +908,7 @@ fn main() {
                         .required(true)
                         .short("k")
                         .takes_value(true)
-                        .help("set the query raw key (generally starts with \"z\"), in escaped form"),
+                        .help(raw_key_hint)
                 )
                 .arg(
                     Arg::with_name("cf")
@@ -982,14 +984,14 @@ fn main() {
                         .short("f")
                         .long("from")
                         .takes_value(true)
-                        .help("set the start raw key (generally starts with \"z\"), in escaped form"),
+                        .help(raw_key_hint)
                 )
                 .arg(
                     Arg::with_name("to")
                         .short("t")
                         .long("to")
                         .takes_value(true)
-                        .help("set the end raw key (generally starts with \"z\"), in escaped form"),
+                        .help(raw_key_hint)
                 )
                 .arg(
                     Arg::with_name("region")
