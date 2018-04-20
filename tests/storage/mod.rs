@@ -11,6 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod sync_storage;
 pub mod assert_storage;
+pub mod sync_storage;
 pub mod util;

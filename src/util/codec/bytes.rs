@@ -200,8 +200,8 @@ impl<'a> BytesDecoder for &'a [u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use util::codec::{bytes, number};
     use std::cmp::Ordering;
+    use util::codec::{bytes, number};
 
     #[test]
     fn test_enc_dec_bytes() {

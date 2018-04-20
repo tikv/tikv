@@ -11,41 +11,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::boxed::FnBox;
-use std::sync::{Arc, Mutex};
-use std::fmt::{self, Debug, Display, Formatter};
-use std::error;
-use std::io::Error as IoError;
-use std::u64;
-use std::cmp;
-use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
-use kvproto::errorpb;
-use util::collections::HashMap;
-use futures::{future, Future};
-use server::readpool::{self, ReadPool};
 use self::metrics::*;
 use self::mvcc::Lock;
 use self::txn::CMD_BATCH_SIZE;
-use util;
-use util::worker::{self, Builder, Worker};
+use futures::{future, Future};
+use kvproto::errorpb;
+use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 use raftstore::store::engine::IterOption;
+use server::readpool::{self, ReadPool};
+use std::boxed::FnBox;
+use std::cmp;
+use std::error;
+use std::fmt::{self, Debug, Display, Formatter};
+use std::io::Error as IoError;
+use std::sync::{Arc, Mutex};
+use std::u64;
+use util;
+use util::collections::HashMap;
+use util::worker::{self, Builder, Worker};
 
-pub mod engine;
-pub mod mvcc;
-pub mod txn;
 pub mod config;
-pub mod types;
+pub mod engine;
 mod metrics;
+pub mod mvcc;
 mod readpool_context;
+pub mod txn;
+pub mod types;
 
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
+pub use self::engine::raftkv::RaftKv;
 pub use self::engine::{new_local_engine, CFStatistics, Cursor, Engine, Error as EngineError,
                        FlowStatistics, Iterator, Modify, ScanMode, Snapshot, Statistics,
                        StatisticsSummary, TEMP_DIR};
-pub use self::engine::raftkv::RaftKv;
+pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
 pub use self::types::{make_key, Key, KvPair, MvccInfo, Value};
-pub use self::readpool_context::Context as ReadPoolContext;
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;
@@ -394,9 +394,9 @@ pub struct Options {
 impl Options {
     pub fn new(lock_ttl: u64, skip_constraint_check: bool, key_only: bool) -> Options {
         Options {
-            lock_ttl: lock_ttl,
-            skip_constraint_check: skip_constraint_check,
-            key_only: key_only,
+            lock_ttl,
+            skip_constraint_check,
+            key_only,
         }
     }
 }
@@ -433,9 +433,9 @@ impl Storage {
         let worker_scheduler = worker.lock().unwrap().scheduler();
         Ok(Storage {
             read_pool,
-            engine: engine,
-            worker: worker,
-            worker_scheduler: worker_scheduler,
+            engine,
+            worker,
+            worker_scheduler,
             gc_ratio_threshold: config.gc_ratio_threshold,
             max_key_size: config.max_key_size,
         })
@@ -484,10 +484,7 @@ impl Storage {
 
     fn schedule(&self, cmd: Command, cb: StorageCb) -> Result<()> {
         fail_point!("storage_drop_message", |_| Ok(()));
-        box_try!(
-            self.worker_scheduler
-                .schedule(Msg::RawCmd { cmd: cmd, cb: cb })
-        );
+        box_try!(self.worker_scheduler.schedule(Msg::RawCmd { cmd, cb }));
         Ok(())
     }
 
@@ -690,10 +687,7 @@ impl Storage {
     }
 
     pub fn async_pause(&self, ctx: Context, duration: u64, callback: Callback<()>) -> Result<()> {
-        let cmd = Command::Pause {
-            ctx: ctx,
-            duration: duration,
-        };
+        let cmd = Command::Pause { ctx, duration };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         Ok(())
     }
@@ -715,11 +709,11 @@ impl Storage {
             }
         }
         let cmd = Command::Prewrite {
-            ctx: ctx,
-            mutations: mutations,
-            primary: primary,
-            start_ts: start_ts,
-            options: options,
+            ctx,
+            mutations,
+            primary,
+            start_ts,
+            options,
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Booleans(callback))?;
@@ -736,10 +730,10 @@ impl Storage {
         callback: Callback<()>,
     ) -> Result<()> {
         let cmd = Command::Commit {
-            ctx: ctx,
-            keys: keys,
-            lock_ts: lock_ts,
-            commit_ts: commit_ts,
+            ctx,
+            keys,
+            lock_ts,
+            commit_ts,
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
@@ -786,11 +780,7 @@ impl Storage {
         start_ts: u64,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command::Cleanup {
-            ctx: ctx,
-            key: key,
-            start_ts: start_ts,
-        };
+        let cmd = Command::Cleanup { ctx, key, start_ts };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
@@ -805,9 +795,9 @@ impl Storage {
         callback: Callback<()>,
     ) -> Result<()> {
         let cmd = Command::Rollback {
-            ctx: ctx,
-            keys: keys,
-            start_ts: start_ts,
+            ctx,
+            keys,
+            start_ts,
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
@@ -824,14 +814,14 @@ impl Storage {
         callback: Callback<Vec<LockInfo>>,
     ) -> Result<()> {
         let cmd = Command::ScanLock {
-            ctx: ctx,
-            max_ts: max_ts,
+            ctx,
+            max_ts,
             start_key: if start_key.is_empty() {
                 None
             } else {
                 Some(Key::from_raw(&start_key))
             },
-            limit: limit,
+            limit,
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Locks(callback))?;
@@ -846,8 +836,8 @@ impl Storage {
         callback: Callback<()>,
     ) -> Result<()> {
         let cmd = Command::ResolveLock {
-            ctx: ctx,
-            txn_status: txn_status,
+            ctx,
+            txn_status,
             scan_key: None,
             key_locks: vec![],
         };
@@ -859,8 +849,8 @@ impl Storage {
 
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
         let cmd = Command::Gc {
-            ctx: ctx,
-            safe_point: safe_point,
+            ctx,
+            safe_point,
             ratio_threshold: self.gc_ratio_threshold,
             scan_key: None,
             keys: vec![],
@@ -1296,7 +1286,7 @@ impl Storage {
         key: Key,
         callback: Callback<MvccInfo>,
     ) -> Result<()> {
-        let cmd = Command::MvccByKey { ctx: ctx, key: key };
+        let cmd = Command::MvccByKey { ctx, key };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::MvccInfoByKey(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
@@ -1309,10 +1299,7 @@ impl Storage {
         start_ts: u64,
         callback: Callback<Option<(Key, MvccInfo)>>,
     ) -> Result<()> {
-        let cmd = Command::MvccByStartTs {
-            ctx: ctx,
-            start_ts: start_ts,
-        };
+        let cmd = Command::MvccByStartTs { ctx, start_ts };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::MvccInfoByStartTs(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
@@ -1388,8 +1375,8 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc::{channel, Sender};
     use kvproto::kvrpcpb::Context;
+    use std::sync::mpsc::{channel, Sender};
     use util::config::ReadableSize;
     use util::worker::FutureWorker;
 

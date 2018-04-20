@@ -20,8 +20,8 @@ use clap::ArgMatches;
 use tikv::config::{MetricConfig, TiKvConfig};
 use tikv::util;
 use tikv::util::collections::HashMap;
-use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
+use tikv::util::logger::{self, StderrLogger};
 
 // A workaround for checking if log is initialized.
 pub static LOG_INITIALIZED: AtomicBool = ATOMIC_BOOL_INIT;

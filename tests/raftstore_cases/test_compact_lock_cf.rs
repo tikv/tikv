@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocksdb::DBStatisticsTickerType;
 use tikv::storage::CF_LOCK;
 use tikv::util::config::*;
-use rocksdb::DBStatisticsTickerType;
 
-use super::util::*;
 use super::cluster::{Cluster, Simulator};
 use super::server::new_server_cluster;
+use super::util::*;
 
 fn flush<T: Simulator>(cluster: &mut Cluster<T>) {
     for engines in cluster.engines.values() {
