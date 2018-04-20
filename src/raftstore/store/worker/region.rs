@@ -476,7 +476,7 @@ impl Runner {
                 batch_size,
                 use_delete_range,
                 clean_stale_peer_delay,
-                PendingDeleteRanges::default(),
+                pending_delete_ranges: PendingDeleteRanges::default(),
             },
         }
     }
