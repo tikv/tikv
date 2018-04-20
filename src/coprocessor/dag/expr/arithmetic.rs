@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{f64, i64, u64};
+use super::{Error, EvalContext, FnCall, Result};
+use coprocessor::codec::mysql::{Decimal, Res};
+use coprocessor::codec::{mysql, Datum};
 use std::borrow::Cow;
 use std::ops::{Add, Mul, Sub};
-use coprocessor::codec::{mysql, Datum};
-use coprocessor::codec::mysql::{Decimal, Res};
-use super::{Error, EvalContext, FnCall, Result};
+use std::{f64, i64, u64};
 
 impl FnCall {
     pub fn plus_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -201,12 +201,12 @@ impl FnCall {
 
 #[cfg(test)]
 mod test {
+    use coprocessor::codec::mysql::types;
+    use coprocessor::codec::{mysql, Datum};
+    use coprocessor::dag::expr::test::{check_overflow, datum_expr, fncall_expr, str2dec};
+    use coprocessor::dag::expr::{EvalContext, Expression};
     use std::{f64, i64, u64};
     use tipb::expression::ScalarFuncSig;
-    use coprocessor::codec::{mysql, Datum};
-    use coprocessor::codec::mysql::types;
-    use coprocessor::dag::expr::{EvalContext, Expression};
-    use coprocessor::dag::expr::test::{check_overflow, datum_expr, fncall_expr, str2dec};
 
     #[test]
     fn test_arithmetic_int() {

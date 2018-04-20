@@ -11,45 +11,45 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{mem, usize};
-use std::time::Duration;
 use std::cell::{RefCell, RefMut};
-use std::sync::{mpsc, Arc};
-use std::iter::FromIterator;
-use std::thread::{self, ThreadId};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Debug, Display, Formatter};
+use std::iter::FromIterator;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc};
+use std::thread::{self, ThreadId};
+use std::time::Duration;
+use std::{mem, usize};
 
-use protobuf::{CodedInputStream, Message as PbMsg};
-use futures::{future, stream};
 use futures::sync::mpsc as futures_mpsc;
+use futures::{future, stream};
 use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
+use protobuf::{CodedInputStream, Message as PbMsg};
 
-use tipb::select::DAGRequest;
+use kvproto::coprocessor::{KeyRange, Request, Response};
+use kvproto::errorpb::{self, ServerIsBusy};
+use kvproto::kvrpcpb::{CommandPri, HandleTime, IsolationLevel};
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::checksum::{ChecksumRequest, ChecksumScanOn};
 use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
-use kvproto::coprocessor::{KeyRange, Request, Response};
-use kvproto::errorpb::{self, ServerIsBusy};
-use kvproto::kvrpcpb::{CommandPri, HandleTime, IsolationLevel};
+use tipb::select::DAGRequest;
 
+use pd::PdTask;
+use server::{Config, OnResponse};
+use storage::engine::Error as EngineError;
+use storage::{self, engine, Engine, Snapshot};
+use util::collections::HashMap;
 use util::time::{duration_to_sec, Instant};
 use util::worker::{FutureScheduler, Runnable, Scheduler};
-use util::collections::HashMap;
-use server::{Config, OnResponse};
-use storage::{self, engine, Engine, Snapshot};
-use storage::engine::Error as EngineError;
-use pd::PdTask;
 
-use super::codec::mysql;
-use super::codec::datum::Datum;
-use super::dag::DAGContext;
-use super::statistics::analyze::AnalyzeContext;
 use super::checksum::ChecksumContext;
-use super::metrics::*;
-use super::local_metrics::{BasicLocalMetrics, ExecLocalMetrics};
+use super::codec::datum::Datum;
+use super::codec::mysql;
+use super::dag::DAGContext;
 use super::dag::executor::ExecutorMetrics;
+use super::local_metrics::{BasicLocalMetrics, ExecLocalMetrics};
+use super::metrics::*;
+use super::statistics::analyze::AnalyzeContext;
 use super::{Error, Result};
 
 pub const REQ_TYPE_DAG: i64 = 103;
@@ -123,7 +123,7 @@ impl FromIterator<(ThreadId, CopContext)> for CopContextPool {
             cop_ctxs.insert(thread_id, cop_ctx);
         }
         let cop_ctxs = Arc::new(cop_ctxs);
-        CopContextPool { cop_ctxs: cop_ctxs }
+        CopContextPool { cop_ctxs }
     }
 }
 
@@ -160,13 +160,13 @@ pub struct Host {
 impl Host {
     pub fn new(
         engine: Box<Engine>,
-        scheduler: Scheduler<Task>,
+        sched: Scheduler<Task>,
         cfg: &Config,
         pd_task_sender: FutureScheduler<PdTask>,
     ) -> Host {
         Host {
-            engine: engine,
-            sched: scheduler,
+            engine,
+            sched,
             reqs: HashMap::default(),
             last_req_id: 0,
             pool: Host::create_executor_pool(
@@ -618,11 +618,11 @@ impl RequestTask {
         let start_time = Instant::now_coarse();
 
         let req_ctx = ReqContext {
-            start_time: start_time,
+            start_time,
             deadline: start_time,
             isolation_level: req.get_context().get_isolation_level(),
             fill_cache: !req.get_context().get_not_fill_cache(),
-            table_scan: table_scan,
+            table_scan,
         };
 
         let request_tracker = RequestTracker {
@@ -652,10 +652,10 @@ impl RequestTask {
             .inc();
 
         Ok(RequestTask {
-            req: req,
-            cop_req: cop_req,
+            req,
+            cop_req,
             ctx: req_ctx,
-            on_resp: on_resp,
+            on_resp,
             tracker: request_tracker,
         })
     }
@@ -901,14 +901,14 @@ pub fn get_req_pri_str(pri: CommandPri) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use storage::engine::{self, TEMP_DIR};
     use futures::Future;
     use futures::sync::oneshot;
+    use storage::engine::{self, TEMP_DIR};
 
     use kvproto::coprocessor::Request;
-    use tipb::select::DAGRequest;
-    use tipb::expression::Expr;
     use tipb::executor::Executor;
+    use tipb::expression::Expr;
+    use tipb::select::DAGRequest;
 
     use util::config::ReadableDuration;
     use util::time::Instant;

@@ -1,5 +1,5 @@
 # pingcap/rust: 2017-06-12
-FROM pingcap/rust@sha256:781bde5503c57ca24cc828c30c161fc7b674a462b39c029b89747a90f120ee94
+FROM pingcap/rust
 
 MAINTAINER Liu Yin <liuy@pingcap.com>
 
