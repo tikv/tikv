@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::iter::Peekable;
 use std::mem;
 use std::vec::IntoIter;
-use std::iter::Peekable;
 
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::TableScan;
@@ -24,8 +24,8 @@ use coprocessor::{Error, Result};
 use storage::{Key, SnapshotStore};
 use util::collections::HashSet;
 
-use super::{Executor, ExecutorMetrics, Row};
 use super::scanner::{ScanOn, Scanner};
+use super::{Executor, ExecutorMetrics, Row};
 
 pub struct TableScanExecutor {
     store: SnapshotStore,
@@ -65,14 +65,14 @@ impl TableScanExecutor {
         let counts = if collect { Some(Vec::default()) } else { None };
 
         Ok(TableScanExecutor {
-            store: store,
-            desc: desc,
-            col_ids: col_ids,
+            store,
+            desc,
+            col_ids,
             key_ranges: key_ranges.into_iter().peekable(),
             current_range: None,
             scan_range: KeyRange::default(),
             scanner: None,
-            counts: counts,
+            counts,
             metrics: Default::default(),
             first_collect: true,
         })
@@ -222,9 +222,9 @@ mod test {
 
     use storage::SnapshotStore;
 
-    use super::*;
     use super::super::scanner::test::{get_point_range, get_range, prepare_table_data, Data,
                                       TestStore};
+    use super::*;
 
     const TABLE_ID: i64 = 1;
     const KEY_NUMBER: usize = 10;
@@ -258,9 +258,9 @@ mod test {
             TableScanTestWrapper {
                 data: test_data,
                 store: test_store,
-                table_scan: table_scan,
+                table_scan,
                 ranges: key_ranges,
-                cols: cols,
+                cols,
             }
         }
     }

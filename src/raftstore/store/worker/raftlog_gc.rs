@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::store::keys;
 use raftstore::store::engine::Iterable;
+use raftstore::store::keys;
 use util::worker::Runnable;
 
 use rocksdb::{Writable, WriteBatch, DB};
-use std::sync::Arc;
-use std::fmt::{self, Display, Formatter};
 use std::error;
+use std::fmt::{self, Display, Formatter};
+use std::sync::Arc;
 use std::sync::mpsc::Sender;
 
 pub struct Task {
@@ -60,7 +60,7 @@ pub struct Runner {
 
 impl Runner {
     pub fn new(ch: Option<Sender<TaskRes>>) -> Runner {
-        Runner { ch: ch }
+        Runner { ch }
     }
 
     /// Do the gc job and return the count of log collected.
@@ -100,9 +100,7 @@ impl Runner {
         self.ch
             .as_ref()
             .unwrap()
-            .send(TaskRes {
-                collected: collected,
-            })
+            .send(TaskRes { collected })
             .unwrap();
     }
 }
@@ -133,12 +131,12 @@ impl Runnable<Task> for Runner {
 
 #[cfg(test)]
 mod test {
+    use super::*;
     use std::sync::mpsc;
     use std::time::Duration;
-    use util::rocksdb::new_engine;
-    use tempdir::TempDir;
     use storage::CF_DEFAULT;
-    use super::*;
+    use tempdir::TempDir;
+    use util::rocksdb::new_engine;
 
     #[test]
     fn test_gc_raft_log() {
@@ -162,7 +160,7 @@ mod test {
             (
                 Task {
                     raft_engine: Arc::clone(&raft_db),
-                    region_id: region_id,
+                    region_id,
                     start_idx: 0,
                     end_idx: 10,
                 },
@@ -173,7 +171,7 @@ mod test {
             (
                 Task {
                     raft_engine: Arc::clone(&raft_db),
-                    region_id: region_id,
+                    region_id,
                     start_idx: 0,
                     end_idx: 50,
                 },
@@ -184,7 +182,7 @@ mod test {
             (
                 Task {
                     raft_engine: Arc::clone(&raft_db),
-                    region_id: region_id,
+                    region_id,
                     start_idx: 50,
                     end_idx: 50,
                 },
@@ -195,7 +193,7 @@ mod test {
             (
                 Task {
                     raft_engine: Arc::clone(&raft_db),
-                    region_id: region_id,
+                    region_id,
                     start_idx: 50,
                     end_idx: 60,
                 },
