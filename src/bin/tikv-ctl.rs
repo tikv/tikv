@@ -34,8 +34,8 @@ use std::fs::File;
 use std::io::Read;
 use std::iter::FromIterator;
 use std::sync::Arc;
-use std::{process, str, u64};
 use std::thread;
+use std::{process, str, u64};
 
 use clap::{App, Arg, ArgMatches, SubCommand};
 use futures::{future, stream, Future, Stream};
@@ -529,7 +529,10 @@ impl DebugExecutor for DebugClient {
         req.set_to_key(to.clone());
         self.compact(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::compact", e));
-        println!("compact db:{:?} cf:{} range:[{:?}, {:?}) success!", db, cf, from, to);
+        println!(
+            "compact db:{:?} cf:{} range:[{:?}, {:?}) success!",
+            db, cf, from, to
+        );
     }
 
     fn dump_metrics(&self, tags: Vec<&str>) {
@@ -633,7 +636,10 @@ impl DebugExecutor for Debugger {
     fn do_compaction(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>) {
         self.compact(db, cf, &from, &to)
             .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
-        println!("compact db:{:?}  cf:{}  range:[{:?}, {:?}) success!", db, cf, from, to);
+        println!(
+            "compact db:{:?} cf:{} range:[{:?}, {:?}) success!",
+            db, cf, from, to
+        );
     }
 
     fn set_region_tombstone(&self, regions: Vec<Region>) {
