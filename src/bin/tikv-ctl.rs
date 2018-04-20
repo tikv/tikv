@@ -525,11 +525,11 @@ impl DebugExecutor for DebugClient {
         let mut req = CompactRequest::new();
         req.set_db(db);
         req.set_cf(cf.to_owned());
-        req.set_from_key(from);
-        req.set_to_key(to);
+        req.set_from_key(from.clone());
+        req.set_to_key(to.clone());
         self.compact(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::compact", e));
-        println!("success!");
+        println!("compact db:{:?} cf:{} range:[{:?}, {:?}) success!", db, cf, from, to);
     }
 
     fn dump_metrics(&self, tags: Vec<&str>) {
@@ -633,7 +633,7 @@ impl DebugExecutor for Debugger {
     fn do_compaction(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>) {
         self.compact(db, cf, &from, &to)
             .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
-        println!("success!");
+        println!("compact db:{:?}  cf:{}  range:[{:?}, {:?}) success!", db, cf, from, to);
     }
 
     fn set_region_tombstone(&self, regions: Vec<Region>) {
@@ -689,21 +689,21 @@ fn main() {
         .arg(
             Arg::with_name("db")
                 .required(true)
-                .conflicts_with_all(&["host", "hex-to-escaped", "escaped-to-hex"])
+                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex"])
                 .long("db")
                 .takes_value(true)
                 .help("set rocksdb path"),
         )
         .arg(
             Arg::with_name("raftdb")
-                .conflicts_with_all(&["host", "hex-to-escaped", "escaped-to-hex"])
+                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex"])
                 .long("raftdb")
                 .takes_value(true)
                 .help("set raft rocksdb path"),
         )
         .arg(
             Arg::with_name("config")
-                .conflicts_with_all(&["host", "hex-to-escaped", "escaped-to-hex"])
+                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex"])
                 .long("config")
                 .takes_value(true)
                 .help("set config for rocksdb"),
@@ -711,7 +711,7 @@ fn main() {
         .arg(
             Arg::with_name("host")
                 .required(true)
-                .conflicts_with_all(&["db", "raftdb", "hex-to-escaped", "escaped-to-hex", "config"])
+                .conflicts_with_all(&["db", "pd", "raftdb", "hex-to-escaped", "escaped-to-hex", "config"])
                 .long("host")
                 .takes_value(true)
                 .help("set remote host"),
@@ -750,6 +750,14 @@ fn main() {
                 .long("to-hex")
                 .takes_value(true)
                 .help("convert escaped key to hex key"),
+        )
+        .arg(
+            Arg::with_name("pd")
+                .required(true)
+                .long("pd")
+                .conflicts_with_all(&["db", "raftdb", "host", "hex-to-escaped", "escaped-to-hex", "config"])
+                .takes_value(true)
+                .help("pd address"),
         )
         .subcommand(
             SubCommand::with_name("raft")
@@ -1088,16 +1096,11 @@ fn main() {
             SubCommand::with_name("compact-the-whole-cluster")
                 .about("compact the whole cluster in a specified range in one or more column families")
                 .arg(
-                    Arg::with_name("pd")
-                        .short("p")
-                        .takes_value(true)
-                        .help("pd address, eg. 127.0.0.1:2379"),
-                )
-                .arg(
                     Arg::with_name("db")
                         .short("d")
                         .takes_value(true)
                         .default_value("kv")
+                        .possible_values(&["kv", "raft"])
                         .help("kv or raft"),
                 )
                 .arg(
@@ -1109,6 +1112,7 @@ fn main() {
                         .require_delimiter(true)
                         .value_delimiter(",")
                         .default_value(CF_DEFAULT)
+                        .possible_values(&["default", "lock", "write"])
                         .help("column family names, for kv db, combine from default/lock/write; for raft db, can only be default"),
                 )
                 .arg(
@@ -1148,13 +1152,13 @@ fn main() {
     if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
         let path = matches.value_of("file").unwrap();
         return dump_snap_meta_file(path);
-    } else if let Some(matches) = matches.subcommand_matches("compact-whole-cluster") {
+    } else if let Some(sub_cmd) = matches.subcommand_matches("compact-the-whole-cluster") {
         let pd = matches.value_of("pd").unwrap();
-        let db = matches.value_of("db").unwrap();
+        let db = sub_cmd.value_of("db").unwrap();
         let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
-        let cfs = Vec::from_iter(matches.values_of("cf").unwrap());
-        let from_key = matches.value_of("from").map(|k| unescape(k));
-        let to_key = matches.value_of("to").map(|k| unescape(k));
+        let cfs = Vec::from_iter(sub_cmd.values_of("cf").unwrap());
+        let from_key = sub_cmd.value_of("from").map(|k| unescape(k));
+        let to_key = sub_cmd.value_of("to").map(|k| unescape(k));
         return compact_whole_cluster(pd, db_type, cfs, from_key, to_key, mgr);
     }
 
