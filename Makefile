@@ -78,7 +78,8 @@ bench:
 	RUST_BACKTRACE=1 cargo run --release --bin bench-tikv --features "${ENABLE_FEATURES}"
 
 format:
-	@cargo fmt --all -- --write-mode diff >/dev/null || cargo fmt --all
+	@cargo fmt --all -- --write-mode diff >/dev/null || \
+	cargo fmt --all
 
 clean:
-	cargo clean
+	@cargo clean

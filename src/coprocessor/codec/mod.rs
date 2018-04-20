@@ -38,9 +38,9 @@ macro_rules! invalid_type {
     });
 }
 
-pub mod datum;
-pub mod table;
 pub mod convert;
+pub mod datum;
 pub mod mysql;
+pub mod table;
 
 pub use self::datum::Datum;

@@ -11,16 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use prometheus::local::{LocalHistogramTimer, LocalHistogramVec, LocalIntCounterVec};
 use std::fmt;
 use std::mem;
-use prometheus::local::{LocalHistogramTimer, LocalHistogramVec, LocalIntCounterVec};
 
+use pd;
 use server::readpool;
+use storage;
+use util::collections::HashMap;
 use util::futurepool;
 use util::worker;
-use util::collections::HashMap;
-use pd;
-use storage;
 
 use super::metrics::*;
 

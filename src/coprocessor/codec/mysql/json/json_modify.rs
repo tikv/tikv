@@ -13,9 +13,9 @@
 
 use std::mem;
 
+use super::super::Result;
 use super::Json;
 use super::path_expr::{PathExpression, PathLeg};
-use super::super::Result;
 
 /// `ModifyType` is for modify a JSON.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -106,8 +106,8 @@ impl Json {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use super::super::path_expr::parse_json_path_expr;
+    use super::*;
 
     #[test]
     fn test_json_modify() {

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod store;
-pub mod errors;
 pub mod coprocessor;
+pub mod errors;
+pub mod store;
 pub use self::errors::{Error, Result};
