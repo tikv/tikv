@@ -175,9 +175,9 @@ impl PendingDeleteRanges {
             );
         }
         let info = StalePeerInfo {
-            region_id: region_id,
-            end_key: end_key,
-            timeout: timeout,
+            region_id,
+            end_key,
+            timeout,
         };
         self.ranges.insert(start_key, info);
     }
