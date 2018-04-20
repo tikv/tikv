@@ -590,7 +590,7 @@ impl MvccChecker {
                 if l.lock_type == LockType::Put && l.short_value.is_none() {
                     match default {
                         Some(start_ts) if start_ts == l.ts => {
-                            default = self.next_default(key)?;
+                            next_default = true;
                         }
                         _ => {
                             warn!(
