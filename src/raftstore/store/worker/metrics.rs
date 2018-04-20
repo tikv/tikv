@@ -49,9 +49,8 @@ lazy_static! {
         "Proposal count of all regions in a mio tick",
         exponential_buckets(1.0, 2.0, 20).unwrap()
     ).unwrap();
-    pub static ref STALE_PEER_PENDING_DELETE_RANGE_GAUGE: Gauge =
-      register_gauge!(
-          "tikv_pending_delete_ranges_of_stale_peer",
-          "Total number of tikv pending delete range of stale peer"
-      ).unwrap();
+    pub static ref STALE_PEER_PENDING_DELETE_RANGE_GAUGE: Gauge = register_gauge!(
+        "tikv_pending_delete_ranges_of_stale_peer",
+        "Total number of tikv pending delete range of stale peer"
+    ).unwrap();
 }
