@@ -416,6 +416,8 @@
 # use-direct-io-for-flush-and-compaction = false
 # enable-pipelined-write = true
 # allow-concurrent-memtable-write = false
+# bytes-per-sync = "0MB"
+# wal-bytes-per-sync = "0KB"
 
 [raftdb.defaultcf]
 # compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
@@ -435,7 +437,6 @@
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = 0
 # read-amp-bytes-per-bit = 0
-# wal-bytes-per-sync = 0
 # dynamic-level-bytes = false
 
 [security]
