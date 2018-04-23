@@ -1269,13 +1269,10 @@ fn get_module_type(module: &str) -> MODULE {
 
 fn from_hex(key: &str) -> Vec<u8> {
     const HEX_PREFIX: &str = "0x";
-    let mut s = String::from(key);
-    if s.starts_with(HEX_PREFIX) {
-        let len = s.len();
-        let new_len = len.saturating_sub(HEX_PREFIX.len());
-        s.truncate(new_len);
+    if key.starts_with(HEX_PREFIX) {
+        return key[2..].from_hex().unwrap();
     }
-    s.as_str().from_hex().unwrap()
+    key.from_hex().unwrap()
 }
 
 fn convert_gbmb(mut bytes: u64) -> String {
