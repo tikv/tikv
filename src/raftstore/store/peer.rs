@@ -656,7 +656,7 @@ impl Peer {
                     let (_, pending_after) = self.peers_start_pending_time.swap_remove(i);
                     let elapsed = duration_to_sec(pending_after.elapsed());
                     debug!(
-                        "{} peer {} has caugth up logs, elapsed: {}",
+                        "{} peer {} has caught up logs, elapsed: {}",
                         self.tag, peer_id, elapsed
                     );
                     return true;
