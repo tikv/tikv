@@ -17,9 +17,12 @@ mod dag;
 mod endpoint;
 pub mod local_metrics;
 mod metrics;
+mod readpool_context;
 mod statistics;
 
 pub use self::endpoint::err_resp;
+pub use self::readpool_context::Context as ReadPoolContext;
+
 use std::error;
 use std::result;
 use std::time::Duration;
