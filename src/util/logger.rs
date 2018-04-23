@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::{self, Write};
 use std::fmt::Arguments;
+use std::io::{self, Write};
 
 use grpc;
-use time;
 use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
+use time;
 
 pub use log::LogLevelFilter;
 
@@ -36,8 +36,8 @@ pub fn init_log<W: LogWriter + Sync + Send + 'static>(
         filter.set(level);
         grpc::redirect_log();
         Box::new(Logger {
-            level: level,
-            writer: writer,
+            level,
+            writer,
             tikv_only: false,
         })
     })
@@ -51,8 +51,8 @@ pub fn init_log_for_tikv_only<W: LogWriter + Sync + Send + 'static>(
         filter.set(level);
         grpc::redirect_log();
         Box::new(Logger {
-            level: level,
-            writer: writer,
+            level,
+            writer,
             tikv_only: true,
         })
     })

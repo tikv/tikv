@@ -12,17 +12,17 @@
 // limitations under the License.
 
 use super::sync_storage::SyncStorage;
+use super::util::new_raft_storage_with_store_count;
 use kvproto::kvrpcpb::{Context, LockInfo};
-use tikv::storage::{self, make_key, Key, KvPair, Mutation, Value};
-use tikv::storage::mvcc::{self, MAX_TXN_WRITE_SIZE};
-use tikv::storage::txn;
 use raftstore::cluster::Cluster;
 use raftstore::server::ServerCluster;
-use tikv::util::HandyRwLock;
-use super::util::new_raft_storage_with_store_count;
+use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::config::Config;
 use tikv::storage::engine;
-use tikv::server::readpool::{self, ReadPool};
+use tikv::storage::mvcc::{self, MAX_TXN_WRITE_SIZE};
+use tikv::storage::txn;
+use tikv::storage::{self, make_key, Key, KvPair, Mutation, Value};
+use tikv::util::HandyRwLock;
 use tikv::util::worker::FutureWorker;
 
 #[derive(Clone)]
@@ -50,10 +50,7 @@ impl AssertionStorage {
         key: &str,
     ) -> (Cluster<ServerCluster>, AssertionStorage) {
         let (cluster, store, ctx) = new_raft_storage_with_store_count(count, key);
-        let storage = AssertionStorage {
-            ctx: ctx,
-            store: store,
-        };
+        let storage = AssertionStorage { ctx, store };
         (cluster, storage)
     }
 
@@ -108,9 +105,9 @@ impl AssertionStorage {
 
     fn expect_not_leader_or_stale_command(&self, err: storage::Error) {
         match err {
-            storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(
-                engine::Error::Request(ref e),
-            )))
+            storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(engine::Error::Request(
+                ref e,
+            ))))
             | storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e)))
             | storage::Error::Engine(engine::Error::Request(ref e)) => {
                 assert!(
@@ -450,31 +447,44 @@ impl AssertionStorage {
         panic!("failed with 3 retry!");
     }
 
-    pub fn raw_get_ok(&self, key: Vec<u8>, value: Option<Vec<u8>>) {
-        assert_eq!(self.store.raw_get(self.ctx.clone(), key).unwrap(), value);
+    pub fn raw_get_ok(&self, cf: String, key: Vec<u8>, value: Option<Vec<u8>>) {
+        assert_eq!(
+            self.store.raw_get(self.ctx.clone(), cf, key).unwrap(),
+            value
+        );
     }
 
-    pub fn raw_put_ok(&self, key: Vec<u8>, value: Vec<u8>) {
-        self.store.raw_put(self.ctx.clone(), key, value).unwrap();
-    }
-
-    pub fn raw_put_err(&self, key: Vec<u8>, value: Vec<u8>) {
+    pub fn raw_put_ok(&self, cf: String, key: Vec<u8>, value: Vec<u8>) {
         self.store
-            .raw_put(self.ctx.clone(), key, value)
+            .raw_put(self.ctx.clone(), cf, key, value)
+            .unwrap();
+    }
+
+    pub fn raw_put_err(&self, cf: String, key: Vec<u8>, value: Vec<u8>) {
+        self.store
+            .raw_put(self.ctx.clone(), cf, key, value)
             .unwrap_err();
     }
 
-    pub fn raw_delete_ok(&self, key: Vec<u8>) {
-        self.store.raw_delete(self.ctx.clone(), key).unwrap()
+    pub fn raw_delete_ok(&self, cf: String, key: Vec<u8>) {
+        self.store.raw_delete(self.ctx.clone(), cf, key).unwrap()
     }
 
-    pub fn raw_delete_err(&self, key: Vec<u8>) {
-        self.store.raw_delete(self.ctx.clone(), key).unwrap_err();
+    pub fn raw_delete_err(&self, cf: String, key: Vec<u8>) {
+        self.store
+            .raw_delete(self.ctx.clone(), cf, key)
+            .unwrap_err();
     }
 
-    pub fn raw_scan_ok(&self, start_key: Vec<u8>, limit: usize, expect: Vec<(&[u8], &[u8])>) {
+    pub fn raw_scan_ok(
+        &self,
+        cf: String,
+        start_key: Vec<u8>,
+        limit: usize,
+        expect: Vec<(&[u8], &[u8])>,
+    ) {
         let result: Vec<KvPair> = self.store
-            .raw_scan(self.ctx.clone(), start_key, limit)
+            .raw_scan(self.ctx.clone(), cf, start_key, limit)
             .unwrap()
             .into_iter()
             .map(|x| x.unwrap())
