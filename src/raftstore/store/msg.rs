@@ -16,11 +16,11 @@ use std::fmt;
 use std::time::Instant;
 
 use kvproto::importpb::SSTMeta;
-use kvproto::metapb::RegionEpoch;
+use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
-
 use raft::{Ready, SnapshotStatus};
+
 use raftstore::store::InvokeContext;
 use util::escape;
 use util::rocksdb::CompactedEvent;
@@ -186,6 +186,12 @@ pub enum Msg {
     Persistence {
         append_res: Vec<(Ready, InvokeContext)>,
     },
+
+    DestoryPeer {
+        region_id: u64,
+        peer: metapb::Peer,
+        keep_data: bool,
+    },
 }
 
 impl fmt::Debug for Msg {
@@ -227,6 +233,14 @@ impl fmt::Debug for Msg {
             Msg::MergeFail { region_id } => write!(fmt, "MergeFail region_id {}", region_id),
             Msg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
             Msg::Persistence { .. } => write!(fmt, "Persistence"),
+            Msg::DestoryPeer {
+                region_id,
+                ref peer,
+                ..
+            } => fmt.debug_struct("Msg::DestoryPeer")
+                .field("region_id", &region_id)
+                .field("peer", &peer)
+                .finish(),
         }
     }
 }

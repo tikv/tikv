@@ -419,7 +419,9 @@ impl Peer {
             return None;
         }
         let initialized = self.get_store().is_initialized();
-        let async_remove = if self.is_applying_snapshot() {
+        let async_remove = if self.is_persisting {
+            true
+        } else if self.is_applying_snapshot() {
             if !self.mut_store().cancel_applying_snap() {
                 info!(
                     "{} Stale peer {} is applying snapshot, will destroy next \
@@ -449,6 +451,10 @@ impl Peer {
 
         let region = self.get_store().get_region().clone();
         info!("{} begin to destroy", self.tag);
+        debug!(
+            "{} begin to destroy, is_persisting {}",
+            self.tag, self.is_persisting
+        );
 
         // Set Tombstone state explicitly
         let kv_wb = WriteBatch::new();
@@ -818,6 +824,7 @@ impl Peer {
 
         if self.is_persisting {
             // We have logs or region state that are persisting right now.
+            debug!("{} still persisting, skip further handling.", self.tag);
             return;
         }
 
@@ -868,6 +875,10 @@ impl Peer {
 
         if !ready.entries.is_empty() || ready.snapshot != RaftSnapshot::new() || ready.hs.is_some()
         {
+            debug!(
+                "{} needs to persist entries {:?}, snapshot: {:?}, hs: {:?}",
+                self.tag, ready.entries, ready.snapshot, ready.hs
+            );
             self.is_persisting = true;
         }
         ctx.ready_res.push(ready, invoke_ctx);
@@ -1816,13 +1827,21 @@ impl Peer {
         let to_peer_id = to_peer.get_id();
         let to_store_id = to_peer.get_store_id();
         let msg_type = msg.get_msg_type();
+        let index = msg.get_index();
+        let commit = msg.get_commit();
+        let p1_p2 = (from_peer.get_id() == 2 && to_peer_id == 1)
+            || (from_peer.get_id() == 1 && to_peer_id == 2);
+        let empty = eraftpb::Message::new();
         debug!(
-            "{} send raft msg {:?}[size: {}] from {} to {}",
+            "{} send raft msg {:?}, index {}, commit {}, [size: {}] from {} to {}, {:?}",
             self.tag,
             msg_type,
+            index,
+            commit,
             msg.compute_size(),
             from_peer.get_id(),
-            to_peer_id
+            to_peer_id,
+            if p1_p2 { &msg } else { &empty },
         );
 
         send_msg.set_from_peer(from_peer);

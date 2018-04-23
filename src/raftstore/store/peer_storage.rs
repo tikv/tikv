@@ -1093,6 +1093,12 @@ impl PeerStorage {
 
     /// Update the memory state after ready changes are flushed to disk successfully.
     pub fn post_ready(&mut self, ctx: InvokeContext) -> Option<ApplySnapResult> {
+        debug!(
+            "[region {}] {} update {:?}",
+            self.get_region_id(),
+            self.peer_id,
+            ctx.raft_state
+        );
         self.raft_state = ctx.raft_state;
         self.apply_state = ctx.apply_state;
         self.last_term = ctx.last_term;
@@ -1390,6 +1396,7 @@ impl Storage for PeerStorage {
     }
 
     fn last_index(&self) -> raft::Result<u64> {
+        debug!("{} last_index {}", self.tag, self.last_index());
         Ok(self.last_index())
     }
 

@@ -59,7 +59,7 @@ mod util;
 use std::env;
 
 #[test]
-fn _0_ci_setup() {
+fn _0_ci_setuptest_conf_change() {
     // Set up ci test fail case log.
     // The prefix "_" here is to guarantee running this case first.
     if env::var("CI").is_ok() && env::var("LOG_FILE").is_ok() {

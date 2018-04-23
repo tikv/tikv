@@ -1246,13 +1246,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         self.raft_metrics.ready.has_ready_region += persist.len() as u64;
 
-        let persist_task = PersistTask {
-            kv_wb,
-            raft_wb,
-            persist,
-            sync_log,
-        };
-        self.persist_worker.schedule(persist_task).unwrap();
+        if !persist.is_empty() {
+            let persist_task = PersistTask::persist(kv_wb, raft_wb, persist, sync_log);
+            self.persist_worker.schedule(persist_task).unwrap();
+        }
 
         if !region_proposals.is_empty() {
             self.apply_worker
@@ -1367,7 +1364,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .process_ready
             .observe(duration_to_sec(dur) as f64);
 
+        /*
         self.trans.flush();
+        */
 
         slow_log!(t, "{} on {} regions raft ready", self.tag, pending_count);
     }
@@ -1392,6 +1391,22 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     pub fn destroy_peer(&mut self, region_id: u64, peer: metapb::Peer, keep_data: bool) {
+        let mut job = None;
+        if let Some(p) = self.region_peers.get_mut(&region_id) {
+            job = p.maybe_destroy();
+        }
+        if let Some(job) = job {
+            if job.async_remove {
+                info!("{} begin to async destory peer {:?}", self.tag, peer);
+                let destory = PersistTask::destory(region_id, peer, keep_data);
+                self.persist_worker.schedule(destory).unwrap();
+            } else {
+                self.on_ready_destroy_peer(region_id, peer, keep_data);
+            }
+        }
+    }
+
+    fn on_ready_destroy_peer(&mut self, region_id: u64, peer: metapb::Peer, keep_data: bool) {
         // Can we destroy it in another thread later?
 
         // Suppose cluster removes peer a from store and then add a new
@@ -1974,22 +1989,31 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for (ready, invoke_ctx) in persist {
             let region_id = invoke_ctx.region_id;
             let peer_id = invoke_ctx.peer_id;
-            let mut is_merging;
+            let mut is_merging = false;
             let res = {
-                // TODO fix panic None, because it was removed via ConfChange::RemoveNode.
-                let peer = self.region_peers.get_mut(&region_id).unwrap();
-                if peer.peer.get_id() != peer_id {
-                    // Must advance on the same peer.
-                    info!(
-                        "{} {} skip stale raft ready result for {}",
-                        self.tag,
-                        peer.peer.get_id(),
-                        peer_id
-                    );
-                    return;
+                if let Some(peer) = self.region_peers.get_mut(&region_id) {
+                    if peer.peer.get_id() != peer_id {
+                        // Must advance on the same peer.
+                        info!(
+                            "{} {} skip stale raft ready result for {}",
+                            self.tag,
+                            peer.peer.get_id(),
+                            peer_id
+                        );
+                        return;
+                    }
+                    is_merging = peer.pending_merge.is_some();
+                    peer.post_raft_ready_append(
+                        &mut self.raft_metrics,
+                        &self.trans,
+                        ready,
+                        invoke_ctx,
+                    )
+                } else {
+                    // It was removed via ConfChange::RemoveNode.
+                    info!("{} persisted for a removed peer {}", self.tag, peer_id);
+                    None
                 }
-                is_merging = peer.pending_merge.is_some();
-                peer.post_raft_ready_append(&mut self.raft_metrics, &self.trans, ready, invoke_ctx)
             };
             if is_merging && res.is_some() {
                 // After applying a snapshot, merge is rollbacked implicitly.
@@ -1999,6 +2023,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 self.on_ready_apply_snapshot(apply_result);
             }
         }
+        self.trans.flush();
         // TODO: record append duration.
         // self.raft_metrics
         //     .append_log
@@ -3309,6 +3334,11 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::MergeFail { region_id } => self.on_merge_fail(region_id),
             Msg::ValidateSSTResult { invalid_ssts } => self.on_validate_sst_result(invalid_ssts),
             Msg::Persistence { append_res } => self.on_ready_persistence_result(append_res),
+            Msg::DestoryPeer {
+                region_id,
+                peer,
+                keep_data,
+            } => self.on_ready_destroy_peer(region_id, peer, keep_data),
         }
     }
 

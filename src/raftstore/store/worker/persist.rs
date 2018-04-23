@@ -14,6 +14,7 @@
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
+use kvproto::metapb;
 use raft::Ready;
 use rocksdb::rocksdb_options::WriteOptions;
 use rocksdb::{WriteBatch, DB};
@@ -23,21 +24,57 @@ use raftstore::store::peer_storage::InvokeContext;
 use util::transport::{NotifyError, RetryableSendCh, Sender};
 use util::worker::Runnable;
 
-pub struct Task {
-    pub kv_wb: WriteBatch,
-    pub raft_wb: WriteBatch,
-    pub persist: Vec<(Ready, InvokeContext)>,
-    pub sync_log: bool,
+pub enum Task {
+    Persist {
+        kv_wb: WriteBatch,
+        raft_wb: WriteBatch,
+        persist: Vec<(Ready, InvokeContext)>,
+        sync_log: bool,
+    },
+    Destory {
+        region_id: u64,
+        peer: metapb::Peer,
+        keep_data: bool,
+    },
+}
+
+impl Task {
+    pub fn persist(
+        kv_wb: WriteBatch,
+        raft_wb: WriteBatch,
+        persist: Vec<(Ready, InvokeContext)>,
+        sync_log: bool,
+    ) -> Task {
+        Task::Persist {
+            kv_wb,
+            raft_wb,
+            persist,
+            sync_log,
+        }
+    }
+
+    pub fn destory(region_id: u64, peer: metapb::Peer, keep_data: bool) -> Task {
+        Task::Destory {
+            region_id,
+            peer,
+            keep_data,
+        }
+    }
 }
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(
-            f,
-            "async persist, kv write batch size {}, raft write batch size {}",
-            self.kv_wb.data_size(),
-            self.raft_wb.data_size()
-        )
+        match *self {
+            Task::Persist { .. } => write!(f, "Persist"),
+            Task::Destory {
+                region_id,
+                ref peer,
+                ..
+            } => f.debug_struct("Msg::DestoryPeer")
+                .field("region_id", &region_id)
+                .field("peer", &peer)
+                .finish(),
+        }
     }
 }
 
@@ -68,42 +105,52 @@ impl<C: Sender<Msg>> Runner<C> {
         }
     }
 
-    fn handle_persist(&mut self, task: Task) {
+    fn handle_persist(
+        &mut self,
+        kv_wb: WriteBatch,
+        raft_wb: WriteBatch,
+        persist: Vec<(Ready, InvokeContext)>,
+        sync_log: bool,
+    ) {
         // apply_snapshot, peer_destroy will clear_meta, so we need write region state first.
         // otherwise, if program restart between two write, raft log will be removed,
         // but region state may not changed in disk.
         fail_point!("raft_before_save");
-        if !task.kv_wb.is_empty() {
+        if !kv_wb.is_empty() {
             // RegionLocalState, ApplyState
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
             self.kv_engine
-                .write_opt(task.kv_wb, &write_opts)
+                .write_opt(kv_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save append state result: {:?}", self.tag, e);
                 });
         }
         fail_point!("raft_between_save");
-        if !task.raft_wb.is_empty() {
+        if !raft_wb.is_empty() {
             // RaftLocalState, Raft Log Entry
             let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.sync_log || task.sync_log);
+            write_opts.set_sync(self.sync_log || sync_log);
             self.raft_engine
-                .write_opt(task.raft_wb, &write_opts)
+                .write_opt(raft_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save raft append result: {:?}", self.tag, e);
                 });
         }
         fail_point!("raft_after_save");
 
-        let mut appended = Some(Msg::Persistence {
-            append_res: task.persist,
+        self.send(Msg::Persistence {
+            append_res: persist,
         });
-        while let Some(msg) = appended.take() {
+    }
+
+    fn send(&self, msg: Msg) {
+        let mut m = Some(msg);
+        while let Some(msg) = m.take() {
             match self.store_ch.send(msg) {
                 Ok(()) => (),
                 Err(NotifyError::Full(msg)) => {
-                    appended = Some(msg);
+                    m = Some(msg);
                     error!("fail to send Msg::Persistence, notify queue is full, retry...");
                 }
                 Err(NotifyError::Closed(_)) => {
@@ -120,6 +167,22 @@ impl<C: Sender<Msg>> Runner<C> {
 
 impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
     fn run(&mut self, task: Task) {
-        self.handle_persist(task);
+        match task {
+            Task::Persist {
+                kv_wb,
+                raft_wb,
+                persist,
+                sync_log,
+            } => self.handle_persist(kv_wb, raft_wb, persist, sync_log),
+            Task::Destory {
+                region_id,
+                peer,
+                keep_data,
+            } => self.send(Msg::DestoryPeer {
+                region_id,
+                peer,
+                keep_data,
+            }),
+        }
     }
 }
