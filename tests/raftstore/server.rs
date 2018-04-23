@@ -22,7 +22,9 @@ use tempdir::TempDir;
 
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftMessage};
+
 use tikv::config::TiKvConfig;
+use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager};
@@ -125,10 +127,11 @@ impl Simulator for ServerCluster {
 
         // Create storage.
         let pd_worker = FutureWorker::new("test future worker");
-        let read_pool = ReadPool::new("readpool", &cfg.readpool.storage, || {
+        let storage_read_pool = ReadPool::new("store-read", &cfg.readpool.storage, || {
             || storage::ReadPoolContext::new(pd_worker.scheduler())
         });
-        let mut store = create_raft_storage(sim_router.clone(), &cfg.storage, read_pool).unwrap();
+        let mut store =
+            create_raft_storage(sim_router.clone(), &cfg.storage, storage_read_pool).unwrap();
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
@@ -149,6 +152,9 @@ impl Simulator for ServerCluster {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
+        let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor, || {
+            || coprocessor::ReadPoolContext::new(pd_worker.scheduler())
+        });
         let mut server = None;
         for _ in 0..100 {
             server = Some(Server::new(
@@ -156,10 +162,10 @@ impl Simulator for ServerCluster {
                 &security_mgr,
                 cfg.coprocessor.region_split_size.0 as usize,
                 store.clone(),
+                cop_read_pool.clone(),
                 sim_router.clone(),
                 resolver.clone(),
                 snap_mgr.clone(),
-                pd_worker.scheduler(),
                 Some(engines.clone()),
                 Some(import_service.clone()),
             ));

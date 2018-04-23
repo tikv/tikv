@@ -68,9 +68,9 @@ fn test_serde_custom_tikv_config() {
         grpc_stream_initial_window_size: ReadableSize(12_345),
         grpc_keepalive_time: ReadableDuration::secs(3),
         grpc_keepalive_timeout: ReadableDuration::secs(60),
-        end_point_concurrency: 12,
+        end_point_concurrency: None,
         end_point_max_tasks: 12,
-        end_point_stack_size: ReadableSize::mb(12),
+        end_point_stack_size: None,
         end_point_recursion_limit: 100,
         end_point_stream_channel_size: 16,
         end_point_batch_row_limit: 64,
@@ -88,6 +88,15 @@ fn test_serde_custom_tikv_config() {
             max_tasks_normal: 20000,
             max_tasks_low: 30000,
             stack_size: ReadableSize::mb(20),
+        },
+        coprocessor: ReadPoolInstanceConfig {
+            high_concurrency: 2,
+            normal_concurrency: 4,
+            low_concurrency: 6,
+            max_tasks_high: 20000,
+            max_tasks_normal: 30000,
+            max_tasks_low: 40000,
+            stack_size: ReadableSize::mb(12),
         },
     };
     value.metric = MetricConfig {

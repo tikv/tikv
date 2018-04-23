@@ -712,13 +712,23 @@ pub enum LogLevel {
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
     pub storage: ReadPoolInstanceConfig,
+    pub coprocessor: ReadPoolInstanceConfig,
 }
 
 impl Default for ReadPoolConfig {
     fn default() -> ReadPoolConfig {
         ReadPoolConfig {
-            storage: ReadPoolInstanceConfig::default(),
+            storage: ReadPoolInstanceConfig::default_for_storage(),
+            coprocessor: ReadPoolInstanceConfig::default_for_coprocessor(),
         }
+    }
+}
+
+impl ReadPoolConfig {
+    pub fn validate(&mut self) -> Result<(), Box<Error>> {
+        self.storage.validate()?;
+        self.coprocessor.validate()?;
+        Ok(())
     }
 }
 
@@ -765,6 +775,7 @@ impl Default for TiKvConfig {
 
 impl TiKvConfig {
     pub fn validate(&mut self) -> Result<(), Box<Error>> {
+        self.readpool.validate()?;
         self.storage.validate()?;
 
         self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
@@ -837,7 +848,35 @@ impl TiKvConfig {
             }
             self.raft_store.region_split_size = default_raft_store.region_split_size;
         }
-
+        if self.server.end_point_concurrency != None {
+            warn!(
+                "deprecated configuration, {} has been moved to {}",
+                "server.end_point_concurrency", "readpool.coprocessor.xxx-concurrency",
+            );
+            warn!(
+                "override {} with {}, {:?}",
+                "readpool.coprocessor.xxx-concurrency",
+                "server.end_point_concurrency",
+                self.server.end_point_concurrency
+            );
+            let concurrency = self.server.end_point_concurrency.unwrap();
+            self.readpool.coprocessor.high_concurrency = concurrency;
+            self.readpool.coprocessor.normal_concurrency = concurrency;
+            self.readpool.coprocessor.low_concurrency = concurrency;
+        }
+        if self.server.end_point_stack_size != None {
+            warn!(
+                "deprecated configuration, {} has been moved to {}",
+                "server.end_point_stack_size", "readpool.coprocessor.stack_size",
+            );
+            warn!(
+                "override {} with {}, {:?}",
+                "readpool.coprocessor.stack_size",
+                "server.end_point_stack_size",
+                self.server.end_point_stack_size
+            );
+            self.readpool.coprocessor.stack_size = self.server.end_point_stack_size.unwrap();
+        }
         if self.raft_store.clean_stale_peer_delay.as_secs() > 0 {
             let delay_secs = self.raft_store.clean_stale_peer_delay.as_secs()
                 + self.server.end_point_request_max_handle_duration.as_secs();
