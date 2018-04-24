@@ -46,6 +46,7 @@ use util::collections::{HashMap, HashSet};
 use util::rocksdb::{CompactedEvent, CompactionListener};
 use util::sys as util_sys;
 use util::time::{duration_to_sec, SlowTimer};
+use util::timer::Timer;
 use util::transport::SendCh;
 use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
 use util::{escape, rocksdb};
@@ -64,7 +65,7 @@ use super::worker::apply::{ChangePeer, ExecResult};
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, CleanupSSTTask,
                     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
                     RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
-                    SplitCheckTask};
+                    SplitCheckTask, STALE_PEER_CHECK_INTERVAL};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use import::SSTImporter;
 
@@ -152,8 +153,8 @@ pub struct Store<T, C: 'static> {
     // captch up by normal log replication.
     pending_cross_snap: HashMap<u64, metapb::RegionEpoch>,
     split_check_worker: Worker<SplitCheckTask>,
-    region_worker: Worker<RegionTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask>,
+    region_worker: Worker<RegionTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: FutureWorker<PdTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
@@ -551,14 +552,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         box_try!(self.split_check_worker.start(split_check_runner));
 
-        let runner = RegionRunner::new(
+        let region_runner = RegionRunner::new(
             Arc::clone(&self.kv_engine),
             Arc::clone(&self.raft_engine),
             self.snap_mgr.clone(),
             self.cfg.snap_apply_batch_size.0 as usize,
             self.cfg.use_delete_range,
+            self.cfg.clean_stale_peer_delay.0,
         );
-        box_try!(self.region_worker.start(runner));
+        let mut timer = Timer::new(1);
+        timer.add_task(Duration::from_millis(STALE_PEER_CHECK_INTERVAL), ());
+        box_try!(self.region_worker.start_with_timer(region_runner, timer));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
         box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
