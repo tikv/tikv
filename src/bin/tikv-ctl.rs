@@ -427,6 +427,33 @@ trait DebugExecutor {
 
     fn check_local_mode(&self);
 
+    fn recover_regions_mvcc(
+        &self,
+        mgr: Arc<SecurityManager>,
+        cfg: &PdConfig,
+        region_ids: Vec<u64>,
+    ) {
+        self.check_local_mode();
+        let rpc_client =
+            RpcClient::new(cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+
+        let regions = region_ids
+            .into_iter()
+            .map(|region_id| {
+                if let Some(region) = rpc_client
+                    .get_region_by_id(region_id)
+                    .wait()
+                    .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
+                {
+                    return region;
+                }
+                eprintln!("no such region in pd: {}", region_id);
+                process::exit(-1);
+            })
+            .collect();
+        self.recover_regions(regions);
+    }
+
     fn get_all_meta_regions(&self) -> Vec<u64>;
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8>;
@@ -447,6 +474,8 @@ trait DebugExecutor {
     fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>);
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
+
+    fn recover_regions(&self, regions: Vec<Region>);
 
     fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str);
 
@@ -570,6 +599,10 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only avaliable for local mode");
     }
 
+    fn recover_regions(&self, _: Vec<Region>) {
+        unimplemented!("only avaliable for local mode");
+    }
+
     fn print_bad_regions(&self) {
         unimplemented!("only avaliable for local mode");
     }
@@ -650,6 +683,18 @@ impl DebugExecutor for Debugger {
     fn set_region_tombstone(&self, regions: Vec<Region>) {
         let ret = self.set_region_tombstone(regions)
             .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e));
+        if ret.is_empty() {
+            println!("success!");
+            return;
+        }
+        for (region_id, error) in ret {
+            eprintln!("region: {}, error: {}", region_id, error);
+        }
+    }
+
+    fn recover_regions(&self, regions: Vec<Region>) {
+        let ret = self.recover_regions(regions)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::recover regions", e));
         if ret.is_empty() {
             println!("success!");
             return;
@@ -1028,6 +1073,32 @@ fn main() {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("recover-mvcc")
+                .about("recover mvcc data of regions on one node")
+                .arg(
+                    Arg::with_name("regions")
+                        .required(true)
+                        .short("r")
+                        .takes_value(true)
+                        .multiple(true)
+                        .use_delimiter(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
+                        .help("the target region"),
+                )
+                .arg(
+                    Arg::with_name("pd")
+                        .required(true)
+                        .short("p")
+                        .takes_value(true)
+                        .multiple(true)
+                        .use_delimiter(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
+                        .help("PD endpoints"),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("unsafe-recover")
                 .about("unsafe recover the cluster when majority replicas are failed")
                 .subcommand(
@@ -1225,6 +1296,20 @@ fn main() {
             panic!("invalid pd configuration: {:?}", e);
         }
         debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
+    } else if let Some(matches) = matches.subcommand_matches("recover-mvcc") {
+        let regions = matches
+            .values_of("regions")
+            .unwrap()
+            .map(|r| r.parse())
+            .collect::<Result<Vec<_>, _>>()
+            .expect("parse regions fail");
+        let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
+        let mut cfg = PdConfig::default();
+        cfg.endpoints = pd_urls;
+        if let Err(e) = cfg.validate() {
+            panic!("invalid pd configuration: {:?}", e);
+        }
+        debug_executor.recover_regions_mvcc(mgr, &cfg, regions);
     } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
         if let Some(matches) = matches.subcommand_matches("remove-fail-stores") {
             let stores = matches.values_of("stores").unwrap();
