@@ -877,6 +877,11 @@ impl TiKvConfig {
             );
             self.readpool.coprocessor.stack_size = self.server.end_point_stack_size.unwrap();
         }
+        if self.raft_store.clean_stale_peer_delay.as_secs() > 0 {
+            let delay_secs = self.raft_store.clean_stale_peer_delay.as_secs()
+                + self.server.end_point_request_max_handle_duration.as_secs();
+            self.raft_store.clean_stale_peer_delay = ReadableDuration::secs(delay_secs);
+        }
     }
 
     pub fn tune_for_import_mode(&mut self) {
