@@ -400,11 +400,11 @@ impl Drop for RequestTracker {
             };
 
             info!(
-                "[region {}] tableID {:?} handle {:?} [{}] takes {:?} [keys: {}, hit: {}, \
+                "[region {}] handle {:?} tableID {:?} [{}] takes {:?} [keys: {}, hit: {}, \
                  ranges: {} ({:?})]",
                 self.region_id,
-                table_id,
                 self.txn_start_ts,
+                table_id,
                 self.scan_tag,
                 self.total_handle_time,
                 self.exec_metrics.cf_stats.total_op_count(),
