@@ -11,19 +11,31 @@
 # log-file = ""
 
 [readpool.storage]
-# size of thread pool for high-priority read operations
-# high-concurrency = 8
-# size of thread pool for normal-priority read operations
-# normal-concurrency = 8
-# size of thread pool for low-priority read operations
-# low-concurrency = 8
-# max running high-priority read operations, reject if exceed
-# max-tasks-high = 16000
-# max running normal-priority read operations, reject if exceed
-# max-tasks-normal = 16000
-# max running low-priority read operations, reject if exceed
-# max-tasks-low = 16000
+# size of thread pool for high-priority operations
+# high-concurrency = 4
+# size of thread pool for normal-priority operations
+# normal-concurrency = 4
+# size of thread pool for low-priority operations
+# low-concurrency = 4
+# max running high-priority operations, reject if exceed
+# max-tasks-high = 8000
+# max running normal-priority operations, reject if exceed
+# max-tasks-normal = 8000
+# max running low-priority operations, reject if exceed
+# max-tasks-low = 8000
 # size of stack size for each thread pool
+# stack-size = "10MB"
+
+[readpool.coprocessor]
+# Notice: if CPU_NUM > 8, default thread pool size for coprocessors
+# will be set to CPU_NUM * 0.8.
+
+# high-concurrency = 8
+# normal-concurrency = 8
+# low-concurrency = 8
+# max-tasks-high = 16000
+# max-tasks-normal = 16000
+# max-tasks-low = 16000
 # stack-size = "10MB"
 
 [server]
@@ -45,14 +57,9 @@
 # Amount to read ahead on individual grpc streams.
 # grpc-stream-initial-window-size = "2MB"
 
-# size of thread pool for endpoint task, should less than total cpu cores.
-# end-point-concurrency = 8
-
 # max count of tasks being handled, new tasks will be rejected.
 # end-point-max-tasks = 2000
 
-# stack size of endpoint, complicated tasks may involve very deep recursion.
-# end-point-stack-size = "10MB"
 # max recursion level allowed when decoding dag expression
 # end-point-recursion-limit = 1000
 
@@ -161,6 +168,9 @@
 
 # Use delete range to drop a large number of continuous keys.
 # use-delete-range = false
+
+# delay time before deleting a stale peer
+# clean-stale-peer-delay = "5m"
 
 # Interval to cleanup import sst files.
 # cleanup-import-sst-interval = "10m"
@@ -413,6 +423,8 @@
 # use-direct-io-for-flush-and-compaction = false
 # enable-pipelined-write = true
 # allow-concurrent-memtable-write = false
+# bytes-per-sync = "0MB"
+# wal-bytes-per-sync = "0KB"
 
 [raftdb.defaultcf]
 # compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
@@ -432,7 +444,6 @@
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = 0
 # read-amp-bytes-per-bit = 0
-# wal-bytes-per-sync = 0
 # dynamic-level-bytes = false
 
 [security]
