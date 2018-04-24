@@ -11,25 +11,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod metrics;
 mod client;
+mod metrics;
 mod util;
 
+mod config;
 pub mod errors;
 pub mod pd;
-mod config;
-pub use self::errors::{Error, Result};
 pub use self::client::RpcClient;
-pub use self::util::validate_endpoints;
+pub use self::config::Config;
+pub use self::errors::{Error, Result};
 pub use self::pd::{Runner as PdRunner, Task as PdTask};
 pub use self::util::RECONNECT_INTERVAL_SEC;
-pub use self::config::Config;
+pub use self::util::validate_endpoints;
 
 use std::ops::Deref;
 
+use futures::Future;
 use kvproto::metapb;
 use kvproto::pdpb;
-use futures::Future;
 
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = Box<Future<Item = T, Error = Error> + Send>;
@@ -54,10 +54,7 @@ pub struct RegionInfo {
 
 impl RegionInfo {
     pub fn new(region: metapb::Region, leader: Option<metapb::Peer>) -> RegionInfo {
-        RegionInfo {
-            region: region,
-            leader: leader,
-        }
+        RegionInfo { region, leader }
     }
 }
 

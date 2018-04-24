@@ -11,22 +11,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::*;
-use std::time::*;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Mutex};
+use std::time::*;
+use std::*;
 
 use fail;
-use tikv::util::config::*;
-use tikv::raftstore::Result;
-use raft::eraftpb::MessageType;
 use kvproto::raft_serverpb::RaftMessage;
+use raft::eraftpb::MessageType;
+use tikv::raftstore::Result;
+use tikv::util::config::*;
 
 use raftstore::cluster::Simulator;
-use raftstore::transport_simulate::*;
 use raftstore::node::new_node_cluster;
 use raftstore::server::new_server_cluster;
+use raftstore::transport_simulate::*;
 use raftstore::util::*;
 
 #[test]
@@ -85,7 +85,7 @@ impl SnapshotNotifier {
     pub fn new(notifier: Sender<()>, ready_notify: Arc<AtomicBool>) -> SnapshotNotifier {
         SnapshotNotifier {
             notifier: Mutex::new(notifier),
-            ready_notify: ready_notify,
+            ready_notify,
             pending_notify: AtomicUsize::new(0),
         }
     }
@@ -231,7 +231,7 @@ fn test_generate_snapshot() {
 }
 
 fn must_empty_dir(path: String) {
-    for _ in 0..100 {
+    for _ in 0..200 {
         let snap_dir = fs::read_dir(&path).unwrap();
         if snap_dir.count() > 0 {
             thread::sleep(Duration::from_millis(10));

@@ -85,11 +85,11 @@ pub fn extract_json(j: &Json, path_legs: &[PathLeg]) -> Vec<Json> {
 
 #[cfg(test)]
 mod test {
-    use std::str::FromStr;
-    use super::*;
     use super::super::path_expr::{PathExpressionFlag, PATH_EXPRESSION_CONTAINS_ASTERISK,
                                   PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
                                   PATH_EXPR_ARRAY_INDEX_ASTERISK};
+    use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn test_json_extract() {
@@ -214,12 +214,9 @@ mod test {
             };
             let got = j.extract(&exprs[..]);
             assert_eq!(
-                got,
-                expected,
+                got, expected,
                 "#{} expect {:?}, but got {:?}",
-                i,
-                expected,
-                got
+                i, expected, got
             );
         }
     }

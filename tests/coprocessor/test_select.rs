@@ -11,31 +11,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use futures::sync::{mpsc as futures_mpsc, oneshot};
+use futures::{Future, Stream};
 use std::collections::{BTreeMap, HashMap};
-use std::{cmp, mem};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::i64;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
-use futures::{Future, Stream};
-use futures::sync::{mpsc as futures_mpsc, oneshot};
+use std::{cmp, mem};
 
-use tikv::coprocessor::*;
-use kvproto::kvrpcpb::Context;
-use tikv::coprocessor::codec::{datum, table, Datum};
-use tikv::coprocessor::codec::datum::DatumDecoder;
-use tikv::util::codec::number::*;
-use tikv::server::{Config, OnResponse};
-use tikv::server::readpool::{self, ReadPool};
-use tikv::storage::{self, Key, Mutation, ALL_CFS};
-use tikv::storage::engine::{self, Engine, TEMP_DIR};
-use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
 use kvproto::coprocessor::{KeyRange, Request, Response};
-use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
-use tipb::executor::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
-use tipb::schema::{self, ColumnInfo};
-use tipb::expression::{ByItem, Expr, ExprType, ScalarFuncSig};
+use kvproto::kvrpcpb::Context;
 use protobuf::{Message, RepeatedField};
+use tikv::coprocessor::codec::datum::DatumDecoder;
+use tikv::coprocessor::codec::{datum, table, Datum};
+use tikv::coprocessor::*;
+use tikv::server::readpool::{self, ReadPool};
+use tikv::server::{Config, OnResponse};
+use tikv::storage::engine::{self, Engine, TEMP_DIR};
+use tikv::storage::{self, Key, Mutation, ALL_CFS};
+use tikv::util::codec::number::*;
+use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
+use tipb::executor::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
+use tipb::expression::{ByItem, Expr, ExprType, ScalarFuncSig};
+use tipb::schema::{self, ColumnInfo};
+use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 
 use raftstore::util::MAX_LEADER_LEASE;
 use storage::sync_storage::SyncStorage;
@@ -48,13 +48,6 @@ static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
 
 const TYPE_VAR_CHAR: i32 = 1;
 const TYPE_LONG: i32 = 2;
-
-fn new_endpoint_test_config() -> Config {
-    Config {
-        end_point_concurrency: 2,
-        ..Config::default()
-    }
-}
 
 pub fn next_id() -> i64 {
     ID_GENERATOR.fetch_add(1, Ordering::Relaxed) as i64
@@ -77,8 +70,8 @@ struct DAGChunkSpliter {
 impl DAGChunkSpliter {
     fn new(chunks: Vec<Chunk>, col_cnt: usize) -> DAGChunkSpliter {
         DAGChunkSpliter {
-            chunks: chunks,
-            col_cnt: col_cnt,
+            chunks,
+            col_cnt,
             datums: Vec::with_capacity(0),
         }
     }
@@ -305,8 +298,8 @@ struct Insert<'a> {
 impl<'a> Insert<'a> {
     fn new(store: &'a mut Store, table: &'a Table) -> Insert<'a> {
         Insert {
-            store: store,
-            table: table,
+            store,
+            table,
             values: BTreeMap::new(),
         }
     }
@@ -351,10 +344,7 @@ struct Delete<'a> {
 
 impl<'a> Delete<'a> {
     fn new(store: &'a mut Store, table: &'a Table) -> Delete<'a> {
-        Delete {
-            store: store,
-            table: table,
-        }
+        Delete { store, table }
     }
 
     fn execute(self, id: i64, row: Vec<Datum>) {
@@ -480,10 +470,10 @@ impl ProductTable {
             .build();
 
         ProductTable {
-            id: id,
-            name: name,
-            count: count,
-            table: table,
+            id,
+            name,
+            count,
+            table,
         }
     }
 }
@@ -495,7 +485,7 @@ fn init_data_with_engine_and_commit(
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
 ) -> (Store, Worker<EndPointTask>) {
-    init_data_with_details(ctx, engine, tbl, vals, commit, new_endpoint_test_config())
+    init_data_with_details(ctx, engine, tbl, vals, commit, Config::default())
 }
 
 fn init_data_with_details(
@@ -520,16 +510,14 @@ fn init_data_with_details(
     if commit {
         store.commit_with_ctx(ctx);
     }
+    let pd_worker = FutureWorker::new("test-pd-worker");
+    let pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+        || ReadPoolContext::new(pd_worker.scheduler())
+    });
     let mut end_point = WorkerBuilder::new("test select worker")
         .batch_size(5)
         .create();
-    let pd_worker = FutureWorker::new("test pd worker");
-    let runner = EndPointHost::new(
-        store.get_engine(),
-        end_point.scheduler(),
-        &cfg,
-        pd_worker.scheduler(),
-    );
+    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), &cfg, pool);
     end_point.start(runner).unwrap();
 
     (store, end_point)
@@ -825,7 +813,7 @@ fn test_batch_row_limit() {
     let product = ProductTable::new();
     let (_, mut end_point) = {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
-        let mut cfg = new_endpoint_test_config();
+        let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = batch_row_limit;
         init_data_with_details(Context::new(), engine, &product, &data, true, cfg)
     };
@@ -860,7 +848,7 @@ fn test_stream_batch_row_limit() {
     let stream_row_limit = 2;
     let (_, mut end_point) = {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
-        let mut cfg = new_endpoint_test_config();
+        let mut cfg = Config::default();
         cfg.end_point_stream_batch_row_limit = stream_row_limit;
         init_data_with_details(Context::new(), engine, &product, &data, true, cfg)
     };
@@ -934,6 +922,45 @@ fn test_select_after_lease() {
             datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()]).unwrap();
         let result_encoded = datum::encode_value(&row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
+    }
+
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
+fn test_scan_detail() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let mut cfg = Config::default();
+        cfg.end_point_batch_row_limit = 50;
+        init_data_with_details(Context::new(), engine, &product, &data, true, cfg)
+    };
+
+    let reqs = vec![
+        DAGSelect::from(&product.table).build(),
+        DAGSelect::from_index(&product.table, product.name).build(),
+    ];
+
+    for mut req in reqs {
+        req.mut_context().set_scan_detail(true);
+        req.mut_context().set_handle_time(true);
+
+        let resp = handle_request(&end_point, req);
+        assert!(resp.get_exec_details().has_handle_time());
+
+        let scan_detail = resp.get_exec_details().get_scan_detail();
+        // Values would occur in data cf are inlined in write cf.
+        assert_eq!(scan_detail.get_write().get_total(), 5);
+        assert_eq!(scan_detail.get_write().get_processed(), 4);
+        assert_eq!(scan_detail.get_lock().get_total(), 1);
     }
 
     end_point.stop().unwrap().join().unwrap();

@@ -13,21 +13,21 @@
 
 use std::mem;
 
-use rand::{thread_rng, Rng, ThreadRng};
-use protobuf::{Message, RepeatedField};
 use kvproto::coprocessor::{KeyRange, Response};
+use protobuf::{Message, RepeatedField};
+use rand::{thread_rng, Rng, ThreadRng};
 use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
-use tipb::schema::ColumnInfo;
 use tipb::executor::TableScan;
+use tipb::schema::ColumnInfo;
 
+use super::cmsketch::CMSketch;
+use super::fmsketch::FMSketch;
+use super::histogram::Histogram;
+use coprocessor::codec::datum;
 use coprocessor::dag::executor::{Executor, ExecutorMetrics, IndexScanExecutor, TableScanExecutor};
 use coprocessor::endpoint::ReqContext;
-use coprocessor::codec::datum;
 use coprocessor::{Error, Result};
 use storage::{Snapshot, SnapshotStore};
-use super::fmsketch::FMSketch;
-use super::cmsketch::CMSketch;
-use super::histogram::Histogram;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext {
@@ -50,9 +50,9 @@ impl AnalyzeContext {
             req_ctx.fill_cache,
         );
         AnalyzeContext {
-            req: req,
+            req,
             snap: Some(snap),
-            ranges: ranges,
+            ranges,
         }
     }
 
@@ -177,7 +177,7 @@ impl SampleBuilder {
         Ok(SampleBuilder {
             data: table_scanner,
             cols: meta.take_columns().to_vec(),
-            col_len: col_len,
+            col_len,
             max_bucket_size: req.get_bucket_size() as usize,
             max_fm_sketch_size: req.get_sketch_size() as usize,
             max_sample_size: req.get_sample_size() as usize,
@@ -218,7 +218,7 @@ impl SampleBuilder {
     }
 }
 
-/// `SampleCollector` will collect Samples and calculate the count and ndv of an attribute.
+/// `SampleCollector` will collect Samples and calculate the count, ndv and total size of an attribute.
 #[derive(Clone)]
 struct SampleCollector {
     samples: Vec<Vec<u8>>,
@@ -228,6 +228,7 @@ struct SampleCollector {
     fm_sketch: FMSketch,
     cm_sketch: Option<CMSketch>,
     rng: ThreadRng,
+    total_size: u64,
 }
 
 impl SampleCollector {
@@ -245,6 +246,7 @@ impl SampleCollector {
             fm_sketch: FMSketch::new(max_fm_sketch_size),
             cm_sketch: CMSketch::new(cm_sketch_depth, cm_sketch_width),
             rng: thread_rng(),
+            total_size: 0,
         }
     }
 
@@ -257,6 +259,7 @@ impl SampleCollector {
         if let Some(c) = self.cm_sketch {
             s.set_cm_sketch(c.into_proto())
         }
+        s.set_total_size(self.total_size as i64);
         s
     }
 
@@ -270,6 +273,7 @@ impl SampleCollector {
         if let Some(c) = self.cm_sketch.as_mut() {
             c.insert(&data)
         }
+        self.total_size += data.len() as u64;
         if self.samples.len() < self.max_sample_size {
             self.samples.push(data);
             return;
@@ -283,9 +287,9 @@ impl SampleCollector {
 
 #[cfg(test)]
 mod test {
+    use super::*;
     use coprocessor::codec::datum;
     use coprocessor::codec::datum::Datum;
-    use super::*;
 
     #[test]
     fn test_sample_collector() {
@@ -307,6 +311,7 @@ mod test {
         assert_eq!(sample.samples.len(), max_sample_size);
         assert_eq!(sample.null_count, 1);
         assert_eq!(sample.count, 3);
-        assert_eq!(sample.cm_sketch.unwrap().count(), 3)
+        assert_eq!(sample.cm_sketch.unwrap().count(), 3);
+        assert_eq!(sample.total_size, 6)
     }
 }

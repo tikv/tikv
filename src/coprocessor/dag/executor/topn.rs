@@ -11,17 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::usize;
-use std::sync::Arc;
 use std::cell::RefCell;
+use std::sync::Arc;
+use std::usize;
 use std::vec::IntoIter;
 
 use tipb::executor::TopN;
-use tipb::schema::ColumnInfo;
 use tipb::expression::ByItem;
+use tipb::schema::ColumnInfo;
 
-use coprocessor::codec::datum::Datum;
 use coprocessor::Result;
+use coprocessor::codec::datum::Datum;
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 
 use super::topn_heap::TopNHeap;
@@ -40,7 +40,7 @@ impl OrderBy {
         }
         Ok(OrderBy {
             items: Arc::new(order_by),
-            exprs: exprs,
+            exprs,
         })
     }
 
@@ -69,25 +69,25 @@ impl TopNExecutor {
     pub fn new(
         mut meta: TopN,
         eval_cfg: Arc<EvalConfig>,
-        columns_info: Arc<Vec<ColumnInfo>>,
+        cols: Arc<Vec<ColumnInfo>>,
         src: Box<Executor + Send>,
     ) -> Result<TopNExecutor> {
         let order_by = meta.take_order_by().into_vec();
 
-        let mut visitor = ExprColumnRefVisitor::new(columns_info.len());
+        let mut visitor = ExprColumnRefVisitor::new(cols.len());
         for by_item in &order_by {
             visitor.visit(by_item.get_expr())?;
         }
         let mut eval_ctx = EvalContext::new(Arc::clone(&eval_cfg));
         let order_by = OrderBy::new(&mut eval_ctx, order_by)?;
         Ok(TopNExecutor {
-            order_by: order_by,
-            cols: columns_info,
+            order_by,
+            cols,
             related_cols_offset: visitor.column_offsets(),
             iter: None,
             eval_ctx: Some(eval_ctx),
             eval_warnings: None,
-            src: src,
+            src,
             limit: meta.get_limit() as usize,
             first_collect: true,
         })
@@ -174,8 +174,8 @@ impl Executor for TopNExecutor {
 
 #[cfg(test)]
 pub mod test {
-    use std::sync::Arc;
     use std::cell::RefCell;
+    use std::sync::Arc;
 
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
@@ -183,16 +183,16 @@ pub mod test {
     use tipb::expression::{Expr, ExprType};
 
     use coprocessor::codec::Datum;
-    use coprocessor::codec::table::{self, RowColsDict};
     use coprocessor::codec::mysql::types;
-    use util::collections::HashMap;
+    use coprocessor::codec::table::{self, RowColsDict};
     use util::codec::number::NumberEncoder;
+    use util::collections::HashMap;
 
     use storage::SnapshotStore;
 
-    use super::*;
-    use super::super::table_scan::TableScanExecutor;
     use super::super::scanner::test::{get_range, new_col_info, TestStore};
+    use super::super::table_scan::TableScanExecutor;
+    use super::*;
 
     fn new_order_by(offset: i64, desc: bool) -> ByItem {
         let mut item = ByItem::new();

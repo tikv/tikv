@@ -9,6 +9,15 @@ max-tasks-normal = 20000
 max-tasks-low = 30000
 stack-size = "20MB"
 
+[readpool.coprocessor]
+high-concurrency = 2
+normal-concurrency = 4
+low-concurrency = 6
+max-tasks-high = 20000
+max-tasks-normal = 30000
+max-tasks-low = 40000
+stack-size = "12MB"
+
 [server]
 addr = "example.com:443"
 advertise-addr = "example.com:443"
@@ -20,9 +29,7 @@ grpc-raft-conn-num = 123
 grpc-stream-initial-window-size = 12345
 grpc-keepalive-time = "3s"
 grpc-keepalive-timeout = "1m"
-end-point-concurrency = 12
 end-point-max-tasks = 12
-end-point-stack-size = "12MB"
 end-point-recursion-limit = 100
 end-point-stream-channel-size = 16
 end-point-batch-row-limit = 64
@@ -71,6 +78,7 @@ raft-log-gc-size-limit = "1KB"
 split-region-check-tick-interval = "12s"
 region-split-check-diff = "6MB"
 region-compact-check-interval = "12s"
+clean-stale-peer-delay = "13s"
 region-compact-check-step = 1234
 region-compact-min-tombstones = 999
 pd-heartbeat-tick-interval = "12m"
