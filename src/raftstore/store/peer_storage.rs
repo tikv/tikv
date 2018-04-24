@@ -1683,6 +1683,7 @@ mod test {
             mgr,
             0,
             true,
+            Duration::from_secs(0),
         );
         worker.start(runner).unwrap();
         let snap = s.snapshot();
@@ -1972,6 +1973,7 @@ mod test {
             mgr.clone(),
             0,
             true,
+            Duration::from_secs(0),
         );
         worker.start(runner).unwrap();
         assert!(s1.snapshot().is_err());
