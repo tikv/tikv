@@ -81,6 +81,18 @@ pub fn check_table_ranges(ranges: &[KeyRange]) -> Result<()> {
     Ok(())
 }
 
+pub fn decode_table_id(key: &[u8]) -> Result<i64> {
+    if !key.starts_with(TABLE_PREFIX) {
+        return Err(invalid_type!(
+            "record key expected, but got {}",
+            escape(key)
+        ));
+    }
+
+    let mut remaining = &key[TABLE_PREFIX.len()..];
+    remaining.decode_i64()
+}
+
 pub fn flatten(data: Datum) -> Result<Datum> {
     match data {
         Datum::Dur(d) => Ok(Datum::I64(d.to_nanos())),
@@ -621,5 +633,19 @@ mod test {
         range.set_start(small_key);
         range.set_end(b"xx".to_vec());
         assert!(check_table_ranges(&[range]).is_err());
+    }
+
+    #[test]
+    fn test_decode_table_id() {
+        let tests = vec![0, 2, 3, 1024, i64::MAX];
+        for &tid in &tests {
+            let mut buf = vec![];
+            buf.encode_i64(1).unwrap();
+            let k = encode_row_key(tid, &buf);
+            assert_eq!(tid, decode_table_id(&k).unwrap());
+            let k = encode_index_seek_key(tid, 1, &k);
+            assert_eq!(tid, decode_table_id(&k).unwrap());
+            assert!(decode_table_id(b"xxx").is_err());
+        }
     }
 }
