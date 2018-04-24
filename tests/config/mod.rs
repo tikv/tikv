@@ -121,6 +121,7 @@ fn test_serde_custom_tikv_config() {
         split_region_check_tick_interval: ReadableDuration::secs(12),
         region_split_check_diff: ReadableSize::mb(6),
         region_compact_check_interval: ReadableDuration::secs(12),
+        clean_stale_peer_delay: ReadableDuration::secs(13),
         region_compact_check_step: 1_234,
         region_compact_min_tombstones: 999,
         pd_heartbeat_tick_interval: ReadableDuration::minutes(12),
