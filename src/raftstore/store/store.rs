@@ -2602,6 +2602,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.store_stat.engine_last_total_bytes_written =
             self.store_stat.engine_total_bytes_written;
         self.store_stat.engine_last_total_keys_written = self.store_stat.engine_total_keys_written;
+
         stats.set_is_busy(self.is_busy);
         self.is_busy = false;
 
