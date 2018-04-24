@@ -171,9 +171,9 @@ pub mod test {
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::table;
     use coprocessor::util;
+    use storage::engine::{self, Engine, Modify, TEMP_DIR};
     use storage::mvcc::MvccTxn;
-    use storage::{engine, make_key, Engine, Mutation, Options, Snapshot, SnapshotStore, ALL_CFS,
-                  TEMP_DIR};
+    use storage::{make_key, Mutation, Options, Snapshot, SnapshotStore, ALL_CFS};
     use util::codec::number::NumberEncoder;
     use util::collections::HashMap;
 
@@ -322,7 +322,7 @@ pub mod test {
         }
 
         #[inline]
-        fn write_modifies(&mut self, txn: Vec<engine::Modify>) {
+        fn write_modifies(&mut self, txn: Vec<Modify>) {
             self.engine.write(&self.ctx, txn).unwrap();
             self.snapshot = self.engine.snapshot(&self.ctx).unwrap()
         }
