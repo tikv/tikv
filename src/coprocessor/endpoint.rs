@@ -400,7 +400,7 @@ impl Drop for RequestTracker {
             };
 
             info!(
-                "[region {}] handle {:?} tableID {:?} [{}] takes {:?} [keys: {}, hit: {}, \
+                "[region {}] handle {:?} table id {:?} [{}] takes {:?} [keys: {}, hit: {}, \
                  ranges: {} ({:?})]",
                 self.region_id,
                 self.txn_start_ts,
