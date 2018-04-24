@@ -40,6 +40,7 @@ use util::time::{duration_to_sec, Instant};
 use util::worker::{Runnable, Scheduler};
 
 use super::checksum::ChecksumContext;
+use super::codec::table;
 use super::dag::DAGContext;
 use super::dag::executor::ExecutorMetrics;
 use super::local_metrics::BasicLocalMetrics;
@@ -390,11 +391,18 @@ impl Drop for RequestTracker {
         }
 
         if self.total_handle_time > SLOW_QUERY_LOWER_BOUND {
+            let table_id = if let Some(ref range) = self.first_range {
+                table::decode_table_id(range.get_start()).unwrap_or_default()
+            } else {
+                0
+            };
+
             info!(
-                "[region {}] handle {:?} [{}] takes {:?} [keys: {}, hit: {}, \
+                "[region {}] handle {:?} table id {:?} [{}] takes {:?} [keys: {}, hit: {}, \
                  ranges: {} ({:?})]",
                 self.region_id,
                 self.txn_start_ts,
+                table_id,
                 self.scan_tag,
                 self.total_handle_time,
                 self.exec_metrics.cf_stats.total_op_count(),
