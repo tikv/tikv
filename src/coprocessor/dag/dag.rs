@@ -13,17 +13,18 @@
 
 use std::sync::Arc;
 
-use tipb::schema::ColumnInfo;
-use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message as PbMsg, RepeatedField};
+use tipb::schema::ColumnInfo;
+use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 
-use coprocessor::*;
-use coprocessor::util;
-use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
+use coprocessor::codec::mysql;
 use coprocessor::dag::expr::EvalConfig;
 use coprocessor::endpoint::ReqContext;
+use coprocessor::util;
+use coprocessor::*;
+
 use storage::{Snapshot, SnapshotStore};
 
 use super::executor::{build_exec, Executor, ExecutorMetrics, Row};
@@ -59,11 +60,12 @@ impl DAGContext {
             store,
             ranges,
             Arc::new(eval_cfg),
+            req.get_collect_range_counts(),
         )?;
         Ok(DAGContext {
             columns: dag_executor.columns,
             has_aggr: dag_executor.has_aggr,
-            req_ctx: req_ctx,
+            req_ctx,
             exec: dag_executor.exec,
             output_offsets: req.take_output_offsets(),
         })
@@ -73,8 +75,8 @@ impl DAGContext {
         let mut record_cnt = 0;
         let mut chunks = Vec::new();
         loop {
-            match self.exec.next()? {
-                Some(row) => {
+            match self.exec.next() {
+                Ok(Some(row)) => {
                     self.req_ctx.check_if_outdated()?;
                     if chunks.is_empty() || record_cnt >= batch_row_limit {
                         let chunk = Chunk::new();
@@ -90,7 +92,7 @@ impl DAGContext {
                         chunk.mut_rows_data().extend_from_slice(&value);
                     }
                 }
-                None => {
+                Ok(None) => {
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
@@ -104,6 +106,15 @@ impl DAGContext {
                     resp.set_data(data);
                     return Ok(resp);
                 }
+                Err(Error::Eval(err)) => {
+                    let mut resp = Response::new();
+                    let mut sel_resp = SelectResponse::new();
+                    sel_resp.set_error(err);
+                    let data = box_try!(sel_resp.write_to_bytes());
+                    resp.set_data(data);
+                    return Ok(resp);
+                }
+                Err(e) => return Err(e),
             }
         }
     }
@@ -116,8 +127,8 @@ impl DAGContext {
         let mut chunk = Chunk::new();
         self.exec.start_scan();
         while record_cnt < batch_row_limit {
-            match self.exec.next()? {
-                Some(row) => {
+            match self.exec.next() {
+                Ok(Some(row)) => {
                     record_cnt += 1;
                     if self.has_aggr {
                         chunk.mut_rows_data().extend_from_slice(&row.data.value);
@@ -126,10 +137,19 @@ impl DAGContext {
                         chunk.mut_rows_data().extend_from_slice(&value);
                     }
                 }
-                None => {
+                Ok(None) => {
                     finished = true;
                     break;
                 }
+                Err(Error::Eval(err)) => {
+                    let mut resp = Response::new();
+                    let mut sel_resp = StreamResponse::new();
+                    sel_resp.set_error(err);
+                    let data = box_try!(sel_resp.write_to_bytes());
+                    resp.set_data(data);
+                    return Ok((Some(resp), true));
+                }
+                Err(e) => return Err(e),
             }
         }
         if record_cnt > 0 {

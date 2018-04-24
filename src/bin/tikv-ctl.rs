@@ -27,37 +27,37 @@ extern crate rustc_serialize;
 extern crate tikv;
 extern crate toml;
 
-use std::fs::File;
-use std::io::Read;
-use std::{process, str, u64};
-use std::iter::FromIterator;
+use rustc_serialize::hex::{FromHex, ToHex};
 use std::cmp::Ordering;
 use std::error::Error;
+use std::fs::File;
+use std::io::Read;
+use std::iter::FromIterator;
 use std::sync::Arc;
-use rustc_serialize::hex::{FromHex, ToHex};
+use std::{process, str, u64};
 
 use clap::{App, Arg, ArgMatches, SubCommand};
-use protobuf::Message;
 use futures::{future, stream, Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
+use protobuf::Message;
 use protobuf::RepeatedField;
 
+use kvproto::debugpb::DB as DBType;
+use kvproto::debugpb::*;
+use kvproto::debugpb_grpc::DebugClient;
+use kvproto::kvrpcpb::MvccInfo;
+use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
-use kvproto::metapb::Region;
 use raft::eraftpb::{ConfChange, Entry, EntryType};
-use kvproto::kvrpcpb::MvccInfo;
-use kvproto::debugpb::*;
-use kvproto::debugpb::DB as DBType;
-use kvproto::debugpb_grpc::DebugClient;
-use tikv::util::{escape, unescape};
-use tikv::util::security::{SecurityConfig, SecurityManager};
-use tikv::util::rocksdb as rocksdb_util;
+use tikv::config::TiKvConfig;
+use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::raftstore::store::{keys, Engines};
 use tikv::server::debug::{Debugger, RegionInfo};
 use tikv::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
-use tikv::config::TiKvConfig;
+use tikv::util::rocksdb as rocksdb_util;
+use tikv::util::security::{SecurityConfig, SecurityManager};
+use tikv::util::{escape, unescape};
 
 const METRICS_PROMETHEUS: &str = "prometheus";
 const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
@@ -227,14 +227,13 @@ trait DebugExecutor {
                 println!("key: {}", escape(&key));
                 if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
                     let lock_info = mvcc.get_lock();
-                    if start_ts.map_or(true, |ts| lock_info.get_lock_version() == ts) {
-                        // FIXME: "lock type" is lost in kvproto.
+                    if start_ts.map_or(true, |ts| lock_info.get_start_ts() == ts) {
                         println!("\tlock cf value: {:?}", lock_info);
                     }
                 }
                 if cfs.contains(&CF_DEFAULT) {
                     for value_info in mvcc.get_values() {
-                        if commit_ts.map_or(true, |ts| value_info.get_ts() == ts) {
+                        if commit_ts.map_or(true, |ts| value_info.get_start_ts() == ts) {
                             println!("\tdefault cf value: {:?}", value_info);
                         }
                     }
@@ -244,7 +243,6 @@ trait DebugExecutor {
                         if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts)
                             && commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
                         {
-                            // FIXME: short_value is lost in kvproto.
                             println!("\t write cf value: {:?}", write_info);
                         }
                     }
@@ -370,6 +368,14 @@ trait DebugExecutor {
     fn compact(&self, db: DBType, cf: &str, from: Option<Vec<u8>>, to: Option<Vec<u8>>) {
         let from = from.unwrap_or_default();
         let to = to.unwrap_or_default();
+        self.do_compact(db, cf, from, to);
+    }
+
+    fn compact_region(&self, db: DBType, cf: &str, region_id: u64) {
+        let region_local = self.get_region_info(region_id).region_local_state.unwrap();
+        let r = region_local.get_region();
+        let from = keys::data_key(r.get_start_key());
+        let to = keys::data_end_key(r.get_end_key());
         self.do_compact(db, cf, from, to);
     }
 
@@ -964,6 +970,13 @@ fn main() {
                         .long("to")
                         .takes_value(true)
                         .help("set the end raw key, in escaped form"),
+                )
+                .arg(
+                    Arg::with_name("region")
+                    .short("r")
+                    .long("region")
+                    .takes_value(true)
+                    .help("set the region id"),
                 ),
         )
         .subcommand(
@@ -1156,7 +1169,11 @@ fn main() {
         let cf = matches.value_of("cf").unwrap();
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
-        debug_executor.compact(db_type, cf, from_key, to_key);
+        if let Some(region) = matches.value_of("region") {
+            debug_executor.compact_region(db_type, cf, region.parse().unwrap());
+        } else {
+            debug_executor.compact(db_type, cf, from_key, to_key);
+        }
     } else if let Some(matches) = matches.subcommand_matches("tombstone") {
         let regions = matches
             .values_of("regions")

@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tipb::schema::ColumnInfo;
 use kvproto::coprocessor as coppb;
+use tipb::schema::ColumnInfo;
 
-use super::codec::mysql;
 use super::codec::datum::Datum;
+use super::codec::mysql;
 
 pub fn prefix_next(key: &[u8]) -> Vec<u8> {
     let mut nk = key.to_vec();

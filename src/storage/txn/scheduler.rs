@@ -32,32 +32,32 @@
 //! to the scheduler.
 
 use std::fmt::{self, Debug, Display, Formatter};
-use std::time::Duration;
-use std::thread;
 use std::hash::{Hash, Hasher};
-use std::u64;
 use std::mem;
+use std::thread;
+use std::time::Duration;
+use std::u64;
 
-use prometheus::HistogramTimer;
-use prometheus::local::{LocalCounter, LocalHistogramVec};
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
+use prometheus::HistogramTimer;
+use prometheus::local::{LocalHistogramVec, LocalIntCounter};
 
-use storage::{Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
-              Statistics, StatisticsSummary, StorageCb};
-use storage::mvcc::{Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, WriteType,
-                    MAX_TXN_WRITE_SIZE};
-use storage::{Key, KvPair, MvccInfo, Value, CMD_TAG_GC};
 use storage::engine::{self, Callback as EngineCallback, CbContext, Error as EngineError, Modify,
                       Result as EngineResult};
+use storage::mvcc::{Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write,
+                    MAX_TXN_WRITE_SIZE};
+use storage::{Key, KvPair, MvccInfo, Value, CMD_TAG_GC};
+use storage::{Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
+              Statistics, StatisticsSummary, StorageCb};
+use util::collections::HashMap;
 use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
 use util::time::SlowTimer;
-use util::collections::HashMap;
 use util::worker::{self, Runnable, ScheduleError};
 
-use super::Result;
-use super::Error;
-use super::latch::{Latches, Lock};
 use super::super::metrics::*;
+use super::Error;
+use super::Result;
+use super::latch::{Latches, Lock};
 
 pub const CMD_BATCH_SIZE: usize = 256;
 // TODO: make it configurable.
@@ -237,14 +237,14 @@ impl RunningCtx {
         let region_id = cmd.get_context().get_region_id();
         let write_bytes = cmd.write_bytes();
         RunningCtx {
-            cid: cid,
+            cid,
             cmd: Some(cmd),
-            write_bytes: write_bytes,
-            lock: lock,
+            write_bytes,
+            lock,
             callback: Some(cb),
-            tag: tag,
-            ts: ts,
-            region_id: region_id,
+            tag,
+            ts,
+            region_id,
             latch_timer: Some(
                 SCHED_LATCH_HISTOGRAM_VEC
                     .with_label_values(&[tag])
@@ -282,10 +282,10 @@ fn make_engine_cb(
 ) -> EngineCallback<()> {
     Box::new(move |(cb_ctx, result)| {
         match scheduler.schedule(Msg::WriteFinished {
-            cid: cid,
-            pr: pr,
-            cb_ctx: cb_ctx,
-            result: result,
+            cid,
+            pr,
+            cb_ctx,
+            result,
         }) {
             Ok(_) => {
                 KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
@@ -366,7 +366,7 @@ pub struct Scheduler {
 }
 
 // Make clippy happy.
-type MultipleReturnValue = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, bool, Value)>);
+type MultipleReturnValue = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, Value)>);
 
 fn find_mvcc_infos_by_key(
     reader: &mut MvccReader,
@@ -378,26 +378,16 @@ fn find_mvcc_infos_by_key(
     let lock = reader.load_lock(key)?;
     loop {
         let opt = reader.seek_write(key, ts)?;
-        let short_value: Option<Value>;
         match opt {
-            Some((commit_ts, mut write)) => {
+            Some((commit_ts, write)) => {
                 ts = commit_ts - 1;
-                let write_type = write.write_type;
-                short_value = write.short_value.take();
                 writes.push((commit_ts, write));
-                if write_type != WriteType::Put {
-                    continue;
-                }
             }
             None => break,
         };
-        let write = &writes[writes.len() - 1].1;
-        if let Some(v) = short_value {
-            values.push((write.start_ts, true, v));
-        }
     }
     for (ts, v) in reader.scan_values_in_default(key)? {
-        values.push((ts, false, v));
+        values.push((ts, v));
     }
     Ok((lock, writes, values))
 }
@@ -412,16 +402,16 @@ impl Scheduler {
         sched_pending_write_threshold: usize,
     ) -> Scheduler {
         Scheduler {
-            engine: engine,
+            engine,
             cmd_ctxs: Default::default(),
             grouped_cmds: Some(HashMap::with_capacity_and_hasher(
                 CMD_BATCH_SIZE,
                 Default::default(),
             )),
-            scheduler: scheduler,
+            scheduler,
             id_alloc: 0,
             latches: Latches::new(concurrency),
-            sched_pending_write_threshold: sched_pending_write_threshold,
+            sched_pending_write_threshold,
             worker_pool: ThreadPoolBuilder::with_default_factory(thd_name!("sched-worker-pool"))
                 .thread_count(worker_pool_size)
                 .build(),
@@ -462,9 +452,9 @@ fn process_read(
             let res = match find_mvcc_infos_by_key(&mut reader, key, u64::MAX) {
                 Ok((lock, writes, values)) => ProcessResult::MvccKey {
                     mvcc: MvccInfo {
-                        lock: lock,
-                        writes: writes,
-                        values: values,
+                        lock,
+                        writes,
+                        values,
                     },
                 },
                 Err(e) => ProcessResult::Failed { err: e.into() },
@@ -489,9 +479,9 @@ fn process_read(
                             mvcc: Some((
                                 key,
                                 MvccInfo {
-                                    lock: lock,
-                                    writes: writes,
-                                    values: values,
+                                    lock,
+                                    writes,
+                                    values,
                                 },
                             )),
                         },
@@ -539,7 +529,7 @@ fn process_read(
                 });
             statistics.add(reader.get_statistics());
             match res {
-                Ok(locks) => ProcessResult::Locks { locks: locks },
+                Ok(locks) => ProcessResult::Locks { locks },
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
@@ -577,13 +567,13 @@ fn process_read(
                             ctx: ctx.clone(),
                             txn_status: mem::replace(txn_status, Default::default()),
                             scan_key: next_scan_key,
-                            key_locks: key_locks,
+                            key_locks,
                         }))
                     }
                 });
             statistics.add(reader.get_statistics());
             match res {
-                Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
+                Ok(Some(cmd)) => ProcessResult::NextCommand { cmd },
                 Ok(None) => ProcessResult::Res,
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
@@ -633,17 +623,17 @@ fn process_read(
                         } else {
                             Ok(Some(Command::Gc {
                                 ctx: ctx.clone(),
-                                safe_point: safe_point,
-                                ratio_threshold: ratio_threshold,
+                                safe_point,
+                                ratio_threshold,
                                 scan_key: next_start,
-                                keys: keys,
+                                keys,
                             }))
                         }
                     })
             };
             statistics.add(reader.get_statistics());
             match res {
-                Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
+                Ok(Some(cmd)) => ProcessResult::NextCommand { cmd },
                 Ok(None) => ProcessResult::Res,
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
@@ -655,7 +645,7 @@ fn process_read(
         _ => panic!("unsupported read command"),
     };
 
-    if let Err(e) = scheduler.schedule(Msg::ReadFinished { cid: cid, pr: pr }) {
+    if let Err(e) = scheduler.schedule(Msg::ReadFinished { cid, pr }) {
         // Todo: if this happens we need to clean up command's context
         panic!("schedule ReadFinished msg failed, cid={}, err={:?}", cid, e);
     }
@@ -673,7 +663,7 @@ fn process_write(
     fail_point!("txn_before_process_write");
     let mut statistics = Statistics::default();
     if let Err(e) = process_write_impl(cid, cmd, scheduler.clone(), snapshot, &mut statistics) {
-        if let Err(err) = scheduler.schedule(Msg::WritePrepareFailed { cid: cid, err: e }) {
+        if let Err(err) = scheduler.schedule(Msg::WritePrepareFailed { cid, err: e }) {
             // Todo: if this happens, lock will hold for ever
             panic!(
                 "schedule WritePrepareFailed msg failed. cid={}, err={:?}",
@@ -740,7 +730,7 @@ fn process_write_impl(
             if commit_ts <= lock_ts {
                 return Err(Error::InvalidTxnTso {
                     start_ts: lock_ts,
-                    commit_ts: commit_ts,
+                    commit_ts,
                 });
             }
             let mut txn = MvccTxn::new(
@@ -824,7 +814,7 @@ fn process_write_impl(
                     if current_lock.ts >= commit_ts {
                         return Err(Error::InvalidTxnTso {
                             start_ts: current_lock.ts,
-                            commit_ts: commit_ts,
+                            commit_ts,
                         });
                     }
                     txn.commit(current_key, commit_ts)?;
@@ -886,8 +876,8 @@ fn process_write_impl(
                 ProcessResult::NextCommand {
                     cmd: Command::Gc {
                         ctx: ctx.clone(),
-                        safe_point: safe_point,
-                        ratio_threshold: ratio_threshold,
+                        safe_point,
+                        ratio_threshold,
                         scan_key: scan_key.take(),
                         keys: vec![],
                     },
@@ -899,11 +889,11 @@ fn process_write_impl(
     };
 
     box_try!(scheduler.schedule(Msg::WritePrepareFinished {
-        cid: cid,
-        cmd: cmd,
-        pr: pr,
+        cid,
+        cmd,
+        pr,
         to_be_write: modifies,
-        rows: rows,
+        rows,
     }));
 
     Ok(())
@@ -914,8 +904,8 @@ struct SchedContext {
     processing_read_duration: LocalHistogramVec,
     processing_write_duration: LocalHistogramVec,
     command_keyread_duration: LocalHistogramVec,
-    command_gc_skipped_counter: LocalCounter,
-    command_gc_empty_range_counter: LocalCounter,
+    command_gc_skipped_counter: LocalIntCounter,
+    command_gc_empty_range_counter: LocalIntCounter,
 }
 
 impl Default for SchedContext {
@@ -945,8 +935,7 @@ impl ThreadContext for SchedContext {
                 for (tag, count) in details {
                     KV_COMMAND_SCAN_DETAILS
                         .with_label_values(&[cmd, cf, tag])
-                        .inc_by(count as f64)
-                        .unwrap();
+                        .inc_by(count as i64);
                 }
             }
         }
@@ -976,8 +965,8 @@ impl Scheduler {
         if self.cmd_ctxs.insert(cid, ctx).is_some() {
             panic!("command cid={} shouldn't exist", cid);
         }
-        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as f64);
-        SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as f64);
+        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as i64);
+        SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as i64);
     }
 
     fn remove_ctx(&mut self, cid: u64) -> RunningCtx {
@@ -989,8 +978,8 @@ impl Scheduler {
         if ctx.tag == CMD_TAG_GC {
             self.has_gc_command = false;
         }
-        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as f64);
-        SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as f64);
+        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as i64);
+        SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as i64);
         ctx
     }
 
@@ -1158,8 +1147,8 @@ impl Scheduler {
         let scheduler = self.scheduler.clone();
         let cb = box move |(cb_ctx, snapshot)| match scheduler.schedule(Msg::SnapshotFinished {
             cids: cids1,
-            cb_ctx: cb_ctx,
-            snapshot: snapshot,
+            cb_ctx,
+            snapshot,
         }) {
             Ok(_) => {}
             e @ Err(ScheduleError::Stopped(_)) => info!("scheduler worker stopped, err {:?}", e),
@@ -1507,10 +1496,10 @@ pub fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
 mod tests {
     use super::*;
     use kvproto::kvrpcpb::Context;
-    use util::collections::HashMap;
+    use storage::mvcc;
     use storage::txn::latch::*;
     use storage::{make_key, Command, Mutation, Options};
-    use storage::mvcc;
+    use util::collections::HashMap;
 
     #[test]
     fn test_command_latches() {

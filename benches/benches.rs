@@ -31,9 +31,9 @@ extern crate tikv;
 extern crate time;
 
 mod channel;
-mod writebatch;
-mod serialization;
 mod coprocessor;
+mod serialization;
+mod writebatch;
 
 #[allow(dead_code)]
 #[path = "../tests/util/mod.rs"]
