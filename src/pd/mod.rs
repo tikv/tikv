@@ -157,7 +157,7 @@ pub trait PdClient: Send + Sync {
     fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse>;
 
     // Send store statistics regularly.
-    fn store_heartbeat(&self, stats: pdpb::StoreStats, last_report_ts: u64) -> PdFuture<()>;
+    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<()>;
 
     // Report pd the split region.
     fn report_split(&self, left: metapb::Region, right: metapb::Region) -> PdFuture<()>;

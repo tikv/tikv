@@ -313,9 +313,9 @@ impl<T: PdClient> Runner<T> {
         stats.set_keys_read(
             self.store_stat.engine_total_keys_read - self.store_stat.engine_last_total_keys_read,
         );
+        stats.set_start_timestamp(self.store_stat.last_report_ts);
         self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
         self.store_stat.engine_last_total_keys_read = self.store_stat.engine_total_keys_read;
-        let last_report_ts = self.store_stat.last_report_ts;
         self.store_stat.last_report_ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -334,7 +334,7 @@ impl<T: PdClient> Runner<T> {
             .set(available as i64);
 
         let f = self.pd_client
-            .store_heartbeat(stats, last_report_ts)
+            .store_heartbeat(stats)
             .map_err(|e| {
                 error!("store heartbeat failed {:?}", e);
             });
