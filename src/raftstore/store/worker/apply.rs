@@ -747,7 +747,7 @@ impl ApplyDelegate {
             // clear dirty values.
             ctx.wb_mut().rollback_to_save_point().unwrap();
             match e {
-                Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
+                Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
                 _ => error!("{} execute raft command err: {:?}", self.tag, e),
             }
             (cmd_resp::new_error(e), None)
