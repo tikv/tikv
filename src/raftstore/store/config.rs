@@ -56,6 +56,8 @@ pub struct Config {
     pub region_split_check_diff: ReadableSize,
     /// Interval (ms) to check whether start compaction for a region.
     pub region_compact_check_interval: ReadableDuration,
+    // delay time before deleting a stale peer
+    pub clean_stale_peer_delay: ReadableDuration,
     /// Number of regions for each time checking.
     pub region_compact_check_step: u64,
     /// Minimum number of tombstones to trigger manual compaction.
@@ -137,6 +139,7 @@ impl Default for Config {
             raft_log_gc_size_limit: split_size * 3 / 4,
             split_region_check_tick_interval: ReadableDuration::secs(10),
             region_split_check_diff: split_size / 16,
+            clean_stale_peer_delay: ReadableDuration::minutes(5),
             region_compact_check_interval: ReadableDuration::minutes(5),
             region_compact_check_step: 100,
             region_compact_min_tombstones: 10000,
