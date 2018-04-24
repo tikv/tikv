@@ -911,8 +911,8 @@ fn main() {
                         .help(raw_key_hint)
                 )
                 .arg(
-                    Arg::with_name("cf")
-                        .short("c")
+                    Arg::with_name("show-cf")
+                        .long("show-cf")
                         .takes_value(true)
                         .multiple(true)
                         .use_delimiter(true)
@@ -1191,7 +1191,7 @@ fn main() {
         debug_executor.dump_mvccs_infos(from, to, limit, cfs, start_ts, commit_ts);
     } else if let Some(matches) = matches.subcommand_matches("mvcc") {
         let from = unescape(matches.value_of("key").unwrap());
-        let cfs = Vec::from_iter(matches.values_of("cf").unwrap());
+        let cfs = Vec::from_iter(matches.values_of("show-cf").unwrap());
         let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
         let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
         debug_executor.dump_mvccs_infos(from, vec![], 0, cfs, start_ts, commit_ts);
