@@ -748,7 +748,7 @@ impl PeerStorage {
     // Append the given entries to the raft log using previous last index or self.last_index.
     // Return the new last index for later update. After we commit in engine, we can set last_index
     // to the return one.
-    pub fn append<T>(
+    fn append<T>(
         &mut self,
         invoke_ctx: &mut InvokeContext,
         entries: &[Entry],
@@ -1094,17 +1094,24 @@ impl PeerStorage {
     /// Update the memory state after ready changes are flushed to disk successfully.
     pub fn post_ready(&mut self, ctx: InvokeContext) -> Option<ApplySnapResult> {
         debug!(
-            "[region {}] {} update {:?}",
+            "[region {}] {} update raft_state: {:?}, apply_state: {:?}, region: {:?}",
             self.get_region_id(),
             self.peer_id,
-            ctx.raft_state
+            ctx.raft_state,
+            ctx.apply_state,
+            ctx.snap_region,
         );
         self.raft_state = ctx.raft_state;
+        /* TODO: we shall update apply_state only for applying snapshot.
         self.apply_state = ctx.apply_state;
+        */
         self.last_term = ctx.last_term;
         // If we apply snapshot ok, we should update some infos like applied index too.
         let snap_region = match ctx.snap_region {
-            Some(r) => r,
+            Some(r) => {
+                self.apply_state = ctx.apply_state;
+                r
+            }
             None => return None,
         };
         // cleanup data before scheduling apply task
