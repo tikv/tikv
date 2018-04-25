@@ -518,7 +518,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, false)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -573,7 +573,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, false)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -643,7 +643,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, false)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -875,7 +875,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, true)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -927,7 +927,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, true)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -985,9 +985,7 @@ impl Storage {
             ],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
-        RAWKV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_put"])
-            .inc();
+        KV_COMMAND_COUNTER_VEC.with_label_values(&["raw_put"]).inc();
         Ok(())
     }
 
@@ -1013,7 +1011,7 @@ impl Storage {
             .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
                 callback(res.map_err(Error::from))
             })?;
-        RAWKV_COMMAND_COUNTER_VEC
+        KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_batch_put"])
             .inc();
         Ok(())
@@ -1037,7 +1035,7 @@ impl Storage {
             ],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
-        RAWKV_COMMAND_COUNTER_VEC
+        KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_delete"])
             .inc();
         Ok(())
@@ -1070,7 +1068,7 @@ impl Storage {
             ],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
-        RAWKV_COMMAND_COUNTER_VEC
+        KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_delete_range"])
             .inc();
         Ok(())
@@ -1097,7 +1095,7 @@ impl Storage {
             .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
                 callback(res.map_err(Error::from))
             })?;
-        RAWKV_COMMAND_COUNTER_VEC
+        KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_batch_delete"])
             .inc();
         Ok(())
@@ -1151,7 +1149,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, true)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -1244,7 +1242,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, true)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
