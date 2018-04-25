@@ -779,7 +779,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
-        let region_id = msg.get_region_id();
         if !self.validate_raft_msg(&msg) {
             return Ok(());
         }
@@ -790,6 +789,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
+        let region_id = msg.get_region_id();
         if msg.has_merge_target() {
             if self.need_gc_merge(&msg)? {
                 self.on_merge_fail(region_id);
