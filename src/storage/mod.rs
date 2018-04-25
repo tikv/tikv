@@ -11,41 +11,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::boxed::FnBox;
-use std::sync::{Arc, Mutex};
-use std::fmt::{self, Debug, Display, Formatter};
-use std::error;
-use std::io::Error as IoError;
-use std::u64;
-use std::cmp;
-use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
-use kvproto::errorpb;
-use util::collections::HashMap;
-use futures::{future, Future};
-use server::readpool::{self, ReadPool};
 use self::metrics::*;
 use self::mvcc::Lock;
 use self::txn::CMD_BATCH_SIZE;
-use util;
-use util::worker::{self, Builder, Worker};
+use futures::{future, Future};
+use kvproto::errorpb;
+use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 use raftstore::store::engine::IterOption;
+use server::readpool::{self, ReadPool};
+use std::boxed::FnBox;
+use std::cmp;
+use std::error;
+use std::fmt::{self, Debug, Display, Formatter};
+use std::io::Error as IoError;
+use std::sync::{Arc, Mutex};
+use std::u64;
+use util;
+use util::collections::HashMap;
+use util::worker::{self, Builder, Worker};
 
-pub mod engine;
-pub mod mvcc;
-pub mod txn;
 pub mod config;
-pub mod types;
+pub mod engine;
 mod metrics;
+pub mod mvcc;
 mod readpool_context;
+pub mod txn;
+pub mod types;
 
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
+pub use self::engine::raftkv::RaftKv;
 pub use self::engine::{new_local_engine, CFStatistics, Cursor, Engine, Error as EngineError,
                        FlowStatistics, Iterator, Modify, ScanMode, Snapshot, Statistics,
                        StatisticsSummary, TEMP_DIR};
-pub use self::engine::raftkv::RaftKv;
+pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
 pub use self::types::{make_key, Key, KvPair, MvccInfo, Value};
-pub use self::readpool_context::Context as ReadPoolContext;
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;
@@ -394,9 +394,9 @@ pub struct Options {
 impl Options {
     pub fn new(lock_ttl: u64, skip_constraint_check: bool, key_only: bool) -> Options {
         Options {
-            lock_ttl: lock_ttl,
-            skip_constraint_check: skip_constraint_check,
-            key_only: key_only,
+            lock_ttl,
+            skip_constraint_check,
+            key_only,
         }
     }
 }
@@ -433,9 +433,9 @@ impl Storage {
         let worker_scheduler = worker.lock().unwrap().scheduler();
         Ok(Storage {
             read_pool,
-            engine: engine,
-            worker: worker,
-            worker_scheduler: worker_scheduler,
+            engine,
+            worker,
+            worker_scheduler,
             gc_ratio_threshold: config.gc_ratio_threshold,
             max_key_size: config.max_key_size,
         })
@@ -484,10 +484,7 @@ impl Storage {
 
     fn schedule(&self, cmd: Command, cb: StorageCb) -> Result<()> {
         fail_point!("storage_drop_message", |_| Ok(()));
-        box_try!(
-            self.worker_scheduler
-                .schedule(Msg::RawCmd { cmd: cmd, cb: cb })
-        );
+        box_try!(self.worker_scheduler.schedule(Msg::RawCmd { cmd, cb }));
         Ok(())
     }
 
@@ -521,7 +518,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, false)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -576,7 +573,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, false)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -646,7 +643,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, false)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -690,10 +687,7 @@ impl Storage {
     }
 
     pub fn async_pause(&self, ctx: Context, duration: u64, callback: Callback<()>) -> Result<()> {
-        let cmd = Command::Pause {
-            ctx: ctx,
-            duration: duration,
-        };
+        let cmd = Command::Pause { ctx, duration };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         Ok(())
     }
@@ -715,11 +709,11 @@ impl Storage {
             }
         }
         let cmd = Command::Prewrite {
-            ctx: ctx,
-            mutations: mutations,
-            primary: primary,
-            start_ts: start_ts,
-            options: options,
+            ctx,
+            mutations,
+            primary,
+            start_ts,
+            options,
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Booleans(callback))?;
@@ -736,10 +730,10 @@ impl Storage {
         callback: Callback<()>,
     ) -> Result<()> {
         let cmd = Command::Commit {
-            ctx: ctx,
-            keys: keys,
-            lock_ts: lock_ts,
-            commit_ts: commit_ts,
+            ctx,
+            keys,
+            lock_ts,
+            commit_ts,
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
@@ -786,11 +780,7 @@ impl Storage {
         start_ts: u64,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command::Cleanup {
-            ctx: ctx,
-            key: key,
-            start_ts: start_ts,
-        };
+        let cmd = Command::Cleanup { ctx, key, start_ts };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
@@ -805,9 +795,9 @@ impl Storage {
         callback: Callback<()>,
     ) -> Result<()> {
         let cmd = Command::Rollback {
-            ctx: ctx,
-            keys: keys,
-            start_ts: start_ts,
+            ctx,
+            keys,
+            start_ts,
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
@@ -824,14 +814,14 @@ impl Storage {
         callback: Callback<Vec<LockInfo>>,
     ) -> Result<()> {
         let cmd = Command::ScanLock {
-            ctx: ctx,
-            max_ts: max_ts,
+            ctx,
+            max_ts,
             start_key: if start_key.is_empty() {
                 None
             } else {
                 Some(Key::from_raw(&start_key))
             },
-            limit: limit,
+            limit,
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Locks(callback))?;
@@ -846,8 +836,8 @@ impl Storage {
         callback: Callback<()>,
     ) -> Result<()> {
         let cmd = Command::ResolveLock {
-            ctx: ctx,
-            txn_status: txn_status,
+            ctx,
+            txn_status,
             scan_key: None,
             key_locks: vec![],
         };
@@ -859,8 +849,8 @@ impl Storage {
 
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
         let cmd = Command::Gc {
-            ctx: ctx,
-            safe_point: safe_point,
+            ctx,
+            safe_point,
             ratio_threshold: self.gc_ratio_threshold,
             scan_key: None,
             keys: vec![],
@@ -874,6 +864,7 @@ impl Storage {
     pub fn async_raw_get(
         &self,
         ctx: Context,
+        cf: String,
         key: Vec<u8>,
     ) -> impl Future<Item = Option<Vec<u8>>, Error = Error> {
         const CMD: &str = "raw_get";
@@ -884,18 +875,18 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, true)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-
+                    let cf = Storage::rawkv_cf(cf)?;
                     // no scan_count for this kind of op.
 
                     let key_len = key.len();
-                    snapshot.get(&Key::from_encoded(key))
+                    snapshot.get_cf(cf, &Key::from_encoded(key))
                         // map storage::engine::Error -> storage::Error
                         .map_err(Error::from)
                         .map(|r| {
@@ -923,6 +914,7 @@ impl Storage {
     pub fn async_raw_batch_get(
         &self,
         ctx: Context,
+        cf: String,
         keys: Vec<Vec<u8>>,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_batch_get";
@@ -935,18 +927,18 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, true)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-
+                    let cf = Storage::rawkv_cf(cf)?;
                     // no scan_count for this kind of op.
                     let mut stats = Statistics::default();
                     let result: Vec<Result<KvPair>> = keys.iter()
-                        .map(|k| (k, snapshot.get(k)))
+                        .map(|k| (k, snapshot.get_cf(cf, k)))
                         .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
                         .into_iter()
                         .map(|(k, v)| match v {
@@ -977,6 +969,7 @@ impl Storage {
     pub fn async_raw_put(
         &self,
         ctx: Context,
+        cf: String,
         key: Vec<u8>,
         value: Vec<u8>,
         callback: Callback<()>,
@@ -987,21 +980,23 @@ impl Storage {
         }
         self.engine.async_write(
             &ctx,
-            vec![Modify::Put(CF_DEFAULT, Key::from_encoded(key), value)],
+            vec![
+                Modify::Put(Storage::rawkv_cf(cf)?, Key::from_encoded(key), value),
+            ],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
-        RAWKV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_put"])
-            .inc();
+        KV_COMMAND_COUNTER_VEC.with_label_values(&["raw_put"]).inc();
         Ok(())
     }
 
     pub fn async_raw_batch_put(
         &self,
         ctx: Context,
+        cf: String,
         pairs: Vec<KvPair>,
         callback: Callback<()>,
     ) -> Result<()> {
+        let cf = Storage::rawkv_cf(cf)?;
         for &(ref key, _) in &pairs {
             if key.len() > self.max_key_size {
                 callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
@@ -1010,13 +1005,13 @@ impl Storage {
         }
         let requests = pairs
             .into_iter()
-            .map(|(k, v)| Modify::Put(CF_DEFAULT, Key::from_encoded(k), v))
+            .map(|(k, v)| Modify::Put(cf, Key::from_encoded(k), v))
             .collect();
         self.engine
             .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
                 callback(res.map_err(Error::from))
             })?;
-        RAWKV_COMMAND_COUNTER_VEC
+        KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_batch_put"])
             .inc();
         Ok(())
@@ -1025,6 +1020,7 @@ impl Storage {
     pub fn async_raw_delete(
         &self,
         ctx: Context,
+        cf: String,
         key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
@@ -1034,10 +1030,12 @@ impl Storage {
         }
         self.engine.async_write(
             &ctx,
-            vec![Modify::Delete(CF_DEFAULT, Key::from_encoded(key))],
+            vec![
+                Modify::Delete(Storage::rawkv_cf(cf)?, Key::from_encoded(key)),
+            ],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
-        RAWKV_COMMAND_COUNTER_VEC
+        KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_delete"])
             .inc();
         Ok(())
@@ -1046,6 +1044,7 @@ impl Storage {
     pub fn async_raw_delete_range(
         &self,
         ctx: Context,
+        cf: String,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
         callback: Callback<()>,
@@ -1062,14 +1061,14 @@ impl Storage {
             &ctx,
             vec![
                 Modify::DeleteRange(
-                    CF_DEFAULT,
+                    Storage::rawkv_cf(cf)?,
                     Key::from_encoded(start_key),
                     Key::from_encoded(end_key),
                 ),
             ],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
-        RAWKV_COMMAND_COUNTER_VEC
+        KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_delete_range"])
             .inc();
         Ok(())
@@ -1078,9 +1077,11 @@ impl Storage {
     pub fn async_raw_batch_delete(
         &self,
         ctx: Context,
+        cf: String,
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
     ) -> Result<()> {
+        let cf = Storage::rawkv_cf(cf)?;
         for key in &keys {
             if key.len() > self.max_key_size {
                 callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
@@ -1088,13 +1089,13 @@ impl Storage {
             }
         }
         let requests = keys.into_iter()
-            .map(|k| Modify::Delete(CF_DEFAULT, Key::from_encoded(k)))
+            .map(|k| Modify::Delete(cf, Key::from_encoded(k)))
             .collect();
         self.engine
             .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
                 callback(res.map_err(Error::from))
             })?;
-        RAWKV_COMMAND_COUNTER_VEC
+        KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_batch_delete"])
             .inc();
         Ok(())
@@ -1102,17 +1103,18 @@ impl Storage {
 
     fn raw_scan(
         snapshot: &Snapshot,
+        cf: String,
         start_key: &Key,
         end_key: Option<Key>,
         limit: usize,
         stats: &mut Statistics,
         key_only: bool,
-    ) -> engine::Result<Vec<Result<KvPair>>> {
+    ) -> Result<Vec<Result<KvPair>>> {
         let mut option = IterOption::default();
         if let Some(end) = end_key {
             option.set_upper_bound(end.encoded().clone());
         }
-        let mut cursor = snapshot.iter(option, ScanMode::Forward)?;
+        let mut cursor = snapshot.iter_cf(Storage::rawkv_cf(cf)?, option, ScanMode::Forward)?;
         if !cursor.seek(start_key, &mut stats.data)? {
             return Ok(vec![]);
         }
@@ -1134,6 +1136,7 @@ impl Storage {
     pub fn async_raw_scan(
         &self,
         ctx: Context,
+        cf: String,
         key: Vec<u8>,
         limit: usize,
         key_only: bool,
@@ -1146,7 +1149,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, true)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -1157,6 +1160,7 @@ impl Storage {
                     let mut statistics = Statistics::default();
                     let result = Storage::raw_scan(
                         snapshot.as_ref(),
+                        cf,
                         &Key::from_encoded(key),
                         None,
                         limit,
@@ -1195,6 +1199,18 @@ impl Storage {
             .flatten()
     }
 
+    fn rawkv_cf(cf: String) -> Result<CfName> {
+        if cf.is_empty() {
+            return Ok(CF_DEFAULT);
+        }
+        for c in DATA_CFS {
+            if &cf == c {
+                return Ok(c);
+            }
+        }
+        Err(Error::InvalidCf(cf))
+    }
+
     fn check_key_ranges(ranges: &[KeyRange]) -> bool {
         let ranges_len = ranges.len();
         for i in 0..ranges_len {
@@ -1213,6 +1229,7 @@ impl Storage {
     pub fn async_raw_batch_scan(
         &self,
         ctx: Context,
+        cf: String,
         mut ranges: Vec<KeyRange>,
         each_limit: usize,
         key_only: bool,
@@ -1225,7 +1242,7 @@ impl Storage {
             let mut _timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority, true)
+                thread_ctx.start_command_duration_timer(CMD, priority)
             };
 
             Self::async_snapshot(engine, &ctx)
@@ -1253,6 +1270,7 @@ impl Storage {
                         };
                         let pairs = Storage::raw_scan(
                             snapshot.as_ref(),
+                            cf.clone(),
                             &start_key,
                             end_key,
                             each_limit,
@@ -1296,7 +1314,7 @@ impl Storage {
         key: Key,
         callback: Callback<MvccInfo>,
     ) -> Result<()> {
-        let cmd = Command::MvccByKey { ctx: ctx, key: key };
+        let cmd = Command::MvccByKey { ctx, key };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::MvccInfoByKey(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
@@ -1309,10 +1327,7 @@ impl Storage {
         start_ts: u64,
         callback: Callback<Option<(Key, MvccInfo)>>,
     ) -> Result<()> {
-        let cmd = Command::MvccByStartTs {
-            ctx: ctx,
-            start_ts: start_ts,
-        };
+        let cmd = Command::MvccByStartTs { ctx, start_ts };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::MvccInfoByStartTs(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
@@ -1358,6 +1373,10 @@ quick_error! {
             description("max key size exceeded")
             display("max key size exceeded, size: {}, limit: {}", size, limit)
         }
+        InvalidCf (cf_name: String) {
+            description("invalid cf name")
+            display("invalid cf name: {}", cf_name)
+        }
     }
 }
 
@@ -1388,8 +1407,8 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc::{channel, Sender};
     use kvproto::kvrpcpb::Context;
+    use std::sync::mpsc::{channel, Sender};
     use util::config::ReadableSize;
     use util::worker::FutureWorker;
 
@@ -2063,6 +2082,7 @@ mod tests {
             storage
                 .async_raw_put(
                     Context::new(),
+                    "".to_string(),
                     kv.0.to_vec(),
                     kv.1.to_vec(),
                     expect_ok_callback(tx.clone(), 0),
@@ -2072,13 +2092,16 @@ mod tests {
 
         expect_value(
             b"004".to_vec(),
-            storage.async_raw_get(Context::new(), b"d".to_vec()).wait(),
+            storage
+                .async_raw_get(Context::new(), "".to_string(), b"d".to_vec())
+                .wait(),
         );
 
         // Delete ["d", "e")
         storage
             .async_raw_delete_range(
                 Context::new(),
+                "".to_string(),
                 b"d".to_vec(),
                 b"e".to_vec(),
                 expect_ok_callback(tx.clone(), 1),
@@ -2089,18 +2112,27 @@ mod tests {
         // Assert key "d" has gone
         expect_value(
             b"003".to_vec(),
-            storage.async_raw_get(Context::new(), b"c".to_vec()).wait(),
+            storage
+                .async_raw_get(Context::new(), "".to_string(), b"c".to_vec())
+                .wait(),
         );
-        expect_none(storage.async_raw_get(Context::new(), b"d".to_vec()).wait());
+        expect_none(
+            storage
+                .async_raw_get(Context::new(), "".to_string(), b"d".to_vec())
+                .wait(),
+        );
         expect_value(
             b"005".to_vec(),
-            storage.async_raw_get(Context::new(), b"e".to_vec()).wait(),
+            storage
+                .async_raw_get(Context::new(), "".to_string(), b"e".to_vec())
+                .wait(),
         );
 
         // Delete ["aa", "ab")
         storage
             .async_raw_delete_range(
                 Context::new(),
+                "".to_string(),
                 b"aa".to_vec(),
                 b"ab".to_vec(),
                 expect_ok_callback(tx.clone(), 2),
@@ -2111,17 +2143,22 @@ mod tests {
         // Assert nothing happened
         expect_value(
             b"001".to_vec(),
-            storage.async_raw_get(Context::new(), b"a".to_vec()).wait(),
+            storage
+                .async_raw_get(Context::new(), "".to_string(), b"a".to_vec())
+                .wait(),
         );
         expect_value(
             b"002".to_vec(),
-            storage.async_raw_get(Context::new(), b"b".to_vec()).wait(),
+            storage
+                .async_raw_get(Context::new(), "".to_string(), b"b".to_vec())
+                .wait(),
         );
 
         // Delete all
         storage
             .async_raw_delete_range(
                 Context::new(),
+                "".to_string(),
                 b"a".to_vec(),
                 b"z".to_vec(),
                 expect_ok_callback(tx, 3),
@@ -2131,7 +2168,11 @@ mod tests {
 
         // Assert now no key remains
         for kv in &test_data {
-            expect_none(storage.async_raw_get(Context::new(), kv.0.to_vec()).wait());
+            expect_none(
+                storage
+                    .async_raw_get(Context::new(), "".to_string(), kv.0.to_vec())
+                    .wait(),
+            );
         }
 
         rx.recv().unwrap();
@@ -2157,6 +2198,7 @@ mod tests {
         storage
             .async_raw_batch_put(
                 Context::new(),
+                "".to_string(),
                 test_data.clone(),
                 expect_ok_callback(tx.clone(), 0),
             )
@@ -2165,7 +2207,12 @@ mod tests {
 
         // Verify pairs one by one
         for (key, val) in test_data {
-            expect_value(val, storage.async_raw_get(Context::new(), key).wait());
+            expect_value(
+                val,
+                storage
+                    .async_raw_get(Context::new(), "".to_string(), key)
+                    .wait(),
+            );
         }
     }
 
@@ -2190,6 +2237,7 @@ mod tests {
             storage
                 .async_raw_put(
                     Context::new(),
+                    "".to_string(),
                     key.clone(),
                     value.clone(),
                     expect_ok_callback(tx.clone(), 0),
@@ -2203,7 +2251,9 @@ mod tests {
         let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
         expect_multi_values(
             results,
-            storage.async_raw_batch_get(Context::new(), keys).wait(),
+            storage
+                .async_raw_batch_get(Context::new(), "".to_string(), keys)
+                .wait(),
         );
     }
 
@@ -2227,6 +2277,7 @@ mod tests {
         storage
             .async_raw_batch_put(
                 Context::new(),
+                "".to_string(),
                 test_data.clone(),
                 expect_ok_callback(tx.clone(), 0),
             )
@@ -2241,13 +2292,16 @@ mod tests {
             .collect();
         expect_multi_values(
             results,
-            storage.async_raw_batch_get(Context::new(), keys).wait(),
+            storage
+                .async_raw_batch_get(Context::new(), "".to_string(), keys)
+                .wait(),
         );
 
         // Delete ["b", "d"]
         storage
             .async_raw_batch_delete(
                 Context::new(),
+                "".to_string(),
                 vec![b"b".to_vec(), b"d".to_vec()],
                 expect_ok_callback(tx.clone(), 1),
             )
@@ -2257,23 +2311,38 @@ mod tests {
         // Assert "b" and "d" are gone
         expect_value(
             b"aa".to_vec(),
-            storage.async_raw_get(Context::new(), b"a".to_vec()).wait(),
+            storage
+                .async_raw_get(Context::new(), "".to_string(), b"a".to_vec())
+                .wait(),
         );
-        expect_none(storage.async_raw_get(Context::new(), b"b".to_vec()).wait());
+        expect_none(
+            storage
+                .async_raw_get(Context::new(), "".to_string(), b"b".to_vec())
+                .wait(),
+        );
         expect_value(
             b"cc".to_vec(),
-            storage.async_raw_get(Context::new(), b"c".to_vec()).wait(),
+            storage
+                .async_raw_get(Context::new(), "".to_string(), b"c".to_vec())
+                .wait(),
         );
-        expect_none(storage.async_raw_get(Context::new(), b"d".to_vec()).wait());
+        expect_none(
+            storage
+                .async_raw_get(Context::new(), "".to_string(), b"d".to_vec())
+                .wait(),
+        );
         expect_value(
             b"ee".to_vec(),
-            storage.async_raw_get(Context::new(), b"e".to_vec()).wait(),
+            storage
+                .async_raw_get(Context::new(), "".to_string(), b"e".to_vec())
+                .wait(),
         );
 
         // Delete ["a", "c", "e"]
         storage
             .async_raw_batch_delete(
                 Context::new(),
+                "".to_string(),
                 vec![b"a".to_vec(), b"c".to_vec(), b"e".to_vec()],
                 expect_ok_callback(tx.clone(), 2),
             )
@@ -2282,7 +2351,11 @@ mod tests {
 
         // Assert no key remains
         for (k, _) in test_data {
-            expect_none(storage.async_raw_get(Context::new(), k).wait());
+            expect_none(
+                storage
+                    .async_raw_get(Context::new(), "".to_string(), k)
+                    .wait(),
+            );
         }
     }
 
@@ -2321,6 +2394,7 @@ mod tests {
         storage
             .async_raw_batch_put(
                 Context::new(),
+                "".to_string(),
                 test_data.clone(),
                 expect_ok_callback(tx.clone(), 0),
             )
@@ -2335,14 +2409,14 @@ mod tests {
         expect_multi_values(
             results.clone(),
             storage
-                .async_raw_scan(Context::new(), vec![], 20, true)
+                .async_raw_scan(Context::new(), "".to_string(), vec![], 20, true)
                 .wait(),
         );
         results = results.split_off(10);
         expect_multi_values(
             results,
             storage
-                .async_raw_scan(Context::new(), b"c2".to_vec(), 20, true)
+                .async_raw_scan(Context::new(), "".to_string(), b"c2".to_vec(), 20, true)
                 .wait(),
         );
         let mut results: Vec<Option<KvPair>> =
@@ -2350,14 +2424,14 @@ mod tests {
         expect_multi_values(
             results.clone(),
             storage
-                .async_raw_scan(Context::new(), vec![], 20, false)
+                .async_raw_scan(Context::new(), "".to_string(), vec![], 20, false)
                 .wait(),
         );
         results = results.split_off(10);
         expect_multi_values(
             results,
             storage
-                .async_raw_scan(Context::new(), b"c2".to_vec(), 20, false)
+                .async_raw_scan(Context::new(), "".to_string(), b"c2".to_vec(), 20, false)
                 .wait(),
         );
     }
@@ -2397,6 +2471,7 @@ mod tests {
         storage
             .async_raw_batch_put(
                 Context::new(),
+                "".to_string(),
                 test_data.clone(),
                 expect_ok_callback(tx.clone(), 0),
             )
@@ -2408,7 +2483,9 @@ mod tests {
         let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
         expect_multi_values(
             results,
-            storage.async_raw_batch_get(Context::new(), keys).wait(),
+            storage
+                .async_raw_batch_get(Context::new(), "".to_string(), keys)
+                .wait(),
         );
 
         let results = vec![
@@ -2437,7 +2514,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), ranges.clone(), 5, false)
+                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 5, false)
                 .wait(),
         );
 
@@ -2459,7 +2536,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), ranges.clone(), 5, true)
+                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 5, true)
                 .wait(),
         );
 
@@ -2477,7 +2554,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), ranges.clone(), 3, false)
+                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 3, false)
                 .wait(),
         );
 
@@ -2495,7 +2572,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), ranges, 3, true)
+                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 3, true)
                 .wait(),
         );
 
@@ -2525,7 +2602,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), ranges.clone(), 5, false)
+                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 5, false)
                 .wait(),
         );
 
@@ -2543,7 +2620,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), ranges, 5, true)
+                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 5, true)
                 .wait(),
         );
     }

@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{str, i64, u64};
 use std::borrow::Cow;
+use std::{str, i64, u64};
 
-use coprocessor::codec::{mysql, Datum, Error as CError};
-use coprocessor::codec::mysql::{charset, types, Decimal, Duration, Json, Res, Time};
-use coprocessor::codec::mysql::decimal::RoundMode;
 use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
+use coprocessor::codec::mysql::decimal::RoundMode;
+use coprocessor::codec::mysql::{charset, types, Decimal, Duration, Json, Res, Time};
+use coprocessor::codec::{mysql, Datum, Error as CError};
 
 use super::{Error, EvalContext, FnCall, Result};
 
@@ -707,11 +707,11 @@ mod test {
 
     use chrono::{FixedOffset, Utc};
 
-    use coprocessor::codec::{convert, Datum};
     use coprocessor::codec::mysql::{self, charset, types, Decimal, Duration, Json, Time};
+    use coprocessor::codec::{convert, Datum};
+    use coprocessor::dag::expr::test::{col_expr as base_col_expr, fncall_expr};
     use coprocessor::dag::expr::{self, err, EvalConfig, EvalContext, Expression,
                                  FLAG_IGNORE_TRUNCATE};
-    use coprocessor::dag::expr::test::{col_expr as base_col_expr, fncall_expr};
 
     pub fn col_expr(col_id: i64, tp: i32) -> Expr {
         let mut expr = base_col_expr(col_id);

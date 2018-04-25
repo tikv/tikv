@@ -11,21 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Duration;
+use std::iter::*;
 use std::sync::Arc;
 use std::thread;
-use std::iter::*;
+use std::time::Duration;
 
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use tikv::pd::PdClient;
+use tikv::raftstore::store::Peekable;
 use tikv::raftstore::store::keys;
 use tikv::storage::CF_RAFT;
-use tikv::raftstore::store::Peekable;
 
 use super::node::new_node_cluster;
 use super::util;
-use raftstore::util::*;
 use raftstore::transport_simulate::*;
+use raftstore::util::*;
 
 /// Test if merge is working as expected in a general condition.
 #[test]

@@ -54,7 +54,7 @@ impl Lock {
     /// Creates a lock.
     pub fn new(required_slots: Vec<usize>) -> Lock {
         Lock {
-            required_slots: required_slots,
+            required_slots,
             owned_count: 0,
         }
     }

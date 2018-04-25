@@ -11,18 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::collections::hash_map::Entry;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::sync::{Arc, RwLock};
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use tokio_timer::Timer;
-use futures::{Future, Stream};
 use futures::future::{err, ok};
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use futures::{Future, Stream};
+use tokio_timer::Timer;
 
+use super::util::*;
 use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
 use raft::eraftpb;
@@ -30,7 +31,6 @@ use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::util::{escape, Either, HandyRwLock};
-use super::util::*;
 
 struct Store {
     store: metapb::Store,
@@ -234,7 +234,7 @@ impl Cluster {
         meta.set_max_peer_count(5);
 
         Cluster {
-            meta: meta,
+            meta,
             stores: HashMap::new(),
             regions: BTreeMap::new(),
             region_id_keys: HashMap::new(),
@@ -535,10 +535,7 @@ impl Cluster {
             operator = self.handle_heartbeat_max_peer_count(&region, &leader);
         }
 
-        if operator.is_none() {
-            return None;
-        }
-        let operator = operator.unwrap();
+        let operator = operator?;
         debug!(
             "[region {}] schedule {:?} to {:?}, region: {:?}",
             region_id, operator, leader, region
@@ -641,7 +638,7 @@ pub struct TestPdClient {
 impl TestPdClient {
     pub fn new(cluster_id: u64) -> TestPdClient {
         TestPdClient {
-            cluster_id: cluster_id,
+            cluster_id,
             cluster: Arc::new(RwLock::new(Cluster::new(cluster_id))),
             timer: Timer::default(),
         }
@@ -735,6 +732,17 @@ impl TestPdClient {
         }
         let region = self.get_region_by_id(region_id).wait().unwrap();
         panic!("region {:?} has peer {:?}", region, peer);
+    }
+
+    pub fn must_none_pending_peer(&self, peer: metapb::Peer) {
+        for _ in 1..500 {
+            sleep_ms(10);
+            if self.cluster.rl().pending_peers.contains_key(&peer.get_id()) {
+                continue;
+            }
+            return;
+        }
+        panic!("peer {:?} shouldn't be pending any more", peer);
     }
 
     pub fn add_region(&self, region: &metapb::Region) {

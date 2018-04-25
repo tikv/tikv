@@ -81,10 +81,10 @@ impl CompactedEvent {
             output_level: info.output_level(),
             total_input_bytes: info.total_input_bytes(),
             total_output_bytes: info.total_output_bytes(),
-            start_key: start_key,
-            end_key: end_key,
-            input_props: input_props,
-            output_props: output_props,
+            start_key,
+            end_key,
+            input_props,
+            output_props,
         }
     }
 }
@@ -101,10 +101,7 @@ impl CompactionListener {
         ch: Box<Fn(CompactedEvent) + Send + Sync>,
         filter: Option<Filter>,
     ) -> CompactionListener {
-        CompactionListener {
-            ch: ch,
-            filter: filter,
-        }
+        CompactionListener { ch, filter }
     }
 }
 

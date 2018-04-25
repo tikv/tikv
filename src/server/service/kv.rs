@@ -11,34 +11,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::iter::{self, FromIterator};
+use futures::sync::{mpsc as futures_mpsc, oneshot};
+use futures::{future, stream, Future, Sink, Stream};
 use grpc::{ClientStreamingSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
            RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
-use futures::{future, stream, Future, Sink, Stream};
-use futures::sync::{mpsc as futures_mpsc, oneshot};
-use protobuf::RepeatedField;
-use kvproto::tikvpb_grpc;
-use kvproto::raft_serverpb::*;
-use kvproto::kvrpcpb;
-use kvproto::kvrpcpb::*;
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
+use kvproto::kvrpcpb;
+use kvproto::kvrpcpb::*;
+use kvproto::raft_serverpb::*;
+use kvproto::tikvpb_grpc;
 use prometheus::Histogram;
+use protobuf::RepeatedField;
+use std::iter::{self, FromIterator};
 
-use util::worker::Scheduler;
+use coprocessor::local_metrics::BasicLocalMetrics;
+use coprocessor::{err_resp, EndPointTask, RequestTask};
+use raftstore::store::{Callback, Msg as StoreMessage};
+use server::metrics::*;
+use server::snap::Task as SnapTask;
+use server::transport::RaftStoreRouter;
+use server::{Error, OnResponse};
+use storage::engine::Error as EngineError;
+use storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
+use storage::txn::Error as TxnError;
+use storage::{self, Key, Mutation, Options, Storage, Value};
 use util::collections::HashMap;
 use util::future::paired_future_callback;
-use storage::{self, Key, Mutation, Options, Storage, Value};
-use storage::txn::Error as TxnError;
-use storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
-use storage::engine::Error as EngineError;
-use server::transport::RaftStoreRouter;
-use server::snap::Task as SnapTask;
-use server::metrics::*;
-use server::{Error, OnResponse};
-use raftstore::store::{Callback, Msg as StoreMessage};
-use coprocessor::{err_resp, EndPointTask, RequestTask};
-use coprocessor::local_metrics::BasicLocalMetrics;
+use util::worker::Scheduler;
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 
@@ -127,13 +127,13 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
         stream_channel_size: usize,
     ) -> Service<T> {
         Service {
-            storage: storage,
-            end_point_scheduler: end_point_scheduler,
-            ch: ch,
-            snap_scheduler: snap_scheduler,
-            recursion_limit: recursion_limit,
+            storage,
+            end_point_scheduler,
+            ch,
+            snap_scheduler,
+            recursion_limit,
             metrics: Metrics::new(),
-            stream_channel_size: stream_channel_size,
+            stream_channel_size,
         }
     }
 
@@ -631,7 +631,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let timer = self.metrics.raw_get.start_coarse_timer();
 
         let future = self.storage
-            .async_raw_get(req.take_context(), req.take_key())
+            .async_raw_get(req.take_context(), req.take_cf(), req.take_key())
             .then(|v| {
                 let mut resp = RawGetResponse::new();
                 if let Some(err) = extract_region_error(&v) {
@@ -666,7 +666,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let keys = req.take_keys().into_vec();
         let future = self.storage
-            .async_raw_batch_get(req.take_context(), keys)
+            .async_raw_batch_get(req.take_context(), req.take_cf(), keys)
             .then(|v| {
                 let mut resp = RawBatchGetResponse::new();
                 if let Some(err) = extract_region_error(&v) {
@@ -693,6 +693,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let future = self.storage
             .async_raw_scan(
                 req.take_context(),
+                req.take_cf(),
                 req.take_start_key(),
                 req.get_limit() as usize,
                 req.get_key_only(),
@@ -728,6 +729,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let future = self.storage
             .async_raw_batch_scan(
                 req.take_context(),
+                req.take_cf(),
                 req.take_ranges().into_vec(),
                 req.get_each_limit() as usize,
                 req.get_key_only(),
@@ -756,9 +758,13 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let timer = self.metrics.raw_put.start_coarse_timer();
 
         let (cb, future) = paired_future_callback();
-        let res =
-            self.storage
-                .async_raw_put(req.take_context(), req.take_key(), req.take_value(), cb);
+        let res = self.storage.async_raw_put(
+            req.take_context(),
+            req.take_cf(),
+            req.take_key(),
+            req.take_value(),
+            cb,
+        );
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -800,7 +806,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .collect();
         let (cb, future) = paired_future_callback();
         let res = self.storage
-            .async_raw_batch_put(req.take_context(), pairs, cb);
+            .async_raw_batch_put(req.take_context(), req.take_cf(), pairs, cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -837,8 +843,9 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let timer = self.metrics.raw_delete.start_coarse_timer();
 
         let (cb, future) = paired_future_callback();
-        let res = self.storage
-            .async_raw_delete(req.take_context(), req.take_key(), cb);
+        let res =
+            self.storage
+                .async_raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -877,7 +884,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let keys = req.take_keys().into_vec();
         let (cb, future) = paired_future_callback();
         let res = self.storage
-            .async_raw_batch_delete(req.take_context(), keys, cb);
+            .async_raw_batch_delete(req.take_context(), req.take_cf(), keys, cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -916,6 +923,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let (cb, future) = paired_future_callback();
         let res = self.storage.async_raw_delete_range(
             req.take_context(),
+            req.take_cf(),
             req.take_start_key(),
             req.take_end_key(),
             cb,

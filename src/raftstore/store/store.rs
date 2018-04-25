@@ -11,62 +11,63 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{cmp, thread, u64};
-use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
-use std::rc::Rc;
+use protobuf::{self, Message, RepeatedField};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
+use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
 use std::time::{Duration, Instant};
+use std::{cmp, thread, u64};
 use time::{self, Timespec};
-use protobuf::{self, Message, RepeatedField};
 
-use rocksdb::{CompactionJobInfo, WriteBatch, DB};
-use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
+use rocksdb::rocksdb_options::WriteOptions;
+use rocksdb::{CompactionJobInfo, WriteBatch, DB};
 
+use kvproto::importpb::SSTMeta;
 use kvproto::metapb;
 use kvproto::pdpb::StoreStats;
-use kvproto::raft_serverpb::{MergeState, PeerState, RaftMessage, RaftSnapshotData,
-                             RaftTruncatedState, RegionLocalState};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse,
                           StatusCmdType, StatusResponse};
-use kvproto::importpb::SSTMeta;
-use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
+use kvproto::raft_serverpb::{MergeState, PeerState, RaftMessage, RaftSnapshotData,
+                             RaftTruncatedState, RegionLocalState};
 use raft::eraftpb::{ConfChangeType, MessageType};
+use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
-use util::{escape, rocksdb};
-use util::time::{duration_to_sec, SlowTimer};
-use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
-use util::transport::SendCh;
+use pd::{PdClient, PdRunner, PdTask};
+use raftstore::coprocessor::CoprocessorHost;
+use raftstore::coprocessor::split_observer::SplitObserver;
+use raftstore::{Error, Result};
+use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::RingQueue;
 use util::collections::{HashMap, HashSet};
 use util::rocksdb::{CompactedEvent, CompactionListener};
 use util::sys as util_sys;
-use pd::{PdClient, PdRunner, PdTask};
-use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use raftstore::{Error, Result};
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::coprocessor::split_observer::SplitObserver;
+use util::time::{duration_to_sec, SlowTimer};
+use util::timer::Timer;
+use util::transport::SendCh;
+use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
+use util::{escape, rocksdb};
 
-use import::SSTImporter;
+use super::cmd_resp::{bind_term, new_error};
+use super::config::Config;
+use super::engine::{Iterable, Mutable, Peekable, Snapshot as EngineSnapshot};
+use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
+use super::local_metrics::RaftMetrics;
+use super::metrics::*;
+use super::msg::{Callback, ReadResponse};
+use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
+use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
+use super::transport::Transport;
+use super::worker::apply::{ChangePeer, ExecResult};
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, CleanupSSTTask,
                     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
                     RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
-                    SplitCheckTask};
-use super::worker::apply::{ChangePeer, ExecResult};
+                    SplitCheckTask, STALE_PEER_CHECK_INTERVAL};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
-use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
-use super::engine::{Iterable, Mutable, Peekable, Snapshot as EngineSnapshot};
-use super::config::Config;
-use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
-use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
-use super::msg::{Callback, ReadResponse};
-use super::cmd_resp::{bind_term, new_error};
-use super::transport::Transport;
-use super::metrics::*;
-use super::local_metrics::RaftMetrics;
+use import::SSTImporter;
 
 type Key = Vec<u8>;
 
@@ -82,8 +83,8 @@ pub struct Engines {
 impl Engines {
     pub fn new(kv_engine: Arc<DB>, raft_engine: Arc<DB>) -> Engines {
         Engines {
-            kv_engine: kv_engine,
-            raft_engine: raft_engine,
+            kv_engine,
+            raft_engine,
         }
     }
 }
@@ -152,8 +153,8 @@ pub struct Store<T, C: 'static> {
     // captch up by normal log replication.
     pending_cross_snap: HashMap<u64, metapb::RegionEpoch>,
     split_check_worker: Worker<SplitCheckTask>,
-    region_worker: Worker<RegionTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask>,
+    region_worker: Worker<RegionTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: FutureWorker<PdTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
@@ -229,7 +230,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             store: meta,
             kv_engine: engines.kv_engine,
             raft_engine: engines.raft_engine,
-            sendch: sendch,
+            sendch,
             significant_msg_receiver: ch.significant_msg_receiver,
             region_peers: HashMap::default(),
             merging_regions: Some(vec![]),
@@ -238,7 +239,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             region_worker: Worker::new("snapshot worker"),
             raftlog_gc_worker: Worker::new("raft gc worker"),
             compact_worker: Worker::new("compact worker"),
-            pd_worker: pd_worker,
+            pd_worker,
             consistency_check_worker: Worker::new("consistency check worker"),
             cleanup_sst_worker: Worker::new("cleanup sst worker"),
             apply_worker: Worker::new("apply worker"),
@@ -247,15 +248,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             region_ranges: BTreeMap::new(),
             pending_snapshot_regions: vec![],
             pending_cross_snap: HashMap::default(),
-            trans: trans,
-            pd_client: pd_client,
+            trans,
+            pd_client,
             coprocessor_host: Arc::new(coprocessor_host),
-            importer: importer,
+            importer,
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
             entry_cache_metries: Rc::new(RefCell::new(CacheQueryStats::default())),
             pending_votes: RingQueue::with_capacity(PENDING_VOTES_CAP),
-            tag: tag,
+            tag,
             start_time: time::get_time(),
             is_busy: false,
             store_stat: StoreStat::default(),
@@ -551,14 +552,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         box_try!(self.split_check_worker.start(split_check_runner));
 
-        let runner = RegionRunner::new(
+        let region_runner = RegionRunner::new(
             Arc::clone(&self.kv_engine),
             Arc::clone(&self.raft_engine),
             self.snap_mgr.clone(),
             self.cfg.snap_apply_batch_size.0 as usize,
             self.cfg.use_delete_range,
+            self.cfg.clean_stale_peer_delay.0,
         );
-        box_try!(self.region_worker.start(runner));
+        let mut timer = Timer::new(1);
+        timer.add_task(Duration::from_millis(STALE_PEER_CHECK_INTERVAL), ());
+        box_try!(self.region_worker.start_with_timer(region_runner, timer));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
         box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
@@ -775,7 +779,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
-        let region_id = msg.get_region_id();
         if !self.validate_raft_msg(&msg) {
             return Ok(());
         }
@@ -786,6 +789,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
+        let region_id = msg.get_region_id();
         if msg.has_merge_target() {
             if self.need_gc_merge(&msg)? {
                 self.on_merge_fail(region_id);
@@ -1388,9 +1392,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // We can't destroy a peer which is applying snapshot.
         assert!(!p.is_applying_snapshot());
         self.pending_cross_snap.remove(&region_id);
-        let task = PdTask::DestroyPeer {
-            region_id: region_id,
-        };
+        let task = PdTask::DestroyPeer { region_id };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
         }
@@ -1709,8 +1711,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let min_index = peer.get_min_progress() + 1;
             let low = cmp::max(min_index, state.get_min_index());
             // TODO: move this into raft module.
-            // +1 to include the PrepareMerge proposal.
-            let entries = if low >= state.get_commit() + 1 {
+            // > over >= to include the PrepareMerge proposal.
+            let entries = if low > state.get_commit() {
                 vec![]
             } else {
                 self.region_peers[&region.get_id()]
@@ -2374,7 +2376,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // Schedule the task.
             let cf_names = vec![CF_DEFAULT.to_owned(), CF_WRITE.to_owned()];
             if let Err(e) = self.compact_worker.schedule(CompactTask::CheckAndCompact {
-                cf_names: cf_names,
+                cf_names,
                 ranges: ranges_need_check,
                 tombstones_threshold: self.cfg.region_compact_min_tombstones,
             }) {
@@ -2400,7 +2402,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region = peer.region();
         let task = PdTask::AskSplit {
             region: region.clone(),
-            split_key: split_key,
+            split_key,
             peer: peer.peer.clone(),
             right_derive: self.cfg.right_derive_when_split,
             callback: cb,
@@ -2609,10 +2611,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             capacity: self.cfg.capacity.0,
         };
 
-        let task = PdTask::StoreHeartbeat {
-            stats: stats,
-            store_info: store_info,
-        };
+        let task = PdTask::StoreHeartbeat { stats, store_info };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
         }
@@ -3435,7 +3434,7 @@ mod tests {
         index_handles.add(b"c".to_vec(), index_handle3);
         let size_prop = SizeProperties {
             total_size: 12 * 1024,
-            index_handles: index_handles,
+            index_handles,
         };
         let event = CompactedEvent {
             cf: "default".to_owned(),
