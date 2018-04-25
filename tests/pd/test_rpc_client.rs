@@ -11,22 +11,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::thread;
-use std::sync::{mpsc, Arc};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc};
+use std::thread;
 use std::time::Duration;
 
-use grpc::EnvBuilder;
 use futures::Future;
 use futures_cpupool::Builder;
+use grpc::EnvBuilder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
 use tikv::pd::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
 use tikv::util::security::{SecurityConfig, SecurityManager};
 
-use super::mock::mocker::*;
 use super::mock::Server as MockServer;
+use super::mock::mocker::*;
 use util;
 
 fn new_config(eps: Vec<(String, u16)>) -> Config {

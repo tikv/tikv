@@ -11,18 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::thread;
-use std::sync::mpsc::channel;
-use std::time::Duration;
 use fail;
 use kvproto::kvrpcpb::Context;
-use tikv::storage;
-use tikv::storage::*;
-use tikv::storage::config::Config;
-use tikv::util::HandyRwLock;
 use raftstore::server::new_server_cluster;
+use std::sync::mpsc::channel;
+use std::thread;
+use std::time::Duration;
 use storage::util::new_raft_engine;
 use tikv::server::readpool::{self, ReadPool};
+use tikv::storage;
+use tikv::storage::config::Config;
+use tikv::storage::*;
+use tikv::util::HandyRwLock;
 use tikv::util::worker::FutureWorker;
 
 #[test]

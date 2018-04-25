@@ -13,9 +13,9 @@
 
 use std::sync::atomic::{ATOMIC_U64_INIT, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+use test::black_box;
 use tikv::coprocessor::codec::table::{encode_index_seek_key, encode_row_key};
 use tikv::util::codec::number::NumberEncoder;
-use test::black_box;
 
 #[inline]
 pub fn next_ts() -> u64 {

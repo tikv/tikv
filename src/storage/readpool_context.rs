@@ -11,16 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use prometheus::local::{LocalHistogramTimer, LocalHistogramVec, LocalIntCounterVec};
 use std::fmt;
 use std::mem;
-use prometheus::local::{LocalHistogramTimer, LocalHistogramVec, LocalIntCounterVec};
 
+use pd;
 use server::readpool;
+use storage;
+use util::collections::HashMap;
 use util::futurepool;
 use util::worker;
-use util::collections::HashMap;
-use pd;
-use storage;
 
 use super::metrics::*;
 
@@ -52,7 +52,7 @@ impl Context {
             command_duration: SCHED_HISTOGRAM_VEC.local(),
             processing_read_duration: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
             command_keyreads: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
-            command_counter: COMMAND_COUNTER_VEC.local(),
+            command_counter: KV_COMMAND_COUNTER_VEC.local(),
             command_pri_counter: SCHED_COMMANDS_PRI_COUNTER_VEC.local(),
             scan_details: KV_COMMAND_SCAN_DETAILS.local(),
             read_flow_stats: HashMap::default(),

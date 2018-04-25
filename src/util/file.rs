@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::{self, ErrorKind, Read};
 use std::fs::{self, File, OpenOptions};
+use std::io::{self, ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
 use crc::crc32::{self, Digest, Hasher32};
@@ -75,10 +75,10 @@ pub fn calc_crc32<P: AsRef<Path>>(path: P) -> io::Result<u32> {
 
 #[cfg(test)]
 mod test {
-    use std::io::Write;
-    use std::fs::OpenOptions;
-    use tempdir::TempDir;
     use rand::{thread_rng, Rng};
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use tempdir::TempDir;
 
     use super::*;
 
