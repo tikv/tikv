@@ -17,6 +17,7 @@ use tipb::schema::ColumnInfo;
 use super::codec::datum::Datum;
 use super::codec::mysql;
 
+/// Get the smallest key which is larger than the key given.
 pub fn prefix_next(key: &[u8]) -> Vec<u8> {
     let mut nk = key.to_vec();
     if nk.is_empty() {
@@ -52,5 +53,25 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
         Datum::U64(h as u64)
     } else {
         Datum::I64(h)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_prefix_next() {
+        assert_eq!(prefix_next(&[]), vec![0]);
+        assert_eq!(prefix_next(&[0]), vec![1]);
+        assert_eq!(prefix_next(&[1]), vec![2]);
+        assert_eq!(prefix_next(&[255]), vec![255, 0]);
+        assert_eq!(prefix_next(&[255, 255, 255]), vec![255, 255, 255, 0]);
+        assert_eq!(prefix_next(&[1, 255]), vec![2, 0]);
+        assert_eq!(prefix_next(&[0, 1, 255]), vec![0, 2, 0]);
+        assert_eq!(prefix_next(&[0, 1, 255, 5]), vec![0, 1, 255, 6]);
+        assert_eq!(prefix_next(&[0, 1, 5, 255]), vec![0, 1, 6, 0]);
+        assert_eq!(prefix_next(&[0, 1, 255, 255]), vec![0, 2, 0, 0]);
+        assert_eq!(prefix_next(&[0, 255, 255, 255]), vec![1, 0, 0, 0]);
     }
 }
