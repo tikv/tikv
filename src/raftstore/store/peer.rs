@@ -260,6 +260,7 @@ pub struct Peer {
     // When entry exceed max size, reject to propose the entry.
     pub raft_entry_max_size: u64,
     is_persisting: bool,
+    is_persisting_snapshot: bool,
 
     apply_scheduler: Scheduler<ApplyTask>,
 
@@ -380,6 +381,7 @@ impl Peer {
             last_applying_idx: applied_index,
             last_compacted_idx: 0,
             is_persisting: false,
+            is_persisting_snapshot: false,
             consistency_state: ConsistencyState {
                 last_check_time: Instant::now(),
                 index: INVALID_INDEX,
@@ -873,13 +875,19 @@ impl Peer {
             }
         };
 
-        if !ready.entries.is_empty() || ready.snapshot != RaftSnapshot::new() || ready.hs.is_some()
-        {
+        if !ready.entries.is_empty() || ready.hs.is_some() {
             debug!(
-                "{} needs to persist entries {:?}, snapshot: {:?}, hs: {:?}",
-                self.tag, ready.entries, ready.snapshot, ready.hs
+                "{} needs to persist entries {:?}, hs: {:?}",
+                self.tag, ready.entries, ready.hs
             );
             self.is_persisting = true;
+            if ready.snapshot != RaftSnapshot::new() {
+                debug!(
+                    "{} needs to persist snapshot: {:?}",
+                    self.tag, ready.snapshot.get_metadata()
+                );
+                self.is_persisting_snapshot = true;
+            }
         }
         ctx.ready_res.push(ready, invoke_ctx);
     }
@@ -927,6 +935,14 @@ impl Peer {
         apply_snap_result
     }
 
+    /// Can only be called after Snapshot's metadata is applied,
+    pub fn post_raft_ready_snapshot(&mut self) {
+        assert!(self.is_persisting_snapshot);
+        self.is_persisting_snapshot = false;
+        self.last_applying_idx = self.get_store().truncated_index();
+        self.raft_group.advance_apply(self.last_applying_idx);
+    }
+
     pub fn handle_raft_ready_apply(&mut self, mut ready: Ready, apply_tasks: &mut Vec<Apply>) {
         // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
@@ -935,6 +951,7 @@ impl Peer {
         // updates will soon be removed. But the soft state of raft is still be updated
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
+        /*
         if self.is_applying_snapshot() {
             // Snapshot's metadata has been applied.
             self.last_applying_idx = self.get_store().truncated_index();
@@ -960,6 +977,31 @@ impl Peer {
                 apply_tasks.push(Apply::new(self.region_id, self.term(), committed_entries));
             }
         }
+        */
+
+        if self.is_persisting_snapshot || self.is_applying_snapshot() {
+            return;
+        }
+        let committed_entries = ready.committed_entries.take().unwrap();
+        // leader needs to update lease.
+        let mut to_be_updated = self.is_leader();
+        if !to_be_updated {
+            // It's not leader anymore, we are safe to clear proposals. If it becomes leader
+            // again, the lease should be updated when election is finished, old proposals
+            // have no effect.
+            self.proposals.clear();
+        }
+        for entry in committed_entries.iter().rev() {
+            // raft meta is very small, can be ignored.
+            self.raft_log_size_hint += entry.get_data().len() as u64;
+            if to_be_updated {
+                to_be_updated = !self.maybe_update_lease(entry);
+            }
+        }
+        if !committed_entries.is_empty() {
+            self.last_applying_idx = committed_entries.last().unwrap().get_index();
+            apply_tasks.push(Apply::new(self.region_id, self.term(), committed_entries));
+        }
 
         self.apply_reads(&ready);
 
@@ -968,11 +1010,13 @@ impl Peer {
         assert!(ready.snapshot == RaftSnapshot::default(), "{:?}", ready);
         assert!(ready.entries.is_empty(), "{:?}", ready);
         self.raft_group.advance_append(ready);
+        /*
         if self.is_applying_snapshot() {
             // Because we only handle raft ready when not applying snapshot, so following
             // line won't be called twice for the same snapshot.
             self.raft_group.advance_apply(self.last_applying_idx);
         }
+        */
         self.proposals.gc();
     }
 

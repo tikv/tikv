@@ -1935,6 +1935,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         self.region_ranges
             .insert(enc_end_key(&region), region.get_id());
+
+        self.region_peers
+            .get_mut(&region_id)
+            .unwrap()
+            .post_raft_ready_snapshot();
     }
 
     fn on_ready_apply_result(
@@ -1990,7 +1995,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let region_id = invoke_ctx.region_id;
             let peer_id = invoke_ctx.peer_id;
             let mut is_merging = false;
-            let res = {
+            let snap_res = {
                 if let Some(peer) = self.region_peers.get_mut(&region_id) {
                     if peer.peer.get_id() != peer_id {
                         // Must advance on the same peer.
@@ -2015,12 +2020,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     None
                 }
             };
-            if is_merging && res.is_some() {
+            if is_merging && snap_res.is_some() {
                 // After applying a snapshot, merge is rollbacked implicitly.
                 self.on_ready_rollback_merge(region_id, 0, None);
             }
-            if let Some(apply_result) = res {
-                self.on_ready_apply_snapshot(apply_result);
+            if let Some(snap_result) = snap_res {
+                self.on_ready_apply_snapshot(snap_result);
             }
         }
         self.trans.flush();
