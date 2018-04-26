@@ -65,6 +65,10 @@ fn _0_ci_setup() {
     if env::var("CI").is_ok() && env::var("LOG_FILE").is_ok() {
         self::util::init_log();
     }
+    if env::var("PANIC_ABORT").is_ok() {
+        // Panics as aborts, it's helpful for debug, but also stops tests immediately.
+        tikv::util::panic_hook::set_exit_hook(true);
+    }
 }
 
 #[test]
