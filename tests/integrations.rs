@@ -66,7 +66,8 @@ fn _0_ci_setup() {
         self::util::init_log();
     }
     if env::var("PANIC_ABORT").is_ok() {
-        // Panics as aborts, it's helpful for debug, but also stops tests immediately.
+        // Panics as aborts, it's helpful for debugging,
+        // but also stops tests immediately.
         tikv::util::panic_hook::set_exit_hook(true);
     }
 }
