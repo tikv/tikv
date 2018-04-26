@@ -2095,7 +2095,7 @@ pub struct BorrowDelegate {
 }
 
 pub enum RegionTask {
-    Apply(Apply),
+    Apply((Apply, Instant)),
     Destroy(RegionDestroy),
     Suicide(Suicide),
     Proposal(RegionProposal),
@@ -2103,8 +2103,8 @@ pub enum RegionTask {
 }
 
 impl RegionTask {
-    pub fn apply(apply: Apply) -> RegionTask {
-        RegionTask::Apply(apply)
+    pub fn apply(apply: Apply, start: Instant) -> RegionTask {
+        RegionTask::Apply((apply, start))
     }
 
     pub fn proposal(proposal: RegionProposal) -> RegionTask {
@@ -2135,6 +2135,7 @@ pub enum Task {
     Proposals(Vec<RegionProposal>),
     Destroy(Destroy),
     Borrow(BorrowDelegate),
+    Remove(u64),
 }
 
 impl Task {
@@ -2171,6 +2172,7 @@ impl Display for Task {
             }
             Task::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
             Task::Borrow(ref b) => write!(f, "borrow [reigon {}]", b.target),
+            Task::Remove(region_id) => write!(f, "[region {}] pending remove", region_id),
         }
     }
 }
@@ -2299,7 +2301,21 @@ impl Runner {
             .spawn(move |_| {
                 rx.fold(delegate, move |mut delegate, task| {
                     match task {
-                        RegionTask::Apply(apply) => {
+                        RegionTask::Apply((apply, start)) => {
+                            assert_eq!(apply.region_id, delegate.region_id());
+
+                            let elapsed = duration_to_sec(start.elapsed());
+                            APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
+
+                            delegate.metrics = ApplyMetrics::default();
+                            delegate.term = apply.term;
+
+                            if apply.entries.is_empty() {
+                                return box future::ok(delegate)
+                                    as Box<Future<Item = ApplyDelegate, Error = ()> + Send>;
+                            }
+
+                            let t = SlowTimer::new();
                             let ctx = ApplyContext::new(
                                 Arc::clone(&delegate.host),
                                 Arc::clone(&delegate.importer),
@@ -2316,6 +2332,10 @@ impl Runner {
                                     };
 
                                     if delegate.pending_remove {
+                                        delegate
+                                            .scheduler
+                                            .schedule(Task::Remove(delegate.region_id()))
+                                            .unwrap();
                                         delegate.destroy();
                                         return Err(());
                                     }
@@ -2326,6 +2346,16 @@ impl Runner {
                                             .send(TaskRes::Applys(ctx.apply_res))
                                             .unwrap();
                                     }
+
+                                    STORE_APPLY_LOG_HISTOGRAM
+                                        .observe(duration_to_sec(t.elapsed()) as f64);
+
+                                    slow_log!(
+                                        t,
+                                        "{} handle ready {} committed entries",
+                                        delegate.tag,
+                                        ctx.committed_count
+                                    );
 
                                     Ok(delegate)
                                 })
@@ -2432,15 +2462,17 @@ impl Runner {
         // }
     }
 
-    fn handle_applies(&mut self, applies: Vec<Apply>) {
-        for apply in applies {
+    fn handle_applies(&mut self, applies: ApplyBatch) {
+        let start = applies.start;
+        let vec = applies.vec;
+        for apply in vec {
             if apply.entries.is_empty() {
                 continue;
             }
             let region_id = apply.region_id;
             let mut removed = false;
             if let Some(tx) = self.region_task_senders.get(&region_id) {
-                tx.unbounded_send(RegionTask::apply(apply))
+                tx.unbounded_send(RegionTask::apply(apply, start))
                     .unwrap_or_else(|e| {
                         error!("[region {}] has been removed", region_id);
                         removed = true;
@@ -2454,16 +2486,21 @@ impl Runner {
             }
         }
     }
+
+    fn handle_remove(&mut self, region_id: u64) {
+        self.region_task_senders.remove(&region_id);
+    }
 }
 
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         match task {
-            Task::Applies(a) => self.handle_applies(a.vec),
+            Task::Applies(a) => self.handle_applies(a),
             Task::Proposals(props) => self.handle_proposals(props),
             Task::Registration(s) => self.handle_registration(s),
             Task::Destroy(d) => self.handle_destroy(d),
             Task::Borrow(b) => self.handle_borrow(b),
+            Task::Remove(r) => self.handle_remove(r),
         }
     }
 
