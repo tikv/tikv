@@ -13,7 +13,6 @@
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::Future;
 use tokio_core::reactor::Handle;
@@ -37,6 +36,7 @@ use storage::FlowStatistics;
 use util::collections::HashMap;
 use util::escape;
 use util::rocksdb::*;
+use util::time::time_now_sec;
 use util::transport::SendCh;
 use util::worker::FutureRunnable as Runnable;
 
@@ -313,14 +313,12 @@ impl<T: PdClient> Runner<T> {
         stats.set_keys_read(
             self.store_stat.engine_total_keys_read - self.store_stat.engine_last_total_keys_read,
         );
-        stats.set_start_timestamp(self.store_stat.last_report_ts);
+        let mut interval = pdpb::TimeInterval::new();
+        interval.set_start_timestamp(self.store_stat.last_report_ts);
+        stats.set_interval(interval);
         self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
         self.store_stat.engine_last_total_keys_read = self.store_stat.engine_total_keys_read;
-        self.store_stat.last_report_ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
+        self.store_stat.last_report_ts = time_now_sec();
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
         self.store_stat.region_bytes_read.flush();
@@ -563,10 +561,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     peer_stat.last_written_keys = written_keys;
                     peer_stat.last_read_bytes = peer_stat.read_bytes;
                     peer_stat.last_read_keys = peer_stat.read_keys;
-                    peer_stat.last_report_ts = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs();
+                    peer_stat.last_report_ts = time_now_sec();
                     (
                         read_bytes_delta,
                         read_keys_delta,
