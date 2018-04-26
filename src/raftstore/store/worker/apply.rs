@@ -518,9 +518,45 @@ pub struct ApplyDelegate {
 
 impl Debug for ApplyDelegate {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{} ApplyDelegate", self.tag)
+        write!(f, "{} peer {} ApplyDelegate", self.tag, self.id)
     }
 }
+
+type ProcessCmdItem = (ApplyDelegate, ApplyContext, Option<ExecResult>);
+type CatchUpLogItem = (ApplyDelegate, ApplyContext, Region);
+type AdminCmdFuture = Box<
+    Future<
+        Item = (
+            ApplyDelegate,
+            ApplyContext,
+            AdminResponse,
+            Option<ExecResult>,
+        ),
+        Error = (ApplyDelegate, ApplyContext, Error),
+    >
+        + Send,
+>;
+
+type RaftCmdFuture = Box<
+    Future<
+        Item = (
+            ApplyDelegate,
+            ApplyContext,
+            RaftCmdResponse,
+            Option<ExecResult>,
+        ),
+        Error = (ApplyDelegate, ApplyContext, Error),
+    >
+        + Send,
+>;
+
+type RaftEntryFuture = Box<
+    Future<
+        Item = (ApplyDelegate, ApplyContext, Option<ExecResult>),
+        Error = (ApplyDelegate, ApplyContext, Error),
+    >
+        + Send,
+>;
 
 impl ApplyDelegate {
     fn from_peer(
@@ -659,17 +695,7 @@ impl ApplyDelegate {
             });
     }
 
-    fn handle_raft_entry(
-        mut self,
-        mut apply_ctx: ApplyContext,
-        entry: Entry,
-    ) -> Box<
-        Future<
-            Item = (Self, ApplyContext, Option<ExecResult>),
-            Error = (Self, ApplyContext, Error),
-        >
-            + Send,
-    > {
+    fn handle_raft_entry(mut self, mut apply_ctx: ApplyContext, entry: Entry) -> RaftEntryFuture {
         let index = entry.get_index();
         let term = entry.get_term();
         match entry.get_entry_type() {
@@ -758,8 +784,7 @@ impl ApplyDelegate {
         index: u64,
         term: u64,
         cmd: RaftCmdRequest,
-    ) -> impl Future<Item = (Self, ApplyContext, Option<ExecResult>), Error = (Self, ApplyContext, Error)>
-    {
+    ) -> impl Future<Item = ProcessCmdItem, Error = (Self, ApplyContext, Error)> {
         if index == 0 {
             panic!(
                 "{} processing raft command needs a none zero index",
@@ -802,13 +827,7 @@ impl ApplyDelegate {
         index: u64,
         term: u64,
         req: RaftCmdRequest,
-    ) -> Box<
-        Future<
-            Item = (Self, ApplyContext, RaftCmdResponse, Option<ExecResult>),
-            Error = (Self, ApplyContext, Error),
-        >
-            + Send,
-    > {
+    ) -> RaftCmdFuture {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
@@ -947,16 +966,7 @@ impl ExecContext {
 // Here we implement all commands.
 impl ApplyDelegate {
     // Only errors that will also occur on all other stores should be returned.
-    fn exec_raft_cmd(
-        self,
-        ctx: ApplyContext,
-    ) -> Box<
-        Future<
-            Item = (Self, ApplyContext, RaftCmdResponse, Option<ExecResult>),
-            Error = (Self, ApplyContext, Error),
-        >
-            + Send,
-    > {
+    fn exec_raft_cmd(self, ctx: ApplyContext) -> RaftCmdFuture {
         let req = ctx.exec_ctx.as_ref().unwrap().req.clone();
         // Include region for stale epoch after merge may cause key not in range.
         let include_region =
@@ -972,17 +982,7 @@ impl ApplyDelegate {
         }
     }
 
-    fn exec_admin_cmd(
-        self,
-        ctx: ApplyContext,
-        request: AdminRequest,
-    ) -> Box<
-        Future<
-            Item = (Self, ApplyContext, RaftCmdResponse, Option<ExecResult>),
-            Error = (Self, ApplyContext, Error),
-        >
-            + Send,
-    > {
+    fn exec_admin_cmd(self, ctx: ApplyContext, request: AdminRequest) -> RaftCmdFuture {
         let cmd_type = request.get_cmd_type();
         info!(
             "{} execute admin command {:?} at [term: {}, index: {}]",
@@ -1027,17 +1027,7 @@ impl ApplyDelegate {
         })
     }
 
-    fn exec_change_peer(
-        mut self,
-        mut ctx: ApplyContext,
-        request: &AdminRequest,
-    ) -> Box<
-        Future<
-            Item = (Self, ApplyContext, AdminResponse, Option<ExecResult>),
-            Error = (Self, ApplyContext, Error),
-        >
-            + Send,
-    > {
+    fn exec_change_peer(mut self, mut ctx: ApplyContext, request: &AdminRequest) -> AdminCmdFuture {
         let request = request.get_change_peer();
         let peer = request.get_peer();
         let store_id = peer.get_store_id();
@@ -1188,17 +1178,7 @@ impl ApplyDelegate {
         ))
     }
 
-    fn exec_split(
-        self,
-        mut ctx: ApplyContext,
-        req: &AdminRequest,
-    ) -> Box<
-        Future<
-            Item = (Self, ApplyContext, AdminResponse, Option<ExecResult>),
-            Error = (Self, ApplyContext, Error),
-        >
-            + Send,
-    > {
+    fn exec_split(self, mut ctx: ApplyContext, req: &AdminRequest) -> AdminCmdFuture {
         let apply_before_split = || {
             fail_point!(
                 "apply_before_split_1_3",
@@ -1339,17 +1319,7 @@ impl ApplyDelegate {
         }
     }
 
-    fn exec_prepare_merge(
-        self,
-        ctx: ApplyContext,
-        req: &AdminRequest,
-    ) -> Box<
-        Future<
-            Item = (Self, ApplyContext, AdminResponse, Option<ExecResult>),
-            Error = (Self, ApplyContext, Error),
-        >
-            + Send,
-    > {
+    fn exec_prepare_merge(self, ctx: ApplyContext, req: &AdminRequest) -> AdminCmdFuture {
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["prepare_merge", "all"])
             .inc();
@@ -1454,8 +1424,7 @@ impl ApplyDelegate {
         mut ctx: ApplyContext,
         merge: &CommitMergeRequest,
         exist_region: Region,
-    ) -> Box<Future<Item = (Self, ApplyContext, Region), Error = (Self, ApplyContext, Error)> + Send>
-    {
+    ) -> Box<Future<Item = CatchUpLogItem, Error = (Self, ApplyContext, Error)> + Send> {
         let region_id = exist_region.get_id();
         let apply_state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
@@ -1497,17 +1466,7 @@ impl ApplyDelegate {
         })
     }
 
-    fn exec_commit_merge(
-        self,
-        ctx: ApplyContext,
-        req: &AdminRequest,
-    ) -> Box<
-        Future<
-            Item = (Self, ApplyContext, AdminResponse, Option<ExecResult>),
-            Error = (Self, ApplyContext, Error),
-        >
-            + Send,
-    > {
+    fn exec_commit_merge(self, ctx: ApplyContext, req: &AdminRequest) -> AdminCmdFuture {
         {
             let apply_before_commit_merge = || {
                 fail_point!(
@@ -1540,7 +1499,7 @@ impl ApplyDelegate {
                 self.tag, state
             ),
         }
-        let mut exist_region = state.get_region().to_owned();
+        let exist_region = state.get_region().to_owned();
         box self.catch_up_log_for_merge(ctx, merge, exist_region)
             .and_then(move |(delegate, ctx, exist_region)| {
                 if source_region != exist_region {
@@ -1599,17 +1558,7 @@ impl ApplyDelegate {
             })
     }
 
-    fn exec_rollback_merge(
-        self,
-        ctx: ApplyContext,
-        req: &AdminRequest,
-    ) -> Box<
-        Future<
-            Item = (Self, ApplyContext, AdminResponse, Option<ExecResult>),
-            Error = (Self, ApplyContext, Error),
-        >
-            + Send,
-    > {
+    fn exec_rollback_merge(self, ctx: ApplyContext, req: &AdminRequest) -> AdminCmdFuture {
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["rollback_merge", "all"])
             .inc();
@@ -1653,17 +1602,7 @@ impl ApplyDelegate {
         ))
     }
 
-    fn exec_compact_log(
-        self,
-        mut ctx: ApplyContext,
-        req: &AdminRequest,
-    ) -> Box<
-        Future<
-            Item = (Self, ApplyContext, AdminResponse, Option<ExecResult>),
-            Error = (Self, ApplyContext, Error),
-        >
-            + Send,
-    > {
+    fn exec_compact_log(self, mut ctx: ApplyContext, req: &AdminRequest) -> AdminCmdFuture {
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["compact", "all"])
             .inc();
@@ -1734,17 +1673,7 @@ impl ApplyDelegate {
         ))
     }
 
-    fn exec_write_cmd(
-        mut self,
-        ctx: ApplyContext,
-        requests: Vec<Request>,
-    ) -> Box<
-        Future<
-            Item = (Self, ApplyContext, RaftCmdResponse, Option<ExecResult>),
-            Error = (Self, ApplyContext, Error),
-        >
-            + Send,
-    > {
+    fn exec_write_cmd(mut self, ctx: ApplyContext, requests: Vec<Request>) -> RaftCmdFuture {
         let mut responses = Vec::with_capacity(requests.len());
 
         let mut ranges = vec![];
@@ -2031,17 +1960,7 @@ fn check_sst_for_ingestion(sst: &SSTMeta, region: &Region) -> Result<()> {
 
 // Consistency Check
 impl ApplyDelegate {
-    fn exec_compute_hash(
-        self,
-        ctx: ApplyContext,
-        _: &AdminRequest,
-    ) -> Box<
-        Future<
-            Item = (Self, ApplyContext, AdminResponse, Option<ExecResult>),
-            Error = (Self, ApplyContext, Error),
-        >
-            + Send,
-    > {
+    fn exec_compute_hash(self, ctx: ApplyContext, _: &AdminRequest) -> AdminCmdFuture {
         let resp = AdminResponse::new();
         let region = self.region.clone();
         let engine = Arc::clone(&self.engine);
@@ -2062,17 +1981,7 @@ impl ApplyDelegate {
         ))
     }
 
-    fn exec_verify_hash(
-        self,
-        ctx: ApplyContext,
-        req: &AdminRequest,
-    ) -> Box<
-        Future<
-            Item = (Self, ApplyContext, AdminResponse, Option<ExecResult>),
-            Error = (Self, ApplyContext, Error),
-        >
-            + Send,
-    > {
+    fn exec_verify_hash(self, ctx: ApplyContext, req: &AdminRequest) -> AdminCmdFuture {
         let verify_req = req.get_verify_hash();
         let index = verify_req.get_index();
         let hash = verify_req.get_hash().to_vec();
@@ -2530,7 +2439,7 @@ impl Runner {
             }
             let region_id = apply.region_id;
             let mut removed = false;
-            if let Some(ref tx) = self.region_task_senders.get(&region_id) {
+            if let Some(tx) = self.region_task_senders.get(&region_id) {
                 tx.unbounded_send(RegionTask::apply(apply))
                     .unwrap_or_else(|e| {
                         error!("[region {}] has been removed", region_id);
@@ -2588,6 +2497,7 @@ mod tests {
     use super::*;
     use import::test_helpers::*;
     use util::collections::HashMap;
+    use util::worker::{Scheduler, Worker};
 
     pub fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
         let path = TempDir::new(path).unwrap();
@@ -2611,6 +2521,7 @@ mod tests {
         host: Arc<CoprocessorHost>,
         importer: Arc<SSTImporter>,
         tx: Sender<TaskRes>,
+        ch: Scheduler<Task>,
     ) -> Runner {
         let apply_pool = FuturePool::new(
             POOL_SIZE,
