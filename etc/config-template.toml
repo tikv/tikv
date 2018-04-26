@@ -170,7 +170,7 @@
 # use-delete-range = false
 
 # delay time before deleting a stale peer
-# clean-stale-peer-delay = "5m"
+# clean-stale-peer-delay = "10m"
 
 # Interval to cleanup import sst files.
 # cleanup-import-sst-interval = "10m"

@@ -77,11 +77,6 @@ lazy_static! {
         "Bucketed counter of kv keys scan details for each cf",
         &["req", "cf", "tag"]
     ).unwrap();
-    pub static ref RAWKV_COMMAND_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
-        "tikv_storage_rawkv_command_total",
-        "Total number of rawkv commands received.",
-        &["type"]
-    ).unwrap();
     pub static ref KV_COMMAND_GC_EMPTY_RANGE_COUNTER: IntCounter = register_int_counter!(
         "tikv_storage_gc_empty_range_total",
         "Total number of empty range found by gc"
