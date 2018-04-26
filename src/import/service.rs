@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use grpc::{RpcContext, RpcStatus, RpcStatusCode, UnarySink};
 use futures::Future;
+use grpc::{RpcContext, RpcStatus, RpcStatusCode, UnarySink};
 
 use super::Error;
 
@@ -31,7 +31,7 @@ where
 }
 
 macro_rules! send_rpc_response {
-    ($res:ident, $sink: ident, $label:ident, $timer:ident) => ({
+    ($res:ident, $sink:ident, $label:ident, $timer:ident) => {{
         let res = match $res {
             Ok(resp) => {
                 IMPORT_RPC_DURATION
@@ -47,5 +47,5 @@ macro_rules! send_rpc_response {
             }
         };
         res.map_err(|e| warn!("send rpc response: {:?}", e))
-    })
+    }};
 }

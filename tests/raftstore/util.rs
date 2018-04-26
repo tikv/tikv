@@ -11,33 +11,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{mpsc, Arc};
-use std::time::Duration;
-use std::thread;
 use std::path::Path;
+use std::sync::{mpsc, Arc};
+use std::thread;
+use std::time::Duration;
 
 use tempdir::TempDir;
 
-use rocksdb::{CompactionJobInfo, DB};
 use protobuf;
+use rocksdb::{CompactionJobInfo, DB};
 
 use kvproto::metapb::{self, RegionEpoch};
-use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
-use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
 use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
+use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
+use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
 use raft::eraftpb::ConfChangeType;
 
+use tikv::config::{ReadPoolConfig, TiKvConfig};
+use tikv::raftstore::store::Msg as StoreMsg;
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Config as ServerConfig;
 use tikv::server::readpool::Config as ReadPoolInstanceConfig;
 use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
+use tikv::util::config::*;
 use tikv::util::escape;
 use tikv::util::rocksdb::{self, CompactionListener};
-use tikv::util::config::*;
-use tikv::config::{ReadPoolConfig, TiKvConfig};
 use tikv::util::transport::SendCh;
-use tikv::raftstore::store::Msg as StoreMsg;
 
 use super::cluster::{Cluster, Simulator};
 
@@ -108,6 +108,7 @@ pub fn new_store_cfg() -> Config {
         region_split_check_diff: ReadableSize(10000),
         report_region_flow_interval: ReadableDuration::millis(100),
         raft_store_max_leader_lease: ReadableDuration::millis(MAX_LEADER_LEASE),
+        clean_stale_peer_delay: ReadableDuration::secs(0),
         allow_remove_leader: true,
         ..Config::default()
     }
@@ -115,13 +116,12 @@ pub fn new_store_cfg() -> Config {
 
 pub fn new_server_config(cluster_id: u64) -> ServerConfig {
     ServerConfig {
-        cluster_id: cluster_id,
+        cluster_id,
         addr: "127.0.0.1:0".to_owned(),
         grpc_concurrency: 1,
         // Considering connection selection algo is involved, maybe
         // use 2 or larger value here?
         grpc_raft_conn_num: 1,
-        end_point_concurrency: 1,
         ..ServerConfig::default()
     }
 }
@@ -129,6 +129,7 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
 pub fn new_readpool_cfg() -> ReadPoolConfig {
     ReadPoolConfig {
         storage: ReadPoolInstanceConfig::default_for_test(),
+        coprocessor: ReadPoolInstanceConfig::default_for_test(),
     }
 }
 

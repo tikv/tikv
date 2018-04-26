@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt;
 use kvproto::kvrpcpb;
+use std::fmt;
 
 #[derive(Debug, Copy, Clone)]
 pub enum Priority {

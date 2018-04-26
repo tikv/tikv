@@ -47,8 +47,8 @@ impl ThreadsColletcor {
         let descs = cpu_totals.desc().into_iter().cloned().collect();
 
         ThreadsColletcor {
-            pid: pid,
-            descs: descs,
+            pid,
+            descs,
             cpu_totals: Mutex::new(cpu_totals),
         }
     }
@@ -179,8 +179,8 @@ lazy_static! {
 
 #[cfg(test)]
 mod tests {
-    use std::thread;
     use std::sync;
+    use std::thread;
 
     use libc;
 

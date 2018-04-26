@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::i64;
 use std::borrow::Cow;
+use std::i64;
 
-use coprocessor::codec::{mysql, Datum};
-use coprocessor::codec::mysql::Decimal;
 use super::{Error, EvalContext, FnCall, Result};
+use coprocessor::codec::mysql::Decimal;
+use coprocessor::codec::{mysql, Datum};
 
 impl FnCall {
     pub fn logical_and(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -181,12 +181,12 @@ impl FnCall {
 
 #[cfg(test)]
 mod test {
-    use std::i64;
-    use tipb::expression::ScalarFuncSig;
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::Duration;
-    use coprocessor::dag::expr::{EvalContext, Expression};
     use coprocessor::dag::expr::test::{check_overflow, datum_expr, fncall_expr, str2dec};
+    use coprocessor::dag::expr::{EvalContext, Expression};
+    use std::i64;
+    use tipb::expression::ScalarFuncSig;
 
     #[test]
     fn test_logic_op() {

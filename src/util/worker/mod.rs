@@ -11,23 +11,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-/// Worker contains all workers that do the expensive job in background.
+/*!
 
-mod metrics;
+`Worker` provides a mechanism to run tasks asynchronously (i.e. in the background) with some
+additional features, for example, ticks.
+
+A worker contains:
+
+- A runner (which should implement the `Runnable` trait): to run tasks one by one or in batch.
+- A scheduler: to send tasks to the runner, returns immediately.
+
+Briefly speaking, this is a mpsc (multiple-producer-single-consumer) model.
+
+*/
+
 mod future;
+mod metrics;
 
-use std::{io, usize};
-use std::sync::{Arc, Mutex};
-use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
+use prometheus::IntGauge;
+use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::error::Error;
+use std::sync::{Arc, Mutex};
+use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::Duration;
+use std::{io, usize};
 
-use util::time::{Instant, SlowTimer};
-use util::timer::Timer;
 use self::metrics::*;
 use crossbeam_channel::{self, Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError};
+use util::time::{Instant, SlowTimer};
+use util::timer::Timer;
 
 pub use self::future::Runnable as FutureRunnable;
 pub use self::future::Scheduler as FutureScheduler;
@@ -124,6 +137,7 @@ pub struct Scheduler<T> {
     name: Arc<String>,
     counter: Arc<AtomicUsize>,
     sender: Sender<Option<T>>,
+    metrics_pending_task_count: IntGauge,
 }
 
 impl<T: Display> Scheduler<T> {
@@ -131,10 +145,12 @@ impl<T: Display> Scheduler<T> {
     where
         S: Into<String>,
     {
+        let name = name.into();
         Scheduler {
-            name: Arc::new(name.into()),
+            metrics_pending_task_count: WORKER_PENDING_TASK_VEC.with_label_values(&[&name]),
+            name: Arc::new(name),
             counter: Arc::new(counter),
-            sender: sender,
+            sender,
         }
     }
 
@@ -151,9 +167,7 @@ impl<T: Display> Scheduler<T> {
             }
         }
         self.counter.fetch_add(1, Ordering::SeqCst);
-        WORKER_PENDING_TASK_VEC
-            .with_label_values(&[&self.name])
-            .inc();
+        self.metrics_pending_task_count.inc();
         Ok(())
     }
 
@@ -169,6 +183,7 @@ impl<T> Clone for Scheduler<T> {
             name: Arc::clone(&self.name),
             counter: Arc::clone(&self.counter),
             sender: self.sender.clone(),
+            metrics_pending_task_count: self.metrics_pending_task_count.clone(),
         }
     }
 }
@@ -192,7 +207,7 @@ pub struct Builder<S: Into<String>> {
 impl<S: Into<String>> Builder<S> {
     pub fn new(name: S) -> Self {
         Builder {
-            name: name,
+            name,
             batch_size: 1,
             pending_capacity: usize::MAX,
         }
@@ -244,7 +259,11 @@ fn poll<R, T, U>(
     T: Display + Send + 'static,
     U: Send + 'static,
 {
-    let name = thread::current().name().unwrap().to_owned();
+    let current_thread = thread::current();
+    let name = current_thread.name().unwrap();
+    let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[name]);
+    let metrics_handled_task_count = WORKER_HANDLED_TASK_VEC.with_label_values(&[name]);
+
     let mut batch = Vec::with_capacity(batch_size);
     let mut keep_going = true;
     let mut tick_time = None;
@@ -254,14 +273,13 @@ fn poll<R, T, U>(
 
         keep_going = fill_task_batch(&rx, &mut batch, batch_size, timeout);
         if !batch.is_empty() {
-            counter.fetch_sub(batch.len(), Ordering::SeqCst);
-            WORKER_PENDING_TASK_VEC
-                .with_label_values(&[&name])
-                .sub(batch.len() as i64);
-            WORKER_HANDLED_TASK_VEC
-                .with_label_values(&[&name])
-                .inc_by(batch.len() as i64);
+            // batch will be cleared after `run_batch`, so we need to store its length
+            // before `run_batch`.
+            let batch_len = batch.len();
             runner.run_batch(&mut batch);
+            counter.fetch_sub(batch_len, Ordering::SeqCst);
+            metrics_pending_task_count.sub(batch_len as i64);
+            metrics_handled_task_count.inc_by(batch_len as i64);
             batch.clear();
         }
 
@@ -366,20 +384,18 @@ impl<T: Display + Send + 'static> Worker<T> {
     pub fn stop(&mut self) -> Option<thread::JoinHandle<()>> {
         // close sender explicitly so the background thread will exit.
         info!("stoping {}", self.scheduler.name);
-        if self.handle.is_none() {
-            return None;
-        }
+        let handle = self.handle.take()?;
         if let Err(e) = self.scheduler.sender.send(None) {
             warn!("failed to stop worker thread: {:?}", e);
         }
-        self.handle.take()
+        Some(handle)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::thread;
     use std::sync::mpsc;
+    use std::thread;
     use std::time::Duration;
 
     use super::*;
@@ -446,6 +462,8 @@ mod test {
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 60);
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 40);
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 50);
+        // task is handled before we update the busy status, so that we need some sleep.
+        thread::sleep(Duration::from_millis(100));
         assert!(!worker.is_busy());
         worker.stop().unwrap().join().unwrap();
         // now worker can't handle any task
@@ -486,7 +504,8 @@ mod test {
             if v.is_empty() {
                 break;
             }
-            sum += v.into_iter().fold(0, |a, b| a + b);
+            let result: u64 = v.into_iter().sum();
+            sum += result;
         }
         assert_eq!(sum, 50 * 20);
         assert!(rx.recv().is_err());

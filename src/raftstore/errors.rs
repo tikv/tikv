@@ -12,19 +12,19 @@
 // limitations under the License.
 
 use std::error;
-use std::result;
 use std::io;
 use std::net;
+use std::result;
 
 use protobuf::{ProtobufError, RepeatedField};
 
-use util::codec;
+use kvproto::{errorpb, metapb};
 use pd;
 use raft;
-use kvproto::{errorpb, metapb};
+use util::codec;
 
-use super::store::SnapError;
 use super::coprocessor::Error as CopError;
+use super::store::SnapError;
 use util::{escape, transport};
 
 const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";

@@ -11,11 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, Mutex};
-use std::thread::{self, Builder, JoinHandle};
-use std::io;
+use prometheus::IntGauge;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
+use std::io;
+use std::sync::{Arc, Mutex};
+use std::thread::{self, Builder, JoinHandle};
 
 use futures::Stream;
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
@@ -52,13 +53,16 @@ pub trait Runnable<T: Display> {
 pub struct Scheduler<T> {
     name: Arc<String>,
     sender: UnboundedSender<Option<T>>,
+    metrics_pending_task_count: IntGauge,
 }
 
 impl<T: Display> Scheduler<T> {
     fn new<S: Into<String>>(name: S, sender: UnboundedSender<Option<T>>) -> Scheduler<T> {
+        let name = name.into();
         Scheduler {
-            name: Arc::new(name.into()),
-            sender: sender,
+            metrics_pending_task_count: WORKER_PENDING_TASK_VEC.with_label_values(&[&name]),
+            name: Arc::new(name),
+            sender,
         }
     }
 
@@ -70,9 +74,7 @@ impl<T: Display> Scheduler<T> {
         if let Err(err) = self.sender.unbounded_send(Some(task)) {
             return Err(Stopped(err.into_inner().unwrap()));
         }
-        WORKER_PENDING_TASK_VEC
-            .with_label_values(&[&self.name])
-            .inc();
+        self.metrics_pending_task_count.inc();
         Ok(())
     }
 }
@@ -82,6 +84,7 @@ impl<T: Display> Clone for Scheduler<T> {
         Scheduler {
             name: Arc::clone(&self.name),
             sender: self.sender.clone(),
+            metrics_pending_task_count: self.metrics_pending_task_count.clone(),
         }
     }
 }
@@ -99,14 +102,18 @@ where
     R: Runnable<T> + Send + 'static,
     T: Display + Send + 'static,
 {
-    let name = thread::current().name().unwrap().to_owned();
+    let current_thread = thread::current();
+    let name = current_thread.name().unwrap();
+    let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[name]);
+    let metrics_handled_task_count = WORKER_HANDLED_TASK_VEC.with_label_values(&[name]);
+
     let mut core = Core::new().unwrap();
     let handle = core.handle();
     {
         let f = rx.take_while(|t| Ok(t.is_some())).for_each(|t| {
             runner.run(t.unwrap(), &handle);
-            WORKER_PENDING_TASK_VEC.with_label_values(&[&name]).dec();
-            WORKER_HANDLED_TASK_VEC.with_label_values(&[&name]).inc();
+            metrics_pending_task_count.dec();
+            metrics_handled_task_count.inc();
             Ok(())
         });
         // `UnboundedReceiver` never returns an error.
@@ -172,13 +179,11 @@ impl<T: Display + Send + 'static> Worker<T> {
     pub fn stop(&mut self) -> Option<thread::JoinHandle<()>> {
         // close sender explicitly so the background thread will exit.
         info!("stoping {}", self.scheduler.name);
-        if self.handle.is_none() {
-            return None;
-        }
+        let handle = self.handle.take()?;
         if let Err(e) = self.scheduler.sender.unbounded_send(None) {
             warn!("failed to stop worker thread: {:?}", e);
         }
-        self.handle.take()
+        Some(handle)
     }
 }
 
@@ -190,8 +195,8 @@ mod test {
     use std::time::Instant;
 
     use futures::Future;
-    use tokio_timer::Timer;
     use tokio_core::reactor::Handle;
+    use tokio_timer::Timer;
 
     use super::*;
 

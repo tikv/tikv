@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{error, io, str};
-use std::string::FromUtf8Error;
 use std::str::Utf8Error;
+use std::string::FromUtf8Error;
+use std::{error, io, str};
 use tipb::expression::ScalarFuncSig;
 use tipb::select;
 
