@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Arguments;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
@@ -121,12 +120,12 @@ impl RotatingFileLogger {
 }
 
 impl LogWriter for RotatingFileLogger {
-    fn write(&self, args: Arguments) {
+    fn write(&self, args: String) {
         let mut core = self.core.lock().unwrap();
         if core.should_rollover() {
             core.do_rollover()
         };
-        let _ = core.file.write_fmt(args);
+        let _ = core.file.write(args.as_bytes());
     }
 }
 
