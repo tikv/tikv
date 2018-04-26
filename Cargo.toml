@@ -109,6 +109,9 @@ features = ["secure"]
 [replace]
 "protobuf:1.4.1" = { git = "https://github.com/stepancheg/rust-protobuf.git" }
 
+[workspace]
+members = ["fuzz"]
+
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
 debug = true   # Controls whether the compiler passes `-g`
