@@ -804,6 +804,14 @@ impl Peer {
         if self.pending_remove {
             return;
         }
+
+        if self.is_persisting_snapshot {
+            debug!(
+                "{} is still persisting snapshot, skip further handling.",
+                self.tag
+            );
+            return;
+        }
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
             // leader will send all the remaining messages to this follower, which can lead
@@ -814,7 +822,6 @@ impl Peer {
             );
             return;
         }
-
         if !self.pending_messages.is_empty() {
             fail_point!("raft_before_follower_send");
             let messages = mem::replace(&mut self.pending_messages, vec![]);
@@ -825,8 +832,8 @@ impl Peer {
         }
 
         if self.is_persisting {
-            // We have logs or region state that are persisting right now.
-            debug!("{} still persisting, skip further handling.", self.tag);
+            // We have logs that are persisting right now.
+            debug!("{} is still persisting, skip further handling.", self.tag);
             return;
         }
 
@@ -884,7 +891,8 @@ impl Peer {
             if ready.snapshot != RaftSnapshot::new() {
                 debug!(
                     "{} needs to persist snapshot: {:?}",
-                    self.tag, ready.snapshot.get_metadata()
+                    self.tag,
+                    ready.snapshot.get_metadata()
                 );
                 self.is_persisting_snapshot = true;
             }
