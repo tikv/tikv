@@ -12,18 +12,102 @@
 // limitations under the License.
 
 use prometheus::*;
+use prometheus_static_metric::make_static_metric;
+
+make_static_metric! {
+    label_enum CommandTypes {
+        get,
+        batch_get,
+        scan,
+        prewrite,
+        commit,
+        cleanup,
+        rollback,
+        scan_lock,
+        resolve_lock,
+        gc,
+        delete_range,
+        pause,
+        key_mvcc,
+        start_ts_mvcc,
+        raw_get,
+        raw_batch_get,
+        raw_scan,
+        raw_batch_scan,
+        raw_put,
+        raw_batch_put,
+        raw_delete,
+        raw_delete_range,
+        raw_batch_delete,
+    }
+    label_enum CommandPriorities {
+        low,
+        normal,
+        high,
+    }
+    label_enum SchedulerStages {
+        new,
+        process,
+        error,
+        snapshot,
+        snapshot_retry,
+        snapshot_ok,
+        snapshot_err,
+        async_snapshot_err,
+        batch_snapshot,
+        async_batch_snapshot_err,
+        read_finish,
+        next_cmd,
+        write,
+        write_finish,
+        prepare_write_err,
+        async_write_err,
+    }
+    pub struct KvCommandCounterVec: IntCounter {
+        "type" => CommandTypes,
+    }
+    pub struct SchedStageCounterVec: IntCounter {
+        "type" => CommandTypes,
+        "stage" => SchedulerStages,
+    }
+    pub struct SchedHistogramVec: Histogram {
+        "type" => CommandTypes,
+    }
+    pub struct SchedLatchHistogramVec: Histogram {
+        "type" => CommandTypes,
+    }
+    pub struct SchedTooBusyCounterVec: IntCounter {
+        "type" => CommandTypes,
+    }
+    pub struct SchedCommandPriorityCounterVec: IntCounter {
+        "priority" => CommandPriorities,
+    }
+    pub struct BatchCommandHistogramVec: Histogram {
+        "type" => {
+            retry,
+            all,
+        },
+    }
+    pub struct KvCommandKeyWriteHistogramVec: Histogram {
+        "type" => CommandTypes,
+    }
+}
 
 lazy_static! {
-    pub static ref KV_COMMAND_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+    static ref _KV_COMMAND_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_storage_command_total",
         "Total number of commands received.",
         &["type"]
     ).unwrap();
-    pub static ref SCHED_STAGE_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+    pub static ref KV_COMMAND_COUNTER_VEC: KvCommandCounterVec =
+        KvCommandCounterVec::from(&_KV_COMMAND_COUNTER_VEC);
+    static ref _SCHED_STAGE_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_scheduler_stage_total",
         "Total number of commands on each stage.",
         &["type", "stage"]
     ).unwrap();
+    pub static ref SCHED_STAGE_COUNTER_VEC: SchedStageCounterVec =
+        SchedStageCounterVec::from(&_SCHED_STAGE_COUNTER_VEC);
     pub static ref SCHED_WRITING_BYTES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_scheduler_writing_bytes",
         "Total number of writing kv."
@@ -32,18 +116,22 @@ lazy_static! {
         "tikv_scheduler_contex_total",
         "Total number of pending commands."
     ).unwrap();
-    pub static ref SCHED_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+    static ref _SCHED_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_command_duration_seconds",
         "Bucketed histogram of command execution",
         &["type"],
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     ).unwrap();
-    pub static ref SCHED_LATCH_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+    pub static ref SCHED_HISTOGRAM_VEC: SchedHistogramVec =
+        SchedHistogramVec::from(&_SCHED_HISTOGRAM_VEC);
+    static ref _SCHED_LATCH_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_latch_wait_duration_seconds",
         "Bucketed histogram of latch wait",
         &["type"],
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     ).unwrap();
+    pub static ref SCHED_LATCH_HISTOGRAM_VEC: SchedLatchHistogramVec =
+        SchedLatchHistogramVec::from(&_SCHED_LATCH_HISTOGRAM_VEC);
     pub static ref SCHED_PROCESSING_READ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_processing_read_duration_seconds",
         "Bucketed histogram of processing read duration",
@@ -56,16 +144,20 @@ lazy_static! {
         &["type"],
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     ).unwrap();
-    pub static ref SCHED_TOO_BUSY_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+    static ref _SCHED_TOO_BUSY_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_scheduler_too_busy_total",
         "Total count of scheduler too busy",
         &["type"]
     ).unwrap();
-    pub static ref SCHED_COMMANDS_PRI_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+    pub static ref SCHED_TOO_BUSY_COUNTER_VEC: SchedTooBusyCounterVec =
+        SchedTooBusyCounterVec::from(&_SCHED_TOO_BUSY_COUNTER_VEC);
+    static ref _SCHED_COMMANDS_PRI_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_scheduler_commands_pri_total",
         "Total count of different priority commands",
         &["priority"]
     ).unwrap();
+    pub static ref SCHED_COMMANDS_PRI_COUNTER_VEC: SchedCommandPriorityCounterVec =
+        SchedCommandPriorityCounterVec::from(&_SCHED_COMMANDS_PRI_COUNTER_VEC);
     pub static ref KV_COMMAND_KEYREAD_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_kv_command_key_read",
         "Bucketed histogram of keys read of a kv command",
@@ -85,7 +177,7 @@ lazy_static! {
         "tikv_storage_gc_skipped_counter",
         "Total number of gc command skipped owing to optimization"
     ).unwrap();
-    pub static ref BATCH_COMMANDS: HistogramVec = register_histogram_vec!(
+    static ref _BATCH_COMMANDS: HistogramVec = register_histogram_vec!(
         "tikv_storage_batch_commands_total",
         "Bucketed histogram of total number of a batch of commands",
         &["type"],
@@ -94,10 +186,14 @@ lazy_static! {
             64.0, 96.0, 128.0, 192.0, 256.0,
         ]
     ).unwrap();
-    pub static ref KV_COMMAND_KEYWRITE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+    pub static ref BATCH_COMMANDS: BatchCommandHistogramVec =
+        BatchCommandHistogramVec::from(&_BATCH_COMMANDS);
+    static ref _KV_COMMAND_KEYWRITE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_kv_command_key_write",
         "Bucketed histogram of keys write of a kv command",
         &["type"],
         exponential_buckets(1.0, 2.0, 21).unwrap()
     ).unwrap();
+    pub static ref KV_COMMAND_KEYWRITE_HISTOGRAM_VEC: KvCommandKeyWriteHistogramVec =
+        KvCommandKeyWriteHistogramVec::from(&_KV_COMMAND_KEYWRITE_HISTOGRAM_VEC);
 }

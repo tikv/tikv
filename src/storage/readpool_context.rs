@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use prometheus::HistogramTimer;
 use prometheus::local::{LocalHistogramTimer, LocalHistogramVec, LocalIntCounterVec};
 use std::fmt;
 use std::mem;
@@ -28,12 +29,9 @@ pub struct Context {
     pd_sender: worker::FutureScheduler<pd::PdTask>,
 
     // TODO: command_duration, processing_read_duration, command_counter can be merged together.
-    command_duration: LocalHistogramVec,
     processing_read_duration: LocalHistogramVec,
     command_keyreads: LocalHistogramVec,
     // TODO: command_counter, command_pri_counter can be merged together.
-    command_counter: LocalIntCounterVec,
-    command_pri_counter: LocalIntCounterVec,
     scan_details: LocalIntCounterVec,
 
     read_flow_stats: HashMap<u64, storage::FlowStatistics>,
@@ -49,11 +47,8 @@ impl Context {
     pub fn new(pd_sender: worker::FutureScheduler<pd::PdTask>) -> Self {
         Context {
             pd_sender,
-            command_duration: SCHED_HISTOGRAM_VEC.local(),
             processing_read_duration: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
             command_keyreads: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
-            command_counter: KV_COMMAND_COUNTER_VEC.local(),
-            command_pri_counter: SCHED_COMMANDS_PRI_COUNTER_VEC.local(),
             scan_details: KV_COMMAND_SCAN_DETAILS.local(),
             read_flow_stats: HashMap::default(),
         }
@@ -64,14 +59,12 @@ impl Context {
         &mut self,
         cmd: &str,
         priority: readpool::Priority,
-    ) -> LocalHistogramTimer {
-        self.command_counter.with_label_values(&[cmd]).inc();
-        self.command_pri_counter
-            .with_label_values(&[&priority.to_string()])
+    ) -> HistogramTimer {
+        KV_COMMAND_COUNTER_VEC.get(cmd).inc();
+        SCHED_COMMANDS_PRI_COUNTER_VEC
+            .get(&priority.to_string())
             .inc();
-        self.command_duration
-            .with_label_values(&[cmd])
-            .start_coarse_timer()
+        SCHED_HISTOGRAM_VEC.get(cmd).start_coarse_timer()
     }
 
     #[inline]
@@ -112,11 +105,8 @@ impl Context {
 impl futurepool::Context for Context {
     fn on_tick(&mut self) {
         // Flush Prometheus metrics
-        self.command_duration.flush();
         self.processing_read_duration.flush();
         self.command_keyreads.flush();
-        self.command_counter.flush();
-        self.command_pri_counter.flush();
         self.scan_details.flush();
 
         // Report PD metrics
