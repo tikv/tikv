@@ -101,6 +101,10 @@ branch = "dev"
 features = ["profiling"]
 optional = true
 
+[dependencies.prometheus-static-metric]
+git = "https://github.com/pingcap/rust-prometheus.git"
+branch = "wenxuan/static-metric-v2"
+
 [dependencies.grpcio]
 version = "0.2"
 features = ["secure"]
