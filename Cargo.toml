@@ -72,7 +72,9 @@ zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.4", features = [ "serde", "v4" ] }
+grpcio = { version = "0.2" features = [ "serde", "v4" ] }
 raft = "0.1"
+crossbeam-channel = { version = "0.1" features = [ "nightly" ] }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.4"
@@ -99,14 +101,6 @@ git = "https://github.com/busyjay/jemallocator.git"
 branch = "dev"
 features = ["profiling"]
 optional = true
-
-[dependencies.grpcio]
-version = "0.2"
-features = ["secure"]
-
-[dependencies.crossbeam-channel]
-version = "0.1"
-features = ["nightly"]
 
 [replace]
 "protobuf:1.4.1" = { git = "https://github.com/stepancheg/rust-protobuf.git" }
