@@ -11,17 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::usize;
+use std::cell::RefCell;
+use std::cmp::{self, Ordering};
 use std::collections::BinaryHeap;
 use std::sync::Arc;
-use std::cmp::{self, Ordering};
-use std::cell::RefCell;
+use std::usize;
 use tipb::expression::ByItem;
 
-use coprocessor::codec::table::RowColsDict;
 use coprocessor::codec::datum::Datum;
-use coprocessor::dag::expr::EvalContext;
-use coprocessor::Result;
+use coprocessor::codec::table::RowColsDict;
+use coprocessor::dag::expr::{EvalContext, Result};
 
 const HEAP_MAX_CAPACITY: usize = 1024;
 
@@ -44,12 +43,12 @@ impl SortRow {
         err: Arc<RefCell<Option<String>>>,
     ) -> SortRow {
         SortRow {
-            handle: handle,
-            data: data,
-            key: key,
-            order_cols: order_cols,
+            handle,
+            data,
+            key,
+            order_cols,
             eval_ctx: ctx,
-            err: err,
+            err,
         }
     }
 
@@ -106,9 +105,9 @@ impl TopNHeap {
         let cap = cmp::min(limit, HEAP_MAX_CAPACITY);
         Ok(TopNHeap {
             rows: BinaryHeap::with_capacity(cap),
-            limit: limit,
+            limit,
             err: Arc::new(RefCell::new(None)),
-            ctx: ctx,
+            ctx,
         })
     }
 
@@ -187,16 +186,16 @@ impl PartialOrd for SortRow {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::cell::RefCell;
+    use std::sync::Arc;
 
     use tipb::expression::{ByItem, Expr, ExprType};
 
-    use util::collections::HashMap;
-    use util::codec::number::*;
     use coprocessor::codec::Datum;
     use coprocessor::codec::table::RowColsDict;
     use coprocessor::dag::expr::EvalContext;
+    use util::codec::number::*;
+    use util::collections::HashMap;
 
     use super::*;
 

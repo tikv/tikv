@@ -11,24 +11,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod endpoint;
-mod metrics;
-mod dag;
-mod statistics;
-mod checksum;
-pub mod local_metrics;
-pub mod codec;
 pub mod cache;
+mod checksum;
+pub mod codec;
+mod dag;
+mod endpoint;
+pub mod local_metrics;
+mod metrics;
+mod readpool_context;
+mod statistics;
 
 pub use self::endpoint::err_resp;
-use std::result;
+pub use self::readpool_context::Context as ReadPoolContext;
+
 use std::error;
+use std::result;
 use std::time::Duration;
 
-use kvproto::kvrpcpb::LockInfo;
 use kvproto::errorpb;
+use kvproto::kvrpcpb::LockInfo;
+use tipb::select;
 
+use self::dag::expr;
 use storage::{engine, mvcc, txn};
+use util;
 
 quick_error! {
     #[derive(Debug)]
@@ -47,6 +53,11 @@ quick_error! {
         Full(allow: usize) {
             description("running queue is full")
         }
+        Eval(err:select::Error) {
+            from()
+            description("eval failed")
+            display("eval error {:?}",err)
+        }
         Other(err: Box<error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
@@ -64,6 +75,20 @@ impl From<engine::Error> for Error {
             engine::Error::Request(e) => Error::Region(e),
             _ => Error::Other(box e),
         }
+    }
+}
+
+impl From<expr::Error> for Error {
+    fn from(e: expr::Error) -> Error {
+        Error::Eval(e.into())
+    }
+}
+
+impl From<util::codec::Error> for Error {
+    fn from(e: util::codec::Error) -> Error {
+        let mut err = select::Error::new();
+        err.set_msg(format!("{}", e));
+        Error::Eval(err)
     }
 }
 
@@ -88,7 +113,7 @@ impl From<txn::Error> for Error {
     }
 }
 
+pub use self::dag::{ScanOn, Scanner};
 pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask,
                          DEFAULT_REQUEST_MAX_HANDLE_SECS, REQ_TYPE_CHECKSUM, REQ_TYPE_DAG,
                          SINGLE_GROUP};
-pub use self::dag::{ScanOn, Scanner};

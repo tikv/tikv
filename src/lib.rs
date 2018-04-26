@@ -18,12 +18,11 @@
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
 #![feature(iterator_for_each)]
-#![feature(conservative_impl_trait)]
 #![feature(entry_or_default)]
 #![cfg_attr(feature = "dev", feature(plugin))]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-#![recursion_limit = "100"]
+#![recursion_limit = "200"]
 #![feature(ascii_ctype)]
 #![allow(module_inception)]
 #![allow(should_implement_trait)]
@@ -33,6 +32,9 @@
 #![allow(new_without_default_derive)]
 #![allow(verbose_bit_mask)]
 #![allow(implicit_hasher)]
+// Currently this raises some false positives, so we allow it:
+// https://github.com/rust-lang-nursery/rust-clippy/issues/2638
+#![allow(nonminimal_bool)]
 
 extern crate alloc;
 extern crate backtrace;
@@ -91,12 +93,12 @@ extern crate zipf;
 #[macro_use]
 pub mod util;
 pub mod config;
-pub mod storage;
-pub mod raftstore;
-pub mod pd;
-pub mod server;
 pub mod coprocessor;
 pub mod import;
+pub mod pd;
+pub mod raftstore;
+pub mod server;
+pub mod storage;
 
 pub use storage::Storage;
 

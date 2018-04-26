@@ -14,11 +14,11 @@
 mod config;
 mod priority;
 
-use std::fmt;
-use std::error::Error;
-use std::time::Duration;
 use futures::Future;
 use futures_cpupool::CpuFuture;
+use std::error::Error;
+use std::fmt;
+use std::time::Duration;
 
 use util;
 use util::futurepool::{self, FuturePool};
@@ -89,8 +89,9 @@ impl<T: futurepool::Context + 'static> ReadPool<T> {
         }
     }
 
+    /// TODO: Remove pub.
     #[inline]
-    fn get_pool_by_priority(&self, priority: Priority) -> &FuturePool<T> {
+    pub fn get_pool_by_priority(&self, priority: Priority) -> &FuturePool<T> {
         match priority {
             Priority::High => &self.pool_high,
             Priority::Normal => &self.pool_normal,
@@ -123,8 +124,12 @@ impl<T: futurepool::Context + 'static> ReadPool<T> {
     {
         let pool = self.get_pool_by_priority(priority);
         let max_tasks = self.get_max_tasks_by_priority(priority);
-        if pool.get_running_task_count() >= max_tasks {
-            Err(Full {})
+        let current_tasks = pool.get_running_task_count();
+        if current_tasks >= max_tasks {
+            Err(Full {
+                current_tasks,
+                max_tasks,
+            })
         } else {
             Ok(pool.spawn(future_factory))
         }
@@ -132,11 +137,18 @@ impl<T: futurepool::Context + 'static> ReadPool<T> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Full;
+pub struct Full {
+    pub current_tasks: usize,
+    pub max_tasks: usize,
+}
 
 impl fmt::Display for Full {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        write!(fmt, "read pool is full")
+        write!(
+            fmt,
+            "read pool is full, current task count = {}, max task count = {}",
+            self.current_tasks, self.max_tasks
+        )
     }
 }
 
@@ -148,12 +160,12 @@ impl Error for Full {
 
 #[cfg(test)]
 mod tests {
-    use std::error;
-    use std::result;
-    use std::fmt;
-    use std::thread;
-    use std::sync::mpsc::{channel, Sender};
     use futures::{future, Future};
+    use std::error;
+    use std::fmt;
+    use std::result;
+    use std::sync::mpsc::{channel, Sender};
+    use std::thread;
 
     pub use super::*;
 
@@ -237,7 +249,7 @@ mod tests {
             &Config {
                 high_concurrency: 2,
                 max_tasks_high: 4,
-                ..Config::default()
+                ..Config::default_for_test()
             },
             || || Context {},
         );

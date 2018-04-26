@@ -27,37 +27,37 @@ extern crate rustc_serialize;
 extern crate tikv;
 extern crate toml;
 
-use std::fs::File;
-use std::io::Read;
-use std::{process, str, u64};
-use std::iter::FromIterator;
+use rustc_serialize::hex::{FromHex, ToHex};
 use std::cmp::Ordering;
 use std::error::Error;
+use std::fs::File;
+use std::io::Read;
+use std::iter::FromIterator;
 use std::sync::Arc;
-use rustc_serialize::hex::{FromHex, ToHex};
+use std::{process, str, u64};
 
 use clap::{App, Arg, ArgMatches, SubCommand};
-use protobuf::Message;
 use futures::{future, stream, Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
+use protobuf::Message;
 use protobuf::RepeatedField;
 
+use kvproto::debugpb::DB as DBType;
+use kvproto::debugpb::*;
+use kvproto::debugpb_grpc::DebugClient;
+use kvproto::kvrpcpb::MvccInfo;
+use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
-use kvproto::metapb::Region;
 use raft::eraftpb::{ConfChange, Entry, EntryType};
-use kvproto::kvrpcpb::MvccInfo;
-use kvproto::debugpb::*;
-use kvproto::debugpb::DB as DBType;
-use kvproto::debugpb_grpc::DebugClient;
-use tikv::util::{escape, unescape};
-use tikv::util::security::{SecurityConfig, SecurityManager};
-use tikv::util::rocksdb as rocksdb_util;
+use tikv::config::TiKvConfig;
+use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::raftstore::store::{keys, Engines};
 use tikv::server::debug::{Debugger, RegionInfo};
 use tikv::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
-use tikv::config::TiKvConfig;
+use tikv::util::rocksdb as rocksdb_util;
+use tikv::util::security::{SecurityConfig, SecurityManager};
+use tikv::util::{escape, unescape};
 
 const METRICS_PROMETHEUS: &str = "prometheus";
 const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
@@ -203,38 +203,48 @@ trait DebugExecutor {
         }
     }
 
+    /// Dump mvcc infos for a given key range. The given `from` and `to` must
+    /// be raw key with `z` prefix. Both `to` and `limit` are empty value means
+    /// what we want is point query instead of range scan.
     fn dump_mvccs_infos(
         &self,
         from: Vec<u8>,
-        to: Option<Vec<u8>>,
-        limit: Option<u64>,
+        to: Vec<u8>,
+        mut limit: u64,
         cfs: Vec<&str>,
         start_ts: Option<u64>,
         commit_ts: Option<u64>,
     ) {
-        let to = to.unwrap_or_default();
-        let limit = limit.unwrap_or_default();
-        if to.is_empty() && limit == 0 {
-            eprintln!(r#"please pass "to" or "limit""#);
+        if !from.starts_with(b"z") || (!to.is_empty() && !to.starts_with(b"z")) {
+            eprintln!("from and to should start with \"z\"");
             process::exit(-1);
         }
         if !to.is_empty() && to < from {
-            eprintln!("The region's from pos must greater than the to pos.");
+            eprintln!("\"to\" must be greater than \"from\"");
             process::exit(-1);
         }
-        let scan_future = self.get_mvcc_infos(from, to, limit)
-            .for_each(move |(key, mvcc)| {
+
+        let point_query = to.is_empty() && limit == 0;
+        if point_query {
+            limit = 1;
+        }
+
+        let scan_future = self.get_mvcc_infos(from.clone(), to, limit).for_each(
+            move |(key, mvcc)| {
+                if point_query && key != from {
+                    println!("no mvcc infos for {}", escape(&from));
+                }
+
                 println!("key: {}", escape(&key));
                 if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
                     let lock_info = mvcc.get_lock();
-                    if start_ts.map_or(true, |ts| lock_info.get_lock_version() == ts) {
-                        // FIXME: "lock type" is lost in kvproto.
+                    if start_ts.map_or(true, |ts| lock_info.get_start_ts() == ts) {
                         println!("\tlock cf value: {:?}", lock_info);
                     }
                 }
                 if cfs.contains(&CF_DEFAULT) {
                     for value_info in mvcc.get_values() {
-                        if commit_ts.map_or(true, |ts| value_info.get_ts() == ts) {
+                        if commit_ts.map_or(true, |ts| value_info.get_start_ts() == ts) {
                             println!("\tdefault cf value: {:?}", value_info);
                         }
                     }
@@ -244,14 +254,14 @@ trait DebugExecutor {
                         if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts)
                             && commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
                         {
-                            // FIXME: short_value is lost in kvproto.
                             println!("\t write cf value: {:?}", write_info);
                         }
                     }
                 }
                 println!();
                 future::ok::<(), String>(())
-            });
+            },
+        );
         if let Err(e) = scan_future.wait() {
             eprintln!("{}", e);
             process::exit(-1);
@@ -373,6 +383,14 @@ trait DebugExecutor {
         self.do_compact(db, cf, from, to);
     }
 
+    fn compact_region(&self, db: DBType, cf: &str, region_id: u64) {
+        let region_local = self.get_region_info(region_id).region_local_state.unwrap();
+        let r = region_local.get_region();
+        let from = keys::data_key(r.get_start_key());
+        let to = keys::data_end_key(r.get_end_key());
+        self.do_compact(db, cf, from, to);
+    }
+
     fn print_bad_regions(&self);
 
     fn set_region_tombstone_after_remove_peer(
@@ -409,6 +427,33 @@ trait DebugExecutor {
 
     fn check_local_mode(&self);
 
+    fn recover_regions_mvcc(
+        &self,
+        mgr: Arc<SecurityManager>,
+        cfg: &PdConfig,
+        region_ids: Vec<u64>,
+    ) {
+        self.check_local_mode();
+        let rpc_client =
+            RpcClient::new(cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+
+        let regions = region_ids
+            .into_iter()
+            .map(|region_id| {
+                if let Some(region) = rpc_client
+                    .get_region_by_id(region_id)
+                    .wait()
+                    .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
+                {
+                    return region;
+                }
+                eprintln!("no such region in pd: {}", region_id);
+                process::exit(-1);
+            })
+            .collect();
+        self.recover_regions(regions);
+    }
+
     fn get_all_meta_regions(&self) -> Vec<u64>;
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8>;
@@ -429,6 +474,8 @@ trait DebugExecutor {
     fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>);
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
+
+    fn recover_regions(&self, regions: Vec<Region>);
 
     fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str);
 
@@ -552,6 +599,10 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only avaliable for local mode");
     }
 
+    fn recover_regions(&self, _: Vec<Region>) {
+        unimplemented!("only avaliable for local mode");
+    }
+
     fn print_bad_regions(&self) {
         unimplemented!("only avaliable for local mode");
     }
@@ -641,6 +692,18 @@ impl DebugExecutor for Debugger {
         }
     }
 
+    fn recover_regions(&self, regions: Vec<Region>) {
+        let ret = self.recover_regions(regions)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::recover regions", e));
+        if ret.is_empty() {
+            println!("success!");
+            return;
+        }
+        for (region_id, error) in ret {
+            eprintln!("region: {}, error: {}", region_id, error);
+        }
+    }
+
     fn print_bad_regions(&self) {
         let bad_regions = self.bad_regions()
             .unwrap_or_else(|e| perror_and_exit("Debugger::bad_regions", e));
@@ -675,7 +738,10 @@ impl DebugExecutor for Debugger {
     }
 }
 
+#[allow(cyclomatic_complexity)]
 fn main() {
+    let raw_key_hint: &'static str = "raw key (generally starts with \"z\") in escaped form";
+
     let mut app = App::new("TiKV Ctl")
         .author("PingCAP")
         .about("Distributed transactional key value database powered by Rust and Raft")
@@ -772,7 +838,7 @@ fn main() {
                                 .conflicts_with_all(&["region", "index"])
                                 .short("k")
                                 .takes_value(true)
-                                .help("set the raw key, in escaped form"),
+                                .help(raw_key_hint)
                         ),
                 )
                 .subcommand(
@@ -818,17 +884,18 @@ fn main() {
                 .about("print the range db range")
                 .arg(
                     Arg::with_name("from")
+                        .required(true)
                         .short("f")
                         .long("from")
                         .takes_value(true)
-                        .help("set the scan from raw key, in escaped format"),
+                        .help(raw_key_hint)
                 )
                 .arg(
                     Arg::with_name("to")
                         .short("t")
                         .long("to")
                         .takes_value(true)
-                        .help("set the scan end raw key, in escaped format"),
+                        .help(raw_key_hint)
                 )
                 .arg(
                     Arg::with_name("limit")
@@ -849,8 +916,8 @@ fn main() {
                         .help("set the scan commit_ts as filter"),
                 )
                 .arg(
-                    Arg::with_name("cf")
-                        .long("cf")
+                    Arg::with_name("show-cf")
+                        .long("show-cf")
                         .takes_value(true)
                         .multiple(true)
                         .use_delimiter(true)
@@ -875,7 +942,7 @@ fn main() {
                         .required(true)
                         .short("k")
                         .takes_value(true)
-                        .help("set the query raw key, in escaped form"),
+                        .help(raw_key_hint)
                 ),
         )
         .subcommand(
@@ -883,13 +950,14 @@ fn main() {
                 .about("print the mvcc value")
                 .arg(
                     Arg::with_name("key")
+                        .required(true)
                         .short("k")
                         .takes_value(true)
-                        .help("set the query raw key, in escaped form"),
+                        .help(raw_key_hint)
                 )
                 .arg(
-                    Arg::with_name("cf")
-                        .short("c")
+                    Arg::with_name("show-cf")
+                        .long("show-cf")
                         .takes_value(true)
                         .multiple(true)
                         .use_delimiter(true)
@@ -916,18 +984,23 @@ fn main() {
                 .about("diff two region keys")
                 .arg(
                     Arg::with_name("region")
+                        .required(true)
                         .short("r")
                         .takes_value(true)
                         .help("specify region id"),
                 )
                 .arg(
                     Arg::with_name("to_db")
+                        .required_unless("to_host")
+                        .conflicts_with("to_host")
                         .long("to-db")
                         .takes_value(true)
                         .help("to which db path"),
                 )
                 .arg(
                     Arg::with_name("to_host")
+                        .required_unless("to_db")
+                        .conflicts_with("to_db")
                         .long("to-host")
                         .takes_value(true)
                         .conflicts_with("to_db")
@@ -956,19 +1029,52 @@ fn main() {
                         .short("f")
                         .long("from")
                         .takes_value(true)
-                        .help("set the start raw key, in escaped form"),
+                        .help(raw_key_hint)
                 )
                 .arg(
                     Arg::with_name("to")
                         .short("t")
                         .long("to")
                         .takes_value(true)
-                        .help("set the end raw key, in escaped form"),
+                        .help(raw_key_hint)
+                )
+                .arg(
+                    Arg::with_name("region")
+                    .short("r")
+                    .long("region")
+                    .takes_value(true)
+                    .help("set the region id"),
                 ),
         )
         .subcommand(
             SubCommand::with_name("tombstone")
                 .about("set a region on the node to tombstone by manual")
+                .arg(
+                    Arg::with_name("regions")
+                        .required(true)
+                        .short("r")
+                        .takes_value(true)
+                        .multiple(true)
+                        .use_delimiter(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
+                        .help("the target region"),
+                )
+                .arg(
+                    Arg::with_name("pd")
+                        .required(true)
+                        .short("p")
+                        .takes_value(true)
+                        .multiple(true)
+                        .use_delimiter(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
+                        .help("PD endpoints"),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("recover-mvcc")
+                .about("recover mvcc data of regions on one node")
                 .arg(
                     Arg::with_name("regions")
                         .required(true)
@@ -1043,12 +1149,14 @@ fn main() {
                 .about("modify tikv config, eg. ./tikv-ctl -h ip:port -m kvdb -n default.disable_auto_compactions -v true")
                 .arg(
                     Arg::with_name("module")
+                        .required(true)
                         .short("m")
                         .takes_value(true)
                         .help("module of the tikv, eg. kvdb or raftdb"),
                 )
                 .arg(
                     Arg::with_name("config_name")
+                        .required(true)
                         .short("n")
                         .takes_value(true)
                         .help("config name of the module, for kvdb or raftdb, you can choose \
@@ -1058,6 +1166,7 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("config_value")
+                        .required(true)
                         .short("v")
                         .takes_value(true)
                         .help("config value of the module, eg. 8 for max_background_jobs or true for disable_auto_compactions"),
@@ -1065,10 +1174,14 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("dump-snap-meta").about("dump snapshot meta file")
-            .arg(Arg::with_name("file")
-                 .short("f").long("file")
-                 .takes_value(true)
-                 .help("meta file path"))
+                .arg(
+                    Arg::with_name("file")
+                        .required(true)
+                        .short("f")
+                        .long("file")
+                        .takes_value(true)
+                        .help("meta file path"),
+                 ),
         );
     let matches = app.clone().get_matches();
 
@@ -1133,18 +1246,26 @@ fn main() {
         }
     } else if let Some(matches) = matches.subcommand_matches("scan") {
         let from = unescape(matches.value_of("from").unwrap());
-        let to = matches.value_of("to").map(|to| unescape(to));
-        let limit = matches.value_of("limit").map(|s| s.parse().unwrap());
-        let cfs = Vec::from_iter(matches.values_of("cf").unwrap());
+        let to = matches
+            .value_of("to")
+            .map_or_else(|| vec![], |to| unescape(to));
+        let limit = matches
+            .value_of("limit")
+            .map_or(0, |s| s.parse().expect("parse u64"));
+        if to.is_empty() && limit == 0 {
+            eprintln!(r#"please pass "to" or "limit""#);
+            process::exit(-1);
+        }
+        let cfs = Vec::from_iter(matches.values_of("show-cf").unwrap());
         let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
         let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
         debug_executor.dump_mvccs_infos(from, to, limit, cfs, start_ts, commit_ts);
     } else if let Some(matches) = matches.subcommand_matches("mvcc") {
         let from = unescape(matches.value_of("key").unwrap());
-        let cfs = Vec::from_iter(matches.values_of("cf").unwrap());
+        let cfs = Vec::from_iter(matches.values_of("show-cf").unwrap());
         let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
         let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
-        debug_executor.dump_mvccs_infos(from, None, Some(1), cfs, start_ts, commit_ts);
+        debug_executor.dump_mvccs_infos(from, vec![], 0, cfs, start_ts, commit_ts);
     } else if let Some(matches) = matches.subcommand_matches("diff") {
         let region = matches.value_of("region").unwrap().parse().unwrap();
         let to_db = matches.value_of("to_db");
@@ -1156,7 +1277,11 @@ fn main() {
         let cf = matches.value_of("cf").unwrap();
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
-        debug_executor.compact(db_type, cf, from_key, to_key);
+        if let Some(region) = matches.value_of("region") {
+            debug_executor.compact_region(db_type, cf, region.parse().unwrap());
+        } else {
+            debug_executor.compact(db_type, cf, from_key, to_key);
+        }
     } else if let Some(matches) = matches.subcommand_matches("tombstone") {
         let regions = matches
             .values_of("regions")
@@ -1171,6 +1296,20 @@ fn main() {
             panic!("invalid pd configuration: {:?}", e);
         }
         debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
+    } else if let Some(matches) = matches.subcommand_matches("recover-mvcc") {
+        let regions = matches
+            .values_of("regions")
+            .unwrap()
+            .map(|r| r.parse())
+            .collect::<Result<Vec<_>, _>>()
+            .expect("parse regions fail");
+        let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
+        let mut cfg = PdConfig::default();
+        cfg.endpoints = pd_urls;
+        if let Err(e) = cfg.validate() {
+            panic!("invalid pd configuration: {:?}", e);
+        }
+        debug_executor.recover_regions_mvcc(mgr, &cfg, regions);
     } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
         if let Some(matches) = matches.subcommand_matches("remove-fail-stores") {
             let stores = matches.values_of("stores").unwrap();
@@ -1215,13 +1354,10 @@ fn get_module_type(module: &str) -> MODULE {
 
 fn from_hex(key: &str) -> Vec<u8> {
     const HEX_PREFIX: &str = "0x";
-    let mut s = String::from(key);
-    if s.starts_with(HEX_PREFIX) {
-        let len = s.len();
-        let new_len = len.saturating_sub(HEX_PREFIX.len());
-        s.truncate(new_len);
+    if key.starts_with(HEX_PREFIX) {
+        return key[2..].from_hex().unwrap();
     }
-    s.as_str().from_hex().unwrap()
+    key.from_hex().unwrap()
 }
 
 fn convert_gbmb(mut bytes: u64) -> String {

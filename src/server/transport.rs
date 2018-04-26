@@ -11,24 +11,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock};
-use std::sync::mpsc::Sender;
-use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::RaftCmdRequest;
+use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, RwLock};
 
-use util::transport::SendCh;
-use util::HandyRwLock;
-use util::worker::Scheduler;
-use util::collections::HashSet;
-use raft::SnapshotStatus;
-use raftstore::store::{BatchReadCallback, Callback, Msg as StoreMsg, SignificantMsg, Transport};
-use raftstore::Result as RaftStoreResult;
-use server::raft_client::RaftClient;
-use server::Result;
-use super::snap::Task as SnapTask;
-use super::resolve::StoreAddrResolver;
 use super::metrics::*;
+use super::resolve::StoreAddrResolver;
+use super::snap::Task as SnapTask;
+use raft::SnapshotStatus;
+use raftstore::Result as RaftStoreResult;
+use raftstore::store::{BatchReadCallback, Callback, Msg as StoreMsg, SignificantMsg, Transport};
+use server::Result;
+use server::raft_client::RaftClient;
+use util::HandyRwLock;
+use util::collections::HashSet;
+use util::transport::SendCh;
+use util::worker::Scheduler;
 
 pub trait RaftStoreRouter: Send + Clone {
     /// Send StoreMsg, retry if failed. Try times may vary from implementation.
@@ -75,9 +75,9 @@ pub trait RaftStoreRouter: Send + Clone {
         status: SnapshotStatus,
     ) -> RaftStoreResult<()> {
         self.significant_send(SignificantMsg::SnapshotStatus {
-            region_id: region_id,
-            to_peer_id: to_peer_id,
-            status: status,
+            region_id,
+            to_peer_id,
+            status,
         })
     }
 }
@@ -94,8 +94,8 @@ impl ServerRaftStoreRouter {
         significant_msg_sender: Sender<SignificantMsg>,
     ) -> ServerRaftStoreRouter {
         ServerRaftStoreRouter {
-            ch: ch,
-            significant_msg_sender: significant_msg_sender,
+            ch,
+            significant_msg_sender,
         }
     }
 }
@@ -172,11 +172,11 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         resolver: S,
     ) -> ServerTransport<T, S> {
         ServerTransport {
-            raft_client: raft_client,
-            snap_scheduler: snap_scheduler,
-            raft_router: raft_router,
+            raft_client,
+            snap_scheduler,
+            raft_router,
             resolving: Arc::new(RwLock::new(Default::default())),
-            resolver: resolver,
+            resolver,
         }
     }
 
@@ -291,12 +291,12 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
                 rep.report(SnapshotStatus::Finish);
             }
         };
-        if let Err(e) = self.snap_scheduler.schedule(SnapTask::SendTo {
+        if let Err(e) = self.snap_scheduler.schedule(SnapTask::Send {
             addr: addr.to_owned(),
-            msg: msg,
-            cb: cb,
+            msg,
+            cb,
         }) {
-            if let SnapTask::SendTo { cb, .. } = e.into_inner() {
+            if let SnapTask::Send { cb, .. } = e.into_inner() {
                 error!(
                     "channel is unavaliable, failed to schedule snapshot to {}",
                     addr
@@ -313,9 +313,9 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
 
         SnapshotReporter {
             raft_router: self.raft_router.clone(),
-            region_id: region_id,
-            to_peer_id: to_peer_id,
-            to_store_id: to_store_id,
+            region_id,
+            to_peer_id,
+            to_store_id,
         }
     }
 

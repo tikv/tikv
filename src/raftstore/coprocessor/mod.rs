@@ -11,19 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use kvproto::metapb::Region;
+use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
+use protobuf::RepeatedField;
 use raft::StateRole;
 use rocksdb::DB;
-use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
-use kvproto::metapb::Region;
-use protobuf::RepeatedField;
 
-pub mod dispatcher;
-pub mod split_observer;
-pub mod distsql_cache_observer;
 pub mod config;
+pub mod dispatcher;
+pub mod distsql_cache_observer;
 mod error;
 mod metrics;
 mod split_check;
+pub mod split_observer;
 
 pub use self::config::Config;
 pub use self::dispatcher::{CoprocessorHost, Registry};
@@ -49,7 +49,7 @@ pub struct ObserverContext<'a> {
 impl<'a> ObserverContext<'a> {
     pub fn new(region: &Region) -> ObserverContext {
         ObserverContext {
-            region: region,
+            region,
             bypass: false,
         }
     }

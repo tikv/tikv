@@ -58,20 +58,20 @@ fn parse_frac(s: &[u8], fsp: u8) -> Result<u32> {
     }
 }
 
-mod duration;
-pub mod decimal;
 pub mod charset;
-pub mod types;
-mod time;
+pub mod decimal;
+mod duration;
 pub mod json;
+mod time;
+pub mod types;
 
-pub use self::duration::Duration;
 pub use self::decimal::{dec_encoded_len, Decimal, DecimalDecoder, DecimalEncoder, Res};
-pub use self::types::{has_is_boolean_flag, has_not_null_flag, has_parse_to_json_flag,
-                      has_unsigned_flag};
-pub use self::time::Time;
+pub use self::duration::Duration;
 pub use self::json::{parse_json_path_expr, Json, JsonDecoder, JsonEncoder, ModifyType,
                      PathExpression};
+pub use self::time::Time;
+pub use self::types::{has_is_boolean_flag, has_not_null_flag, has_parse_to_json_flag,
+                      has_unsigned_flag};
 
 #[cfg(test)]
 mod test {
