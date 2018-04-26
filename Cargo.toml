@@ -73,7 +73,6 @@ bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.4", features = [ "serde", "v4" ] }
 raft = "0.1"
-crossbeam-channel = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.4"
@@ -104,6 +103,10 @@ optional = true
 [dependencies.grpcio]
 version = "0.2"
 features = ["secure"]
+
+[dependencies.crossbeam-channel]
+version = "0.1"
+features = ["nightly"]
 
 [replace]
 "protobuf:1.4.1" = { git = "https://github.com/stepancheg/rust-protobuf.git" }
