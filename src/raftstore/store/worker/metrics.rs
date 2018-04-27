@@ -53,4 +53,9 @@ lazy_static! {
         "tikv_pending_delete_ranges_of_stale_peer",
         "Total number of tikv pending delete range of stale peer"
     ).unwrap();
+    pub static ref ASYNC_PERSIST: HistogramVec = register_histogram_vec!(
+        "tikv_raftstore_async_persist_duration",
+        "Bucketed histogram of raftstore async persist duration",
+        &["stage"]
+    ).unwrap();
 }

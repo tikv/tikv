@@ -17,14 +17,18 @@ use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use kvproto::metapb;
+use prometheus::local::LocalHistogram;
 use raft::Ready;
 use rocksdb::rocksdb_options::WriteOptions;
 use rocksdb::{WriteBatch, DB};
 
 use raftstore::store::msg::Msg;
 use raftstore::store::peer_storage::InvokeContext;
+use util::time::duration_to_sec;
 use util::transport::SendCh;
 use util::worker::Runnable;
+
+use super::metrics::ASYNC_PERSIST;
 
 pub enum Task {
     Persist {
@@ -119,6 +123,9 @@ pub struct Runner {
     ch: Sender<TaskRes>,
     notifier: SendCh<Msg>,
     sync_log: bool,
+
+    wait_duration: LocalHistogram,
+    write_duration: LocalHistogram,
 }
 
 impl Runner {
@@ -138,6 +145,8 @@ impl Runner {
             ch,
             notifier,
             sync_log,
+            wait_duration: ASYNC_PERSIST.with_label_values(&["wait"]).local(),
+            write_duration: ASYNC_PERSIST.with_label_values(&["write"]).local(),
         }
     }
 
@@ -149,6 +158,8 @@ impl Runner {
         sync_log: bool,
         timer: Instant,
     ) {
+        self.wait_duration.observe(duration_to_sec(timer.elapsed()));
+        let start = Instant::now();
         // apply_snapshot, peer_destroy will clear_meta, so we need write region state first.
         // otherwise, if program restart between two write, raft log will be removed,
         // but region state may not changed in disk.
@@ -175,6 +186,8 @@ impl Runner {
                 });
         }
         fail_point!("raft_after_save");
+        self.write_duration
+            .observe(duration_to_sec(start.elapsed()));
 
         self.ch
             .send(TaskRes::Persist {
@@ -214,5 +227,10 @@ impl Runnable<Task> for Runner {
                 .unwrap(),
         }
         self.kick();
+    }
+
+    fn on_tick(&mut self) {
+        self.wait_duration.flush();
+        self.write_duration.flush();
     }
 }
