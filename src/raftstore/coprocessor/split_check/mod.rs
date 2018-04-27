@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod table;
-mod size;
 mod half;
+mod size;
+mod table;
 
+use self::half::HalfStatus;
 use self::size::SizeStatus;
 use self::table::TableStatus;
-use self::half::HalfStatus;
 
 pub use self::size::SizeCheckObserver;
 pub const SIZE_CHECK_OBSERVER_PRIORITY: u32 = 200;

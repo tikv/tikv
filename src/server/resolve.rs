@@ -11,16 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
 use std::boxed::FnBox;
 use std::fmt::{self, Display, Formatter};
+use std::sync::Arc;
 use std::time::Instant;
 
 use kvproto::metapb;
 
+use pd::PdClient;
 use util::collections::HashMap;
 use util::worker::{Runnable, Scheduler, Worker};
-use pd::PdClient;
 
 use super::Result;
 use super::metrics::*;
@@ -113,7 +113,7 @@ pub struct PdStoreAddrResolver {
 
 impl PdStoreAddrResolver {
     pub fn new(sched: Scheduler<Task>) -> PdStoreAddrResolver {
-        PdStoreAddrResolver { sched: sched }
+        PdStoreAddrResolver { sched }
     }
 }
 
@@ -124,7 +124,7 @@ where
     let mut worker = Worker::new("store address resolve worker");
 
     let runner = Runner {
-        pd_client: pd_client,
+        pd_client,
         store_addrs: HashMap::default(),
     };
     box_try!(worker.start(runner));
@@ -136,10 +136,7 @@ where
 
 impl StoreAddrResolver for PdStoreAddrResolver {
     fn resolve(&self, store_id: u64, cb: Callback) -> Result<()> {
-        let task = Task {
-            store_id: store_id,
-            cb: cb,
-        };
+        let task = Task { store_id, cb };
         box_try!(self.sched.schedule(task));
         Ok(())
     }
@@ -149,14 +146,14 @@ impl StoreAddrResolver for PdStoreAddrResolver {
 mod tests {
     use super::*;
     use std::net::SocketAddr;
-    use std::sync::Arc;
-    use std::time::{Duration, Instant};
     use std::ops::Sub;
     use std::str::FromStr;
+    use std::sync::Arc;
     use std::thread;
+    use std::time::{Duration, Instant};
 
-    use kvproto::pdpb;
     use kvproto::metapb;
+    use kvproto::pdpb;
     use pd::{PdClient, PdFuture, RegionStat, Result};
     use util;
     use util::collections::HashMap;
@@ -239,7 +236,7 @@ mod tests {
     fn new_runner(store: metapb::Store) -> Runner<MockPdClient> {
         let client = MockPdClient {
             start: Instant::now(),
-            store: store,
+            store,
         };
         Runner {
             pd_client: Arc::new(client),

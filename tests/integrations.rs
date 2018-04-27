@@ -46,15 +46,15 @@ extern crate tokio_timer;
 extern crate toml;
 extern crate uuid;
 
+mod config;
+mod coprocessor;
+mod import;
+mod pd;
 mod raftstore;
 mod raftstore_cases;
-mod coprocessor;
 mod storage;
 mod storage_cases;
 mod util;
-mod pd;
-mod config;
-mod import;
 
 use std::env;
 

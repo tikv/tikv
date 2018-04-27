@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test::Bencher;
-use std::thread;
 use std::sync::mpsc::channel;
+use std::thread;
+use test::Bencher;
 
 use mio::{EventLoop, Handler, Sender};
 

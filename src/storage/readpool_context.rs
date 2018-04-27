@@ -11,29 +11,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use prometheus::local::{LocalHistogramTimer, LocalHistogramVec, LocalIntCounterVec};
 use std::fmt;
 use std::mem;
-use prometheus::local::{LocalHistogramTimer, LocalHistogramVec, LocalIntCounterVec};
 
+use pd;
 use server::readpool;
+use storage;
+use util::collections::HashMap;
 use util::futurepool;
 use util::worker;
-use util::collections::HashMap;
-use pd;
-use storage;
 
 use super::metrics::*;
 
 pub struct Context {
     pd_sender: worker::FutureScheduler<pd::PdTask>,
 
-    // TODO: command_duration, processing_read_duration, kv_command_counter can be merged together.
+    // TODO: command_duration, processing_read_duration, command_counter can be merged together.
     command_duration: LocalHistogramVec,
     processing_read_duration: LocalHistogramVec,
     command_keyreads: LocalHistogramVec,
-    // TODO: kv_command_counter, raw_command_counter, command_pri_counter can be merged together.
-    kv_command_counter: LocalIntCounterVec,
-    raw_command_counter: LocalIntCounterVec,
+    // TODO: command_counter, command_pri_counter can be merged together.
+    command_counter: LocalIntCounterVec,
     command_pri_counter: LocalIntCounterVec,
     scan_details: LocalIntCounterVec,
 
@@ -53,8 +52,7 @@ impl Context {
             command_duration: SCHED_HISTOGRAM_VEC.local(),
             processing_read_duration: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
             command_keyreads: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
-            kv_command_counter: KV_COMMAND_COUNTER_VEC.local(),
-            raw_command_counter: RAWKV_COMMAND_COUNTER_VEC.local(),
+            command_counter: KV_COMMAND_COUNTER_VEC.local(),
             command_pri_counter: SCHED_COMMANDS_PRI_COUNTER_VEC.local(),
             scan_details: KV_COMMAND_SCAN_DETAILS.local(),
             read_flow_stats: HashMap::default(),
@@ -66,13 +64,8 @@ impl Context {
         &mut self,
         cmd: &str,
         priority: readpool::Priority,
-        is_raw: bool,
     ) -> LocalHistogramTimer {
-        if is_raw {
-            self.raw_command_counter.with_label_values(&[cmd]).inc();
-        } else {
-            self.kv_command_counter.with_label_values(&[cmd]).inc();
-        }
+        self.command_counter.with_label_values(&[cmd]).inc();
         self.command_pri_counter
             .with_label_values(&[&priority.to_string()])
             .inc();
@@ -122,8 +115,7 @@ impl futurepool::Context for Context {
         self.command_duration.flush();
         self.processing_read_duration.flush();
         self.command_keyreads.flush();
-        self.kv_command_counter.flush();
-        self.raw_command_counter.flush();
+        self.command_counter.flush();
         self.command_pri_counter.flush();
         self.scan_details.flush();
 

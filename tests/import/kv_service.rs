@@ -13,13 +13,13 @@
 
 use std::sync::Arc;
 
-use uuid::Uuid;
 use futures::{stream, Future, Stream};
 use tempdir::TempDir;
+use uuid::Uuid;
 
+use grpc::{ChannelBuilder, Environment, Result, WriteFlags};
 use kvproto::importpb::*;
 use kvproto::importpb_grpc::*;
-use grpc::{ChannelBuilder, Environment, Result, WriteFlags};
 
 use tikv::config::TiKvConfig;
 use tikv::import::ImportKVServer;
