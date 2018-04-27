@@ -128,6 +128,7 @@ impl Debug for EngineRocksdb {
 }
 
 fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
+    debug!("EngineRocksdb: write_modifies begin");
     let wb = WriteBatch::new();
     for rev in modifies {
         let res = match rev {
@@ -162,9 +163,11 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
             return Err(Error::RocksDb(msg));
         }
     }
+    debug!("EngineRocksdb: write_modifies write batch prepared");
     if let Err(msg) = db.write(wb) {
         return Err(Error::RocksDb(msg));
     }
+    debug!("EngineRocksdb: write_modifies write batch end");
     Ok(())
 }
 

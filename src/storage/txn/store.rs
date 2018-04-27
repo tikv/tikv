@@ -39,6 +39,7 @@ impl SnapshotStore {
     }
 
     pub fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
+        info!("SnapshotStore.get begin: key = {}", key);
         let mut reader = MvccReader::new(
             self.snapshot.clone(),
             None,
@@ -49,6 +50,7 @@ impl SnapshotStore {
         );
         let v = reader.get(key, self.start_ts)?;
         statistics.add(reader.get_statistics());
+        info!("SnapshotStore.get end: key = {}", key);
         Ok(v)
     }
 
@@ -57,6 +59,7 @@ impl SnapshotStore {
         keys: &[Key],
         statistics: &mut Statistics,
     ) -> Result<Vec<Result<Option<Value>>>> {
+        info!("SnapshotStore.batch_get begin: keys = {:?}", keys);
         // TODO: sort the keys and use ScanMode::Forward
         let mut reader = MvccReader::new(
             self.snapshot.clone(),
@@ -71,6 +74,7 @@ impl SnapshotStore {
             results.push(reader.get(k, self.start_ts).map_err(Error::from));
         }
         statistics.add(reader.get_statistics());
+        info!("SnapshotStore.batch_get end: keys = {:?}", keys);
         Ok(results)
     }
 
@@ -122,14 +126,21 @@ fn handle_mvcc_err(e: MvccError, result: &mut Vec<Result<KvPair>>) -> Result<Key
 
 impl StoreScanner {
     pub fn seek(&mut self, key: Key) -> Result<Option<(Key, Value)>> {
-        Ok(self.reader.seek(key, self.start_ts)?)
+        info!("StoreScanner.seek begin: key = {}", key);
+        let ret = self.reader.seek(key, self.start_ts)?;
+        info!("StoreScanner.seek end");
+        Ok(ret)
     }
 
     pub fn reverse_seek(&mut self, key: Key) -> Result<Option<(Key, Value)>> {
-        Ok(self.reader.reverse_seek(key, self.start_ts)?)
+        info!("StoreScanner.reverse_seek begin: key = {}", key);
+        let ret = self.reader.reverse_seek(key, self.start_ts)?;
+        info!("StoreScanner.reverse_seek end");
+        Ok(ret)
     }
 
     pub fn scan(&mut self, mut key: Key, limit: usize) -> Result<Vec<Result<KvPair>>> {
+        info!("StoreScanner.scan begin: key = {}, limit = {}", key, limit);
         let mut results = vec![];
         while results.len() < limit {
             match self.seek(key) {
@@ -143,10 +154,15 @@ impl StoreScanner {
             }
             key = key.append_ts(0);
         }
+        info!("StoreScanner.scan end, resuts_len = {}", results.len());
         Ok(results)
     }
 
     pub fn reverse_scan(&mut self, mut key: Key, limit: usize) -> Result<Vec<Result<KvPair>>> {
+        info!(
+            "StoreScanner.reverse_scan begin: key = {}, limit = {}",
+            key, limit
+        );
         let mut results = vec![];
         while results.len() < limit {
             match self.reverse_seek(key) {
@@ -159,6 +175,10 @@ impl StoreScanner {
                 Err(e) => return Err(e),
             }
         }
+        info!(
+            "StoreScanner.reverse_scan end: results_len = {}",
+            results.len()
+        );
         Ok(results)
     }
 
