@@ -24,3 +24,7 @@ out/
 target
 tmp
 /bin
+
+# Cargo-fuzz
+corpus
+artifacts
