@@ -13,6 +13,7 @@
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
+use std::time::Instant;
 
 use kvproto::metapb;
 use raft::Ready;
@@ -30,6 +31,8 @@ pub enum Task {
         raft_wb: WriteBatch,
         persist: Vec<(Ready, InvokeContext)>,
         sync_log: bool,
+
+        timer: Instant,
     },
     Destory {
         region_id: u64,
@@ -45,11 +48,13 @@ impl Task {
         persist: Vec<(Ready, InvokeContext)>,
         sync_log: bool,
     ) -> Task {
+        let timer = Instant::now();
         Task::Persist {
             kv_wb,
             raft_wb,
             persist,
             sync_log,
+            timer,
         }
     }
 
@@ -111,6 +116,7 @@ impl<C: Sender<Msg>> Runner<C> {
         raft_wb: WriteBatch,
         persist: Vec<(Ready, InvokeContext)>,
         sync_log: bool,
+        timer: Instant,
     ) {
         // apply_snapshot, peer_destroy will clear_meta, so we need write region state first.
         // otherwise, if program restart between two write, raft log will be removed,
@@ -141,6 +147,7 @@ impl<C: Sender<Msg>> Runner<C> {
 
         self.send(Msg::Persistence {
             append_res: persist,
+            timer,
         });
     }
 
@@ -173,7 +180,8 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
                 raft_wb,
                 persist,
                 sync_log,
-            } => self.handle_persist(kv_wb, raft_wb, persist, sync_log),
+                timer,
+            } => self.handle_persist(kv_wb, raft_wb, persist, sync_log, timer),
             Task::Destory {
                 region_id,
                 peer,

@@ -185,6 +185,7 @@ pub enum Msg {
 
     Persistence {
         append_res: Vec<(Ready, InvokeContext)>,
+        timer: Instant,
     },
 
     DestoryPeer {

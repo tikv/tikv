@@ -1985,12 +1985,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn on_ready_persistence_result(&mut self, persist: Vec<(Ready, InvokeContext)>) {
+    fn on_ready_persistence_result(
+        &mut self,
+        persist: Vec<(Ready, InvokeContext)>,
+        timer: Instant,
+    ) {
         debug!(
             "{} async persist done, total ready count {}",
             self.tag,
             persist.len()
         );
+        self.raft_metrics
+            .append_log
+            .observe(duration_to_sec(timer.elapsed()) as f64);
         for (ready, invoke_ctx) in persist {
             let region_id = invoke_ctx.region_id;
             let peer_id = invoke_ctx.peer_id;
@@ -2029,10 +2036,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
         self.trans.flush();
-        // TODO: record append duration.
-        // self.raft_metrics
-        //     .append_log
-        //     .observe(duration_to_sec(t.elapsed()) as f64);
     }
 
     /// Check if a request is valid if it has valid prepare_merge/commit_merge proposal.
@@ -3338,7 +3341,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             } => self.on_schedule_half_split_region(region_id, &region_epoch),
             Msg::MergeFail { region_id } => self.on_merge_fail(region_id),
             Msg::ValidateSSTResult { invalid_ssts } => self.on_validate_sst_result(invalid_ssts),
-            Msg::Persistence { append_res } => self.on_ready_persistence_result(append_res),
+            Msg::Persistence { append_res, timer } => {
+                self.on_ready_persistence_result(append_res, timer)
+            }
             Msg::DestoryPeer {
                 region_id,
                 peer,
