@@ -92,7 +92,7 @@ See also [TiDB change log][tidb_change_log] and [PD change log][pd_change_log].
 * Use DeleteFilesInRanges to clear stale data and improve the TiKV starting speed
 * Sync the metadata of the received Snapshot compulsorily to ensure its safety
 ### Bug Fixes
-* Using Decimal in Coprocessor sum
+* Use Decimal in Coprocessor sum
 
 ## [1.0.7] - 2018-01-22
 ### Improvements
