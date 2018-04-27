@@ -11,8 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use byteorder::{ReadBytesExt, WriteBytesExt};
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
+use std::io::{Read, Write};
 use std::str;
 
 use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Timelike, Utc, Weekday};
@@ -21,7 +23,7 @@ use super::super::{Result, TEN_POW};
 use coprocessor::codec::mysql::Decimal;
 use coprocessor::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
 use coprocessor::codec::mysql::{self, check_fsp, parse_frac, types};
-
+use util::codec::number::{NumberDecoder, NumberEncoder};
 const ZERO_DATETIME_STR: &str = "0000-00-00 00:00:00";
 const ZERO_DATE_STR: &str = "0000-00-00";
 /// In go, `time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC)` will be adjusted to
@@ -804,6 +806,53 @@ impl Display for Time {
             write!(f, ".{0:01$}", nanos, self.fsp as usize)?;
         }
         Ok(())
+    }
+}
+
+impl<T: Write> TimeEncoder for T {}
+pub trait TimeEncoder: NumberEncoder {
+    fn encode_time(&mut self, v: &Time) -> Result<()> {
+        self.encode_u16(v.time.year() as u16)?;
+        self.write_u8(v.time.month() as u8)?;
+        self.write_u8(v.time.day() as u8)?;
+        self.write_u8(v.time.hour() as u8)?;
+        self.write_u8(v.time.minute() as u8)?;
+        self.write_u8(v.time.second() as u8)?;
+        self.encode_u32(v.time.nanosecond() / 1000)?;
+        self.write_u8(v.tp)?;
+        self.write_u8(v.fsp).map_err(From::from)
+    }
+}
+
+impl<T: Read> TimeDecoder for T {}
+pub trait TimeDecoder: NumberDecoder {
+    fn decode_time(&mut self) -> Result<Time> {
+        let year = i32::from(self.decode_u16()?);
+        let month = u32::from(self.read_u8()?);
+        let day = u32::from(self.read_u8()?);
+        let hour = u32::from(self.read_u8()?);
+        let minute = u32::from(self.read_u8()?);
+        let second = u32::from(self.read_u8()?);
+        let nanoseconds = 1000 * self.decode_u32()?;
+        let tp = self.read_u8()?;
+        let fsp = self.read_u8()?;
+        let tz = FixedOffset::east(0); // TODO
+        let t = if tp == types::TIMESTAMP {
+            let t = ymd_hms_nanos(&Utc, year, month, day, hour, minute, second, nanoseconds)?;
+            tz.from_utc_datetime(&t.naive_utc())
+        } else {
+            ymd_hms_nanos(
+                &FixedOffset::east(0),
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                nanoseconds,
+            )?
+        };
+        Time::new(t, tp, fsp as i8)
     }
 }
 

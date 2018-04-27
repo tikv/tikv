@@ -11,14 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use byteorder::{ReadBytesExt, WriteBytesExt};
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::str::{self, FromStr};
 use std::{cmp, mem, i32, i64, u32, u64};
-
-use byteorder::ReadBytesExt;
 
 use coprocessor::codec::{convert, Error, Result, TEN_POW};
 use coprocessor::dag::expr::EvalContext;
@@ -27,6 +26,7 @@ use coprocessor::dag::expr::EvalContext;
 use coprocessor::dag::expr::Error as ExprError;
 
 use util::codec::bytes::BytesDecoder;
+use util::codec::number::{NumberDecoder, NumberEncoder};
 use util::escape;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -809,6 +809,9 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
     }
     res.map(|_| dec)
 }
+
+/// `DECIMAL_STRUCT_SIZE`is the struct size of `Decimal`.
+pub const DECIMAL_STRUCT_SIZE: usize = 40;
 
 /// `Decimal` represents a decimal value.
 #[derive(Clone, Debug)]
@@ -1774,7 +1777,7 @@ macro_rules! read_word {
     }};
 }
 
-pub trait DecimalEncoder: Write {
+pub trait DecimalEncoder: NumberEncoder {
     /// Encode decimal to comparable bytes.
     // TODO: resolve following warnings.
     #[allow(cyclomatic_complexity)]
@@ -1886,11 +1889,37 @@ pub trait DecimalEncoder: Write {
         }
         Ok(res)
     }
+
+    fn encode_decimal_to_chunk(&mut self, v: &Decimal) -> Result<()> {
+        self.write_u8(v.int_cnt)?;
+        self.write_u8(v.frac_cnt)?;
+        self.write_u8(v.result_frac_cnt)?;
+        //TODO tidb do not have precision
+        self.write_u8(v.negative as u8)?;
+        let len = word_cnt!(v.int_cnt) + word_cnt!(v.frac_cnt);
+        for id in 0..len as usize {
+            self.encode_i32_le(v.word_buf[id] as i32)?;
+        }
+        Ok(())
+    }
 }
 
 impl<T: Write> DecimalEncoder for T {}
 
-pub trait DecimalDecoder: BytesDecoder {
+pub trait DecimalDecoder: BytesDecoder + NumberDecoder {
+    fn decode_decimal_from_chunk(&mut self) -> Result<Decimal> {
+        let int_cnt = self.read_u8()?;
+        let frac_cnt = self.read_u8()?;
+        let result_frac_cnt = self.read_u8()?;
+        let negative = self.read_u8()? == 1;
+        let mut d = Decimal::new(int_cnt, frac_cnt, negative);
+        d.result_frac_cnt = result_frac_cnt;
+        for id in 0..WORD_BUF_LEN {
+            d.word_buf[id as usize] = self.decode_i32_le()? as u32;
+        }
+        Ok(d)
+    }
+
     fn decode_decimal(&mut self) -> Result<Decimal> {
         if self.remaining() < 3 {
             return Err(box_err!("decimal too short: {} < 3", self.remaining()));

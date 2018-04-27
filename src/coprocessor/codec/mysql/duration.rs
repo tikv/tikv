@@ -13,10 +13,11 @@
 
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::time::Duration as StdDuration;
 use std::{str, i64, u64};
 use time::{self, Tm};
+use util::codec::number::{NumberDecoder, NumberEncoder};
 
 use super::super::Result;
 use super::{check_fsp, parse_frac, Decimal};
@@ -272,6 +273,23 @@ impl Eq for Duration {}
 impl Ord for Duration {
     fn cmp(&self, dur: &Duration) -> Ordering {
         self.partial_cmp(dur).unwrap()
+    }
+}
+
+impl<T: Write> DurationEncoder for T {}
+pub trait DurationEncoder: NumberEncoder {
+    fn encode_duration(&mut self, v: &Duration) -> Result<()> {
+        self.encode_i64(v.to_nanos())?;
+        self.encode_i64(i64::from(v.fsp))
+    }
+}
+
+impl<T: Read> DurationDecoder for T {}
+pub trait DurationDecoder: NumberDecoder {
+    fn decode_duration(&mut self) -> Result<Duration> {
+        let nanos = self.decode_i64()?;
+        let fsp = self.decode_i64()?;
+        Duration::from_nanos(nanos, fsp as i8)
     }
 }
 

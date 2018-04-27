@@ -77,6 +77,14 @@ pub trait NumberEncoder: Write {
         self.write_u64::<BigEndian>(!v).map_err(From::from)
     }
 
+    fn encode_u32(&mut self, v: u32) -> Result<()> {
+        self.write_u32::<BigEndian>(v).map_err(From::from)
+    }
+
+    fn encode_u16(&mut self, v: u16) -> Result<()> {
+        self.write_u16::<BigEndian>(v).map_err(From::from)
+    }
+
     /// `encode_var_i64` writes the encoded value to slice buf.
     /// Note that the encoded result is not memcomparable.
     fn encode_var_i64(&mut self, v: i64) -> Result<()> {
@@ -119,6 +127,10 @@ pub trait NumberEncoder: Write {
         self.write_u32::<LittleEndian>(v).map_err(From::from)
     }
 
+    fn encode_i32_le(&mut self, v: i32) -> Result<()> {
+        self.write_i32::<LittleEndian>(v).map_err(From::from)
+    }
+
     fn encode_f64_le(&mut self, v: f64) -> Result<()> {
         self.write_f64::<LittleEndian>(v).map_err(From::from)
     }
@@ -154,6 +166,14 @@ pub trait NumberDecoder: Read {
     fn decode_u64_desc(&mut self) -> Result<u64> {
         let v = self.read_u64::<BigEndian>()?;
         Ok(!v)
+    }
+
+    fn decode_u32(&mut self) -> Result<u32> {
+        self.read_u32::<BigEndian>().map_err(From::from)
+    }
+
+    fn decode_u16(&mut self) -> Result<u16> {
+        self.read_u16::<BigEndian>().map_err(From::from)
     }
 
     /// `decode_var_i64` decodes value encoded by `encode_var_i64` before.
@@ -202,6 +222,10 @@ pub trait NumberDecoder: Read {
 
     fn decode_u32_le(&mut self) -> Result<u32> {
         self.read_u32::<LittleEndian>().map_err(From::from)
+    }
+
+    fn decode_i32_le(&mut self) -> Result<i32> {
+        self.read_i32::<LittleEndian>().map_err(From::from)
     }
 
     fn decode_f64_le(&mut self) -> Result<f64> {
