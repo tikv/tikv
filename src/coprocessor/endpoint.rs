@@ -313,6 +313,7 @@ struct RequestTracker {
     first_range: Option<KeyRange>,
     scan_tag: &'static str,
     pri_str: &'static str,
+    peer: String,
 }
 
 impl RequestTracker {
@@ -400,9 +401,10 @@ impl Drop for RequestTracker {
             };
 
             info!(
-                "[region {}] handle {:?} table id {:?} [{}] takes {:?} [keys: {}, hit: {}, \
+                "[region {}] from {:?} handle {:?} table id {:?} [{}] takes {:?} [keys: {}, hit: {}, \
                  ranges: {} ({:?})]",
                 self.region_id,
+                self.peer,
                 self.txn_start_ts,
                 table_id,
                 self.scan_tag,
@@ -466,6 +468,7 @@ pub struct RequestTask {
 
 impl RequestTask {
     pub fn new(
+        peer: String,
         req: Request,
         on_resp: OnResponse<Response>,
         recursion_limit: u32,
@@ -531,6 +534,7 @@ impl RequestTask {
             first_range: req.get_ranges().get(0).cloned(),
             scan_tag: req_ctx.get_scan_tag(),
             pri_str: get_req_pri_str(req.get_context().get_priority()),
+            peer: peer,
         };
 
         COPR_PENDING_REQS
