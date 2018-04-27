@@ -27,7 +27,7 @@ use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::Entry;
-use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
+use rocksdb::{Kv, SeekKey, Writable, WriteBatch, WriteOptions, DB};
 
 use raft::{self, quorum, RawNode};
 use raftstore::store::engine::{IterOption, Mutable};
@@ -217,7 +217,13 @@ impl Debugger {
         }
     }
 
+    /// Scan MVCC Infos for given range `[start, end)`.
     pub fn scan_mvcc(&self, start: &[u8], end: &[u8], limit: u64) -> Result<MvccInfoIterator> {
+        if !start.starts_with(b"z") || (!end.is_empty() && !end.starts_with(b"z")) {
+            return Err(Error::InvalidArgument(
+                "start and end should start with \"z\"".to_owned(),
+            ));
+        }
         if end.is_empty() && limit == 0 {
             return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
         }
@@ -256,6 +262,44 @@ impl Debugger {
             box_try!(db.write_opt(wb, &write_opts));
         }
         Ok(errors)
+    }
+
+    pub fn recover_regions(&self, regions: Vec<Region>) -> Result<Vec<(u64, Error)>> {
+        let db = &self.engines.kv_engine;
+
+        let mut errors = Vec::with_capacity(regions.len());
+        for region in regions {
+            let region_id = region.get_id();
+            if let Err(e) = self.recover_region(db, region) {
+                errors.push((region_id, e));
+            }
+        }
+
+        Ok(errors)
+    }
+
+    fn recover_region(&self, db: &Arc<DB>, region: Region) -> Result<()> {
+        let wb = WriteBatch::new();
+
+        let mut mvcc_checker = box_try!(MvccChecker::new(
+            Arc::clone(db),
+            region.get_start_key(),
+            region.get_end_key()
+        ));
+        mvcc_checker.check_mvcc(&wb)?;
+
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        box_try!(db.write_opt(wb, &write_opts));
+
+        warn!(
+            "total fix default: {}, lock: {}, write: {}",
+            mvcc_checker.default_fix_count,
+            mvcc_checker.lock_fix_count,
+            mvcc_checker.write_fix_count
+        );
+
+        Ok(())
     }
 
     pub fn bad_regions(&self) -> Result<Vec<(u64, Error)>> {
@@ -462,6 +506,223 @@ impl Debugger {
                 config_name
             )));
         }
+        Ok(())
+    }
+}
+
+pub struct MvccChecker {
+    db: Arc<DB>,
+    lock_iter: DBIterator,
+    default_iter: DBIterator,
+    write_iter: DBIterator,
+    lock_fix_count: usize,
+    default_fix_count: usize,
+    write_fix_count: usize,
+}
+
+impl MvccChecker {
+    fn new(db: Arc<DB>, start_key: &[u8], end_key: &[u8]) -> Result<Self> {
+        let start_key = keys::data_key(start_key);
+        let end_key = keys::data_end_key(end_key);
+        let gen_iter = |cf: &str| -> Result<_> {
+            let from = start_key.clone();
+            let to = end_key.clone();
+            let readopts = IterOption::new(Some(from.clone()), Some(to), false).build_read_opts();
+            let handle = box_try!(get_cf_handle(db.as_ref(), cf));
+            let mut iter = DBIterator::new_cf(Arc::clone(&db), handle, readopts);
+            iter.seek(SeekKey::Start);
+            Ok(iter)
+        };
+
+        Ok(MvccChecker {
+            db: Arc::clone(&db),
+            write_iter: gen_iter(CF_WRITE)?,
+            lock_iter: gen_iter(CF_LOCK)?,
+            default_iter: gen_iter(CF_DEFAULT)?,
+            lock_fix_count: 0,
+            default_fix_count: 0,
+            write_fix_count: 0,
+        })
+    }
+
+    fn min_key(key: Option<Vec<u8>>, iter: &DBIterator, f: fn(&[u8]) -> &[u8]) -> Option<Vec<u8>> {
+        let iter_key = if iter.valid() {
+            Some(f(keys::origin_key(iter.key())).to_vec())
+        } else {
+            None
+        };
+        match (key, iter_key) {
+            (Some(a), Some(b)) => if a < b {
+                Some(a)
+            } else {
+                Some(b)
+            },
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        }
+    }
+
+    pub fn check_mvcc(&mut self, wb: &WriteBatch) -> Result<()> {
+        loop {
+            // Find min key in the 3 CFs.
+            let mut key = MvccChecker::min_key(None, &self.default_iter, truncate_ts);
+            key = MvccChecker::min_key(key, &self.lock_iter, |k| k);
+            key = MvccChecker::min_key(key, &self.write_iter, truncate_ts);
+
+            match key {
+                Some(key) => self.check_mvcc_key(wb, key.as_ref())?,
+                None => return Ok(()),
+            }
+        }
+    }
+
+    fn check_mvcc_key(&mut self, wb: &WriteBatch, key: &[u8]) -> Result<()> {
+        let (mut default, mut write, mut lock) = (None, None, None);
+        let (mut next_default, mut next_write, mut next_lock) = (true, true, true);
+        loop {
+            if next_default {
+                default = self.next_default(key)?;
+                next_default = false;
+            }
+            if next_write {
+                write = self.next_write(key)?;
+                next_write = false;
+            }
+            if next_lock {
+                lock = self.next_lock(key)?;
+                next_lock = false;
+            }
+
+            // If lock exists, check whether the records in DEFAULT and WRITE
+            // match it.
+            if let Some(ref l) = lock {
+                // All write records' ts should be less than lock's ts.
+                if let Some((commit_ts, _)) = write {
+                    if l.ts <= commit_ts {
+                        warn!(
+                            "LOCK ts is less than WRITE ts, key: {}, lock_ts: {}, commit_ts: {}",
+                            escape(key),
+                            l.ts,
+                            commit_ts
+                        );
+                        self.delete(wb, CF_LOCK, key, None)?;
+                        self.lock_fix_count += 1;
+                        next_lock = true;
+                        continue;
+                    }
+                }
+
+                // If the lock's type is PUT and contains no short value, there
+                // should be a corresponding default record.
+                if l.lock_type == LockType::Put && l.short_value.is_none() {
+                    match default {
+                        Some(start_ts) if start_ts == l.ts => {
+                            next_default = true;
+                        }
+                        _ => {
+                            warn!(
+                                "no corresponding DEFAULT record for LOCK, key: {}, lock_ts: {}",
+                                escape(key),
+                                l.ts
+                            );
+                            self.delete(wb, CF_LOCK, key, None)?;
+                            self.lock_fix_count += 1;
+                        }
+                    }
+                }
+                next_lock = true;
+                continue;
+            }
+
+            // For none-put write or write with short_value, no DEFAULT record
+            // is needed.
+            if let Some((_, ref w)) = write {
+                if w.write_type != WriteType::Put || w.short_value.is_some() {
+                    next_write = true;
+                    continue;
+                }
+            }
+
+            // The start_ts of DEFAULT and WRITE should be matched.
+            match (default, &write) {
+                (Some(start_ts), &Some((_, ref w))) if start_ts == w.start_ts => {
+                    next_default = true;
+                    next_write = true;
+                    continue;
+                }
+                (Some(start_ts), &Some((_, ref w))) if start_ts < w.start_ts => next_write = true,
+                (Some(start_ts), &Some((_, ref w))) if start_ts > w.start_ts => next_default = true,
+                (Some(_), &Some(_)) => {} // Won't happen.
+                (None, &Some(_)) => next_write = true,
+                (Some(_), &None) => next_default = true,
+                (None, &None) => return Ok(()),
+            }
+
+            if next_default {
+                warn!(
+                    "orphan DEFAULT record, key: {}, start_ts: {}",
+                    escape(key),
+                    default.unwrap()
+                );
+                self.delete(wb, CF_DEFAULT, key, default)?;
+                self.default_fix_count += 1;
+            }
+
+            if next_write {
+                if let Some((commit_ts, ref w)) = write {
+                    warn!(
+                        "no corresponding DEFAULT record for WRITE, key: {}, start_ts: {}, commit_ts: {}",
+                        escape(key),
+                        w.start_ts,
+                        commit_ts
+                    );
+                    self.delete(wb, CF_WRITE, key, Some(commit_ts))?;
+                    self.write_fix_count += 1;
+                }
+            }
+        }
+    }
+
+    fn next_lock(&mut self, key: &[u8]) -> Result<Option<Lock>> {
+        if self.lock_iter.valid() && keys::origin_key(self.lock_iter.key()) == key {
+            let lock = box_try!(Lock::parse(self.lock_iter.value()));
+            self.lock_iter.next();
+            return Ok(Some(lock));
+        }
+        Ok(None)
+    }
+
+    fn next_default(&mut self, key: &[u8]) -> Result<Option<u64>> {
+        if self.default_iter.valid()
+            && truncate_ts(keys::origin_key(self.default_iter.key())) == key
+        {
+            let record_key = Key::from_encoded(keys::origin_key(self.default_iter.key()).to_vec());
+            let start_ts = box_try!(record_key.decode_ts());
+            self.default_iter.next();
+            return Ok(Some(start_ts));
+        }
+        Ok(None)
+    }
+
+    fn next_write(&mut self, key: &[u8]) -> Result<Option<(u64, Write)>> {
+        if self.write_iter.valid() && truncate_ts(keys::origin_key(self.write_iter.key())) == key {
+            let record_key = Key::from_encoded(keys::origin_key(self.write_iter.key()).to_vec());
+            let write = box_try!(Write::parse(self.write_iter.value()));
+            let commit_ts = box_try!(record_key.decode_ts());
+            self.write_iter.next();
+            return Ok(Some((commit_ts, write)));
+        }
+        Ok(None)
+    }
+
+    fn delete(&mut self, wb: &WriteBatch, cf: &str, key: &[u8], ts: Option<u64>) -> Result<()> {
+        let handle = box_try!(get_cf_handle(self.db.as_ref(), cf));
+        let key = match ts {
+            Some(ts) => Key::from_encoded(key.to_vec()).append_ts(ts),
+            None => Key::from_encoded(key.to_vec()),
+        };
+        box_try!(wb.delete_cf(handle, &keys::data_key(key.encoded())));
         Ok(())
     }
 }
@@ -708,8 +969,8 @@ mod tests {
     use super::*;
     use raftstore::store::engine::Mutable;
     use storage::mvcc::{Lock, LockType};
-    use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use util::rocksdb::{self as rocksdb_util, CFOptions};
+    use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use util::rocksdb::{self as rocksdb_util, new_engine_opt, CFOptions};
 
     fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
         let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
@@ -971,6 +1232,10 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 7);
+
+        // Test scan with bad start, end or limit.
+        assert!(debugger.scan_mvcc(b"z", b"", 0).is_err());
+        assert!(debugger.scan_mvcc(b"z", b"x", 3).is_err());
     }
 
     #[test]
@@ -1147,5 +1412,148 @@ mod tests {
             .unwrap();
         let cf_opts = engine.get_options_cf(cf);
         assert_eq!(cf_opts.get_disable_auto_compactions(), true);
+    }
+
+    #[test]
+    fn test_mvcc_checker() {
+        let (mut default, mut lock, mut write) = (vec![], vec![], vec![]);
+        enum Expect {
+            Keep,
+            Remove,
+        };
+        // test check CF_LOCK.
+        default.extend(vec![
+            // key, start_ts, check
+            (b"k4", 100, Expect::Keep),
+            (b"k5", 100, Expect::Keep),
+        ]);
+        lock.extend(vec![
+            // key, start_ts, lock_type, short_value, check
+            (b"k1", 100, LockType::Put, false, Expect::Remove), // k1: remove orphan lock.
+            (b"k2", 100, LockType::Delete, false, Expect::Keep), // k2: Delete doesn't need default.
+            (b"k3", 100, LockType::Put, true, Expect::Keep), // k3: short value doesn't need default.
+            (b"k4", 100, LockType::Put, false, Expect::Keep), // k4: corresponding default exists.
+            (b"k5", 100, LockType::Put, false, Expect::Remove), // k5: duplicated lock and write.
+        ]);
+        write.extend(vec![
+            // key, start_ts, commit_ts, write_type, short_value, check
+            (b"k5", 100, 101, WriteType::Put, false, Expect::Keep),
+        ]);
+
+        // test match CF_DEFAULT and CF_WRITE.
+        default.extend(vec![
+            // key, start_ts
+            (b"k6", 96, Expect::Remove), // extra default.
+            (b"k6", 94, Expect::Keep),   // ok.
+            (b"k6", 90, Expect::Remove), // Delete should not have default.
+            (b"k6", 88, Expect::Remove), // Default is redundant if write has short value.
+        ]);
+        write.extend(vec![
+            // key, start_ts, commit_ts, write_type, short_value
+            (b"k6", 100, 101, WriteType::Put, true, Expect::Keep), // short value doesn't need default.
+            (b"k6", 99, 99, WriteType::Rollback, false, Expect::Keep), // rollback doesn't need default.
+            (b"k6", 97, 98, WriteType::Delete, false, Expect::Keep), // delete doesn't need default.
+            (b"k6", 94, 94, WriteType::Put, false, Expect::Keep),    // ok.
+            (b"k6", 92, 93, WriteType::Put, false, Expect::Remove),  // extra write.
+            (b"k6", 90, 91, WriteType::Delete, false, Expect::Keep),
+            (b"k6", 88, 89, WriteType::Put, true, Expect::Keep),
+        ]);
+
+        // Combine problems together.
+        default.extend(vec![
+            // key, start_ts
+            (b"k7", 98, Expect::Remove), // default without lock or write.
+            (b"k7", 90, Expect::Remove), // orphan default.
+        ]);
+        lock.extend(vec![
+            // key, start_ts, lock_type, short_value, check
+            (b"k7", 100, LockType::Put, false, Expect::Remove), // duplicated lock and write.
+        ]);
+        write.extend(vec![
+            // key, start_ts, commit_ts, write_type, short_value
+            (b"k7", 99, 100, WriteType::Put, false, Expect::Remove), // write without default.
+            (b"k7", 96, 97, WriteType::Put, true, Expect::Keep),
+        ]);
+
+        // Out of range.
+        default.extend(vec![
+            // key, start_ts
+            (b"k8", 100, Expect::Keep),
+        ]);
+        lock.extend(vec![
+            // key, start_ts, lock_type, short_value, check
+            (b"k8", 101, LockType::Put, false, Expect::Keep),
+        ]);
+        write.extend(vec![
+            // key, start_ts, commit_ts, write_type, short_value
+            (b"k8", 102, 103, WriteType::Put, false, Expect::Keep),
+        ]);
+
+        let mut kv = vec![];
+        for (key, ts, expect) in default {
+            kv.push((
+                CF_DEFAULT,
+                Key::from_raw(key).append_ts(ts),
+                b"v".to_vec(),
+                expect,
+            ));
+        }
+        for (key, ts, tp, short_value, expect) in lock {
+            let v = if short_value {
+                Some(b"v".to_vec())
+            } else {
+                None
+            };
+            let lock = Lock::new(tp, vec![], ts, 0, v);
+            kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes(), expect));
+        }
+        for (key, start_ts, commit_ts, tp, short_value, expect) in write {
+            let v = if short_value {
+                Some(b"v".to_vec())
+            } else {
+                None
+            };
+            let write = Write::new(tp, start_ts, v);
+            kv.push((
+                CF_WRITE,
+                Key::from_raw(key).append_ts(commit_ts),
+                write.to_bytes(),
+                expect,
+            ));
+        }
+
+        let path = TempDir::new("test_mvcc_checker").expect("");
+        let path_str = path.path().to_str().unwrap();
+        let cfs_opts = ALL_CFS
+            .into_iter()
+            .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
+            .collect();
+        let db = Arc::new(new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap());
+        // Write initial KVs.
+        let wb = WriteBatch::new();
+        for &(cf, ref k, ref v, _) in &kv {
+            wb.put_cf(
+                get_cf_handle(&db, cf).unwrap(),
+                &keys::data_key(k.encoded()),
+                v,
+            ).unwrap();
+        }
+        db.write(wb).unwrap();
+        // Fix problems.
+        let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"k8").unwrap();
+        let wb = WriteBatch::new();
+        checker.check_mvcc(&wb).unwrap();
+        db.write(wb).unwrap();
+        // Check result.
+        for (cf, k, _, expect) in kv {
+            let data = db.get_cf(
+                get_cf_handle(&db, cf).unwrap(),
+                &keys::data_key(k.encoded()),
+            ).unwrap();
+            match expect {
+                Expect::Keep => assert!(data.is_some()),
+                Expect::Remove => assert!(data.is_none()),
+            }
+        }
     }
 }

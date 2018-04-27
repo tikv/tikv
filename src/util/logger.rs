@@ -26,6 +26,7 @@ const ENABLED_TARGETS: &[&str] = &[
     "benches::",
     "integrations::",
     "failpoints::",
+    "raft::",
 ];
 
 pub fn init_log<W: LogWriter + Sync + Send + 'static>(

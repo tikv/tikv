@@ -734,6 +734,17 @@ impl TestPdClient {
         panic!("region {:?} has peer {:?}", region, peer);
     }
 
+    pub fn must_none_pending_peer(&self, peer: metapb::Peer) {
+        for _ in 1..500 {
+            sleep_ms(10);
+            if self.cluster.rl().pending_peers.contains_key(&peer.get_id()) {
+                continue;
+            }
+            return;
+        }
+        panic!("peer {:?} shouldn't be pending any more", peer);
+    }
+
     pub fn add_region(&self, region: &metapb::Region) {
         self.cluster.wl().add_region(region)
     }

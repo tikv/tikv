@@ -108,6 +108,7 @@ pub fn new_store_cfg() -> Config {
         region_split_check_diff: ReadableSize(10000),
         report_region_flow_interval: ReadableDuration::millis(100),
         raft_store_max_leader_lease: ReadableDuration::millis(MAX_LEADER_LEASE),
+        clean_stale_peer_delay: ReadableDuration::secs(0),
         allow_remove_leader: true,
         ..Config::default()
     }
@@ -121,7 +122,6 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
         // Considering connection selection algo is involved, maybe
         // use 2 or larger value here?
         grpc_raft_conn_num: 1,
-        end_point_concurrency: 1,
         ..ServerConfig::default()
     }
 }
@@ -129,6 +129,7 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
 pub fn new_readpool_cfg() -> ReadPoolConfig {
     ReadPoolConfig {
         storage: ReadPoolInstanceConfig::default_for_test(),
+        coprocessor: ReadPoolInstanceConfig::default_for_test(),
     }
 }
 

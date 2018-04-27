@@ -58,6 +58,7 @@ use clap::{App, Arg};
 use fs2::FileExt;
 
 use tikv::config::{check_and_persist_critical_config, TiKvConfig};
+use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::pd::{PdClient, RpcClient};
 use tikv::raftstore::coprocessor::CoprocessorHost;
@@ -132,6 +133,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let pd_worker = FutureWorker::new("pd worker");
     let (mut worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
         .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
+    let pd_sender = pd_worker.scheduler();
 
     // Create kv engine, storage.
     let mut kv_db_opts = cfg.rocksdb.build_opt();
@@ -141,7 +143,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {:?}", s)),
     );
-    let pd_sender = pd_worker.scheduler();
     let storage_read_pool = ReadPool::new("store-read", &cfg.readpool.storage, || {
         let pd_sender = pd_sender.clone();
         move || storage::ReadPoolContext::new(pd_sender.clone())
@@ -179,15 +180,19 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     let server_cfg = Arc::new(cfg.server.clone());
     // Create server
+    let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor, || {
+        let pd_sender = pd_sender.clone();
+        move || coprocessor::ReadPoolContext::new(pd_sender.clone())
+    });
     let mut server = Server::new(
         &server_cfg,
         &security_mgr,
         cfg.coprocessor.region_split_size.0 as usize,
         storage.clone(),
+        cop_read_pool,
         raft_router,
         resolver,
         snap_mgr.clone(),
-        pd_worker.scheduler(),
         Some(engines.clone()),
         Some(import_service),
     ).unwrap_or_else(|e| fatal!("failed to create server: {:?}", e));
