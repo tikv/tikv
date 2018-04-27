@@ -5,6 +5,46 @@ See also [TiDB change log][tidb_change_log] and [PD change log][pd_change_log].
 [tidb_change_log]: https://github.com/pingcap/tidb/blob/master/CHANGELOG.md
 [pd_change_log]: https://github.com/pingcap/pd/blob/master/CHANGELOG.md
 
+## [2.0.0] - 2018-04-27
+### Features
+* Protect critical configuration from incorrect modification
+* Support `Region Merge` [experimental]
+* Add the `Raw DeleteRange` API
+* Add the `GetMetric` API
+* Add `Raw Batch Put`, `Raw Batch Get`, `Raw Batch Delete` and `Raw Batch Scan`
+* Add Column Family options for the RawKV API and support executing operation on a specific Column Family
+* Support Streaming and Streaming Aggregation in Coprocessor
+* Support configuring the request timeout of Coprocessor
+* Carry timestamps with Region heartbeats
+* Support modifying some RocksDB parameters online, such as `block-cache-size`
+* Support configuring the behavior of Coprocessor when it encounters some warnings or errors
+* Support starting in the importing data mode to reduce write amplification during the data importing process
+* Support manually splitting Region in halves
+* Improve the data recovery tool `tikv-ctl`
+* Return more statistics in Coprocessor to guide the behavior of TiDB
+* Support the `ImportSST` API to import SST files [experimental]
+* Add the TiKV Importer binary to integrate with TiDB Lightning to import data quickly [experimental]
+### Performance
+* Optimize read performance using `ReadPool` and increase the `raw_get/get/batch_get` by 30%
+* Improve metrics performance
+* Inform PD immediately once the Raft snapshot process is completed to speed up balancing
+* Solve performance jitter caused by RocksDB flushing
+* Optimize the space reclaiming mechanism after deleting data
+* Speed up garbage cleaning while starting the server
+* Reduce the I/O overhead during replica migration using `DeleteFilesInRanges`
+### Stability
+* Fix the issue that gRPC call does not returned when the PD leader switches
+* Fix the issue that it is slow to offline nodes caused by snapshots
+* Limit the temporary space usage consumed by migrating replicas
+* Report the Regions that cannot elect a leader for a long time
+* Update the Region size information in time according to compaction events
+* Limit the size of scan lock to avoid request timeout
+* Limit the memory usage when receiving snapshots to avoid OOM
+* Increase the speed of CI test
+* Fix the OOM issue caused by too many snapshots
+* Configure `keepalive` of gRPC
+* Fix the OOM issue caused by an increase of the Region number
+
 ## [2.0.0-rc6] - 2018-04-19
 ### New Features
 ### Improvements
