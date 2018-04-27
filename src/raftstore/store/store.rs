@@ -63,8 +63,9 @@ use super::transport::Transport;
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, CleanupSSTTask,
                     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
-                    RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
-                    PersistRunner, PersistTask, SplitCheckTask, STALE_PEER_CHECK_INTERVAL};
+                    PersistRunner, PersistTask, PersistTaskRes, RaftlogGcRunner, RaftlogGcTask,
+                    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask,
+                    STALE_PEER_CHECK_INTERVAL};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 
 type Key = Vec<u8>;
@@ -160,6 +161,7 @@ pub struct Store<T, C: 'static> {
     pub apply_worker: Worker<ApplyTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
     persist_worker: Worker<PersistTask>,
+    persist_res_receiver: Option<StdReceiver<PersistTaskRes>>,
 
     last_compact_checked_key: Key,
 
@@ -243,6 +245,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             cleanup_sst_worker: Worker::new("cleanup sst worker"),
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
+            persist_res_receiver: None,
             persist_worker: Worker::new("persist worker"),
             last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
             region_ranges: BTreeMap::new(),
@@ -597,14 +600,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
 
-        let append_runner = PersistRunner::new(
+        let (tx, rx) = mpsc::channel();
+        let persist_runner = PersistRunner::new(
             self.store_id(),
             Arc::clone(&self.kv_engine),
             Arc::clone(&self.raft_engine),
-            self.sendch.clone(),
+            tx,
             self.cfg.sync_log,
         );
-        box_try!(self.persist_worker.start(append_runner));
+        self.persist_res_receiver = Some(rx);
+        box_try!(self.persist_worker.start(persist_runner));
 
         if let Err(e) = util_sys::pri::set_priority(util_sys::HIGH_PRI) {
             warn!("set priority for raftstore failed, error: {:?}", e);
@@ -698,6 +703,23 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     let store_id = self.store_id();
                     self.destroy_peer(p.region_id(), util::new_peer(store_id, p.id()), false);
                 }
+                Err(TryRecvError::Empty) => break,
+                Err(e) => panic!("unexpected error {:?}", e),
+            }
+        }
+    }
+
+    fn poll_persist(&mut self) {
+        loop {
+            match self.persist_res_receiver.as_ref().unwrap().try_recv() {
+                Ok(PersistTaskRes::Persist { append_res, timer }) => {
+                    self.on_ready_persistence_result(append_res, timer)
+                }
+                Ok(PersistTaskRes::Destory {
+                    region_id,
+                    peer,
+                    keep_data,
+                }) => self.on_ready_destroy_peer(region_id, peer, keep_data),
                 Err(TryRecvError::Empty) => break,
                 Err(e) => panic!("unexpected error {:?}", e),
             }
@@ -3279,6 +3301,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
     type Message = Msg;
 
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
+        self.poll_persist();
         match msg {
             Msg::RaftMessage(data) => if let Err(e) = self.on_raft_message(data) {
                 error!("{} handle raft message err: {:?}", self.tag, e);
@@ -3341,14 +3364,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             } => self.on_schedule_half_split_region(region_id, &region_epoch),
             Msg::MergeFail { region_id } => self.on_merge_fail(region_id),
             Msg::ValidateSSTResult { invalid_ssts } => self.on_validate_sst_result(invalid_ssts),
-            Msg::Persistence { append_res, timer } => {
-                self.on_ready_persistence_result(append_res, timer)
-            }
-            Msg::DestoryPeer {
-                region_id,
-                peer,
-                keep_data,
-            } => self.on_ready_destroy_peer(region_id, peer, keep_data),
         }
     }
 

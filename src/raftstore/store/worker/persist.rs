@@ -13,6 +13,7 @@
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
+use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use kvproto::metapb;
@@ -20,9 +21,7 @@ use raft::Ready;
 use rocksdb::rocksdb_options::WriteOptions;
 use rocksdb::{WriteBatch, DB};
 
-use raftstore::store::Msg;
 use raftstore::store::peer_storage::InvokeContext;
-use util::transport::{NotifyError, RetryableSendCh, Sender};
 use util::worker::Runnable;
 
 pub enum Task {
@@ -75,7 +74,7 @@ impl Display for Task {
                 region_id,
                 ref peer,
                 ..
-            } => f.debug_struct("Msg::DestoryPeer")
+            } => f.debug_struct("Destory")
                 .field("region_id", &region_id)
                 .field("peer", &peer)
                 .finish(),
@@ -83,29 +82,57 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<C: Sender<Msg>> {
+pub enum TaskRes {
+    Persist {
+        append_res: Vec<(Ready, InvokeContext)>,
+        timer: Instant,
+    },
+
+    Destory {
+        region_id: u64,
+        peer: metapb::Peer,
+        keep_data: bool,
+    },
+}
+
+impl Display for TaskRes {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match *self {
+            TaskRes::Persist { .. } => write!(f, "Persist"),
+            TaskRes::Destory {
+                region_id,
+                ref peer,
+                ..
+            } => f.debug_struct("Destory")
+                .field("region_id", &region_id)
+                .field("peer", &peer)
+                .finish(),
+        }
+    }
+}
+
+pub struct Runner {
     tag: String,
     kv_engine: Arc<DB>,
     raft_engine: Arc<DB>,
-    store_ch: C,
+    notifier: Sender<TaskRes>,
     sync_log: bool,
 }
 
-impl<C: Sender<Msg>> Runner<C> {
+impl Runner {
     pub fn new(
         store_id: u64,
         kv_engine: Arc<DB>,
         raft_engine: Arc<DB>,
-        store_ch: RetryableSendCh<Msg, C>,
+        notifier: Sender<TaskRes>,
         sync_log: bool,
-    ) -> Runner<C> {
+    ) -> Runner {
         let tag = format!("store {}", store_id);
-        let store_ch = store_ch.into_inner();
         Runner {
             tag,
             kv_engine,
             raft_engine,
-            store_ch,
+            notifier,
             sync_log,
         }
     }
@@ -145,34 +172,16 @@ impl<C: Sender<Msg>> Runner<C> {
         }
         fail_point!("raft_after_save");
 
-        self.send(Msg::Persistence {
-            append_res: persist,
-            timer,
-        });
-    }
-
-    fn send(&self, msg: Msg) {
-        let mut m = Some(msg);
-        while let Some(msg) = m.take() {
-            match self.store_ch.send(msg) {
-                Ok(()) => (),
-                Err(NotifyError::Full(msg)) => {
-                    m = Some(msg);
-                    error!("fail to send Msg::Persistence, notify queue is full, retry...");
-                }
-                Err(NotifyError::Closed(_)) => {
-                    warn!("store_ch is closed");
-                    break;
-                }
-                Err(NotifyError::Io(e)) => {
-                    panic!("fail to send Msg::Persistence: {:?}", e);
-                }
-            }
-        }
+        self.notifier
+            .send(TaskRes::Persist {
+                append_res: persist,
+                timer,
+            })
+            .unwrap();
     }
 }
 
-impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
+impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         match task {
             Task::Persist {
@@ -186,11 +195,13 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
                 region_id,
                 peer,
                 keep_data,
-            } => self.send(Msg::DestoryPeer {
-                region_id,
-                peer,
-                keep_data,
-            }),
+            } => self.notifier
+                .send(TaskRes::Destory {
+                    region_id,
+                    peer,
+                    keep_data,
+                })
+                .unwrap(),
         }
     }
 }
