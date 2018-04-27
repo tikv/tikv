@@ -2,10 +2,10 @@
 All notable changes to this project are documented in this file.
 See also [TiDB change log][tidb_change_log] and [PD change log][pd_change_log].
 
-[tidb_change_log]: https://github.com/pingcap/tidb/blob/change-log/CHANGELOG.md
-[pd_change_log]: https://github.com/pingcap/pd/blob/change-log/CHANGELOG.md
+[tidb_change_log]: https://github.com/pingcap/tidb/blob/master/CHANGELOG.md
+[pd_change_log]: https://github.com/pingcap/pd/blob/master/CHANGELOG.md
 
-## [2.0.0-GA] - 2018-04-27
+## [2.0.0] - 2018-04-27
 ### New Features
 * `tikv-ctl` now can recover MVCC data corruption.
 * Support column families for raw key/value API.
@@ -13,8 +13,6 @@ See also [TiDB change log][tidb_change_log] and [PD change log][pd_change_log].
 * Gc Raft logs cache eagerly to reduce memory usage.
 ### Bug Fixes
 * Fix a `tikv-ctl` bug might cause TiKV panic.
-
-
 
 ## [2.0.0-rc6] - 2018-04-19
 ### New Features
