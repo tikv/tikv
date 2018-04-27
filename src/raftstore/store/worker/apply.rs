@@ -65,6 +65,7 @@ use raftstore::store::{cmd_resp, keys, util, Engines, Store};
 use raftstore::{Error, Result};
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::collections::HashMap;
+use util::futurepool::{Context as FuturePoolContext, FuturePool};
 use util::time::{duration_to_sec, Instant, SlowTimer};
 use util::worker::Runnable;
 use util::{escape, rocksdb, MustConsumeVec};
@@ -276,8 +277,8 @@ pub struct ApplyContext {
 impl ApplyContext {
     pub fn new(host: Arc<CoprocessorHost>, importer: Arc<SSTImporter>) -> ApplyContext {
         ApplyContext {
-            host: host,
-            importer: importer,
+            host,
+            importer,
             wb: None,
             cbs: MustConsumeVec::new("callback of apply context"),
             merged_regions: vec![],
@@ -1093,10 +1094,14 @@ impl ApplyDelegate {
                             "{} remove unmatched peer: expect: {:?}, get {:?}, ignore",
                             self.tag, peer, p
                         );
-                        return Err(box_err!(
-                            "remove unmatched peer: expect: {:?}, get {:?}, ignore",
-                            peer,
-                            p
+                        return box future::err((
+                            self,
+                            ctx,
+                            box_err!(
+                                "remove unmatched peer: expect: {:?}, get {:?}, ignore",
+                                peer,
+                                p
+                            ),
                         ));
                     }
                     if self.id == peer.get_id() {
@@ -1109,10 +1114,11 @@ impl ApplyDelegate {
                         "{} remove missing peer {:?} from region {:?}",
                         self.tag, peer, self.region
                     );
-                    return Err(box_err!(
-                        "remove missing peer {:?} from region {:?}",
-                        peer,
-                        self.region
+                    let region = self.region.clone();
+                    return box future::err((
+                        self,
+                        ctx,
+                        box_err!("remove missing peer {:?} from region {:?}", peer, region),
                     ));
                 }
 
@@ -1136,10 +1142,15 @@ impl ApplyDelegate {
                         "{} can't add duplicated learner {:?} to region {:?}",
                         self.tag, peer, self.region
                     );
-                    return Err(box_err!(
-                        "can't add duplicated learner {:?} to region {:?}",
-                        peer,
-                        self.region
+                    let region = self.region.clone();
+                    return box future::err((
+                        self,
+                        ctx,
+                        box_err!(
+                            "can't add duplicated learner {:?} to region {:?}",
+                            peer,
+                            region
+                        ),
                     ));
                 }
                 region.mut_peers().push(peer.clone());
@@ -1970,8 +1981,8 @@ impl ApplyDelegate {
             ctx,
             resp,
             Some(ExecResult::ComputeHash {
-                region: region,
-                index: index,
+                region,
+                index,
                 // This snapshot may be held for a long time, which may cause too many
                 // open files in rocksdb.
                 // TODO: figure out another way to do consistency check without snapshot
@@ -1990,10 +2001,7 @@ impl ApplyDelegate {
             self,
             ctx,
             resp,
-            Some(ExecResult::VerifyHash {
-                index: index,
-                hash: hash,
-            }),
+            Some(ExecResult::VerifyHash { index, hash }),
         ))
     }
 }
@@ -2135,7 +2143,6 @@ pub enum Task {
     Proposals(Vec<RegionProposal>),
     Destroy(Destroy),
     Borrow(BorrowDelegate),
-    Remove(u64),
 }
 
 impl Task {
@@ -2172,7 +2179,6 @@ impl Display for Task {
             }
             Task::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
             Task::Borrow(ref b) => write!(f, "borrow [reigon {}]", b.target),
-            Task::Remove(region_id) => write!(f, "[region {}] pending remove", region_id),
         }
     }
 }
@@ -2275,21 +2281,40 @@ impl Runner {
 
     fn handle_proposals(&mut self, proposals: Vec<RegionProposal>) {
         let mut propose_num = 0;
-        for region_proposal in proposals {
+        for mut region_proposal in proposals {
+            propose_num += region_proposal.props.len();
+
+            let mut removed = false;
+            let mut stale_proposal = None;
             match self.region_task_senders.get(&region_proposal.region_id) {
                 Some(tx) => {
                     tx.unbounded_send(RegionTask::proposal(region_proposal))
-                        .unwrap();
+                        .unwrap_or_else(|e| {
+                            removed = true;
+                            let task = e.into_inner();
+                            if let RegionTask::Proposal(p) = task {
+                                stale_proposal = Some(p);
+                            } else {
+                                panic!("Proposal task is expected.")
+                            }
+                        });
                 }
                 None => {
-                    for p in region_proposal.props {
-                        let cmd = PendingCmd::new(p.index, p.term, p.cb);
-                        notify_region_removed(region_proposal.region_id, region_proposal.id, cmd);
-                    }
-                    continue;
+                    removed = true;
+                    stale_proposal = Some(region_proposal);
                 }
             }
+            if removed {
+                let stale_proposal = stale_proposal.unwrap();
+                for p in stale_proposal.props {
+                    let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                    notify_region_removed(stale_proposal.region_id, stale_proposal.id, cmd);
+                }
+                self.region_task_senders.remove(&stale_proposal.region_id);
+            }
         }
+
+        APPLY_PROPOSAL.observe(propose_num as f64);
     }
 
     fn spawn_region(
@@ -2328,23 +2353,19 @@ impl Runner {
                                             ctx.write_to_db(&delegate.engine);
                                             (delegate, ctx)
                                         }
-                                        Err((delegate, ctx, e)) => (delegate, ctx),
+                                        Err((delegate, ctx, _e)) => (delegate, ctx),
                                     };
-
-                                    if delegate.pending_remove {
-                                        delegate
-                                            .scheduler
-                                            .schedule(Task::Remove(delegate.region_id()))
-                                            .unwrap();
-                                        delegate.destroy();
-                                        return Err(());
-                                    }
 
                                     if !ctx.apply_res.is_empty() {
                                         delegate
                                             .notifier
                                             .send(TaskRes::Applys(ctx.apply_res))
                                             .unwrap();
+                                    }
+
+                                    if delegate.pending_remove {
+                                        delegate.destroy();
+                                        return Err(());
                                     }
 
                                     STORE_APPLY_LOG_HISTOGRAM
@@ -2442,17 +2463,31 @@ impl Runner {
         // Only respond when the meta exists. Otherwise if destroy is triggered
         // multiple times, the store may destroy wrong target peer.
         if let Some(tx) = self.region_task_senders.remove(&d.region_id) {
-            tx.unbounded_send(RegionTask::destroy(d.region_id)).unwrap();
+            tx.unbounded_send(RegionTask::destroy(d.region_id))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "[region {}] has been removed before destroy message arrived, error {:?}",
+                        d.region_id, e
+                    );
+                });
         }
     }
 
     fn handle_borrow(&mut self, borrow: BorrowDelegate) {
-        let tx = self.region_task_senders
-            .remove(&borrow.target)
-            .unwrap_or_else(|| {
-                panic!("Can't borrow delegate for region {}", borrow.target);
+        let target = borrow.target;
+        let tx = self.region_task_senders.remove(&target).unwrap_or_else(|| {
+            panic!(
+                "Can't borrow region {} 's delegate, no releated message channel",
+                target
+            );
+        });
+        tx.unbounded_send(RegionTask::Borrow(borrow))
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Can't borrow region {} 's delegate, caused by err: {:?}",
+                    target, e
+                );
             });
-        tx.unbounded_send(RegionTask::Borrow(borrow)).unwrap();
     }
 
     fn handle_shutdown(&mut self) {
@@ -2473,7 +2508,7 @@ impl Runner {
             let mut removed = false;
             if let Some(tx) = self.region_task_senders.get(&region_id) {
                 tx.unbounded_send(RegionTask::apply(apply, start))
-                    .unwrap_or_else(|e| {
+                    .unwrap_or_else(|_e| {
                         error!("[region {}] has been removed", region_id);
                         removed = true;
                     });
@@ -2486,10 +2521,6 @@ impl Runner {
             }
         }
     }
-
-    fn handle_remove(&mut self, region_id: u64) {
-        self.region_task_senders.remove(&region_id);
-    }
 }
 
 impl Runnable<Task> for Runner {
@@ -2500,7 +2531,6 @@ impl Runnable<Task> for Runner {
             Task::Registration(s) => self.handle_registration(s),
             Task::Destroy(d) => self.handle_destroy(d),
             Task::Borrow(b) => self.handle_borrow(b),
-            Task::Remove(r) => self.handle_remove(r),
         }
     }
 
