@@ -2108,6 +2108,7 @@ pub enum RegionTask {
     Suicide(Suicide),
     Proposal(RegionProposal),
     Borrow(BorrowDelegate),
+    Stop(u64),
 }
 
 impl RegionTask {
@@ -2400,6 +2401,13 @@ impl Runner {
                             // Exit current task
                             box future::err(())
                         }
+                        RegionTask::Stop(region_id) => {
+                            assert_eq!(delegate.region_id(), region_id);
+                            delegate.destroy();
+
+                            // Exit current task
+                            box future::err(())
+                        }
                         RegionTask::Borrow(borrow) => {
                             assert_eq!(delegate.region_id(), borrow.target);
                             borrow.tx.send(delegate).unwrap();
@@ -2491,10 +2499,10 @@ impl Runner {
     }
 
     fn handle_shutdown(&mut self) {
-        // let mut delegates = self.delegates.lock().unwrap();
-        // for p in delegates.values_mut() {
-        //     p.as_mut().unwrap().clear_pending_commands();
-        // }
+        // Todo: wait all regions finished.
+        for (region_id, tx) in self.region_task_senders.drain() {
+            let _ = tx.unbounded_send(RegionTask::Stop(region_id));
+        }
     }
 
     fn handle_applies(&mut self, applies: ApplyBatch) {
