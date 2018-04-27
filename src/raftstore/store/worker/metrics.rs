@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{exponential_buckets, Histogram, HistogramVec, IntCounterVec};
+use prometheus::{exponential_buckets, Gauge, Histogram, HistogramVec, IntCounterVec};
 
 lazy_static! {
     pub static ref SNAP_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
@@ -48,5 +48,9 @@ lazy_static! {
         "tikv_raftstore_apply_proposal",
         "Proposal count of all regions in a mio tick",
         exponential_buckets(1.0, 2.0, 20).unwrap()
+    ).unwrap();
+    pub static ref STALE_PEER_PENDING_DELETE_RANGE_GAUGE: Gauge = register_gauge!(
+        "tikv_pending_delete_ranges_of_stale_peer",
+        "Total number of tikv pending delete range of stale peer"
     ).unwrap();
 }

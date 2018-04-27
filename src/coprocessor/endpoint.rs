@@ -11,18 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cell::{RefCell, RefMut};
+use std::cell::RefMut;
 use std::fmt::{self, Debug, Display, Formatter};
-use std::iter::FromIterator;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
-use std::thread::{self, ThreadId};
 use std::time::Duration;
 use std::{mem, usize};
 
 use futures::sync::mpsc as futures_mpsc;
 use futures::{future, stream};
-use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 use protobuf::{CodedInputStream, Message as PbMsg};
 
 use kvproto::coprocessor::{KeyRange, Request, Response};
@@ -34,23 +31,24 @@ use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
 use tipb::select::DAGRequest;
 
-use pd::PdTask;
+use server::readpool::{self, ReadPool};
 use server::{Config, OnResponse};
 use storage::engine::Error as EngineError;
 use storage::{self, engine, Engine, Snapshot};
 use util::collections::HashMap;
+use util::futurepool;
 use util::time::{duration_to_sec, Instant};
-use util::worker::{FutureScheduler, Runnable, Scheduler};
+use util::worker::{Runnable, Scheduler};
 
 use super::checksum::ChecksumContext;
 use super::codec::datum::Datum;
-use super::codec::mysql;
+use super::codec::{mysql, table};
 use super::dag::DAGContext;
 use super::dag::executor::ExecutorMetrics;
-use super::local_metrics::{BasicLocalMetrics, ExecLocalMetrics};
+use super::local_metrics::BasicLocalMetrics;
 use super::metrics::*;
 use super::statistics::analyze::AnalyzeContext;
-use super::{Error, Result};
+use super::{Error, ReadPoolContext, Result};
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
@@ -68,87 +66,12 @@ const OUTDATED_ERROR_MSG: &str = "request outdated.";
 
 const ENDPOINT_IS_BUSY: &str = "endpoint is busy";
 
-struct CopContextInner {
-    exec_local_metrics: ExecLocalMetrics,
-    basic_local_metrics: BasicLocalMetrics,
-    timer: Instant,
-    timeout: Duration,
-}
-
-impl CopContextInner {
-    fn collect(&mut self, region_id: u64, scan_tag: &str, metrics: ExecutorMetrics) {
-        self.exec_local_metrics
-            .collect(scan_tag, region_id, metrics);
-
-        let new_timer = Instant::now_coarse();
-        if new_timer.duration_since(self.timer) >= self.timeout {
-            self.exec_local_metrics.flush();
-            self.basic_local_metrics.flush();
-            self.timer = new_timer;
-        }
-    }
-}
-
-struct CopContext(RefCell<CopContextInner>);
-
-impl CopContext {
-    fn new(pd_task_sender: FutureScheduler<PdTask>) -> Self {
-        let inner = CopContextInner {
-            exec_local_metrics: ExecLocalMetrics::new(pd_task_sender),
-            basic_local_metrics: BasicLocalMetrics::default(),
-            timer: Instant::now_coarse(),
-            timeout: Duration::from_secs(1),
-        };
-        CopContext(RefCell::new(inner))
-    }
-}
-
-#[derive(Clone)]
-struct CopContextPool {
-    cop_ctxs: Arc<HashMap<ThreadId, CopContext>>,
-}
-
-impl CopContextPool {
-    // Must be called in thread pool.
-    fn get_context(&self) -> &CopContext {
-        let thread_id = thread::current().id();
-        self.cop_ctxs.get(&thread_id).unwrap()
-    }
-}
-
-impl FromIterator<(ThreadId, CopContext)> for CopContextPool {
-    fn from_iter<T: IntoIterator<Item = (ThreadId, CopContext)>>(iter: T) -> Self {
-        let mut cop_ctxs = map![];
-        for (thread_id, cop_ctx) in iter {
-            cop_ctxs.insert(thread_id, cop_ctx);
-        }
-        let cop_ctxs = Arc::new(cop_ctxs);
-        CopContextPool { cop_ctxs }
-    }
-}
-
-unsafe impl Sync for CopContextPool {}
-unsafe impl Send for CopContextPool {}
-
-impl Debug for CopContextPool {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "CopContextPool")
-    }
-}
-
-struct ExecutorPool {
-    pool: CpuPool,
-    contexts: CopContextPool,
-}
-
 pub struct Host {
     engine: Box<Engine>,
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: ExecutorPool,
-    low_priority_pool: ExecutorPool,
-    high_priority_pool: ExecutorPool,
+    pool: ReadPool<ReadPoolContext>,
     basic_local_metrics: BasicLocalMetrics,
     max_running_task_count: usize,
     running_task_count: Arc<AtomicUsize>,
@@ -162,62 +85,20 @@ impl Host {
         engine: Box<Engine>,
         sched: Scheduler<Task>,
         cfg: &Config,
-        pd_task_sender: FutureScheduler<PdTask>,
+        pool: ReadPool<ReadPoolContext>,
     ) -> Host {
         Host {
             engine,
             sched,
             reqs: HashMap::default(),
             last_req_id: 0,
-            pool: Host::create_executor_pool(
-                "endpoint-normal-pool",
-                cfg.end_point_concurrency,
-                cfg.end_point_stack_size.0 as usize,
-                pd_task_sender.clone(),
-            ),
-            low_priority_pool: Host::create_executor_pool(
-                "endpoint-low-pool",
-                cfg.end_point_concurrency,
-                cfg.end_point_stack_size.0 as usize,
-                pd_task_sender.clone(),
-            ),
-            high_priority_pool: Host::create_executor_pool(
-                "endpoint-high-pool",
-                cfg.end_point_concurrency,
-                cfg.end_point_stack_size.0 as usize,
-                pd_task_sender,
-            ),
+            pool,
             basic_local_metrics: BasicLocalMetrics::default(),
             max_running_task_count: cfg.end_point_max_tasks,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             request_max_handle_duration: cfg.end_point_request_max_handle_duration.0,
             running_task_count: Arc::new(AtomicUsize::new(0)),
-        }
-    }
-
-    fn create_executor_pool(
-        name_prefix: &str,
-        pool_size: usize,
-        thread_stack_size: usize,
-        pd_task_sender: FutureScheduler<PdTask>,
-    ) -> ExecutorPool {
-        let (tx, rx) = mpsc::sync_channel(pool_size);
-        let cpu_pool = {
-            CpuPoolBuilder::new()
-                .name_prefix(name_prefix)
-                .pool_size(pool_size)
-                .stack_size(thread_stack_size)
-                .after_start(move || {
-                    let thread_id = thread::current().id();
-                    let cop_ctx = CopContext::new(pd_task_sender.clone());
-                    tx.send((thread_id, cop_ctx)).unwrap();
-                })
-                .create()
-        };
-        ExecutorPool {
-            pool: cpu_pool,
-            contexts: CopContextPool::from_iter(rx),
         }
     }
 
@@ -255,13 +136,10 @@ impl Host {
         let mut tracker = t.tracker;
         let ranges = req.take_ranges().into_vec();
 
-        let pool_and_ctx_pool = match req.get_context().get_priority() {
-            CommandPri::Low => &mut self.low_priority_pool,
-            CommandPri::High => &mut self.high_priority_pool,
-            CommandPri::Normal => &mut self.pool,
-        };
-        let pool = &pool_and_ctx_pool.pool;
-        tracker.ctx_pool(pool_and_ctx_pool.contexts.clone());
+        let priority = readpool::Priority::from(req.get_context().get_priority());
+        let pool = self.pool.get_pool_by_priority(priority);
+        let ctxd = pool.get_context_delegators();
+        tracker.ctx_pool(ctxd);
 
         match cop_req {
             CopRequest::DAG(dag) => {
@@ -274,7 +152,7 @@ impl Host {
                 };
                 if !on_resp.is_streaming() {
                     let batch_row_limit = self.batch_row_limit;
-                    let do_request = move || {
+                    let do_request = move |_| {
                         tracker.record_wait();
                         let mut resp = ctx.handle_request(batch_row_limit).unwrap_or_else(|e| {
                             let mut metrics = tracker.get_basic_metrics();
@@ -286,7 +164,8 @@ impl Host {
                         on_resp.respond(resp);
                         future::ok::<_, ()>(())
                     };
-                    return pool.spawn_fn(do_request).forget();
+                    pool.spawn(do_request).forget();
+                    return;
                 }
                 // For streaming.
                 let batch_row_limit = self.stream_batch_row_limit;
@@ -307,12 +186,12 @@ impl Host {
                         future::ok::<_, futures_mpsc::SendError<_>>((resp, (ctx, finished)))
                     })
                 });
-                pool.spawn(on_resp.respond_stream(s)).forget();
+                pool.spawn(move |_| on_resp.respond_stream(s)).forget();
             }
             CopRequest::Analyze(analyze) => {
                 let ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx);
                 let mut exec_metrics = ExecutorMetrics::default();
-                let do_request = move || {
+                let do_request = move |_| {
                     tracker.record_wait();
                     let mut resp = ctx.handle_request(&mut exec_metrics).unwrap_or_else(|e| {
                         let mut metrics = tracker.get_basic_metrics();
@@ -322,12 +201,12 @@ impl Host {
                     on_resp.respond(resp);
                     future::ok::<_, ()>(())
                 };
-                pool.spawn_fn(do_request).forget();
+                pool.spawn(do_request).forget();
             }
             CopRequest::Checksum(checksum) => {
                 let ctx = ChecksumContext::new(checksum, ranges, snap, &req_ctx);
                 let mut exec_metrics = ExecutorMetrics::default();
-                let do_request = move || {
+                let do_request = move |_| {
                     tracker.record_wait();
                     let mut resp = ctx.handle_request(&mut exec_metrics).unwrap_or_else(|e| {
                         let mut metrics = tracker.get_basic_metrics();
@@ -337,7 +216,7 @@ impl Host {
                     on_resp.respond(resp);
                     future::ok::<_, ()>(())
                 };
-                pool.spawn_fn(do_request).forget();
+                pool.spawn(do_request).forget();
             }
         }
     }
@@ -414,7 +293,7 @@ impl ReqContext {
 #[derive(Debug)]
 struct RequestTracker {
     running_task_count: Option<Arc<AtomicUsize>>,
-    ctx_pool: Option<CopContextPool>,
+    ctx_pool: Option<futurepool::ContextDelegators<ReadPoolContext>>,
     record_handle_time: bool,
     record_scan_detail: bool,
 
@@ -442,14 +321,14 @@ impl RequestTracker {
         self.running_task_count = Some(running_task_count);
     }
 
-    fn ctx_pool(&mut self, ctx_pool: CopContextPool) {
+    fn ctx_pool(&mut self, ctx_pool: futurepool::ContextDelegators<ReadPoolContext>) {
         self.ctx_pool = Some(ctx_pool);
     }
 
     // This function will be only called in thread pool.
     fn get_basic_metrics(&self) -> RefMut<BasicLocalMetrics> {
         let ctx_pool = self.ctx_pool.as_ref().unwrap();
-        let ctx = ctx_pool.get_context().0.borrow_mut();
+        let ctx = ctx_pool.current_thread_context_mut();
         RefMut::map(ctx, |c| &mut c.basic_local_metrics)
     }
 
@@ -467,7 +346,7 @@ impl RequestTracker {
                 .dec();
 
             let ctx_pool = self.ctx_pool.as_ref().unwrap();
-            let mut cop_ctx = ctx_pool.get_context().0.borrow_mut();
+            let mut cop_ctx = ctx_pool.current_thread_context_mut();
             cop_ctx
                 .basic_local_metrics
                 .wait_time
@@ -514,11 +393,18 @@ impl Drop for RequestTracker {
         }
 
         if self.total_handle_time > SLOW_QUERY_LOWER_BOUND {
+            let table_id = if let Some(ref range) = self.first_range {
+                table::decode_table_id(range.get_start()).unwrap_or_default()
+            } else {
+                0
+            };
+
             info!(
-                "[region {}] handle {:?} [{}] takes {:?} [keys: {}, hit: {}, \
+                "[region {}] handle {:?} table id {:?} [{}] takes {:?} [keys: {}, hit: {}, \
                  ranges: {} ({:?})]",
                 self.region_id,
                 self.txn_start_ts,
+                table_id,
                 self.scan_tag,
                 self.total_handle_time,
                 self.exec_metrics.cf_stats.total_op_count(),
@@ -546,7 +432,7 @@ impl Drop for RequestTracker {
         }
 
         let ctx_pool = self.ctx_pool.take().unwrap();
-        let mut cop_ctx = ctx_pool.get_context().0.borrow_mut();
+        let mut cop_ctx = ctx_pool.current_thread_context_mut();
 
         cop_ctx
             .basic_local_metrics
@@ -934,9 +820,13 @@ mod tests {
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
         cfg.end_point_request_max_handle_duration = ReadableDuration::secs(0);
-        cfg.end_point_concurrency = 1;
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
+        let read_pool = ReadPool::new(
+            "readpool",
+            &readpool::Config::default_with_concurrency(1),
+            || || ReadPoolContext::new(pd_worker.scheduler()),
+        );
+        let end_point = Host::new(engine, worker.scheduler(), &cfg, read_pool);
         worker.start(end_point).unwrap();
 
         let mut req = Request::new();
@@ -956,10 +846,14 @@ mod tests {
     fn test_too_many_reqs() {
         let mut worker = WorkerBuilder::new("test-endpoint").batch_size(5).create();
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
-        let mut cfg = Config::default();
-        cfg.end_point_concurrency = 1;
+        let cfg = Config::default();
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
+        let read_pool = ReadPool::new(
+            "readpool",
+            &readpool::Config::default_with_concurrency(1),
+            || || ReadPoolContext::new(pd_worker.scheduler()),
+        );
+        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, read_pool);
         end_point.max_running_task_count = 1;
         worker.start(end_point).unwrap();
         let result_futures: Vec<_> = (0..30 * 4)
@@ -1022,10 +916,14 @@ mod tests {
     fn test_deconstruct_request_tracker() {
         let mut worker = WorkerBuilder::new("test-endpoint").batch_size(1).create();
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
-        let mut cfg = Config::default();
-        cfg.end_point_concurrency = 1;
+        let cfg = Config::default();
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
+        let read_pool = ReadPool::new(
+            "readpool",
+            &readpool::Config::default_with_concurrency(1),
+            || || ReadPoolContext::new(pd_worker.scheduler()),
+        );
+        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, read_pool);
         end_point.max_running_task_count = 1;
         worker.start(end_point).unwrap();
 

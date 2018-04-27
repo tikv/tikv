@@ -49,13 +49,6 @@ static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
 const TYPE_VAR_CHAR: i32 = 1;
 const TYPE_LONG: i32 = 2;
 
-fn new_endpoint_test_config() -> Config {
-    Config {
-        end_point_concurrency: 2,
-        ..Config::default()
-    }
-}
-
 pub fn next_id() -> i64 {
     ID_GENERATOR.fetch_add(1, Ordering::Relaxed) as i64
 }
@@ -492,7 +485,7 @@ fn init_data_with_engine_and_commit(
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
 ) -> (Store, Worker<EndPointTask>) {
-    init_data_with_details(ctx, engine, tbl, vals, commit, new_endpoint_test_config())
+    init_data_with_details(ctx, engine, tbl, vals, commit, Config::default())
 }
 
 fn init_data_with_details(
@@ -517,16 +510,14 @@ fn init_data_with_details(
     if commit {
         store.commit_with_ctx(ctx);
     }
+    let pd_worker = FutureWorker::new("test-pd-worker");
+    let pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+        || ReadPoolContext::new(pd_worker.scheduler())
+    });
     let mut end_point = WorkerBuilder::new("test select worker")
         .batch_size(5)
         .create();
-    let pd_worker = FutureWorker::new("test pd worker");
-    let runner = EndPointHost::new(
-        store.get_engine(),
-        end_point.scheduler(),
-        &cfg,
-        pd_worker.scheduler(),
-    );
+    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), &cfg, pool);
     end_point.start(runner).unwrap();
 
     (store, end_point)
@@ -822,7 +813,7 @@ fn test_batch_row_limit() {
     let product = ProductTable::new();
     let (_, mut end_point) = {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
-        let mut cfg = new_endpoint_test_config();
+        let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = batch_row_limit;
         init_data_with_details(Context::new(), engine, &product, &data, true, cfg)
     };
@@ -857,7 +848,7 @@ fn test_stream_batch_row_limit() {
     let stream_row_limit = 2;
     let (_, mut end_point) = {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
-        let mut cfg = new_endpoint_test_config();
+        let mut cfg = Config::default();
         cfg.end_point_stream_batch_row_limit = stream_row_limit;
         init_data_with_details(Context::new(), engine, &product, &data, true, cfg)
     };
@@ -948,7 +939,7 @@ fn test_scan_detail() {
     let product = ProductTable::new();
     let (_, mut end_point) = {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
-        let mut cfg = new_endpoint_test_config();
+        let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = 50;
         init_data_with_details(Context::new(), engine, &product, &data, true, cfg)
     };

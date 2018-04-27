@@ -46,6 +46,7 @@ use util::collections::{HashMap, HashSet};
 use util::rocksdb::{CompactedEvent, CompactionListener};
 use util::sys as util_sys;
 use util::time::{duration_to_sec, SlowTimer};
+use util::timer::Timer;
 use util::transport::SendCh;
 use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
 use util::{escape, rocksdb};
@@ -64,7 +65,7 @@ use super::worker::apply::{ChangePeer, ExecResult};
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, CleanupSSTTask,
                     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
                     RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
-                    SplitCheckTask};
+                    SplitCheckTask, STALE_PEER_CHECK_INTERVAL};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use import::SSTImporter;
 
@@ -152,8 +153,8 @@ pub struct Store<T, C: 'static> {
     // captch up by normal log replication.
     pending_cross_snap: HashMap<u64, metapb::RegionEpoch>,
     split_check_worker: Worker<SplitCheckTask>,
-    region_worker: Worker<RegionTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask>,
+    region_worker: Worker<RegionTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: FutureWorker<PdTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
@@ -551,14 +552,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         box_try!(self.split_check_worker.start(split_check_runner));
 
-        let runner = RegionRunner::new(
+        let region_runner = RegionRunner::new(
             Arc::clone(&self.kv_engine),
             Arc::clone(&self.raft_engine),
             self.snap_mgr.clone(),
             self.cfg.snap_apply_batch_size.0 as usize,
             self.cfg.use_delete_range,
+            self.cfg.clean_stale_peer_delay.0,
         );
-        box_try!(self.region_worker.start(runner));
+        let mut timer = Timer::new(1);
+        timer.add_task(Duration::from_millis(STALE_PEER_CHECK_INTERVAL), ());
+        box_try!(self.region_worker.start_with_timer(region_runner, timer));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
         box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
@@ -775,7 +779,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
-        let region_id = msg.get_region_id();
         if !self.validate_raft_msg(&msg) {
             return Ok(());
         }
@@ -786,6 +789,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
+        let region_id = msg.get_region_id();
         if msg.has_merge_target() {
             if self.need_gc_merge(&msg)? {
                 self.on_merge_fail(region_id);
@@ -2162,7 +2166,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut total_gc_logs = 0;
 
         for (&region_id, peer) in &mut self.region_peers {
+            let applied_idx = peer.get_store().applied_index();
             if !peer.is_leader() {
+                peer.mut_store().compact_to(applied_idx + 1);
                 continue;
             }
 
@@ -2178,16 +2184,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             //                  ^                                       ^
             //                  |-----------------threshold------------ |
             //              first_index                         replicated_index
-            let replicated_idx = peer.raft_group
-                .raft
-                .prs()
-                .iter()
-                .map(|(_, p)| p.matched)
-                .min()
-                .unwrap();
+            // `healthy_replicated_index` is the smallest `replicated_index` of healthy nodes.
+            let truncated_idx = peer.get_store().truncated_index();
+            let last_idx = peer.get_store().last_index();
+            let (mut replicated_idx, mut healthy_replicated_idx) = (last_idx, last_idx);
+            for (_, p) in peer.raft_group.raft.prs().iter() {
+                if replicated_idx > p.matched {
+                    replicated_idx = p.matched;
+                }
+                if healthy_replicated_idx > p.matched && p.matched >= truncated_idx {
+                    healthy_replicated_idx = p.matched;
+                }
+            }
             // When an election happened or a new peer is added, replicated_idx can be 0.
             if replicated_idx > 0 {
-                let last_idx = peer.raft_group.raft.raft_log.last_index();
                 assert!(
                     last_idx >= replicated_idx,
                     "expect last index {} >= replicated index {}",
@@ -2196,7 +2206,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 );
                 REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
             }
-            let applied_idx = peer.get_store().applied_index();
+            peer.mut_store()
+                .maybe_gc_cache(healthy_replicated_idx, applied_idx);
             let first_idx = peer.get_store().first_index();
             let mut compact_idx;
             if applied_idx > first_idx
