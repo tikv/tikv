@@ -606,6 +606,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Arc::clone(&self.kv_engine),
             Arc::clone(&self.raft_engine),
             tx,
+            self.sendch.clone(),
             self.cfg.sync_log,
         );
         self.persist_res_receiver = Some(rx);
@@ -3303,6 +3304,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         self.poll_persist();
         match msg {
+            Msg::Kick => {
+                debug!("{} kicked", self.tag);
+            }
             Msg::RaftMessage(data) => if let Err(e) = self.on_raft_message(data) {
                 error!("{} handle raft message err: {:?}", self.tag, e);
             },

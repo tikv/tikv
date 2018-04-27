@@ -181,6 +181,8 @@ pub enum Msg {
     ValidateSSTResult {
         invalid_ssts: Vec<SSTMeta>,
     },
+
+    Kick,
 }
 
 impl fmt::Debug for Msg {
@@ -221,6 +223,7 @@ impl fmt::Debug for Msg {
             }
             Msg::MergeFail { region_id } => write!(fmt, "MergeFail region_id {}", region_id),
             Msg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
+            Msg::Kick { .. } => write!(fmt, "Kick"),
         }
     }
 }

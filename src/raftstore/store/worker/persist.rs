@@ -21,7 +21,9 @@ use raft::Ready;
 use rocksdb::rocksdb_options::WriteOptions;
 use rocksdb::{WriteBatch, DB};
 
+use raftstore::store::msg::Msg;
 use raftstore::store::peer_storage::InvokeContext;
+use util::transport::SendCh;
 use util::worker::Runnable;
 
 pub enum Task {
@@ -87,7 +89,6 @@ pub enum TaskRes {
         append_res: Vec<(Ready, InvokeContext)>,
         timer: Instant,
     },
-
     Destory {
         region_id: u64,
         peer: metapb::Peer,
@@ -115,7 +116,8 @@ pub struct Runner {
     tag: String,
     kv_engine: Arc<DB>,
     raft_engine: Arc<DB>,
-    notifier: Sender<TaskRes>,
+    ch: Sender<TaskRes>,
+    notifier: SendCh<Msg>,
     sync_log: bool,
 }
 
@@ -124,7 +126,8 @@ impl Runner {
         store_id: u64,
         kv_engine: Arc<DB>,
         raft_engine: Arc<DB>,
-        notifier: Sender<TaskRes>,
+        ch: Sender<TaskRes>,
+        notifier: SendCh<Msg>,
         sync_log: bool,
     ) -> Runner {
         let tag = format!("store {}", store_id);
@@ -132,6 +135,7 @@ impl Runner {
             tag,
             kv_engine,
             raft_engine,
+            ch,
             notifier,
             sync_log,
         }
@@ -172,12 +176,18 @@ impl Runner {
         }
         fail_point!("raft_after_save");
 
-        self.notifier
+        self.ch
             .send(TaskRes::Persist {
                 append_res: persist,
                 timer,
             })
             .unwrap();
+    }
+
+    fn kick(&self) {
+        if let Err(e) = self.notifier.send(Msg::Kick) {
+            error!("fail to kick raftstore: {:?}", e);
+        }
     }
 }
 
@@ -195,7 +205,7 @@ impl Runnable<Task> for Runner {
                 region_id,
                 peer,
                 keep_data,
-            } => self.notifier
+            } => self.ch
                 .send(TaskRes::Destory {
                     region_id,
                     peer,
@@ -203,5 +213,6 @@ impl Runnable<Task> for Runner {
                 })
                 .unwrap(),
         }
+        self.kick();
     }
 }
