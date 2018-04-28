@@ -33,11 +33,13 @@ jobs:
             sudo apt-get update -y;
             sudo apt-get install -y g++-4.8 curl libdw-dev libelf-dev elfutils binutils-dev
       - restore_cache:
+          name: Restoring ~/.local Cache
           keys: 
             - v1-local-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
             - v1-local-{{ .Branch }}
             - v1-local
       - restore_cache:
+          name: Restoring ~/.cargo Cache
           keys:
             - v1-cargo-{{ .Branch }}-{{ checksum "Cargo.lock" }}
             - v1-cargo-{{ .Branch }}
@@ -77,6 +79,7 @@ jobs:
           name: Checking Format
           command: make format && git diff-index --quiet HEAD -- || (git diff; echo please make format and run tests before creating a PR!; exit 1)
       - restore_cache:
+          name: Restoring ./target Cache  
           keys:
             - v1-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
             - v1-target-{{ .Branch }}
@@ -86,14 +89,17 @@ jobs:
           command: env SKIP_TESTS=true make trace_test
           no_output_timeout: 1800s
       - save_cache:
+          name: Saving ./target Cache
           key: v1-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
           paths:
             - target
       - save_cache:
+          name: Saving ~/.cargo Cache
           key: v1-cargo-{{ .Branch }}-{{ checksum "Cargo.lock" }}
           paths:
             - ~/.cargo
       - save_cache:
+          name: Saving ~/.local Cache
           key: v1-local-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
           paths:
             - ~/.local
