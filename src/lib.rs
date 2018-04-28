@@ -13,6 +13,7 @@
 
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
+#![feature(proc_macro)]
 #![feature(fnbox)]
 #![feature(alloc)]
 #![feature(slice_patterns)]
@@ -73,6 +74,7 @@ extern crate rocksdb;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
+extern crate prometheus_static_metric;
 extern crate serde_json;
 extern crate sys_info;
 extern crate tempdir;

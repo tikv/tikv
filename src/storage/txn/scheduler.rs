@@ -245,14 +245,8 @@ impl RunningCtx {
             tag,
             ts,
             region_id,
-            latch_timer: Some(
-                SCHED_LATCH_HISTOGRAM_VEC
-                    .with_label_values(&[tag])
-                    .start_coarse_timer(),
-            ),
-            _timer: SCHED_HISTOGRAM_VEC
-                .with_label_values(&[tag])
-                .start_coarse_timer(),
+            latch_timer: Some(SCHED_LATCH_HISTOGRAM_VEC.get(tag).start_coarse_timer()),
+            _timer: SCHED_HISTOGRAM_VEC.get(tag).start_coarse_timer(),
             slow_timer: None,
         }
     }
@@ -289,7 +283,7 @@ fn make_engine_cb(
         }) {
             Ok(_) => {
                 KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
-                    .with_label_values(&[cmd])
+                    .get(cmd)
                     .observe(rows as f64);
             }
             e @ Err(ScheduleError::Stopped(_)) => info!("scheduler worker stopped, {:?}", e),
@@ -998,7 +992,8 @@ impl Scheduler {
     /// Delivers a command to a worker thread for processing.
     fn process_by_worker(&mut self, cid: u64, cb_ctx: CbContext, snapshot: Box<Snapshot>) {
         SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[self.get_ctx_tag(cid), "process"])
+            .get(self.get_ctx_tag(cid))
+            .process
             .inc();
         debug!(
             "process cmd with snapshot, cid={}, cb_ctx={:?}",
@@ -1041,7 +1036,8 @@ impl Scheduler {
     fn finish_with_err(&mut self, cid: u64, err: Error) {
         debug!("command cid={}, finished with error", cid);
         SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[self.get_ctx_tag(cid), "error"])
+            .get(self.get_ctx_tag(cid))
+            .error
             .inc();
 
         let mut ctx = self.remove_ctx(cid);
@@ -1072,12 +1068,8 @@ impl Scheduler {
     /// execution because 1) all the conflicting commands (if any) must be in the waiting queues;
     /// 2) there may be non-conflicitng commands running concurrently, but it doesn't matter.
     fn schedule_command(&mut self, cmd: Command, callback: StorageCb) {
-        SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[cmd.tag(), "new"])
-            .inc();
-        SCHED_COMMANDS_PRI_COUNTER_VEC
-            .with_label_values(&[cmd.priority_tag()])
-            .inc();
+        SCHED_STAGE_COUNTER_VEC.get(cmd.tag()).new.inc();
+        SCHED_COMMANDS_PRI_COUNTER_VEC.get(cmd.priority_tag()).inc();
         let cid = self.gen_id();
         debug!("received new command, cid={}, cmd={}", cid, cmd);
         let lock = gen_command_lock(&self.latches, &cmd);
@@ -1094,9 +1086,7 @@ impl Scheduler {
     fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
         // write flow control
         if cmd.need_flow_control() && self.too_busy() {
-            SCHED_TOO_BUSY_COUNTER_VEC
-                .with_label_values(&[cmd.tag()])
-                .inc();
+            SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
             execute_callback(
                 callback,
                 ProcessResult::Failed {
@@ -1107,9 +1097,7 @@ impl Scheduler {
         }
         // Allow 1 GC command at the same time.
         if cmd.tag() == CMD_TAG_GC && self.has_gc_command {
-            SCHED_TOO_BUSY_COUNTER_VEC
-                .with_label_values(&[cmd.tag()])
-                .inc();
+            SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
             execute_callback(
                 callback,
                 ProcessResult::Failed {
@@ -1140,7 +1128,8 @@ impl Scheduler {
     fn get_snapshot(&mut self, ctx: &Context, cids: Vec<u64>) {
         for cid in &cids {
             SCHED_STAGE_COUNTER_VEC
-                .with_label_values(&[self.get_ctx_tag(*cid), "snapshot"])
+                .get(self.get_ctx_tag(*cid))
+                .snapshot
                 .inc();
         }
         let cids1 = cids.clone();
@@ -1158,7 +1147,8 @@ impl Scheduler {
         if let Err(e) = self.engine.async_snapshot(ctx, cb) {
             for cid in cids {
                 SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(cid), "async_snapshot_err"])
+                    .get(self.get_ctx_tag(cid))
+                    .async_snapshot_err
                     .inc();
 
                 let e = e.maybe_clone().unwrap_or_else(|| {
@@ -1178,7 +1168,8 @@ impl Scheduler {
         for &(_, ref cids) in &batch {
             for cid in cids {
                 SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(*cid), "batch_snapshot"])
+                    .get(self.get_ctx_tag(*cid))
+                    .batch_snapshot
                     .inc();
             }
             all_cids.extend(cids);
@@ -1211,9 +1202,7 @@ impl Scheduler {
                 }
             }
             if !retry.is_empty() {
-                BATCH_COMMANDS
-                    .with_label_values(&["retry"])
-                    .observe(retry.len() as f64);
+                BATCH_COMMANDS.retry.observe(retry.len() as f64);
                 match scheduler.schedule(Msg::RetryGetSnapshots(retry)) {
                     Ok(_) => {}
                     e @ Err(ScheduleError::Stopped(_)) => {
@@ -1229,7 +1218,8 @@ impl Scheduler {
         if let Err(e) = self.engine.async_batch_snapshot(batch1, on_finished) {
             for cid in all_cids {
                 SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(cid), "async_batch_snapshot_err"])
+                    .get(self.get_ctx_tag(cid))
+                    .async_batch_snapshot_err
                     .inc();
                 let e = e.maybe_clone().unwrap_or_else(|| {
                     error!("async snapshot failed for cid={}, error {:?}", cid, e);
@@ -1245,7 +1235,8 @@ impl Scheduler {
         for (ctx, cids) in batch {
             for cid in &cids {
                 SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(*cid), "snapshot_retry"])
+                    .get(self.get_ctx_tag(*cid))
+                    .snapshot_retry
                     .inc();
             }
             self.get_snapshot(&ctx, cids);
@@ -1269,7 +1260,8 @@ impl Scheduler {
         match snapshot {
             Ok(snapshot) => for cid in cids {
                 SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(cid), "snapshot_ok"])
+                    .get(self.get_ctx_tag(cid))
+                    .snapshot_ok
                     .inc();
                 self.process_by_worker(cid, cb_ctx.clone(), snapshot.clone());
             },
@@ -1277,7 +1269,8 @@ impl Scheduler {
                 error!("get snapshot failed for cids={:?}, error {:?}", cids, e);
                 for cid in cids {
                     SCHED_STAGE_COUNTER_VEC
-                        .with_label_values(&[self.get_ctx_tag(cid), "snapshot_err"])
+                        .get(self.get_ctx_tag(cid))
+                        .snapshot_err
                         .inc();
                     let e = e.maybe_clone()
                         .unwrap_or_else(|| EngineError::Other(box_err!("{:?}", e)));
@@ -1295,14 +1288,10 @@ impl Scheduler {
     fn on_read_finished(&mut self, cid: u64, pr: ProcessResult) {
         debug!("read command(cid={}) finished", cid);
         let mut ctx = self.remove_ctx(cid);
-        SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[ctx.tag, "read_finish"])
-            .inc();
+        SCHED_STAGE_COUNTER_VEC.get(ctx.tag).read_finish.inc();
         let cb = ctx.callback.take().unwrap();
         if let ProcessResult::NextCommand { cmd } = pr {
-            SCHED_STAGE_COUNTER_VEC
-                .with_label_values(&[ctx.tag, "next_cmd"])
-                .inc();
+            SCHED_STAGE_COUNTER_VEC.get(ctx.tag).next_cmd.inc();
             self.schedule_command(cmd, cb);
         } else {
             execute_callback(cb, pr);
@@ -1318,7 +1307,8 @@ impl Scheduler {
     fn on_write_prepare_failed(&mut self, cid: u64, e: Error) {
         debug!("write command(cid={}) failed at prewrite.", cid);
         SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[self.get_ctx_tag(cid), "prepare_write_err"])
+            .get(self.get_ctx_tag(cid))
+            .prepare_write_err
             .inc();
         self.finish_with_err(cid, e);
     }
@@ -1336,7 +1326,8 @@ impl Scheduler {
         rows: usize,
     ) {
         SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[self.get_ctx_tag(cid), "write"])
+            .get(self.get_ctx_tag(cid))
+            .write
             .inc();
         if to_be_write.is_empty() {
             return self.on_write_finished(cid, pr, Ok(()));
@@ -1346,7 +1337,8 @@ impl Scheduler {
             .async_write(cmd.get_context(), to_be_write, engine_cb)
         {
             SCHED_STAGE_COUNTER_VEC
-                .with_label_values(&[self.get_ctx_tag(cid), "async_write_err"])
+                .get(self.get_ctx_tag(cid))
+                .async_write_err
                 .inc();
             self.finish_with_err(cid, Error::from(e));
         }
@@ -1355,7 +1347,8 @@ impl Scheduler {
     /// Event handler for the success of write.
     fn on_write_finished(&mut self, cid: u64, pr: ProcessResult, result: EngineResult<()>) {
         SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[self.get_ctx_tag(cid), "write_finish"])
+            .get(self.get_ctx_tag(cid))
+            .write_finish
             .inc();
         debug!("write finished for command, cid={}", cid);
         let mut ctx = self.remove_ctx(cid);
@@ -1367,9 +1360,7 @@ impl Scheduler {
             },
         };
         if let ProcessResult::NextCommand { cmd } = pr {
-            SCHED_STAGE_COUNTER_VEC
-                .with_label_values(&[ctx.tag, "next_cmd"])
-                .inc();
+            SCHED_STAGE_COUNTER_VEC.get(ctx.tag).next_cmd.inc();
             self.schedule_command(cmd, cb);
         } else {
             execute_callback(cb, pr);
@@ -1450,9 +1441,7 @@ impl Runnable<Msg> for Scheduler {
                 Default::default(),
             ));
             let batch = cmds.into_iter().map(|(hash_ctx, cids)| {
-                BATCH_COMMANDS
-                    .with_label_values(&["all"])
-                    .observe(cids.len() as f64);
+                BATCH_COMMANDS.all.observe(cids.len() as f64);
                 (hash_ctx.0, cids)
             });
             self.batch_get_snapshot(batch.collect());

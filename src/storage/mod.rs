@@ -717,7 +717,7 @@ impl Storage {
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Booleans(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC.get(tag).inc();
         Ok(())
     }
 
@@ -737,7 +737,7 @@ impl Storage {
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC.get(tag).inc();
         Ok(())
     }
 
@@ -767,9 +767,7 @@ impl Storage {
             .async_write(&ctx, modifies, box |(_, res): (_, engine::Result<_>)| {
                 callback(res.map_err(Error::from))
             })?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["delete_range"])
-            .inc();
+        KV_COMMAND_COUNTER_VEC.delete_range.inc();
         Ok(())
     }
 
@@ -783,7 +781,7 @@ impl Storage {
         let cmd = Command::Cleanup { ctx, key, start_ts };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC.get(tag).inc();
         Ok(())
     }
 
@@ -801,7 +799,7 @@ impl Storage {
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC.get(tag).inc();
         Ok(())
     }
 
@@ -825,7 +823,7 @@ impl Storage {
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Locks(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC.get(tag).inc();
         Ok(())
     }
 
@@ -843,7 +841,7 @@ impl Storage {
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC.get(tag).inc();
         Ok(())
     }
 
@@ -857,7 +855,7 @@ impl Storage {
         };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC.get(tag).inc();
         Ok(())
     }
 
@@ -985,7 +983,7 @@ impl Storage {
             ],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&["raw_put"]).inc();
+        KV_COMMAND_COUNTER_VEC.raw_put.inc();
         Ok(())
     }
 
@@ -1011,9 +1009,7 @@ impl Storage {
             .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
                 callback(res.map_err(Error::from))
             })?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_batch_put"])
-            .inc();
+        KV_COMMAND_COUNTER_VEC.raw_batch_put.inc();
         Ok(())
     }
 
@@ -1035,9 +1031,7 @@ impl Storage {
             ],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_delete"])
-            .inc();
+        KV_COMMAND_COUNTER_VEC.raw_delete.inc();
         Ok(())
     }
 
@@ -1068,9 +1062,7 @@ impl Storage {
             ],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_delete_range"])
-            .inc();
+        KV_COMMAND_COUNTER_VEC.raw_delete_range.inc();
         Ok(())
     }
 
@@ -1095,9 +1087,7 @@ impl Storage {
             .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
                 callback(res.map_err(Error::from))
             })?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_batch_delete"])
-            .inc();
+        KV_COMMAND_COUNTER_VEC.raw_batch_delete.inc();
         Ok(())
     }
 
@@ -1317,7 +1307,7 @@ impl Storage {
         let cmd = Command::MvccByKey { ctx, key };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::MvccInfoByKey(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC.get(tag).inc();
         Ok(())
     }
 
@@ -1330,7 +1320,7 @@ impl Storage {
         let cmd = Command::MvccByStartTs { ctx, start_ts };
         let tag = cmd.tag();
         self.schedule(cmd, StorageCb::MvccInfoByStartTs(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC.get(tag).inc();
         Ok(())
     }
 }
