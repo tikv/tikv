@@ -13,7 +13,6 @@
 
 use rand::{self, Rng, ThreadRng};
 use std::env;
-use std::fmt::Arguments;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -67,7 +66,7 @@ struct CaseTraceLogger {
 }
 
 impl LogWriter for CaseTraceLogger {
-    fn write(&self, args: Arguments) {
+    fn write(&self, args: String) {
         let tag = util::get_tag_from_thread_name().unwrap_or_else(|| "".into());
         let _ = if let Some(ref out) = self.f {
             let mut w = out.lock().unwrap();
