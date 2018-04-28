@@ -44,7 +44,7 @@ jobs:
             - v1-cargo
 
       - run: 
-          name: Setting up Rust and Other Build Environment
+          name: Setting up Rust and the rest of the Build Environment
           command: |
             RUST_VERSION=`tail -n 1 RUST_VERSION`
             if [[ ! -e $HOME/.cargo ]]; then
