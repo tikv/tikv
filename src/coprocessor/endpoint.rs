@@ -534,7 +534,7 @@ impl RequestTask {
             first_range: req.get_ranges().get(0).cloned(),
             scan_tag: req_ctx.get_scan_tag(),
             pri_str: get_req_pri_str(req.get_context().get_priority()),
-            peer: peer,
+            peer,
         };
 
         COPR_PENDING_REQS
@@ -833,11 +833,13 @@ mod tests {
         let end_point = Host::new(engine, worker.scheduler(), &cfg, read_pool);
         worker.start(end_point).unwrap();
 
+        let peer = String::from("127.0.0.1");
+
         let mut req = Request::new();
         req.set_tp(REQ_TYPE_DAG);
         let (tx, rx) = oneshot::channel();
         let on_resp = OnResponse::Unary(tx);
-        let task = RequestTask::new(req, on_resp, 1000).unwrap();
+        let task = RequestTask::new(peer, req, on_resp, 1000).unwrap();
 
         worker.schedule(Task::Request(task)).unwrap();
         let resp = rx.wait().unwrap();
@@ -873,7 +875,7 @@ mod tests {
                     req.mut_context().set_priority(CommandPri::High);
                 }
                 let on_resp = OnResponse::Unary(tx);
-                let task = RequestTask::new(req, on_resp, 1000).unwrap();
+                let task = RequestTask::new(String::from("127.0.0.1"), req, on_resp, 1000).unwrap();
                 worker.schedule(Task::Request(task)).unwrap();
                 rx
             })
@@ -907,7 +909,8 @@ mod tests {
         req.set_data(dag.write_to_bytes().unwrap());
 
         let (tx, _rx) = oneshot::channel();
-        let err = RequestTask::new(req, OnResponse::Unary(tx), 5).unwrap_err();
+        let err =
+            RequestTask::new(String::from("127.0.0.1"), req, OnResponse::Unary(tx), 5).unwrap_err();
         let s = format!("{:?}", err);
         assert!(
             s.contains("Recursion"),
@@ -935,7 +938,8 @@ mod tests {
         req.set_tp(REQ_TYPE_DAG);
 
         let (tx, rx) = oneshot::channel();
-        let task = RequestTask::new(req, OnResponse::Unary(tx), 1000).unwrap();
+        let task =
+            RequestTask::new(String::from("127.0.0.1"), req, OnResponse::Unary(tx), 1000).unwrap();
         worker.schedule(Task::Request(task)).unwrap();
 
         let resp = rx.wait().unwrap();
