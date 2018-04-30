@@ -6,7 +6,7 @@ TiKV (The pronunciation is: /'taɪkeɪvi:/ tai-K-V, etymology: titanium) is a di
 
 - __Geo-Replication__
 
-    TiKV uses Raft and Placement Driver to support Geo-Replication.
+    TiKV uses [Raft](http://raft.github.io/) and the [Placement Driver](https://github.com/pingcap/pd/) to support Geo-Replication.
 
 - __Horizontal scalability__
 
