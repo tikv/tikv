@@ -2,76 +2,149 @@
 
 [![Build Status](https://circleci.com/gh/pingcap/tikv.svg?style=shield&circle-token=36bab0a8e43edb0941b31c38557d2d9d0d58f708)](https://circleci.com/gh/pingcap/tikv) [![Coverage Status](https://coveralls.io/repos/github/pingcap/tikv/badge.svg?branch=master)](https://coveralls.io/github/pingcap/tikv) ![GitHub release](https://img.shields.io/github/release/pingcap/tikv.svg)
 
-TiKV (The pronunciation is: /'taɪkeɪvi:/ tai-K-V, etymology: titanium) is a distributed Key-Value database which is based on the design of Google Spanner and HBase, but it is much simpler without dependency on any distributed file system. With the implementation of the Raft consensus algorithm in Rust and consensus state stored in RocksDB, it guarantees data consistency. Placement Driver which is introduced to implement sharding enables automatic data migration. The transaction model is similar to Google's Percolator with some performance improvements. TiKV also provides snapshot isolation (SI), snapshot isolation with lock (SQL: select ... for update), and externally consistent reads and writes in distributed transactions. See [TiKV-server software stack](#tikv-server-software-stack) for more information. TiKV has the following primary features:
+TiKV (The pronunciation is: /'taɪkeɪvi:/ tai-K-V, etymology: titanium) is a distributed Key-Value database which is based on the design of Google Spanner and HBase, but it is much simpler without dependency on any distributed file system. With the implementation of the Raft consensus algorithm in Rust and consensus state stored in RocksDB, it guarantees data consistency. Placement Driver which is introduced to implement sharding enables automatic data migration. The transaction model is similar to Google's Percolator with some performance improvements. TiKV also provides snapshot isolation (SI), snapshot isolation with lock (SQL: `SELECT ... FOR UPDATE`), and externally consistent reads and writes in distributed transactions.
 
-- __Geo-Replication__
+TiKV has the following primary features:
 
-    TiKV uses [Raft](http://raft.github.io/) and the [Placement Driver](https://github.com/pingcap/pd/) to support Geo-Replication.
+- **Geo-Replication:** TiKV uses [Raft](http://raft.github.io/) and the [Placement Driver](https://github.com/pingcap/pd/) to support Geo-Replication.
 
-- __Horizontal scalability__
+- **Horizontal scalability:** With Placement Driver and carefully designed Raft groups, TiKV excels in horizontal scalability and can easily scale to 100+ TBs of data.
 
-    With Placement Driver and carefully designed Raft groups, TiKV excels in horizontal scalability and can easily scale to 100+ TBs of data.
+- **Consistent distributed transactions:** Similar to Google's Spanner, TiKV supports externally-consistent distributed transactions.
 
-- __Consistent distributed transactions__
+- **Coprocessor support:** Similar to Hbase, TiKV implements a coprocessor framework to support distributed computing.
 
-    Similar to Google's Spanner, TiKV supports externally-consistent distributed transactions.
+- **Cooperates with [TiDB](https://github.com/pingcap/tidb):** Thanks to the internal optimization, TiKV and TiDB can work together to be a compelling database solution with high horizontal scalability, externally-consistent transations, and support for RDMBS and NoSQL design patterns.
 
-- __Coprocessor support__
 
-    Similar to Hbase, TiKV implements the coprocessor framework to support distributed computing.
+## The TiKV Software Stack
 
-- __Working with [TiDB](https://github.com/pingcap/tidb)__
+![The TiKV software stack.](images/tikv_stack.png)
 
-    Thanks to the internal optimization, TiKV and TiDB can work together to be the best database system that specializes in horizontal scalability, support for externally-consistent transactions, as well as a focus on supporting both traditional RDBMS and NoSQL.
+- **Placement Driver:** Placement Driver (PD) is the cluster manager of TiKV. PD periodically checks replication constraints to balance load and data automatically.
+- **Store:** There is a RocksDB within each Store and it stores data into local disk.
+- **Region:** Region is the basic unit of Key-Value data movement. Each Region is replicated to multiple Nodes. These multiple replicas form a Raft group.
+- **Node:** A physical node in the cluster. Within each node, there are one or more Stores. Within each Store, there are many Regions.
 
-### Required Rust version
+When a node starts, the metadata of the Node, Store and Region are registered into PD. The status of each Region and Store is reported to PD regularly.
 
-Rust Nightly is required. TiKV is currently tested mainly with the version specified in the `RUST_VERSION` file, however we would like to track `nightly`, so please report new breakage.
+
+## Your First Test Drive
+
+We have a [Docker Compose](https://github.com/pingcap/tidb-docker-compose/) you can use to test out [TiKV](https://github.com/pingcap/tikv) and [TiDB](https://github.com/pingcap/tidb).
 
 ```bash
-# Get rustup from rustup.rs, then in your `tikv` folder:
+git clone https://github.com/pingcap/tidb-docker-compose/
+cd tidb-docker-compose
+docker-compose up -d
+```
+
+Shortly after you will be able to connect with `mysql -h 127.0.0.1 -P 4000 -u root` and view the cluster metrics at [http://localhost:3000/](http://localhost:3000/).
+
+
+## Setting Up a Development Workspace
+
+The TiKV codebase is primarily written in Rust, but has components written in C++ (RocksDB) and Go (for protobufs). In order to provide consistency and avoid opinion-based arguments, we make extensive use of linters and automated formatting tools. Additionally, due to Rust's youth we are currently utlizing nightly builds which provide access to many useful features.
+
+### Checking Your Prerequisites
+
+In order to build TiKV you will need (at least) the following packages available:
+
+* `git` - Version control
+* `rustup` - Rust toolchain manager
+* `awk` - Pattern scanning/processing language
+* `cmake` - Build tool (required for gRPC)
+* `go` - Programming language (required for protobuf)
+* `make` - Build tool (run common workflows)
+* `clang` - C compiler toolchain
+
+### Getting the Repository
+
+```
+git clone https://github.com/pingcap/tikv.git
+cd tikv
+# Future instructions assume you are in this repository
+```
+
+### Configuring Your Rust Toolchain
+
+`rustup` is an official toolchain manager for Rust, akin to `rvm` or `rbenv` from the Ruby world.
+
+TiKV uses the version of the Rust toolchain specified in `RUST_VERSION`. We also make use of the `rustfmt` component.
+
+```bash
 rustup override set `tail -n 1 RUST_VERSION`
 rustup component add rustfmt-preview --toolchain `tail -n 1 RUST_VERSION`
 ```
 
-### Tikv-server software stack
-This figure represents the tikv-server software stack.
+### Building & Testing
 
-![image](images/tikv_stack.png)
+> While TiKV includes a `Makefile` with common workflows, you are also able to use `cargo` as you would a normal Rust project.
 
-- Placement driver: Placement Driver (PD) is the cluster manager of TiKV. PD periodically checks replication constraints to balance load and data automatically.
-- Store: There is a RocksDB within each Store and it stores data into local disk.
-- Region: Region is the basic unit of Key-Value data movement. Each Region is replicated to multiple Nodes. These multiple replicas form a Raft group.
-- Node: A physical node in the cluster. Within each node, there are one or more Stores. Within each Store, there are many Regions.
+At this point you should be able to build TiKV:
 
-When a node starts, the metadata of the Node, Store and Region are registered into PD. The status of each Region and Store is reported to PD regularly.
+```bash
+make build
+```
 
-### Build
+Compiling the full codebase takes quite some time, so you may find it best to use `cargo check` during your development workflow to make sure that the code will compile, without completely compiling it.
 
-TiKV is a component in the TiDB project. To run TiKV you must build and run it with TiDB and PD together.
+Before making a PR you should ensure the codebase if properly formatted:
+
+```bash
+make format
+```
+
+You can run the full test suite locally, or just run a specific test:
+
+```bash
+# Run the full suite
+make test
+# Run a specific test
+cargo test $TESTNAME
+```
+
+Any pull requests made will automatically be tested by our CI systems, so making sure the full suite passes before creating your PR is not strictly required. **All merged PRs must have passing CI tests.**
+
+### Getting the Rest of the System Working
+
+In order to get other components ([TiDB](https://github.com/pingcap/tidb) and [PD](https://github.com/pingcap/pd) working we suggest you follow the [development guide](https://github.com/pingcap/docs/blob/master/dev-guide/development.md) as you will need to (at least) have `pd-server` working alongside `tikv-server` in order to do integration level testing.
+
+## Deploying To Production
+
+**Use Ansible?** The official [Ansible playbooks](https://github.com/pingcap/tidb-ansible) are the reccomended way of deploying a cluster of TiKV nodes alongside the other components of a cluster.
+
+**Prefer Docker?** You can find a guide on deploying a cluster with [Docker](https://github.com/pingcap/docs/blob/master/op-guide/docker-deployment.md) to run the TiKV and the rest of the cluster.
+
+**Want to roll your own?** That works too! We have written a [Binary Deployment Guide](https://github.com/pingcap/docs/blob/master/op-guide/binary-deployment.md) which might help you as you piece together your own way of doing things.
+
+
+## Using TiKV
+
+TiKV is a component in the TiDB project. To run TiKV you must build and run it with PD, which is used to manage the cluster.
+
 Currently the only interface to TiKV is the [TiDB Go client](https://github.com/pingcap/tidb/tree/master/store/tikv) and the [TiSpark Java client](https://github.com/pingcap/tispark/tree/master/tikv-client/src/main/java/com/pingcap/tikv).
-You are welcome to develop drivers in other languages.
 
-If you want to use TiDB in production, see [deployment build guide](https://github.com/pingcap/docs/blob/master/dev-guide/deployment.md) to build the TiDB project first.
+**We would love it if you developed drivers in other languages.**
 
-If you want to dive into TiDB, see [development build guide](https://github.com/pingcap/docs/blob/master/dev-guide/development.md) on how to build the TiDB project.
 
-### Next steps
+### Configuration
 
-+ Read the [deployment doc](https://github.com/pingcap/docs/blob/master/op-guide/binary-deployment.md#multi-nodes-deployment) on how to run the TiDB project.
-+ Learn the [configuration explanations](https://github.com/pingcap/docs/blob/master/op-guide/configuration.md).
-+ Use [Docker](https://github.com/pingcap/docs/blob/master/op-guide/docker-deployment.md) to run the TiDB project.
+Read our configuration guide to learn about the various [configuration options](https://github.com/pingcap/docs/blob/master/op-guide/configuration.md).
 
-### Contributing
+
+## Contributing
 
 See [CONTRIBUTING](./CONTRIBUTING.md) for details on submitting patches and the contribution workflow.
 
-### License
+
+## License
 
 TiKV is under the Apache 2.0 license. See the [LICENSE](./LICENSE) file for details.
 
 
-### Acknowledgments
+## Acknowledgments
+
 - Thanks [etcd](https://github.com/coreos/etcd) for providing some great open source tools.
 - Thanks [RocksDB](https://github.com/facebook/rocksdb) for their powerful storage engines.
 - Thanks [mio](https://github.com/carllerche/mio) for providing metal IO library for Rust.
