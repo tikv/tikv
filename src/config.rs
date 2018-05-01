@@ -23,9 +23,9 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::usize;
 
-use log::LogLevelFilter;
 use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
               DBCompressionType, DBOptions, DBRecoveryMode};
+use slog::Level;
 use sys_info;
 
 use import::Config as ImportConfig;
@@ -696,15 +696,15 @@ impl Default for MetricConfig {
 }
 
 #[derive(Serialize, Deserialize)]
-#[serde(remote = "LogLevelFilter")]
+#[serde(remote = "Level")]
 #[serde(rename_all = "kebab-case")]
 pub enum LogLevel {
-    Info,
-    Trace,
-    Debug,
-    Warn,
+    Critical,
     Error,
-    Off,
+    Warning,
+    Info,
+    Debug,
+    Trace,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -737,7 +737,7 @@ impl ReadPoolConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
     #[serde(with = "LogLevel")]
-    pub log_level: LogLevelFilter,
+    pub log_level: Level,
     pub log_file: String,
     pub readpool: ReadPoolConfig,
     pub server: ServerConfig,
@@ -756,7 +756,7 @@ pub struct TiKvConfig {
 impl Default for TiKvConfig {
     fn default() -> TiKvConfig {
         TiKvConfig {
-            log_level: LogLevelFilter::Info,
+            log_level: Level::Info,
             log_file: "".to_owned(),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),

@@ -12,15 +12,17 @@
 // limitations under the License.
 
 use rand::{self, Rng, ThreadRng};
+use slog::{self, Drain, OwnedKVList, Record};
+use slog_async;
 use std::env;
-use std::fmt::Arguments;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
+use time;
 
 use tikv::util;
-use tikv::util::logger::{self, LogWriter};
+use tikv::util::logger;
 use tikv::util::security::SecurityConfig;
 
 /// A random generator of kv.
@@ -66,16 +68,34 @@ struct CaseTraceLogger {
     f: Option<Mutex<File>>,
 }
 
-impl LogWriter for CaseTraceLogger {
-    fn write(&self, args: Arguments) {
+impl Drain for CaseTraceLogger {
+    type Ok = ();
+    type Err = slog::Never;
+    fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         let tag = util::get_tag_from_thread_name().unwrap_or_else(|| "".into());
-        let _ = if let Some(ref out) = self.f {
+
+        let t = time::now();
+        let time_str = time::strftime("%y/%m/%d %h:%m:%s.%f", &t).unwrap();
+        // todo allow formatter to be configurable.
+        let message = format!(
+            "{} {} {}:{}: [{}] {} {:?}\n",
+            tag,
+            &time_str[..time_str.len() - 6],
+            record.file().rsplit('/').nth(0).unwrap(),
+            record.line(),
+            record.level(),
+            record.msg(),
+            values,
+        );
+
+        if let Some(ref out) = self.f {
             let mut w = out.lock().unwrap();
-            write!(w, "{} {}", tag, args)
+            let _ = w.write(message.as_bytes());
         } else {
             let mut w = io::stderr();
-            write!(w, "{} {}", tag, args)
-        };
+            let _ = w.write(message.as_bytes());
+        }
+        Ok(())
     }
 }
 
@@ -94,7 +114,10 @@ fn init_log() {
         logger::get_level_by_string(&env::var("LOG_LEVEL").unwrap_or_else(|_| "debug".to_owned()));
     let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
     // we don't mind set it multiple times.
-    let _ = logger::init_log_for_tikv_only(CaseTraceLogger { f: writer }, level);
+    let drain = CaseTraceLogger { f: writer };
+    let drain = slog_async::Async::new(drain).build().fuse();
+    let logger = slog::Logger::root(drain, slog_o!());
+    let _ = logger::init_log_for_tikv_only(logger, level);
 }
 
 /// Set up ci test fail case log.

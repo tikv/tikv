@@ -11,12 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Arguments;
-use std::io::{self, Write};
+use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use grpc;
-use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
-use time;
+use log::SetLoggerError;
+use slog::{self, Drain, Level, Logger};
+use slog_scope;
+use slog_stdlog;
 
 pub use log::LogLevelFilter;
 
@@ -29,93 +30,38 @@ const ENABLED_TARGETS: &[&str] = &[
     "raft::",
 ];
 
-pub fn init_log<W: LogWriter + Sync + Send + 'static>(
-    writer: W,
-    level: LogLevelFilter,
-) -> Result<(), SetLoggerError> {
-    log::set_logger(|filter| {
-        filter.set(level);
-        grpc::redirect_log();
-        Box::new(Logger {
-            level,
-            writer,
-            tikv_only: false,
-        })
-    })
+pub fn init_log<D>(drain: D, level: Level) -> Result<(), SetLoggerError>
+where
+    D: Drain + Send + Sync + 'static + RefUnwindSafe + UnwindSafe,
+    <D as slog::Drain>::Err: ::std::fmt::Debug,
+{
+    grpc::redirect_log();
+
+    let drain = drain.filter_level(level).fuse();
+
+    let logger = slog::Logger::root(drain, slog_o!());
+
+    slog_scope::set_global_logger(logger).cancel_reset();
+    slog_stdlog::init()
 }
 
-pub fn init_log_for_tikv_only<W: LogWriter + Sync + Send + 'static>(
-    writer: W,
-    level: LogLevelFilter,
-) -> Result<(), SetLoggerError> {
-    log::set_logger(|filter| {
-        filter.set(level);
-        grpc::redirect_log();
-        Box::new(Logger {
-            level,
-            writer,
-            tikv_only: true,
-        })
-    })
+pub fn init_log_for_tikv_only(logger: Logger, level: Level) -> Result<(), SetLoggerError> {
+    let filtered = logger.filter(|record| {
+        ENABLED_TARGETS
+            .iter()
+            .all(|target| !record.module().starts_with(target))
+    });
+    init_log(filtered, level)
 }
 
-pub trait LogWriter {
-    fn write(&self, args: Arguments);
-}
-
-struct Logger<W: LogWriter> {
-    level: LogLevelFilter,
-    writer: W,
-    tikv_only: bool,
-}
-
-impl<W: LogWriter + Sync + Send> Log for Logger<W> {
-    fn enabled(&self, meta: &LogMetadata) -> bool {
-        meta.level() <= self.level
-    }
-
-    fn log(&self, record: &LogRecord) {
-        if self.tikv_only
-            && ENABLED_TARGETS
-                .iter()
-                .all(|target| !record.target().starts_with(target))
-        {
-            return;
-        }
-        if self.enabled(record.metadata()) {
-            let t = time::now();
-            let time_str = time::strftime("%Y/%m/%d %H:%M:%S.%f", &t).unwrap();
-            // TODO allow formatter to be configurable.
-            self.writer.write(format_args!(
-                "{} {}:{}: [{}] {}\n",
-                &time_str[..time_str.len() - 6],
-                record.location().file().rsplit('/').nth(0).unwrap(),
-                record.location().line(),
-                record.level(),
-                record.args()
-            ));
-        }
-    }
-}
-
-pub struct StderrLogger;
-
-impl LogWriter for StderrLogger {
-    #[inline]
-    fn write(&self, args: Arguments) {
-        let _ = io::stderr().write_fmt(args);
-    }
-}
-
-pub fn get_level_by_string(lv: &str) -> LogLevelFilter {
+pub fn get_level_by_string(lv: &str) -> Level {
     #![allow(match_same_arms)]
     match &*lv.to_owned().to_lowercase() {
-        "trace" => LogLevelFilter::Trace,
-        "debug" => LogLevelFilter::Debug,
-        "info" => LogLevelFilter::Info,
-        "warn" => LogLevelFilter::Warn,
-        "error" => LogLevelFilter::Error,
-        "off" => LogLevelFilter::Off,
-        _ => LogLevelFilter::Info,
+        "critical" => Level::Critical,
+        "error" => Level::Error,
+        "warning" => Level::Warning,
+        "debug" => Level::Debug,
+        "trace" => Level::Trace,
+        "info" | _ => Level::Info,
     }
 }

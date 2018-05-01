@@ -11,6 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use slog::{self, Drain};
+use slog_async;
+use slog_term;
 use std::env;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
@@ -21,7 +24,7 @@ use tikv::config::{MetricConfig, TiKvConfig};
 use tikv::util;
 use tikv::util::collections::HashMap;
 use tikv::util::file_log::RotatingFileLogger;
-use tikv::util::logger::{self, StderrLogger};
+use tikv::util::logger;
 
 // A workaround for checking if log is initialized.
 pub static LOG_INITIALIZED: AtomicBool = ATOMIC_BOOL_INIT;
@@ -39,18 +42,24 @@ macro_rules! fatal {
 
 pub fn init_log(config: &TiKvConfig) {
     if config.log_file.is_empty() {
-        logger::init_log(StderrLogger, config.log_level).unwrap_or_else(|e| {
+        let decorator = slog_term::TermDecorator::new().build();
+        let drain = slog_term::FullFormat::new(decorator).build().fuse();
+        let drain = slog_async::Async::new(drain).build().fuse();
+        let logger = slog::Logger::root(drain, slog_o!());
+        logger::init_log(logger, config.log_level).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {:?}", e);
         });
     } else {
-        let w = RotatingFileLogger::new(&config.log_file).unwrap_or_else(|e| {
+        let drain = RotatingFileLogger::new(&config.log_file).unwrap_or_else(|e| {
             fatal!(
                 "failed to initialize log with file {:?}: {:?}",
                 config.log_file,
                 e
             );
         });
-        logger::init_log(w, config.log_level).unwrap_or_else(|e| {
+        let drain = slog_async::Async::new(drain).build().fuse();
+        let logger = slog::Logger::root(drain, slog_o!());
+        logger::init_log(logger, config.log_level).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {:?}", e);
         });
     }
