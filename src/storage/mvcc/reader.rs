@@ -194,14 +194,14 @@ impl MvccReader {
         Ok(Some((commit_ts, write)))
     }
 
-    fn check_lock(&mut self, key: &Key, mut ts: u64) -> Result<bool> {
+    fn check_lock(&mut self, key: &Key, mut ts: u64) -> Result<()> {
         if let Some(lock) = self.load_lock(key)? {
             if lock.lock_type == LockType::Lock || ts == u64::MAX && key.raw()? == lock.primary {
                 // ignore the lock:
                 // 1. when ts==u64::MAX(which means to get latest committed version for
                 //    primary key),and current key is the primary key.
                 // 2. when lock's type is Lock(which means it won't change the value).
-                return Ok(true)
+                return Ok(())
             }
             if lock.ts <= ts {
                 // There is a pending lock. Client should wait or clean it.
@@ -213,13 +213,13 @@ impl MvccReader {
                 })
             }
         }
-        Ok(true)
+        Ok(())
     }
 
     pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
         // Check for locks that signal concurrent writes.
         match self.isolation_level {
-            IsolationLevel::SI => if self.check_lock(key, ts)? {}
+            IsolationLevel::SI => self.check_lock(key, ts)?,
             IsolationLevel::RC => {}
         }
         loop {
