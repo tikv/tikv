@@ -15,48 +15,60 @@ mod half;
 mod size;
 mod table;
 
-use self::half::HalfStatus;
-use self::size::SizeStatus;
-use self::table::TableStatus;
+use kvproto::metapb::Region;
 
-pub use self::size::SizeCheckObserver;
-pub const SIZE_CHECK_OBSERVER_PRIORITY: u32 = 200;
-pub use self::table::TableCheckObserver;
-// TableCheckObserver has higher priority than SizeCheckObserver.
-// Note that higher means less.
-pub const TABLE_CHECK_OBSERVER_PRIORITY: u32 = SIZE_CHECK_OBSERVER_PRIORITY - 1;
+use super::{ObserverContext, SplitChecker};
 
 pub use self::half::HalfCheckObserver;
-pub const HALF_SPLIT_OBSERVER_PRIORITY: u32 = 400;
+pub use self::size::SizeCheckObserver;
+pub use self::table::TableCheckObserver;
 
 #[derive(Default)]
-pub struct Status {
-    // For TableCheckObserver
-    table: Option<TableStatus>,
-    // For SizeCheckObserver
-    size: Option<SizeStatus>,
-    // For HalfCheckObserver
-    half: Option<HalfStatus>,
-    // Whether it's called by auto_split
+pub struct Host {
+    checkers: Vec<Box<SplitChecker>>,
     auto_split: bool,
 }
 
-impl Status {
-    pub fn new(auto_split: bool) -> Status {
-        let mut status = Status::default();
-        status.auto_split = auto_split;
-        status
-    }
-
-    pub fn skip(&self) -> bool {
-        self.table.is_none() && self.size.is_none() && self.half.is_none()
-    }
-
-    pub fn split_key(self) -> Option<Vec<u8>> {
-        if let Some(status) = self.half {
-            status.split_key()
-        } else {
-            None
+impl Host {
+    pub fn new(auto_split: bool) -> Host {
+        Host {
+            auto_split,
+            checkers: vec![],
         }
+    }
+
+    #[inline]
+    pub fn auto_split(&self) -> bool {
+        self.auto_split
+    }
+
+    #[inline]
+    pub fn skip(&self) -> bool {
+        self.checkers.is_empty()
+    }
+
+    /// Hook to call for every check during split.
+    ///
+    /// Return true means abort early.
+    pub fn on_kv(&mut self, region: &Region, key: &[u8], value_size: u64) -> bool {
+        let mut ob_ctx = ObserverContext::new(region);
+        for checker in &mut self.checkers {
+            if checker.on_kv(&mut ob_ctx, key, value_size) {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn split_key(mut self) -> Option<Vec<u8>> {
+        self.checkers
+            .drain(..)
+            .flat_map(|mut c| c.split_key())
+            .next()
+    }
+
+    #[inline]
+    pub fn add_checker(&mut self, checker: Box<SplitChecker>) {
+        self.checkers.push(checker);
     }
 }
