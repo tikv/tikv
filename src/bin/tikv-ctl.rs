@@ -379,18 +379,25 @@ trait DebugExecutor {
         }
     }
 
-    fn compact(&self, db: DBType, cf: &str, from: Option<Vec<u8>>, to: Option<Vec<u8>>) {
+    fn compact(
+        &self,
+        address: Option<&str>,
+        db: DBType,
+        cf: &str,
+        from: Option<Vec<u8>>,
+        to: Option<Vec<u8>>,
+    ) {
         let from = from.unwrap_or_default();
         let to = to.unwrap_or_default();
-        self.do_compaction(db, cf, from, to);
+        self.do_compaction(address, db, cf, from, to);
     }
 
-    fn compact_region(&self, db: DBType, cf: &str, region_id: u64) {
+    fn compact_region(&self, address: Option<&str>, db: DBType, cf: &str, region_id: u64) {
         let region_local = self.get_region_info(region_id).region_local_state.unwrap();
         let r = region_local.get_region();
         let from = keys::data_key(r.get_start_key());
         let to = keys::data_end_key(r.get_end_key());
-        self.do_compaction(db, cf, from, to);
+        self.do_compaction(address, db, cf, from, to);
     }
 
     fn print_bad_regions(&self);
@@ -473,7 +480,14 @@ trait DebugExecutor {
         limit: u64,
     ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
 
-    fn do_compaction(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>);
+    fn do_compaction(
+        &self,
+        address: Option<&str>,
+        db: DBType,
+        cf: &str,
+        from: Vec<u8>,
+        to: Vec<u8>,
+    );
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
 
@@ -563,7 +577,14 @@ impl DebugExecutor for DebugClient {
         ) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
-    fn do_compaction(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>) {
+    fn do_compaction(
+        &self,
+        address: Option<&str>,
+        db: DBType,
+        cf: &str,
+        from: Vec<u8>,
+        to: Vec<u8>,
+    ) {
         let mut req = CompactRequest::new();
         req.set_db(db);
         req.set_cf(cf.to_owned());
@@ -572,8 +593,12 @@ impl DebugExecutor for DebugClient {
         self.compact(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::compact", e));
         println!(
-            "compact db:{:?} cf:{} range:[{:?}, {:?}) success!",
-            db, cf, from, to
+            "store:{:?} compact db:{:?} cf:{} range:[{:?}, {:?}) success!",
+            address.unwrap(),
+            db,
+            cf,
+            from,
+            to
         );
     }
 
@@ -679,11 +704,11 @@ impl DebugExecutor for Debugger {
         Box::new(stream) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
-    fn do_compaction(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>) {
+    fn do_compaction(&self, _: Option<&str>, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>) {
         self.compact(db, cf, &from, &to)
             .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
         println!(
-            "compact db:{:?} cf:{} range:[{:?}, {:?}) success!",
+            "local store compact db:{:?} cf:{} range:[{:?}, {:?}) success!",
             db, cf, from, to
         );
     }
@@ -1198,7 +1223,7 @@ fn main() {
                  .help("meta file path"))
         )
         .subcommand(
-            SubCommand::with_name("compact-the-whole-cluster")
+            SubCommand::with_name("compact-cluster")
                 .about("compact the whole cluster in a specified range in one or more column families")
                 .arg(
                     Arg::with_name("db")
@@ -1225,14 +1250,14 @@ fn main() {
                         .short("f")
                         .long("from")
                         .takes_value(true)
-                        .help("set the start raw key, in escaped form"),
+                        .help(raw_key_hint)
                 )
                 .arg(
                     Arg::with_name("to")
                         .short("t")
                         .long("to")
                         .takes_value(true)
-                        .help("set the end raw key, in escaped form"),
+                        .help(raw_key_hint)
                 ),
     );
 
@@ -1273,7 +1298,7 @@ fn main() {
     let host = matches.value_of("host");
     let cfg_path = matches.value_of("config");
 
-    let debug_executor = new_debug_executor(db, raft_db, host, cfg_path, Arc::clone(&mgr));
+    let debug_executor = new_debug_executor(db, raft_db, host.clone(), cfg_path, Arc::clone(&mgr));
 
     if let Some(matches) = matches.subcommand_matches("print") {
         let cf = matches.value_of("cf").unwrap();
@@ -1340,9 +1365,9 @@ fn main() {
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
         if let Some(region) = matches.value_of("region") {
-            debug_executor.compact_region(db_type, cf, region.parse().unwrap());
+            debug_executor.compact_region(host, db_type, cf, region.parse().unwrap());
         } else {
-            debug_executor.compact(db_type, cf, from_key, to_key);
+            debug_executor.compact(host, db_type, cf, from_key, to_key);
         }
     } else if let Some(matches) = matches.subcommand_matches("tombstone") {
         let regions = matches
@@ -1509,7 +1534,7 @@ fn compact_whole_cluster(
         let h = thread::spawn(move || {
             let debug_executor = new_debug_executor(None, None, Some(&addr), None, mgr);
             for cf in cfs {
-                debug_executor.compact(db_type, cf.as_str(), from.clone(), to.clone());
+                debug_executor.compact(Some(&addr), db_type, cf.as_str(), from.clone(), to.clone());
             }
         });
         handles.push(h);
