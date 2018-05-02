@@ -42,6 +42,14 @@ fn test_txn_store_get() {
 }
 
 #[test]
+fn test_txn_store_get_with_type_lock() {
+    let store = AssertionStorage::default();
+    store.put_ok(b"k1", b"v1", 1, 2);
+    store.prewrite_ok(vec![Mutation::Lock(make_key(b"k1"))], b"k1", 5);
+    store.get_ok(b"k1", 20, b"v1");
+}
+
+#[test]
 fn test_txn_store_delete() {
     let store = AssertionStorage::default();
     store.put_ok(b"x", b"x5-10", 5, 10);
