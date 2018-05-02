@@ -1336,7 +1336,7 @@ fn main() {
                 Err(e) => perror_and_exit("parse store id list", e),
             }
         } else {
-            eprintln!("No or unsupported sub command");
+            eprintln!("No subcommand.");
             process::exit(0);
         }
     } else if let Some(matches) = matches.subcommand_matches("consistency-check") {

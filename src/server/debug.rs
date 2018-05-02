@@ -1297,17 +1297,26 @@ mod tests {
         // region 2 with peers at stores 21, 22, 23.
         init_region_state(engine, 2, &[21, 22, 23]);
 
+        // Only remove specified stores from region 1.
         debugger
             .remove_failed_stores(vec![13, 14, 21, 23], Some(vec![1]))
             .unwrap();
+
+        // 13 and 14 should be removed from region 1.
         let region_state = get_region_state(engine, 1);
         assert_eq!(region_state.get_region().get_peers().len(), 2);
+        // 21 and 23 shouldn't be removed from region 2.
         let region_state = get_region_state(engine, 2);
         assert_eq!(region_state.get_region().get_peers().len(), 3);
 
-        debugger
-            .remove_failed_stores(vec![13, 14, 23], None)
-            .unwrap();
+        // Remove specified stores from all regions.
+        debugger.remove_failed_stores(vec![11, 23], None).unwrap();
+
+        // 11 should be removed from region 1.
+        let region_state = get_region_state(engine, 1);
+        assert_eq!(region_state.get_region().get_peers().len(), 1);
+
+        // 23 shouldn't be removed from region 2 because there's still a quorom.
         let region_state = get_region_state(engine, 2);
         assert_eq!(region_state.get_region().get_peers().len(), 3);
 
