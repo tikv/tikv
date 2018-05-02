@@ -630,7 +630,7 @@ impl Peer {
                     {
                         let now = Instant::now();
                         self.peers_start_pending_time.push((id, now));
-                        warn!("{} peer {} start pending at {:?}", self.tag, id, now);
+                        debug!("{} peer {} start pending at {:?}", self.tag, id, now);
                     }
                 }
             }
@@ -655,8 +655,8 @@ impl Peer {
                 if progress.matched >= truncated_idx {
                     let (_, pending_after) = self.peers_start_pending_time.swap_remove(i);
                     let elapsed = duration_to_sec(pending_after.elapsed());
-                    info!(
-                        "{} peer {} has caugth up logs, elapsed: {}",
+                    debug!(
+                        "{} peer {} has caught up logs, elapsed: {}",
                         self.tag, peer_id, elapsed
                     );
                     return true;
@@ -1611,7 +1611,7 @@ impl Peer {
     fn handle_read(&mut self, req: RaftCmdRequest) -> ReadResponse {
         let mut resp = self.exec_read(&req).unwrap_or_else(|e| {
             match e {
-                Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
+                Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
                 _ => error!("{} execute raft command err: {:?}", self.tag, e),
             }
             ReadResponse {
