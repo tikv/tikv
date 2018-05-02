@@ -30,7 +30,6 @@ use raft::eraftpb::Entry;
 use rocksdb::{Kv, SeekKey, Writable, WriteBatch, WriteOptions, DB};
 
 use raft::{self, quorum, RawNode};
-use raftstore::errors::Error as RaftstoreError;
 use raftstore::store::engine::{IterOption, Mutable};
 use raftstore::store::util as raftstore_util;
 use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
@@ -468,7 +467,13 @@ impl Debugger {
                     return Ok(true);
                 }
 
-                Err(RaftstoreError::Other("region overlap".into()))
+                if exists_region.get_start_key() == region.get_start_key()
+                    && exists_region.get_end_key() == region.get_end_key()
+                {
+                    Err(box_err!("region {} still exists", region.get_id()))
+                } else {
+                    Err(box_err!("region overlap with {}", exists_region.get_id()))
+                }
             },
         ));
 
