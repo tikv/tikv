@@ -15,7 +15,7 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use grpc;
 use log::SetLoggerError;
-use slog::{self, Drain, Level, Logger};
+use slog::{self, Drain, Level};
 use slog_scope;
 use slog_stdlog;
 
@@ -45,8 +45,12 @@ where
     slog_stdlog::init()
 }
 
-pub fn init_log_for_tikv_only(logger: Logger, level: Level) -> Result<(), SetLoggerError> {
-    let filtered = logger.filter(|record| {
+pub fn init_log_for_tikv_only<D>(drain: D, level: Level) -> Result<(), SetLoggerError>
+where
+    D: Drain + Send + Sync + 'static + RefUnwindSafe + UnwindSafe,
+    <D as slog::Drain>::Err: ::std::fmt::Debug,
+{
+    let filtered = drain.filter(|record| {
         ENABLED_TARGETS
             .iter()
             .all(|target| !record.module().starts_with(target))
@@ -55,7 +59,6 @@ pub fn init_log_for_tikv_only(logger: Logger, level: Level) -> Result<(), SetLog
 }
 
 pub fn get_level_by_string(lv: &str) -> Level {
-    #![allow(match_same_arms)]
     match &*lv.to_owned().to_lowercase() {
         "critical" => Level::Critical,
         "error" => Level::Error,

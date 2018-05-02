@@ -116,7 +116,7 @@ fn init_log() {
     // we don't mind set it multiple times.
     let drain = CaseTraceLogger { f: writer };
     let drain = slog_async::Async::new(drain).build().fuse();
-    let logger = slog::Logger::root(drain, slog_o!());
+    let logger = slog::Logger::root_typed(drain, slog_o!());
     let _ = logger::init_log_for_tikv_only(logger, level);
 }
 

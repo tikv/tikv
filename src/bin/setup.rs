@@ -45,7 +45,7 @@ pub fn init_log(config: &TiKvConfig) {
         let decorator = slog_term::TermDecorator::new().build();
         let drain = slog_term::FullFormat::new(decorator).build().fuse();
         let drain = slog_async::Async::new(drain).build().fuse();
-        let logger = slog::Logger::root(drain, slog_o!());
+        let logger = slog::Logger::root_typed(drain, slog_o!());
         logger::init_log(logger, config.log_level).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {:?}", e);
         });
@@ -58,7 +58,7 @@ pub fn init_log(config: &TiKvConfig) {
             );
         });
         let drain = slog_async::Async::new(drain).build().fuse();
-        let logger = slog::Logger::root(drain, slog_o!());
+        let logger = slog::Logger::root_typed(drain, slog_o!());
         logger::init_log(logger, config.log_level).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {:?}", e);
         });
