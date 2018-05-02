@@ -17,9 +17,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crc::crc32::{self, Hasher32};
-use uuid::Uuid;
 use kvproto::importpb::*;
 use rocksdb::{IngestExternalFileOptions, DB};
+use uuid::Uuid;
 
 use util::rocksdb::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
 
@@ -104,9 +104,9 @@ impl ImportDir {
         fs::create_dir_all(&temp_dir)?;
         fs::create_dir_all(&clone_dir)?;
         Ok(ImportDir {
-            root_dir: root_dir,
-            temp_dir: temp_dir,
-            clone_dir: clone_dir,
+            root_dir,
+            temp_dir,
+            clone_dir,
         })
     }
 
@@ -208,8 +208,8 @@ impl ImportFile {
             .create_new(true)
             .open(&path.temp)?;
         Ok(ImportFile {
-            meta: meta,
-            path: path,
+            meta,
+            path,
             file: Some(file),
             digest: crc32::Digest::new(crc32::IEEE),
         })

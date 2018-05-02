@@ -13,14 +13,14 @@
 
 use std::cmp::Ordering;
 
-use rocksdb::{SeekKey, DB};
 use kvproto::metapb::Region;
+use rocksdb::{SeekKey, DB};
 
+use coprocessor::codec::table as table_codec;
+use raftstore::store::engine::{IterOption, Iterable};
+use raftstore::store::keys;
 use storage::CF_WRITE;
 use storage::types::Key;
-use raftstore::store::keys;
-use raftstore::store::engine::{IterOption, Iterable};
-use coprocessor::codec::table as table_codec;
 use util::escape;
 
 use super::super::{Coprocessor, ObserverContext, Result, SplitCheckObserver};
@@ -223,22 +223,22 @@ mod test {
     use std::sync::Arc;
     use std::sync::mpsc;
 
-    use tempdir::TempDir;
-    use rocksdb::Writable;
     use kvproto::metapb::Peer;
+    use rocksdb::Writable;
+    use tempdir::TempDir;
 
+    use coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
+    use raftstore::store::{Msg, SplitCheckRunner, SplitCheckTask};
     use storage::ALL_CFS;
     use storage::types::Key;
-    use raftstore::store::{Msg, SplitCheckRunner, SplitCheckTask};
-    use util::rocksdb::new_engine;
-    use util::worker::Runnable;
-    use util::transport::RetryableSendCh;
-    use util::config::ReadableSize;
     use util::codec::number::NumberEncoder;
-    use coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
+    use util::config::ReadableSize;
+    use util::rocksdb::new_engine;
+    use util::transport::RetryableSendCh;
+    use util::worker::Runnable;
 
-    use raftstore::coprocessor::{Config, CoprocessorHost};
     use super::*;
+    use raftstore::coprocessor::{Config, CoprocessorHost};
 
     /// Composes table record and index prefix: `t[table_id]`.
     // Port from TiDB

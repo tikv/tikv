@@ -13,15 +13,15 @@
 
 extern crate toml;
 
-use std::error::Error;
-use std::usize;
-use std::fs;
-use std::io::{Read, Write};
-use std::io::Error as IoError;
-use std::path::Path;
-use std::fmt;
 use std::cmp;
+use std::error::Error;
+use std::fmt;
+use std::fs;
 use std::i32;
+use std::io::Error as IoError;
+use std::io::{Read, Write};
+use std::path::Path;
+use std::usize;
 
 use log::LogLevelFilter;
 use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
@@ -29,12 +29,12 @@ use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBComp
 use sys_info;
 
 use import::Config as ImportConfig;
-use server::Config as ServerConfig;
-use server::readpool::Config as ReadPoolInstanceConfig;
 use pd::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::keys::region_raft_prefix_len;
+use server::Config as ServerConfig;
+use server::readpool::Config as ReadPoolInstanceConfig;
 use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
               DEFAULT_ROCKSDB_SUB_DIR};
 use util::config::{self, compression_type_level_serde, ReadableDuration, ReadableSize, GB, KB, MB};
@@ -106,7 +106,7 @@ macro_rules! cf_config {
             pub soft_pending_compaction_bytes_limit: ReadableSize,
             pub hard_pending_compaction_bytes_limit: ReadableSize,
         }
-    }
+    };
 }
 
 macro_rules! build_cf_opt {
@@ -116,11 +116,13 @@ macro_rules! build_cf_opt {
         block_base_opts.set_no_block_cache($opt.disable_block_cache);
         block_base_opts.set_lru_cache($opt.block_cache_size.0 as usize, -1, 0, 0.0);
         block_base_opts.set_cache_index_and_filter_blocks($opt.cache_index_and_filter_blocks);
-        block_base_opts.set_pin_l0_filter_and_index_blocks_in_cache(
-            $opt.pin_l0_filter_and_index_blocks);
+        block_base_opts
+            .set_pin_l0_filter_and_index_blocks_in_cache($opt.pin_l0_filter_and_index_blocks);
         if $opt.use_bloom_filter {
-            block_base_opts.set_bloom_filter($opt.bloom_filter_bits_per_key,
-                                             $opt.block_based_bloom_filter);
+            block_base_opts.set_bloom_filter(
+                $opt.bloom_filter_bits_per_key,
+                $opt.block_based_bloom_filter,
+            );
             block_base_opts.set_whole_key_filtering($opt.whole_key_filtering);
         }
         block_base_opts.set_read_amp_bytes_per_bit($opt.read_amp_bytes_per_bit);
@@ -168,7 +170,7 @@ macro_rules! tune_for_import_mode_cf {
         if $opt.block_cache_size.0 > GB {
             $opt.block_cache_size.0 = GB;
         }
-    }}
+    }};
 }
 
 cf_config!(DefaultCfConfig);
@@ -391,7 +393,8 @@ impl RaftCfConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
-    #[serde(with = "config::recovery_mode_serde")] pub wal_recovery_mode: DBRecoveryMode,
+    #[serde(with = "config::recovery_mode_serde")]
+    pub wal_recovery_mode: DBRecoveryMode,
     pub wal_dir: String,
     pub wal_ttl_seconds: u64,
     pub wal_size_limit: ReadableSize,
@@ -573,7 +576,8 @@ impl RaftDefaultCfConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct RaftDbConfig {
-    #[serde(with = "config::recovery_mode_serde")] pub wal_recovery_mode: DBRecoveryMode,
+    #[serde(with = "config::recovery_mode_serde")]
+    pub wal_recovery_mode: DBRecoveryMode,
     pub wal_dir: String,
     pub wal_ttl_seconds: u64,
     pub wal_size_limit: ReadableSize,
@@ -708,13 +712,23 @@ pub enum LogLevel {
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
     pub storage: ReadPoolInstanceConfig,
+    pub coprocessor: ReadPoolInstanceConfig,
 }
 
 impl Default for ReadPoolConfig {
     fn default() -> ReadPoolConfig {
         ReadPoolConfig {
-            storage: ReadPoolInstanceConfig::default(),
+            storage: ReadPoolInstanceConfig::default_for_storage(),
+            coprocessor: ReadPoolInstanceConfig::default_for_coprocessor(),
         }
+    }
+}
+
+impl ReadPoolConfig {
+    pub fn validate(&mut self) -> Result<(), Box<Error>> {
+        self.storage.validate()?;
+        self.coprocessor.validate()?;
+        Ok(())
     }
 }
 
@@ -722,14 +736,16 @@ impl Default for ReadPoolConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
-    #[serde(with = "LogLevel")] pub log_level: LogLevelFilter,
+    #[serde(with = "LogLevel")]
+    pub log_level: LogLevelFilter,
     pub log_file: String,
     pub readpool: ReadPoolConfig,
     pub server: ServerConfig,
     pub storage: StorageConfig,
     pub pd: PdConfig,
     pub metric: MetricConfig,
-    #[serde(rename = "raftstore")] pub raft_store: RaftstoreConfig,
+    #[serde(rename = "raftstore")]
+    pub raft_store: RaftstoreConfig,
     pub coprocessor: CopConfig,
     pub rocksdb: DbConfig,
     pub raftdb: RaftDbConfig,
@@ -759,6 +775,7 @@ impl Default for TiKvConfig {
 
 impl TiKvConfig {
     pub fn validate(&mut self) -> Result<(), Box<Error>> {
+        self.readpool.validate()?;
         self.storage.validate()?;
 
         self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
@@ -830,6 +847,40 @@ impl TiKvConfig {
                 self.coprocessor.region_split_size = self.raft_store.region_split_size;
             }
             self.raft_store.region_split_size = default_raft_store.region_split_size;
+        }
+        if self.server.end_point_concurrency != None {
+            warn!(
+                "deprecated configuration, {} has been moved to {}",
+                "server.end_point_concurrency", "readpool.coprocessor.xxx-concurrency",
+            );
+            warn!(
+                "override {} with {}, {:?}",
+                "readpool.coprocessor.xxx-concurrency",
+                "server.end_point_concurrency",
+                self.server.end_point_concurrency
+            );
+            let concurrency = self.server.end_point_concurrency.unwrap();
+            self.readpool.coprocessor.high_concurrency = concurrency;
+            self.readpool.coprocessor.normal_concurrency = concurrency;
+            self.readpool.coprocessor.low_concurrency = concurrency;
+        }
+        if self.server.end_point_stack_size != None {
+            warn!(
+                "deprecated configuration, {} has been moved to {}",
+                "server.end_point_stack_size", "readpool.coprocessor.stack_size",
+            );
+            warn!(
+                "override {} with {}, {:?}",
+                "readpool.coprocessor.stack_size",
+                "server.end_point_stack_size",
+                self.server.end_point_stack_size
+            );
+            self.readpool.coprocessor.stack_size = self.server.end_point_stack_size.unwrap();
+        }
+        if self.raft_store.clean_stale_peer_delay.as_secs() > 0 {
+            let delay_secs = self.raft_store.clean_stale_peer_delay.as_secs()
+                + self.server.end_point_request_max_handle_duration.as_secs();
+            self.raft_store.clean_stale_peer_delay = ReadableDuration::secs(delay_secs);
         }
     }
 

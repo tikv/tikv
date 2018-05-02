@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::panic::{self, PanicInfo};
 use std::cell::RefCell;
+use std::panic::{self, PanicInfo};
 use std::sync::{Once, ONCE_INIT};
 use std::{process, thread};
 

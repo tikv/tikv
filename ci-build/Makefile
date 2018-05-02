@@ -28,7 +28,7 @@ ${LOCAL_DIR}/bin/kcov:
 	fi
 
 prepare-rustfmt:
-	 @[[ "`cargo fmt -- --version`" = "0.3.4-nightly ( )" ]] || cargo install --force rustfmt-nightly --vers 0.3.4 || exit 0
+	 rustup component add rustfmt-preview --toolchain `tail -n 1 ${CI_BUILD_DIR}/../RUST_VERSION`
 
 prepare_linux: ${LOCAL_DIR}/bin/kcov  prepare-rustfmt
 

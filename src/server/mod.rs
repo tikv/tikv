@@ -12,31 +12,31 @@
 // limitations under the License.
 
 mod metrics;
-mod service;
 mod raft_client;
+mod service;
 
-pub mod readpool;
 pub mod config;
-pub mod errors;
-pub mod server;
-pub mod transport;
-pub mod node;
-pub mod resolve;
-pub mod snap;
 pub mod debug;
+pub mod errors;
+pub mod node;
+pub mod readpool;
+pub mod resolve;
+pub mod server;
+pub mod snap;
+pub mod transport;
 
 use std::fmt::{Debug, Formatter, Result as FormatResult};
 
-use futures::{stream, Future, Sink, Stream};
 use futures::sync::{mpsc, oneshot};
+use futures::{stream, Future, Sink, Stream};
 
 pub use self::config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Error, Result};
+pub use self::node::{create_raft_storage, Node};
+pub use self::raft_client::RaftClient;
+pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::server::Server;
 pub use self::transport::{ServerRaftStoreRouter, ServerTransport};
-pub use self::node::{create_raft_storage, Node};
-pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
-pub use self::raft_client::RaftClient;
 
 pub enum OnResponse<T> {
     Unary(oneshot::Sender<T>),

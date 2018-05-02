@@ -15,18 +15,18 @@ use std::option::Option;
 use std::{fmt, u64};
 
 use kvproto::metapb;
-use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use kvproto::raft_serverpb::RaftMessage;
 use protobuf::{self, Message, MessageStatic};
-use raftstore::{Error, Result};
+use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raftstore::store::keys;
+use raftstore::{Error, Result};
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
 use storage::{Key, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
 use util::properties::SizeProperties;
-use util::{rocksdb as rocksdb_util, Either};
 use util::time::monotonic_raw_now;
+use util::{rocksdb as rocksdb_util, Either};
 
 use super::engine::{IterOption, Iterable};
 use super::peer_storage;
@@ -171,6 +171,19 @@ pub fn delete_all_in_range_cf(
     Ok(())
 }
 
+pub fn delete_all_files_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+    if start_key >= end_key {
+        return Ok(());
+    }
+
+    for cf in db.cf_names() {
+        let handle = rocksdb_util::get_cf_handle(db, cf)?;
+        db.delete_files_in_range_cf(handle, start_key, end_key, false)?;
+    }
+
+    Ok(())
+}
+
 // check whether epoch is staler than check_epoch.
 pub fn is_epoch_stale(epoch: &metapb::RegionEpoch, check_epoch: &metapb::RegionEpoch) -> bool {
     epoch.get_version() < check_epoch.get_version()
@@ -290,7 +303,7 @@ impl Lease {
     pub fn new(max_lease: Duration) -> Lease {
         Lease {
             bound: None,
-            max_lease: max_lease,
+            max_lease,
         }
     }
 
@@ -405,12 +418,12 @@ mod tests {
     use tempdir::TempDir;
     use time::Duration as TimeDuration;
 
+    use super::*;
     use raftstore::store::peer_storage;
+    use storage::{Key, ALL_CFS};
     use util::properties::SizePropertiesCollectorFactory;
     use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
     use util::time::monotonic_raw_now;
-    use storage::{Key, ALL_CFS};
-    use super::*;
 
     #[test]
     fn test_lease() {
@@ -701,6 +714,41 @@ mod tests {
     #[test]
     fn test_delete_all_in_range_not_use_delete_range() {
         test_delete_all_in_range(false);
+    }
+
+    #[test]
+    fn test_delete_all_files_in_range() {
+        let path = TempDir::new("_raftstore_util_delete_all_files_in_range").expect("");
+        let path_str = path.path().to_str().unwrap();
+
+        let cfs_opts = ALL_CFS
+            .into_iter()
+            .map(|cf| {
+                let mut cf_opts = ColumnFamilyOptions::new();
+                cf_opts.set_level_zero_file_num_compaction_trigger(1);
+                CFOptions::new(cf, cf_opts)
+            })
+            .collect();
+        let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
+
+        let keys = vec![b"k1", b"k2", b"k3", b"k4"];
+
+        let mut kvs: Vec<(&[u8], &[u8])> = vec![];
+        for key in keys {
+            kvs.push((key, b"value"));
+        }
+        let kvs_left: Vec<(&[u8], &[u8])> = vec![(kvs[0].0, kvs[0].1), (kvs[3].0, kvs[3].1)];
+        for cf in ALL_CFS {
+            let handle = get_cf_handle(&db, cf).unwrap();
+            for &(k, v) in kvs.as_slice() {
+                db.put_cf(handle, k, v).unwrap();
+                db.flush_cf(handle, true).unwrap();
+            }
+        }
+        check_data(&db, ALL_CFS, kvs.as_slice());
+
+        delete_all_files_in_range(&db, b"k2", b"k4").unwrap();
+        check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
 
     fn exit_with_err(msg: String) -> ! {

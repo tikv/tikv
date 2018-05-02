@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Duration;
-use std::{fs, thread};
+use rand::{self, Rng};
 use std::sync::Arc;
 use std::sync::mpsc::channel;
-use rand::{self, Rng};
+use std::time::Duration;
+use std::{fs, thread};
 
 use kvproto::metapb;
 use raft::eraftpb::MessageType;
@@ -23,14 +23,14 @@ use raft::eraftpb::MessageType;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
+use super::transport_simulate::*;
 use super::util;
 use tikv::pd::PdClient;
-use tikv::storage::{CF_DEFAULT, CF_WRITE};
+use tikv::raftstore::store::engine::Iterable;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::{Callback, WriteResponse};
-use tikv::raftstore::store::engine::Iterable;
+use tikv::storage::{CF_DEFAULT, CF_WRITE};
 use tikv::util::config::*;
-use super::transport_simulate::*;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
