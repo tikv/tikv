@@ -1335,6 +1335,9 @@ fn main() {
                 Ok(store_ids) => debug_executor.remove_fail_stores(store_ids, region_ids),
                 Err(e) => perror_and_exit("parse store id list", e),
             }
+        } else {
+            eprintln!("No or unsupported sub command");
+            process::exit(0);
         }
     } else if let Some(matches) = matches.subcommand_matches("consistency-check") {
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
