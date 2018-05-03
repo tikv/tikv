@@ -18,8 +18,6 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use time::{self, Timespec, Tm};
 
-use slog::{self, Drain, OwnedKVList, Record};
-
 const ONE_DAY_SECONDS: u64 = 60 * 60 * 24;
 
 fn systemtime_to_tm(t: SystemTime) -> Tm {
@@ -119,30 +117,21 @@ impl RotatingFileLogger {
     }
 }
 
-impl Drain for RotatingFileLogger {
-    type Ok = ();
-    type Err = slog::Never;
-
-    fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+impl Write for RotatingFileLogger {
+    fn write(&mut self, bytes: &[u8]) -> Result<usize, ::std::io::Error> {
         let mut core = self.core.lock().unwrap();
         if core.should_rollover() {
             core.do_rollover()
         };
+        core.file.write(bytes)
+    }
 
-        let t = time::now();
-        let time_str = time::strftime("%y/%m/%d %H:%M:%S.%f", &t).unwrap();
-        // todo allow formatter to be configurable.
-        let _ = write!(
-            core.file,
-            "{} {}:{}: [{}] {} {:?}\n",
-            &time_str[..time_str.len() - 6],
-            record.file().rsplit('/').nth(0).unwrap(),
-            record.line(),
-            record.level(),
-            record.msg(),
-            values,
-        );
-        Ok(())
+    fn flush(&mut self) -> Result<(), ::std::io::Error> {
+        let mut core = self.core.lock().unwrap();
+        if core.should_rollover() {
+            core.do_rollover()
+        };
+        core.file.flush()
     }
 }
 

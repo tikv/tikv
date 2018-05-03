@@ -50,13 +50,15 @@ pub fn init_log(config: &TiKvConfig) {
             fatal!("failed to initialize log: {:?}", e);
         });
     } else {
-        let drain = RotatingFileLogger::new(&config.log_file).unwrap_or_else(|e| {
+        let logger = RotatingFileLogger::new(&config.log_file).unwrap_or_else(|e| {
             fatal!(
                 "failed to initialize log with file {:?}: {:?}",
                 config.log_file,
                 e
             );
         });
+        let decorator = slog_term::PlainDecorator::new(logger);
+        let drain = slog_term::FullFormat::new(decorator).build().fuse();
         let drain = slog_async::Async::new(drain).build().fuse();
         let logger = slog::Logger::root_typed(drain, slog_o!());
         logger::init_log(logger, config.log_level).unwrap_or_else(|e| {
