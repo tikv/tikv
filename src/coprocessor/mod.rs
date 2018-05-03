@@ -19,6 +19,7 @@ pub mod local_metrics;
 mod metrics;
 mod readpool_context;
 mod statistics;
+mod util;
 
 pub use self::endpoint::err_resp;
 pub use self::readpool_context::Context as ReadPoolContext;
@@ -33,7 +34,6 @@ use tipb::select;
 
 use self::dag::expr;
 use storage::{engine, mvcc, txn};
-use util;
 
 quick_error! {
     #[derive(Debug)]
@@ -83,8 +83,8 @@ impl From<expr::Error> for Error {
     }
 }
 
-impl From<util::codec::Error> for Error {
-    fn from(e: util::codec::Error) -> Error {
+impl From<super::util::codec::Error> for Error {
+    fn from(e: super::util::codec::Error) -> Error {
         let mut err = select::Error::new();
         err.set_msg(format!("{}", e));
         Error::Eval(err)
