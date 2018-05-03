@@ -259,6 +259,7 @@ pub struct PeerStorage {
     pub applied_index_term: u64,
     pub last_term: u64,
 
+    peer_id: u64,
     snap_state: RefCell<SnapState>,
     region_sched: Scheduler<RegionTask>,
     snap_tried_cnt: RefCell<usize>,
@@ -290,6 +291,7 @@ pub struct ApplySnapResult {
 
 pub struct InvokeContext {
     pub region_id: u64,
+    pub peer_id: u64,
     pub raft_state: RaftLocalState,
     pub apply_state: RaftApplyState,
     last_term: u64,
@@ -300,6 +302,7 @@ impl InvokeContext {
     pub fn new(store: &PeerStorage) -> InvokeContext {
         InvokeContext {
             region_id: store.get_region_id(),
+            peer_id: store.peer_id,
             raft_state: store.raft_state.clone(),
             apply_state: store.apply_state.clone(),
             last_term: store.last_term,
@@ -456,6 +459,7 @@ fn init_last_term(
 
 impl PeerStorage {
     pub fn new(
+        peer_id: u64,
         kv_engine: Arc<DB>,
         raft_engine: Arc<DB>,
         region: &metapb::Region,
@@ -482,6 +486,7 @@ impl PeerStorage {
             region: region.clone(),
             raft_state,
             apply_state,
+            peer_id,
             snap_state: RefCell::new(SnapState::Relax),
             region_sched,
             snap_tried_cnt: RefCell::new(0),
@@ -743,7 +748,7 @@ impl PeerStorage {
     // Append the given entries to the raft log using previous last index or self.last_index.
     // Return the new last index for later update. After we commit in engine, we can set last_index
     // to the return one.
-    pub fn append<T>(
+    fn append<T>(
         &mut self,
         invoke_ctx: &mut InvokeContext,
         entries: &[Entry],
@@ -1088,12 +1093,25 @@ impl PeerStorage {
 
     /// Update the memory state after ready changes are flushed to disk successfully.
     pub fn post_ready(&mut self, ctx: InvokeContext) -> Option<ApplySnapResult> {
+        debug!(
+            "[region {}] {} update raft_state: {:?}, apply_state: {:?}, region: {:?}",
+            self.get_region_id(),
+            self.peer_id,
+            ctx.raft_state,
+            ctx.apply_state,
+            ctx.snap_region,
+        );
         self.raft_state = ctx.raft_state;
+        /* TODO: we shall update apply_state only for applying snapshot.
         self.apply_state = ctx.apply_state;
+        */
         self.last_term = ctx.last_term;
         // If we apply snapshot ok, we should update some infos like applied index too.
         let snap_region = match ctx.snap_region {
-            Some(r) => r,
+            Some(r) => {
+                self.apply_state = ctx.apply_state;
+                r
+            }
             None => return None,
         };
         // cleanup data before scheduling apply task
@@ -1385,6 +1403,7 @@ impl Storage for PeerStorage {
     }
 
     fn last_index(&self) -> raft::Result<u64> {
+        debug!("{} last_index {}", self.tag, self.last_index());
         Ok(self.last_index())
     }
 
@@ -1428,7 +1447,7 @@ mod test {
         bootstrap::bootstrap_store(&engines, 1, 1).expect("");
         let region = bootstrap::prepare_bootstrap(&engines, 1, 1, 1).expect("");
         let metrics = Rc::new(RefCell::new(CacheQueryStats::default()));
-        PeerStorage::new(kv_db, raft_db, &region, sched, "".to_owned(), metrics).unwrap()
+        PeerStorage::new(1, kv_db, raft_db, &region, sched, "".to_owned(), metrics).unwrap()
     }
 
     fn new_storage_from_ents(

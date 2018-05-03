@@ -49,6 +49,7 @@ mod cleanup_sst;
 mod compact;
 mod consistency_check;
 mod metrics;
+mod persist;
 mod raftlog_gc;
 mod region;
 mod split_check;
@@ -58,6 +59,7 @@ pub use self::apply::{Apply, ApplyMetrics, ApplyRes, Proposal, RegionProposal, R
 pub use self::cleanup_sst::{Runner as CleanupSSTRunner, Task as CleanupSSTTask};
 pub use self::compact::{Runner as CompactRunner, Task as CompactTask};
 pub use self::consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask};
+pub use self::persist::{Runner as PersistRunner, Task as PersistTask, TaskRes as PersistTaskRes};
 pub use self::raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask};
 pub use self::region::{Runner as RegionRunner, Task as RegionTask, STALE_PEER_CHECK_INTERVAL};
 pub use self::split_check::{Runner as SplitCheckRunner, Task as SplitCheckTask};
