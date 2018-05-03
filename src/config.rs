@@ -25,7 +25,8 @@ use std::usize;
 
 use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
               DBCompressionType, DBOptions, DBRecoveryMode};
-use slog::Level;
+use serde::{Deserialize, Deserializer};
+use slog;
 use sys_info;
 
 use import::Config as ImportConfig;
@@ -38,6 +39,7 @@ use server::readpool::Config as ReadPoolInstanceConfig;
 use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
               DEFAULT_ROCKSDB_SUB_DIR};
 use util::config::{self, compression_type_level_serde, ReadableDuration, ReadableSize, GB, KB, MB};
+use util::logger::get_level_by_string;
 use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
 use util::rocksdb::{db_exist, CFOptions, EventListener, FixedPrefixSliceTransform,
                     FixedSuffixSliceTransform, NoopSliceTransform};
@@ -695,16 +697,41 @@ impl Default for MetricConfig {
     }
 }
 
+// This type exists purely for interacting with Serde, and using `slog::Level` should
+// be preferred.
 #[derive(Serialize, Deserialize)]
-#[serde(remote = "Level")]
+#[serde(remote = "slog::Level")]
 #[serde(rename_all = "kebab-case")]
-pub enum LogLevel {
+pub enum Level {
     Critical,
     Error,
     Warning,
     Info,
     Debug,
     Trace,
+}
+
+impl<'de> Deserialize<'de> for Level {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let string = String::deserialize(deserializer)?;
+        Ok(get_level_by_string(&string).into())
+    }
+}
+
+impl From<slog::Level> for Level {
+    fn from(value: slog::Level) -> Self {
+        match value {
+            slog::Level::Critical => Level::Critical,
+            slog::Level::Error => Level::Error,
+            slog::Level::Warning => Level::Warning,
+            slog::Level::Info => Level::Info,
+            slog::Level::Debug => Level::Debug,
+            slog::Level::Trace => Level::Trace,
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -736,8 +763,8 @@ impl ReadPoolConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
-    #[serde(with = "LogLevel")]
-    pub log_level: Level,
+    #[serde(with = "Level")]
+    pub log_level: slog::Level,
     pub log_file: String,
     pub readpool: ReadPoolConfig,
     pub server: ServerConfig,
@@ -756,7 +783,7 @@ pub struct TiKvConfig {
 impl Default for TiKvConfig {
     fn default() -> TiKvConfig {
         TiKvConfig {
-            log_level: Level::Info,
+            log_level: slog::Level::Info,
             log_file: "".to_owned(),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
