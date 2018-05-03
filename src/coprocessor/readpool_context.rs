@@ -13,9 +13,9 @@
 
 use std::fmt;
 
+use pd;
 use util::futurepool;
 use util::worker;
-use pd;
 
 use super::dag::executor::ExecutorMetrics;
 use super::local_metrics::{BasicLocalMetrics, ExecLocalMetrics};

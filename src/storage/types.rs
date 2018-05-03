@@ -13,13 +13,13 @@
 
 //! Core data types.
 
-use std::hash::{Hash, Hasher};
 use std::fmt::{self, Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::u64;
 
-use util::{codec, escape};
-use util::codec::number::{self, NumberDecoder, NumberEncoder};
 use util::codec::bytes::BytesDecoder;
+use util::codec::number::{self, NumberDecoder, NumberEncoder};
+use util::{codec, escape};
 
 use storage::mvcc::{Lock, Write};
 
@@ -40,7 +40,7 @@ pub struct MvccInfo {
     /// commit_ts and write
     pub writes: Vec<(u64, Write)>,
     /// start_ts and value
-    pub values: Vec<(u64, bool, Value)>,
+    pub values: Vec<(u64, Value)>,
 }
 
 /// The caller should ensure the key is a timestamped key.

@@ -14,9 +14,9 @@
 use std::cmp::Ordering;
 use tipb::expression::ExprType;
 
+use coprocessor::Result;
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::Decimal;
-use coprocessor::Result;
 
 use super::super::expr::{eval_arith, EvalContext};
 
@@ -195,7 +195,7 @@ impl Sum {
             v => v,
         };
         let res = match self.res.take() {
-            Some(b) => box_try!(eval_arith(ctx, v, b, Datum::checked_add)),
+            Some(b) => eval_arith(ctx, v, b, Datum::checked_add)?,
             None => v,
         };
         self.res = Some(res);
@@ -214,7 +214,7 @@ impl AggrFunc for Sum {
         match res {
             Datum::Null | Datum::F64(_) => collector.push(res),
             _ => {
-                let d = box_try!(res.into_dec());
+                let d = res.into_dec()?;
                 collector.push(Datum::Dec(d));
             }
         }
@@ -248,10 +248,7 @@ struct Extremum {
 
 impl Extremum {
     fn new(ord: Ordering) -> Extremum {
-        Extremum {
-            datum: None,
-            ord: ord,
-        }
+        Extremum { datum: None, ord }
     }
 }
 
@@ -267,7 +264,7 @@ impl AggrFunc for Extremum {
             return Ok(());
         }
         if let Some(ref d) = self.datum {
-            if box_try!(d.cmp(ctx, &args[0])) != self.ord {
+            if d.cmp(ctx, &args[0])? != self.ord {
                 return Ok(());
             }
         }
@@ -283,9 +280,9 @@ impl AggrFunc for Extremum {
 
 #[cfg(test)]
 mod test {
-    use std::{i64, u64};
-    use std::ops::Add;
     use coprocessor::dag::expr::EvalContext;
+    use std::ops::Add;
+    use std::{i64, u64};
 
     use super::*;
 

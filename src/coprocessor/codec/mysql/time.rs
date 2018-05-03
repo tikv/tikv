@@ -12,15 +12,15 @@
 // limitations under the License.
 
 use std::cmp::Ordering;
-use std::str;
 use std::fmt::{self, Display, Formatter};
+use std::str;
 
 use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Timelike, Utc, Weekday};
 
-use coprocessor::codec::mysql::{self, check_fsp, parse_frac, types};
+use super::super::{Result, TEN_POW};
 use coprocessor::codec::mysql::Decimal;
 use coprocessor::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
-use super::super::{Result, TEN_POW};
+use coprocessor::codec::mysql::{self, check_fsp, parse_frac, types};
 
 const ZERO_DATETIME_STR: &str = "0000-00-00 00:00:00";
 const ZERO_DATE_STR: &str = "0000-00-00";
@@ -322,8 +322,8 @@ pub struct Time {
 impl Time {
     pub fn new(time: DateTime<FixedOffset>, tp: u8, fsp: i8) -> Result<Time> {
         Ok(Time {
-            time: time,
-            tp: tp,
+            time,
+            tp,
             fsp: check_fsp(fsp)?,
         })
     }
@@ -414,80 +414,80 @@ impl Time {
         let mut frac_str = "";
         let mut need_adjust = false;
         let parts = Time::parse_datetime_format(s);
-        let (mut y, m, d, h, minute, sec): (i32, u32, u32, u32, u32, u32) = match *parts.as_slice()
-        {
-            [s1] => {
-                need_adjust = s1.len() == 12 || s1.len() == 6;
-                match s1.len() {
-                    14 | 12 | 8 | 6 => split_ymd_hms(s1.as_bytes())?,
-                    _ => return Err(box_err!("invalid datetime: {}", s)),
+        let (mut year, month, day, hour, minute, sec): (i32, u32, u32, u32, u32, u32) =
+            match *parts.as_slice() {
+                [s1] => {
+                    need_adjust = s1.len() == 12 || s1.len() == 6;
+                    match s1.len() {
+                        14 | 12 | 8 | 6 => split_ymd_hms(s1.as_bytes())?,
+                        _ => return Err(box_err!("invalid datetime: {}", s)),
+                    }
                 }
-            }
-            [s1, frac] => {
-                frac_str = frac;
-                need_adjust = s1.len() == 12;
-                match s1.len() {
-                    14 | 12 => split_ymd_hms(s1.as_bytes())?,
-                    _ => return Err(box_err!("invalid datetime: {}", s)),
+                [s1, frac] => {
+                    frac_str = frac;
+                    need_adjust = s1.len() == 12;
+                    match s1.len() {
+                        14 | 12 => split_ymd_hms(s1.as_bytes())?,
+                        _ => return Err(box_err!("invalid datetime: {}", s)),
+                    }
                 }
-            }
-            [year, month, day] => (
-                box_try!(year.parse()),
-                box_try!(month.parse()),
-                box_try!(day.parse()),
-                0,
-                0,
-                0,
-            ),
-            [year, month, day, hour, min, sec] => (
-                box_try!(year.parse()),
-                box_try!(month.parse()),
-                box_try!(day.parse()),
-                box_try!(hour.parse()),
-                box_try!(min.parse()),
-                box_try!(sec.parse()),
-            ),
-            [year, month, day, hour, min, sec, frac] => {
-                frac_str = frac;
-                (
+                [year, month, day] => (
+                    box_try!(year.parse()),
+                    box_try!(month.parse()),
+                    box_try!(day.parse()),
+                    0,
+                    0,
+                    0,
+                ),
+                [year, month, day, hour, min, sec] => (
                     box_try!(year.parse()),
                     box_try!(month.parse()),
                     box_try!(day.parse()),
                     box_try!(hour.parse()),
                     box_try!(min.parse()),
                     box_try!(sec.parse()),
-                )
-            }
-            _ => return Err(box_err!("invalid datetime: {}", s)),
-        };
+                ),
+                [year, month, day, hour, min, sec, frac] => {
+                    frac_str = frac;
+                    (
+                        box_try!(year.parse()),
+                        box_try!(month.parse()),
+                        box_try!(day.parse()),
+                        box_try!(hour.parse()),
+                        box_try!(min.parse()),
+                        box_try!(sec.parse()),
+                    )
+                }
+                _ => return Err(box_err!("invalid datetime: {}", s)),
+            };
 
         if need_adjust || parts[0].len() == 2 {
-            if y >= 0 && y <= 69 {
-                y += 2000;
-            } else if y >= 70 && y <= 99 {
-                y += 1900;
+            if year >= 0 && year <= 69 {
+                year += 2000;
+            } else if year >= 70 && year <= 99 {
+                year += 1900;
             }
         }
 
         let frac = parse_frac(frac_str.as_bytes(), fsp)?;
-        if y == 0 && m == 0 && d == 0 && h == 0 && minute == 0 && sec == 0 {
+        if year == 0 && month == 0 && day == 0 && hour == 0 && minute == 0 && sec == 0 {
             return Ok(zero_datetime(tz));
         }
         // it won't happen until 10000
-        if y < 0 || y > 9999 {
-            return Err(box_err!("unsupport year: {}", y));
+        if year < 0 || year > 9999 {
+            return Err(box_err!("unsupport year: {}", year));
         }
-        let t = ymd_hms_nanos(
+        let time = ymd_hms_nanos(
             tz,
-            y,
-            m,
-            d,
-            h,
+            year,
+            month,
+            day,
+            hour,
             minute,
             sec,
             frac * TEN_POW[9 - fsp as usize],
         )?;
-        Time::new(t, types::DATETIME as u8, fsp as i8)
+        Time::new(time, types::DATETIME as u8, fsp as i8)
     }
 
     /// Get time from packed u64. When `tp` is `TIMESTAMP`, the packed time should
@@ -1125,13 +1125,9 @@ mod test {
             utc_t.round_frac(fsp).unwrap();
             let expect = Time::parse_utc_datetime(exp, UN_SPECIFIED_FSP).unwrap();
             assert_eq!(
-                utc_t,
-                expect,
+                utc_t, expect,
                 "input:{:?}, exp:{:?}, utc_t:{:?}, expect:{:?}",
-                input,
-                exp,
-                utc_t,
-                expect
+                input, exp, utc_t, expect
             );
 
             for mut offset in MIN_OFFSET..MAX_OFFSET {
@@ -1141,14 +1137,9 @@ mod test {
                 t.round_frac(fsp).unwrap();
                 let expect = Time::parse_datetime(exp, UN_SPECIFIED_FSP, &tz).unwrap();
                 assert_eq!(
-                    t,
-                    expect,
+                    t, expect,
                     "tz:{:?},input:{:?}, exp:{:?}, utc_t:{:?}, expect:{:?}",
-                    offset,
-                    input,
-                    exp,
-                    t,
-                    expect
+                    offset, input, exp, t, expect
                 );
             }
         }

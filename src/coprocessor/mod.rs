@@ -11,27 +11,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod endpoint;
-mod metrics;
-mod dag;
-mod statistics;
 mod checksum;
-mod readpool_context;
-pub mod local_metrics;
-pub mod util;
 pub mod codec;
+mod dag;
+mod endpoint;
+pub mod local_metrics;
+mod metrics;
+mod readpool_context;
+mod statistics;
+mod util;
 
 pub use self::endpoint::err_resp;
 pub use self::readpool_context::Context as ReadPoolContext;
 
-use std::result;
 use std::error;
+use std::result;
 use std::time::Duration;
 
 use kvproto::{errorpb, kvrpcpb};
+use tipb;
 
-use util::time::Instant;
 use storage;
+use util::time::Instant;
 
 const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
@@ -52,6 +53,11 @@ quick_error! {
         Full(allow: usize) {
             description("running queue is full")
         }
+        Eval(err: tipb::select::Error) {
+            from()
+            description("eval failed")
+            display("eval error {:?}", err)
+        }
         Other(err: Box<error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
@@ -69,6 +75,20 @@ impl From<storage::engine::Error> for Error {
             storage::engine::Error::Request(e) => Error::Region(e),
             _ => Error::Other(box e),
         }
+    }
+}
+
+impl From<self::dag::expr::Error> for Error {
+    fn from(e: self::dag::expr::Error) -> Error {
+        Error::Eval(e.into())
+    }
+}
+
+impl From<::util::codec::Error> for Error {
+    fn from(e: ::util::codec::Error) -> Error {
+        let mut err = tipb::select::Error::new();
+        err.set_msg(format!("{}", e));
+        Error::Eval(err)
     }
 }
 
@@ -92,10 +112,6 @@ impl From<storage::txn::Error> for Error {
         }
     }
 }
-
-pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask,
-                         DEFAULT_REQUEST_MAX_HANDLE_SECS, REQ_TYPE_CHECKSUM, REQ_TYPE_DAG};
-pub use self::dag::{ScanOn, Scanner};
 
 #[derive(Debug)]
 pub struct ReqContext {
@@ -140,3 +156,7 @@ impl ReqContext {
         Ok(())
     }
 }
+
+pub use self::dag::{ScanOn, Scanner};
+pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask,
+                         DEFAULT_REQUEST_MAX_HANDLE_SECS, REQ_TYPE_CHECKSUM, REQ_TYPE_DAG};

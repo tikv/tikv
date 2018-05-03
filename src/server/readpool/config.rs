@@ -85,18 +85,22 @@ impl Config {
         Config::default()
     }
 
+    pub fn default_with_concurrency(concurrency: usize) -> Config {
+        Config {
+            high_concurrency: concurrency,
+            normal_concurrency: concurrency,
+            low_concurrency: concurrency,
+            max_tasks_high: DEFAULT_MAX_TASKS_PER_CORE * concurrency,
+            max_tasks_normal: DEFAULT_MAX_TASKS_PER_CORE * concurrency,
+            max_tasks_low: DEFAULT_MAX_TASKS_PER_CORE * concurrency,
+            ..Config::default()
+        }
+    }
+
     /// Tests are run in parallel so that we need a lower concurrency
     /// to prevent resource exhausting.
     pub fn default_for_test() -> Config {
-        Config {
-            high_concurrency: 2,
-            normal_concurrency: 2,
-            low_concurrency: 2,
-            max_tasks_high: DEFAULT_MAX_TASKS_PER_CORE * 2,
-            max_tasks_normal: DEFAULT_MAX_TASKS_PER_CORE * 2,
-            max_tasks_low: DEFAULT_MAX_TASKS_PER_CORE * 2,
-            ..Config::default()
-        }
+        Config::default_with_concurrency(2)
     }
 
     pub fn validate(&mut self) -> Result<(), Error> {

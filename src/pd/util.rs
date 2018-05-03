@@ -11,27 +11,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashSet;
 use std::result;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::time::Instant;
 use std::time::Duration;
-use std::collections::HashSet;
+use std::time::Instant;
 
-use futures::{task, Async, Future, Poll, Stream};
-use futures::task::Task;
 use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
+use futures::task::Task;
+use futures::{task, Async, Future, Poll, Stream};
 use grpc::{CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
            Result as GrpcResult};
-use tokio_timer::Timer;
 use kvproto::pdpb::{ErrorType, GetMembersRequest, GetMembersResponse, Member,
                     RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader};
 use kvproto::pdpb_grpc::PdClient;
+use tokio_timer::Timer;
 
-use util::{Either, HandyRwLock};
-use util::security::SecurityManager;
 use super::{Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
+use util::security::SecurityManager;
+use util::{Either, HandyRwLock};
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -103,12 +103,12 @@ impl LeaderClient {
         LeaderClient {
             timer: Timer::default(),
             inner: Arc::new(RwLock::new(Inner {
-                env: env,
+                env,
                 hb_sender: Either::Left(Some(tx)),
                 hb_receiver: Either::Left(Some(rx)),
-                client: client,
-                members: members,
-                security_mgr: security_mgr,
+                client,
+                members,
+                security_mgr,
                 on_reconnect: None,
 
                 last_update: Instant::now(),
@@ -135,7 +135,7 @@ impl LeaderClient {
         inner.on_reconnect = Some(f);
     }
 
-    pub fn request<Req, Resp, F>(&self, req: Req, f: F, retry: usize) -> Request<Req, Resp, F>
+    pub fn request<Req, Resp, F>(&self, req: Req, func: F, retry: usize) -> Request<Req, Resp, F>
     where
         Req: Clone + 'static,
         F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
@@ -147,9 +147,9 @@ impl LeaderClient {
                 timer: self.timer.clone(),
                 inner: Arc::clone(&self.inner),
             },
-            req: req,
+            req,
             resp: None,
-            func: f,
+            func,
         }
     }
 
@@ -385,7 +385,10 @@ fn connect(
     info!("connect to PD endpoint: {:?}", addr);
     let addr = addr.trim_left_matches("http://")
         .trim_left_matches("https://");
-    let cb = ChannelBuilder::new(env);
+    let cb = ChannelBuilder::new(env)
+        .keepalive_time(Duration::from_secs(10))
+        .keepalive_timeout(Duration::from_secs(3));
+
     let channel = security_mgr.connect(cb, addr);
     let client = PdClient::new(channel);
     let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));

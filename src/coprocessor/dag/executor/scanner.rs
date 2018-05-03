@@ -13,10 +13,10 @@
 
 use kvproto::coprocessor::KeyRange;
 
-use coprocessor::util;
 use coprocessor::codec::table::truncate_as_row_key;
-use storage::{Key, ScanMode, SnapshotStore, Statistics, StoreScanner, Value};
+use coprocessor::util;
 use storage::txn::Result;
+use storage::{Key, ScanMode, SnapshotStore, Statistics, StoreScanner, Value};
 use util::escape;
 
 #[derive(Copy, Clone)]
@@ -56,12 +56,12 @@ impl Scanner {
         let scanner = Self::range_scanner(store, scan_mode, key_only, &range)?;
 
         Ok(Scanner {
-            scan_mode: scan_mode,
-            scan_on: scan_on,
-            key_only: key_only,
-            seek_key: seek_key,
-            scanner: scanner,
-            range: range,
+            scan_mode,
+            scan_on,
+            key_only,
+            seek_key,
+            scanner,
+            range,
             no_more: false,
             statistics_cache: Statistics::default(),
         })
@@ -167,15 +167,15 @@ pub mod test {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use tipb::schema::ColumnInfo;
 
-    use coprocessor::codec::mysql::types;
     use coprocessor::codec::datum::{self, Datum};
+    use coprocessor::codec::mysql::types;
     use coprocessor::codec::table;
     use coprocessor::util;
-    use util::collections::HashMap;
-    use util::codec::number::NumberEncoder;
+    use storage::engine::{self, Engine, Modify, TEMP_DIR};
     use storage::mvcc::MvccTxn;
     use storage::{make_key, Mutation, Options, Snapshot, SnapshotStore, ALL_CFS};
-    use storage::engine::{self, Engine, Modify, TEMP_DIR};
+    use util::codec::number::NumberEncoder;
+    use util::collections::HashMap;
 
     use super::*;
 
@@ -246,9 +246,9 @@ pub mod test {
             kv_data.push((key, value));
         }
         Data {
-            kv_data: kv_data,
-            expect_rows: expect_rows,
-            cols: cols,
+            kv_data,
+            expect_rows,
+            cols,
         }
     }
 
@@ -267,9 +267,9 @@ pub mod test {
             let ctx = Context::new();
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut store = TestStore {
-                snapshot: snapshot,
-                ctx: ctx,
-                engine: engine,
+                snapshot,
+                ctx,
+                engine,
             };
             store.init_data(kv_data);
             store

@@ -11,37 +11,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{mpsc, Arc};
-use std::time::Duration;
-use std::thread;
 use std::path::Path;
+use std::sync::{mpsc, Arc};
+use std::thread;
+use std::time::Duration;
 
 use tempdir::TempDir;
 
-use rocksdb::{CompactionJobInfo, DB};
 use protobuf;
+use rocksdb::{CompactionJobInfo, DB};
 
 use kvproto::metapb::{self, RegionEpoch};
-use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
-use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
 use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
+use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
+use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
 use raft::eraftpb::ConfChangeType;
 
+use tikv::config::{ReadPoolConfig, TiKvConfig};
+use tikv::raftstore::store::Msg as StoreMsg;
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Config as ServerConfig;
 use tikv::server::readpool::Config as ReadPoolInstanceConfig;
 use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
+use tikv::util::config::*;
 use tikv::util::escape;
 use tikv::util::rocksdb::{self, CompactionListener};
-use tikv::util::config::*;
-use tikv::config::{ReadPoolConfig, TiKvConfig};
 use tikv::util::transport::SendCh;
-use tikv::raftstore::store::Msg as StoreMsg;
 
 use super::cluster::{Cluster, Simulator};
 
-pub use tikv::raftstore::store::util::find_peer;
+pub use tikv::raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 
 pub const MAX_LEADER_LEASE: u64 = 250; // 250ms
 
@@ -108,6 +108,7 @@ pub fn new_store_cfg() -> Config {
         region_split_check_diff: ReadableSize(10000),
         report_region_flow_interval: ReadableDuration::millis(100),
         raft_store_max_leader_lease: ReadableDuration::millis(MAX_LEADER_LEASE),
+        clean_stale_peer_delay: ReadableDuration::secs(0),
         allow_remove_leader: true,
         ..Config::default()
     }
@@ -115,7 +116,7 @@ pub fn new_store_cfg() -> Config {
 
 pub fn new_server_config(cluster_id: u64) -> ServerConfig {
     ServerConfig {
-        cluster_id: cluster_id,
+        cluster_id,
         addr: "127.0.0.1:0".to_owned(),
         grpc_concurrency: 1,
         // Considering connection selection algo is involved, maybe
@@ -268,13 +269,6 @@ pub fn new_prepare_merge(target_region: metapb::Region) -> AdminRequest {
     cmd.set_cmd_type(AdminCmdType::PrepareMerge);
     cmd.mut_prepare_merge().set_target(target_region);
     cmd
-}
-
-pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
-    let mut peer = metapb::Peer::new();
-    peer.set_store_id(store_id);
-    peer.set_id(peer_id);
-    peer
 }
 
 pub fn new_store(store_id: u64, addr: String) -> metapb::Store {

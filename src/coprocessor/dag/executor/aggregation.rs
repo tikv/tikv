@@ -11,24 +11,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cmp::Ordering;
 use std::mem;
 use std::sync::Arc;
-use std::cmp::Ordering;
 
-use tipb::schema::ColumnInfo;
 use tipb::executor::Aggregation;
 use tipb::expression::{Expr, ExprType};
+use tipb::schema::ColumnInfo;
 
 use util::collections::{OrderMap, OrderMapEntry};
 
-use coprocessor::*;
-use coprocessor::codec::table::RowColsDict;
 use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
+use coprocessor::codec::table::RowColsDict;
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use coprocessor::*;
 
+use super::ExecutorMetrics;
 use super::aggregate::{self, AggrFunc};
 use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
-use super::ExecutorMetrics;
 
 struct AggFuncExpr {
     args: Vec<Expression>,
@@ -43,16 +43,16 @@ impl AggFuncExpr {
     }
 
     fn build(ctx: &mut EvalContext, mut expr: Expr) -> Result<AggFuncExpr> {
-        let args = box_try!(Expression::batch_build(
-            ctx,
-            expr.take_children().into_vec()
-        ));
+        let args = Expression::batch_build(ctx, expr.take_children().into_vec())?;
         let tp = expr.get_tp();
-        Ok(AggFuncExpr { args: args, tp: tp })
+        Ok(AggFuncExpr { args, tp })
     }
 
     fn eval_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Vec<Datum>> {
-        let res: Vec<Datum> = box_try!(self.args.iter().map(|v| v.eval(ctx, row)).collect());
+        let mut res = Vec::with_capacity(self.args.len());
+        for arg in &self.args {
+            res.push(arg.eval(ctx, row)?);
+        }
         Ok(res)
     }
 }
@@ -83,7 +83,6 @@ pub struct HashAggExecutor {
     cols: Arc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
     src: Box<Executor + Send>,
-    count: i64,
     first_collect: bool,
 }
 
@@ -91,27 +90,26 @@ impl HashAggExecutor {
     pub fn new(
         mut meta: Aggregation,
         eval_config: Arc<EvalConfig>,
-        columns: Arc<Vec<ColumnInfo>>,
+        cols: Arc<Vec<ColumnInfo>>,
         src: Box<Executor + Send>,
     ) -> Result<HashAggExecutor> {
         // collect all cols used in aggregation
-        let mut visitor = ExprColumnRefVisitor::new(columns.len());
+        let mut visitor = ExprColumnRefVisitor::new(cols.len());
         let group_by = meta.take_group_by().into_vec();
         visitor.batch_visit(&group_by)?;
         let aggr_func = meta.take_agg_func().into_vec();
         visitor.batch_visit(&aggr_func)?;
         let mut ctx = EvalContext::new(eval_config);
         Ok(HashAggExecutor {
-            group_by: box_try!(Expression::batch_build(&mut ctx, group_by)),
+            group_by: Expression::batch_build(&mut ctx, group_by)?,
             aggr_func: AggFuncExpr::batch_build(&mut ctx, aggr_func)?,
             group_key_aggrs: OrderMap::new(),
             cursor: 0,
             executed: false,
-            ctx: ctx,
-            cols: columns,
+            ctx,
+            cols,
             related_cols_offset: visitor.column_offsets(),
-            src: src,
-            count: 0,
+            src,
             first_collect: true,
         })
     }
@@ -123,7 +121,7 @@ impl HashAggExecutor {
         }
         let mut vals = Vec::with_capacity(self.group_by.len());
         for expr in &self.group_by {
-            let v = box_try!(expr.eval(&mut self.ctx, row));
+            let v = expr.eval(&mut self.ctx, row)?;
             vals.push(v);
         }
         let res = box_try!(datum::encode_value(&vals));
@@ -186,7 +184,6 @@ impl Executor for HashAggExecutor {
                 if !self.group_by.is_empty() {
                     value.extend_from_slice(group_key);
                 }
-                self.count += 1;
                 Ok(Some(Row {
                     handle: 0,
                     data: RowColsDict::new(map![], value),
@@ -198,8 +195,6 @@ impl Executor for HashAggExecutor {
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
         self.src.collect_output_counts(counts);
-        counts.push(self.count);
-        self.count = 0;
     }
 
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
@@ -260,8 +255,6 @@ impl Executor for StreamAggExecutor {
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
         self.src.collect_output_counts(counts);
-        counts.push(self.count);
-        self.count = 0;
     }
 
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
@@ -326,12 +319,12 @@ impl StreamAggExecutor {
         }
 
         Ok(StreamAggExecutor {
-            src: src,
+            src,
             executed: false,
             agg_exprs: exprs,
             agg_funcs: funcs,
-            group_by_exprs: box_try!(Expression::batch_build(&mut ctx, group_bys)),
-            ctx: ctx,
+            group_by_exprs: Expression::batch_build(&mut ctx, group_bys)?,
+            ctx,
             related_cols_offset: visitor.column_offsets(),
             cols: columns,
             cur_group_row: Vec::with_capacity(group_len),
@@ -351,9 +344,8 @@ impl StreamAggExecutor {
         let mut tmp_group_row = Vec::with_capacity(self.group_by_exprs.len());
         let mut matched = !self.is_first_group;
         for (i, expr) in self.group_by_exprs.iter().enumerate() {
-            let v = box_try!(expr.eval(&mut self.ctx, row));
-            if matched && box_try!(v.cmp(&mut self.ctx, &self.cur_group_row[i])) != Ordering::Equal
-            {
+            let v = expr.eval(&mut self.ctx, row)?;
+            if matched && v.cmp(&mut self.ctx, &self.cur_group_row[i])? != Ordering::Equal {
                 matched = false;
             }
             tmp_group_row.push(v);
@@ -419,12 +411,12 @@ mod test {
     use util::codec::number::NumberEncoder;
     use util::collections::HashMap;
 
-    use super::*;
-    use super::super::table_scan::TableScanExecutor;
     use super::super::index_scan::IndexScanExecutor;
     use super::super::index_scan::test::IndexTestWrapper;
     use super::super::scanner::test::{get_range, new_col_info, Data, TestStore};
+    use super::super::table_scan::TableScanExecutor;
     use super::super::topn::test::gen_table_data;
+    use super::*;
 
     #[inline]
     fn build_expr(tp: ExprType, id: Option<i64>, child: Option<Expr>) -> Expr {
@@ -495,9 +487,9 @@ mod test {
             handle += 1;
         }
         Data {
-            kv_data: kv_data,
-            expect_rows: expect_rows,
-            cols: cols,
+            kv_data,
+            expect_rows,
+            cols,
         }
     }
 
@@ -529,7 +521,7 @@ mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let is_executor =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique).unwrap();
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique, true).unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
@@ -543,8 +535,8 @@ mod test {
             row_data.push(row.data);
         }
         assert_eq!(row_data.len(), expect_row_cnt);
-        let expected_counts = vec![idx_row_cnt, expect_row_cnt as i64];
-        let mut counts = Vec::with_capacity(2);
+        let expected_counts = vec![idx_row_cnt];
+        let mut counts = Vec::with_capacity(1);
         agg_ect.collect_output_counts(&mut counts);
         assert_eq!(expected_counts, counts);
 
@@ -559,7 +551,7 @@ mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let is_executor =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique).unwrap();
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique, true).unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
@@ -589,8 +581,8 @@ mod test {
             assert_eq!(ds.len(), expect_col_cnt);
             assert_eq!(ds[0], Datum::from(expect_cols.0));
         }
-        let expected_counts = vec![idx_row_cnt, expect_row_cnt as i64];
-        let mut counts = Vec::with_capacity(2);
+        let expected_counts = vec![idx_row_cnt];
+        let mut counts = Vec::with_capacity(1);
         agg_ect.collect_output_counts(&mut counts);
         assert_eq!(expected_counts, counts);
 
@@ -610,7 +602,7 @@ mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let is_executor =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique).unwrap();
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique, true).unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
@@ -667,8 +659,8 @@ mod test {
             assert_eq!(ds[2], Datum::from(expect_cols.2));
             assert_eq!(ds[3], Datum::from(expect_cols.3));
         }
-        let expected_counts = vec![idx_row_cnt, expect_row_cnt as i64];
-        let mut counts = Vec::with_capacity(2);
+        let expected_counts = vec![idx_row_cnt];
+        let mut counts = Vec::with_capacity(1);
         agg_ect.collect_output_counts(&mut counts);
         assert_eq!(expected_counts, counts);
     }
@@ -745,7 +737,7 @@ mod test {
         let key_ranges = vec![get_range(tid, i64::MIN, i64::MAX)];
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store).unwrap();
+        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store, true).unwrap();
 
         // init aggregation meta
         let mut aggregation = Aggregation::default();
@@ -825,8 +817,8 @@ mod test {
             assert_eq!(ds[3], Datum::from(expect_cols.3));
             assert_eq!(ds[4], Datum::from(expect_cols.4));
         }
-        let expected_counts = vec![raw_data.len() as i64, expect_row_cnt as i64];
-        let mut counts = Vec::with_capacity(2);
+        let expected_counts = vec![raw_data.len() as i64];
+        let mut counts = Vec::with_capacity(1);
         aggr_ect.collect_output_counts(&mut counts);
         assert_eq!(expected_counts, counts);
     }

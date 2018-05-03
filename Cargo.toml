@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "2.0.0-rc.3"
+version = "2.1.0-alpha.1"
 keywords = ["KV", "distributed-systems", "raft"]
 build = "build.rs"
 
@@ -31,6 +31,9 @@ name = "tikv-ctl"
 [[bin]]
 name = "tikv-fail"
 
+[[bin]]
+name = "tikv-importer"
+
 [dependencies]
 log = "0.3"
 byteorder = "0.5"
@@ -55,7 +58,7 @@ regex = "0.1"
 fnv = "1.0"
 sys-info = "0.5.1"
 flat_map = "0.0.4"
-indexmap = "1.0"
+indexmap = { version = "1.0", features = ["serde-1"] }
 mio = "0.5"
 futures = "0.1"
 futures-cpupool = "0.1"
@@ -69,8 +72,9 @@ zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.4", features = [ "serde", "v4" ] }
+grpcio = { version = "0.2", features = [ "secure" ] }
 raft = "0.1"
-crossbeam-channel = "0.1"
+crossbeam-channel = { version = "0.1", features = [ "nightly" ] }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.4"
@@ -88,7 +92,7 @@ git = "https://github.com/pingcap/kvproto.git"
 git = "https://github.com/pingcap/tipb.git"
 
 [dependencies.prometheus]
-version = "0.3"
+version = "0.4"
 default-features = false
 features = ["nightly", "push", "process"]
 
@@ -98,12 +102,11 @@ branch = "dev"
 features = ["profiling"]
 optional = true
 
-[dependencies.grpcio]
-version = "0.2"
-features = ["secure"]
-
 [replace]
 "protobuf:1.4.1" = { git = "https://github.com/stepancheg/rust-protobuf.git" }
+
+[workspace]
+members = ["fuzz"]
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with

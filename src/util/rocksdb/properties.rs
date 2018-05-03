@@ -12,19 +12,19 @@
 // limitations under the License.
 
 use std::cmp;
-use std::collections::{BTreeMap, HashMap};
 use std::collections::Bound::{Included, Unbounded};
+use std::collections::{BTreeMap, HashMap};
+use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::u64;
-use std::io::Read;
 
-use storage::mvcc::{Write, WriteType};
-use storage::types;
 use raftstore::store::keys;
 use rocksdb::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory,
               UserCollectedProperties};
-use util::codec::{Error, Result};
+use storage::mvcc::{Write, WriteType};
+use storage::types;
 use util::codec::number::{NumberDecoder, NumberEncoder};
+use util::codec::{Error, Result};
 
 const PROP_NUM_ERRORS: &str = "tikv.num_errors";
 const PROP_MIN_TS: &str = "tikv.min_ts";
@@ -468,11 +468,11 @@ impl DecodeProperties for UserCollectedProperties {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use test::Bencher;
+    use raftstore::store::keys;
     use rocksdb::{DBEntryType, TablePropertiesCollector};
     use storage::Key;
     use storage::mvcc::{Write, WriteType};
-    use raftstore::store::keys;
+    use test::Bencher;
 
     #[test]
     fn test_mvcc_properties() {
