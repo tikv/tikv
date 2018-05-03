@@ -21,8 +21,10 @@ use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::codec::mysql;
 use coprocessor::dag::expr::EvalConfig;
-use coprocessor::endpoint::{get_pk, ReqContext};
-use coprocessor::{Error, Result};
+use coprocessor::endpoint::ReqContext;
+use coprocessor::util;
+use coprocessor::*;
+
 use storage::{Snapshot, SnapshotStore};
 
 use super::executor::{build_exec, Executor, ExecutorMetrics, Row};
@@ -192,7 +194,7 @@ fn inflate_cols(row: &Row, cols: &[ColumnInfo], output_offsets: &[u32]) -> Resul
         match data.get(col_id) {
             Some(value) => values.extend_from_slice(value),
             None if col.get_pk_handle() => {
-                let pk = get_pk(col, row.handle);
+                let pk = util::get_pk(col, row.handle);
                 box_try!(values.encode(&[pk], false));
             }
             None if col.has_default_val() => {
