@@ -58,7 +58,7 @@ mod storage;
 mod util;
 
 use std::sync::*;
-use std::{env, thread};
+use std::{thread};
 
 use tikv::util::panic_hook;
 
@@ -66,16 +66,7 @@ lazy_static! {
     /// Failpoints are global structs, hence rules set in different cases
     /// may affect each other. So use a global lock to synchronize them.
     static ref LOCK: Mutex<()> = {
-        // Set up ci test fail case log.
-        if env::var("CI").is_ok() && env::var("LOG_FILE").is_ok() {
-            self::util::init_log();
-        }
-        if env::var("PANIC_ABORT").is_ok() {
-            // Panics as aborts, it's helpful for debugging,
-            // but also stops tests immediately.
-            tikv::util::panic_hook::set_exit_hook(true);
-        }
-
+        util::ci_setup();
         Mutex::new(())
     };
 }
