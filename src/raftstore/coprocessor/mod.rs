@@ -27,9 +27,8 @@ pub mod split_observer;
 pub use self::config::Config;
 pub use self::dispatcher::{CoprocessorHost, Registry};
 pub use self::error::{Error, Result};
-pub use self::split_check::{HalfCheckObserver, SizeCheckObserver, Status as SplitCheckStatus,
-                            TableCheckObserver, HALF_SPLIT_OBSERVER_PRIORITY,
-                            SIZE_CHECK_OBSERVER_PRIORITY, TABLE_CHECK_OBSERVER_PRIORITY};
+pub use self::split_check::{HalfCheckObserver, Host as SplitCheckerHost, SizeCheckObserver,
+                            TableCheckObserver};
 
 /// Coprocessor is used to provide a convient way to inject code to
 /// KV processing.
@@ -90,25 +89,23 @@ pub trait QueryObserver: Coprocessor {
     fn post_apply_query(&self, _: &mut ObserverContext, _: &mut RepeatedField<Response>) {}
 }
 
-pub trait SplitCheckObserver: Coprocessor {
-    /// Hook to call before handle split region task. If it returns a None,
-    /// then `on_split_check` can be skippped.
-    //
-    // This is a workaround for preserving status for split check observers.
-    // TODO: Refactor RegionObserver, requires Send + Clone,
-    //       so that ervery threads has its own RegionObservers.
-    fn new_split_check_status(&self, _: &mut ObserverContext, _: &mut SplitCheckStatus, _: &DB) {}
-
-    /// Hook to call for every check during split.
-    fn on_split_check(
-        &self,
-        _: &mut ObserverContext,
-        _: &mut SplitCheckStatus,
-        _: &[u8],
-        _: u64,
-    ) -> Option<Vec<u8>> {
-        None
+/// SplitChecker is invoked during a split check scan, and decides to use
+/// which keys to split a region.
+pub trait SplitChecker {
+    /// Hook to call for every kv scanned during split.
+    ///
+    /// Return true to abort scan early.
+    fn on_kv(&mut self, _: &mut ObserverContext, _: &[u8], _: u64) -> bool {
+        false
     }
+
+    /// Get the desired split keys.
+    fn split_key(&mut self) -> Option<Vec<u8>>;
+}
+
+pub trait SplitCheckObserver: Coprocessor {
+    /// Add a checker for a split scan.
+    fn add_checker(&self, _: &mut ObserverContext, &mut SplitCheckerHost, _: &DB);
 }
 
 pub trait RoleObserver: Coprocessor {
