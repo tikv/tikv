@@ -311,7 +311,7 @@ struct RequestTracker {
     first_range: Option<KeyRange>,
     scan_tag: &'static str,
     pri_str: &'static str,
-    desc_scan: bool,
+    desc_scan: Option<bool>, // only applicable to DAG requests
 }
 
 impl RequestTracker {
@@ -401,7 +401,7 @@ impl Drop for RequestTracker {
             info!(
                 "[region {}] [slow_query] execute takes {:?}, wait takes {:?}, \
                  start_ts: {:?}, table_id: {:?}, \
-                 scan_type: {} (desc: {}) \
+                 scan_type: {} (desc: {:?}) \
                  [keys: {}, hit: {}, ranges: {} ({:?})]",
                 self.region_id,
                 self.total_handle_time,
@@ -474,7 +474,7 @@ impl RequestTask {
         recursion_limit: u32,
     ) -> Result<RequestTask> {
         let mut table_scan = false;
-        let mut is_desc_scan = false; // only used in slow query logs
+        let mut is_desc_scan: Option<bool> = None; // only used in slow query logs
         let (start_ts, cop_req) = match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut is = CodedInputStream::from_bytes(req.get_data());
@@ -485,9 +485,9 @@ impl RequestTask {
                     // the first executor must be table scan or index scan.
                     table_scan = scan.get_tp() == ExecType::TypeTableScan;
                     if table_scan {
-                        is_desc_scan = scan.get_tbl_scan().get_desc();
+                        is_desc_scan = Some(scan.get_tbl_scan().get_desc());
                     } else {
-                        is_desc_scan = scan.get_idx_scan().get_desc();
+                        is_desc_scan = Some(scan.get_idx_scan().get_desc());
                     }
                 }
                 (dag.get_start_ts(), CopRequest::DAG(dag))
