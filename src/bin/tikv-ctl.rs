@@ -1218,11 +1218,11 @@ fn main() {
                 .about("dump snapshot meta file")
                 .arg(
                     Arg::with_name("file")
-                     .required(true)
-                     .short("f")
-                     .long("file")
-                     .takes_value(true)
-                     .help("meta file path"),
+                        .required(true)
+                        .short("f")
+                        .long("file")
+                        .takes_value(true)
+                        .help("meta file path"),
                 ),
         )
         .subcommand(
