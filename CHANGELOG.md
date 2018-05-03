@@ -1,9 +1,6 @@
 # TiKV Change Log
 All notable changes to this project are documented in this file.
-See also [TiDB change log][tidb_change_log] and [PD change log][pd_change_log].
-
-[tidb_change_log]: https://github.com/pingcap/tidb/blob/master/CHANGELOG.md
-[pd_change_log]: https://github.com/pingcap/pd/blob/master/CHANGELOG.md
+See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
 ## [2.0.0] - 2018-04-27
 ### Features
@@ -46,12 +43,11 @@ See also [TiDB change log][tidb_change_log] and [PD change log][pd_change_log].
 * Fix the OOM issue caused by an increase of the Region number
 
 ## [2.0.0-rc6] - 2018-04-19
-### New Features
 ### Improvements
 * Reduce lock contention in Worker
 * Add metrics to the FuturePool
 ### Bug Fixes
-* Fix misused metrics in coprocessor
+* Fix misused metrics in Coprocessor
 
 ## [2.0.0-rc.5] - 2018-04-17
 ### New Features

@@ -237,7 +237,9 @@ impl Debugger {
         let handle = box_try!(get_cf_handle(db, cf));
         let start = if start.is_empty() { None } else { Some(start) };
         let end = if end.is_empty() { None } else { Some(end) };
+        info!("Debugger starts manual comapct on {:?}.{}", db, cf);
         compact_range(db, handle, start, end, false);
+        info!("Debugger finishs manual comapct on {:?}.{}", db, cf);
         Ok(())
     }
 
