@@ -1336,8 +1336,7 @@ fn main() {
                 Err(e) => perror_and_exit("parse store id list", e),
             }
         } else {
-            eprintln!("No subcommand.");
-            process::exit(0);
+            eprintln!("{}", matches.usage());
         }
     } else if let Some(matches) = matches.subcommand_matches("consistency-check") {
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
