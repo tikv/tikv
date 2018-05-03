@@ -212,7 +212,7 @@ impl MvccReader {
                 primary: lock.primary,
                 ts: lock.ts,
                 ttl: lock.ttl,
-            })
+            });
         }
         Ok(())
     }
