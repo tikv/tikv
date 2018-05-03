@@ -196,15 +196,15 @@ impl MvccReader {
 
     fn check_lock(&mut self, key: &Key, mut ts: u64) -> Result<()> {
         if let Some(lock) = self.load_lock(key)? {
-            if lock.ts > ts ||
-                lock.lock_type == LockType::Lock ||
-                ts == u64::MAX && key.raw()? == lock.primary {
+            if lock.ts > ts || lock.lock_type == LockType::Lock
+                || ts == u64::MAX && key.raw()? == lock.primary
+            {
                 // ignore the lock:
                 // 1. when lock.ts > ts.
                 // 2. when lock's type is Lock(which means it won't change the value).
                 // 3. when ts==u64::MAX(which means to get latest committed version for
                 //    primary key),and current key is the primary key.
-                return Ok(())
+                return Ok(());
             }
             // There is a pending lock. Client should wait or clean it.
             return Err(Error::KeyIsLocked {
