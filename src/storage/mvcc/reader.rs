@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::lock::Lock;
+use super::lock::{Lock, LockType};
 use super::write::{Write, WriteType};
 use super::{Error, Result};
 use kvproto::kvrpcpb::IsolationLevel;
@@ -194,34 +194,33 @@ impl MvccReader {
         Ok(Some((commit_ts, write)))
     }
 
-    fn check_lock(&mut self, key: &Key, mut ts: u64) -> Result<Option<u64>> {
+    fn check_lock(&mut self, key: &Key, mut ts: u64) -> Result<()> {
         if let Some(lock) = self.load_lock(key)? {
-            if lock.ts <= ts {
-                if ts == u64::MAX && key.raw()? == lock.primary {
-                    // when ts==u64::MAX(which means to get latest committed version for
-                    // primary key),and current key is the primary key, returns the latest
-                    // commit version's value
-                    ts = lock.ts - 1;
-                } else {
-                    // There is a pending lock. Client should wait or clean it.
-                    return Err(Error::KeyIsLocked {
-                        key: key.raw()?,
-                        primary: lock.primary,
-                        ts: lock.ts,
-                        ttl: lock.ttl,
-                    });
-                }
+            if lock.ts > ts || lock.lock_type == LockType::Lock
+                || ts == u64::MAX && key.raw()? == lock.primary
+            {
+                // ignore the lock:
+                // 1. when lock.ts > ts.
+                // 2. when lock's type is Lock(which means it won't change the value).
+                // 3. when ts==u64::MAX(which means to get latest committed version for
+                //    primary key),and current key is the primary key.
+                return Ok(());
             }
+            // There is a pending lock. Client should wait or clean it.
+            return Err(Error::KeyIsLocked {
+                key: key.raw()?,
+                primary: lock.primary,
+                ts: lock.ts,
+                ttl: lock.ttl,
+            });
         }
-        Ok(Some(ts))
+        Ok(())
     }
 
     pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
         // Check for locks that signal concurrent writes.
         match self.isolation_level {
-            IsolationLevel::SI => if let Some(new_ts) = self.check_lock(key, ts)? {
-                ts = new_ts;
-            },
+            IsolationLevel::SI => self.check_lock(key, ts)?,
             IsolationLevel::RC => {}
         }
         loop {
