@@ -1214,13 +1214,16 @@ fn main() {
                 ),
         )
         .subcommand(
-            SubCommand::with_name("dump-snap-meta").about("dump snapshot meta file")
-            .arg(Arg::with_name("file")
-                 .required(true)
-                 .short("f")
-                 .long("file")
-                 .takes_value(true)
-                 .help("meta file path"))
+            SubCommand::with_name("dump-snap-meta")
+                .about("dump snapshot meta file")
+                .arg(
+                    Arg::with_name("file")
+                     .required(true)
+                     .short("f")
+                     .long("file")
+                     .takes_value(true)
+                     .help("meta file path"),
+                ),
         )
         .subcommand(
             SubCommand::with_name("compact-cluster")
@@ -1298,7 +1301,7 @@ fn main() {
     let host = matches.value_of("host");
     let cfg_path = matches.value_of("config");
 
-    let debug_executor = new_debug_executor(db, raft_db, host.clone(), cfg_path, Arc::clone(&mgr));
+    let debug_executor = new_debug_executor(db, raft_db, host, cfg_path, Arc::clone(&mgr));
 
     if let Some(matches) = matches.subcommand_matches("print") {
         let cf = matches.value_of("cf").unwrap();
