@@ -1137,7 +1137,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "2.0.0-rc.6"
+version = "2.1.0-alpha.1"
 dependencies = [
  "backtrace 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "bitflags 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1193,7 +1193,7 @@ name = "tikv-fuzz"
 version = "0.0.1"
 dependencies = [
  "libfuzzer-sys 0.1.0 (git+https://github.com/rust-fuzz/libfuzzer-sys.git)",
- "tikv 2.0.0-rc.6",
+ "tikv 2.1.0-alpha.1",
 ]
 
 [[package]]

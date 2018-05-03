@@ -58,7 +58,7 @@ mod storage;
 mod util;
 
 use std::sync::*;
-use std::{thread};
+use std::thread;
 
 use tikv::util::panic_hook;
 
