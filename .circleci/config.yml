@@ -14,6 +14,7 @@ jobs:
       - run:
           name: Updating PATH and Define Environment Variable at Runtime
           # Define variables that need interpolation
+          # As CircleCI's each `run` declaration starts a new shell, we need to persist them to $BASH_ENV
           command: |
             echo 'export PATH=$HOME/.local/cmake/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH' >> $BASH_ENV
             echo 'export LD_RUN_PATH=$LD_RUN_PATH:$HOME/.local/lib' >> $BASH_ENV
@@ -22,9 +23,6 @@ jobs:
             echo 'export CPPFLAGS=-I$HOME/.local/include' >> $BASH_ENV
             echo 'export CXXFLAGS=-I$HOME/.local/include' >> $BASH_ENV
             echo 'export LOCAL_PREFIX=$HOME/.local' >> $BASH_ENV
-            echo 'export LD_RUN_PATH=$LD_RUN_PATH:$HOME/.local/lib' >> $BASH_ENV
-            echo 'export LD_RUN_PATH=$LD_RUN_PATH:$HOME/.local/lib' >> $BASH_ENV
-            source $BASH_ENV
       - checkout
       - run: 
           name: Installing Build Dependencies
@@ -44,7 +42,6 @@ jobs:
             - v1-cargo-{{ .Branch }}-{{ checksum "Cargo.lock" }}
             - v1-cargo-{{ .Branch }}
             - v1-cargo
-
       - run: 
           name: Setting up Rust and the rest of the Build Environment
           command: |
@@ -63,16 +60,6 @@ jobs:
               curl https://cmake.org/files/v3.10/cmake-3.10.0-Linux-x86_64.tar.gz -sSf | tar xzf -;
               rm -rf $HOME/.local/cmake
               mv cmake-3.10.0-Linux-x86_64 $HOME/.local/cmake
-            fi
-
-            if [[ ! -e $HOME/.local/lib/libgflags.a ]]; then
-              cd /tmp && \
-              curl -L https://github.com/gflags/gflags/archive/v2.1.2.tar.gz -o gflags.tar.gz && \
-              tar xf gflags.tar.gz && \
-              cd gflags-2.1.2 && \
-              cmake -DCMAKE_INSTALL_PREFIX=${LOCAL_PREFIX} . && \
-              make -j && \
-              make install;
             fi
       # check format first
       -  run:
