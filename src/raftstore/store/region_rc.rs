@@ -27,7 +27,7 @@ When a region splits, its references should be copied to the new region
 because the new region is a subset of the old region and the snapshot's
 range is not changed:
 
-```
+```text
 Before split:           After split A into A and B:
 
 [   Region A   ]        [ Region A ][ Region B ]
@@ -37,7 +37,7 @@ Before split:           After split A into A and B:
 
 When two regions merge, their references should be merged as well:
 
-```
+```text
 Before merge:             After merge A and B:
 
 [ A ][ B ][ C ]           [       Region D       ][ Region C ]
@@ -59,20 +59,20 @@ Here we use `R1 <- A1(S1, S2)` to denote that region `R1` has two
 snapshot references (from `S1` and `S2`) and both of them are hold
 by a single atomic instance `A1`.
 
-### Scenario 1. R1 ref by S1, S2, S3, S4
+### Scenario 0. R1 ref by S1, S2, S3, S4
 
 These four references are maintained by the same atomic instance `A1`:
 
-```
+```text
 R1 <- A1(S1, S2, S3, S4)
 ```
 
-### Scenario 2. R1 split into R1 and R2
+### Scenario 1. R1 split into R1 and R2
 
 Since references should be copied to the new region, `R2` shares the
 same atomic instance `A1`:
 
-```
+```text
 R1 <- A1(S1, S2, S3, S4)
 R2 <- A1(S1, S2, S3, S4)
 ```
@@ -82,7 +82,7 @@ R2 <- A1(S1, S2, S3, S4)
 `S5` and `S6` reference `R1` only, and should not reference `R2` so that we
 need a new atomic variable `A2`:
 
-```
+```text
 R1 <- A1(S1, S2, S3, S4), A2(S5, S6)
 R2 <- A1(S1, S2, S3, S4)
 ```
@@ -98,7 +98,7 @@ For the same reason in scenario 2, we need a new atomic variable `A3` to
 hold reference `S7` because this reference is not shared for multiple
 regions:
 
-```
+```text
 R1 <- A1(S1, S2, S3, S4), A2(S5, S6)
 R2 <- A1(S1, S2, S3, S4), A3(S7)
 ```
@@ -108,14 +108,14 @@ R2 <- A1(S1, S2, S3, S4), A3(S7)
 Previously `S1` reference `R1` and after split it reference `R1` and `R2`
 both. When `S1` is dropped, it no longer reference them:
 
-```
+```text
 R1 <- A1(S2, S3, S4), A2(S5, S6)
 R2 <- A1(S2, S3, S4), A3(S7)
 ```
 
 ### Scenario 5. S6 drop
 
-```
+```text
 R1 <- A1(S2, S3, S4), A2(S5)
 R2 <- A1(S2, S3, S4), A3(S7)
 ```
@@ -129,7 +129,7 @@ atomic variable which holds the reference. If the atomic variable holds
 
 The same to scenario 2:
 
-```
+```text
 R1 <- A1(S2, S3, S4), A2(S5)
 R3 <- A1(S2, S3, S4), A2(S5)
 R2 <- A1(S2, S3, S4), A3(S7)
@@ -139,7 +139,7 @@ R2 <- A1(S2, S3, S4), A3(S7)
 
 The same to scenario 2 and 3:
 
-```
+```text
 R1 <- A1(S2, S3, S4), A2(S5), A4(S8)
 R3 <- A1(S2, S3, S4), A2(S5)
 R2 <- A1(S2, S3, S4), A3(S7)
@@ -149,7 +149,7 @@ R2 <- A1(S2, S3, S4), A3(S7)
 
 The same to scenario 2, 3 and 7:
 
-```
+```text
 R1 <- A1(S2, S3, S4), A2(S5), A4(S8)
 R3 <- A1(S2, S3, S4), A2(S5)
 R2 <- A1(S2, S3, S4), A3(S7, S9)
@@ -159,7 +159,7 @@ R2 <- A1(S2, S3, S4), A3(S7, S9)
 
 First, we naively merge all atomics:
 
-```
+```text
 R1 <- A1(S2, S3, S4), A2(S5), A4(S8), A1(S2, S3, S4), A3(S7, S9)
 R3 <- A1(S2, S3, S4), A2(S5)
 ```
@@ -167,14 +167,14 @@ R3 <- A1(S2, S3, S4), A2(S5)
 Next, same atomic instances should be de-duplicated if we want to get a
 reference count by simply calculating the sum of all atomic instances:
 
-```
+```text
 R1 <- A1(S2, S3, S4), A2(S5), A4(S8), A3(S7, S9)
 R3 <- A1(S2, S3, S4), A2(S5)
 ```
 
 ### Scenario 10. S5 drop
 
-```
+```text
 R1 <- A1(S2, S3, S4), A2(), A4(S8), A3(S7, S9)
 R3 <- A1(S2, S3, S4), A2()
 ```
@@ -195,6 +195,7 @@ use util::collections::{HashMap, HashSet};
 
 /// A struct represents an atomic variable, used in this module only so that it does not need
 /// to be `Sync`.
+#[derive(Debug)]
 struct RefHolder {
     ref_count: Arc<AtomicU64>,
 }
@@ -225,8 +226,13 @@ impl RefHolder {
         }
     }
 
-    fn get_ref_count(&self) -> u64 {
+    fn get_ref_value(&self) -> u64 {
         self.ref_count.load(Ordering::SeqCst)
+    }
+
+    fn get_referrer(&self) -> RegionReferrer {
+        self.ref_count.fetch_add(1, Ordering::SeqCst);
+        RegionReferrer::new(self)
     }
 }
 
@@ -246,6 +252,8 @@ impl util::AssertSend for RegionReferrer {}
 impl util::AssertSync for RegionReferrer {}
 
 impl RegionReferrer {
+    /// Constructs a new referrer based on the given reference holder. This
+    /// function does not increase the reference counter.
     fn new(ref_holder: &RefHolder) -> Self {
         Self {
             ref_holder_content: ref_holder.ref_count.clone(),
@@ -275,18 +283,19 @@ impl RegionRefCounter {
 
     /// Refer a region. The region will be de-refed when `RegionReferrer` is dropped.
     pub fn ref_region(&mut self, region_id: u64) -> RegionReferrer {
+        // TODO: clean up unused holders
         let holders = self.refs.get_mut(&region_id).unwrap();
         {
             // Find a `RefHolder` which is used only in 1 region
             let holder = holders.iter().find(|holder| Rc::strong_count(holder) == 1);
             if let Some(holder) = holder {
-                return RegionReferrer::new(holder);
+                return holder.get_referrer();
             }
         }
 
         // If there isn't any, append a new `RefHolder` and return its referrer.
         let holder = Rc::new(RefHolder::new());
-        let referrer = RegionReferrer::new(&holder);
+        let referrer = holder.get_referrer();
         holders.push(holder);
         referrer
     }
@@ -295,7 +304,7 @@ impl RegionRefCounter {
     pub fn handle_region_split(&mut self, region_id: u64, new_region_id: u64) {
         let holders: Vec<_> = self.refs.remove(&region_id).unwrap()
             .into_iter()
-            .filter(|holder| holder.get_ref_count() == 0) // clean up unused holders
+            .filter(|holder| holder.get_ref_value() > 0) // clean up unused holders
             .collect();
         let old_value = self.refs.insert(new_region_id, holders.clone());
         assert!(old_value.is_none());
@@ -315,7 +324,7 @@ impl RegionRefCounter {
             .drain(..)
             .collect::<HashSet<_>>()
             .into_iter()
-            .filter(|holder| holder.get_ref_count() == 0) // clean up unused holders
+            .filter(|holder| holder.get_ref_value() > 0) // clean up unused holders
             .collect::<Vec<_>>();
 
         // 3. insert back
@@ -327,7 +336,239 @@ impl RegionRefCounter {
     pub fn get_region_refs(&self, region_id: u64) -> u64 {
         self.refs[&region_id]
             .iter()
-            .map(|holder| holder.get_ref_count())
+            .map(|holder| holder.get_ref_value())
             .sum()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_init() {
+        let mut rc = RegionRefCounter::new();
+        rc.init_region(1);
+        assert_eq!(rc.get_region_refs(1), 0u64);
+    }
+
+    #[test]
+    fn test_ref() {
+        let mut rc = RegionRefCounter::new();
+        rc.init_region(1);
+        let ref1 = rc.ref_region(1);
+        assert_eq!(rc.get_region_refs(1), 1u64);
+        let ref2 = rc.ref_region(1);
+        assert_eq!(rc.get_region_refs(1), 2u64);
+        drop(ref1);
+        assert_eq!(rc.get_region_refs(1), 1u64);
+        drop(ref2);
+        assert_eq!(rc.get_region_refs(1), 0u64);
+    }
+
+    #[test]
+    fn test_split() {
+        let mut rc = RegionRefCounter::new();
+        rc.init_region(1);
+        rc.handle_region_split(1, 2);
+        assert_eq!(rc.get_region_refs(1), 0u64);
+        assert_eq!(rc.get_region_refs(2), 0u64);
+        let ref1 = rc.ref_region(1);
+        assert_eq!(rc.get_region_refs(1), 1u64);
+        assert_eq!(rc.get_region_refs(2), 0u64);
+        let ref2 = rc.ref_region(2);
+        let ref3 = rc.ref_region(2);
+        assert_eq!(rc.get_region_refs(1), 1u64);
+        assert_eq!(rc.get_region_refs(2), 2u64);
+        rc.handle_region_split(1, 3);
+        assert_eq!(rc.get_region_refs(1), 1u64);
+        assert_eq!(rc.get_region_refs(2), 2u64);
+        assert_eq!(rc.get_region_refs(3), 1u64);
+        let ref4 = rc.ref_region(1);
+        assert_eq!(rc.get_region_refs(1), 2u64);
+        assert_eq!(rc.get_region_refs(2), 2u64);
+        assert_eq!(rc.get_region_refs(3), 1u64);
+        rc.handle_region_split(1, 4);
+        assert_eq!(rc.get_region_refs(1), 2u64);
+        assert_eq!(rc.get_region_refs(2), 2u64);
+        assert_eq!(rc.get_region_refs(3), 1u64);
+        assert_eq!(rc.get_region_refs(4), 2u64);
+        let ref5 = rc.ref_region(2);
+        assert_eq!(rc.get_region_refs(1), 2u64);
+        assert_eq!(rc.get_region_refs(2), 3u64);
+        assert_eq!(rc.get_region_refs(3), 1u64);
+        assert_eq!(rc.get_region_refs(4), 2u64);
+        rc.handle_region_split(2, 5);
+        assert_eq!(rc.get_region_refs(1), 2u64);
+        assert_eq!(rc.get_region_refs(2), 3u64);
+        assert_eq!(rc.get_region_refs(3), 1u64);
+        assert_eq!(rc.get_region_refs(4), 2u64);
+        assert_eq!(rc.get_region_refs(5), 3u64);
+        let ref6 = rc.ref_region(5);
+        assert_eq!(rc.get_region_refs(1), 2u64);
+        assert_eq!(rc.get_region_refs(2), 3u64);
+        assert_eq!(rc.get_region_refs(3), 1u64);
+        assert_eq!(rc.get_region_refs(4), 2u64);
+        assert_eq!(rc.get_region_refs(5), 4u64);
+        let ref7 = rc.ref_region(2);
+        assert_eq!(rc.get_region_refs(1), 2u64);
+        assert_eq!(rc.get_region_refs(2), 4u64);
+        assert_eq!(rc.get_region_refs(3), 1u64);
+        assert_eq!(rc.get_region_refs(4), 2u64);
+        assert_eq!(rc.get_region_refs(5), 4u64);
+        drop(ref1);
+        assert_eq!(rc.get_region_refs(1), 1u64);
+        assert_eq!(rc.get_region_refs(2), 4u64);
+        assert_eq!(rc.get_region_refs(3), 0u64);
+        assert_eq!(rc.get_region_refs(4), 1u64);
+        assert_eq!(rc.get_region_refs(5), 4u64);
+        drop(ref5);
+        assert_eq!(rc.get_region_refs(1), 1u64);
+        assert_eq!(rc.get_region_refs(2), 3u64);
+        assert_eq!(rc.get_region_refs(3), 0u64);
+        assert_eq!(rc.get_region_refs(4), 1u64);
+        assert_eq!(rc.get_region_refs(5), 3u64);
+        drop(ref2);
+        assert_eq!(rc.get_region_refs(1), 1u64);
+        assert_eq!(rc.get_region_refs(2), 2u64);
+        assert_eq!(rc.get_region_refs(3), 0u64);
+        assert_eq!(rc.get_region_refs(4), 1u64);
+        assert_eq!(rc.get_region_refs(5), 2u64);
+        drop(ref3);
+        assert_eq!(rc.get_region_refs(1), 1u64);
+        assert_eq!(rc.get_region_refs(2), 1u64);
+        assert_eq!(rc.get_region_refs(3), 0u64);
+        assert_eq!(rc.get_region_refs(4), 1u64);
+        assert_eq!(rc.get_region_refs(5), 1u64);
+        drop(ref4);
+        assert_eq!(rc.get_region_refs(1), 0u64);
+        assert_eq!(rc.get_region_refs(2), 1u64);
+        assert_eq!(rc.get_region_refs(3), 0u64);
+        assert_eq!(rc.get_region_refs(4), 0u64);
+        assert_eq!(rc.get_region_refs(5), 1u64);
+        drop(ref7);
+        assert_eq!(rc.get_region_refs(1), 0u64);
+        assert_eq!(rc.get_region_refs(2), 0u64);
+        assert_eq!(rc.get_region_refs(3), 0u64);
+        assert_eq!(rc.get_region_refs(4), 0u64);
+        assert_eq!(rc.get_region_refs(5), 1u64);
+        drop(ref6);
+        assert_eq!(rc.get_region_refs(1), 0u64);
+        assert_eq!(rc.get_region_refs(2), 0u64);
+        assert_eq!(rc.get_region_refs(3), 0u64);
+        assert_eq!(rc.get_region_refs(4), 0u64);
+        assert_eq!(rc.get_region_refs(5), 0u64);
+    }
+
+    #[test]
+    fn test_merge() {
+        let mut rc = RegionRefCounter::new();
+        rc.init_region(1);
+        let ref1 = rc.ref_region(1);
+        rc.handle_region_split(1, 2);
+        rc.handle_region_split(1, 3);
+        assert_eq!(rc.get_region_refs(1), 1u64);
+        assert_eq!(rc.get_region_refs(2), 1u64);
+        assert_eq!(rc.get_region_refs(3), 1u64);
+        let ref2 = rc.ref_region(1);
+        assert_eq!(rc.get_region_refs(1), 2u64);
+        assert_eq!(rc.get_region_refs(2), 1u64);
+        assert_eq!(rc.get_region_refs(3), 1u64);
+        rc.handle_region_split(2, 4);
+        assert_eq!(rc.get_region_refs(1), 2u64);
+        assert_eq!(rc.get_region_refs(2), 1u64);
+        assert_eq!(rc.get_region_refs(3), 1u64);
+        assert_eq!(rc.get_region_refs(4), 1u64);
+        rc.handle_region_merge(4, 2);
+        assert_eq!(rc.get_region_refs(1), 2u64);
+        assert_eq!(rc.get_region_refs(2), 1u64);
+        assert_eq!(rc.get_region_refs(3), 1u64);
+        drop(ref1);
+        assert_eq!(rc.get_region_refs(1), 1u64);
+        assert_eq!(rc.get_region_refs(2), 0u64);
+        assert_eq!(rc.get_region_refs(3), 0u64);
+        rc.handle_region_merge(3, 1);
+        assert_eq!(rc.get_region_refs(1), 1u64);
+        assert_eq!(rc.get_region_refs(2), 0u64);
+        drop(ref2);
+        assert_eq!(rc.get_region_refs(1), 0u64);
+        assert_eq!(rc.get_region_refs(2), 0u64);
+        rc.handle_region_merge(2, 1);
+        assert_eq!(rc.get_region_refs(1), 0u64);
+    }
+
+    #[test]
+    fn test_complex() {
+        let mut rc = RegionRefCounter::new();
+        rc.init_region(1);
+        // Scenario 0. R1 ref by S1, S2, S3, S4
+        let ref1 = rc.ref_region(1);
+        let ref2 = rc.ref_region(1);
+        let ref3 = rc.ref_region(1);
+        let ref4 = rc.ref_region(1);
+        assert_eq!(rc.get_region_refs(1), 4u64);
+        // Scenario 1. R1 split into R1 and R2
+        rc.handle_region_split(1, 2);
+        assert_eq!(rc.get_region_refs(1), 4u64);
+        assert_eq!(rc.get_region_refs(2), 4u64);
+        // Scenario 2. R1 ref by S5, S6
+        let ref5 = rc.ref_region(1);
+        let ref6 = rc.ref_region(1);
+        assert_eq!(rc.get_region_refs(1), 6u64);
+        assert_eq!(rc.get_region_refs(2), 4u64);
+        // Scenario 3. R2 ref by S7
+        let ref7 = rc.ref_region(2);
+        assert_eq!(rc.get_region_refs(1), 6u64);
+        assert_eq!(rc.get_region_refs(2), 5u64);
+        // Scenario 4. S1 drop
+        drop(ref1);
+        assert_eq!(rc.get_region_refs(1), 5u64);
+        assert_eq!(rc.get_region_refs(2), 4u64);
+        // Scenario 5. S6 drop
+        drop(ref6);
+        assert_eq!(rc.get_region_refs(1), 4u64);
+        assert_eq!(rc.get_region_refs(2), 4u64);
+        // Scenario 6. R1 split into R1 and R3
+        rc.handle_region_split(1, 3);
+        assert_eq!(rc.get_region_refs(1), 4u64);
+        assert_eq!(rc.get_region_refs(3), 4u64);
+        assert_eq!(rc.get_region_refs(2), 4u64);
+        // Scenario 7. R1 ref by S8
+        let ref8 = rc.ref_region(1);
+        assert_eq!(rc.get_region_refs(1), 5u64);
+        assert_eq!(rc.get_region_refs(3), 4u64);
+        assert_eq!(rc.get_region_refs(2), 4u64);
+        // Scenario 8. R2 ref by S9
+        let ref9 = rc.ref_region(2);
+        assert_eq!(rc.get_region_refs(1), 5u64);
+        assert_eq!(rc.get_region_refs(3), 4u64);
+        assert_eq!(rc.get_region_refs(2), 5u64);
+        // Scenario 9. R2 merge into R1
+        rc.handle_region_merge(2, 1);
+        assert_eq!(rc.get_region_refs(1), 7u64);
+        assert_eq!(rc.get_region_refs(3), 4u64);
+        // Scenario 10. S5 drop
+        drop(ref5);
+        assert_eq!(rc.get_region_refs(1), 6u64);
+        assert_eq!(rc.get_region_refs(3), 3u64);
+        // Drop remainings
+        drop(ref8);
+        assert_eq!(rc.get_region_refs(1), 5u64);
+        assert_eq!(rc.get_region_refs(3), 3u64);
+        drop(ref2);
+        assert_eq!(rc.get_region_refs(1), 4u64);
+        assert_eq!(rc.get_region_refs(3), 2u64);
+        drop(ref4);
+        assert_eq!(rc.get_region_refs(1), 3u64);
+        assert_eq!(rc.get_region_refs(3), 1u64);
+        drop(ref3);
+        assert_eq!(rc.get_region_refs(1), 2u64);
+        assert_eq!(rc.get_region_refs(3), 0u64);
+        drop(ref7);
+        assert_eq!(rc.get_region_refs(1), 1u64);
+        assert_eq!(rc.get_region_refs(3), 0u64);
+        drop(ref9);
+        assert_eq!(rc.get_region_refs(1), 0u64);
+        assert_eq!(rc.get_region_refs(3), 0u64);
     }
 }
