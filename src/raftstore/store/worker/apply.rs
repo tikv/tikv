@@ -1093,6 +1093,15 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, Option<ExecResult>)> {
+        let apply_before_split = || {
+            fail_point!(
+                "apply_before_split_1_3",
+                { self.id == 3 && self.region_id() == 1 },
+                |_| {}
+            );
+        };
+        apply_before_split();
+
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["split", "all"])
             .inc();
