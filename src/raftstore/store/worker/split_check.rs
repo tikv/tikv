@@ -124,11 +124,8 @@ pub struct Task {
 }
 
 impl Task {
-    pub fn new(region: &Region, auto_split: bool) -> Task {
-        Task {
-            region: region.clone(),
-            auto_split,
-        }
+    pub fn new(region: Region, auto_split: bool) -> Task {
+        Task { region, auto_split }
     }
 }
 
@@ -164,10 +161,10 @@ impl<C: Sender<Msg>> Runner<C> {
 
     fn check_split(&mut self, task: Task) {
         let region = &task.region;
-        let mut split_ctx =
+        let mut host =
             self.coprocessor
-                .new_split_check_status(region, &self.engine, task.auto_split);
-        if split_ctx.skip() {
+                .new_split_checker_host(region, &self.engine, task.auto_split);
+        if host.skip() {
             debug!("[region {}] skip split check", region.get_id());
             return;
         }
@@ -183,39 +180,28 @@ impl<C: Sender<Msg>> Runner<C> {
         );
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
-        let mut split_key = None;
-        let coprocessor = &mut self.coprocessor;
-
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
         let res = MergedIterator::new(self.engine.as_ref(), LARGE_CFS, &start_key, &end_key, false)
             .map(|mut iter| {
                 while let Some(e) = iter.next() {
-                    if let Some(key) = coprocessor.on_split_check(
-                        region,
-                        &mut split_ctx,
-                        e.key.as_ref().unwrap(),
-                        e.value_size as u64,
-                    ) {
-                        split_key = Some(key);
+                    if host.on_kv(region, e.key.as_ref().unwrap(), e.value_size as u64) {
                         break;
                     }
                 }
             });
         timer.observe_duration();
 
-        if split_key.is_none() {
-            split_key = split_ctx.split_key();
-        }
-
         if let Err(e) = res {
             error!("[region {}] failed to scan split key: {}", region_id, e);
             return;
         }
 
-        if let Some(split_key) = split_key {
+        let split_key = host.split_key();
+
+        if let Some(key) = split_key {
             let region_epoch = region.get_region_epoch().clone();
             let res = self.ch
-                .try_send(new_split_region(region_id, region_epoch, split_key));
+                .try_send(new_split_region(region_id, region_epoch, key));
             if let Err(e) = res {
                 warn!("[region {}] failed to send check result: {}", region_id, e);
             }
