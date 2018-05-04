@@ -36,6 +36,7 @@ use storage::FlowStatistics;
 use util::collections::HashMap;
 use util::escape;
 use util::rocksdb::*;
+use util::time::time_now_sec;
 use util::transport::SendCh;
 use util::worker::FutureRunnable as Runnable;
 
@@ -84,6 +85,7 @@ pub struct StoreStat {
     pub engine_total_keys_read: u64,
     pub engine_last_total_bytes_read: u64,
     pub engine_last_total_keys_read: u64,
+    pub last_report_ts: u64,
 
     pub region_bytes_read: LocalHistogram,
     pub region_keys_read: LocalHistogram,
@@ -99,6 +101,7 @@ impl Default for StoreStat {
             region_bytes_written: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
             region_keys_written: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
 
+            last_report_ts: 0,
             engine_total_bytes_read: 0,
             engine_total_keys_read: 0,
             engine_last_total_bytes_read: 0,
@@ -115,6 +118,7 @@ pub struct PeerStat {
     pub last_read_keys: u64,
     pub last_written_bytes: u64,
     pub last_written_keys: u64,
+    pub last_report_ts: u64,
 }
 
 impl Display for Task {
@@ -309,9 +313,12 @@ impl<T: PdClient> Runner<T> {
         stats.set_keys_read(
             self.store_stat.engine_total_keys_read - self.store_stat.engine_last_total_keys_read,
         );
+        let mut interval = pdpb::TimeInterval::new();
+        interval.set_start_timestamp(self.store_stat.last_report_ts);
+        stats.set_interval(interval);
         self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
         self.store_stat.engine_last_total_keys_read = self.store_stat.engine_total_keys_read;
-
+        self.store_stat.last_report_ts = time_now_sec();
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
         self.store_stat.region_bytes_read.flush();
@@ -535,7 +542,13 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     Some(size) => size,
                     None => get_region_approximate_size(&self.db, &region).unwrap_or(0),
                 };
-                let (read_bytes_delta, read_keys_delta, written_bytes_delta, written_keys_delta) = {
+                let (
+                    read_bytes_delta,
+                    read_keys_delta,
+                    written_bytes_delta,
+                    written_keys_delta,
+                    last_report_ts,
+                ) = {
                     let peer_stat = self.region_peers
                         .entry(region.get_id())
                         .or_insert_with(PeerStat::default);
@@ -543,15 +556,18 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     let read_keys_delta = peer_stat.read_keys - peer_stat.last_read_keys;
                     let written_bytes_delta = written_bytes - peer_stat.last_written_bytes;
                     let written_keys_delta = written_keys - peer_stat.last_written_keys;
+                    let last_report_ts = peer_stat.last_report_ts;
                     peer_stat.last_written_bytes = written_bytes;
                     peer_stat.last_written_keys = written_keys;
                     peer_stat.last_read_bytes = peer_stat.read_bytes;
                     peer_stat.last_read_keys = peer_stat.read_keys;
+                    peer_stat.last_report_ts = time_now_sec();
                     (
                         read_bytes_delta,
                         read_keys_delta,
                         written_bytes_delta,
                         written_keys_delta,
+                        last_report_ts,
                     )
                 };
                 self.handle_heartbeat(
@@ -566,6 +582,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                         read_bytes: read_bytes_delta,
                         read_keys: read_keys_delta,
                         approximate_size,
+                        last_report_ts,
                     },
                 )
             }
