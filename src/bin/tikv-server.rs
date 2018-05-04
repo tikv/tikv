@@ -396,7 +396,7 @@ fn main() {
     // Print version information.
     util::print_tikv_info();
 
-    panic_hook::set_exit_hook();
+    panic_hook::set_exit_hook(false);
 
     config.compatible_adjust();
     if let Err(e) = config.validate() {
