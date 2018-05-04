@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cmp;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
@@ -37,6 +38,7 @@ use super::{Config, Result};
 
 const DEFAULT_COPROCESSOR_BATCH: usize = 256;
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
+const MAX_SEND_MESSAGE_LEN: usize = 1024 * 1024 * 1024;
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
@@ -102,7 +104,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
-            .max_send_message_len(region_split_size as usize * 4)
+            .max_send_message_len(cmp::min(
+                MAX_SEND_MESSAGE_LEN,
+                region_split_size as usize * 4,
+            ))
             .build_args();
         let grpc_server = {
             let mut sb = ServerBuilder::new(Arc::clone(&env))
