@@ -15,6 +15,7 @@
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![allow(needless_pass_by_value)]
+#![allow(cyclomatic_complexity)]
 
 extern crate clap;
 extern crate futures;
@@ -34,6 +35,7 @@ use std::fs::File;
 use std::io::Read;
 use std::iter::FromIterator;
 use std::sync::Arc;
+use std::thread;
 use std::{process, str, u64};
 
 use clap::{App, Arg, ArgMatches, SubCommand};
@@ -377,18 +379,41 @@ trait DebugExecutor {
         }
     }
 
-    fn compact(&self, db: DBType, cf: &str, from: Option<Vec<u8>>, to: Option<Vec<u8>>) {
+    fn compact(
+        &self,
+        address: Option<&str>,
+        db: DBType,
+        cf: &str,
+        from: Option<Vec<u8>>,
+        to: Option<Vec<u8>>,
+    ) {
         let from = from.unwrap_or_default();
         let to = to.unwrap_or_default();
-        self.do_compact(db, cf, from, to);
+        self.do_compaction(db, cf, &from, &to);
+        println!(
+            "store:{:?} compact db:{:?} cf:{} range:[{:?}, {:?}) success!",
+            address.unwrap_or("local"),
+            db,
+            cf,
+            from,
+            to
+        );
     }
 
-    fn compact_region(&self, db: DBType, cf: &str, region_id: u64) {
+    fn compact_region(&self, address: Option<&str>, db: DBType, cf: &str, region_id: u64) {
         let region_local = self.get_region_info(region_id).region_local_state.unwrap();
         let r = region_local.get_region();
         let from = keys::data_key(r.get_start_key());
         let to = keys::data_end_key(r.get_end_key());
-        self.do_compact(db, cf, from, to);
+        self.do_compaction(db, cf, &from, &to);
+        println!(
+            "store:{:?} compact_region db:{:?} cf:{} range:[{:?}, {:?}) success!",
+            address.unwrap_or("local"),
+            db,
+            cf,
+            from,
+            to
+        );
     }
 
     fn print_bad_regions(&self);
@@ -421,7 +446,7 @@ trait DebugExecutor {
     }
 
     /// Recover the cluster when given `store_ids` are failed.
-    fn remove_fail_stores(&self, store_ids: Vec<u64>);
+    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>);
 
     fn check_region_consistency(&self, _: u64);
 
@@ -471,7 +496,7 @@ trait DebugExecutor {
         limit: u64,
     ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
 
-    fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>);
+    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8]);
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
 
@@ -561,15 +586,14 @@ impl DebugExecutor for DebugClient {
         ) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
-    fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>) {
+    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8]) {
         let mut req = CompactRequest::new();
         req.set_db(db);
         req.set_cf(cf.to_owned());
-        req.set_from_key(from);
-        req.set_to_key(to);
+        req.set_from_key(from.to_owned());
+        req.set_to_key(to.to_owned());
         self.compact(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::compact", e));
-        println!("success!");
     }
 
     fn dump_metrics(&self, tags: Vec<&str>) {
@@ -607,7 +631,7 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only avaliable for local mode");
     }
 
-    fn remove_fail_stores(&self, _: Vec<u64>) {
+    fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>) {
         self.check_local_mode();
     }
 
@@ -674,10 +698,9 @@ impl DebugExecutor for Debugger {
         Box::new(stream) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
-    fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>) {
-        self.compact(db, cf, &from, &to)
+    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8]) {
+        self.compact(db, cf, from, to)
             .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
-        println!("success!");
     }
 
     fn set_region_tombstone(&self, regions: Vec<Region>) {
@@ -716,9 +739,9 @@ impl DebugExecutor for Debugger {
         println!("all regions are healthy")
     }
 
-    fn remove_fail_stores(&self, store_ids: Vec<u64>) {
+    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>) {
         println!("removing stores {:?} from configrations...", store_ids);
-        self.remove_failed_stores(store_ids)
+        self.remove_failed_stores(store_ids, region_ids)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
         println!("success");
     }
@@ -748,21 +771,21 @@ fn main() {
         .arg(
             Arg::with_name("db")
                 .required(true)
-                .conflicts_with_all(&["host", "hex-to-escaped", "escaped-to-hex"])
+                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex"])
                 .long("db")
                 .takes_value(true)
                 .help("set rocksdb path"),
         )
         .arg(
             Arg::with_name("raftdb")
-                .conflicts_with_all(&["host", "hex-to-escaped", "escaped-to-hex"])
+                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex"])
                 .long("raftdb")
                 .takes_value(true)
                 .help("set raft rocksdb path"),
         )
         .arg(
             Arg::with_name("config")
-                .conflicts_with_all(&["host", "hex-to-escaped", "escaped-to-hex"])
+                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex"])
                 .long("config")
                 .takes_value(true)
                 .help("set config for rocksdb"),
@@ -770,7 +793,7 @@ fn main() {
         .arg(
             Arg::with_name("host")
                 .required(true)
-                .conflicts_with_all(&["db", "raftdb", "hex-to-escaped", "escaped-to-hex", "config"])
+                .conflicts_with_all(&["db", "pd", "raftdb", "hex-to-escaped", "escaped-to-hex", "config"])
                 .long("host")
                 .takes_value(true)
                 .help("set remote host"),
@@ -809,6 +832,14 @@ fn main() {
                 .long("to-hex")
                 .takes_value(true)
                 .help("convert escaped key to hex key"),
+        )
+        .arg(
+            Arg::with_name("pd")
+                .required(true)
+                .long("pd")
+                .conflicts_with_all(&["db", "raftdb", "host", "hex-to-escaped", "escaped-to-hex", "config"])
+                .takes_value(true)
+                .help("pd address"),
         )
         .subcommand(
             SubCommand::with_name("raft")
@@ -1102,16 +1133,28 @@ fn main() {
             SubCommand::with_name("unsafe-recover")
                 .about("unsafe recover the cluster when majority replicas are failed")
                 .subcommand(
-                    SubCommand::with_name("remove-fail-stores").arg(
+                    SubCommand::with_name("remove-fail-stores")
+                    .arg(
                         Arg::with_name("stores")
                             .required(true)
+                            .short("s")
                             .takes_value(true)
                             .multiple(true)
                             .use_delimiter(true)
                             .require_delimiter(true)
                             .value_delimiter(",")
                             .help("failed store id list"),
-                    ),
+                    )
+                    .arg(
+                        Arg::with_name("regions")
+                            .takes_value(true)
+                            .short("r")
+                            .multiple(true)
+                            .use_delimiter(true)
+                            .require_delimiter(true)
+                            .value_delimiter(",")
+                            .help("only for these regions"),
+                        )
                 ),
         )
         .subcommand(
@@ -1173,7 +1216,8 @@ fn main() {
                 ),
         )
         .subcommand(
-            SubCommand::with_name("dump-snap-meta").about("dump snapshot meta file")
+            SubCommand::with_name("dump-snap-meta")
+                .about("dump snapshot meta file")
                 .arg(
                     Arg::with_name("file")
                         .required(true)
@@ -1181,8 +1225,47 @@ fn main() {
                         .long("file")
                         .takes_value(true)
                         .help("meta file path"),
-                 ),
-        );
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("compact-cluster")
+                .about("compact the whole cluster in a specified range in one or more column families")
+                .arg(
+                    Arg::with_name("db")
+                        .short("d")
+                        .takes_value(true)
+                        .default_value("kv")
+                        .possible_values(&["kv", "raft"])
+                        .help("kv or raft"),
+                )
+                .arg(
+                    Arg::with_name("cf")
+                        .short("c")
+                        .takes_value(true)
+                        .multiple(true)
+                        .use_delimiter(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
+                        .default_value(CF_DEFAULT)
+                        .possible_values(&["default", "lock", "write"])
+                        .help("column family names, for kv db, combine from default/lock/write; for raft db, can only be default"),
+                )
+                .arg(
+                    Arg::with_name("from")
+                        .short("f")
+                        .long("from")
+                        .takes_value(true)
+                        .help(raw_key_hint)
+                )
+                .arg(
+                    Arg::with_name("to")
+                        .short("t")
+                        .long("to")
+                        .takes_value(true)
+                        .help(raw_key_hint)
+                ),
+    );
+
     let matches = app.clone().get_matches();
 
     let hex_key = matches.value_of("hex-to-escaped");
@@ -1200,9 +1283,19 @@ fn main() {
         _ => unreachable!(),
     };
 
+    let mgr = new_security_mgr(&matches);
+
     if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
         let path = matches.value_of("file").unwrap();
         return dump_snap_meta_file(path);
+    } else if let Some(sub_cmd) = matches.subcommand_matches("compact-cluster") {
+        let pd = matches.value_of("pd").unwrap();
+        let db = sub_cmd.value_of("db").unwrap();
+        let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
+        let cfs = Vec::from_iter(sub_cmd.values_of("cf").unwrap());
+        let from_key = sub_cmd.value_of("from").map(|k| unescape(k));
+        let to_key = sub_cmd.value_of("to").map(|k| unescape(k));
+        return compact_whole_cluster(pd, db_type, cfs, from_key, to_key, mgr);
     }
 
     let db = matches.value_of("db");
@@ -1210,7 +1303,6 @@ fn main() {
     let host = matches.value_of("host");
     let cfg_path = matches.value_of("config");
 
-    let mgr = new_security_mgr(&matches);
     let debug_executor = new_debug_executor(db, raft_db, host, cfg_path, Arc::clone(&mgr));
 
     if let Some(matches) = matches.subcommand_matches("print") {
@@ -1278,9 +1370,9 @@ fn main() {
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
         if let Some(region) = matches.value_of("region") {
-            debug_executor.compact_region(db_type, cf, region.parse().unwrap());
+            debug_executor.compact_region(host, db_type, cf, region.parse().unwrap());
         } else {
-            debug_executor.compact(db_type, cf, from_key, to_key);
+            debug_executor.compact(host, db_type, cf, from_key, to_key);
         }
     } else if let Some(matches) = matches.subcommand_matches("tombstone") {
         let regions = matches
@@ -1312,11 +1404,19 @@ fn main() {
         debug_executor.recover_regions_mvcc(mgr, &cfg, regions);
     } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
         if let Some(matches) = matches.subcommand_matches("remove-fail-stores") {
+            let region_ids = matches.values_of("regions").map(|ids| {
+                ids.map(|r| r.parse())
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("parse regions fail")
+            });
             let stores = matches.values_of("stores").unwrap();
+
             match stores.map(|s| s.parse()).collect::<Result<Vec<u64>, _>>() {
-                Ok(store_ids) => debug_executor.remove_fail_stores(store_ids),
+                Ok(store_ids) => debug_executor.remove_fail_stores(store_ids, region_ids),
                 Err(e) => perror_and_exit("parse store id list", e),
             }
+        } else {
+            eprintln!("{}", matches.usage());
         }
     } else if let Some(matches) = matches.subcommand_matches("consistency-check") {
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
@@ -1414,5 +1514,46 @@ fn dump_snap_meta_file(path: &str) {
             "cf {}, size {}, checksum: {}",
             cf_file.cf, cf_file.size, cf_file.checksum
         );
+    }
+}
+
+fn compact_whole_cluster(
+    pd: &str,
+    db_type: DBType,
+    cfs: Vec<&str>,
+    from: Option<Vec<u8>>,
+    to: Option<Vec<u8>>,
+    mgr: Arc<SecurityManager>,
+) {
+    let mut cfg = PdConfig::default();
+    cfg.endpoints.push(pd.to_owned());
+    if let Err(e) = cfg.validate() {
+        panic!("invalid pd configuration: {:?}", e);
+    }
+
+    let pd_client = RpcClient::new(&cfg, Arc::clone(&mgr))
+        .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+
+    let stores = pd_client
+        .get_all_stores()
+        .unwrap_or_else(|e| perror_and_exit("Get all cluster stores from PD failed", e));
+
+    let mut handles = Vec::new();
+    for s in stores {
+        let mgr = Arc::clone(&mgr);
+        let addr = s.address.clone();
+        let (from, to) = (from.clone(), to.clone());
+        let cfs: Vec<String> = cfs.iter().map(|cf| cf.to_string().clone()).collect();
+        let h = thread::spawn(move || {
+            let debug_executor = new_debug_executor(None, None, Some(&addr), None, mgr);
+            for cf in cfs {
+                debug_executor.compact(Some(&addr), db_type, cf.as_str(), from.clone(), to.clone());
+            }
+        });
+        handles.push(h);
+    }
+
+    for h in handles {
+        h.join().unwrap();
     }
 }
