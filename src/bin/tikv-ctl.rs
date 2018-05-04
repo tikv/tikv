@@ -389,7 +389,15 @@ trait DebugExecutor {
     ) {
         let from = from.unwrap_or_default();
         let to = to.unwrap_or_default();
-        self.do_compaction(address, db, cf, from, to);
+        self.do_compaction(db, cf, &from, &to);
+        println!(
+            "store:{:?} compact db:{:?} cf:{} range:[{:?}, {:?}) success!",
+            address.unwrap_or(&"local"),
+            db,
+            cf,
+            from,
+            to
+        );
     }
 
     fn compact_region(&self, address: Option<&str>, db: DBType, cf: &str, region_id: u64) {
@@ -397,7 +405,15 @@ trait DebugExecutor {
         let r = region_local.get_region();
         let from = keys::data_key(r.get_start_key());
         let to = keys::data_end_key(r.get_end_key());
-        self.do_compaction(address, db, cf, from, to);
+        self.do_compaction(db, cf, &from, &to);
+        println!(
+            "store:{:?} compact_region db:{:?} cf:{} range:[{:?}, {:?}) success!",
+            address.unwrap_or(&"local"),
+            db,
+            cf,
+            from,
+            to
+        );
     }
 
     fn print_bad_regions(&self);
@@ -480,14 +496,7 @@ trait DebugExecutor {
         limit: u64,
     ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
 
-    fn do_compaction(
-        &self,
-        address: Option<&str>,
-        db: DBType,
-        cf: &str,
-        from: Vec<u8>,
-        to: Vec<u8>,
-    );
+    fn do_compaction(&self, db: DBType, cf: &str, from: &Vec<u8>, to: &Vec<u8>);
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
 
@@ -577,14 +586,7 @@ impl DebugExecutor for DebugClient {
         ) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
-    fn do_compaction(
-        &self,
-        address: Option<&str>,
-        db: DBType,
-        cf: &str,
-        from: Vec<u8>,
-        to: Vec<u8>,
-    ) {
+    fn do_compaction(&self, db: DBType, cf: &str, from: &Vec<u8>, to: &Vec<u8>) {
         let mut req = CompactRequest::new();
         req.set_db(db);
         req.set_cf(cf.to_owned());
@@ -592,14 +594,6 @@ impl DebugExecutor for DebugClient {
         req.set_to_key(to.clone());
         self.compact(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::compact", e));
-        println!(
-            "store:{:?} compact db:{:?} cf:{} range:[{:?}, {:?}) success!",
-            address.unwrap(),
-            db,
-            cf,
-            from,
-            to
-        );
     }
 
     fn dump_metrics(&self, tags: Vec<&str>) {
@@ -704,13 +698,9 @@ impl DebugExecutor for Debugger {
         Box::new(stream) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
-    fn do_compaction(&self, _: Option<&str>, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>) {
+    fn do_compaction(&self, db: DBType, cf: &str, from: &Vec<u8>, to: &Vec<u8>) {
         self.compact(db, cf, &from, &to)
             .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
-        println!(
-            "local store compact db:{:?} cf:{} range:[{:?}, {:?}) success!",
-            db, cf, from, to
-        );
     }
 
     fn set_region_tombstone(&self, regions: Vec<Region>) {
@@ -1286,7 +1276,7 @@ fn main() {
     if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
         let path = matches.value_of("file").unwrap();
         return dump_snap_meta_file(path);
-    } else if let Some(sub_cmd) = matches.subcommand_matches("compact-the-whole-cluster") {
+    } else if let Some(sub_cmd) = matches.subcommand_matches("compact-cluster") {
         let pd = matches.value_of("pd").unwrap();
         let db = sub_cmd.value_of("db").unwrap();
         let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
