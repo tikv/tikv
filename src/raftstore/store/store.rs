@@ -2323,7 +2323,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             {
                 continue;
             }
-            let task = SplitCheckTask::new(peer.region(), true);
+            let task = SplitCheckTask::new(peer.region().clone(), true);
             if let Err(e) = self.split_check_worker.schedule(task) {
                 error!("{} failed to schedule split check: {}", self.tag, e);
             }
@@ -2528,7 +2528,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return;
         }
 
-        let task = SplitCheckTask::new(region, false);
+        let task = SplitCheckTask::new(region.clone(), false);
         if let Err(e) = self.split_check_worker.schedule(task) {
             error!("{} failed to schedule split check: {}", self.tag, e);
         }
