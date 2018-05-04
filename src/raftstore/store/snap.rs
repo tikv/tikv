@@ -872,11 +872,10 @@ impl Snapshot for Snap {
         debug!("deleting {}", self.path());
         for cf_file in &self.cf_files {
             delete_file_if_exist(&cf_file.tmp_path);
-            if file_exists(&cf_file.path) {
+            delete_file_if_exist(&cf_file.clone_path);
+            if delete_file_if_exist(&cf_file.path) {
                 self.size_track.fetch_sub(cf_file.size, Ordering::SeqCst);
             }
-            delete_file_if_exist(&cf_file.path);
-            delete_file_if_exist(&cf_file.clone_path);
         }
         delete_file_if_exist(&self.meta_file.tmp_path);
         delete_file_if_exist(&self.meta_file.path);
