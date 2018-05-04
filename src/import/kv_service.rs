@@ -21,8 +21,11 @@ use kvproto::import_kvpb::*;
 use kvproto::import_kvpb_grpc::*;
 use uuid::Uuid;
 
+use raftstore::store::keys;
+use storage::types::Key;
 use util::time::Instant;
 
+use super::client::*;
 use super::metrics::*;
 use super::service::*;
 use super::{Config, Error, KVImporter};
@@ -49,6 +52,35 @@ impl ImportKVService {
 }
 
 impl ImportKv for ImportKVService {
+    fn switch_mode(
+        &self,
+        ctx: RpcContext,
+        req: SwitchModeRequest,
+        sink: UnarySink<SwitchModeResponse>,
+    ) {
+        let label = "switch_mode";
+        let timer = Instant::now_coarse();
+
+        ctx.spawn(
+            self.threads
+                .spawn_fn(move || {
+                    let client = Client::new(req.get_pd_addr(), 1)?;
+                    match client.switch_stores(req.get_request()) {
+                        Ok(_) => {
+                            info!("switch stores {:?}", req.get_request());
+                            Ok(())
+                        }
+                        Err(e) => {
+                            error!("switch stores {:?}: {:?}", req.get_request(), e);
+                            Err(e)
+                        }
+                    }
+                })
+                .map(|_| SwitchModeResponse::new())
+                .then(move |res| send_rpc_response!(res, sink, label, timer)),
+        )
+    }
+
     fn open(&self, ctx: RpcContext, req: OpenRequest, sink: UnarySink<OpenResponse>) {
         let label = "open";
         let timer = Instant::now_coarse();
@@ -144,6 +176,75 @@ impl ImportKv for ImportKVService {
                     }
                     Err(e) => Err(e),
                 })
+                .then(move |res| send_rpc_response!(res, sink, label, timer)),
+        )
+    }
+
+    fn import(&self, ctx: RpcContext, req: ImportRequest, sink: UnarySink<ImportResponse>) {
+        let label = "import";
+        let timer = Instant::now_coarse();
+        let import = Arc::clone(&self.importer);
+
+        ctx.spawn(
+            self.threads
+                .spawn_fn(move || {
+                    let uuid = Uuid::from_bytes(req.get_uuid())?;
+                    import.import_engine(uuid, req.get_pd_addr())
+                })
+                .map(|_| ImportResponse::new())
+                .then(move |res| send_rpc_response!(res, sink, label, timer)),
+        )
+    }
+
+    fn cleanup(&self, ctx: RpcContext, req: CleanupRequest, sink: UnarySink<CleanupResponse>) {
+        let label = "cleanup";
+        let timer = Instant::now_coarse();
+        let import = Arc::clone(&self.importer);
+
+        ctx.spawn(
+            self.threads
+                .spawn_fn(move || {
+                    let uuid = Uuid::from_bytes(req.get_uuid())?;
+                    import.cleanup_engine(uuid)
+                })
+                .map(|_| CleanupResponse::new())
+                .then(move |res| send_rpc_response!(res, sink, label, timer)),
+        )
+    }
+
+    fn compact(&self, ctx: RpcContext, req: CompactRequest, sink: UnarySink<CompactResponse>) {
+        let label = "compact";
+        let timer = Instant::now_coarse();
+
+        let mut compact = req.get_request().clone();
+        if compact.has_range() {
+            // Convert the range to a TiKV encoded data range.
+            let start = Key::from_raw(compact.get_range().get_start());
+            compact
+                .mut_range()
+                .set_start(keys::data_key(start.encoded()));
+            let end = Key::from_raw(compact.get_range().get_end());
+            compact
+                .mut_range()
+                .set_end(keys::data_end_key(end.encoded()));
+        }
+
+        ctx.spawn(
+            self.threads
+                .spawn_fn(move || {
+                    let client = Client::new(req.get_pd_addr(), 1)?;
+                    match client.compact_stores(&compact) {
+                        Ok(_) => {
+                            info!("compact stores {:?}", compact);
+                            Ok(())
+                        }
+                        Err(e) => {
+                            error!("compact stores {:?}: {:?}", compact, e);
+                            Err(e)
+                        }
+                    }
+                })
+                .map(|_| CompactResponse::new())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }
