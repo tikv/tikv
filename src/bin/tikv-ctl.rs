@@ -392,7 +392,7 @@ trait DebugExecutor {
         self.do_compaction(db, cf, &from, &to);
         println!(
             "store:{:?} compact db:{:?} cf:{} range:[{:?}, {:?}) success!",
-            address.unwrap_or(&"local"),
+            address.unwrap_or("local"),
             db,
             cf,
             from,
@@ -408,7 +408,7 @@ trait DebugExecutor {
         self.do_compaction(db, cf, &from, &to);
         println!(
             "store:{:?} compact_region db:{:?} cf:{} range:[{:?}, {:?}) success!",
-            address.unwrap_or(&"local"),
+            address.unwrap_or("local"),
             db,
             cf,
             from,
@@ -496,7 +496,7 @@ trait DebugExecutor {
         limit: u64,
     ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
 
-    fn do_compaction(&self, db: DBType, cf: &str, from: &Vec<u8>, to: &Vec<u8>);
+    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8]);
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
 
@@ -586,12 +586,12 @@ impl DebugExecutor for DebugClient {
         ) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
-    fn do_compaction(&self, db: DBType, cf: &str, from: &Vec<u8>, to: &Vec<u8>) {
+    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8]) {
         let mut req = CompactRequest::new();
         req.set_db(db);
         req.set_cf(cf.to_owned());
-        req.set_from_key(from.clone());
-        req.set_to_key(to.clone());
+        req.set_from_key(from.to_owned());
+        req.set_to_key(to.to_owned());
         self.compact(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::compact", e));
     }
@@ -698,8 +698,8 @@ impl DebugExecutor for Debugger {
         Box::new(stream) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
-    fn do_compaction(&self, db: DBType, cf: &str, from: &Vec<u8>, to: &Vec<u8>) {
-        self.compact(db, cf, &from, &to)
+    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8]) {
+        self.compact(db, cf, from, to)
             .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
     }
 
