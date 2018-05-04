@@ -18,15 +18,16 @@ use tipb::executor::{self, ExecType};
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
 
+use storage::SnapshotStore;
+use util::codec::number::NumberDecoder;
+use util::collections::HashSet;
+
 use coprocessor::codec::datum::{self, Datum};
 use coprocessor::codec::mysql;
 use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings};
-use coprocessor::endpoint::get_pk;
-use coprocessor::{Error, Result};
-use storage::SnapshotStore;
-use util::codec::number::NumberDecoder;
-use util::collections::HashSet;
+use coprocessor::util;
+use coprocessor::*;
 
 mod aggregate;
 mod aggregation;
@@ -109,7 +110,7 @@ impl Row {
         let mut res = Vec::with_capacity(columns.len());
         for col in columns {
             if col.get_pk_handle() {
-                let v = get_pk(col, self.handle);
+                let v = util::get_pk(col, self.handle);
                 let bt = box_try!(datum::encode_value(&[v]));
                 res.push(bt);
                 continue;
@@ -265,7 +266,7 @@ pub fn inflate_with_col_for_dag(
     for offset in offsets {
         let col = &columns[*offset];
         if col.get_pk_handle() {
-            let v = get_pk(col, h);
+            let v = util::get_pk(col, h);
             res[*offset] = v;
         } else {
             let col_id = col.get_column_id();
