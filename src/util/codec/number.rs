@@ -11,7 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use byteorder::{BigEndian, LittleEndian, ReadBytesExt, WriteBytesExt};
+// FIXME(shirly): remove following later
+#![allow(dead_code)]
+
+use byteorder::{BigEndian, ByteOrder, LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{self, ErrorKind, Read, Write};
 use std::mem;
 
@@ -219,6 +222,112 @@ pub trait NumberDecoder: Read {
 
 impl<T: Read> NumberDecoder for T {}
 
+type Bytes<'a> = &'a [u8];
+
+const SIZE_OF_U64: usize = 8;
+const SIZE_OF_U32: usize = 4;
+const SIZE_OF_U16: usize = 2;
+const SIZE_OF_F64: usize = 8;
+
+macro_rules! read_num_bytes {
+    ($size:expr, $data:expr, $fn:path) => {{
+        if $data.len() < $size {
+            return Err(Error::Io(io::Error::new(ErrorKind::UnexpectedEof, "eof")));
+        }
+        let buf = &$data[0..$size];
+        *$data = &$data[$size..];
+        Ok($fn(buf))
+    }};
+}
+/// `decode_i64` decodes value encoded by `encode_i64` before.
+fn decode_i64(data: &mut Bytes) -> Result<i64> {
+    decode_u64(data).map(order_decode_i64)
+}
+
+/// `decode_i64_desc` decodes value encoded by `encode_i64_desc` before.
+fn decode_i64_desc(data: &mut Bytes) -> Result<i64> {
+    decode_u64_desc(data).map(order_decode_i64)
+}
+
+/// `decode_u64` decodes value encoded by `encode_u64` before.
+pub fn decode_u64(data: &mut Bytes) -> Result<u64> {
+    read_num_bytes!(SIZE_OF_U64, data, BigEndian::read_u64)
+}
+
+/// `decode_u64_desc` decodes value encoded by `encode_u64_desc` before.
+pub fn decode_u64_desc(data: &mut Bytes) -> Result<u64> {
+    let v = decode_u64(data)?;
+    Ok(!v)
+}
+
+/// `decode_var_i64` decodes value encoded by `encode_var_i64` before.
+fn decode_var_i64(data: &mut Bytes) -> Result<i64> {
+    let v = decode_var_u64(data)?;
+    let mut vx = v >> 1;
+    if v & 1 != 0 {
+        vx = !vx;
+    }
+    Ok(vx as i64)
+}
+
+/// `decode_var_u64` decodes value encoded by `encode_var_u64` before.
+pub fn decode_var_u64(data: &mut Bytes) -> Result<u64> {
+    let (mut x, mut s, mut i) = (0, 0, 0);
+    while i < data.len() {
+        let b = data[i];
+        if b < 0x80 {
+            if i > 9 || i == 9 && b > 1 {
+                return Err(Error::Io(io::Error::new(
+                    ErrorKind::InvalidData,
+                    "overflow",
+                )));
+            }
+            *data = &data[i + 1..];
+            return Ok(x | (u64::from(b) << s));
+        }
+        x |= u64::from(b & 0x7f) << s;
+        s += 7;
+        i += 1;
+    }
+    Err(Error::Io(io::Error::new(ErrorKind::UnexpectedEof, "eof")))
+}
+
+/// `decode_f64` decodes value encoded by `encode_f64` before.
+pub fn decode_f64(data: &mut Bytes) -> Result<f64> {
+    decode_u64(data).map(order_decode_f64)
+}
+
+/// `decode_f64_desc` decodes value encoded by `encode_f64_desc` before.
+pub fn decode_f64_desc(data: &mut Bytes) -> Result<f64> {
+    decode_u64_desc(data).map(order_decode_f64)
+}
+
+/// `decode_u16_le` decodes value encoded by `encode_u16_le` before.
+pub fn decode_u16_le(data: &mut Bytes) -> Result<u16> {
+    read_num_bytes!(SIZE_OF_U16, data, LittleEndian::read_u16)
+}
+
+/// `decode_u32_le` decodes value encoded by `encode_u32_le` before.
+pub fn decode_u32_le(data: &mut Bytes) -> Result<u32> {
+    read_num_bytes!(SIZE_OF_U32, data, LittleEndian::read_u32)
+}
+
+/// `decode_f64_le` decodes value encoded by `encode_f64_le` before.
+fn decode_f64_le(data: &mut Bytes) -> Result<f64> {
+    read_num_bytes!(SIZE_OF_F64, data, LittleEndian::read_f64)
+}
+
+/// `decode_i64_le` decodes value encoded by `encode_i64_le` before.
+fn decode_i64_le(data: &mut Bytes) -> Result<i64> {
+    let v = decode_u64_le(data)?;
+    Ok(v as i64)
+}
+
+/// `decode_u64_le` decodes value encoded by `encode_u64_le` before.
+fn decode_u64_le(data: &mut Bytes) -> Result<u64> {
+    read_num_bytes!(SIZE_OF_U64, data, LittleEndian::read_u64)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -344,7 +453,7 @@ mod test {
             encoded.sort();
             let decoded: Vec<_> = encoded
                 .iter()
-                .map(|b| b.as_slice().$dec().unwrap())
+                .map(|b| $dec(&mut b.as_slice()).unwrap())
                 .collect();
             assert_eq!(decoded, $sorted);
         };
@@ -359,7 +468,7 @@ mod test {
                     let mut buf = vec![];
                     buf.$enc(v).unwrap();
                     assert!(buf.len() <= MAX_VAR_I64_LEN);
-                    assert_eq!(v, buf.as_slice().$dec().unwrap());
+                    assert_eq!(v, $dec(&mut buf.as_slice()).unwrap());
                 }
             }
         };
@@ -468,7 +577,7 @@ mod test {
             fn $tag() {
                 let mut buf = vec![0; 7];
                 check_error!(buf.as_mut_slice().$enc($case), ErrorKind::WriteZero);
-                check_error!(buf.as_slice().$dec(), ErrorKind::UnexpectedEof);
+                check_error!($dec(&mut buf.as_slice()), ErrorKind::UnexpectedEof);
             }
         };
     }
