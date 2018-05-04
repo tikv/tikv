@@ -80,14 +80,14 @@ impl Channel<RaftMessage> for ChannelTransport {
             let key = SnapKey::from_snap(snap).unwrap();
             let from = match self.rl().snap_paths.get(&from_store) {
                 Some(p) => {
-                    p.0.register(key.clone(), SnapEntry::Sending);
+                    let _ = p.0.register(key.clone(), SnapEntry::Sending);
                     p.0.get_snapshot_for_sending(&key).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", from_store)),
             };
             let to = match self.rl().snap_paths.get(&to_store) {
                 Some(p) => {
-                    p.0.register(key.clone(), SnapEntry::Receiving);
+                    p.0.register(key.clone(), SnapEntry::Receiving).unwrap();
                     let data = msg.get_message().get_snapshot().get_data();
                     p.0.get_snapshot_for_receiving(&key, data).unwrap()
                 }
