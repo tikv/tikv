@@ -28,7 +28,6 @@ use kvproto::kvrpcpb::{CommandPri, HandleTime, IsolationLevel};
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::checksum::{ChecksumRequest, ChecksumScanOn};
 use tipb::executor::ExecType;
-use tipb::schema::ColumnInfo;
 use tipb::select::DAGRequest;
 
 use server::readpool::{self, ReadPool};
@@ -41,8 +40,7 @@ use util::time::{duration_to_sec, Instant};
 use util::worker::{Runnable, Scheduler};
 
 use super::checksum::ChecksumContext;
-use super::codec::datum::Datum;
-use super::codec::{mysql, table};
+use super::codec::table;
 use super::dag::DAGContext;
 use super::dag::executor::ExecutorMetrics;
 use super::local_metrics::BasicLocalMetrics;
@@ -733,44 +731,6 @@ fn err_multi_resp(e: Error, count: usize, metrics: &mut BasicLocalMetrics) -> Re
 
 pub fn err_resp(e: Error, metrics: &mut BasicLocalMetrics) -> Response {
     err_multi_resp(e, 1, metrics)
-}
-
-pub fn prefix_next(key: &[u8]) -> Vec<u8> {
-    let mut nk = key.to_vec();
-    if nk.is_empty() {
-        nk.push(0);
-        return nk;
-    }
-    let mut i = nk.len() - 1;
-    loop {
-        if nk[i] == 255 {
-            nk[i] = 0;
-        } else {
-            nk[i] += 1;
-            return nk;
-        }
-        if i == 0 {
-            nk = key.to_vec();
-            nk.push(0);
-            return nk;
-        }
-        i -= 1;
-    }
-}
-
-/// `is_point` checks if the key range represents a point.
-pub fn is_point(range: &KeyRange) -> bool {
-    range.get_end() == &*prefix_next(range.get_start())
-}
-
-#[inline]
-pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
-    if mysql::has_unsigned_flag(col.get_flag() as u64) {
-        // PK column is unsigned
-        Datum::U64(h as u64)
-    } else {
-        Datum::I64(h)
-    }
 }
 
 pub const STR_REQ_TYPE_SELECT: &str = "select";
