@@ -1293,7 +1293,6 @@ impl SnapManager {
     /// Get the approximate size of snap file exists in snap directory.
     ///
     /// Return value is not guaranteed to be accurate.
-    #[allow(let_and_return)]
     pub fn get_total_snap_size(&self) -> u64 {
         let core = self.core.rl();
         core.snap_size.load(Ordering::SeqCst)
