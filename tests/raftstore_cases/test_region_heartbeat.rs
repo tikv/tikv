@@ -153,3 +153,32 @@ fn test_server_pending_peers() {
     let mut cluster = new_server_cluster(0, 3);
     test_pending_peers(&mut cluster);
 }
+
+#[test]
+fn test_node_region_heartbeat_cache() {
+    let mut cluster = new_node_cluster(0, 1);
+    let heartbeat_interval_ms = 20;
+    let mut count;
+
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval =
+        ReadableDuration::millis(heartbeat_interval_ms);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    cluster.run();
+    count = pd_client.get_region_heartbeat_count();
+
+    // Write the initial value for a key, so it will heartbeat pd.
+    let key = b"k";
+    cluster.must_put(key, b"v1");
+    sleep(Duration::from_millis(heartbeat_interval_ms * 2));
+    assert_ne!(count, pd_client.get_region_heartbeat_count());
+    count = pd_client.get_region_heartbeat_count();
+
+    // After heartbeat interval x3, the heartbeat count is the same as before.
+    sleep(Duration::from_millis(heartbeat_interval_ms * 3));
+    assert_eq!(count, pd_client.get_region_heartbeat_count());
+
+    // Invalidate cache.
+    cluster.pd_client.call_handle_reconnect();
+    sleep(Duration::from_millis(heartbeat_interval_ms * 2));
+    assert_eq!(count + 1, pd_client.get_region_heartbeat_count());
+}

@@ -191,8 +191,8 @@ enum RequestPolicy {
 
 #[derive(Default, Clone)]
 pub struct PeerStat {
-    pub written_bytes: u64,
-    pub written_keys: u64,
+    total_written_bytes: u64,
+    total_written_keys: u64,
 }
 
 pub struct Peer {
@@ -976,8 +976,8 @@ impl Peer {
         }
         self.mut_store().apply_state = res.apply_state.clone();
         self.mut_store().applied_index_term = res.applied_index_term;
-        self.peer_stat.written_keys += res.metrics.written_keys;
-        self.peer_stat.written_bytes += res.metrics.written_bytes;
+        self.peer_stat.total_written_keys += res.metrics.written_keys;
+        self.peer_stat.total_written_bytes += res.metrics.written_bytes;
         store_stat.engine_total_bytes_written += res.metrics.written_bytes;
         store_stat.engine_total_keys_written += res.metrics.written_keys;
 
@@ -1735,8 +1735,8 @@ impl Peer {
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration.0),
             pending_peers: self.collect_pending_peers(),
-            written_bytes: self.peer_stat.written_bytes,
-            written_keys: self.peer_stat.written_keys,
+            total_written_bytes: self.peer_stat.total_written_bytes,
+            total_written_keys: self.peer_stat.total_written_keys,
             region_size: self.approximate_size,
         };
         if let Err(e) = worker.schedule(task) {
