@@ -386,10 +386,11 @@ trait DebugExecutor {
         cf: &str,
         from: Option<Vec<u8>>,
         to: Option<Vec<u8>>,
+        threads: u32,
     ) {
         let from = from.unwrap_or_default();
         let to = to.unwrap_or_default();
-        self.do_compaction(db, cf, &from, &to);
+        self.do_compaction(db, cf, &from, &to, threads);
         println!(
             "store:{:?} compact db:{:?} cf:{} range:[{:?}, {:?}) success!",
             address.unwrap_or("local"),
@@ -400,12 +401,19 @@ trait DebugExecutor {
         );
     }
 
-    fn compact_region(&self, address: Option<&str>, db: DBType, cf: &str, region_id: u64) {
+    fn compact_region(
+        &self,
+        address: Option<&str>,
+        db: DBType,
+        cf: &str,
+        region_id: u64,
+        threads: u32,
+    ) {
         let region_local = self.get_region_info(region_id).region_local_state.unwrap();
         let r = region_local.get_region();
         let from = keys::data_key(r.get_start_key());
         let to = keys::data_end_key(r.get_end_key());
-        self.do_compaction(db, cf, &from, &to);
+        self.do_compaction(db, cf, &from, &to, threads);
         println!(
             "store:{:?} compact_region db:{:?} cf:{} range:[{:?}, {:?}) success!",
             address.unwrap_or("local"),
@@ -496,7 +504,7 @@ trait DebugExecutor {
         limit: u64,
     ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
 
-    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8]);
+    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8], threads: u32);
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
 
@@ -586,12 +594,13 @@ impl DebugExecutor for DebugClient {
         ) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
-    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8]) {
+    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8], threads: u32) {
         let mut req = CompactRequest::new();
         req.set_db(db);
         req.set_cf(cf.to_owned());
         req.set_from_key(from.to_owned());
         req.set_to_key(to.to_owned());
+        req.set_threads(threads);
         self.compact(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::compact", e));
     }
@@ -698,8 +707,8 @@ impl DebugExecutor for Debugger {
         Box::new(stream) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
-    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8]) {
-        self.compact(db, cf, from, to)
+    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8], threads: u32) {
+        self.compact(db, cf, from, to, threads)
             .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
     }
 
@@ -1070,6 +1079,15 @@ fn main() {
                         .help(raw_key_hint)
                 )
                 .arg(
+                    Arg::with_name("threads")
+                        .short("n")
+                        .long("threads")
+                        .takes_value(true)
+                        .default_value("1")
+                        .possible_values(&["1", "2", "4", "8", "16"])
+                        .help("number of threads in one compaction")
+                )
+                .arg(
                     Arg::with_name("region")
                     .short("r")
                     .long("region")
@@ -1263,6 +1281,15 @@ fn main() {
                         .long("to")
                         .takes_value(true)
                         .help(raw_key_hint)
+                )
+                .arg(
+                    Arg::with_name("threads")
+                        .short("n")
+                        .long("threads")
+                        .takes_value(true)
+                        .default_value("1")
+                        .possible_values(&["1", "2", "4", "8", "16"])
+                        .help("number of threads in one compaction")
                 ),
     );
 
@@ -1295,7 +1322,9 @@ fn main() {
         let cfs = Vec::from_iter(sub_cmd.values_of("cf").unwrap());
         let from_key = sub_cmd.value_of("from").map(|k| unescape(k));
         let to_key = sub_cmd.value_of("to").map(|k| unescape(k));
-        return compact_whole_cluster(pd, db_type, cfs, from_key, to_key, mgr);
+        let threads_str = sub_cmd.value_of("threads").unwrap();
+        let threads = threads_str.parse::<u32>().unwrap();
+        return compact_whole_cluster(pd, db_type, cfs, from_key, to_key, threads, mgr);
     }
 
     let db = matches.value_of("db");
@@ -1369,10 +1398,12 @@ fn main() {
         let cf = matches.value_of("cf").unwrap();
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
+        let threads_str = matches.value_of("threads").unwrap();
+        let threads = threads_str.parse::<u32>().unwrap();
         if let Some(region) = matches.value_of("region") {
-            debug_executor.compact_region(host, db_type, cf, region.parse().unwrap());
+            debug_executor.compact_region(host, db_type, cf, region.parse().unwrap(), threads);
         } else {
-            debug_executor.compact(host, db_type, cf, from_key, to_key);
+            debug_executor.compact(host, db_type, cf, from_key, to_key, threads);
         }
     } else if let Some(matches) = matches.subcommand_matches("tombstone") {
         let regions = matches
@@ -1523,6 +1554,7 @@ fn compact_whole_cluster(
     cfs: Vec<&str>,
     from: Option<Vec<u8>>,
     to: Option<Vec<u8>>,
+    threads: u32,
     mgr: Arc<SecurityManager>,
 ) {
     let mut cfg = PdConfig::default();
@@ -1547,7 +1579,14 @@ fn compact_whole_cluster(
         let h = thread::spawn(move || {
             let debug_executor = new_debug_executor(None, None, Some(&addr), None, mgr);
             for cf in cfs {
-                debug_executor.compact(Some(&addr), db_type, cf.as_str(), from.clone(), to.clone());
+                debug_executor.compact(
+                    Some(&addr),
+                    db_type,
+                    cf.as_str(),
+                    from.clone(),
+                    to.clone(),
+                    threads,
+                );
             }
         });
         handles.push(h);
