@@ -38,7 +38,7 @@ use super::{Config, Result};
 
 const DEFAULT_COPROCESSOR_BATCH: usize = 256;
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
-const MAX_SEND_MESSAGE_LEN: usize = 1024 * 1024 * 1024;
+const MAX_SEND_MESSAGE_LEN: usize = 2 >> 30;
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
