@@ -94,9 +94,18 @@ impl FnCall {
             | ScalarFuncSig::LogicalXor
             | ScalarFuncSig::DivideDecimal
             | ScalarFuncSig::DivideReal
+            | ScalarFuncSig::IntDivideInt
+            | ScalarFuncSig::IntDivideDecimal
+            | ScalarFuncSig::ModReal
+            | ScalarFuncSig::ModDecimal
+            | ScalarFuncSig::ModInt
             | ScalarFuncSig::BitAndSig
             | ScalarFuncSig::BitOrSig
             | ScalarFuncSig::BitXorSig
+            | ScalarFuncSig::LeftShift
+            | ScalarFuncSig::RightShift
+            | ScalarFuncSig::RegexpSig
+            | ScalarFuncSig::RegexpBinarySig
             | ScalarFuncSig::DateFormatSig => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -181,7 +190,9 @@ impl FnCall {
             | ScalarFuncSig::FloorDecToInt
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
-            | ScalarFuncSig::BitNegSig => (1, 1),
+            | ScalarFuncSig::BitCount
+            | ScalarFuncSig::BitNegSig
+            | ScalarFuncSig::BitLength => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -218,7 +229,19 @@ impl FnCall {
             | ScalarFuncSig::InDecimal
             | ScalarFuncSig::InTime
             | ScalarFuncSig::InDuration
-            | ScalarFuncSig::InJson => (2, usize::MAX),
+            | ScalarFuncSig::InJson
+            | ScalarFuncSig::GreatestInt
+            | ScalarFuncSig::GreatestReal
+            | ScalarFuncSig::GreatestDecimal
+            | ScalarFuncSig::GreatestString
+            | ScalarFuncSig::GreatestTime
+            | ScalarFuncSig::LeastInt
+            | ScalarFuncSig::LeastReal
+            | ScalarFuncSig::LeastDecimal
+            | ScalarFuncSig::LeastString
+            | ScalarFuncSig::LeastTime
+            | ScalarFuncSig::IntervalInt
+            | ScalarFuncSig::IntervalReal => (2, usize::MAX),
 
             ScalarFuncSig::JsonSetSig
             | ScalarFuncSig::JsonInsertSig
@@ -446,6 +469,9 @@ dispatch_call! {
         PlusInt => plus_int,
         MinusInt => minus_int,
         MultiplyInt => multiply_int,
+        IntDivideInt => intdivide_int,
+        IntDivideDecimal => intdivide_decimal,
+        ModInt => mod_int,
 
         LogicalAnd => logical_and,
         LogicalOr => logical_or,
@@ -479,13 +505,24 @@ dispatch_call! {
 
         CoalesceInt => coalesce_int,
         CaseWhenInt => case_when_int,
+        GreatestInt => greatest_int,
+        LeastInt => least_int,
+        IntervalInt => interval_int,
+        IntervalReal => interval_real,
 
         LikeSig => like,
+        RegexpSig => regexp,
+        RegexpBinarySig => regexp_binary,
+
+        BitLength => bit_length,
 
         BitAndSig => bit_and,
         BitNegSig => bit_neg,
         BitOrSig => bit_or,
         BitXorSig => bit_xor,
+        BitCount => bit_count,
+        LeftShift => left_shift,
+        RightShift => right_shift,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -500,6 +537,8 @@ dispatch_call! {
         PlusReal => plus_real,
         MinusReal => minus_real,
         MultiplyReal => multiply_real,
+        DivideReal => divide_real,
+        ModReal => mod_real,
 
         AbsReal => abs_real,
         CeilReal => ceil_real,
@@ -510,7 +549,8 @@ dispatch_call! {
 
         CoalesceReal => coalesce_real,
         CaseWhenReal => case_when_real,
-        DivideReal => divide_real,
+        GreatestReal => greatest_real,
+        LeastReal => least_real,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -525,6 +565,8 @@ dispatch_call! {
         PlusDecimal => plus_decimal,
         MinusDecimal => minus_decimal,
         MultiplyDecimal => multiply_decimal,
+        DivideDecimal => divide_decimal,
+        ModDecimal => mod_decimal,
 
         AbsDecimal => abs_decimal,
         CeilDecToDec => ceil_dec_to_dec,
@@ -537,7 +579,8 @@ dispatch_call! {
 
         CoalesceDecimal => coalesce_decimal,
         CaseWhenDecimal => case_when_decimal,
-        DivideDecimal => divide_decimal,
+        GreatestDecimal => greatest_decimal,
+        LeastDecimal => least_decimal,
     }
     BYTES_CALLS {
         CastIntAsString => cast_int_as_str,
@@ -553,6 +596,8 @@ dispatch_call! {
 
         CoalesceString => coalesce_string,
         CaseWhenString => case_when_string,
+        GreatestString => greatest_string,
+        LeastString => least_string,
         JsonTypeSig => json_type,
         JsonUnquoteSig => json_unquote,
 
@@ -572,6 +617,8 @@ dispatch_call! {
 
         CoalesceTime => coalesce_time,
         CaseWhenTime => case_when_time,
+        GreatestTime => greatest_time,
+        LeastTime => least_time,
     }
     DUR_CALLS {
         CastIntAsDuration => cast_int_as_duration,

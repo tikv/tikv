@@ -23,6 +23,7 @@ mod err;
 mod fncall;
 mod json;
 mod math;
+mod string;
 mod time;
 pub use self::ctx::*;
 pub use self::err::*;

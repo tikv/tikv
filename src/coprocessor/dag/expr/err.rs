@@ -18,6 +18,7 @@ use tipb::expression::ScalarFuncSig;
 use tipb::select;
 
 use coprocessor::codec::mysql::Res;
+use regex;
 use util;
 use util::codec::Error as CError;
 
@@ -62,6 +63,12 @@ quick_error! {
         Eval(s: String,code:i32) {
             description("evaluation failed")
             display("{}", s)
+        }
+        Regex(err: regex::Error) {
+            from()
+            description("regex error")
+            display("regex error: {}", err)
+            cause(err)
         }
         Other(err: Box<error::Error + Send + Sync>) {
             from()
