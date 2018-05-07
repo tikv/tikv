@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use kvproto::importpb::*;
+use kvproto::import_kvpb::*;
 use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, DBOptions, Writable, WriteBatch as RawBatch,
               DB};
 

@@ -26,7 +26,7 @@ use mio::{self, EventLoop, EventLoopConfig, Sender};
 use rocksdb::rocksdb_options::WriteOptions;
 use rocksdb::{CompactionJobInfo, WriteBatch, DB};
 
-use kvproto::importpb::SSTMeta;
+use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb;
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse,

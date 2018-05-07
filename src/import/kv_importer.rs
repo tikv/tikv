@@ -16,7 +16,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use kvproto::importpb::*;
+use kvproto::import_kvpb::*;
 use uuid::Uuid;
 
 use config::DbConfig;

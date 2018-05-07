@@ -15,7 +15,7 @@ use std::boxed::FnBox;
 use std::fmt;
 use std::time::Instant;
 
-use kvproto::importpb::SSTMeta;
+use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::RegionEpoch;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
