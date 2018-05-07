@@ -13,7 +13,7 @@
 
 use std::fmt;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use futures::sync::mpsc;
 use futures::{future, Future, Sink, Stream};
@@ -27,7 +27,7 @@ use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, Le
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 use pd::{Config, PdFuture};
 use util::security::SecurityManager;
-use util::time::duration_to_sec;
+use util::time::{duration_to_sec, time_now_sec};
 use util::{Either, HandyRwLock};
 
 const CQ_COUNT: usize = 1;
@@ -300,10 +300,10 @@ impl PdClient for RpcClient {
         req.set_bytes_read(region_stat.read_bytes);
         req.set_keys_read(region_stat.read_bytes);
         req.set_approximate_size(region_stat.approximate_size);
-
-        let now = SystemTime::now();
-        let ts = now.duration_since(UNIX_EPOCH).unwrap().as_secs();
-        req.set_timestamp(ts);
+        let mut interval = pdpb::TimeInterval::new();
+        interval.set_start_timestamp(region_stat.last_report_ts);
+        interval.set_end_timestamp(time_now_sec());
+        req.set_interval(interval);
 
         let executor = |client: &RwLock<Inner>, req: pdpb::RegionHeartbeatRequest| {
             let mut inner = client.wl();
@@ -381,13 +381,13 @@ impl PdClient for RpcClient {
             .execute()
     }
 
-    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<()> {
+    fn store_heartbeat(&self, mut stats: pdpb::StoreStats) -> PdFuture<()> {
         let timer = Instant::now();
 
         let mut req = pdpb::StoreHeartbeatRequest::new();
         req.set_header(self.header());
+        stats.mut_interval().set_end_timestamp(time_now_sec());
         req.set_stats(stats);
-
         let executor = move |client: &RwLock<Inner>, req: pdpb::StoreHeartbeatRequest| {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client
