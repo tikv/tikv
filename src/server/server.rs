@@ -17,7 +17,7 @@ use std::sync::{Arc, RwLock};
 
 use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
 use kvproto::debugpb_grpc::create_debug;
-use kvproto::importpb_grpc::create_import_sst;
+use kvproto::import_sstpb_grpc::create_import_sst;
 use kvproto::tikvpb_grpc::*;
 
 use coprocessor::{self, EndPointHost, EndPointTask};
