@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use slog::{self, Drain};
-use slog_async;
-use slog_term;
+use slog::{Drain, Logger};
+use slog_async::Async;
+use slog_term::{FullFormat, PlainDecorator, TermDecorator};
 use std::env;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
@@ -42,10 +42,10 @@ macro_rules! fatal {
 
 pub fn init_log(config: &TiKvConfig) {
     if config.log_file.is_empty() {
-        let decorator = slog_term::TermDecorator::new().build();
-        let drain = slog_term::FullFormat::new(decorator).build().fuse();
-        let drain = slog_async::Async::new(drain).build().fuse();
-        let logger = slog::Logger::root_typed(drain, slog_o!());
+        let decorator = TermDecorator::new().build();
+        let drain = FullFormat::new(decorator).build().fuse();
+        let drain = Async::new(drain).build().fuse();
+        let logger = Logger::root_typed(drain, slog_o!());
         logger::init_log(logger, config.log_level).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {:?}", e);
         });
@@ -57,10 +57,10 @@ pub fn init_log(config: &TiKvConfig) {
                 e
             );
         });
-        let decorator = slog_term::PlainDecorator::new(logger);
-        let drain = slog_term::FullFormat::new(decorator).build().fuse();
-        let drain = slog_async::Async::new(drain).build().fuse();
-        let logger = slog::Logger::root_typed(drain, slog_o!());
+        let decorator = PlainDecorator::new(logger);
+        let drain = FullFormat::new(decorator).build().fuse();
+        let drain = Async::new(drain).build().fuse();
+        let logger = Logger::root_typed(drain, slog_o!());
         logger::init_log(logger, config.log_level).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {:?}", e);
         });
