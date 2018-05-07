@@ -389,14 +389,21 @@ pub struct Options {
     pub lock_ttl: u64,
     pub skip_constraint_check: bool,
     pub key_only: bool,
+    pub reverse_scan: bool,
 }
 
 impl Options {
-    pub fn new(lock_ttl: u64, skip_constraint_check: bool, key_only: bool) -> Options {
+    pub fn new(
+        lock_ttl: u64,
+        skip_constraint_check: bool,
+        key_only: bool,
+        reverse_scan: bool,
+    ) -> Options {
         Options {
             lock_ttl,
             skip_constraint_check,
             key_only,
+            reverse_scan,
         }
     }
 }
@@ -657,23 +664,31 @@ impl Storage {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                     );
-                    snap_store
-                        .scanner(ScanMode::Forward, options.key_only, None, None)
-                        .and_then(|mut scanner| {
-                            let res = scanner.scan(start_key, limit);
-                            let statistics = scanner.get_statistics();
-                            thread_ctx.collect_scan_count(CMD, statistics);
-                            thread_ctx.collect_read_flow(ctx.get_region_id(), statistics);
-                            res
-                        })
-                        .map_err(Error::from)
-                        .map(|results| {
-                            thread_ctx.collect_key_reads(CMD, results.len() as u64);
-                            results
-                                .into_iter()
-                                .map(|x| x.map_err(Error::from))
-                                .collect()
-                        })
+
+                    let scan_mode = if !options.reverse_scan {
+                        ScanMode::Forward
+                    } else {
+                        ScanMode::Backward
+                    };
+
+                    let mut scanner = snap_store.scanner(scan_mode, options.key_only, None, None)?;
+                    let res = if !options.reverse_scan {
+                        scanner.scan(start_key, limit)
+                    } else {
+                        scanner.reverse_scan(start_key, limit)
+                    };
+
+                    let statistics = scanner.get_statistics();
+                    thread_ctx.collect_scan_count(CMD, statistics);
+                    thread_ctx.collect_read_flow(ctx.get_region_id(), statistics);
+
+                    res.map_err(Error::from).map(|results| {
+                        thread_ctx.collect_key_reads(CMD, results.len() as u64);
+                        results
+                            .into_iter()
+                            .map(|x| x.map_err(Error::from))
+                            .collect()
+                    })
                 })
                 .then(move |r| {
                     _timer.observe_duration();
