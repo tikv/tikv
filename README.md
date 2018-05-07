@@ -87,12 +87,17 @@ At this point you should be able to build TiKV:
 make build
 ```
 
-Compiling the full codebase takes quite some time, so you may find it best to use `cargo check` during your development workflow to make sure that the code will compile, without completely compiling it.
-
-Before making a PR you should ensure the codebase if properly formatted:
+While interactively developing you may prefer using `cargo check`, which will do parse, borrow check, and lint run on your code, but not actually compile it. It is particularly handy alongside `cargo-watch` which will run a command each time you change a file.
 
 ```bash
-make format
+cargo install cargo-watch
+cargo watch -s "cargo check --features dev"
+```
+
+When you're ready to test out your changes you should use the `dev` task. It will format your codebase, build with `clippy` enabled, and run tests. This should run without fail before you make a PR.
+
+```bash
+make dev
 ```
 
 You can run the full test suite locally, or just run a specific test:
