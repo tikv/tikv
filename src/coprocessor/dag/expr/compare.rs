@@ -279,7 +279,7 @@ impl FnCall {
 
     pub fn interval_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let target = match self.children[0].eval_int(ctx, row) {
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(e),
             Ok(None) => return Ok(Some(-1)),
             Ok(Some(v)) => v,
         };
@@ -290,7 +290,7 @@ impl FnCall {
         while left < right {
             let mid = left + (right - left) / 2;
             let m = match self.children[mid].eval_int(ctx, row) {
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(e),
                 Ok(None) => target,
                 Ok(Some(v)) => v,
             };
@@ -315,7 +315,7 @@ impl FnCall {
 
     pub fn interval_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let target = match self.children[0].eval_real(ctx, row) {
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(e),
             Ok(None) => return Ok(Some(-1)),
             Ok(Some(v)) => v,
         };
@@ -325,7 +325,7 @@ impl FnCall {
         while left < right {
             let mid = left + (right - left) / 2;
             let m = match self.children[mid].eval_real(ctx, row) {
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(e),
                 Ok(None) => target,
                 Ok(Some(v)) => v,
             };
@@ -1033,7 +1033,7 @@ mod test {
     fn test_greatest_and_least() {
         let s1 = "你好".as_bytes().to_owned();
         let s2 = "你好啊".as_bytes().to_owned();
-        let s3 = "nihaoa".as_bytes().to_owned();
+        let s3 = b"nihaoa".to_owned().to_vec();
         let t1 = Time::parse_utc_datetime("2012-12-12 12:00:39", 0).unwrap();
         let t2 = Time::parse_utc_datetime("2012-12-24 12:00:39", 0).unwrap();
         let t3 = Time::parse_utc_datetime("2012-12-31 12:00:39", 0).unwrap();

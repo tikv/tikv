@@ -35,9 +35,9 @@ mod test {
     #[test]
     fn test_bit_length() {
         let cases = vec![
-            (Datum::Bytes("hi".as_bytes().to_owned()), Datum::I64(16)),
+            (Datum::Bytes(b"hi".to_owned().to_vec()), Datum::I64(16)),
             (Datum::Bytes("你好".as_bytes().to_owned()), Datum::I64(48)),
-            (Datum::Bytes("".as_bytes().to_owned()), Datum::I64(0)),
+            (Datum::Bytes(b"".to_owned().to_vec()), Datum::I64(0)),
             (Datum::Null, Datum::Null),
         ];
         let mut ctx = EvalContext::default();

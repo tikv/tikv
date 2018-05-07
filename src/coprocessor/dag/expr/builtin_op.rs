@@ -180,13 +180,8 @@ impl FnCall {
 
     pub fn bit_count(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try_opt!(self.children[0].eval_int(ctx, row));
-        let mut cnt = 0;
-        let mut remains = lhs as u64;
-        while remains != 0 {
-            cnt += 1;
-            remains = (remains - 1) & remains;
-        }
-        Ok(Some(cnt))
+        let res = (lhs as u64).count_ones();
+        Ok(Some(i64::from(res)))
     }
 
     pub fn left_shift(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {

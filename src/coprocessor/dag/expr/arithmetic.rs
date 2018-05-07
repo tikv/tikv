@@ -209,47 +209,40 @@ impl FnCall {
         let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
         let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
 
-        let data_type = if lus || rus {
-            "BIGINT UNSIGNED"
-        } else {
-            "BIGINT"
-        };
-
-        let overflow = Error::overflow(data_type, &format!("({} DIV {})", lhs, rhs));
         let res = match (lus, rus) {
-            (true, true) => Ok(((lhs as u64) / (rhs as u64)) as i64),
-            (false, false) => {
-                if lhs == i64::MIN && rhs == -1 {
-                    Err(overflow)
+            (true, true) => Some(((lhs as u64) / (rhs as u64)) as i64),
+            (false, false) => if lhs == i64::MIN && rhs == -1 {
+                None
+            } else {
+                Some((lhs / rhs) as i64)
+            },
+            (false, true) => if lhs < 0 {
+                if lhs.overflowing_neg().0 as u64 >= rhs as u64 {
+                    None
                 } else {
-                    Ok((lhs / rhs) as i64)
+                    Some(0 as i64)
                 }
-            }
-            (false, true) => {
-                if lhs < 0 {
-                    if lhs.overflowing_neg().0 as u64 >= rhs as u64 {
-                        Err(overflow)
-                    } else {
-                        Ok(0 as i64)
-                    }
+            } else {
+                Some(((lhs as u64) / rhs as u64) as i64)
+            },
+            (true, false) => if rhs < 0 {
+                if lhs != 0 && rhs.overflowing_neg().0 as u64 <= lhs as u64 {
+                    None
                 } else {
-                    Ok(((lhs as u64) / rhs as u64) as i64)
+                    Some(0 as i64)
                 }
-            }
-            (true, false) => {
-                if rhs < 0 {
-                    if lhs != 0 && rhs.overflowing_neg().0 as u64 <= lhs as u64 {
-                        Err(overflow)
-                    } else {
-                        Ok(0 as i64)
-                    }
-                } else {
-                    Ok(((lhs as u64) / (rhs as u64)) as i64)
-                }
-            }
+            } else {
+                Some(((lhs as u64) / (rhs as u64)) as i64)
+            },
         };
-
-        res.map(Some)
+        res.ok_or_else(|| {
+            let data_type = if lus || rus {
+                "BIGINT UNSIGNED"
+            } else {
+                "BIGINT"
+            };
+            Error::overflow(data_type, &format!("({} DIV {})", lhs, rhs))
+        }).map(Some)
     }
 
     pub fn intdivide_decimal(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
