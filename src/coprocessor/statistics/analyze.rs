@@ -20,14 +20,15 @@ use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, Analyz
 use tipb::executor::TableScan;
 use tipb::schema::ColumnInfo;
 
+use storage::{Snapshot, SnapshotStore};
+
+use coprocessor::codec::datum;
+use coprocessor::dag::executor::{Executor, ExecutorMetrics, IndexScanExecutor, TableScanExecutor};
+use coprocessor::*;
+
 use super::cmsketch::CMSketch;
 use super::fmsketch::FMSketch;
 use super::histogram::Histogram;
-use coprocessor::codec::datum;
-use coprocessor::dag::executor::{Executor, ExecutorMetrics, IndexScanExecutor, TableScanExecutor};
-use coprocessor::endpoint::ReqContext;
-use coprocessor::{Error, Result};
-use storage::{Snapshot, SnapshotStore};
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext {
@@ -46,8 +47,8 @@ impl AnalyzeContext {
         let snap = SnapshotStore::new(
             snap,
             req.get_start_ts(),
-            req_ctx.isolation_level,
-            req_ctx.fill_cache,
+            req_ctx.context.get_isolation_level(),
+            !req_ctx.context.get_not_fill_cache(),
         );
         AnalyzeContext {
             req,
