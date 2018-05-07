@@ -313,6 +313,7 @@ struct RequestTracker {
     first_range: Option<KeyRange>,
     scan_tag: &'static str,
     pri_str: &'static str,
+    desc_scan: Option<bool>, // only applicable to DAG requests
     peer: String,
 }
 
@@ -401,14 +402,18 @@ impl Drop for RequestTracker {
             };
 
             info!(
-                "[region {}] from {:?} handle {:?} table id {:?} [{}] takes {:?} [keys: {}, hit: {}, \
-                 ranges: {} ({:?})]",
+                "[region {}] [slow-query] execute takes {:?}, wait takes {:?}, \
+                 peer: {:?}, start_ts: {:?}, table_id: {:?}, \
+                 scan_type: {} (desc: {:?}) \
+                 [keys: {}, hit: {}, ranges: {} ({:?})]",
                 self.region_id,
+                self.total_handle_time,
+                self.wait_time,
                 self.peer,
                 self.txn_start_ts,
                 table_id,
                 self.scan_tag,
-                self.total_handle_time,
+                self.desc_scan,
                 self.exec_metrics.cf_stats.total_op_count(),
                 self.exec_metrics.cf_stats.total_processed(),
                 self.ranges_len,
@@ -474,6 +479,7 @@ impl RequestTask {
         recursion_limit: u32,
     ) -> Result<RequestTask> {
         let mut table_scan = false;
+        let mut is_desc_scan: Option<bool> = None; // only used in slow query logs
         let (start_ts, cop_req) = match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut is = CodedInputStream::from_bytes(req.get_data());
@@ -481,7 +487,13 @@ impl RequestTask {
                 let mut dag = DAGRequest::new();
                 box_try!(dag.merge_from(&mut is));
                 if let Some(scan) = dag.get_executors().iter().next() {
+                    // the first executor must be table scan or index scan.
                     table_scan = scan.get_tp() == ExecType::TypeTableScan;
+                    if table_scan {
+                        is_desc_scan = Some(scan.get_tbl_scan().get_desc());
+                    } else {
+                        is_desc_scan = Some(scan.get_idx_scan().get_desc());
+                    }
                 }
                 (dag.get_start_ts(), CopRequest::DAG(dag))
             }
@@ -534,6 +546,7 @@ impl RequestTask {
             first_range: req.get_ranges().get(0).cloned(),
             scan_tag: req_ctx.get_scan_tag(),
             pri_str: get_req_pri_str(req.get_context().get_priority()),
+            desc_scan: is_desc_scan,
             peer,
         };
 
