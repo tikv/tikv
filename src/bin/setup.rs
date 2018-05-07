@@ -88,7 +88,7 @@ pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
 
 pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches) {
     if let Some(level) = matches.value_of("log-level") {
-        config.log_level = logger::get_level_by_string(level);
+        config.log_level = logger::get_level_by_string(level).unwrap();
     }
 
     if let Some(file) = matches.value_of("log-file") {

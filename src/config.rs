@@ -25,7 +25,6 @@ use std::usize;
 
 use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
               DBCompressionType, DBOptions, DBRecoveryMode};
-use serde::{Deserialize, Deserializer};
 use slog;
 use sys_info;
 
@@ -697,40 +696,25 @@ impl Default for MetricConfig {
     }
 }
 
-// This type exists purely for interacting with Serde, and using `slog::Level` should
-// be preferred.
-#[derive(Serialize, Deserialize)]
-#[serde(remote = "slog::Level")]
-#[serde(rename_all = "kebab-case")]
-pub enum Level {
-    Critical,
-    Error,
-    Warning,
-    Info,
-    Debug,
-    Trace,
-}
+pub mod log_level_serde {
+    use super::get_level_by_string;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::{Error, Unexpected}};
+    use slog::Level;
 
-impl<'de> Deserialize<'de> for Level {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Level, D::Error>
     where
         D: Deserializer<'de>,
     {
         let string = String::deserialize(deserializer)?;
-        Ok(get_level_by_string(&string).into())
+        get_level_by_string(&string)
+            .ok_or_else(|| D::Error::invalid_value(Unexpected::Str(&string), &"a valid log level"))
     }
-}
 
-impl From<slog::Level> for Level {
-    fn from(value: slog::Level) -> Self {
-        match value {
-            slog::Level::Critical => Level::Critical,
-            slog::Level::Error => Level::Error,
-            slog::Level::Warning => Level::Warning,
-            slog::Level::Info => Level::Info,
-            slog::Level::Debug => Level::Debug,
-            slog::Level::Trace => Level::Trace,
-        }
+    pub fn serialize<S>(value: &Level, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        format!("{:?}", value).serialize(serializer)
     }
 }
 
@@ -763,7 +747,7 @@ impl ReadPoolConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
-    #[serde(with = "Level")]
+    #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
     pub log_file: String,
     pub readpool: ReadPoolConfig,
@@ -1033,6 +1017,8 @@ mod test {
     use tempdir::TempDir;
 
     use super::*;
+    use slog::Level;
+    use toml;
 
     #[test]
     fn test_check_critical_cfg_with() {
@@ -1109,5 +1095,44 @@ mod test {
         assert!(tikv_cfg.validate().is_err());
         tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur * 2);
         tikv_cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn test_parse_log_level() {
+        #[derive(Serialize, Deserialize, Debug)]
+        struct LevelHolder {
+            #[serde(with = "log_level_serde")]
+            v: Level,
+        }
+
+        let legal_cases = vec![
+            ("Critical", Level::Critical),
+            ("Error", Level::Error),
+            ("Warning", Level::Warning),
+            ("Debug", Level::Debug),
+            ("Trace", Level::Trace),
+            ("Info", Level::Info),
+        ];
+        for (serialized, deserialized) in legal_cases {
+            let holder = LevelHolder { v: deserialized };
+            let res_string = toml::to_string(&holder).unwrap();
+            let exp_string = format!("v = {:?}\n", serialized);
+            assert_eq!(res_string, exp_string);
+            let res_value: LevelHolder = toml::from_str(&exp_string).unwrap();
+            assert_eq!(res_value.v, deserialized);
+        }
+
+        let compatibility_cases = vec![("Warn", Level::Warning)];
+        for (serialized, deserialized) in compatibility_cases {
+            let variant_string = format!("v = {:?}\n", serialized);
+            let res_value: LevelHolder = toml::from_str(&variant_string).unwrap();
+            assert_eq!(res_value.v, deserialized);
+        }
+
+        let illegal_cases = vec!["foobar", ""];
+        for case in illegal_cases {
+            let string = format!("v = {:?}\n", case);
+            toml::from_str::<LevelHolder>(&string).unwrap_err();
+        }
     }
 }

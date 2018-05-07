@@ -58,28 +58,29 @@ where
     init_log(filtered, level)
 }
 
-pub fn get_level_by_string(lv: &str) -> Level {
+pub fn get_level_by_string(lv: &str) -> Option<Level> {
     match &*lv.to_owned().to_lowercase() {
-        "critical" => Level::Critical,
-        "error" => Level::Error,
+        "critical" => Some(Level::Critical),
+        "error" => Some(Level::Error),
         // We support `warn` due to legacy.
-        "warning" | "warn" => Level::Warning,
-        "debug" => Level::Debug,
-        "trace" => Level::Trace,
-        "info" | _ => Level::Info,
+        "warning" | "warn" => Some(Level::Warning),
+        "debug" => Some(Level::Debug),
+        "trace" => Some(Level::Trace),
+        "info" => Some(Level::Info),
+        _ => None,
     }
 }
 
 #[test]
 fn test_get_level_by_string() {
     // Ensure UPPER, Capitalized, and lower case all map over.
-    assert_eq!(Level::Trace, get_level_by_string("TRACE"));
-    assert_eq!(Level::Trace, get_level_by_string("Trace"));
-    assert_eq!(Level::Trace, get_level_by_string("trace"));
+    assert_eq!(Some(Level::Trace), get_level_by_string("TRACE"));
+    assert_eq!(Some(Level::Trace), get_level_by_string("Trace"));
+    assert_eq!(Some(Level::Trace), get_level_by_string("trace"));
     // Due to legacy we need to ensure that `warn` maps to `Warning`.
-    assert_eq!(Level::Warning, get_level_by_string("warn"));
-    assert_eq!(Level::Warning, get_level_by_string("warning"));
+    assert_eq!(Some(Level::Warning), get_level_by_string("warn"));
+    assert_eq!(Some(Level::Warning), get_level_by_string("warning"));
     // Ensure that all non-defined values map to `Info`.
-    assert_eq!(Level::Info, get_level_by_string("Off"));
-    assert_eq!(Level::Info, get_level_by_string("definitely not an option"));
+    assert_eq!(None, get_level_by_string("Off"));
+    assert_eq!(None, get_level_by_string("definitely not an option"));
 }
