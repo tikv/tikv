@@ -224,6 +224,7 @@ impl<T: Read> NumberDecoder for T {}
 
 type Bytes<'a> = &'a [u8];
 
+#[inline]
 fn read_num_bytes<T, F>(size: usize, data: &mut &[u8], f: F) -> Result<T>
 where
     F: Fn(&[u8]) -> T,
@@ -265,40 +266,38 @@ pub fn decode_u64_desc(data: &mut Bytes) -> Result<u64> {
 #[inline]
 fn decode_var_i64(data: &mut Bytes) -> Result<i64> {
     let v = decode_var_u64(data)?;
-    let mut vx = v >> 1;
-    if v & 1 != 0 {
-        vx = !vx;
+    let vx = v >> 1;
+    if v & 1 == 0 {
+        Ok(vx as i64)
+    } else {
+        Ok(!vx as i64)
     }
-    Ok(vx as i64)
 }
 
 /// `decode_var_u64` decodes value encoded by `encode_var_u64` before.
 #[inline]
 pub fn decode_var_u64(data: &mut Bytes) -> Result<u64> {
-    if data.len() >= 1 && data[0] < 0x80 {
-        let res = u64::from(data[0]);
-        *data = &data[1..];
-        return Ok(res);
+    if data.len() < 10 && data.iter().find(|&&x| x < 0x80).is_none() {
+        return Err(Error::Io(io::Error::new(ErrorKind::UnexpectedEof, "eof")));
     }
-
-    let (mut x, mut s, mut i) = (0, 0, 0);
-    while i < data.len() {
-        let b = data[i];
+    let mut res = 0;
+    for i in 0..9 {
+        let b = u64::from(data[i]);
+        res |= (b & 0x7f) << (i * 7);
         if b < 0x80 {
-            if i > 9 || i == 9 && b > 1 {
-                return Err(Error::Io(io::Error::new(
-                    ErrorKind::InvalidData,
-                    "overflow",
-                )));
-            }
             *data = &data[i + 1..];
-            return Ok(x | (u64::from(b) << s));
+            return Ok(res);
         }
-        x |= u64::from(b & 0x7f) << s;
-        s += 7;
-        i += 1;
     }
-    Err(Error::Io(io::Error::new(ErrorKind::UnexpectedEof, "eof")))
+    if data[9] > 1 {
+        return Err(Error::Io(io::Error::new(
+            ErrorKind::InvalidData,
+            "overflow",
+        )));
+    }
+    res |= ((u64::from(data[9])) & 0x7f) << (9 * 7);
+    *data = &data[10..];
+    Ok(res)
 }
 
 /// `decode_f64` decodes value encoded by `encode_f64` before.
