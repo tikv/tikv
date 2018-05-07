@@ -1,3 +1,16 @@
+// Copyright 2018 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 // FIXME(shirly): remove following later
 #![allow(dead_code)]
 use super::Result;
@@ -5,22 +18,18 @@ use super::column::Column;
 use coprocessor::codec::Datum;
 use std::sync::Arc;
 use tipb::expression::FieldType;
-// Chunk stores multiple rows of data in Apache Arrow format.
-// See https://arrow.apache.org/docs/memory_layout.html
-// Values are appended in compact format and can be directly accessed without decoding.
-// When the chunk is done processing, we can reuse the allocated memory by resetting it.
-pub struct Chunk {
-    columns: Vec<Column>,
-    // num_virtual_rows indicates the number of virtual rows, witch have zero columns.
-    // It is used only when this Chunk doesn't hold any data, i.e. "len(columns)==0".
-    num_virtual_rows: usize,
-}
 
 const CHUNK_INITIAL_CAPACITY: usize = 32;
 
-pub struct Row {
-    c: Arc<Chunk>,
-    idx: usize,
+/// Chunk stores multiple rows of data in Apache Arrow format.
+/// See https://arrow.apache.org/docs/memory_layout.html
+/// Values are appended in compact format and can be directly accessed without decoding.
+/// When the chunk is done processing, we can reuse the allocated memory by resetting it.
+pub struct Chunk {
+    columns: Vec<Column>,
+    // num_virtual_rows indicates the number of virtual rows, which have zero columns.
+    // It is used only when this Chunk doesn't hold any data, i.e. "len(columns)==0".
+    num_virtual_rows: usize,
 }
 
 impl Chunk {
@@ -94,6 +103,11 @@ impl ArcChunk {
     }
 }
 
+pub struct Row {
+    c: Arc<Chunk>,
+    idx: usize,
+}
+
 impl Row {
     pub fn new(c: Arc<Chunk>, idx: usize) -> Row {
         Row { c, idx }
@@ -123,7 +137,6 @@ impl Row {
     }
 
     pub fn get_datum(&self, col_idx: usize, fp: &FieldType) -> Result<Datum> {
-        println!("get col_idx:{}", col_idx);
         self.c.columns[col_idx].get_datum(self.idx, fp)
     }
 }

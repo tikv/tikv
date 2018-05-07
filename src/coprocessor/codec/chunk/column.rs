@@ -1,10 +1,22 @@
+// Copyright 2018 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use super::Result;
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use coprocessor::codec::mysql::{types, Decimal, DecimalDecoder, DecimalEncoder, Duration,
                                 DurationDecoder, DurationEncoder, Json, JsonDecoder, JsonEncoder,
                                 Time, TimeDecoder, TimeEncoder};
-use std::io::Write;
 use tipb::expression::FieldType;
 use util::codec::number::{NumberDecoder, NumberEncoder};
 #[derive(Default)]
@@ -99,7 +111,7 @@ impl Column {
         Column {
             fixed_len,
             data: Vec::with_capacity(fixed_len * init_cap),
-            null_bitmap: Vec::with_capacity(init_cap >> 3),
+            null_bitmap: Vec::with_capacity(init_cap / 8),
             ..Default::default()
         }
     }
@@ -110,11 +122,12 @@ impl Column {
         Column {
             var_offsets: offsets,
             data: Vec::with_capacity(4 * init_cap),
-            null_bitmap: Vec::with_capacity(init_cap >> 3),
+            null_bitmap: Vec::with_capacity(init_cap / 8),
             ..Default::default()
         }
     }
 
+    #[inline]
     fn is_fixed(&self) -> bool {
         self.fixed_len > 0
     }
@@ -134,7 +147,7 @@ impl Column {
         if let Some(null_byte) = self.null_bitmap.get(row_idx >> 3) {
             null_byte & (1 << ((row_idx) & 7)) == 0
         } else {
-            false //TODO:tidb would panic here
+            panic!("index out of range");
         }
     }
 
@@ -216,7 +229,7 @@ impl Column {
     }
 
     pub fn append_bytes(&mut self, byte: &[u8]) -> Result<()> {
-        self.data.write_all(byte)?;
+        self.data.extend_from_slice(byte);
         self.finished_append_var()
     }
 
