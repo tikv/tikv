@@ -1519,7 +1519,7 @@ fn test_reverse() {
 pub fn handle_request(end_point: &Worker<EndPointTask>, req: Request) -> Response {
     let (tx, rx) = oneshot::channel();
     let on_resp = OnResponse::Unary(tx);
-    let req = RequestTask::new(req, on_resp, 100).unwrap();
+    let req = RequestTask::new(String::from("127.0.0.1"), req, on_resp, 100).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();
     rx.wait().unwrap()
 }
@@ -1541,7 +1541,12 @@ where
     F: FnMut(&Response) + Send + 'static,
 {
     let (stream_tx, stream_rx) = futures_mpsc::channel(10);
-    let req = RequestTask::new(req, OnResponse::Streaming(stream_tx), 100).unwrap();
+    let req = RequestTask::new(
+        String::from("127.0.0.1"),
+        req,
+        OnResponse::Streaming(stream_tx),
+        100,
+    ).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();
     stream_rx
         .wait()
