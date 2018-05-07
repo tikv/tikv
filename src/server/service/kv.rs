@@ -960,7 +960,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let (tx, rx) = oneshot::channel();
         let on_resp = OnResponse::Unary(tx);
-        let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
+        let req_task = match RequestTask::new(ctx.peer(), req, on_resp, self.recursion_limit) {
             Ok(req_task) => req_task,
             Err(e) => {
                 let mut metrics = BasicLocalMetrics::default();
@@ -1004,7 +1004,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let (tx, rx) = futures_mpsc::channel(self.stream_channel_size);
         let on_resp = OnResponse::Streaming(tx);
-        let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
+        let req_task = match RequestTask::new(ctx.peer(), req, on_resp, self.recursion_limit) {
             Ok(req_task) => req_task,
             Err(e) => {
                 let mut metrics = BasicLocalMetrics::default();
