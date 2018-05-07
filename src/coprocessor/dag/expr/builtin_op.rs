@@ -195,7 +195,7 @@ impl FnCall {
 
         let result = match (lhs as u64).checked_shl(rhs as u32) {
             Some(v) => v as i64,
-            None => 0
+            None => 0,
         };
         Ok(Some(result))
     }
@@ -206,7 +206,7 @@ impl FnCall {
 
         let result = match (lhs as u64).checked_shr(rhs as u32) {
             Some(v) => v as i64,
-            None => 0
+            None => 0,
         };
         Ok(Some(result))
     }
@@ -572,7 +572,9 @@ mod test {
             let rhs = datum_expr(tt.1);
             let exp = tt.2;
 
-            let op = Expression::build(&mut ctx, fncall_expr(ScalarFuncSig::LeftShift, &[lhs, rhs])).unwrap();
+            let op =
+                Expression::build(&mut ctx, fncall_expr(ScalarFuncSig::LeftShift, &[lhs, rhs]))
+                    .unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -582,7 +584,11 @@ mod test {
     fn test_right_shift() {
         let cases = vec![
             (Datum::I64(123), Datum::I64(2), Datum::I64(30)),
-            (Datum::I64(-123), Datum::I64(2), Datum::I64(4611686018427387873)),
+            (
+                Datum::I64(-123),
+                Datum::I64(2),
+                Datum::I64(4611686018427387873),
+            ),
             (Datum::Null, Datum::I64(0), Datum::Null),
             (Datum::I64(0), Datum::Null, Datum::Null),
             (Datum::Null, Datum::Null, Datum::Null),
@@ -593,7 +599,10 @@ mod test {
             let rhs = datum_expr(tt.1);
             let exp = tt.2;
 
-            let op = Expression::build(&mut ctx, fncall_expr(ScalarFuncSig::RightShift, &[lhs, rhs])).unwrap();
+            let op = Expression::build(
+                &mut ctx,
+                fncall_expr(ScalarFuncSig::RightShift, &[lhs, rhs]),
+            ).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }

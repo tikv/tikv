@@ -217,15 +217,14 @@ impl FnCall {
 
         let overflow = Error::overflow(data_type, &format!("({} DIV {})", lhs, rhs));
         let res = match (lus, rus) {
-            (true, true) =>
-                Ok(((lhs as u64) / (rhs as u64)) as i64),
+            (true, true) => Ok(((lhs as u64) / (rhs as u64)) as i64),
             (false, false) => {
                 if lhs == i64::MIN && rhs == -1 {
                     Err(overflow)
                 } else {
                     Ok((lhs / rhs) as i64)
                 }
-            },
+            }
             (false, true) => {
                 if lhs < 0 {
                     if lhs.overflowing_neg().0 as u64 >= rhs as u64 {
@@ -236,7 +235,7 @@ impl FnCall {
                 } else {
                     Ok(((lhs as u64) / rhs as u64) as i64)
                 }
-            },
+            }
             (true, false) => {
                 if rhs < 0 {
                     if lhs != 0 && rhs.overflowing_neg().0 as u64 <= lhs as u64 {
@@ -259,17 +258,13 @@ impl FnCall {
         let overflow = Error::overflow("BIGINT", &format!("({} DIV {})", lhs, rhs));
         match lhs.into_owned() / rhs.into_owned() {
             Some(v) => match v {
-                Res::Ok(v) => {
-                        match v.as_i64() {
-                            Res::Ok(v_i64) => Ok(Some(v_i64)),
-                            Res::Truncated(v_i64) => Ok(Some(v_i64)),
-                            Res::Overflow(_) => Err(overflow)
-                        }
-                    }
-                Res::Truncated(v) => Err(Error::Truncated(format!("{} truncated", v))),
-                Res::Overflow(_) => {
-                    Err(overflow)
+                Res::Ok(v) => match v.as_i64() {
+                    Res::Ok(v_i64) => Ok(Some(v_i64)),
+                    Res::Truncated(v_i64) => Ok(Some(v_i64)),
+                    Res::Overflow(_) => Err(overflow),
                 },
+                Res::Truncated(v) => Err(Error::Truncated(format!("{} truncated", v))),
+                Res::Overflow(_) => Err(overflow),
             },
             None => Ok(None),
         }
@@ -309,7 +304,7 @@ impl FnCall {
         let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
         let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
         if rhs == 0 {
-            return Ok(None)
+            return Ok(None);
         }
         let res = match (lus, rus) {
             (true, true) => ((lhs as u64) % (rhs as u64)) as i64,
@@ -600,18 +595,18 @@ mod test {
                 Datum::Null,
                 Datum::Null,
             ), // TODO: support precision in divide.
-               // (
-               //     ScalarFuncSig::DivideReal,
-               //     Datum::F64(-12.3),
-               //     Datum::F64(41f64),
-               //     Datum::F64(-0.3),
-               // ),
-               // (
-               //     ScalarFuncSig::DivideReal,
-               //     Datum::F64(12.3),
-               //     Datum::F64(0.3),
-               //     Datum::F64(41f64)
-               // )
+            // (
+            //     ScalarFuncSig::DivideReal,
+            //     Datum::F64(-12.3),
+            //     Datum::F64(41f64),
+            //     Datum::F64(-0.3),
+            // ),
+            // (
+            //     ScalarFuncSig::DivideReal,
+            //     Datum::F64(12.3),
+            //     Datum::F64(0.3),
+            //     Datum::F64(41f64)
+            // )
             (
                 ScalarFuncSig::ModReal,
                 Datum::F64(1.0),
@@ -920,26 +915,10 @@ mod test {
                 Datum::I64(i64::MIN),
                 Datum::I64(-1),
             ),
-            (
-                ScalarFuncSig::IntDivideInt,
-                Datum::I64(-1),
-                Datum::U64(1),
-            ),
-            (
-                ScalarFuncSig::IntDivideInt,
-                Datum::I64(-2),
-                Datum::U64(1),
-            ),
-            (
-                ScalarFuncSig::IntDivideInt,
-                Datum::U64(1),
-                Datum::I64(-1),
-            ),
-            (
-                ScalarFuncSig::IntDivideInt,
-                Datum::U64(2),
-                Datum::I64(-1),
-            ),
+            (ScalarFuncSig::IntDivideInt, Datum::I64(-1), Datum::U64(1)),
+            (ScalarFuncSig::IntDivideInt, Datum::I64(-2), Datum::U64(1)),
+            (ScalarFuncSig::IntDivideInt, Datum::U64(1), Datum::I64(-1)),
+            (ScalarFuncSig::IntDivideInt, Datum::U64(2), Datum::I64(-1)),
             (
                 ScalarFuncSig::IntDivideDecimal,
                 Datum::Dec(Decimal::from(i64::MIN)),
