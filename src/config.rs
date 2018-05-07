@@ -49,6 +49,7 @@ const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
+const DEFAULT_LOG_ROTATION_SIZE: u64 = 4096 * MB as u64;
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = sys_info::mem_info().unwrap().total * KB;
@@ -749,6 +750,7 @@ pub struct TiKvConfig {
     #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
     pub log_file: String,
+    pub log_rotation_size: ReadableSize,
     pub readpool: ReadPoolConfig,
     pub server: ServerConfig,
     pub storage: StorageConfig,
@@ -768,6 +770,7 @@ impl Default for TiKvConfig {
         TiKvConfig {
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
+            log_rotation_size: ReadableSize(DEFAULT_LOG_ROTATION_SIZE),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
