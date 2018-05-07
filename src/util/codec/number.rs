@@ -280,7 +280,7 @@ pub fn decode_var_u64(data: &mut Bytes) -> Result<u64> {
         *data = &data[1..];
         return Ok(res);
     }
-    
+
     let (mut x, mut s, mut i) = (0, 0, 0);
     while i < data.len() {
         let b = data[i];
