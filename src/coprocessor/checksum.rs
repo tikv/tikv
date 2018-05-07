@@ -21,8 +21,7 @@ use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, Check
 use storage::{Snapshot, SnapshotStore};
 
 use super::dag::executor::{ExecutorMetrics, ScanOn, Scanner};
-use super::endpoint::ReqContext;
-use super::{Error, Result};
+use coprocessor::*;
 
 // `ChecksumContext` is used to handle `ChecksumRequest`
 pub struct ChecksumContext {
@@ -37,13 +36,13 @@ impl ChecksumContext {
         req: ChecksumRequest,
         ranges: Vec<KeyRange>,
         snap: Box<Snapshot>,
-        ctx: &ReqContext,
+        req_ctx: &ReqContext,
     ) -> ChecksumContext {
         let store = SnapshotStore::new(
             snap,
             req.get_start_ts(),
-            ctx.isolation_level,
-            ctx.fill_cache,
+            req_ctx.context.get_isolation_level(),
+            !req_ctx.context.get_not_fill_cache(),
         );
         ChecksumContext {
             req,
