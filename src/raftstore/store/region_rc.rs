@@ -186,17 +186,17 @@ and `R3` is changed.
 */
 
 use std::hash::{Hash, Hasher};
+use std::mem;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use util;
-use util::collections::{HashMap, HashSet};
+use util::collections::HashSet;
 
-/// A struct represents an atomic variable, used in this module only so that it does not need
-/// to be `Sync`.
+/// A struct represents an atomic variable.
 #[derive(Debug)]
-struct RefHolder {
+pub struct RefHolder {
     ref_count: Arc<AtomicU64>,
 }
 
@@ -236,13 +236,12 @@ impl RefHolder {
     }
 }
 
-/// A struct to maintain reference counter for all regions.
-pub struct RegionRefCounter {
-    refs: HashMap<u64, Vec<Rc<RefHolder>>>,
-}
+// All references for a region, consist of multiple `RefHolders`.
+pub type RefHolders = Vec<Rc<RefHolder>>;
 
 /// A struct to represent a single reference, used to send away.
 /// It decrease atomic value internally when dropped.
+#[derive(Debug)]
 pub struct RegionReferrer {
     ref_holder_content: Arc<AtomicU64>,
 }
@@ -268,23 +267,17 @@ impl Drop for RegionReferrer {
     }
 }
 
-impl RegionRefCounter {
-    pub fn new() -> Self {
-        Self {
-            refs: HashMap::default(),
-        }
-    }
+/// Provide functions to manage reference counts. Itself is stateless.
+pub struct RegionRefCountUtil;
 
-    /// Initialize reference counter for a region.
-    pub fn init_region(&mut self, region_id: u64) {
-        let old_value = self.refs.insert(region_id, Vec::new());
-        assert!(old_value.is_none());
+impl RegionRefCountUtil {
+    /// Initialize a region.
+    pub fn init_region() -> RefHolders {
+        RefHolders::new()
     }
 
     /// Refer a region. The region will be de-refed when `RegionReferrer` is dropped.
-    pub fn ref_region(&mut self, region_id: u64) -> RegionReferrer {
-        // TODO: clean up unused holders
-        let holders = self.refs.get_mut(&region_id).unwrap();
+    pub fn ref_region(holders: &mut RefHolders) -> RegionReferrer {
         {
             // Find a `RefHolder` which is used only in 1 region
             let holder = holders.iter().find(|holder| Rc::strong_count(holder) == 1);
@@ -300,41 +293,47 @@ impl RegionRefCounter {
         referrer
     }
 
-    /// Handle region split and update references.
-    pub fn handle_region_split(&mut self, region_id: u64, new_region_id: u64) {
-        let holders: Vec<_> = self.refs.remove(&region_id).unwrap()
-            .into_iter()
-            .filter(|holder| holder.get_ref_value() > 0) // clean up unused holders
+    /// Clean up empty region holders
+    fn cleanup_region(holders: &mut RefHolders) {
+        let mut new_holders: RefHolders = holders
+            .drain(..)
+            .filter(|holder| holder.get_ref_value() > 0)
             .collect();
-        let old_value = self.refs.insert(new_region_id, holders.clone());
-        assert!(old_value.is_none());
-        let old_value = self.refs.insert(region_id, holders);
-        assert!(old_value.is_none());
+        mem::swap(&mut new_holders, holders);
+    }
+
+    /// Handle region split and update references.
+    pub fn handle_region_split(src_region_holders: &mut RefHolders) -> RefHolders {
+        Self::cleanup_region(src_region_holders);
+        src_region_holders.clone()
     }
 
     /// Handle region merge and update references.
-    pub fn handle_region_merge(&mut self, src_region_id: u64, dest_region_id: u64) {
+    pub fn handle_region_merge(
+        src_region_holders: &mut RefHolders,
+        dest_region_holders: &mut RefHolders,
+    ) {
         // 1. naive merge
-        let mut dest_holders = self.refs.remove(&dest_region_id).unwrap();
-        let mut src_holders = self.refs.remove(&src_region_id).unwrap();
-        dest_holders.append(&mut src_holders);
+        dest_region_holders.append(src_region_holders);
 
         // 2. deduplicate
-        let dedup_dest_holders = dest_holders
+        let mut dedup_dest_holders = dest_region_holders
             .drain(..)
             .collect::<HashSet<_>>()
             .into_iter()
-            .filter(|holder| holder.get_ref_value() > 0) // clean up unused holders
             .collect::<Vec<_>>();
 
-        // 3. insert back
-        let old_value = self.refs.insert(dest_region_id, dedup_dest_holders);
-        assert!(old_value.is_none());
+        // 3. clean up
+        Self::cleanup_region(&mut dedup_dest_holders);
+
+        // 4. update
+        mem::swap(&mut dedup_dest_holders, dest_region_holders);
     }
 
     /// Get region reference counts.
-    pub fn get_region_refs(&self, region_id: u64) -> u64 {
-        self.refs[&region_id]
+    #[allow(ptr_arg)]
+    pub fn get_region_refs(region_holders: &RefHolders) -> u64 {
+        region_holders
             .iter()
             .map(|holder| holder.get_ref_value())
             .sum()
@@ -344,6 +343,53 @@ impl RegionRefCounter {
 #[cfg(test)]
 mod test {
     use super::*;
+    use util::collections::HashMap;
+
+    struct RegionRefCounter {
+        refs: HashMap<u64, RefHolders>,
+    }
+
+    impl RegionRefCounter {
+        fn new() -> Self {
+            Self {
+                refs: HashMap::default(),
+            }
+        }
+
+        fn init_region(&mut self, region_id: u64) {
+            assert!(
+                self.refs
+                    .insert(region_id, RegionRefCountUtil::init_region())
+                    .is_none()
+            );
+        }
+
+        fn get_region_refs(&self, region_id: u64) -> u64 {
+            let holders = &self.refs[&region_id];
+            RegionRefCountUtil::get_region_refs(holders)
+        }
+
+        fn handle_region_split(&mut self, src_region_id: u64, new_region_id: u64) {
+            let new_holders = {
+                let mut src_holders = self.refs.get_mut(&src_region_id).unwrap();
+                RegionRefCountUtil::handle_region_split(&mut src_holders)
+            };
+            assert!(self.refs.insert(new_region_id, new_holders).is_none());
+        }
+
+        fn handle_region_merge(&mut self, src_region_id: u64, dest_region_id: u64) {
+            let mut src_holders = self.refs.remove(&src_region_id).unwrap();
+            let mut dest_holders = self.refs.remove(&dest_region_id).unwrap();
+            RegionRefCountUtil::handle_region_merge(&mut src_holders, &mut dest_holders);
+            self.refs.insert(src_region_id, src_holders);
+            self.refs.insert(dest_region_id, dest_holders);
+        }
+
+        fn ref_region(&mut self, region_id: u64) -> RegionReferrer {
+            let mut holders = self.refs.get_mut(&region_id).unwrap();
+            RegionRefCountUtil::ref_region(&mut holders)
+        }
+    }
 
     #[test]
     fn test_init() {

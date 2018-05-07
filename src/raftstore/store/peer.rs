@@ -32,6 +32,7 @@ use time::Timespec;
 use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
            INVALID_INDEX, NO_LIMIT};
 use raftstore::coprocessor::CoprocessorHost;
+use raftstore::store::region_rc::{RefHolders, RegionRefCountUtil};
 use raftstore::store::worker::apply::ExecResult;
 use raftstore::store::worker::{Apply, ApplyRes, ApplyTask};
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
@@ -249,6 +250,8 @@ pub struct Peer {
     pending_messages: Vec<eraftpb::Message>,
 
     pub peer_stat: PeerStat,
+
+    pub references: RefHolders,
 }
 
 impl Peer {
@@ -362,6 +365,7 @@ impl Peer {
             cfg,
             pending_messages: vec![],
             peer_stat: PeerStat::default(),
+            references: RegionRefCountUtil::init_region(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1846,6 +1850,9 @@ impl Peer {
             Some(RegionSnapshot::from_snapshot(
                 snapshot.into_sync(),
                 self.region().to_owned(),
+                Some(Arc::new(RegionRefCountUtil::ref_region(
+                    &mut self.references,
+                ))),
             ))
         } else {
             None
