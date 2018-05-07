@@ -43,6 +43,7 @@ pub struct RegionStat {
     pub read_bytes: u64,
     pub read_keys: u64,
     pub approximate_size: u64,
+    pub last_report_ts: u64,
 }
 
 #[derive(Debug, PartialEq)]
