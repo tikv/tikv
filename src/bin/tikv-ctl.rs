@@ -1083,7 +1083,7 @@ fn main() {
                         .short("n")
                         .long("threads")
                         .takes_value(true)
-                        .default_value("1")
+                        .default_value("8")
                         .possible_values(&["1", "2", "4", "8", "16"])
                         .help("number of threads in one compaction")
                 )
@@ -1287,7 +1287,7 @@ fn main() {
                         .short("n")
                         .long("threads")
                         .takes_value(true)
-                        .default_value("1")
+                        .default_value("8")
                         .possible_values(&["1", "2", "4", "8", "16"])
                         .help("number of threads in one compaction")
                 ),
