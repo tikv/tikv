@@ -275,7 +275,7 @@ fn decode_var_i64(data: &mut Bytes) -> Result<i64> {
 /// `decode_var_u64` decodes value encoded by `encode_var_u64` before.
 #[inline]
 pub fn decode_var_u64(data: &mut Bytes) -> Result<u64> {
-    if data[0] < 0x80 {
+    if data.len() >= 1 && data[0] < 0x80 {
         let res = u64::from(data[0]);
         *data = &data[1..];
         return Ok(res);
