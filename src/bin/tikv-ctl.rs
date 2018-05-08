@@ -1084,7 +1084,6 @@ fn main() {
                         .long("threads")
                         .takes_value(true)
                         .default_value("8")
-                        .possible_values(&["1", "2", "4", "8", "16"])
                         .help("number of threads in one compaction")
                 )
                 .arg(
@@ -1288,7 +1287,6 @@ fn main() {
                         .long("threads")
                         .takes_value(true)
                         .default_value("8")
-                        .possible_values(&["1", "2", "4", "8", "16"])
                         .help("number of threads in one compaction")
                 ),
     );
@@ -1323,7 +1321,9 @@ fn main() {
         let from_key = sub_cmd.value_of("from").map(|k| unescape(k));
         let to_key = sub_cmd.value_of("to").map(|k| unescape(k));
         let threads_str = sub_cmd.value_of("threads").unwrap();
-        let threads = threads_str.parse::<u32>().unwrap();
+        let threads = threads_str
+            .parse::<u32>()
+            .unwrap_or_else(|e| perror_and_exit("bad threads option", e));
         return compact_whole_cluster(pd, db_type, cfs, from_key, to_key, threads, mgr);
     }
 
@@ -1399,7 +1399,9 @@ fn main() {
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
         let threads_str = matches.value_of("threads").unwrap();
-        let threads = threads_str.parse::<u32>().unwrap();
+        let threads = threads_str
+            .parse::<u32>()
+            .unwrap_or_else(|e| perror_and_exit("bad threads option", e));
         if let Some(region) = matches.value_of("region") {
             debug_executor.compact_region(host, db_type, cf, region.parse().unwrap(), threads);
         } else {

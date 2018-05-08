@@ -87,7 +87,7 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/UncP/kvproto.git"
-branch = "speed-compaction"
+branch = "add-threads-option"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
