@@ -11,115 +11,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod column;
-mod constant;
-mod fncall;
+mod arithmetic;
 mod builtin_cast;
 mod builtin_control;
 mod builtin_op;
+mod column;
 mod compare;
-mod arithmetic;
-mod math;
-mod json;
-mod time;
+mod constant;
 mod ctx;
+mod err;
+mod fncall;
+mod json;
+mod math;
+mod time;
 pub use self::ctx::*;
+pub use self::err::*;
 
-use std::{error, io, str};
 use std::borrow::Cow;
-use std::string::FromUtf8Error;
-use std::str::Utf8Error;
+use std::str;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
-use tipb::select;
 
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Res, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
 use coprocessor::codec::mysql::json::JsonDecoder;
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::mysql::{charset, types};
 use coprocessor::codec::{self, Datum};
-use util;
 use util::codec::number::NumberDecoder;
-use util::codec::Error as CError;
-
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Io(err: io::Error) {
-            from()
-            description("io error")
-            display("I/O error: {}", err)
-            cause(err)
-        }
-        Type { has: &'static str, expected: &'static str } {
-            description("type error")
-            display("type error: cannot get {:?} result from {:?} expression", expected, has)
-        }
-        Codec(err: util::codec::Error) {
-            from()
-            description("codec error")
-            display("codec error: {}", err)
-            cause(err)
-        }
-        ColumnOffset(offset: usize) {
-            description("column offset not found")
-            display("illegal column offset: {}", offset)
-        }
-        UnknownSignature(sig: ScalarFuncSig) {
-            description("Unknown signature")
-            display("Unknown signature: {:?}", sig)
-        }
-        Truncated(s:String) {
-            description("Truncated")
-            display("{}",s)
-        }
-        Overflow {
-            description("Overflow")
-            display("error Overflow")
-        }
-        Eval(s: String) {
-            description("evaluation failed")
-            display("{}", s)
-        }
-        Other(err: Box<error::Error + Send + Sync>) {
-            from()
-            cause(err.as_ref())
-            description(err.description())
-            display("unknown error {:?}", err)
-        }
-    }
-}
-
-impl Into<select::Error> for Error {
-    fn into(self) -> select::Error {
-        let mut err = select::Error::new();
-        err.set_msg(format!("{:?}", self));
-        err
-    }
-}
-
-impl From<FromUtf8Error> for Error {
-    fn from(err: FromUtf8Error) -> Error {
-        Error::Codec(CError::Encoding(err.utf8_error()))
-    }
-}
-impl From<Utf8Error> for Error {
-    fn from(err: Utf8Error) -> Error {
-        Error::Codec(CError::Encoding(err))
-    }
-}
-
-pub type Result<T> = ::std::result::Result<T, Error>;
-
-impl<T> Into<Result<T>> for Res<T> {
-    fn into(self) -> Result<T> {
-        match self {
-            Res::Ok(t) => Ok(t),
-            Res::Truncated(_) => Err(Error::Truncated("Truncated".into())),
-            Res::Overflow(_) => Err(Error::Overflow),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
@@ -212,7 +130,7 @@ impl Expression {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_string(),
-            Expression::ColumnRef(ref column) => column.eval_string(row),
+            Expression::ColumnRef(ref column) => column.eval_string(ctx, row),
             Expression::ScalarFn(ref f) => f.eval_bytes(ctx, row),
         }
     }
@@ -277,16 +195,8 @@ impl Expression {
     /// For Bit/Hex, we will get a wrong result if we convert it to int as a string value.
     /// For example, when convert `0b101` to int, the result should be 5, but we will get
     /// 101 if we regard it as a string.
-    fn is_hybrid_type(&self) -> bool {
-        match self.get_tp().get_tp() as u8 {
-            types::ENUM | types::BIT | types::SET => {
-                return true;
-            }
-            _ => {}
-        }
-        // TODO:For a constant, the field type will be inferred as `VARCHAR`
-        // when the kind of it is `HEX` or `BIT`.
-        false
+    pub fn is_hybrid_type(&self) -> bool {
+        types::is_hybrid_type(self.get_tp().get_tp() as u8)
     }
 }
 
@@ -364,17 +274,14 @@ impl Expression {
                     .map(|children| {
                         Expression::ScalarFn(FnCall {
                             sig: expr.get_sig(),
-                            children: children,
-                            tp: tp,
+                            children,
+                            tp,
                         })
                     })
             }
             ExprType::ColumnRef => {
                 let offset = expr.get_val().decode_i64().map_err(Error::from)? as usize;
-                let column = Column {
-                    offset: offset,
-                    tp: tp,
-                };
+                let column = Column { offset, tp };
                 Ok(Expression::ColumnRef(column))
             }
             unhandled => Err(box_err!("can't handle {:?} expr in DAG mode", unhandled)),
@@ -400,14 +307,15 @@ where
 
 #[cfg(test)]
 mod test {
-    use std::{i64, u64};
-    use std::sync::Arc;
-    use coprocessor::codec::{convert, mysql, Datum};
-    use coprocessor::codec::mysql::{charset, types, Decimal, DecimalEncoder, Duration, Json, Time};
+    use super::{Error, EvalConfig, EvalContext, Expression, ERR_DATA_OUT_OF_RANGE,
+                FLAG_IGNORE_TRUNCATE};
     use coprocessor::codec::mysql::json::JsonEncoder;
+    use coprocessor::codec::mysql::{charset, types, Decimal, DecimalEncoder, Duration, Json, Time};
+    use coprocessor::codec::{convert, mysql, Datum};
+    use std::sync::Arc;
+    use std::{i64, u64};
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
     use util::codec::number::{self, NumberEncoder};
-    use super::{Error, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
@@ -421,9 +329,10 @@ mod test {
 
     #[inline]
     pub fn check_overflow(e: Error) -> Result<(), ()> {
-        match e {
-            Error::Overflow => Ok(()),
-            _ => Err(()),
+        if e.code() == ERR_DATA_OUT_OF_RANGE {
+            Ok(())
+        } else {
+            Err(())
         }
     }
 

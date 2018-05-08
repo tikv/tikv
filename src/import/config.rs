@@ -18,6 +18,7 @@ use std::result::Result;
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    pub import_dir: String,
     pub num_threads: usize,
     pub stream_channel_window: usize,
 }
@@ -25,6 +26,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
+            import_dir: "/tmp/tikv/import".to_owned(),
             num_threads: 8,
             stream_channel_window: 128,
         }

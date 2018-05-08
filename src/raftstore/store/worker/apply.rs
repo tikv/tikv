@@ -13,43 +13,43 @@
 
 #![allow(dead_code)]
 
-use std::sync::Arc;
-use std::sync::mpsc::Sender;
+use std::cmp;
+use std::collections::VecDeque;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
-use std::collections::VecDeque;
-use std::cmp;
+use std::sync::Arc;
+use std::sync::mpsc::Sender;
 
-use rocksdb::{Writable, WriteBatch, DB};
-use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::RepeatedField;
+use rocksdb::rocksdb_options::WriteOptions;
+use rocksdb::{Writable, WriteBatch, DB};
 use uuid::Uuid;
 
+use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region};
-use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
-use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState,
-                             RegionLocalState};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType,
                           CommitMergeRequest, RaftCmdRequest, RaftCmdResponse, Request, Response};
-use kvproto::importpb::SSTMeta;
+use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState,
+                             RegionLocalState};
+use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
 
-use util::worker::Runnable;
-use util::{escape, rocksdb, MustConsumeVec};
-use util::time::{duration_to_sec, Instant, SlowTimer};
-use util::collections::HashMap;
-use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use import::SSTImporter;
 use raft::NO_LIMIT;
-use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::{cmd_resp, keys, util, Store};
-use raftstore::store::msg::Callback;
 use raftstore::store::engine::{Mutable, Peekable, Snapshot};
+use raftstore::store::metrics::*;
+use raftstore::store::msg::Callback;
+use raftstore::store::peer::{check_epoch, Peer};
 use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply_state,
                                      write_peer_state};
-use raftstore::store::peer::{check_epoch, Peer};
-use raftstore::store::metrics::*;
-use import::SSTImporter;
+use raftstore::store::{cmd_resp, keys, util, Store};
+use raftstore::{Error, Result};
+use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use util::collections::HashMap;
+use util::time::{duration_to_sec, Instant, SlowTimer};
+use util::worker::Runnable;
+use util::{escape, rocksdb, MustConsumeVec};
 
 use super::metrics::*;
 
@@ -65,8 +65,8 @@ pub struct PendingCmd {
 impl PendingCmd {
     fn new(index: u64, term: u64, cb: Callback) -> PendingCmd {
         PendingCmd {
-            index: index,
-            term: term,
+            index,
+            term,
             cb: Some(cb),
         }
     }
@@ -145,9 +145,9 @@ pub struct Range {
 impl Range {
     fn new(cf: String, start_key: Vec<u8>, end_key: Vec<u8>) -> Range {
         Range {
-            cf: cf,
-            start_key: start_key,
-            end_key: end_key,
+            cf,
+            start_key,
+            end_key,
         }
     }
 }
@@ -247,8 +247,8 @@ struct ApplyContextCore<'a> {
 impl<'a> ApplyContextCore<'a> {
     pub fn new(host: &'a CoprocessorHost, importer: &'a SSTImporter) -> ApplyContextCore<'a> {
         ApplyContextCore {
-            host: host,
-            importer: importer,
+            host,
+            importer,
             wb: None,
             cbs: MustConsumeVec::new("callback of apply context"),
             merged_regions: vec![],
@@ -747,7 +747,7 @@ impl ApplyDelegate {
             // clear dirty values.
             ctx.wb_mut().rollback_to_save_point().unwrap();
             match e {
-                Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
+                Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
                 _ => error!("{} execute raft command err: {:?}", self.tag, e),
             }
             (cmd_resp::new_error(e), None)
@@ -859,12 +859,17 @@ struct ExecContext {
 }
 
 impl ExecContext {
-    pub fn new(state: RaftApplyState, req: RaftCmdRequest, index: u64, term: u64) -> ExecContext {
+    pub fn new(
+        apply_state: RaftApplyState,
+        req: RaftCmdRequest,
+        index: u64,
+        term: u64,
+    ) -> ExecContext {
         ExecContext {
-            apply_state: state,
+            apply_state,
             req: Rc::new(req),
-            index: index,
-            term: term,
+            index,
+            term,
         }
     }
 }
@@ -949,9 +954,7 @@ impl ApplyDelegate {
         );
 
         // TODO: we should need more check, like peer validation, duplicated id, etc.
-        let exists = util::find_peer(&region, store_id).is_some();
         let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
-
         region.mut_region_epoch().set_conf_ver(conf_ver);
 
         match change_type {
@@ -960,26 +963,31 @@ impl ApplyDelegate {
                     .with_label_values(&["add_peer", "all"])
                     .inc();
 
-                if exists {
-                    error!(
-                        "{} can't add duplicated peer {:?} to region {:?}",
-                        self.tag, peer, self.region
-                    );
-                    return Err(box_err!(
-                        "can't add duplicated peer {:?} to region {:?}",
-                        peer,
-                        self.region
-                    ));
+                let mut exists = false;
+                if let Some(p) = util::find_peer_mut(&mut region, store_id) {
+                    exists = true;
+                    if !p.get_is_learner() || p.get_id() != peer.get_id() {
+                        error!(
+                            "{} can't add duplicated peer {:?} to region {:?}",
+                            self.tag, peer, self.region
+                        );
+                        return Err(box_err!(
+                            "can't add duplicated peer {:?} to region {:?}",
+                            peer,
+                            self.region
+                        ));
+                    } else {
+                        p.set_is_learner(false);
+                    }
                 }
-
-                // TODO: Do we allow adding peer in same node?
-
-                region.mut_peers().push(peer.clone());
+                if !exists {
+                    // TODO: Do we allow adding peer in same node?
+                    region.mut_peers().push(peer.clone());
+                }
 
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["add_peer", "success"])
                     .inc();
-
                 info!(
                     "{} add peer {:?} to region {:?}",
                     self.tag, peer, self.region
@@ -990,7 +998,25 @@ impl ApplyDelegate {
                     .with_label_values(&["remove_peer", "all"])
                     .inc();
 
-                if !exists {
+                if let Some(p) = util::remove_peer(&mut region, store_id) {
+                    // Considering `is_learner` flag in `Peer` here is by design.
+                    if &p != peer {
+                        error!(
+                            "{} remove unmatched peer: expect: {:?}, get {:?}, ignore",
+                            self.tag, peer, p
+                        );
+                        return Err(box_err!(
+                            "remove unmatched peer: expect: {:?}, get {:?}, ignore",
+                            peer,
+                            p
+                        ));
+                    }
+                    if self.id == peer.get_id() {
+                        // Remove ourself, we will destroy all region data later.
+                        // So we need not to apply following logs.
+                        self.pending_remove = true;
+                    }
+                } else {
                     error!(
                         "{} remove missing peer {:?} from region {:?}",
                         self.tag, peer, self.region
@@ -1002,18 +1028,9 @@ impl ApplyDelegate {
                     ));
                 }
 
-                if self.id == peer.get_id() {
-                    // Remove ourself, we will destroy all region data later.
-                    // So we need not to apply following logs.
-                    self.pending_remove = true;
-                }
-
-                util::remove_peer(&mut region, store_id).unwrap();
-
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["remove_peer", "success"])
                     .inc();
-
                 info!(
                     "{} remove {} from region:{:?}",
                     self.tag,
@@ -1021,7 +1038,32 @@ impl ApplyDelegate {
                     self.region
                 );
             }
-            ConfChangeType::AddLearnerNode => unimplemented!(),
+            ConfChangeType::AddLearnerNode => {
+                PEER_ADMIN_CMD_COUNTER_VEC
+                    .with_label_values(&["add_learner", "all"])
+                    .inc();
+
+                if util::find_peer(&region, store_id).is_some() {
+                    error!(
+                        "{} can't add duplicated learner {:?} to region {:?}",
+                        self.tag, peer, self.region
+                    );
+                    return Err(box_err!(
+                        "can't add duplicated learner {:?} to region {:?}",
+                        peer,
+                        self.region
+                    ));
+                }
+                region.mut_peers().push(peer.clone());
+
+                PEER_ADMIN_CMD_COUNTER_VEC
+                    .with_label_values(&["add_learner", "success"])
+                    .inc();
+                info!(
+                    "{} add learner {:?} to region {:?}",
+                    self.tag, peer, self.region
+                );
+            }
         }
 
         let state = if self.pending_remove {
@@ -1041,7 +1083,7 @@ impl ApplyDelegate {
             Some(ExecResult::ChangePeer(ChangePeer {
                 conf_change: Default::default(),
                 peer: peer.clone(),
-                region: region,
+                region,
             })),
         ))
     }
@@ -1218,7 +1260,7 @@ impl ApplyDelegate {
         Ok((
             AdminResponse::new(),
             Some(ExecResult::PrepareMerge {
-                region: region,
+                region,
                 state: merging_state,
             }),
         ))
@@ -1376,7 +1418,7 @@ impl ApplyDelegate {
         Ok((
             resp,
             Some(ExecResult::CommitMerge {
-                region: region,
+                region,
                 source: source_region.to_owned(),
             }),
         ))
@@ -1423,7 +1465,7 @@ impl ApplyDelegate {
         Ok((
             resp,
             Some(ExecResult::RollbackMerge {
-                region: region,
+                region,
                 commit: rollback.get_commit(),
             }),
         ))
@@ -1482,7 +1524,7 @@ impl ApplyDelegate {
             resp,
             Some(ExecResult::CompactLog {
                 state: apply_state.get_truncated_state().clone(),
-                first_index: first_index,
+                first_index,
             }),
         ))
     }
@@ -1536,9 +1578,9 @@ impl ApplyDelegate {
 
         assert!(ranges.is_empty() || ssts.is_empty());
         let exec_res = if !ranges.is_empty() {
-            Some(ExecResult::DeleteRange { ranges: ranges })
+            Some(ExecResult::DeleteRange { ranges })
         } else if !ssts.is_empty() {
-            Some(ExecResult::IngestSST { ssts: ssts })
+            Some(ExecResult::IngestSST { ssts })
         } else {
             None
         };
@@ -1824,13 +1866,7 @@ impl ApplyDelegate {
         let index = verify_req.get_index();
         let hash = verify_req.get_hash().to_vec();
         let resp = AdminResponse::new();
-        Ok((
-            resp,
-            Some(ExecResult::VerifyHash {
-                index: index,
-                hash: hash,
-            }),
-        ))
+        Ok((resp, Some(ExecResult::VerifyHash { index, hash })))
     }
 }
 
@@ -1843,9 +1879,9 @@ pub struct Apply {
 impl Apply {
     pub fn new(region_id: u64, term: u64, entries: Vec<Entry>) -> Apply {
         Apply {
-            region_id: region_id,
-            term: term,
-            entries: entries,
+            region_id,
+            term,
+            entries,
         }
     }
 }
@@ -1881,10 +1917,10 @@ pub struct Proposal {
 impl Proposal {
     pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback) -> Proposal {
         Proposal {
-            is_conf_change: is_conf_change,
-            index: index,
-            term: term,
-            cb: cb,
+            is_conf_change,
+            index,
+            term,
+            cb,
         }
     }
 }
@@ -1898,9 +1934,9 @@ pub struct RegionProposal {
 impl RegionProposal {
     pub fn new(id: u64, region_id: u64, props: Vec<Proposal>) -> RegionProposal {
         RegionProposal {
-            id: id,
-            region_id: region_id,
-            props: props,
+            id,
+            region_id,
+            props,
         }
     }
 }
@@ -1935,9 +1971,7 @@ impl Task {
     }
 
     pub fn destroy(region_id: u64) -> Task {
-        Task::Destroy(Destroy {
-            region_id: region_id,
-        })
+        Task::Destroy(Destroy { region_id })
     }
 }
 
@@ -2012,10 +2046,10 @@ impl Runner {
             raft_db: store.raft_engine(),
             host: Arc::clone(&store.coprocessor_host),
             importer: Arc::clone(&store.importer),
-            delegates: delegates,
-            notifier: notifier,
-            sync_log: sync_log,
-            use_delete_range: use_delete_range,
+            delegates,
+            notifier,
+            sync_log,
+            use_delete_range,
             tag: format!("[store {}]", store.store_id()),
         }
     }
@@ -2172,17 +2206,17 @@ impl Runnable<Task> for Runner {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::*;
     use std::sync::atomic::*;
+    use std::sync::*;
     use std::time::*;
 
-    use tempdir::TempDir;
-    use rocksdb::{Writable, WriteBatch, DB};
-    use protobuf::Message;
     use kvproto::metapb::RegionEpoch;
     use kvproto::raft_cmdpb::*;
+    use protobuf::Message;
     use raftstore::coprocessor::*;
     use raftstore::store::msg::WriteResponse;
+    use rocksdb::{Writable, WriteBatch, DB};
+    use tempdir::TempDir;
 
     use super::*;
     use import::test_helpers::*;
@@ -2213,10 +2247,10 @@ mod tests {
         tx: Sender<TaskRes>,
     ) -> Runner {
         Runner {
-            db: db,
-            raft_db: raft_db,
-            host: host,
-            importer: importer,
+            db,
+            raft_db,
+            host,
+            importer,
             delegates: HashMap::default(),
             notifier: tx,
             sync_log: false,
@@ -2424,10 +2458,7 @@ mod tests {
             let mut entry = Entry::new();
             entry.set_index(index);
             entry.set_term(term);
-            EntryBuilder {
-                entry: entry,
-                req: req,
-            }
+            EntryBuilder { entry, req }
         }
 
         fn capture_resp(
@@ -2710,14 +2741,14 @@ mod tests {
         let sst_range = (0, 100);
         let (mut meta1, data1) = gen_sst_file(&sst_path, sst_range);
         meta1.set_region_epoch(sst_epoch);
-        importer.create(1, &meta1).unwrap();
-        importer.append(1, &data1).unwrap();
-        importer.finish(1).unwrap();
+        let mut file1 = importer.create(&meta1).unwrap();
+        file1.append(&data1).unwrap();
+        file1.finish().unwrap();
         let (mut meta2, data2) = gen_sst_file(&sst_path, sst_range);
         meta2.mut_region_epoch().set_version(1234);
-        importer.create(2, &meta2).unwrap();
-        importer.append(2, &data2).unwrap();
-        importer.finish(2).unwrap();
+        let mut file2 = importer.create(&meta2).unwrap();
+        file2.append(&data2).unwrap();
+        file2.finish().unwrap();
 
         // IngestSST
         let put_ok = EntryBuilder::new(9, 3)

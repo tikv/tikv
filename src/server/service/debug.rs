@@ -11,17 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use fail;
+use futures::sync::oneshot;
+use futures::{future, stream, Future, Stream};
+use futures_cpupool::{Builder, CpuPool};
 use grpc::{Error as GrpcError, WriteFlags};
 use grpc::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
-use futures::{future, stream, Future, Stream};
-use futures::sync::oneshot;
-use futures_cpupool::{Builder, CpuPool};
-use protobuf::text_format::print_to_string;
-use kvproto::debugpb_grpc;
 use kvproto::debugpb::*;
+use kvproto::debugpb_grpc;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader,
                           RegionDetailResponse, StatusCmdType, StatusRequest};
-use fail;
+use protobuf::text_format::print_to_string;
 
 use raftstore::store::Engines;
 use raftstore::store::msg::Callback;
@@ -64,9 +64,9 @@ impl<T: RaftStoreRouter> Service<T> {
             .create();
         let debugger = Debugger::new(engines);
         Service {
-            pool: pool,
-            debugger: debugger,
-            raft_router: raft_router,
+            pool,
+            debugger,
+            raft_router,
         }
     }
 
@@ -205,8 +205,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
         let future = future::result(debugger.scan_mvcc(&from, &to, limit))
             .map_err(|e| error_to_grpc_error("scan_mvcc", e))
             .and_then(|iter| {
-                #[allow(deprecated)]
-                stream::iter(iter)
+                stream::iter_result(iter)
                     .map_err(|e| error_to_grpc_error("scan_mvcc", e))
                     .map(|(key, mvcc_info)| {
                         let mut resp = ScanMvccResponse::new();

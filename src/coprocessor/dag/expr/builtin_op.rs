@@ -11,11 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::i64;
 use std::borrow::Cow;
+use std::i64;
+
 use super::{Error, EvalContext, FnCall, Result};
-use coprocessor::codec::{mysql, Datum};
 use coprocessor::codec::mysql::Decimal;
+use coprocessor::codec::{mysql, Datum};
 
 impl FnCall {
     pub fn logical_and(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -95,12 +96,12 @@ impl FnCall {
         if mysql::has_unsigned_flag(u64::from(self.children[0].get_tp().get_flag())) {
             let uval = val as u64;
             if uval > i64::MAX as u64 + 1 {
-                return Err(Error::Overflow);
+                return Err(Error::overflow("BIGINT", &format!("-{}", uval)));
             } else if uval == i64::MAX as u64 + 1 {
                 return Ok(Some(i64::MIN));
             }
         } else if val == i64::MIN {
-            return Err(Error::Overflow);
+            return Err(Error::overflow("BIGINT", &format!("-{}", val)));
         }
         Ok(Some(-val))
     }
@@ -180,12 +181,12 @@ impl FnCall {
 
 #[cfg(test)]
 mod test {
-    use std::i64;
-    use tipb::expression::ScalarFuncSig;
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::Duration;
-    use coprocessor::dag::expr::{Error, EvalContext, Expression};
-    use coprocessor::dag::expr::test::{datum_expr, fncall_expr, str2dec};
+    use coprocessor::dag::expr::test::{check_overflow, datum_expr, fncall_expr, str2dec};
+    use coprocessor::dag::expr::{EvalContext, Expression};
+    use std::i64;
+    use tipb::expression::ScalarFuncSig;
 
     #[test]
     fn test_logic_op() {
@@ -406,13 +407,6 @@ mod test {
             let op = Expression::build(&mut ctx, fncall_expr(op, &[arg1])).unwrap();
             let res = op.eval_int(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
-        }
-    }
-
-    fn check_overflow(e: Error) -> Result<(), ()> {
-        match e {
-            Error::Overflow => Ok(()),
-            _ => Err(()),
         }
     }
 

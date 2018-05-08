@@ -13,13 +13,13 @@
 
 use std::mem;
 
-use coprocessor::metrics::*;
 use coprocessor::dag::executor::ExecutorMetrics;
+use coprocessor::metrics::*;
+use pd::PdTask;
+use prometheus::local::{LocalHistogramVec, LocalIntCounterVec};
 use storage::engine::{FlowStatistics, Statistics};
-use prometheus::local::{LocalCounterVec, LocalHistogramVec};
 use util::collections::HashMap;
 use util::worker::FutureScheduler;
-use pd::PdTask;
 
 /// `CopFlowStatistics` is for flow statistics, it would be reported to PD by flush.
 pub struct CopFlowStatistics {
@@ -30,7 +30,7 @@ pub struct CopFlowStatistics {
 impl CopFlowStatistics {
     pub fn new(sender: FutureScheduler<PdTask>) -> CopFlowStatistics {
         CopFlowStatistics {
-            sender: sender,
+            sender,
             data: Default::default(),
         }
     }
@@ -58,9 +58,9 @@ impl CopFlowStatistics {
 /// `ExecLocalMetrics` collects metrics for request with executors.
 pub struct ExecLocalMetrics {
     flow_stats: CopFlowStatistics,
-    scan_details: LocalCounterVec,
-    scan_counter: LocalCounterVec,
-    exec_counter: LocalCounterVec,
+    scan_details: LocalIntCounterVec,
+    scan_counter: LocalIntCounterVec,
+    exec_counter: LocalIntCounterVec,
 }
 
 impl ExecLocalMetrics {
@@ -80,8 +80,7 @@ impl ExecLocalMetrics {
             for (tag, count) in details {
                 self.scan_details
                     .with_label_values(&[type_str, cf, tag])
-                    .inc_by(count as f64)
-                    .unwrap();
+                    .inc_by(count as i64);
             }
         }
         // flow statistics group by region
@@ -106,7 +105,7 @@ pub struct BasicLocalMetrics {
     pub outdate_time: LocalHistogramVec,
     pub handle_time: LocalHistogramVec,
     pub wait_time: LocalHistogramVec,
-    pub error_cnt: LocalCounterVec,
+    pub error_cnt: LocalIntCounterVec,
     pub scan_keys: LocalHistogramVec,
 }
 

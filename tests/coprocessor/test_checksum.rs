@@ -13,13 +13,13 @@
 
 use std::u64;
 
-use protobuf::Message;
 use kvproto::coprocessor::{KeyRange, Request};
 use kvproto::kvrpcpb::{Context, IsolationLevel};
+use protobuf::Message;
 use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
 
-use tikv::coprocessor::*;
 use tikv::coprocessor::dag::{ScanOn, Scanner};
+use tikv::coprocessor::*;
 use tikv::storage::SnapshotStore;
 
 use super::test_select::*;

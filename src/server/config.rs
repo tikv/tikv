@@ -11,10 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::Result;
+
 use util::collections::HashMap;
 use util::config::{self, ReadableDuration, ReadableSize};
 use util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
-use super::Result;
 
 pub use raftstore::store::Config as RaftStoreConfig;
 pub use storage::Config as StorageConfig;
@@ -49,7 +50,8 @@ pub const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    #[serde(skip)] pub cluster_id: u64,
+    #[serde(skip)]
+    pub cluster_id: u64,
 
     // Server listening address.
     pub addr: String,
@@ -63,6 +65,8 @@ pub struct Config {
     pub grpc_concurrent_stream: usize,
     pub grpc_raft_conn_num: usize,
     pub grpc_stream_initial_window_size: ReadableSize,
+    pub grpc_keepalive_time: ReadableDuration,
+    pub grpc_keepalive_timeout: ReadableDuration,
     pub end_point_max_tasks: usize,
     pub end_point_recursion_limit: u32,
     pub end_point_stream_channel_size: usize,
@@ -73,7 +77,17 @@ pub struct Config {
     pub snap_max_total_size: ReadableSize,
 
     // Server labels to specify some attributes about this server.
-    #[serde(with = "config::order_map_serde")] pub labels: HashMap<String, String>,
+    pub labels: HashMap<String, String>,
+
+    // deprecated. use readpool.coprocessor.xx_concurrency.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub end_point_concurrency: Option<usize>,
+
+    // deprecated. use readpool.coprocessor.stack_size.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub end_point_stack_size: Option<ReadableSize>,
 }
 
 impl Default for Config {
@@ -89,7 +103,13 @@ impl Default for Config {
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
             grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
             grpc_stream_initial_window_size: ReadableSize(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE),
+            // There will be a heartbeat every secs, it's weird a connection will be idle for more
+            // than 10 senconds.
+            grpc_keepalive_time: ReadableDuration::secs(10),
+            grpc_keepalive_timeout: ReadableDuration::secs(3),
+            end_point_concurrency: None, // deprecated
             end_point_max_tasks: DEFAULT_MAX_RUNNING_TASK_COUNT,
+            end_point_stack_size: None, // deprecated
             end_point_recursion_limit: 1000,
             end_point_stream_channel_size: 8,
             end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,

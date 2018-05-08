@@ -11,41 +11,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{mem, usize};
-use std::time::Duration;
 use std::cell::RefMut;
+use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::fmt::{self, Debug, Display, Formatter};
+use std::time::Duration;
+use std::{mem, usize};
 
-use protobuf::{CodedInputStream, Message as PbMsg};
-use futures::{future, stream};
 use futures::sync::mpsc as futures_mpsc;
+use futures::{future, stream};
+use protobuf::{CodedInputStream, Message as PbMsg};
 
-use tipb::select::DAGRequest;
-use tipb::analyze::{AnalyzeReq, AnalyzeType};
-use tipb::checksum::{ChecksumRequest, ChecksumScanOn};
-use tipb::executor::ExecType;
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use kvproto::errorpb::{self, ServerIsBusy};
 use kvproto::kvrpcpb::{CommandPri, HandleTime};
+use tipb::analyze::{AnalyzeReq, AnalyzeType};
+use tipb::checksum::{ChecksumRequest, ChecksumScanOn};
+use tipb::executor::ExecType;
+use tipb::select::DAGRequest;
 
-use util::time::{duration_to_sec, Instant};
-use util::worker::{Runnable, Scheduler};
+use server::readpool::{self, ReadPool};
+use server::{Config, OnResponse};
+use storage::engine::Error as EngineError;
+use storage::{self, engine, Engine, Snapshot};
 use util::collections::HashMap;
 use util::futurepool;
-use server::{Config, OnResponse};
-use server::readpool::{self, ReadPool};
-use storage::{self, engine, Engine, Snapshot};
-use storage::engine::Error as EngineError;
+use util::time::{duration_to_sec, Instant};
+use util::worker::{Runnable, Scheduler};
 
-use super::*;
-use super::dag::DAGContext;
-use super::statistics::analyze::AnalyzeContext;
 use super::checksum::ChecksumContext;
-use super::metrics::*;
-use super::local_metrics::BasicLocalMetrics;
+use super::codec::table;
+use super::dag::DAGContext;
 use super::dag::executor::ExecutorMetrics;
+use super::local_metrics::BasicLocalMetrics;
+use super::metrics::*;
+use super::statistics::analyze::AnalyzeContext;
+use super::*;
 
 // If handle time is larger than the lower bound, the query is considered as slow query.
 const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
@@ -68,16 +69,16 @@ pub struct Host {
 impl Host {
     pub fn new(
         engine: Box<Engine>,
-        scheduler: Scheduler<Task>,
+        sched: Scheduler<Task>,
         cfg: &Config,
         pool: ReadPool<ReadPoolContext>,
     ) -> Host {
         Host {
-            engine: engine,
-            sched: scheduler,
+            engine,
+            sched,
             reqs: HashMap::default(),
             last_req_id: 0,
-            pool: pool,
+            pool,
             basic_local_metrics: BasicLocalMetrics::default(),
             max_running_task_count: cfg.end_point_max_tasks,
             running_task_count: Arc::new(AtomicUsize::new(0)),
@@ -104,7 +105,15 @@ impl Host {
     }
 
     fn handle_request(&mut self, snap: Box<Snapshot>, t: RequestTask) {
+        // Collect metrics into it before requests enter into execute pool.
+        // Otherwize collect into thread local contexts.
         let metrics = &mut self.basic_local_metrics;
+
+        if let Err(e) = t.check_outdated() {
+            let resp = err_resp(e, metrics);
+            t.on_resp.respond(resp);
+            return;
+        }
 
         let (mut tracker, req_ctx, req_handler_builder, on_resp) =
             (t.tracker, t.req_ctx, t.req_handler_builder, t.on_resp);
@@ -219,6 +228,7 @@ struct RequestTracker {
     first_range: Option<KeyRange>,
     scan_tag: &'static str,
     pri_str: &'static str,
+    peer: String,
 }
 
 impl RequestTracker {
@@ -299,11 +309,19 @@ impl Drop for RequestTracker {
         }
 
         if self.total_handle_time > SLOW_QUERY_LOWER_BOUND {
+            let table_id = if let Some(ref range) = self.first_range {
+                table::decode_table_id(range.get_start()).unwrap_or_default()
+            } else {
+                0
+            };
+
             info!(
-                "[region {}] handle {:?} [{}] takes {:?} [keys: {}, hit: {}, \
+                "[region {}] from {:?} handle {:?} table id {:?} [{}] takes {:?} [keys: {}, hit: {}, \
                  ranges: {} ({:?})]",
                 self.region_id,
+                self.peer,
                 self.txn_start_ts,
+                table_id,
                 self.scan_tag,
                 self.total_handle_time,
                 self.exec_metrics.cf_stats.total_op_count(),
@@ -312,6 +330,8 @@ impl Drop for RequestTracker {
                 self.first_range,
             );
         }
+
+        // `wait_time` is none means the request has not entered thread pool.
         if self.wait_time.is_none() {
             COPR_PENDING_REQS
                 .with_label_values(&[self.scan_tag, self.pri_str])
@@ -377,6 +397,7 @@ impl Display for RequestTask {
 impl RequestTask {
     pub fn new(
         mut req: Request,
+        peer: String,
         on_resp: OnResponse<Response>,
         recursion_limit: u32,
         batch_row_limit: usize,
@@ -461,7 +482,7 @@ impl RequestTask {
 
         let start_time = Instant::now_coarse();
 
-        let request_tracker = RequestTracker {
+        let tracker = RequestTracker {
             running_task_count: None,
             ctx_pool: None,
             record_handle_time: req_ctx.context.get_handle_time(),
@@ -481,17 +502,18 @@ impl RequestTask {
             first_range: ranges.get(0).cloned(),
             scan_tag: req_ctx.get_scan_tag(),
             pri_str: get_req_pri_str(req_ctx.context.get_priority()),
+            peer,
         };
 
         COPR_PENDING_REQS
-            .with_label_values(&[request_tracker.scan_tag, request_tracker.pri_str])
-            .add(1.0);
+            .with_label_values(&[tracker.scan_tag, tracker.pri_str])
+            .inc();
 
         Ok(RequestTask {
-            req_ctx: req_ctx,
-            req_handler_builder: req_handler_builder,
-            on_resp: on_resp,
-            tracker: request_tracker,
+            req_ctx,
+            req_handler_builder,
+            on_resp,
+            tracker,
         })
     }
 
@@ -613,7 +635,6 @@ impl Runnable<Task> for Host {
 
 fn err_multi_resp(e: Error, count: usize, metrics: &mut BasicLocalMetrics) -> Response {
     let mut resp = Response::new();
-    let count = count as f64;
     let tag = match e {
         Error::Region(e) => {
             let tag = storage::get_tag_from_header(&e);
@@ -641,7 +662,7 @@ fn err_multi_resp(e: Error, count: usize, metrics: &mut BasicLocalMetrics) -> Re
             resp.set_region_error(errorpb);
             "full"
         }
-        Error::Other(_) => {
+        Error::Other(_) | Error::Eval(_) => {
             resp.set_other_error(format!("{}", e));
             "other"
         }
@@ -649,8 +670,7 @@ fn err_multi_resp(e: Error, count: usize, metrics: &mut BasicLocalMetrics) -> Re
     metrics
         .error_cnt
         .with_label_values(&[tag])
-        .inc_by(count)
-        .unwrap();
+        .inc_by(count as i64);
     resp
 }
 
@@ -674,14 +694,14 @@ pub fn get_req_pri_str(pri: CommandPri) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use storage::engine::{self, TEMP_DIR};
     use futures::Future;
     use futures::sync::oneshot;
+    use storage::engine::{self, TEMP_DIR};
 
     use kvproto::coprocessor::Request;
-    use tipb::select::DAGRequest;
-    use tipb::expression::Expr;
     use tipb::executor::Executor;
+    use tipb::expression::Expr;
+    use tipb::select::DAGRequest;
 
     use util::worker::{Builder as WorkerBuilder, FutureWorker};
 
@@ -702,12 +722,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let read_pool = ReadPool::new(
             "readpool",
-            &readpool::Config {
-                high_concurrency: 1,
-                normal_concurrency: 1,
-                low_concurrency: 1,
-                ..readpool::Config::default_for_test()
-            },
+            &readpool::Config::default_with_concurrency(1),
             || || ReadPoolContext::new(pd_worker.scheduler()),
         );
         let end_point = Host::new(engine, worker.scheduler(), &cfg, read_pool);
@@ -717,7 +732,14 @@ mod tests {
         req.set_tp(REQ_TYPE_DAG);
         let (tx, rx) = oneshot::channel();
         let on_resp = OnResponse::Unary(tx);
-        let task = RequestTask::new(req, on_resp, 1000, 64, Duration::from_secs(0)).unwrap();
+        let task = RequestTask::new(
+            String::from("127.0.0.1"),
+            req,
+            on_resp,
+            1000,
+            64,
+            Duration::from_secs(0),
+        ).unwrap();
 
         worker.schedule(Task::Request(task)).unwrap();
         let resp = rx.wait().unwrap();
@@ -734,12 +756,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let read_pool = ReadPool::new(
             "readpool",
-            &readpool::Config {
-                high_concurrency: 1,
-                normal_concurrency: 1,
-                low_concurrency: 1,
-                ..readpool::Config::default_for_test()
-            },
+            &readpool::Config::default_with_concurrency(1),
             || || ReadPoolContext::new(pd_worker.scheduler()),
         );
         let mut end_point = Host::new(engine, worker.scheduler(), &cfg, read_pool);
@@ -758,8 +775,14 @@ mod tests {
                     req.mut_context().set_priority(CommandPri::High);
                 }
                 let on_resp = OnResponse::Unary(tx);
-                let task =
-                    RequestTask::new(req, on_resp, 1000, 64, Duration::from_secs(60)).unwrap();
+                let task = RequestTask::new(
+                    String::from("127.0.0.1"),
+                    req,
+                    on_resp,
+                    1000,
+                    64,
+                    Duration::from_secs(60),
+                ).unwrap();
                 worker.schedule(Task::Request(task)).unwrap();
                 rx
             })
@@ -793,13 +816,47 @@ mod tests {
         req.set_data(dag.write_to_bytes().unwrap());
 
         let (tx, _rx) = oneshot::channel();
-        let err = RequestTask::new(req, OnResponse::Unary(tx), 5, 64, Duration::from_secs(60))
-            .unwrap_err();
+        let err = RequestTask::new(
+            String::from("127.0.0.1"),
+            req,
+            OnResponse::Unary(tx),
+            5,
+            64,
+            Duration::from_secs(60),
+        ).unwrap_err();
         let s = format!("{:?}", err);
         assert!(
             s.contains("Recursion"),
             "parse should fail due to recursion limit {}",
             s
         );
+    }
+
+    #[test]
+    fn test_deconstruct_request_tracker() {
+        let mut worker = WorkerBuilder::new("test-endpoint").batch_size(1).create();
+        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let cfg = Config::default();
+        let pd_worker = FutureWorker::new("test-pd-worker");
+        let read_pool = ReadPool::new(
+            "readpool",
+            &readpool::Config::default_with_concurrency(1),
+            || || ReadPoolContext::new(pd_worker.scheduler()),
+        );
+        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, read_pool);
+        end_point.max_running_task_count = 1;
+        worker.start(end_point).unwrap();
+
+        let mut req = Request::new();
+        req.set_tp(REQ_TYPE_DAG);
+
+        let (tx, rx) = oneshot::channel();
+        let task =
+            RequestTask::new(String::from("127.0.0.1"), req, OnResponse::Unary(tx), 1000).unwrap();
+        worker.schedule(Task::Request(task)).unwrap();
+
+        let resp = rx.wait().unwrap();
+        assert!(format!("{:?}", resp.get_other_error()).contains("has no executor"));
+        worker.stop();
     }
 }

@@ -12,22 +12,22 @@
 // limitations under the License.
 
 use std::fs;
-use std::time::{Duration, Instant};
-use std::sync::{Arc, Mutex, RwLock};
-use std::sync::mpsc::{self, Sender};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
+use kvproto::raft_serverpb::RaftMessage;
+use raft::eraftpb::{Message, MessageType};
 use tikv::raftstore::Result;
 use tikv::raftstore::store::Msg;
 use tikv::util::HandyRwLock;
 use tikv::util::config::*;
-use raft::eraftpb::{Message, MessageType};
-use kvproto::raft_serverpb::RaftMessage;
 
-use super::transport_simulate::*;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
+use super::transport_simulate::*;
 use super::util::*;
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -101,9 +101,11 @@ fn test_server_huge_snapshot() {
     test_huge_snapshot(&mut cluster);
 }
 
-fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
-    configure_for_snapshot(cluster);
-    cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(2);
+#[test]
+fn test_server_snap_gc() {
+    let mut cluster = new_server_cluster(0, 3);
+    configure_for_snapshot(&mut cluster);
+    cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
@@ -185,18 +187,6 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
         cluster.must_put(b"k2", b"v2");
         sleep_ms(20);
     }
-}
-
-#[test]
-fn test_node_snap_gc() {
-    let mut cluster = new_node_cluster(0, 3);
-    test_snap_gc(&mut cluster);
-}
-
-#[test]
-fn test_server_snap_gc() {
-    let mut cluster = new_server_cluster(0, 3);
-    test_snap_gc(&mut cluster);
 }
 
 /// A helper function for testing the handling of snapshot is correct

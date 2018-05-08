@@ -14,14 +14,14 @@
 use std::vec::IntoIter;
 
 use crc::crc64::{self, Digest, Hasher64};
-use protobuf::Message;
 use kvproto::coprocessor::{KeyRange, Response};
+use protobuf::Message;
 use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
 
 use storage::{Snapshot, SnapshotStore};
 
-use coprocessor::*;
 use super::dag::executor::{ExecutorMetrics, ScanOn, Scanner};
+use coprocessor::*;
 
 // `ChecksumContext` is used to handle `ChecksumRequest`
 pub struct ChecksumContext {
@@ -46,8 +46,8 @@ impl ChecksumContext {
             !req_ctx.context.get_not_fill_cache(),
         );
         Ok(ChecksumContext {
-            req: req,
-            store: store,
+            req,
+            store,
             ranges: ranges.into_iter(),
             scanner: None,
             metrics: ExecutorMetrics::default(),

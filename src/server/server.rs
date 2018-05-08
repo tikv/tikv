@@ -11,29 +11,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
+use std::sync::{Arc, RwLock};
 
 use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
-use kvproto::tikvpb_grpc::*;
 use kvproto::debugpb_grpc::create_debug;
-use kvproto::importpb_grpc::create_import_sst;
+use kvproto::import_sstpb_grpc::create_import_sst;
+use kvproto::tikvpb_grpc::*;
 
-use import::ImportSSTService;
-use util::worker::{Builder as WorkerBuilder, Worker};
-use util::security::SecurityManager;
-use storage::Storage;
-use raftstore::store::{Engines, SnapManager};
-
-use super::{Config, Result};
 use coprocessor::{self, EndPointHost, EndPointTask};
-use super::readpool::ReadPool;
-use super::service::*;
-use super::transport::{RaftStoreRouter, ServerTransport};
-use super::resolve::StoreAddrResolver;
-use super::snap::{Runner as SnapHandler, Task as SnapTask};
+use import::ImportSSTService;
+use raftstore::store::{Engines, SnapManager};
+use storage::Storage;
+use util::security::SecurityManager;
+use util::worker::{Builder as WorkerBuilder, Worker};
+
 use super::raft_client::RaftClient;
+use super::readpool::ReadPool;
+use super::resolve::StoreAddrResolver;
+use super::service::*;
+use super::snap::{Runner as SnapHandler, Task as SnapTask};
+use super::transport::{RaftStoreRouter, ServerTransport};
+use super::{Config, Result};
 
 const DEFAULT_COPROCESSOR_BATCH: usize = 256;
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
@@ -136,14 +136,14 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 
         let svr = Server {
             env: Arc::clone(&env),
-            grpc_server: grpc_server,
+            grpc_server,
             local_addr: addr,
-            trans: trans,
-            raft_router: raft_router,
-            storage: storage,
-            end_point_worker: end_point_worker,
-            snap_mgr: snap_mgr,
-            snap_worker: snap_worker,
+            trans,
+            raft_router,
+            storage,
+            end_point_worker,
+            snap_mgr,
+            snap_worker,
             cop_readpool,
         };
 
@@ -194,24 +194,25 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-    use std::sync::*;
-    use std::sync::mpsc::*;
     use std::sync::atomic::*;
+    use std::sync::mpsc::*;
+    use std::sync::*;
+    use std::time::Duration;
 
     use super::*;
-    use super::super::{Config, Result};
-    use super::super::transport::RaftStoreRouter;
+
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
-    use storage::{self, Config as StorageConfig, Storage};
+    use super::super::transport::RaftStoreRouter;
+    use super::super::{Config, Result};
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::Result as RaftStoreResult;
     use raftstore::store::Msg as StoreMsg;
-    use raftstore::store::*;
     use raftstore::store::transport::Transport;
-    use util::worker::FutureWorker;
-    use util::security::SecurityConfig;
+    use raftstore::store::*;
     use server::readpool::{self, ReadPool};
+    use storage::{self, Config as StorageConfig, Storage};
+    use util::security::SecurityConfig;
+    use util::worker::FutureWorker;
 
     #[derive(Clone)]
     struct MockResolver {
@@ -269,10 +270,11 @@ mod tests {
         let storage_cfg = StorageConfig::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
+        let pd_worker = FutureWorker::new("test future worker");
         let storage_read_pool = ReadPool::new(
             "storage-readpool",
             &readpool::Config::default_for_test(),
-            || || storage::ReadPoolContext::new(None),
+            || || storage::ReadPoolContext::new(pd_worker.scheduler()),
         );
         let mut storage = Storage::new(&storage_cfg, storage_read_pool).unwrap();
         storage.start(&storage_cfg).unwrap();
@@ -280,8 +282,8 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
         let router = TestRaftStoreRouter {
-            tx: tx,
-            significant_msg_sender: significant_msg_sender,
+            tx,
+            significant_msg_sender,
         };
 
         let addr = Arc::new(Mutex::new(None));

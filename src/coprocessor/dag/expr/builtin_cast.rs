@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{str, i64, u64};
 use std::borrow::Cow;
+use std::{str, i64, u64};
 
-use coprocessor::codec::{mysql, Datum};
-use coprocessor::codec::mysql::{charset, types, Decimal, Duration, Json, Res, Time};
-use coprocessor::codec::mysql::decimal::RoundMode;
 use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
+use coprocessor::codec::mysql::decimal::RoundMode;
+use coprocessor::codec::mysql::{charset, types, Decimal, Duration, Json, Res, Time};
+use coprocessor::codec::{mysql, Datum, Error as CError};
 
 use super::{Error, EvalContext, FnCall, Result};
 
@@ -40,15 +40,22 @@ impl FnCall {
     pub fn cast_decimal_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let val = val.into_owned().round(0, RoundMode::HalfEven).unwrap();
-        if mysql::has_unsigned_flag(u64::from(self.tp.get_flag())) {
-            let uint = val.as_u64().unwrap();
-            // TODO:handle overflow
-            Ok(Some(uint as i64))
+        let (overflow, res) = if mysql::has_unsigned_flag(u64::from(self.tp.get_flag())) {
+            let uint = val.as_u64();
+            (uint.is_overflow(), uint.unwrap() as i64)
         } else {
-            let val = val.as_i64().unwrap();
-            // TODO:handle overflow
-            Ok(Some(val))
+            let val = val.as_i64();
+            (val.is_overflow(), val.unwrap())
+        };
+
+        if overflow {
+            if !ctx.cfg.overflow_as_warning {
+                return Err(Error::overflow("CastDecimalAsInt", &format!("{}", val)));
+            }
+            ctx.warnings
+                .append_warning(Error::truncated_wrong_val("DECIMAL", &format!("{}", val)));
         }
+        Ok(Some(res))
     }
 
     pub fn cast_str_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -60,15 +67,31 @@ impl FnCall {
             Some(&b'-') => true,
             _ => false,
         };
-        if is_negative {
-            // negative
-            let v = convert::bytes_to_int(ctx, &val)?;
-            // TODO: if overflow, don't append this warning
-            Ok(Some(v))
+        let res = if is_negative {
+            convert::bytes_to_int(ctx, &val).map(|v| {
+                ctx.warnings
+                    .append_warning(Error::cast_neg_int_as_unsigned());
+                v
+            })
         } else {
-            let urs = convert::bytes_to_uint(ctx, &val)?;
-            // TODO: process overflow
-            Ok(Some(urs as i64))
+            convert::bytes_to_uint(ctx, &val).map(|urs| {
+                if !mysql::has_unsigned_flag(u64::from(self.tp.get_flag()))
+                    && urs > (i64::MAX as u64)
+                {
+                    ctx.warnings
+                        .append_warning(Error::cast_as_signed_overflow());
+                }
+                urs as i64
+            })
+        };
+
+        match res {
+            Ok(v) => Ok(Some(v)),
+            Err(CError::Overflow(data, range)) => {
+                ctx.overflow_from_cast_str_as_int(&val, Error::overflow(&data, &range), is_negative)
+                    .map(Some)
+            }
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -412,8 +435,15 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
         let s = format!("{}", val);
-        let dur = Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8)?;
-        Ok(Some(Cow::Owned(dur)))
+        // TODO: port NumberToDuration from tidb.
+        match Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8) {
+            Ok(dur) => Ok(Some(Cow::Owned(dur))),
+            Err(CError::Overflow(_, _)) => {
+                ctx.handle_overflow(Error::overflow("Duration", &format!("{}", val)))?;
+                Ok(None)
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     pub fn cast_real_as_duration<'a, 'b: 'a>(
@@ -671,16 +701,17 @@ impl FnCall {
 #[cfg(test)]
 mod test {
     use std::sync::Arc;
-    use std::u64;
+    use std::{i64, u64};
 
     use tipb::expression::{Expr, FieldType, ScalarFuncSig};
 
     use chrono::{FixedOffset, Utc};
 
-    use coprocessor::codec::{convert, Datum};
     use coprocessor::codec::mysql::{self, charset, types, Decimal, Duration, Json, Time};
-    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
+    use coprocessor::codec::{convert, Datum};
     use coprocessor::dag::expr::test::{col_expr as base_col_expr, fncall_expr};
+    use coprocessor::dag::expr::{self, err, EvalConfig, EvalContext, Expression,
+                                 FLAG_IGNORE_TRUNCATE};
 
     pub fn col_expr(col_id: i64, tp: i32) -> Expr {
         let mut expr = base_col_expr(col_id);
@@ -718,20 +749,6 @@ mod test {
                 None,
                 vec![Datum::Bytes(b"1".to_vec())],
                 1,
-            ),
-            (
-                ScalarFuncSig::CastStringAsInt,
-                types::STRING,
-                None,
-                vec![Datum::Bytes(b"-123".to_vec())],
-                -123,
-            ),
-            (
-                ScalarFuncSig::CastStringAsInt,
-                types::STRING,
-                None,
-                vec![Datum::Bytes(b"18446744073709551615".to_vec())],
-                u64::MAX as i64,
             ),
             (
                 ScalarFuncSig::CastRealAsInt,
@@ -1792,4 +1809,144 @@ mod test {
             assert_eq!(res.unwrap().into_owned(), exp.unwrap());
         }
     }
+
+    #[test]
+    fn test_dec_as_int_with_overflow() {
+        let cases = vec![
+            (
+                0,
+                vec![
+                    Datum::Dec(Decimal::from_f64(i64::MAX as f64 + 100.5).unwrap()),
+                ],
+                i64::MAX,
+            ),
+            (
+                types::UNSIGNED_FLAG,
+                vec![
+                    Datum::Dec(Decimal::from_f64(u64::MAX as f64 + 100.5).unwrap()),
+                ],
+                u64::MAX as i64,
+            ),
+        ];
+        for (flag, cols, exp) in cases {
+            let mut col_expr = col_expr(0, i32::from(types::NEW_DECIMAL));
+            let mut ex = fncall_expr(ScalarFuncSig::CastDecimalAsInt, &[col_expr]);
+            ex.mut_field_type().set_flag(flag as u32);
+
+            // test with overflow as warning
+            let mut ctx = EvalContext::new(Arc::new(
+                EvalConfig::new(0, expr::FLAG_OVERFLOW_AS_WARNING).unwrap(),
+            ));
+            let e = Expression::build(&mut ctx, ex.clone()).unwrap();
+            let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
+            assert_eq!(res, exp);
+            assert_eq!(ctx.warnings.warning_cnt, 1);
+            assert_eq!(
+                ctx.warnings.warnings[0].get_code(),
+                err::ERR_TRUNCATE_WRONG_VALUE
+            );
+
+            // test overflow as error
+            ctx = EvalContext::new(Arc::new(EvalConfig::default()));
+            let e = Expression::build(&mut ctx, ex).unwrap();
+            let res = e.eval_int(&mut ctx, &cols);
+            assert!(res.is_err());
+        }
+    }
+
+    #[test]
+    fn test_str_as_int() {
+        let cases = vec![
+            (
+                0,
+                vec![Datum::Bytes(b"18446744073709551615".to_vec())],
+                u64::MAX as i64,
+                1,
+            ),
+            (
+                types::UNSIGNED_FLAG,
+                vec![Datum::Bytes(b"18446744073709551615".to_vec())],
+                u64::MAX as i64,
+                0,
+            ),
+            (0, vec![Datum::Bytes(b"-1".to_vec())], -1, 1),
+        ];
+
+        for (flag, cols, exp, warnings_cnt) in cases {
+            let mut col_expr = col_expr(0, i32::from(types::STRING));
+            let mut ex = fncall_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
+            ex.mut_field_type().set_flag(flag as u32);
+
+            let mut ctx = EvalContext::new(Arc::new(EvalConfig::default()));
+            let e = Expression::build(&mut ctx, ex.clone()).unwrap();
+            let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
+            assert_eq!(res, exp);
+            assert_eq!(ctx.warnings.warning_cnt, warnings_cnt);
+            if warnings_cnt > 0 {
+                assert_eq!(ctx.warnings.warnings[0].get_code(), err::ERR_UNKNOWN);
+            }
+        }
+
+        let cases = vec![
+            (
+                vec![Datum::Bytes(b"-9223372036854775810".to_vec())],
+                i64::MIN,
+            ),
+            (
+                vec![Datum::Bytes(b"18446744073709551616".to_vec())],
+                u64::MAX as i64,
+            ),
+        ];
+
+        for (cols, exp) in cases {
+            let mut col_expr = col_expr(0, i32::from(types::STRING));
+            let ex = fncall_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
+            // test with overflow as warning && in select stmt
+            let mut ctx = EvalContext::new(Arc::new(
+                EvalConfig::new(
+                    0,
+                    expr::FLAG_OVERFLOW_AS_WARNING | expr::FLAG_IN_SELECT_STMT,
+                ).unwrap(),
+            ));
+            let e = Expression::build(&mut ctx, ex.clone()).unwrap();
+            let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
+            assert_eq!(res, exp);
+            assert_eq!(ctx.warnings.warning_cnt, 1);
+            assert_eq!(
+                ctx.warnings.warnings[0].get_code(),
+                err::ERR_TRUNCATE_WRONG_VALUE
+            );
+
+            // test overflow as error
+            ctx = EvalContext::new(Arc::new(EvalConfig::default()));
+            let e = Expression::build(&mut ctx, ex).unwrap();
+            let res = e.eval_int(&mut ctx, &cols);
+            assert!(res.is_err());
+        }
+    }
+
+    // This test should work when NumberToDuration ported from tidb.
+    // #[test]
+    // fn test_int_as_duration_with_overflow() {
+    //     let cols = vec![Datum::I64(3020400)];
+
+    //     let col_expr = col_expr(0, i32::from(types::LONG_LONG));
+    //     let ex = fncall_expr(ScalarFuncSig::CastIntAsDuration, &[col_expr]);
+
+    //     // test with overflow as warning
+    //     let mut ctx = EvalContext::new(Arc::new(
+    //         EvalConfig::new(0, expr::FLAG_OVERFLOW_AS_WARNING).unwrap(),
+    //     ));
+    //     let e = Expression::build(&mut ctx, ex.clone()).unwrap();
+    //     let res = e.eval_duration(&mut ctx, &cols).unwrap();
+    //     assert!(res.is_none());
+    //     assert_eq!(ctx.warnings.warning_cnt, 1);
+    //     assert_eq!(ctx.warnings.warnings[0].get_code(), err::ERR_DATA_OUT_OF_RANGE);
+
+    //     // test overflow as error
+    //     ctx = EvalContext::new(Arc::new(EvalConfig::default()));
+    //     let e = Expression::build(&mut ctx, ex).unwrap();
+    //     let res = e.eval_duration(&mut ctx, &cols);
+    //     assert!(res.is_err());
+    // }
 }
