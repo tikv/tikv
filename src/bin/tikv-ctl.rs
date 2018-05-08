@@ -17,6 +17,7 @@
 #![allow(needless_pass_by_value)]
 #![allow(cyclomatic_complexity)]
 
+#[macro_use]
 extern crate clap;
 extern crate futures;
 extern crate grpcio;
@@ -1320,10 +1321,7 @@ fn main() {
         let cfs = Vec::from_iter(sub_cmd.values_of("cf").unwrap());
         let from_key = sub_cmd.value_of("from").map(|k| unescape(k));
         let to_key = sub_cmd.value_of("to").map(|k| unescape(k));
-        let threads_str = sub_cmd.value_of("threads").unwrap();
-        let threads = threads_str
-            .parse::<u32>()
-            .unwrap_or_else(|e| perror_and_exit("bad threads option", e));
+        let threads = value_t_or_exit!(sub_cmd.value_of("threads"), u32);
         return compact_whole_cluster(pd, db_type, cfs, from_key, to_key, threads, mgr);
     }
 
@@ -1398,10 +1396,7 @@ fn main() {
         let cf = matches.value_of("cf").unwrap();
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
-        let threads_str = matches.value_of("threads").unwrap();
-        let threads = threads_str
-            .parse::<u32>()
-            .unwrap_or_else(|e| perror_and_exit("bad threads option", e));
+        let threads = value_t_or_exit!(matches.value_of("threads"), u32);
         if let Some(region) = matches.value_of("region") {
             debug_executor.compact_region(host, db_type, cf, region.parse().unwrap(), threads);
         } else {
