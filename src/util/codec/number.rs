@@ -297,8 +297,9 @@ pub fn decode_var_u64(data: &mut Bytes) -> Result<u64> {
                     return Ok(res);
                 }
             }
-            if data[9] <= 1 {
-                res |= ((u64::from(data[9])) & 0x7f) << (9 * 7);
+            let b = unsafe { *data.get_unchecked(9) };
+            if b <= 1 {
+                res |= ((u64::from(b)) & 0x7f) << (9 * 7);
                 *data = unsafe { data.get_unchecked(10..) };
                 return Ok(res);
             }
