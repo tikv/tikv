@@ -228,6 +228,7 @@ struct RequestTracker {
     first_range: Option<KeyRange>,
     scan_tag: &'static str,
     pri_str: &'static str,
+    desc_scan: Option<bool>, // only applicable to DAG requests
     peer: String,
 }
 
@@ -316,14 +317,18 @@ impl Drop for RequestTracker {
             };
 
             info!(
-                "[region {}] from {:?} handle {:?} table id {:?} [{}] takes {:?} [keys: {}, hit: {}, \
-                 ranges: {} ({:?})]",
+                "[region {}] [slow-query] execute takes {:?}, wait takes {:?}, \
+                 peer: {:?}, start_ts: {:?}, table_id: {:?}, \
+                 scan_type: {} (desc: {:?}) \
+                 [keys: {}, hit: {}, ranges: {} ({:?})]",
                 self.region_id,
+                self.total_handle_time,
+                self.wait_time,
                 self.peer,
                 self.txn_start_ts,
                 table_id,
                 self.scan_tag,
-                self.total_handle_time,
+                self.desc_scan,
                 self.exec_metrics.cf_stats.total_op_count(),
                 self.exec_metrics.cf_stats.total_processed(),
                 self.ranges_len,
@@ -412,8 +417,8 @@ impl RequestTask {
         // drop it in case of mistakenly using its fields
         drop(req);
 
-        let mut table_scan = false;
-
+        let mut is_table_scan = false;
+        let mut is_desc_scan: Option<bool> = None; // only used in slow query logs
         let (req_ctx, req_handler_builder): (_, RequestHandlerBuilder) = match tp {
             REQ_TYPE_DAG => {
                 let mut is = CodedInputStream::from_bytes(&data);
@@ -421,12 +426,18 @@ impl RequestTask {
                 let mut dag = DAGRequest::new();
                 box_try!(dag.merge_from(&mut is));
                 if let Some(scan) = dag.get_executors().iter().next() {
-                    table_scan = scan.get_tp() == ExecType::TypeTableScan;
+                    // the first executor must be table scan or index scan.
+                    is_table_scan = scan.get_tp() == ExecType::TypeTableScan;
+                    if is_table_scan {
+                        is_desc_scan = Some(scan.get_tbl_scan().get_desc());
+                    } else {
+                        is_desc_scan = Some(scan.get_idx_scan().get_desc());
+                    }
                 }
                 let req_ctx = Arc::new(ReqContext::new(
                     context,
                     dag.get_start_ts(),
-                    table_scan,
+                    is_table_scan,
                     max_handle_duration,
                 ));
                 let req_ctx_clone = Arc::clone(&req_ctx);
@@ -442,11 +453,11 @@ impl RequestTask {
                 is.set_recursion_limit(recursion_limit);
                 let mut analyze = AnalyzeReq::new();
                 box_try!(analyze.merge_from(&mut is));
-                table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
+                is_table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
                 let req_ctx = Arc::new(ReqContext::new(
                     context,
                     analyze.get_start_ts(),
-                    table_scan,
+                    is_table_scan,
                     max_handle_duration,
                 ));
                 let req_ctx_clone = Arc::clone(&req_ctx);
@@ -462,11 +473,11 @@ impl RequestTask {
                 is.set_recursion_limit(recursion_limit);
                 let mut checksum = ChecksumRequest::new();
                 box_try!(checksum.merge_from(&mut is));
-                table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
+                is_table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
                 let req_ctx = Arc::new(ReqContext::new(
                     context,
                     checksum.get_start_ts(),
-                    table_scan,
+                    is_table_scan,
                     max_handle_duration,
                 ));
                 let req_ctx_clone = Arc::clone(&req_ctx);
@@ -481,6 +492,8 @@ impl RequestTask {
         };
 
         let start_time = Instant::now_coarse();
+
+        let req_ctx = ReqContext::new(req.get_context(), start_ts, is_table_scan);
 
         let tracker = RequestTracker {
             running_task_count: None,
@@ -502,6 +515,7 @@ impl RequestTask {
             first_range: ranges.get(0).cloned(),
             scan_tag: req_ctx.get_scan_tag(),
             pri_str: get_req_pri_str(req_ctx.context.get_priority()),
+            desc_scan: is_desc_scan,
             peer,
         };
 
@@ -703,6 +717,7 @@ mod tests {
     use tipb::expression::Expr;
     use tipb::select::DAGRequest;
 
+    use util::config::ReadableDuration;
     use util::worker::{Builder as WorkerBuilder, FutureWorker};
 
     #[test]
