@@ -230,7 +230,7 @@ where
     F: Fn(&[u8]) -> T,
 {
     if data.len() >= size {
-        let buf = &data[0..size];
+        let buf = &data[..size];
         *data = &data[size..];
         return Ok(f(buf));
     }
@@ -277,38 +277,36 @@ fn decode_var_i64(data: &mut Bytes) -> Result<i64> {
 /// `decode_var_u64` decodes value encoded by `encode_var_u64` before.
 #[inline]
 pub fn decode_var_u64(data: &mut Bytes) -> Result<u64> {
-    if data.is_empty() {
-        return Err(Error::Io(io::Error::new(ErrorKind::UnexpectedEof, "eof")));
-    }
-    let last = 0x80;
-    // process with value < 127 independently at first
-    // since it matches most of the cases.
-    if data[0] < last {
-        let res = u64::from(data[0]) & 0x7f;
-        *data = &data[1..];
-        return Ok(res);
-    }
+    if !data.is_empty() {
+        // process with value < 127 independently at first
+        // since it matches most of the cases.
+        if data[0] < 0x80 {
+            let res = u64::from(data[0]) & 0x7f;
+            *data = &data[1..];
+            return Ok(res);
+        }
 
-    // process with data's len >=10 or data ends with var u64
-    if data.len() >= 10 || *data.last().unwrap() < last {
-        let mut res = 0;
-        for i in 0..9 {
-            let b = data[i];
-            res |= (u64::from(b) & 0x7f) << (i * 7);
-            if b < last {
-                *data = &data[i + 1..];
-                return Ok(res);
+        // process with data's len >=10 or data ends with var u64
+        if data.len() >= 10 || *data.last().unwrap() < 0x80 {
+            let mut res = 0;
+            for i in 0..9 {
+                let b = data[i];
+                res |= (u64::from(b) & 0x7f) << (i * 7);
+                if b < 0x80 {
+                    *data = &data[i + 1..];
+                    return Ok(res);
+                }
             }
+            if data[9] > 1 {
+                return Err(Error::Io(io::Error::new(
+                    ErrorKind::InvalidData,
+                    "overflow",
+                )));
+            }
+            res |= ((u64::from(data[9])) & 0x7f) << (9 * 7);
+            *data = &data[10..];
+            return Ok(res);
         }
-        if data[9] > 1 {
-            return Err(Error::Io(io::Error::new(
-                ErrorKind::InvalidData,
-                "overflow",
-            )));
-        }
-        res |= ((u64::from(data[9])) & 0x7f) << (9 * 7);
-        *data = &data[10..];
-        return Ok(res);
     }
 
     // process data's len < 10 && data not end with var u64.
@@ -316,7 +314,7 @@ pub fn decode_var_u64(data: &mut Bytes) -> Result<u64> {
     for i in 0..data.len() {
         let b = data[i];
         res |= (u64::from(b) & 0x7f) << (i * 7);
-        if b < last {
+        if b < 0x80 {
             *data = &data[i + 1..];
             return Ok(res);
         }
