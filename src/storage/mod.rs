@@ -393,18 +393,18 @@ pub struct Options {
 }
 
 impl Options {
-    pub fn new(
-        lock_ttl: u64,
-        skip_constraint_check: bool,
-        key_only: bool,
-        reverse_scan: bool,
-    ) -> Options {
+    pub fn new(lock_ttl: u64, skip_constraint_check: bool, key_only: bool) -> Options {
         Options {
             lock_ttl,
             skip_constraint_check,
             key_only,
-            reverse_scan,
+            reverse_scan: false,
         }
+    }
+
+    pub fn reverse_scan(mut self) -> Options {
+        self.reverse_scan = true;
+        self
     }
 }
 
@@ -665,17 +665,17 @@ impl Storage {
                         !ctx.get_not_fill_cache(),
                     );
 
-                    let scan_mode = if !options.reverse_scan {
-                        ScanMode::Forward
-                    } else {
+                    let scan_mode = if options.reverse_scan {
                         ScanMode::Backward
+                    } else {
+                        ScanMode::Forward
                     };
 
                     let mut scanner = snap_store.scanner(scan_mode, options.key_only, None, None)?;
-                    let res = if !options.reverse_scan {
-                        scanner.scan(start_key, limit)
-                    } else {
+                    let res = if options.reverse_scan {
                         scanner.reverse_scan(start_key, limit)
+                    } else {
+                        scanner.scan(start_key, limit)
                     };
 
                     let statistics = scanner.get_statistics();

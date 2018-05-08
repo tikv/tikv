@@ -97,13 +97,7 @@ impl SyncStorage {
         start_ts: u64,
     ) -> Result<Vec<Result<KvPair>>> {
         self.store
-            .async_scan(
-                ctx,
-                key,
-                limit,
-                start_ts,
-                Options::new(0, false, key_only, false),
-            )
+            .async_scan(ctx, key, limit, start_ts, Options::new(0, false, key_only))
             .wait()
     }
 
@@ -121,7 +115,7 @@ impl SyncStorage {
                 key,
                 limit,
                 start_ts,
-                Options::new(0, false, key_only, true),
+                Options::new(0, false, key_only).reverse_scan(),
             )
             .wait()
     }
