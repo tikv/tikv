@@ -71,6 +71,19 @@ pub fn get_level_by_string(lv: &str) -> Option<Level> {
     }
 }
 
+// The `to_string()` function of `slog::Level` produces values like `erro` and `trce` instead of
+// the full words. This produces the full word.
+pub fn get_string_by_level(lv: &Level) -> &'static str {
+    match lv {
+        Level::Critical => "Critical",
+        Level::Error => "Error",
+        Level::Warning => "Warning",
+        Level::Debug => "Debug",
+        Level::Trace => "Trace",
+        Level::Info => "Info",
+    }
+}
+
 #[test]
 fn test_get_level_by_string() {
     // Ensure UPPER, Capitalized, and lower case all map over.

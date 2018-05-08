@@ -38,7 +38,6 @@ use server::readpool::Config as ReadPoolInstanceConfig;
 use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
               DEFAULT_ROCKSDB_SUB_DIR};
 use util::config::{self, compression_type_level_serde, ReadableDuration, ReadableSize, GB, KB, MB};
-use util::logger::get_level_by_string;
 use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
 use util::rocksdb::{db_exist, CFOptions, EventListener, FixedPrefixSliceTransform,
                     FixedSuffixSliceTransform, NoopSliceTransform};
@@ -697,9 +696,9 @@ impl Default for MetricConfig {
 }
 
 pub mod log_level_serde {
-    use super::get_level_by_string;
     use serde::{Deserialize, Deserializer, Serialize, Serializer, de::{Error, Unexpected}};
     use slog::Level;
+    use util::logger::{get_level_by_string, get_string_by_level};
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Level, D::Error>
     where
@@ -714,7 +713,7 @@ pub mod log_level_serde {
     where
         S: Serializer,
     {
-        format!("{:?}", value).serialize(serializer)
+        format!("{}", get_string_by_level(value).to_lowercase()).serialize(serializer)
     }
 }
 
@@ -1106,32 +1105,32 @@ mod test {
         }
 
         let legal_cases = vec![
-            ("Critical", Level::Critical),
-            ("Error", Level::Error),
-            ("Warning", Level::Warning),
-            ("Debug", Level::Debug),
-            ("Trace", Level::Trace),
-            ("Info", Level::Info),
+            ("critical", Level::Critical),
+            ("error", Level::Error),
+            ("warning", Level::Warning),
+            ("debug", Level::Debug),
+            ("trace", Level::Trace),
+            ("info", Level::Info),
         ];
         for (serialized, deserialized) in legal_cases {
             let holder = LevelHolder { v: deserialized };
             let res_string = toml::to_string(&holder).unwrap();
-            let exp_string = format!("v = {:?}\n", serialized);
+            let exp_string = format!("v = \"{}\"\n", serialized);
             assert_eq!(res_string, exp_string);
             let res_value: LevelHolder = toml::from_str(&exp_string).unwrap();
             assert_eq!(res_value.v, deserialized);
         }
 
-        let compatibility_cases = vec![("Warn", Level::Warning)];
+        let compatibility_cases = vec![("warn", Level::Warning)];
         for (serialized, deserialized) in compatibility_cases {
-            let variant_string = format!("v = {:?}\n", serialized);
+            let variant_string = format!("v = \"{}\"\n", serialized);
             let res_value: LevelHolder = toml::from_str(&variant_string).unwrap();
             assert_eq!(res_value.v, deserialized);
         }
 
         let illegal_cases = vec!["foobar", ""];
         for case in illegal_cases {
-            let string = format!("v = {:?}\n", case);
+            let string = format!("v = \"{}\"\n", case);
             toml::from_str::<LevelHolder>(&string).unwrap_err();
         }
     }

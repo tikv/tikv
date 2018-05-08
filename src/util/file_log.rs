@@ -128,10 +128,11 @@ impl Write for RotatingFileLogger {
 
     fn flush(&mut self) -> Result<(), ::std::io::Error> {
         let mut core = self.core.lock().unwrap();
+        core.file.flush()?;
         if core.should_rollover() {
-            core.do_rollover()
+            core.do_rollover();
         };
-        core.file.flush()
+        Ok(())
     }
 }
 

@@ -308,7 +308,9 @@ fn main() {
                 .alias("log")
                 .takes_value(true)
                 .value_name("LEVEL")
-                .possible_values(&["trace", "debug", "info", "warn", "error", "off"])
+                .possible_values(&[
+                    "trace", "debug", "info", "warn", "warning", "error", "critical"
+                ])
                 .help("Sets log level"),
         )
         .arg(
