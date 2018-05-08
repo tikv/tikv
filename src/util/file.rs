@@ -27,14 +27,14 @@ pub fn file_exists(file: &PathBuf) -> bool {
     path.exists() && path.is_file()
 }
 
-pub fn delete_file_if_exist(file: &PathBuf) {
+/// Delete given path from file system. Return `true` for success.
+pub fn delete_file_if_exist(file: &PathBuf) -> bool {
     match fs::remove_file(file) {
-        Ok(_) => {}
+        Ok(_) => return true,
         Err(ref e) if e.kind() == ErrorKind::NotFound => {}
-        Err(e) => {
-            warn!("failed to delete file {}: {:?}", file.display(), e);
-        }
+        Err(e) => warn!("failed to delete file {}: {:?}", file.display(), e),
     }
+    false
 }
 
 pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
