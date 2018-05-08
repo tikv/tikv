@@ -10,12 +10,12 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 use super::lock::Lock;
 use super::write::{Write, WriteType};
 use super::{Error, Result};
 use kvproto::kvrpcpb::IsolationLevel;
 use raftstore::store::engine::IterOption;
+use std::time::Instant;
 use std::u64;
 use storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
 use storage::{Key, Value, CF_LOCK, CF_WRITE};
@@ -841,7 +841,14 @@ mod tests {
         }
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(Box::new(snap), Some(ScanMode::Backward), false, None, None, IsolationLevel::SI);
+        let mut reader = MvccReader::new(
+            Box::new(snap),
+            Some(ScanMode::Backward),
+            false,
+            None,
+            None,
+            IsolationLevel::SI,
+        );
         let row = &[255 as u8];
         let k = make_key(row);
 
