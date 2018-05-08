@@ -16,7 +16,7 @@ use std::io::Read;
 use std::path::Path;
 
 use crc::crc32::{self, Hasher32};
-use kvproto::importpb::*;
+use kvproto::import_sstpb::*;
 use rocksdb::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
 use uuid::Uuid;
 

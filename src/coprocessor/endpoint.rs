@@ -24,7 +24,7 @@ use protobuf::{CodedInputStream, Message as PbMsg};
 
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use kvproto::errorpb::{self, ServerIsBusy};
-use kvproto::kvrpcpb::{CommandPri, HandleTime, IsolationLevel};
+use kvproto::kvrpcpb::{CommandPri, HandleTime};
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::checksum::{ChecksumRequest, ChecksumScanOn};
 use tipb::executor::ExecType;
@@ -46,7 +46,7 @@ use super::dag::executor::ExecutorMetrics;
 use super::local_metrics::BasicLocalMetrics;
 use super::metrics::*;
 use super::statistics::analyze::AnalyzeContext;
-use super::{Error, ReadPoolContext, Result};
+use super::*;
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
@@ -57,8 +57,6 @@ pub const REQ_TYPE_CHECKSUM: i64 = 105;
 pub const DEFAULT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 // If handle time is larger than the lower bound, the query is considered as slow query.
 const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
-
-pub const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
 const OUTDATED_ERROR_MSG: &str = "request outdated.";
 
@@ -256,39 +254,6 @@ enum CopRequest {
 }
 
 #[derive(Debug)]
-pub struct ReqContext {
-    pub start_time: Instant,
-    pub deadline: Instant,
-    pub isolation_level: IsolationLevel,
-    pub fill_cache: bool,
-    pub table_scan: bool, // Whether is a table scan request.
-}
-
-impl ReqContext {
-    #[inline]
-    fn get_scan_tag(&self) -> &'static str {
-        if self.table_scan {
-            STR_REQ_TYPE_SELECT
-        } else {
-            STR_REQ_TYPE_INDEX
-        }
-    }
-
-    pub fn check_if_outdated(&self) -> Result<()> {
-        let now = Instant::now_coarse();
-        if self.deadline <= now {
-            let elapsed = now.duration_since(self.start_time);
-            return Err(Error::Outdated(elapsed, self.get_scan_tag()));
-        }
-        Ok(())
-    }
-
-    pub fn set_max_handle_duration(&mut self, request_max_handle_duration: Duration) {
-        self.deadline = self.start_time + request_max_handle_duration;
-    }
-}
-
-#[derive(Debug)]
 struct RequestTracker {
     running_task_count: Option<Arc<AtomicUsize>>,
     ctx_pool: Option<futurepool::ContextDelegators<ReadPoolContext>>,
@@ -311,6 +276,7 @@ struct RequestTracker {
     first_range: Option<KeyRange>,
     scan_tag: &'static str,
     pri_str: &'static str,
+    desc_scan: Option<bool>, // only applicable to DAG requests
     peer: String,
 }
 
@@ -399,14 +365,18 @@ impl Drop for RequestTracker {
             };
 
             info!(
-                "[region {}] from {:?} handle {:?} table id {:?} [{}] takes {:?} [keys: {}, hit: {}, \
-                 ranges: {} ({:?})]",
+                "[region {}] [slow-query] execute takes {:?}, wait takes {:?}, \
+                 peer: {:?}, start_ts: {:?}, table_id: {:?}, \
+                 scan_type: {} (desc: {:?}) \
+                 [keys: {}, hit: {}, ranges: {} ({:?})]",
                 self.region_id,
+                self.total_handle_time,
+                self.wait_time,
                 self.peer,
                 self.txn_start_ts,
                 table_id,
                 self.scan_tag,
-                self.total_handle_time,
+                self.desc_scan,
                 self.exec_metrics.cf_stats.total_op_count(),
                 self.exec_metrics.cf_stats.total_processed(),
                 self.ranges_len,
@@ -472,6 +442,7 @@ impl RequestTask {
         recursion_limit: u32,
     ) -> Result<RequestTask> {
         let mut table_scan = false;
+        let mut is_desc_scan: Option<bool> = None; // only used in slow query logs
         let (start_ts, cop_req) = match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut is = CodedInputStream::from_bytes(req.get_data());
@@ -479,7 +450,13 @@ impl RequestTask {
                 let mut dag = DAGRequest::new();
                 box_try!(dag.merge_from(&mut is));
                 if let Some(scan) = dag.get_executors().iter().next() {
+                    // the first executor must be table scan or index scan.
                     table_scan = scan.get_tp() == ExecType::TypeTableScan;
+                    if table_scan {
+                        is_desc_scan = Some(scan.get_tbl_scan().get_desc());
+                    } else {
+                        is_desc_scan = Some(scan.get_idx_scan().get_desc());
+                    }
                 }
                 (dag.get_start_ts(), CopRequest::DAG(dag))
             }
@@ -504,13 +481,7 @@ impl RequestTask {
 
         let start_time = Instant::now_coarse();
 
-        let req_ctx = ReqContext {
-            start_time,
-            deadline: start_time,
-            isolation_level: req.get_context().get_isolation_level(),
-            fill_cache: !req.get_context().get_not_fill_cache(),
-            table_scan,
-        };
+        let req_ctx = ReqContext::new(req.get_context(), start_ts, table_scan);
 
         let request_tracker = RequestTracker {
             running_task_count: None,
@@ -532,6 +503,7 @@ impl RequestTask {
             first_range: req.get_ranges().get(0).cloned(),
             scan_tag: req_ctx.get_scan_tag(),
             pri_str: get_req_pri_str(req.get_context().get_priority()),
+            desc_scan: is_desc_scan,
             peer,
         };
 
@@ -733,8 +705,6 @@ pub fn err_resp(e: Error, metrics: &mut BasicLocalMetrics) -> Response {
     err_multi_resp(e, 1, metrics)
 }
 
-pub const STR_REQ_TYPE_SELECT: &str = "select";
-pub const STR_REQ_TYPE_INDEX: &str = "index";
 pub const STR_REQ_PRI_LOW: &str = "low";
 pub const STR_REQ_PRI_NORMAL: &str = "normal";
 pub const STR_REQ_PRI_HIGH: &str = "high";
@@ -761,21 +731,15 @@ mod tests {
     use tipb::select::DAGRequest;
 
     use util::config::ReadableDuration;
-    use util::time::Instant;
     use util::worker::{Builder as WorkerBuilder, FutureWorker};
 
     #[test]
     fn test_get_reg_scan_tag() {
-        let mut ctx = ReqContext {
-            start_time: Instant::now_coarse(),
-            deadline: Instant::now_coarse(),
-            isolation_level: IsolationLevel::RC,
-            fill_cache: true,
-            table_scan: true,
-        };
-        assert_eq!(ctx.get_scan_tag(), STR_REQ_TYPE_SELECT);
+        let context = kvrpcpb::Context::new();
+        let mut ctx = ReqContext::new(&context, 0, true);
+        assert_eq!(ctx.get_scan_tag(), "select");
         ctx.table_scan = false;
-        assert_eq!(ctx.get_scan_tag(), STR_REQ_TYPE_INDEX);
+        assert_eq!(ctx.get_scan_tag(), "index");
     }
 
     #[test]
