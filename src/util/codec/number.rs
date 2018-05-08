@@ -282,7 +282,7 @@ pub fn decode_var_u64(data: &mut Bytes) -> Result<u64> {
         // since it matches most of the cases.
         if data[0] < 0x80 {
             let res = u64::from(data[0]) & 0x7f;
-            *data = &data[1..];
+            *data = unsafe { data.get_unchecked(1..) };
             return Ok(res);
         }
 
@@ -290,22 +290,22 @@ pub fn decode_var_u64(data: &mut Bytes) -> Result<u64> {
         if data.len() >= 10 || *data.last().unwrap() < 0x80 {
             let mut res = 0;
             for i in 0..9 {
-                let b = data[i];
+                let b = unsafe { *data.get_unchecked(i) };
                 res |= (u64::from(b) & 0x7f) << (i * 7);
                 if b < 0x80 {
-                    *data = &data[i + 1..];
+                    *data = unsafe { data.get_unchecked(i + 1..) };
                     return Ok(res);
                 }
             }
-            if data[9] > 1 {
-                return Err(Error::Io(io::Error::new(
-                    ErrorKind::InvalidData,
-                    "overflow",
-                )));
+            if data[9] <= 1 {
+                res |= ((u64::from(data[9])) & 0x7f) << (9 * 7);
+                *data = unsafe { data.get_unchecked(10..) };
+                return Ok(res);
             }
-            res |= ((u64::from(data[9])) & 0x7f) << (9 * 7);
-            *data = &data[10..];
-            return Ok(res);
+            return Err(Error::Io(io::Error::new(
+                ErrorKind::InvalidData,
+                "overflow",
+            )));
         }
     }
 
@@ -315,7 +315,7 @@ pub fn decode_var_u64(data: &mut Bytes) -> Result<u64> {
         let b = data[i];
         res |= (u64::from(b) & 0x7f) << (i * 7);
         if b < 0x80 {
-            *data = &data[i + 1..];
+            *data = unsafe { data.get_unchecked(i + 1..) };
             return Ok(res);
         }
     }
