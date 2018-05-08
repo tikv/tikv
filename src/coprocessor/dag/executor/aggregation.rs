@@ -19,12 +19,12 @@ use tipb::executor::Aggregation;
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
 
-use coprocessor::Result;
+use util::collections::{OrderMap, OrderMapEntry};
+
 use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
 use coprocessor::codec::table::RowColsDict;
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
-use coprocessor::endpoint::SINGLE_GROUP;
-use util::collections::{OrderMap, OrderMapEntry};
+use coprocessor::*;
 
 use super::ExecutorMetrics;
 use super::aggregate::{self, AggrFunc};

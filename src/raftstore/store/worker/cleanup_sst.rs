@@ -14,7 +14,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use kvproto::importpb::SSTMeta;
+use kvproto::import_sstpb::SSTMeta;
 
 use import::SSTImporter;
 use pd::PdClient;
