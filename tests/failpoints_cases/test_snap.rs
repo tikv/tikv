@@ -292,11 +292,11 @@ fn test_snapshots_with_regain_leadership() {
     let mut got_2 = false;
     for _ in 0..100 {
         let (_, &count) = snap_counter.rl().iter().next().unwrap();
-        if count < 2 {
-            thread::sleep(Duration::from_millis(20));
-            continue;
+        if count == 2 {
+            got_2 = true;
+            break;
         }
-        got_2 = true;
+        thread::sleep(Duration::from_millis(20));
     }
     assert!(got_2, "Leader doesn't send 2 same snapshots");
 
