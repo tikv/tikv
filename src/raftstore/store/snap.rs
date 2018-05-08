@@ -447,26 +447,26 @@ impl Snap {
     ) -> RaftStoreResult<Snap> {
         let mut s = Snap::new(dir, key, size_track, false, false, deleter, limiter)?;
         s.set_snapshot_meta(snapshot_meta)?;
-
         if s.exists() {
             return Ok(s);
         }
+
+        let create_new_file = |path: &PathBuf, typ: &str| {
+            let f = OpenOptions::new().write(true).create_new(true).open(path);
+            f.map_err(|e| {
+                error!("tmp {} file exists at {:?}", typ, path);
+                RaftStoreError::from(e)
+            })
+        };
+
         for cf_file in &mut s.cf_files {
             if cf_file.size == 0 {
                 continue;
             }
-            let f = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&cf_file.tmp_path)?;
-            cf_file.file = Some(f);
+            cf_file.file = Some(create_new_file(&cf_file.tmp_path, "cf")?);
             cf_file.write_digest = Some(Digest::new(crc32::IEEE));
         }
-        let f = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&s.meta_file.tmp_path)?;
-        s.meta_file.file = Some(f);
+        s.meta_file.file = Some(create_new_file(&s.meta_file.tmp_path, "meta")?);
         Ok(s)
     }
 
@@ -1318,15 +1318,14 @@ impl SnapManager {
     pub fn register(&self, key: SnapKey, entry: SnapEntry) -> Result<()> {
         debug!("register [key: {}, entry: {:?}]", key, entry);
         match self.core.wl().registry.entry(key) {
-            Entry::Occupied(mut e) => if e.get().contains(&entry) {
-                if entry != SnapEntry::Sending {
+            Entry::Occupied(mut e) => {
+                if e.get().contains(&entry) && entry != SnapEntry::Sending {
                     error!("{} is registered with {:?} multi times", e.key(), entry);
                     return Err(box_err!("Register {:?} multi times", entry));
                 }
-                return Ok(());
-            } else {
+                // Push `SnapEntry::Sending` multi times is allowed.
                 e.get_mut().push(entry);
-            },
+            }
             Entry::Vacant(e) => {
                 e.insert(vec![entry]);
             }
@@ -1336,25 +1335,20 @@ impl SnapManager {
         Ok(())
     }
 
-    pub fn deregister(&self, key: &SnapKey, entry: &SnapEntry) {
+    pub fn deregister(&self, key: SnapKey, entry: &SnapEntry) {
         debug!("deregister [key: {}, entry: {:?}]", key, entry);
-        let mut need_clean = false;
-        let mut handled = false;
-        let mut core = self.core.wl();
-        if let Some(e) = core.registry.get_mut(key) {
-            let last_len = e.len();
-            e.retain(|e| e != entry);
-            need_clean = e.is_empty();
-            handled = last_len > e.len();
+        match self.core.wl().registry.entry(key) {
+            Entry::Occupied(mut e) => {
+                if let Some(idx) = e.get().iter().position(|e| e == entry) {
+                    e.get_mut().swap_remove(idx);
+                    notify_stats(self.ch.as_ref());
+                }
+                if e.get().is_empty() {
+                    e.remove_entry();
+                }
+            }
+            Entry::Vacant(e) => error!("stale deregister key: {} {:?}", e.key(), entry),
         }
-        if need_clean {
-            core.registry.remove(key);
-        }
-        if handled {
-            notify_stats(self.ch.as_ref());
-            return;
-        }
-        warn!("stale deregister key: {} {:?}", key, entry);
     }
 
     pub fn stats(&self) -> SnapStats {
@@ -2255,7 +2249,7 @@ mod test {
         let snap_keys = mgr.list_idle_snap().unwrap();
         assert!(snap_keys.is_empty());
         assert!(mgr.has_registered(key));
-        mgr.deregister(key, entry);
+        mgr.deregister(key.clone(), entry);
         let mut snap_keys = mgr.list_idle_snap().unwrap();
         assert_eq!(snap_keys.len(), 1);
         let snap_key = snap_keys.pop().unwrap().0;

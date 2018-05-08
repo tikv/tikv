@@ -562,11 +562,19 @@ impl Peer {
     }
 
     pub fn step(&mut self, m: eraftpb::Message) -> Result<()> {
+        // Pretend not received any heartbeats, and start a new election.
+        fail_point!(
+            "peer_campaign_before_step",
+            m.get_msg_type() == MessageType::MsgHeartbeat,
+            |_| self.raft_group.campaign().map_err(Error::from)
+        );
+
         fail_point!(
             "step_message_3_1",
             { self.peer.get_store_id() == 3 && self.region_id == 1 },
             |_| Ok(())
         );
+
         if self.is_leader() && m.get_from() != INVALID_ID {
             self.peer_heartbeats.insert(m.get_from(), Instant::now());
         }

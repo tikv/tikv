@@ -11,17 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::*;
 use std::*;
 
 use fail;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
-use tikv::raftstore::Result;
-use tikv::util::config::*;
+use tikv::raftstore::{Result, store::SnapKey};
+use tikv::util::{HandyRwLock, config::*};
 
 use raftstore::cluster::Simulator;
 use raftstore::node::new_node_cluster;
@@ -230,6 +231,79 @@ fn test_generate_snapshot() {
     fail::remove("snapshot_delete_after_send");
 }
 
+// Generally leader can't send one snapshot multi times to a follower,
+// because during the sending leader will mark the follower as pause.
+// However, a new elected leader will reset the flag so that if the
+// leader lose and regain leadership, it can send one snapshot multi times.
+#[test]
+fn test_snapshots_with_regain_leadership() {
+    ::util::ci_setup();
+    let _guard = ::setup();
+
+    let mut cluster = new_server_cluster(1, 3);
+    configure_for_snapshot(&mut cluster);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    // Append some new raft logs and then stop node 2.
+    cluster.stop_node(3);
+    (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
+    must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
+    cluster.stop_node(2);
+
+    // A little snapshot sent counter.
+    struct SnapCounter(Arc<RwLock<HashMap<SnapKey, usize>>>);
+    impl Filter<RaftMessage> for SnapCounter {
+        fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+            for msg in msgs {
+                let msg = msg.get_message();
+                if msg.get_msg_type() == MessageType::MsgSnapshot {
+                    let key = SnapKey::from_snap(msg.get_snapshot()).unwrap();
+                    *self.0.wl().entry(key).or_insert(0) += 1;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    let snap_counter = Arc::new(RwLock::new(HashMap::new()));
+    cluster
+        .sim
+        .wl()
+        .add_send_filter(1, box SnapCounter(snap_counter.clone()));
+
+    // Pretend leader sends a larget snapshot.
+    fail::cfg("snapshot_send_last_chunk", "pause").unwrap();
+    cluster.run_node(3);
+    must_no_empty_dir(cluster.get_snap_dir(3));
+
+    // Let peer 3 start a new election.
+    fail::cfg("peer_campaign_before_step", "return").unwrap();
+    thread::sleep(Duration::from_millis(100));
+    fail::remove("peer_campaign_before_step");
+
+    // Wait for a while so that we can see the leader sends 2 same snapshots.
+    let mut got_2 = false;
+    for _ in 0..100 {
+        let (_, &count) = snap_counter.rl().iter().next().unwrap();
+        if count < 2 {
+            thread::sleep(Duration::from_millis(20));
+            continue;
+        }
+        got_2 = true;
+    }
+    assert!(got_2, "Leader doesn't send 2 same snapshots");
+
+    fail::remove("snapshot_send_last_chunk");
+    must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
+}
+
 fn must_empty_dir(path: String) {
     for _ in 0..200 {
         let snap_dir = fs::read_dir(&path).unwrap();
@@ -240,4 +314,15 @@ fn must_empty_dir(path: String) {
         return;
     }
     panic!("the directory {:?} should be empty", path);
+}
+
+fn must_no_empty_dir(path: String) {
+    for _ in 0..200 {
+        let snap_dir = fs::read_dir(&path).unwrap();
+        if snap_dir.count() == 0 {
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+        return;
+    }
 }

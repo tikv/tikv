@@ -299,7 +299,7 @@ impl SnapContext {
         let snap_key = SnapKey::new(region_id, term, idx);
         self.mgr.register(snap_key.clone(), SnapEntry::Applying)?;
         defer!({
-            self.mgr.deregister(&snap_key, &SnapEntry::Applying);
+            self.mgr.deregister(snap_key.clone(), &SnapEntry::Applying);
         });
         let mut s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
         if !s.exists() {

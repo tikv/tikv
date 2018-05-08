@@ -1269,7 +1269,7 @@ pub fn do_snapshot(
             StorageError::SnapshotTemporarilyUnavailable,
         ));
     }
-    defer!(mgr.deregister(&key, &SnapEntry::Generating));
+    defer!(mgr.deregister(key.clone(), &SnapEntry::Generating));
 
     let state: RegionLocalState = snap.get_msg_cf(CF_RAFT, &keys::region_state_key(key.region_id))
         .and_then(|res| match res {

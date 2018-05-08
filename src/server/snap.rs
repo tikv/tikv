@@ -83,6 +83,18 @@ impl Stream for SnapChunk {
             return Ok(Async::Ready(Some((t, write_flags))));
         }
 
+        // Pause sending the snapshot to emulate large snapshot cases.
+        {
+            let fp_last_chunk = || {
+                fail_point!(
+                    "snapshot_send_last_chunk",
+                    self.remain_bytes <= SNAP_CHUNK_LEN,
+                    |_| ()
+                );
+            };
+            fp_last_chunk();
+        }
+
         let mut buf = match self.remain_bytes {
             0 => return Ok(Async::Ready(None)),
             n if n > SNAP_CHUNK_LEN => vec![0; SNAP_CHUNK_LEN],
@@ -134,7 +146,7 @@ fn send_snap(
     mgr.register(key.clone(), SnapEntry::Sending).unwrap();
     let deregister = {
         let (mgr, key) = (mgr.clone(), key.clone());
-        DeferContext::new(move || mgr.deregister(&key, &SnapEntry::Sending))
+        DeferContext::new(move || mgr.deregister(key.clone(), &SnapEntry::Sending))
     };
 
     let s = box_try!(mgr.get_snapshot_for_sending(&key));
@@ -286,7 +298,7 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
             box recv_chunks
                 .and_then(move |context| context.finish(raft_router))
                 .then(move |r| {
-                    snap_mgr.deregister(&context_key, &SnapEntry::Receiving);
+                    snap_mgr.deregister(context_key, &SnapEntry::Receiving);
                     r
                 })
         },
