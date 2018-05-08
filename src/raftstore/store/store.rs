@@ -1527,11 +1527,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             (left.clone(), right.clone())
         };
 
-        self.region_peers
-            .get_mut(&region_id)
-            .unwrap()
-            .mut_store()
-            .region = origin_region.clone();
+        {
+            let peer = self.region_peers.get_mut(&region_id).unwrap();
+            peer.mut_store().region = origin_region;
+            peer.post_split();
+        }
         let new_region_id = new_region.get_id();
         if let Some(peer) = self.region_peers.get(&new_region_id) {
             // If the store received a raft msg with the new region raft group

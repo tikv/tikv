@@ -188,13 +188,54 @@ impl Into<errorpb::Error> for Error {
                 errorpb.set_stale_command(errorpb::StaleCommand::new());
             }
             Error::Transport(transport::Error::Discard(_)) => {
-                let mut server_is_busy_err = errorpb::ServerIsBusy::new();
-                server_is_busy_err.set_reason(RAFTSTORE_IS_BUSY.to_owned());
-                errorpb.set_server_is_busy(server_is_busy_err);
+                let mut reason = errorpb::ServerIsBusy::new();
+                reason.set_reason(RAFTSTORE_IS_BUSY.to_owned());
+                errorpb.set_server_is_busy(reason);
             }
             _ => {}
         };
 
         errorpb
+    }
+}
+
+impl From<errorpb::Error> for Error {
+    fn from(mut err: errorpb::Error) -> Error {
+        if err.has_region_not_found() {
+            let region_id = err.mut_region_not_found().get_region_id();
+            Error::RegionNotFound(region_id)
+        } else if err.has_not_leader() {
+            let leader = if err.get_not_leader().has_leader() {
+                Some(err.mut_not_leader().take_leader())
+            } else {
+                None
+            };
+            let region_id = err.mut_not_leader().get_region_id();
+            Error::NotLeader(region_id, leader)
+        } else if err.has_raft_entry_too_large() {
+            let region_id = err.mut_raft_entry_too_large().get_region_id();
+            let entry_size = err.mut_raft_entry_too_large().get_entry_size();
+            Error::RaftEntryTooLarge(region_id, entry_size)
+        } else if err.has_store_not_match() {
+            Error::StoreNotMatch(0, 0)
+        } else if err.has_key_not_in_region() {
+            let key = err.mut_key_not_in_region().take_key();
+            let mut region = metapb::Region::new();
+            region.set_id(err.mut_key_not_in_region().get_region_id());
+            region.set_start_key(err.mut_key_not_in_region().take_start_key());
+            region.set_end_key(err.mut_key_not_in_region().take_end_key());
+            Error::KeyNotInRegion(key, region)
+        } else if err.has_stale_epoch() {
+            let mut e = err.take_stale_epoch();
+            let new_regions = e.take_new_regions();
+            Error::StaleEpoch(String::new(), new_regions.into())
+        } else if err.has_stale_command() {
+            Error::StaleCommand
+        } else if err.has_server_is_busy() {
+            let mut reason = err.take_server_is_busy();
+            Error::Transport(transport::Error::Discard(reason.take_reason()))
+        } else {
+            Error::Other(box_err!(err.take_message()))
+        }
     }
 }

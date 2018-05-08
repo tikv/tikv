@@ -23,7 +23,6 @@ use tikv::raftstore::store::Callback;
 
 fn stale_read_during_splitting(right_derive: bool) {
     let _guard = ::setup();
-    let apply_split = "apply_before_split_1_3";
 
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
@@ -35,9 +34,11 @@ fn stale_read_during_splitting(right_derive: bool) {
 
     // Write the initial values.
     let key1 = b"k1";
-    cluster.must_put(key1, b"v1");
+    let v1 = b"v1";
+    cluster.must_put(key1, v1);
     let key2 = b"k2";
-    cluster.must_put(key2, b"v2");
+    let v2 = b"v2";
+    cluster.must_put(key2, v2);
 
     // Get the first region.
     let region1 = {
@@ -59,6 +60,7 @@ fn stale_read_during_splitting(right_derive: bool) {
     let leader1 = peer3;
 
     // Pause the apply worker of peer 1.
+    let apply_split = "apply_before_split_1_3";
     fail::cfg(apply_split, "pause").unwrap();
 
     // Split the frist region.
@@ -74,10 +76,10 @@ fn stale_read_during_splitting(right_derive: bool) {
     thread::sleep(election_timeout);
 
     // A common key that is covered by the old region and the new region.
-    let common_key = if right_derive { key1 } else { key2 };
+    let stale_key = if right_derive { key1 } else { key2 };
     // Get the new region;
     let region2 = loop {
-        match cluster.pd_client.get_region(common_key) {
+        match cluster.pd_client.get_region(stale_key) {
             Ok(ref region) if &region1 != region => break region.clone(),
             _ => {
                 // We may meet range gap after split, so here we will
@@ -95,40 +97,103 @@ fn stale_read_during_splitting(right_derive: bool) {
     };
 
     // A new value for key2.
+    let v3 = b"v3".to_vec();
     let mut request = new_request(
         region2.get_id(),
         region2.get_region_epoch().clone(),
-        vec![new_put_cf_cmd("default", common_key, b"v3")],
+        vec![new_put_cf_cmd("default", stale_key, &v3)],
         false,
     );
     request.mut_header().set_peer(leader2.clone());
-
     cluster
         .call_command_on_node(leader2.get_store_id(), request, Duration::from_secs(5))
         .unwrap();
-    // Issue read requests and check the value on response.
-    let value1 = read_on_peer(
-        &mut cluster,
-        leader1,
-        region1.clone(),
-        common_key,
-        Duration::from_secs(1),
-    );
-    let value2 = read_on_peer(
-        &mut cluster,
-        leader2,
-        region2.clone(),
-        common_key,
-        Duration::from_secs(1),
-    );
 
-    error!(
-        "STALE READ!!!! common_key: {:?}, {:?} vs {:?}",
-        common_key, value1, value2
-    );
+    // LocalRead.
+    {
+        let read_quorum = false;
+        let value1 = read_on_peer(
+            &mut cluster,
+            leader1.clone(),
+            region1.clone(),
+            stale_key,
+            read_quorum,
+            Duration::from_secs(1),
+        );
+        let value2 = read_on_peer(
+            &mut cluster,
+            leader2.clone(),
+            region2.clone(),
+            stale_key,
+            read_quorum,
+            Duration::from_secs(1),
+        );
 
-    // Clean up.
-    fail::remove(apply_split);
+        debug!("stale_key: {:?}, {:?} vs {:?}", stale_key, value1, value2);
+        assert_eq!(value2.as_ref().unwrap(), &v3);
+        // Error does not implement PartialEq, Option<Vec<u8>> does.
+        assert_ne!(value1.ok(), value2.ok());
+    }
+
+    // ReadInedx
+    {
+        let read_quorum = true;
+        let value1 = read_on_peer(
+            &mut cluster,
+            leader1.clone(),
+            region1.clone(),
+            stale_key,
+            read_quorum,
+            Duration::from_secs(1),
+        );
+        let value2 = read_on_peer(
+            &mut cluster,
+            leader2,
+            region2.clone(),
+            stale_key,
+            read_quorum,
+            Duration::from_secs(1),
+        );
+
+        debug!("stale_key: {:?}, {:?} vs {:?}", stale_key, value1, value2);
+        assert_eq!(value2.as_ref().unwrap(), &v3);
+        // Error does not implement PartialEq, Option<Vec<u8>> does.
+        assert_ne!(value1.ok(), value2.ok());
+
+        let propose_readindex = "before_propose_readindex";
+        // Leaders can always propose read index despite split.
+        fail::cfg(propose_readindex, "return(true)").unwrap();
+
+        // Can not execute reads that are queued.
+        let value1 = read_on_peer(
+            &mut cluster,
+            leader1.clone(),
+            region1.clone(),
+            stale_key,
+            read_quorum,
+            Duration::from_secs(1),
+        );
+        debug!("stale_key: {:?}, {:?}", stale_key, value1);
+        assert_timeout(value1);
+
+        // Split shall be processed on peer 3.
+        fail::remove(apply_split);
+
+        // It should read an error stale epoch instead of timeout.
+        let value1 = read_on_peer(
+            &mut cluster,
+            leader1.clone(),
+            region1.clone(),
+            stale_key,
+            read_quorum,
+            Duration::from_secs(5),
+        );
+        debug!("stale_key: {:?}, {:?}", stale_key, value1);
+        assert_stale_epoch(value1);
+
+        // Clean up.
+        fail::remove(propose_readindex);
+    }
 }
 
 #[test]

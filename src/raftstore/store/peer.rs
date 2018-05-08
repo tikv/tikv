@@ -15,6 +15,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, slice};
 
@@ -35,7 +36,7 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::worker::apply::ExecResult;
 use raftstore::store::worker::{Apply, ApplyRes, ApplyTask};
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
-use raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
+use raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot, WriteResponse};
 use raftstore::{Error, Result};
 
 use util::MustConsumeVec;
@@ -172,6 +173,74 @@ impl<'a, T> ReadyContext<'a, T> {
     }
 }
 
+#[derive(Default)]
+struct SplitStates {
+    splitting: Arc<AtomicUsize>,
+    indexes: Vec<u64>,
+}
+
+impl SplitStates {
+    const SHRINK_CAPACITY: usize = 16;
+
+    fn push(&mut self, index: u64) {
+        self.indexes.push(index);
+    }
+
+    fn clear(&mut self) {
+        self.splitting = Arc::default();
+        self.indexes.clear();
+    }
+
+    fn is_splitting(&self) -> bool {
+        self.splitting.load(Ordering::Relaxed) > 0
+    }
+
+    fn maybe_advance_split(&mut self, committed: u64, tag: &str) {
+        if self.indexes.is_empty() {
+            return;
+        }
+        let index = *self.indexes.last().unwrap();
+        let total = self.indexes.len();
+        if index <= committed {
+            // It's going to split.
+            self.indexes.retain(|&i| i > committed);
+            let delta = total - self.indexes.len();
+            self.splitting.fetch_add(delta, Ordering::Relaxed);
+            debug!(
+                "{} advance split count {} for committed: {}",
+                tag, delta, committed
+            );
+
+            // GC.
+            if self.indexes.capacity() > Self::SHRINK_CAPACITY
+                && self.indexes.len() < Self::SHRINK_CAPACITY
+            {
+                self.indexes.shrink_to_fit();
+            }
+        }
+    }
+
+    // There are two way for decreasing the splitting counter.
+    // - post_split: For success splits, it must be invoked after region is updated.
+    // - wrap_callback: For failed splits, it only decreases the counter if splits failed.
+    fn post_split(&mut self) {
+        // `fetch_sub` wraps around on overflow.
+        self.splitting.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    // See post_split
+    fn wrap_callback(&self, cb: Callback) -> Callback {
+        let splitting = self.splitting.clone();
+        Callback::Write(box move |resp: WriteResponse| {
+            if resp.response.get_header().has_error() {
+                // `fetch_sub` wraps around on overflow.
+                splitting.fetch_sub(1, Ordering::Relaxed);
+            }
+            cb.invoke_with_response(resp.response);
+        })
+    }
+}
+
 pub struct ConsistencyState {
     pub last_check_time: Instant,
     // (computed_result_or_to_be_verified, index, hash)
@@ -238,6 +307,9 @@ pub struct Peer {
 
     pub pending_remove: bool,
     pub pending_merge: Option<MergeState>,
+
+    // Traces splitting on the best effort.
+    pending_splits: SplitStates,
 
     marked_to_be_checked: bool,
 
@@ -347,6 +419,7 @@ impl Peer {
             pending_remove: false,
             marked_to_be_checked: false,
             pending_merge: None,
+            pending_splits: Default::default(),
             leader_missing_time: Some(Instant::now()),
             tag,
             last_applying_idx: applied_index,
@@ -700,6 +773,17 @@ impl Peer {
         }
     }
 
+    fn on_hard_state_changed(&mut self, ready: &Ready) {
+        // We only care about splitting on leaders.
+        if self.is_leader() {
+            if let Some(ref hs) = ready.hs {
+                let committed = hs.get_commit();
+                self.pending_splits
+                    .maybe_advance_split(committed, &self.tag);
+            }
+        }
+    }
+
     fn on_role_changed(&mut self, ready: &Ready, worker: &FutureWorker<PdTask>) {
         // Update leader lease when the Raft state changes.
         if let Some(ref ss) = ready.ss {
@@ -713,7 +797,7 @@ impl Peer {
                     // It is recommended to update the lease expiring time right after
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
-                    self.renew_leader_lease(monotonic_raw_now());
+                    self.maybe_renew_leader_lease(monotonic_raw_now());
                     debug!(
                         "{} becomes leader and lease expired time is {:?}",
                         self.tag, self.leader_lease
@@ -722,6 +806,9 @@ impl Peer {
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
+                    // We only care about split commands that are committed
+                    // on the current term.
+                    self.pending_splits.clear();
                 }
                 _ => {}
             }
@@ -742,10 +829,16 @@ impl Peer {
     }
 
     #[inline]
-    pub fn ready_to_handle_read(&self) -> bool {
-        // If applied_index_term isn't equal to current term, there may be some values that are not
-        // applied by this leader yet but the old leader.
-        self.get_store().applied_index_term == self.term()
+    fn ready_to_handle_read_index(&self) -> bool {
+        // There may be some values that are not applied by this leader yet but the old leader,
+        // if applied_index_term isn't equal to current term,
+        //
+        // Also, similar problem exists in split. If the old leader splits really slow,
+        // the new region may already elecetd a new leader while the old leader still think it
+        // owns the splitted range.
+
+        // TODO: It may cause read index waits a long time.
+        self.get_store().applied_index_term == self.term() && !self.pending_splits.is_splitting()
     }
 
     pub fn take_apply_proposals(&mut self) -> Option<RegionProposal> {
@@ -808,6 +901,7 @@ impl Peer {
         let mut ready = self.raft_group.ready_since(self.last_applying_idx);
 
         self.on_role_changed(&ready, worker);
+        self.on_hard_state_changed(&ready);
 
         self.add_ready_metric(&ready, &mut ctx.metrics.ready);
 
@@ -894,7 +988,11 @@ impl Peer {
                 // raft meta is very small, can be ignored.
                 self.raft_log_size_hint += entry.get_data().len() as u64;
                 if to_be_updated {
-                    to_be_updated = !self.maybe_update_lease(entry);
+                    let propose_time = self.find_propose_time(entry.get_index(), entry.get_term());
+                    if let Some(propose_time) = propose_time {
+                        self.maybe_renew_leader_lease(propose_time);
+                        to_be_updated = false;
+                    }
                 }
             }
             if !committed_entries.is_empty() {
@@ -916,24 +1014,23 @@ impl Peer {
 
     fn apply_reads(&mut self, ready: &Ready) {
         let mut propose_time = None;
-        if self.ready_to_handle_read() {
-            for state in &ready.read_states {
-                let mut read = self.pending_reads.reads.pop_front().unwrap();
-                assert_eq!(state.request_ctx.as_slice(), read.binary_id());
-                for (req, cb) in read.cmds.drain(..) {
-                    // TODO: we should add test case that a split happens before pending
-                    // read-index is handled. To do this we need to control async-apply
-                    // procedure precisely.
-                    cb.invoke_read(self.handle_read(req));
+        if !ready.read_states.is_empty() {
+            if self.ready_to_handle_read_index() {
+                for state in &ready.read_states {
+                    let mut read = self.pending_reads.reads.pop_front().unwrap();
+                    assert_eq!(state.request_ctx.as_slice(), read.binary_id());
+                    for (req, cb) in read.cmds.drain(..) {
+                        cb.invoke_read(self.handle_read(req));
+                    }
+                    propose_time = Some(read.renew_lease_time);
                 }
-                propose_time = Some(read.renew_lease_time);
-            }
-        } else {
-            for state in &ready.read_states {
-                let read = &self.pending_reads.reads[self.pending_reads.ready_cnt];
-                assert_eq!(state.request_ctx.as_slice(), read.binary_id());
-                self.pending_reads.ready_cnt += 1;
-                propose_time = Some(read.renew_lease_time);
+            } else {
+                for state in &ready.read_states {
+                    let read = &self.pending_reads.reads[self.pending_reads.ready_cnt];
+                    assert_eq!(state.request_ctx.as_slice(), read.binary_id());
+                    self.pending_reads.ready_cnt += 1;
+                    propose_time = Some(read.renew_lease_time);
+                }
             }
         }
 
@@ -951,7 +1048,7 @@ impl Peer {
             if self.leader_lease.inspect(Some(propose_time)) == LeaseState::Suspect {
                 return;
             }
-            self.renew_leader_lease(propose_time);
+            self.maybe_renew_leader_lease(propose_time);
         }
     }
 
@@ -994,7 +1091,7 @@ impl Peer {
             self.mark_to_be_checked(groups);
         }
 
-        if self.pending_reads.ready_cnt > 0 && self.ready_to_handle_read() {
+        if self.pending_reads.ready_cnt > 0 && self.ready_to_handle_read_index() {
             for _ in 0..self.pending_reads.ready_cnt {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 for (req, cb) in read.cmds.drain(..) {
@@ -1006,26 +1103,24 @@ impl Peer {
         self.pending_reads.gc();
     }
 
-    fn renew_leader_lease(&mut self, ts: Timespec) {
+    pub fn post_split(&mut self) {
+        self.pending_splits.post_split();
+    }
+
+    /// Try to renew leader lease.
+    fn maybe_renew_leader_lease(&mut self, ts: Timespec) {
         // A nonleader peer should never has leader lease.
         if !self.is_leader() {
             return;
         }
+        if self.pending_splits.is_splitting() {
+            // A splitting leader should not renew its leader.
+            // Because we split regions asynchronous, the leader may read stale results
+            // if splitting runs slow on the leader.
+            debug!("{} prevents renew lease while splitting", self.tag);
+            return;
+        }
         self.leader_lease.renew(ts);
-    }
-
-    /// Try to update lease.
-    ///
-    /// If the it can make sure that its lease is the latest lease, returns true.
-    fn maybe_update_lease(&mut self, entry: &eraftpb::Entry) -> bool {
-        let propose_time = match self.find_propose_time(entry.get_index(), entry.get_term()) {
-            Some(t) => t,
-            _ => return false,
-        };
-
-        self.renew_leader_lease(propose_time);
-
-        true
     }
 
     pub fn maybe_campaign(
@@ -1065,7 +1160,7 @@ impl Peer {
     pub fn propose(
         &mut self,
         cb: Callback,
-        req: RaftCmdRequest,
+        mut req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
         metrics: &mut RaftProposeMetrics,
     ) -> bool {
@@ -1082,14 +1177,14 @@ impl Peer {
                 self.read_local(req, cb, metrics);
                 return false;
             }
-            Ok(RequestPolicy::ReadIndex) => return self.read_index(req, cb, metrics),
-            Ok(RequestPolicy::ProposeNormal) => self.propose_normal(req, metrics),
+            Ok(RequestPolicy::ReadIndex) => return self.read_index(req, err_resp, cb, metrics),
+            Ok(RequestPolicy::ProposeNormal) => self.propose_normal(&mut req, metrics),
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(req, cb, metrics)
             }
             Ok(RequestPolicy::ProposeConfChange) => {
                 is_conf_change = true;
-                self.propose_conf_change(req, metrics)
+                self.propose_conf_change(&req, metrics)
             }
             Err(e) => Err(e),
         };
@@ -1106,7 +1201,7 @@ impl Peer {
                     term: self.term(),
                     renew_lease_time: None,
                 };
-                self.post_propose(meta, is_conf_change, cb);
+                self.post_propose(&req, meta, is_conf_change, cb);
                 true
             }
         }
@@ -1146,9 +1241,27 @@ impl Peer {
         }
     }
 
-    fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
+    fn post_propose(
+        &mut self,
+        req: &RaftCmdRequest,
+        mut meta: ProposalMeta,
+        is_conf_change: bool,
+        mut cb: Callback,
+    ) {
         // Try to renew leader lease on every consistent read/write request.
         meta.renew_lease_time = Some(monotonic_raw_now());
+        // Try to trace splits.
+        if req.has_admin_request() && req.get_admin_request().has_split() {
+            debug!(
+                "{} trace split command at term: {}, index: {}",
+                self.tag,
+                self.term(),
+                meta.index
+            );
+            self.pending_splits.push(meta.index);
+            // Hook callbacks of spilts.
+            cb = self.pending_splits.wrap_callback(cb);
+        }
 
         let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
         self.apply_proposals.push(p);
@@ -1363,12 +1476,36 @@ impl Peer {
         cb.invoke_read(self.handle_read(req))
     }
 
+    fn pre_read_index(&self) -> Result<()> {
+        fail_point!("before_propose_readindex", |s| {
+            if s.map_or(true, |s| s.parse().unwrap_or(true)) {
+                Ok(())
+            } else {
+                Err(box_err!("can not read due to injected failure"))
+            }
+        });
+        if self.pending_splits.is_splitting() {
+            Err(box_err!("can not read due to split"))
+        } else {
+            Ok(())
+        }
+    }
+
     fn read_index(
         &mut self,
         req: RaftCmdRequest,
+        mut err_resp: RaftCmdResponse,
         cb: Callback,
         metrics: &mut RaftProposeMetrics,
     ) -> bool {
+        if let Err(e) = self.pre_read_index() {
+            debug!("{} prevents unsafe read index", self.tag);
+            metrics.unsafe_read_index += 1;
+            cmd_resp::bind_error(&mut err_resp, e);
+            cb.invoke_with_response(err_resp);
+            return false;
+        }
+
         metrics.read_index += 1;
 
         let renew_lease_time = monotonic_raw_now();
@@ -1409,14 +1546,14 @@ impl Peer {
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
         if self.leader_lease.inspect(Some(renew_lease_time)) == LeaseState::Suspect {
-            let req = RaftCmdRequest::new();
-            if let Ok(index) = self.propose_normal(req, metrics) {
+            let mut req = RaftCmdRequest::new();
+            if let Ok(index) = self.propose_normal(&mut req, metrics) {
                 let meta = ProposalMeta {
                     index,
                     term: self.term(),
                     renew_lease_time: Some(renew_lease_time),
                 };
-                self.post_propose(meta, false, Callback::None);
+                self.post_propose(&req, meta, false, Callback::None);
             }
         }
 
@@ -1491,7 +1628,7 @@ impl Peer {
 
     fn propose_normal(
         &mut self,
-        mut req: RaftCmdRequest,
+        req: &mut RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
     ) -> Result<u64> {
         if self.pending_merge.is_some()
@@ -1503,7 +1640,7 @@ impl Peer {
         metrics.normal += 1;
 
         // TODO: validate request for unexpected changes.
-        if let Err(e) = self.pre_propose(&mut req) {
+        if let Err(e) = self.pre_propose(req) {
             warn!("{} skip proposal: {:?}", self.tag, e);
             return Err(e);
         }
@@ -1517,7 +1654,7 @@ impl Peer {
             return Err(Error::RaftEntryTooLarge(self.region_id, data.len() as u64));
         }
 
-        let sync_log = get_sync_log_from_request(&req);
+        let sync_log = get_sync_log_from_request(req);
         let propose_index = self.next_proposal_index();
         self.raft_group.propose(data, sync_log)?;
         if self.next_proposal_index() == propose_index {
@@ -1561,7 +1698,7 @@ impl Peer {
 
     fn propose_conf_change(
         &mut self,
-        req: RaftCmdRequest,
+        req: &RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
     ) -> Result<u64> {
         if self.pending_merge.is_some() {
@@ -1575,7 +1712,7 @@ impl Peer {
             ));
         }
 
-        self.check_conf_change(&req)?;
+        self.check_conf_change(req)?;
 
         metrics.conf_change += 1;
 
@@ -1584,7 +1721,7 @@ impl Peer {
         // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
 
-        let change_peer = apply::get_change_peer_cmd(&req).unwrap();
+        let change_peer = apply::get_change_peer_cmd(req).unwrap();
         let mut cc = eraftpb::ConfChange::new();
         cc.set_change_type(change_peer.get_change_type());
         cc.set_node_id(change_peer.get_peer().get_id());

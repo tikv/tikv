@@ -362,20 +362,19 @@ pub fn read_on_peer<T: Simulator>(
     peer: metapb::Peer,
     region: metapb::Region,
     key: &[u8],
+    read_quorum: bool,
     timeout: Duration,
 ) -> Result<Vec<u8>> {
     let mut request = new_request(
         region.get_id(),
         region.get_region_epoch().clone(),
         vec![new_get_cmd(key)],
-        false,
+        read_quorum,
     );
     request.mut_header().set_peer(peer);
     let mut resp = cluster.call_command(request, timeout)?;
     if resp.get_header().has_error() {
-        return Err(Error::Other(box_err!(
-            resp.mut_header().take_error().take_message()
-        )));
+        return Err(resp.mut_header().take_error().into());
     }
     assert_eq!(resp.get_responses().len(), 1);
     assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
@@ -391,7 +390,7 @@ pub fn must_read_on_peer<T: Simulator>(
     value: &[u8],
 ) {
     let timeout = Duration::from_secs(1);
-    match read_on_peer(cluster, peer, region, key, timeout) {
+    match read_on_peer(cluster, peer, region, key, false, timeout) {
         Ok(v) => if v != value {
             panic!(
                 "read key {}, expect value {}, got {}",
@@ -411,7 +410,7 @@ pub fn must_error_read_on_peer<T: Simulator>(
     key: &[u8],
     timeout: Duration,
 ) {
-    if let Ok(value) = read_on_peer(cluster, peer, region, key, timeout) {
+    if let Ok(value) = read_on_peer(cluster, peer, region, key, false, timeout) {
         panic!(
             "key {}, expect error but got {}",
             escape(key),
@@ -459,6 +458,24 @@ pub fn create_test_engine(
         }
     };
     (engines, path)
+}
+
+// It's used in failpoints.
+#[allow(dead_code)]
+pub fn assert_stale_epoch<T: ::std::fmt::Debug>(res: Result<T>) {
+    match res {
+        Err(Error::StaleEpoch(..)) => (),
+        res => panic!("expect Error::StaleEpoch, got {:?}", res),
+    }
+}
+
+// It's used in failpoints.
+#[allow(dead_code)]
+pub fn assert_timeout<T: ::std::fmt::Debug>(res: Result<T>) {
+    match res {
+        Err(Error::Timeout(_)) => (),
+        res => panic!("expect Error::Timeout, got {:?}", res),
+    }
 }
 
 pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
