@@ -445,7 +445,9 @@ impl Peer {
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
             // will be cleared by a newer snapshot applying or restart.
-            if let Err(e) = self.get_store().clear_data() {
+            if let Err(e) = self.get_store()
+                .clear_data(RegionRefCountUtil::get_region_refs(&self.references))
+            {
                 error!("{} failed to schedule clear data task: {:?}", self.tag, e);
             }
         }
