@@ -109,7 +109,7 @@ impl Host {
         // Otherwize collect into thread local contexts.
         let metrics = &mut self.basic_local_metrics;
 
-        if let Err(e) = t.check_outdated() {
+        if let Err(e) = t.req_ctx.check_if_outdated() {
             let resp = err_resp(e, metrics);
             t.on_resp.respond(resp);
             return;
@@ -401,8 +401,8 @@ impl Display for RequestTask {
 
 impl RequestTask {
     pub fn new(
-        mut req: Request,
         peer: String,
+        mut req: Request,
         on_resp: OnResponse<Response>,
         recursion_limit: u32,
         batch_row_limit: usize,
@@ -492,8 +492,6 @@ impl RequestTask {
         };
 
         let start_time = Instant::now_coarse();
-
-        let req_ctx = ReqContext::new(req.get_context(), start_ts, is_table_scan);
 
         let tracker = RequestTracker {
             running_task_count: None,
@@ -717,7 +715,6 @@ mod tests {
     use tipb::expression::Expr;
     use tipb::select::DAGRequest;
 
-    use util::config::ReadableDuration;
     use util::worker::{Builder as WorkerBuilder, FutureWorker};
 
     #[test]
@@ -866,8 +863,14 @@ mod tests {
         req.set_tp(REQ_TYPE_DAG);
 
         let (tx, rx) = oneshot::channel();
-        let task =
-            RequestTask::new(String::from("127.0.0.1"), req, OnResponse::Unary(tx), 1000).unwrap();
+        let task = RequestTask::new(
+            String::from("127.0.0.1"),
+            req,
+            OnResponse::Unary(tx),
+            1000,
+            64,
+            Duration::from_secs(60),
+        ).unwrap();
         worker.schedule(Task::Request(task)).unwrap();
 
         let resp = rx.wait().unwrap();

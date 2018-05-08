@@ -14,13 +14,13 @@
 use futures::sync::{mpsc as futures_mpsc, oneshot};
 use futures::{future, stream, Future, Sink, Stream};
 use std::iter::{self, FromIterator};
-use std::sync::Arc;
 use std::time::Duration;
 
 use grpc::{ClientStreamingSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
            RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
+use kvproto::kvrpcpb;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb_grpc;
@@ -1360,10 +1360,10 @@ fn extract_2pc_values(res: Vec<(u64, Value)>) -> Vec<MvccValue> {
         .collect()
 }
 
-fn extract_2pc_writes(res: Vec<(u64, MvccWrite)>) -> Vec<MvccWrite> {
+fn extract_2pc_writes(res: Vec<(u64, MvccWrite)>) -> Vec<kvrpcpb::MvccWrite> {
     res.into_iter()
         .map(|(commit_ts, write)| {
-            let mut write_info = MvccWrite::new();
+            let mut write_info = kvrpcpb::MvccWrite::new();
             let op = match write.write_type {
                 WriteType::Put => Op::Put,
                 WriteType::Delete => Op::Del,
