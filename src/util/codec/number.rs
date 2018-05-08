@@ -355,6 +355,26 @@ mod test {
         f64::NEG_INFINITY,
     ];
 
+    const I32_TESTS: &[i32] = &[
+        i32::MIN,
+        i32::MAX,
+        0,
+        1,
+        2,
+        10,
+        20,
+        63,
+        64,
+        65,
+        127,
+        128,
+        129,
+        255,
+        256,
+        257,
+        -1024,
+    ];
+
     // use macro to generate order tests for number codecs.
     macro_rules! test_order {
         ($arr:expr, $sorted:expr, $enc:ident, $dec:ident) => {
@@ -411,6 +431,8 @@ mod test {
     }
 
     test_codec!(encode_i64, decode_i64, |a, b| a.cmp(b), I64_TESTS);
+    test_codec!(encode_u32, decode_u32, |a, b| a.cmp(b), U32_TESTS);
+    test_codec!(encode_u16, decode_u16, |a, b| a.cmp(b), U16_TESTS);
     test_codec!(encode_i64_desc, decode_i64_desc, |a, b| b.cmp(a), I64_TESTS);
     test_codec!(encode_u64, decode_u64, |a, b| a.cmp(b), U64_TESTS);
     test_codec!(encode_u64_desc, decode_u64_desc, |a, b| b.cmp(a), U64_TESTS);
@@ -439,6 +461,13 @@ mod test {
         encode_u64_le,
         decode_u64_le,
         U64_TESTS
+    );
+
+    test_serialize!(
+        var_i32_little_endian_codec,
+        encode_i32_le,
+        decode_i32_le,
+        I32_TESTS
     );
 
     test_serialize!(var_u16_codec, encode_u16_le, decode_u16_le, U16_TESTS);

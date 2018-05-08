@@ -2720,6 +2720,35 @@ mod test {
     }
 
     #[test]
+    fn test_chunk_codec() {
+        let cases = vec![
+            "-10.55",
+            "0.0123456789012345678912345",
+            "12345",
+            "12345",
+            "123.45",
+            ".00012345000098765",
+            ".00012345000098765",
+            ".12345000098765",
+            "1234500009876.5",
+            "111111111.11",
+            "000000000.01",
+            "123.4",
+            "1000",
+            "10000000000000000000.23",
+        ];
+
+        for dec_str in cases {
+            let dec = dec_str.parse::<Decimal>().unwrap();
+            let mut buf = vec![];
+            buf.encode_decimal_to_chunk(&dec).unwrap();
+            buf.resize(DECIMAL_STRUCT_SIZE, 0);
+            let decoded = buf.as_slice().decode_decimal_from_chunk().unwrap();
+            assert_eq!(decoded, dec);
+        }
+    }
+
+    #[test]
     fn test_cmp() {
         let cases = vec![
             ("12", "13", Ordering::Less),

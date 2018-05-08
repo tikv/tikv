@@ -148,7 +148,7 @@ mod test {
     use coprocessor::codec::mysql::*;
     use tipb::expression::FieldType;
 
-    fn field_type(tp: u8) -> FieldType {
+    pub fn field_type(tp: u8) -> FieldType {
         let mut fp = FieldType::new();
         fp.set_tp(i32::from(tp));
         fp
@@ -190,5 +190,10 @@ mod test {
             let got = row.get_datum(col_id, &fields[col_id]).unwrap();
             assert_eq!(got, data[col_id]);
         }
+
+        assert_eq!(row.len(), data.len());
+        assert!(!row.is_empty());
+        assert_eq!(row.idx(), 0);
+        assert_eq!(row.next().idx(), arc_chunk.end().idx());
     }
 }

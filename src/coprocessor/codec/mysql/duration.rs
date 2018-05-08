@@ -400,4 +400,25 @@ mod test {
             assert_eq!(exp, res);
         }
     }
+
+    #[test]
+    fn test_codec() {
+        let cases = vec![
+            ("11:30:45.123456", 4),
+            ("11:30:45.123456", 6),
+            ("11:30:45.123456", 0),
+            ("11:59:59.999999", 3),
+            ("1 11:30:45.123456", 1),
+            ("1 11:30:45.999999", 4),
+            ("-1 11:30:45.999999", 0),
+            ("-1 11:59:59.9999", 2),
+        ];
+        for (input, fsp) in cases {
+            let mut t = Duration::parse(input.as_bytes(), fsp).unwrap();
+            let mut buf = vec![];
+            buf.encode_duration(&t).unwrap();
+            let got = buf.as_slice().decode_duration().unwrap();
+            assert_eq!(t, got);
+        }
+    }
 }

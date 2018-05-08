@@ -291,3 +291,136 @@ impl Column {
         self.length
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use coprocessor::codec::chunk::test::field_type;
+    use coprocessor::codec::datum::Datum;
+    use coprocessor::codec::mysql::*;
+    use std::{f64, u64};
+    use tipb::expression::FieldType;
+
+    #[test]
+    fn test_column_i64() {
+        let fields = vec![
+            field_type(types::TINY),
+            field_type(types::SHORT),
+            field_type(types::INT24),
+            field_type(types::LONG),
+            field_type(types::LONG_LONG),
+            field_type(types::YEAR),
+        ];
+        let data = vec![
+            Datum::Null,
+            Datum::I64(-1),
+            Datum::I64(12),
+            Datum::I64(1024),
+        ];
+        for field in &fields {
+            let mut column = Column::new(field, data.len());
+            for v in &data {
+                column.append_datum(v).unwrap();
+            }
+
+            for (id, expect) in data.iter().enumerate() {
+                let get = column.get_datum(id, field).unwrap();
+                assert_eq!(&get, expect);
+            }
+        }
+    }
+
+    #[test]
+    fn test_column_u64() {
+        let mut fields = vec![
+            field_type(types::TINY),
+            field_type(types::SHORT),
+            field_type(types::INT24),
+            field_type(types::LONG),
+            field_type(types::LONG_LONG),
+            field_type(types::YEAR),
+        ];
+        for field in &mut fields {
+            field.set_flag(types::UNSIGNED_FLAG as u32);
+        }
+        let data = vec![
+            Datum::Null,
+            Datum::U64(1),
+            Datum::U64(u64::MIN),
+            Datum::U64(u64::MAX),
+        ];
+        test_colum_datum(fields, data);
+    }
+
+    fn test_colum_datum(fields: Vec<FieldType>, data: Vec<Datum>) {
+        for field in &fields {
+            let mut column = Column::new(field, data.len());
+            for v in &data {
+                column.append_datum(v).unwrap();
+            }
+            for (id, expect) in data.iter().enumerate() {
+                let get = column.get_datum(id, field).unwrap();
+                assert_eq!(&get, expect);
+            }
+        }
+    }
+
+    #[test]
+    fn test_column_f64() {
+        let fields = vec![field_type(types::FLOAT), field_type(types::DOUBLE)];
+        let data = vec![Datum::Null, Datum::F64(f64::MIN), Datum::F64(f64::MAX)];
+        test_colum_datum(fields, data);
+    }
+
+    #[test]
+    fn test_column_time() {
+        let fields = vec![
+            field_type(types::DATE),
+            field_type(types::DATETIME),
+            field_type(types::TIMESTAMP),
+        ];
+        let time = Time::parse_utc_datetime("2012-12-31 11:30:45", -1).unwrap();
+        let data = vec![Datum::Null, Datum::Time(time)];
+        test_colum_datum(fields, data);
+    }
+
+    #[test]
+    fn test_column_duration() {
+        let fields = vec![field_type(types::DURATION)];
+        let duration = Duration::parse(b"10:11:12", 0).unwrap();
+        let data = vec![Datum::Null, Datum::Dur(duration)];
+        test_colum_datum(fields, data);
+    }
+
+    #[test]
+    fn test_column_decimal() {
+        let fields = vec![field_type(types::NEW_DECIMAL)];
+        let dec: Decimal = "1234.00".parse().unwrap();
+        let data = vec![Datum::Null, Datum::Dec(dec)];
+        test_colum_datum(fields, data);
+    }
+
+    #[test]
+    fn test_column_json() {
+        let fields = vec![field_type(types::JSON)];
+        let json: Json = r#"{"k1":"v1"}"#.parse().unwrap();
+
+        let data = vec![Datum::Null, Datum::Json(json)];
+        test_colum_datum(fields, data);
+    }
+
+    #[test]
+    fn test_column_bytes() {
+        let fields = vec![
+            field_type(types::VARCHAR),
+            field_type(types::VAR_STRING),
+            field_type(types::STRING),
+            field_type(types::BLOB),
+            field_type(types::TINY_BLOB),
+            field_type(types::MEDIUM_BLOB),
+            field_type(types::LONG_BLOB),
+        ];
+        let data = vec![Datum::Null, Datum::Bytes(b"xxx".to_vec())];
+        test_colum_datum(fields, data);
+    }
+}
