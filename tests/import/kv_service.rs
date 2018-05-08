@@ -18,8 +18,8 @@ use tempdir::TempDir;
 use uuid::Uuid;
 
 use grpc::{ChannelBuilder, Environment, Result, WriteFlags};
-use kvproto::importpb::*;
-use kvproto::importpb_grpc::*;
+use kvproto::import_kvpb::*;
+use kvproto::import_kvpb_grpc::*;
 
 use tikv::config::TiKvConfig;
 use tikv::import::ImportKVServer;

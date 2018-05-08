@@ -28,12 +28,13 @@ use std::error;
 use std::result;
 use std::time::Duration;
 
-use kvproto::errorpb;
-use kvproto::kvrpcpb::LockInfo;
-use tipb::select;
+use kvproto::{errorpb, kvrpcpb};
+use tipb;
 
-use self::dag::expr;
-use storage::{engine, mvcc, txn};
+use storage;
+use util::time::Instant;
+
+const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
 quick_error! {
     #[derive(Debug)]
@@ -42,7 +43,7 @@ quick_error! {
             description("region related failure")
             display("region {:?}", err)
         }
-        Locked(l: LockInfo) {
+        Locked(l: kvrpcpb::LockInfo) {
             description("key is locked")
             display("locked {:?}", l)
         }
@@ -52,10 +53,10 @@ quick_error! {
         Full(allow: usize) {
             description("running queue is full")
         }
-        Eval(err:select::Error) {
+        Eval(err: tipb::select::Error) {
             from()
             description("eval failed")
-            display("eval error {:?}",err)
+            display("eval error {:?}", err)
         }
         Other(err: Box<error::Error + Send + Sync>) {
             from()
@@ -68,39 +69,39 @@ quick_error! {
 
 pub type Result<T> = result::Result<T, Error>;
 
-impl From<engine::Error> for Error {
-    fn from(e: engine::Error) -> Error {
+impl From<storage::engine::Error> for Error {
+    fn from(e: storage::engine::Error) -> Error {
         match e {
-            engine::Error::Request(e) => Error::Region(e),
+            storage::engine::Error::Request(e) => Error::Region(e),
             _ => Error::Other(box e),
         }
     }
 }
 
-impl From<expr::Error> for Error {
-    fn from(e: expr::Error) -> Error {
+impl From<self::dag::expr::Error> for Error {
+    fn from(e: self::dag::expr::Error) -> Error {
         Error::Eval(e.into())
     }
 }
 
-impl From<super::util::codec::Error> for Error {
-    fn from(e: super::util::codec::Error) -> Error {
-        let mut err = select::Error::new();
+impl From<::util::codec::Error> for Error {
+    fn from(e: ::util::codec::Error) -> Error {
+        let mut err = tipb::select::Error::new();
         err.set_msg(format!("{}", e));
         Error::Eval(err)
     }
 }
 
-impl From<txn::Error> for Error {
-    fn from(e: txn::Error) -> Error {
+impl From<storage::txn::Error> for Error {
+    fn from(e: storage::txn::Error) -> Error {
         match e {
-            txn::Error::Mvcc(mvcc::Error::KeyIsLocked {
+            storage::txn::Error::Mvcc(storage::mvcc::Error::KeyIsLocked {
                 primary,
                 ts,
                 key,
                 ttl,
             }) => {
-                let mut info = LockInfo::new();
+                let mut info = kvrpcpb::LockInfo::new();
                 info.set_primary_lock(primary);
                 info.set_lock_version(ts);
                 info.set_key(key);
@@ -112,7 +113,50 @@ impl From<txn::Error> for Error {
     }
 }
 
+#[derive(Debug)]
+pub struct ReqContext {
+    pub context: kvrpcpb::Context,
+    pub table_scan: bool, // Whether is a table scan request.
+    pub txn_start_ts: u64,
+    pub start_time: Instant,
+    pub deadline: Instant,
+}
+
+impl ReqContext {
+    pub fn new(ctx: &kvrpcpb::Context, txn_start_ts: u64, table_scan: bool) -> ReqContext {
+        let start_time = Instant::now_coarse();
+        ReqContext {
+            context: ctx.clone(),
+            table_scan,
+            txn_start_ts,
+            start_time,
+            deadline: start_time,
+        }
+    }
+
+    pub fn set_max_handle_duration(&mut self, request_max_handle_duration: Duration) {
+        self.deadline = self.start_time + request_max_handle_duration;
+    }
+
+    #[inline]
+    pub fn get_scan_tag(&self) -> &'static str {
+        if self.table_scan {
+            "select"
+        } else {
+            "index"
+        }
+    }
+
+    pub fn check_if_outdated(&self) -> Result<()> {
+        let now = Instant::now_coarse();
+        if self.deadline <= now {
+            let elapsed = now.duration_since(self.start_time);
+            return Err(Error::Outdated(elapsed, self.get_scan_tag()));
+        }
+        Ok(())
+    }
+}
+
 pub use self::dag::{ScanOn, Scanner};
 pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask,
-                         DEFAULT_REQUEST_MAX_HANDLE_SECS, REQ_TYPE_CHECKSUM, REQ_TYPE_DAG,
-                         SINGLE_GROUP};
+                         DEFAULT_REQUEST_MAX_HANDLE_SECS, REQ_TYPE_CHECKSUM, REQ_TYPE_DAG};
