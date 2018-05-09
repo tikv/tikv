@@ -53,7 +53,7 @@ where
     let filtered = drain.filter(|record| {
         ENABLED_TARGETS
             .iter()
-            .all(|target| !record.module().starts_with(target))
+            .any(|target| record.module().starts_with(target))
     });
     init_log(filtered, level)
 }
