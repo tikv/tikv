@@ -468,8 +468,8 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for _ in 0..100 {
         // write many logs to force log GC for region 1 and region 2.
-        cluster.get(b"k1").unwrap();
-        cluster.get(b"k2").unwrap();
+        cluster.must_put(b"k1", b"v1");
+        cluster.must_put(b"k2", b"v2");
     }
 
     cluster.clear_send_filters();
