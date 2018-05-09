@@ -75,12 +75,12 @@ pub fn get_level_by_string(lv: &str) -> Option<Level> {
 // the full words. This produces the full word.
 pub fn get_string_by_level(lv: &Level) -> &'static str {
     match lv {
-        Level::Critical => "Critical",
-        Level::Error => "Error",
-        Level::Warning => "Warning",
-        Level::Debug => "Debug",
-        Level::Trace => "Trace",
-        Level::Info => "Info",
+        Level::Critical => "critical",
+        Level::Error => "error",
+        Level::Warning => "warning",
+        Level::Debug => "debug",
+        Level::Trace => "trace",
+        Level::Info => "info",
     }
 }
 
