@@ -17,8 +17,8 @@ use futures::sync::mpsc;
 use futures::{Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
-use kvproto::importpb::*;
-use kvproto::importpb_grpc::*;
+use kvproto::import_kvpb::*;
+use kvproto::import_kvpb_grpc::*;
 use uuid::Uuid;
 
 use util::time::Instant;

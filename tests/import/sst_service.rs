@@ -20,8 +20,8 @@ use tempdir::TempDir;
 use uuid::Uuid;
 
 use grpc::{ChannelBuilder, Environment, Result, WriteFlags};
-use kvproto::importpb::*;
-use kvproto::importpb_grpc::*;
+use kvproto::import_sstpb::*;
+use kvproto::import_sstpb_grpc::*;
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb_grpc::*;
 
