@@ -16,7 +16,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use grpc::{ChannelBuilder, EnvBuilder, Server as GrpcServer, ServerBuilder};
-use kvproto::importpb_grpc::create_import_kv;
+use kvproto::import_kvpb_grpc::create_import_kv;
 
 use config::TiKvConfig;
 
