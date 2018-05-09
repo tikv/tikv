@@ -44,7 +44,7 @@ Shortly after you will be able to connect with `mysql -h 127.0.0.1 -P 4000 -u ro
 
 ## Setting Up a Development Workspace
 
-The TiKV codebase is primarily written in Rust, but has components written in C++ (RocksDB) and Go (for protobufs). In order to provide consistency and avoid opinion-based arguments, we make extensive use of linters and automated formatting tools. Additionally, due to Rust's youth we are currently utlizing nightly builds which provide access to many useful features.
+The TiKV codebase is primarily written in Rust, but has components written in C++ (RocksDB) and Go (gRPC). In order to provide consistency and avoid opinion-based arguments, we make extensive use of linters and automated formatting tools. Additionally, due to Rust's youth we are currently utlizing nightly builds which provide access to many useful features.
 
 ### Checking Your Prerequisites
 
@@ -54,9 +54,9 @@ In order to build TiKV you will need (at least) the following packages available
 * `rustup` - Rust toolchain manager
 * `awk` - Pattern scanning/processing language
 * `cmake` - Build tool (required for gRPC)
-* `go` - Programming language (required for protobuf)
+* `go` - Programming language (required for gRPC)
 * `make` - Build tool (run common workflows)
-* `clang` - C compiler toolchain
+* `clang` or `gcc` - C compiler toolchain
 
 ### Getting the Repository
 
