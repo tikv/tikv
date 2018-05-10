@@ -117,11 +117,11 @@ In order to get other components ([TiDB](https://github.com/pingcap/tidb) and [P
 
 ## Deploying To Production
 
-**Use Ansible?** The official [Ansible playbooks](https://github.com/pingcap/tidb-ansible) are the reccomended way of deploying a cluster of TiKV nodes alongside the other components of a cluster.
+**Use Ansible?** The official [Ansible deployment guide](https://github.com/pingcap/docs/blob/master/op-guide/ansible-deployment.md) outlines the recommended way of deploying a cluster of TiKV nodes alongside the other components of a cluster.
 
 **Prefer Docker?** You can find a guide on deploying a cluster with [Docker](https://github.com/pingcap/docs/blob/master/op-guide/docker-deployment.md) to run the TiKV and the rest of the cluster.
 
-**Want to roll your own?** That works too! We have written a [Binary Deployment Guide](https://github.com/pingcap/docs/blob/master/op-guide/binary-deployment.md) which might help you as you piece together your own way of doing things.
+**Want to roll your own?** That works too! We have written a [Binary deployment Guide](https://github.com/pingcap/docs/blob/master/op-guide/binary-deployment.md) which might help you as you piece together your own way of doing things.
 
 
 ## Using TiKV
