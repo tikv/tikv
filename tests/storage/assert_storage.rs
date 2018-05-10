@@ -34,9 +34,11 @@ pub struct AssertionStorage {
 impl Default for AssertionStorage {
     fn default() -> AssertionStorage {
         let pd_worker = FutureWorker::new("test future worker");
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(pd_worker.scheduler())
-        });
+        let read_pool = ReadPool::new(
+            "readpool",
+            &readpool::Config::default_for_test().to_base_storage(),
+            || || storage::ReadPoolContext::new(pd_worker.scheduler()),
+        );
         AssertionStorage {
             ctx: Context::new(),
             store: SyncStorage::new(&Config::default(), read_pool),
@@ -67,9 +69,11 @@ impl AssertionStorage {
         self.ctx.set_region_epoch(region.get_region_epoch().clone());
         self.ctx.set_peer(leader.clone());
         let pd_worker = FutureWorker::new("test future worker");
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(pd_worker.scheduler())
-        });
+        let read_pool = ReadPool::new(
+            "readpool",
+            &readpool::Config::default_for_test().to_base_storage(),
+            || || storage::ReadPoolContext::new(pd_worker.scheduler()),
+        );
         self.store = SyncStorage::from_engine(engine, &Config::default(), read_pool);
     }
 

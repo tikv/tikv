@@ -707,21 +707,12 @@ pub enum LogLevel {
     Off,
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Default)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
     pub storage: ReadPoolInstanceConfig,
     pub coprocessor: ReadPoolInstanceConfig,
-}
-
-impl Default for ReadPoolConfig {
-    fn default() -> ReadPoolConfig {
-        ReadPoolConfig {
-            storage: ReadPoolInstanceConfig::default_for_storage(),
-            coprocessor: ReadPoolInstanceConfig::default_for_coprocessor(),
-        }
-    }
 }
 
 impl ReadPoolConfig {
@@ -860,9 +851,7 @@ impl TiKvConfig {
                 self.server.end_point_concurrency
             );
             let concurrency = self.server.end_point_concurrency.unwrap();
-            self.readpool.coprocessor.high_concurrency = concurrency;
-            self.readpool.coprocessor.normal_concurrency = concurrency;
-            self.readpool.coprocessor.low_concurrency = concurrency;
+            self.readpool.coprocessor.set_concurrency(concurrency);
         }
         if self.server.end_point_stack_size != None {
             warn!(
@@ -875,7 +864,7 @@ impl TiKvConfig {
                 "server.end_point_stack_size",
                 self.server.end_point_stack_size
             );
-            self.readpool.coprocessor.stack_size = self.server.end_point_stack_size.unwrap();
+            self.readpool.coprocessor.stack_size = self.server.end_point_stack_size;
         }
         if self.raft_store.clean_stale_peer_delay.as_secs() > 0 {
             let delay_secs = self.raft_store.clean_stale_peer_delay.as_secs()

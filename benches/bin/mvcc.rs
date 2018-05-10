@@ -30,9 +30,11 @@ use super::print_result;
 /// when doing scan.
 fn bench_tombstone_scan() -> BenchSamples {
     let pd_worker = FutureWorker::new("test pd worker");
-    let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-        || storage::ReadPoolContext::new(pd_worker.scheduler())
-    });
+    let read_pool = ReadPool::new(
+        "readpool",
+        &readpool::Config::default_for_test().to_base_storage(),
+        || || storage::ReadPoolContext::new(pd_worker.scheduler()),
+    );
     let store = SyncStorage::new(&Default::default(), read_pool);
     let mut ts_generator = 1..;
 

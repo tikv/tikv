@@ -14,11 +14,12 @@
 mod config;
 mod priority;
 
-use futures::Future;
-use futures_cpupool::CpuFuture;
 use std::error::Error;
 use std::fmt;
 use std::time::Duration;
+
+use futures::Future;
+use futures_cpupool::CpuFuture;
 
 use util;
 use util::futurepool::{self, FuturePool};
@@ -54,7 +55,11 @@ impl<T: futurepool::Context + 'static> Clone for ReadPool<T> {
 impl<T: futurepool::Context + 'static> ReadPool<T> {
     // Rust does not support copying closures (RFC 2132) so that we need a closure builder.
     // TODO: Use a single closure once RFC 2132 is implemented.
-    pub fn new<F, CF>(name_prefix: &str, config: &Config, context_factory_builder: F) -> Self
+    pub fn new<F, CF>(
+        name_prefix: &str,
+        config: &self::config::BaseConfig,
+        context_factory_builder: F,
+    ) -> Self
     where
         F: futurepool::Factory<CF>,
         CF: futurepool::Factory<T>,
@@ -167,7 +172,7 @@ mod tests {
     use std::sync::mpsc::{channel, Sender};
     use std::thread;
 
-    pub use super::*;
+    use super::*;
 
     type BoxError = Box<error::Error + Send + Sync>;
 
@@ -194,7 +199,11 @@ mod tests {
 
     #[test]
     fn test_future_execute() {
-        let read_pool = ReadPool::new("readpool", &Config::default_for_test(), || || Context {});
+        let read_pool = ReadPool::new(
+            "readpool",
+            &Config::default_for_test().to_base_storage(),
+            || || Context {},
+        );
 
         expect_val(
             vec![1, 2, 4],
@@ -247,10 +256,10 @@ mod tests {
         let read_pool = ReadPool::new(
             "readpool",
             &Config {
-                high_concurrency: 2,
-                max_tasks_high: 4,
-                ..Config::default_for_test()
-            },
+                high_concurrency: Some(2),
+                max_tasks_high: Some(4),
+                ..Config::default()
+            }.to_base_storage(),
             || || Context {},
         );
 

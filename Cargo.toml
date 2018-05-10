@@ -71,7 +71,7 @@ rustc-serialize = "0.3"
 zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
-uuid = { version = "0.4", features = [ "serde", "v4" ] }
+uuid = { version = "0.6", features = [ "serde", "v4" ] }
 grpcio = { version = "0.2", features = [ "secure" ] }
 raft = "0.1"
 crossbeam-channel = { version = "0.1", features = [ "nightly" ] }

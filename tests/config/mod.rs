@@ -81,22 +81,22 @@ fn test_serde_custom_tikv_config() {
     };
     value.readpool = ReadPoolConfig {
         storage: ReadPoolInstanceConfig {
-            high_concurrency: 1,
-            normal_concurrency: 3,
-            low_concurrency: 7,
-            max_tasks_high: 10000,
-            max_tasks_normal: 20000,
-            max_tasks_low: 30000,
-            stack_size: ReadableSize::mb(20),
+            high_concurrency: Some(1),
+            normal_concurrency: Some(3),
+            low_concurrency: Some(7),
+            max_tasks_high: Some(10000),
+            max_tasks_normal: Some(20000),
+            max_tasks_low: Some(30000),
+            stack_size: Some(ReadableSize::mb(20)),
         },
         coprocessor: ReadPoolInstanceConfig {
-            high_concurrency: 2,
-            normal_concurrency: 4,
-            low_concurrency: 6,
-            max_tasks_high: 20000,
-            max_tasks_normal: 30000,
-            max_tasks_low: 40000,
-            stack_size: ReadableSize::mb(12),
+            high_concurrency: Some(2),
+            normal_concurrency: Some(4),
+            low_concurrency: Some(6),
+            max_tasks_high: Some(20000),
+            max_tasks_normal: Some(30000),
+            max_tasks_low: Some(40000),
+            stack_size: Some(ReadableSize::mb(12)),
         },
     };
     value.metric = MetricConfig {
@@ -422,4 +422,15 @@ fn test_serde_custom_tikv_config() {
     assert_eq!(value, load);
     let dump = toml::to_string_pretty(&load).unwrap();
     assert_eq!(dump, custom);
+}
+
+#[test]
+fn test_serde_default_config() {
+    let custom = read_file_in_project_dir("tests/config/test-default1.toml");
+    let load: TiKvConfig = toml::from_str(&custom).unwrap();
+    assert_eq!(load, TiKvConfig::default());
+
+    let custom = read_file_in_project_dir("tests/config/test-default2.toml");
+    let load: TiKvConfig = toml::from_str(&custom).unwrap();
+    assert_eq!(load, TiKvConfig::default());
 }
