@@ -5,6 +5,15 @@ See also [TiDB change log][tidb_change_log] and [PD change log][pd_change_log].
 [tidb_change_log]: https://github.com/pingcap/tidb/blob/master/CHANGELOG.md
 [pd_change_log]: https://github.com/pingcap/pd/blob/master/CHANGELOG.md
 
+## [2.0.1]
+### Performance
+* Reduce thread_yield call
+* Enable read when lock by select for update
+### Improvements
+* More verbose logs for slow query
+### Bug Fixes
+* Avoid block raftstore thread when generating snapshot
+
 ## [2.0.0] - 2018-04-27
 ### Features
 * Protect critical configuration from incorrect modification
