@@ -109,8 +109,13 @@ impl<T: Simulator> Cluster<T> {
         sim: Arc<RwLock<T>>,
         pd_client: Arc<TestPdClient>,
     ) -> Cluster<T> {
+        let mut cfg = new_tikv_config(id);
+        // Set this flag to pass tests. (Issue #3034)
+        // TODO: Remove it after apply pool is implemented.
+        // TODO: In the future, maybe it's better to test both true and false
+        cfg.raft_store.use_delete_range = true;
         Cluster {
-            cfg: new_tikv_config(id),
+            cfg,
             leaders: HashMap::new(),
             paths: vec![],
             dbs: vec![],

@@ -80,10 +80,8 @@ fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for i in 1..1000 {
         let k = format!("key{}", i);
-        let _key = k.as_bytes();
-        // Do not assert temporarily
-        // TODO: Uncomment this after apply pool is implemented
-        // assert!(cluster.get(key).is_none());
+        let key = k.as_bytes();
+        assert!(cluster.get(key).is_none());
     }
 }
 

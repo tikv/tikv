@@ -1711,9 +1711,9 @@ impl ApplyDelegate {
             });
 
         // Delete all remaining keys.
-        // Temporarily only delete LOCK_CF here
-        // TODO: Also delete other CFs after apply pool is implemented
-        if cf == CF_LOCK {
+        // If it's not CF_LOCK and use_delete_range is false, skip this step to speed up (#3034)
+        // TODO: Remove the `if` line after apply pool is implemented
+        if cf == CF_LOCK || use_delete_range {
             util::delete_all_in_range_cf(&self.engine, cf, &start_key, &end_key, use_delete_range)
                 .unwrap_or_else(|e| {
                     panic!(
@@ -2735,11 +2735,9 @@ mod tests {
         apply_ctx.write_to_db(&db);
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
-        // Do not assert delete range because cleaning up keys are skipped temporarily
-        // TODO: Uncomment following lines after apply pools is implemented
-        // assert!(db.get(&dk_k2).unwrap().is_none());
-        // assert!(db.get(&dk_k1).unwrap().is_none());
-        // assert!(db.get(&dk_k3).unwrap().is_none());
+        assert!(db.get(&dk_k1).unwrap().is_none());
+        assert!(db.get(&dk_k2).unwrap().is_none());
+        assert!(db.get(&dk_k3).unwrap().is_none());
 
         // UploadSST
         let sst_path = import_dir.path().join("test.sst");
