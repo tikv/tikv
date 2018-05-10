@@ -118,3 +118,4 @@ codegen-units = 4
 lto = true
 opt-level = 3
 debug = true
+codegen-units = 2
