@@ -28,9 +28,9 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use raft::eraftpb::ConfChangeType;
 
 use tikv::config::{ReadPoolConfig, TiKvConfig};
+use tikv::raftstore::Result;
 use tikv::raftstore::store::Msg as StoreMsg;
 use tikv::raftstore::store::*;
-use tikv::raftstore::{Error, Result};
 use tikv::server::Config as ServerConfig;
 use tikv::server::readpool::Config as ReadPoolInstanceConfig;
 use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
@@ -364,7 +364,7 @@ pub fn read_on_peer<T: Simulator>(
     key: &[u8],
     read_quorum: bool,
     timeout: Duration,
-) -> Result<Vec<u8>> {
+) -> Result<RaftCmdResponse> {
     let mut request = new_request(
         region.get_id(),
         region.get_region_epoch().clone(),
@@ -372,14 +372,17 @@ pub fn read_on_peer<T: Simulator>(
         read_quorum,
     );
     request.mut_header().set_peer(peer);
-    let mut resp = cluster.call_command(request, timeout)?;
+    cluster.call_command(request, timeout)
+}
+
+pub fn must_get_value(resp: &RaftCmdResponse) -> Vec<u8> {
     if resp.get_header().has_error() {
-        return Err(resp.mut_header().take_error().into());
+        panic!("failed to read {:?}", resp);
     }
     assert_eq!(resp.get_responses().len(), 1);
     assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
     assert!(resp.get_responses()[0].has_get());
-    Ok(resp.mut_responses()[0].mut_get().take_value())
+    resp.get_responses()[0].get_get().get_value().to_vec()
 }
 
 pub fn must_read_on_peer<T: Simulator>(
@@ -390,16 +393,15 @@ pub fn must_read_on_peer<T: Simulator>(
     value: &[u8],
 ) {
     let timeout = Duration::from_secs(1);
-    match read_on_peer(cluster, peer, region, key, false, timeout) {
-        Ok(v) => if v != value {
-            panic!(
-                "read key {}, expect value {}, got {}",
-                escape(key),
-                escape(value),
-                escape(&v)
-            )
-        },
-        Err(e) => panic!("failed to read for key {}, err {:?}", escape(key), e),
+    let resp = read_on_peer(cluster, peer, region, key, false, timeout).unwrap();
+    let v = must_get_value(&resp);
+    if v != value {
+        panic!(
+            "read key {}, expect value {}, got {}",
+            escape(key),
+            escape(value),
+            escape(&v)
+        )
     }
 }
 
@@ -410,12 +412,15 @@ pub fn must_error_read_on_peer<T: Simulator>(
     key: &[u8],
     timeout: Duration,
 ) {
-    if let Ok(value) = read_on_peer(cluster, peer, region, key, false, timeout) {
-        panic!(
-            "key {}, expect error but got {}",
-            escape(key),
-            escape(&value)
-        );
+    if let Ok(mut resp) = read_on_peer(cluster, peer, region, key, false, timeout) {
+        if !resp.get_header().has_error() {
+            let value = resp.mut_responses()[0].mut_get().take_value();
+            panic!(
+                "key {}, expect error but got {}",
+                escape(key),
+                escape(&value)
+            );
+        }
     }
 }
 
@@ -458,24 +463,6 @@ pub fn create_test_engine(
         }
     };
     (engines, path)
-}
-
-// It's used in failpoints.
-#[allow(dead_code)]
-pub fn assert_stale_epoch<T: ::std::fmt::Debug>(res: Result<T>) {
-    match res {
-        Err(Error::StaleEpoch(..)) => (),
-        res => panic!("expect Error::StaleEpoch, got {:?}", res),
-    }
-}
-
-// It's used in failpoints.
-#[allow(dead_code)]
-pub fn assert_timeout<T: ::std::fmt::Debug>(res: Result<T>) {
-    match res {
-        Err(Error::Timeout(_)) => (),
-        res => panic!("expect Error::Timeout, got {:?}", res),
-    }
 }
 
 pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {

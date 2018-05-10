@@ -18,7 +18,6 @@ use fail;
 
 use raftstore::node::new_node_cluster;
 use raftstore::util::*;
-use tikv::pd::PdClient;
 use tikv::raftstore::store::Callback;
 
 fn stale_read_during_splitting(right_derive: bool) {
@@ -66,7 +65,7 @@ fn stale_read_during_splitting(right_derive: bool) {
     // Split the frist region.
     cluster.split_region(&region1, key2, Callback::Write(Box::new(move |_| {})));
 
-    // Sleep for a while
+    // Sleep for a while.
     // The TiKVs that have followers of the old region will elected a leader
     // of the new region.
     //           TiKV 1  TiKV 2  TiKV 3
@@ -75,19 +74,10 @@ fn stale_read_during_splitting(right_derive: bool) {
     // L: leader, F: follower, X: peer is not ready.
     thread::sleep(election_timeout);
 
-    // A common key that is covered by the old region and the new region.
+    // A key that is covered by the old region and the new region.
     let stale_key = if right_derive { key1 } else { key2 };
-    // Get the new region;
-    let region2 = loop {
-        match cluster.pd_client.get_region(stale_key) {
-            Ok(ref region) if &region1 != region => break region.clone(),
-            _ => {
-                // We may meet range gap after split, so here we will
-                // retry to get the region again.
-                sleep_ms(20);
-            }
-        }
-    };
+    // Get the new region.
+    let region2 = cluster.get_region_not_eq(stale_key, Some(&region1));
 
     // Get the leader of the new region.
     let leader2 = {
@@ -130,12 +120,12 @@ fn stale_read_during_splitting(right_derive: bool) {
         );
 
         debug!("stale_key: {:?}, {:?} vs {:?}", stale_key, value1, value2);
-        assert_eq!(value2.as_ref().unwrap(), &v3);
-        // Error does not implement PartialEq, Option<Vec<u8>> does.
+        assert_eq!(&must_get_value(value2.as_ref().unwrap()), &v3);
+        // Error does not implement PartialEq, Option<RaftCmdResponse> does.
         assert_ne!(value1.ok(), value2.ok());
     }
 
-    // ReadInedx
+    // ReadIndex
     {
         let read_quorum = true;
         let value1 = read_on_peer(
@@ -148,16 +138,15 @@ fn stale_read_during_splitting(right_derive: bool) {
         );
         let value2 = read_on_peer(
             &mut cluster,
-            leader2,
+            leader2.clone(),
             region2.clone(),
             stale_key,
             read_quorum,
             Duration::from_secs(1),
         );
-
         debug!("stale_key: {:?}, {:?} vs {:?}", stale_key, value1, value2);
-        assert_eq!(value2.as_ref().unwrap(), &v3);
-        // Error does not implement PartialEq, Option<Vec<u8>> does.
+        assert_eq!(&must_get_value(value2.as_ref().unwrap()), &v3);
+        // Error does not implement PartialEq, Option<RaftCmdResponse> does.
         assert_ne!(value1.ok(), value2.ok());
 
         let propose_readindex = "before_propose_readindex";
@@ -174,7 +163,7 @@ fn stale_read_during_splitting(right_derive: bool) {
             Duration::from_secs(1),
         );
         debug!("stale_key: {:?}, {:?}", stale_key, value1);
-        assert_timeout(value1);
+        value1.unwrap_err(); // Error::Timeout
 
         // Split shall be processed on peer 3.
         fail::remove(apply_split);
@@ -189,7 +178,7 @@ fn stale_read_during_splitting(right_derive: bool) {
             Duration::from_secs(5),
         );
         debug!("stale_key: {:?}, {:?}", stale_key, value1);
-        assert_stale_epoch(value1);
+        assert!(value1.unwrap().get_header().get_error().has_stale_epoch());
 
         // Clean up.
         fail::remove(propose_readindex);
