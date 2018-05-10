@@ -14,7 +14,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
-use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use time::{self, Timespec, Tm};
 
@@ -54,19 +53,19 @@ fn open_log_file(path: &str) -> io::Result<File> {
     OpenOptions::new().append(true).create(true).open(path)
 }
 
-struct RotatingFileLoggerCore {
+pub struct RotatingFileLogger {
     rollover_time: Tm,
     file_path: String,
     file: File,
 }
 
-impl RotatingFileLoggerCore {
-    fn new(path: &str) -> io::Result<RotatingFileLoggerCore> {
+impl RotatingFileLogger {
+    pub fn new(path: &str) -> io::Result<Self> {
         let file = open_log_file(path)?;
         let file_attr = fs::metadata(path).unwrap();
         let file_modified_time = file_attr.modified().unwrap();
         let rollover_time = compute_rollover_time(systemtime_to_tm(file_modified_time));
-        let ret = RotatingFileLoggerCore {
+        let ret = Self {
             rollover_time,
             file_path: path.to_string(),
             file,
@@ -74,20 +73,21 @@ impl RotatingFileLoggerCore {
         Ok(ret)
     }
 
-    fn open(&mut self) {
-        self.file = open_log_file(&self.file_path).unwrap()
+    fn open(&mut self) -> io::Result<()> {
+        self.file = open_log_file(&self.file_path)?;
+        Ok(())
     }
 
     fn should_rollover(&mut self) -> bool {
         time::now() > self.rollover_time
     }
 
-    fn do_rollover(&mut self) {
-        self.close();
+    fn do_rollover(&mut self) -> io::Result<()> {
+        self.close()?;
         let mut s = self.file_path.clone();
         s.push_str(".");
         s.push_str(&time::strftime("%Y%m%d", &one_day_before(self.rollover_time)).unwrap());
-        fs::rename(&self.file_path, &s).unwrap();
+        fs::rename(&self.file_path, &s)?;
         self.update_rollover_time();
         self.open()
     }
@@ -97,49 +97,27 @@ impl RotatingFileLoggerCore {
         self.rollover_time = compute_rollover_time(now);
     }
 
-    fn close(&mut self) {
-        self.file.flush().unwrap()
-    }
-}
-
-/// A log implemetation which writes to file and rotates by day.
-pub struct RotatingFileLogger {
-    core: Mutex<RotatingFileLoggerCore>,
-}
-
-impl RotatingFileLogger {
-    pub fn new(file_path: &str) -> io::Result<RotatingFileLogger> {
-        let core = RotatingFileLoggerCore::new(file_path)?;
-        let ret = RotatingFileLogger {
-            core: Mutex::new(core),
-        };
-        Ok(ret)
+    fn close(&mut self) -> io::Result<()> {
+        self.file.flush()
     }
 }
 
 impl Write for RotatingFileLogger {
-    fn write(&mut self, bytes: &[u8]) -> Result<usize, ::std::io::Error> {
-        let mut core = self.core.lock().unwrap();
-        if core.should_rollover() {
-            core.do_rollover()
-        };
-        core.file.write(bytes)
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.file.write(bytes)
     }
 
-    fn flush(&mut self) -> Result<(), ::std::io::Error> {
-        let mut core = self.core.lock().unwrap();
-        core.file.flush()?;
-        if core.should_rollover() {
-            core.do_rollover();
+    fn flush(&mut self) -> io::Result<()> {
+        if self.should_rollover() {
+            self.do_rollover()?;
         };
-        Ok(())
+        self.file.flush()
     }
 }
 
 impl Drop for RotatingFileLogger {
     fn drop(&mut self) {
-        let mut core = self.core.lock().unwrap();
-        core.close()
+        self.close().unwrap()
     }
 }
 
@@ -153,7 +131,7 @@ mod tests {
     use tempdir::TempDir;
     use utime;
 
-    use super::{RotatingFileLoggerCore, ONE_DAY_SECONDS};
+    use super::{RotatingFileLogger, ONE_DAY_SECONDS};
 
     #[test]
     fn test_one_day_before() {
@@ -190,9 +168,9 @@ mod tests {
         let time_in_sec = one_day_ago.sec as u64;
         utime::set_file_times(&log_file, time_in_sec, time_in_sec).unwrap();
         // initialize the logger
-        let mut core = RotatingFileLoggerCore::new(&log_file).unwrap();
+        let mut core = RotatingFileLogger::new(&log_file).unwrap();
         assert!(core.should_rollover());
-        core.do_rollover();
+        core.do_rollover().unwrap();
         // check the rotated file exist
         let mut rotated_file = log_file.clone();
         rotated_file.push_str(".");
