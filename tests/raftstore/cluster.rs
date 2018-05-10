@@ -580,20 +580,27 @@ impl<T: Simulator> Cluster<T> {
         panic!("request failed after retry for 20 times");
     }
 
-    pub fn get_region(&self, key: &[u8]) -> metapb::Region {
+    pub fn get_region_not_eq(&self, key: &[u8], region: Option<&metapb::Region>) -> metapb::Region {
         for _ in 0..100 {
-            match self.pd_client.get_region(key) {
-                Ok(region) => return region,
-                Err(_) => {
-                    // We may meet range gap after split, so here we will
-                    // retry to get the region again.
-                    sleep_ms(20);
-                    continue;
+            if let Ok(r) = self.pd_client.get_region(key) {
+                if let Some(region) = region {
+                    if region != &r {
+                        return r;
+                    }
+                } else {
+                    return r;
                 }
-            };
+            }
+            // We may meet range gap after split, so here we will
+            // retry to get the region again.
+            sleep_ms(20);
         }
 
         panic!("find no region for {:?}", escape(key));
+    }
+
+    pub fn get_region(&self, key: &[u8]) -> metapb::Region {
+        self.get_region_not_eq(key, None)
     }
 
     pub fn get_region_id(&self, key: &[u8]) -> u64 {
