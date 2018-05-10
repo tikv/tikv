@@ -15,6 +15,7 @@ use slog::{Drain, Logger};
 use slog_async::Async;
 use slog_term::{FullFormat, PlainDecorator, TermDecorator};
 use std::env;
+use std::io::BufWriter;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
 
@@ -50,13 +51,15 @@ pub fn init_log(config: &TiKvConfig) {
             fatal!("failed to initialize log: {:?}", e);
         });
     } else {
-        let logger = RotatingFileLogger::new(&config.log_file).unwrap_or_else(|e| {
-            fatal!(
-                "failed to initialize log with file {:?}: {:?}",
-                config.log_file,
-                e
-            );
-        });
+        let logger = BufWriter::new(RotatingFileLogger::new(&config.log_file).unwrap_or_else(
+            |e| {
+                fatal!(
+                    "failed to initialize log with file {:?}: {:?}",
+                    config.log_file,
+                    e
+                );
+            },
+        ));
         let decorator = PlainDecorator::new(logger);
         let drain = FullFormat::new(decorator).build().fuse();
         let drain = Async::new(drain).build().fuse();
