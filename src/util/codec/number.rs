@@ -318,7 +318,7 @@ pub fn decode_var_u64(data: &mut BytesSlice) -> Result<u64> {
             return Ok(res);
         }
     }
-    Err(Error::Io(io::Error::new(ErrorKind::UnexpectedEof, "eof")))
+    Err(Error::unexpected_eof())
 }
 
 /// `decode_f64` decodes value encoded by `encode_f64` before.
