@@ -494,9 +494,9 @@ impl Debugger {
                 if exists_region.get_start_key() == region.get_start_key()
                     && exists_region.get_end_key() == region.get_end_key()
                 {
-                    Err(box_err!("region {} still exists", region.get_id()))
+                    Err(box_err!("region still exists {:?}", region))
                 } else {
-                    Err(box_err!("region overlap with {}", exists_region.get_id()))
+                    Err(box_err!("region overlap with {:?}", exists_region))
                 }
             },
         ));
