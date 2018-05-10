@@ -18,7 +18,7 @@ use byteorder::{BigEndian, ByteOrder, LittleEndian, ReadBytesExt, WriteBytesExt}
 use std::io::{self, ErrorKind, Read, Write};
 use std::mem;
 
-use super::{Error, Result};
+use super::{BytesSlice, Error, Result};
 
 const SIGN_MARK: u64 = 0x8000000000000000;
 pub const MAX_VAR_I64_LEN: usize = 10;
@@ -221,8 +221,6 @@ pub trait NumberDecoder: Read {
 }
 
 impl<T: Read> NumberDecoder for T {}
-
-type BytesSlice<'a> = &'a [u8];
 
 #[inline]
 fn read_num_bytes<T, F>(size: usize, data: &mut &[u8], f: F) -> Result<T>
