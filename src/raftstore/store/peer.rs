@@ -13,6 +13,7 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::collections::hash_map::Values as StdHashMapValues;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -39,7 +40,7 @@ use raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
 
 use util::MustConsumeVec;
-use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
+use util::collections::{FlatMap, HashSet};
 use util::time::{duration_to_sec, monotonic_raw_now};
 use util::worker::{FutureWorker, Scheduler};
 
@@ -324,7 +325,7 @@ impl Peer {
             ..Default::default()
         };
 
-        let raft_group = RawNode::new(&raft_cfg, ps, &[])?;
+        let raft_group = RawNode::new(&raft_cfg, ps, vec![])?;
 
         let mut peer = Peer {
             kv_engine: store.kv_engine(),
@@ -1229,7 +1230,7 @@ impl Peer {
     /// 2. it's a follower, and it does not lag behind the leader a lot.
     ///    If a snapshot is involved between it and the Raft leader, it's not healthy since
     ///    it cannot works as a node in the quorum to receive replicating logs from leader.
-    fn count_healthy_node(&self, progress: Values<u64, Progress>) -> usize {
+    fn count_healthy_node(&self, progress: StdHashMapValues<u64, Progress>) -> usize {
         let mut healthy = 0;
         for pr in progress {
             if pr.matched >= self.get_store().truncated_index() {
