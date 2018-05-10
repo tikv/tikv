@@ -19,34 +19,22 @@ use coprocessor::codec::Datum;
 use std::sync::Arc;
 use tipb::expression::FieldType;
 
-const CHUNK_INITIAL_CAPACITY: usize = 32;
-
 /// Chunk stores multiple rows of data in Apache Arrow format.
 /// See https://arrow.apache.org/docs/memory_layout.html
 /// Values are appended in compact format and can be directly accessed without decoding.
 /// When the chunk is done processing, we can reuse the allocated memory by resetting it.
 pub struct Chunk {
     columns: Vec<Column>,
-    // num_virtual_rows indicates the number of virtual rows, which have zero columns.
-    // It is used only when this Chunk doesn't hold any data, i.e. "len(columns)==0".
-    num_virtual_rows: usize,
 }
 
 impl Chunk {
-    ///new_chunk creates a new chunk with field types.
-    pub fn new(tps: &[FieldType]) -> Chunk {
-        Chunk::new_with_capacity(tps, CHUNK_INITIAL_CAPACITY)
-    }
-
-    pub fn new_with_capacity(tps: &[FieldType], cap: usize) -> Chunk {
+    ///new creates a new chunk with field types and capacity.
+    pub fn new(tps: &[FieldType], cap: usize) -> Chunk {
         let mut columns = Vec::with_capacity(tps.len());
         for tp in tps {
             columns.push(Column::new(tp, cap));
         }
-        Chunk {
-            columns,
-            num_virtual_rows: 0,
-        }
+        Chunk { columns }
     }
 
     // reset resets the chunk, so the memory it allocated can be reused.
@@ -179,7 +167,7 @@ mod test {
             Datum::Bytes(b"xxx".to_vec()),
         ];
 
-        let mut chunk = Chunk::new(&fields);
+        let mut chunk = Chunk::new(&fields, 10);
         for (col_id, val) in data.iter().enumerate() {
             chunk.append_datum(col_id, val).unwrap();
         }
