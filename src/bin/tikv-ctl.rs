@@ -29,7 +29,7 @@ extern crate rustc_serialize;
 extern crate tikv;
 extern crate toml;
 
-use rustc_serialize::hex::{FromHex, ToHex};
+use rustc_serialize::hex::{FromHex, FromHexError, ToHex};
 use std::cmp::Ordering;
 use std::error::Error;
 use std::fs::File;
@@ -1298,7 +1298,7 @@ fn main() {
     let escaped_key = matches.value_of("escaped-to-hex");
     match (hex_key, escaped_key) {
         (Some(hex), None) => {
-            println!("{}", escape(&from_hex(hex)));
+            println!("{}", escape(&from_hex(hex).unwrap()));
             return;
         }
         (None, Some(escaped)) => {
@@ -1480,12 +1480,12 @@ fn get_module_type(module: &str) -> MODULE {
     }
 }
 
-fn from_hex(key: &str) -> Vec<u8> {
+fn from_hex(key: &str) -> Result<Vec<u8>, FromHexError> {
     const HEX_PREFIX: &str = "0x";
     if key.starts_with(HEX_PREFIX) {
-        return key[2..].from_hex().unwrap();
+        return key[2..].from_hex();
     }
-    key.from_hex().unwrap()
+    key.from_hex()
 }
 
 fn convert_gbmb(mut bytes: u64) -> String {
