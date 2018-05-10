@@ -222,7 +222,7 @@ pub trait NumberDecoder: Read {
 
 impl<T: Read> NumberDecoder for T {}
 
-type Bytes<'a> = &'a [u8];
+type BytesSlice<'a> = &'a [u8];
 
 #[inline]
 fn read_num_bytes<T, F>(size: usize, data: &mut &[u8], f: F) -> Result<T>
@@ -239,32 +239,32 @@ where
 
 /// `decode_i64` decodes value encoded by `encode_i64` before.
 #[inline]
-fn decode_i64(data: &mut Bytes) -> Result<i64> {
+fn decode_i64(data: &mut BytesSlice) -> Result<i64> {
     decode_u64(data).map(order_decode_i64)
 }
 
 /// `decode_i64_desc` decodes value encoded by `encode_i64_desc` before.
 #[inline]
-fn decode_i64_desc(data: &mut Bytes) -> Result<i64> {
+fn decode_i64_desc(data: &mut BytesSlice) -> Result<i64> {
     decode_u64_desc(data).map(order_decode_i64)
 }
 
 /// `decode_u64` decodes value encoded by `encode_u64` before.
 #[inline]
-pub fn decode_u64(data: &mut Bytes) -> Result<u64> {
+pub fn decode_u64(data: &mut BytesSlice) -> Result<u64> {
     read_num_bytes(mem::size_of::<u64>(), data, BigEndian::read_u64)
 }
 
 /// `decode_u64_desc` decodes value encoded by `encode_u64_desc` before.
 #[inline]
-pub fn decode_u64_desc(data: &mut Bytes) -> Result<u64> {
+pub fn decode_u64_desc(data: &mut BytesSlice) -> Result<u64> {
     let v = decode_u64(data)?;
     Ok(!v)
 }
 
 /// `decode_var_i64` decodes value encoded by `encode_var_i64` before.
 #[inline]
-fn decode_var_i64(data: &mut Bytes) -> Result<i64> {
+fn decode_var_i64(data: &mut BytesSlice) -> Result<i64> {
     let v = decode_var_u64(data)?;
     let vx = v >> 1;
     if v & 1 == 0 {
@@ -276,7 +276,7 @@ fn decode_var_i64(data: &mut Bytes) -> Result<i64> {
 
 /// `decode_var_u64` decodes value encoded by `encode_var_u64` before.
 #[inline]
-pub fn decode_var_u64(data: &mut Bytes) -> Result<u64> {
+pub fn decode_var_u64(data: &mut BytesSlice) -> Result<u64> {
     if !data.is_empty() {
         // process with value < 127 independently at first
         // since it matches most of the cases.
@@ -325,44 +325,44 @@ pub fn decode_var_u64(data: &mut Bytes) -> Result<u64> {
 
 /// `decode_f64` decodes value encoded by `encode_f64` before.
 #[inline]
-pub fn decode_f64(data: &mut Bytes) -> Result<f64> {
+pub fn decode_f64(data: &mut BytesSlice) -> Result<f64> {
     decode_u64(data).map(order_decode_f64)
 }
 
 /// `decode_f64_desc` decodes value encoded by `encode_f64_desc` before.
 #[inline]
-pub fn decode_f64_desc(data: &mut Bytes) -> Result<f64> {
+pub fn decode_f64_desc(data: &mut BytesSlice) -> Result<f64> {
     decode_u64_desc(data).map(order_decode_f64)
 }
 
 /// `decode_u16_le` decodes value encoded by `encode_u16_le` before.
 #[inline]
-pub fn decode_u16_le(data: &mut Bytes) -> Result<u16> {
+pub fn decode_u16_le(data: &mut BytesSlice) -> Result<u16> {
     read_num_bytes(mem::size_of::<u16>(), data, LittleEndian::read_u16)
 }
 
 /// `decode_u32_le` decodes value encoded by `encode_u32_le` before.
 #[inline]
-pub fn decode_u32_le(data: &mut Bytes) -> Result<u32> {
+pub fn decode_u32_le(data: &mut BytesSlice) -> Result<u32> {
     read_num_bytes(mem::size_of::<u32>(), data, LittleEndian::read_u32)
 }
 
 /// `decode_f64_le` decodes value encoded by `encode_f64_le` before.
 #[inline]
-fn decode_f64_le(data: &mut Bytes) -> Result<f64> {
+fn decode_f64_le(data: &mut BytesSlice) -> Result<f64> {
     read_num_bytes(mem::size_of::<f64>(), data, LittleEndian::read_f64)
 }
 
 /// `decode_i64_le` decodes value encoded by `encode_i64_le` before.
 #[inline]
-fn decode_i64_le(data: &mut Bytes) -> Result<i64> {
+fn decode_i64_le(data: &mut BytesSlice) -> Result<i64> {
     let v = decode_u64_le(data)?;
     Ok(v as i64)
 }
 
 /// `decode_u64_le` decodes value encoded by `encode_u64_le` before.
 #[inline]
-fn decode_u64_le(data: &mut Bytes) -> Result<u64> {
+fn decode_u64_le(data: &mut BytesSlice) -> Result<u64> {
     read_num_bytes(mem::size_of::<u64>(), data, LittleEndian::read_u64)
 }
 
