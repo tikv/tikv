@@ -15,8 +15,8 @@ use std::fs;
 use std::io::{Error, ErrorKind, Read, Result};
 use std::sync::Mutex;
 
-use prometheus::{self, proto, CounterVec, Opts};
 use prometheus::core::{Collector, Desc};
+use prometheus::{self, proto, CounterVec, Opts};
 
 use libc::{self, pid_t};
 
