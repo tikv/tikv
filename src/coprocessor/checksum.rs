@@ -115,7 +115,7 @@ impl RequestHandler for ChecksumContext {
         Ok(resp)
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut self::dag::executor::ExecutorMetrics) {
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         metrics.merge(&mut self.metrics);
     }
 }
