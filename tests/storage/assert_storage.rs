@@ -281,6 +281,25 @@ impl AssertionStorage {
         assert_eq!(result, expect);
     }
 
+    pub fn reverse_scan_ok(
+        &self,
+        start_key: &[u8],
+        limit: usize,
+        ts: u64,
+        expect: Vec<Option<(&[u8], &[u8])>>,
+    ) {
+        let key_address = make_key(start_key);
+        let result = self.store
+            .reverse_scan(self.ctx.clone(), key_address, limit, false, ts)
+            .unwrap();
+        let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
+        let expect: Vec<Option<KvPair>> = expect
+            .into_iter()
+            .map(|x| x.map(|(k, v)| (k.to_vec(), v.to_vec())))
+            .collect();
+        assert_eq!(result, expect);
+    }
+
     pub fn scan_key_only_ok(
         &self,
         start_key: &[u8],
