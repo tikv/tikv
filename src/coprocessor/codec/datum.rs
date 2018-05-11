@@ -763,7 +763,7 @@ impl From<Json> for Datum {
 pub fn decode_datum(data: &mut BytesSlice) -> Result<Datum> {
     if !data.is_empty() {
         let flag = data[0];
-        *data = unsafe { data.get_unchecked(1..) };
+        *data = &data[1..];
         match flag {
             INT_FLAG => number::decode_i64(data).map(Datum::I64),
             UINT_FLAG => number::decode_u64(data).map(Datum::U64),
