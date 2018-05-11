@@ -120,19 +120,27 @@ impl MvccTxn {
     ) -> Result<()> {
         let key = mutation.key();
         if !options.skip_constraint_check {
-            if let Some((commit, _)) = self.reader.seek_write(key, u64::max_value())? {
-                // Abort on writes after our start timestamp ...
-                if commit >= self.start_ts {
-                    MVCC_CONFLICT_COUNTER
-                        .with_label_values(&["prewrite_write_conflict"])
-                        .inc();
-                    return Err(Error::WriteConflict {
-                        start_ts: self.start_ts,
-                        conflict_ts: commit,
-                        key: key.encoded().to_owned(),
-                        primary: primary.to_vec(),
-                    });
+            let mut ts = u64::max_value();
+            loop {
+                if let Some((commit, write)) = self.reader.seek_write(key, ts)? {
+                    if write.write_type == WriteType::Rollback {
+                        ts = commit - 1;
+                        continue;
+                    }
+                    // Abort on writes after our start timestamp ...
+                    if commit >= self.start_ts {
+                        MVCC_CONFLICT_COUNTER
+                            .with_label_values(&["prewrite_write_conflict"])
+                            .inc();
+                        return Err(Error::WriteConflict {
+                            start_ts: self.start_ts,
+                            conflict_ts: commit,
+                            key: key.encoded().to_owned(),
+                            primary: primary.to_vec(),
+                        });
+                    }
                 }
+                break;
             }
         }
         // ... or locks at any timestamp.
