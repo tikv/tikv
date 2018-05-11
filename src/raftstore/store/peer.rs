@@ -22,7 +22,7 @@ use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
                           RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse};
-use kvproto::raft_serverpb::{MergeState, PeerState, RaftMessage};
+use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftMessage};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use rocksdb::rocksdb_options::WriteOptions;
@@ -32,14 +32,14 @@ use time::Timespec;
 use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
            INVALID_INDEX, NO_LIMIT};
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::worker::apply::ExecResult;
-use raftstore::store::worker::{Apply, ApplyRes, ApplyTask};
+use raftstore::store::worker::apply::ApplyMetrics;
+use raftstore::store::worker::{Apply, ApplyTask};
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
 use raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
 
 use util::MustConsumeVec;
-use util::collections::{FlatMap, HashSet, HashMapValues};
+use util::collections::{FlatMap, HashMapValues, HashSet};
 use util::time::{duration_to_sec, monotonic_raw_now};
 use util::worker::{FutureWorker, Scheduler};
 
@@ -50,7 +50,7 @@ use super::engine::Snapshot;
 use super::local_metrics::{RaftMessageMetrics, RaftMetrics, RaftProposeMetrics, RaftReadyMetrics};
 use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
-use super::store::{DestroyPeerJob, Store, StoreStat};
+use super::store::{DestroyPeerJob, Store};
 use super::transport::Transport;
 use super::util::{self, Lease, LeaseState};
 
@@ -225,7 +225,7 @@ pub struct Peer {
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
     /// delete keys' count since last reset.
-    pub delete_keys_hint: u64,
+    delete_keys_hint: u64,
     /// approximate region size.
     pub approximate_size: Option<u64>,
     pub compaction_declined_bytes: u64,
@@ -991,36 +991,27 @@ impl Peer {
 
     pub fn post_apply(
         &mut self,
-        res: &ApplyRes,
         groups: &mut HashSet<u64>,
-        store_stat: &mut StoreStat,
+        apply_state: RaftApplyState,
+        applied_index_term: u64,
+        merged: bool,
+        apply_metrics: &ApplyMetrics,
     ) {
         if self.is_applying_snapshot() {
             panic!("{} should not applying snapshot.", self.tag);
         }
 
-        let has_split = res.exec_res.iter().any(|e| match *e {
-            ExecResult::SplitRegion { .. } => true,
-            _ => false,
-        });
-
-        if !res.merged {
+        if !merged {
             self.raft_group
-                .advance_apply(res.apply_state.get_applied_index());
+                .advance_apply(apply_state.get_applied_index());
         }
-        self.mut_store().apply_state = res.apply_state.clone();
-        self.mut_store().applied_index_term = res.applied_index_term;
-        self.peer_stat.written_keys += res.metrics.written_keys;
-        self.peer_stat.written_bytes += res.metrics.written_bytes;
-        store_stat.engine_total_bytes_written += res.metrics.written_bytes;
-        store_stat.engine_total_keys_written += res.metrics.written_keys;
-
-        let diff = if has_split {
-            self.delete_keys_hint = res.metrics.delete_keys_hint;
-            res.metrics.size_diff_hint
-        } else {
-            self.delete_keys_hint += res.metrics.delete_keys_hint;
-            self.size_diff_hint as i64 + res.metrics.size_diff_hint
+        self.mut_store().apply_state = apply_state;
+        self.mut_store().applied_index_term = applied_index_term;
+        self.peer_stat.written_keys += apply_metrics.written_keys;
+        self.peer_stat.written_bytes += apply_metrics.written_bytes;
+        let diff = {
+            self.delete_keys_hint += apply_metrics.delete_keys_hint;
+            self.size_diff_hint as i64 + apply_metrics.size_diff_hint
         };
         self.size_diff_hint = cmp::max(diff, 0) as u64;
 
@@ -1038,6 +1029,14 @@ impl Peer {
             self.pending_reads.ready_cnt = 0;
         }
         self.pending_reads.gc();
+    }
+
+    pub fn post_split(&mut self, apply_metrics: &ApplyMetrics) {
+        let diff = {
+            self.delete_keys_hint = apply_metrics.delete_keys_hint;
+            apply_metrics.size_diff_hint
+        };
+        self.size_diff_hint = cmp::max(diff, 0) as u64;
     }
 
     /// Try to renew leader lease.
@@ -1174,12 +1173,7 @@ impl Peer {
         }
     }
 
-    fn post_propose(
-        &mut self,
-        mut meta: ProposalMeta,
-        is_conf_change: bool,
-        cb: Callback,
-    ) {
+    fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
         // Try to renew leader lease on every consistent read/write request.
         meta.renew_lease_time = Some(monotonic_raw_now());
         let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
