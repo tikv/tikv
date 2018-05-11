@@ -177,34 +177,6 @@ impl FnCall {
         let lhs = try_opt!(self.children[0].eval_int(ctx, row));
         Ok(Some(!lhs))
     }
-
-    pub fn bit_count(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
-        let res = (lhs as u64).count_ones();
-        Ok(Some(i64::from(res)))
-    }
-
-    pub fn left_shift(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
-        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
-
-        let result = match (lhs as u64).checked_shl(rhs as u32) {
-            Some(v) => v as i64,
-            None => 0,
-        };
-        Ok(Some(result))
-    }
-
-    pub fn right_shift(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
-        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
-
-        let result = match (lhs as u64).checked_shr(rhs as u32) {
-            Some(v) => v as i64,
-            None => 0,
-        };
-        Ok(Some(result))
-    }
 }
 
 #[cfg(test)]
@@ -213,7 +185,7 @@ mod test {
     use coprocessor::codec::mysql::Duration;
     use coprocessor::dag::expr::test::{check_overflow, datum_expr, fncall_expr, str2dec};
     use coprocessor::dag::expr::{EvalContext, Expression};
-    use std::{i64, u64};
+    use std::i64;
     use tipb::expression::ScalarFuncSig;
 
     #[test]
@@ -519,85 +491,6 @@ mod test {
             let args = &[datum_expr(arg)];
             let op =
                 Expression::build(&mut ctx, fncall_expr(ScalarFuncSig::BitNegSig, args)).unwrap();
-            let res = op.eval(&mut ctx, &[]).unwrap();
-            assert_eq!(res, exp);
-        }
-    }
-
-    #[test]
-    fn test_bit_count() {
-        let cases = vec![
-            (Datum::Null, Datum::Null),
-            (Datum::I64(8), Datum::I64(1)),
-            (Datum::I64(29), Datum::I64(4)),
-            (Datum::I64(0), Datum::I64(0)),
-            (Datum::I64(-1), Datum::I64(64)),
-            (Datum::I64(-11), Datum::I64(62)),
-            (Datum::I64(-1000), Datum::I64(56)),
-            (Datum::I64(29), Datum::I64(4)),
-            (Datum::I64(i64::MAX), Datum::I64(63)),
-            (Datum::I64(i64::MIN), Datum::I64(1)),
-            (Datum::U64(u64::MAX), Datum::I64(64)),
-        ];
-        let mut ctx = EvalContext::default();
-        for (arg, exp) in cases {
-            let args = &[datum_expr(arg)];
-            let op =
-                Expression::build(&mut ctx, fncall_expr(ScalarFuncSig::BitCount, args)).unwrap();
-            let res = op.eval(&mut ctx, &[]).unwrap();
-            assert_eq!(res, exp);
-        }
-    }
-
-    #[test]
-    fn test_left_shift() {
-        let cases = vec![
-            (Datum::I64(123), Datum::I64(2), Datum::I64(492)),
-            (Datum::I64(-123), Datum::I64(2), Datum::I64(-492)),
-            (Datum::I64(1), Datum::I64(63), Datum::I64(i64::MIN)),
-            (Datum::I64(1), Datum::I64(64), Datum::I64(0)),
-            (Datum::I64(1), Datum::I64(65), Datum::I64(0)),
-            (Datum::Null, Datum::I64(0), Datum::Null),
-            (Datum::I64(0), Datum::Null, Datum::Null),
-            (Datum::Null, Datum::Null, Datum::Null),
-        ];
-        let mut ctx = EvalContext::default();
-        for tt in cases {
-            let lhs = datum_expr(tt.0);
-            let rhs = datum_expr(tt.1);
-            let exp = tt.2;
-
-            let op =
-                Expression::build(&mut ctx, fncall_expr(ScalarFuncSig::LeftShift, &[lhs, rhs]))
-                    .unwrap();
-            let res = op.eval(&mut ctx, &[]).unwrap();
-            assert_eq!(res, exp);
-        }
-    }
-
-    #[test]
-    fn test_right_shift() {
-        let cases = vec![
-            (Datum::I64(123), Datum::I64(2), Datum::I64(30)),
-            (
-                Datum::I64(-123),
-                Datum::I64(2),
-                Datum::I64(4611686018427387873),
-            ),
-            (Datum::Null, Datum::I64(0), Datum::Null),
-            (Datum::I64(0), Datum::Null, Datum::Null),
-            (Datum::Null, Datum::Null, Datum::Null),
-        ];
-        let mut ctx = EvalContext::default();
-        for tt in cases {
-            let lhs = datum_expr(tt.0);
-            let rhs = datum_expr(tt.1);
-            let exp = tt.2;
-
-            let op = Expression::build(
-                &mut ctx,
-                fncall_expr(ScalarFuncSig::RightShift, &[lhs, rhs]),
-            ).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }

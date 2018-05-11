@@ -13,7 +13,7 @@
 
 use super::{Error, EvalContext, FnCall, Result};
 use coprocessor::codec::mysql::{Decimal, Res};
-use coprocessor::codec::{mysql, Datum};
+use coprocessor::codec::{mysql, Datum, div_i64, div_i64_with_u64, div_u64_with_i64};
 use std::borrow::Cow;
 use std::ops::{Add, Mul, Sub};
 use std::{f64, i64, u64};
@@ -210,39 +210,12 @@ impl FnCall {
         let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
 
         let res = match (lus, rus) {
-            (true, true) => Some(((lhs as u64) / (rhs as u64)) as i64),
-            (false, false) => if lhs == i64::MIN && rhs == -1 {
-                None
-            } else {
-                Some((lhs / rhs) as i64)
-            },
-            (false, true) => if lhs < 0 {
-                if lhs.overflowing_neg().0 as u64 >= rhs as u64 {
-                    None
-                } else {
-                    Some(0 as i64)
-                }
-            } else {
-                Some(((lhs as u64) / rhs as u64) as i64)
-            },
-            (true, false) => if rhs < 0 {
-                if lhs != 0 && rhs.overflowing_neg().0 as u64 <= lhs as u64 {
-                    None
-                } else {
-                    Some(0 as i64)
-                }
-            } else {
-                Some(((lhs as u64) / (rhs as u64)) as i64)
-            },
+            (true, true) => Ok(((lhs as u64) / (rhs as u64)) as i64),
+            (false, false) => div_i64(lhs, rhs),
+            (false, true) => div_i64_with_u64(lhs, rhs as u64).map(|r| r as i64),
+            (true, false) => div_u64_with_i64(lhs as u64, rhs).map(|r| r as i64),
         };
-        res.ok_or_else(|| {
-            let data_type = if lus || rus {
-                "BIGINT UNSIGNED"
-            } else {
-                "BIGINT"
-            };
-            Error::overflow(data_type, &format!("({} DIV {})", lhs, rhs))
-        }).map(Some)
+        res.map(Some)
     }
 
     pub fn intdivide_decimal(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -302,8 +275,8 @@ impl FnCall {
         let res = match (lus, rus) {
             (true, true) => ((lhs as u64) % (rhs as u64)) as i64,
             (false, false) => lhs % rhs,
-            (true, false) => ((lhs as u64) % (rhs.abs() as u64)) as i64,
-            (false, true) => ((lhs.abs() as u64) % (rhs as u64)) as i64,
+            (true, false) => ((lhs as u64) % (rhs.overflowing_abs().0 as u64)) as i64,
+            (false, true) => ((lhs.overflowing_abs().0 as u64) % (rhs as u64)) as i64,
         };
         Ok(Some(res))
     }
@@ -521,6 +494,30 @@ mod test {
                 Datum::I64(-11),
                 Datum::I64(0),
                 Datum::Null,
+            ),
+            (
+                ScalarFuncSig::ModInt,
+                Datum::I64(i64::MAX),
+                Datum::I64(i64::MIN),
+                Datum::I64(i64::MAX),
+            ),
+            (
+                ScalarFuncSig::ModInt,
+                Datum::I64(i64::MIN),
+                Datum::I64(i64::MAX),
+                Datum::I64(-1),
+            ),
+            (
+                ScalarFuncSig::ModInt,
+                Datum::U64(u64::MAX),
+                Datum::I64(i64::MIN),
+                Datum::U64(i64::MAX as u64),
+            ),
+            (
+                ScalarFuncSig::ModInt,
+                Datum::I64(i64::MIN),
+                Datum::U64(u64::MAX),
+                Datum::U64(i64::MIN as u64),
             ),
         ];
         let mut ctx = EvalContext::default();

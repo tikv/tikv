@@ -505,24 +505,13 @@ dispatch_call! {
 
         CoalesceInt => coalesce_int,
         CaseWhenInt => case_when_int,
-        GreatestInt => greatest_int,
-        LeastInt => least_int,
-        IntervalInt => interval_int,
-        IntervalReal => interval_real,
 
         LikeSig => like,
-        RegexpSig => regexp,
-        RegexpBinarySig => regexp_binary,
-
-        BitLength => bit_length,
 
         BitAndSig => bit_and,
         BitNegSig => bit_neg,
         BitOrSig => bit_or,
         BitXorSig => bit_xor,
-        BitCount => bit_count,
-        LeftShift => left_shift,
-        RightShift => right_shift,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -549,8 +538,6 @@ dispatch_call! {
 
         CoalesceReal => coalesce_real,
         CaseWhenReal => case_when_real,
-        GreatestReal => greatest_real,
-        LeastReal => least_real,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -579,8 +566,6 @@ dispatch_call! {
 
         CoalesceDecimal => coalesce_decimal,
         CaseWhenDecimal => case_when_decimal,
-        GreatestDecimal => greatest_decimal,
-        LeastDecimal => least_decimal,
     }
     BYTES_CALLS {
         CastIntAsString => cast_int_as_str,
@@ -596,8 +581,6 @@ dispatch_call! {
 
         CoalesceString => coalesce_string,
         CaseWhenString => case_when_string,
-        GreatestString => greatest_string,
-        LeastString => least_string,
         JsonTypeSig => json_type,
         JsonUnquoteSig => json_unquote,
 
@@ -617,8 +600,6 @@ dispatch_call! {
 
         CoalesceTime => coalesce_time,
         CaseWhenTime => case_when_time,
-        GreatestTime => greatest_time,
-        LeastTime => least_time,
     }
     DUR_CALLS {
         CastIntAsDuration => cast_int_as_duration,
