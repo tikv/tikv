@@ -362,7 +362,7 @@ impl Debugger {
                 ..Default::default()
             };
 
-            box_try!(RawNode::new(&raft_cfg, peer_storage, &[]));
+            box_try!(RawNode::new(&raft_cfg, peer_storage, vec![]));
             Ok(())
         };
 
