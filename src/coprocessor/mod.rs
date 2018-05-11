@@ -28,11 +28,38 @@ pub use self::readpool_context::Context as ReadPoolContext;
 
 use std::time::Duration;
 
-use kvproto::kvrpcpb;
+use kvproto::{coprocessor as coppb, kvrpcpb};
 
 use util::time::Instant;
 
+pub const REQ_TYPE_DAG: i64 = 103;
+pub const REQ_TYPE_ANALYZE: i64 = 104;
+pub const REQ_TYPE_CHECKSUM: i64 = 105;
+
 const SINGLE_GROUP: &[u8] = b"SingleGroup";
+
+type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
+
+trait RequestHandler: Send {
+    fn handle_request(&mut self) -> Result<coppb::Response> {
+        panic!("unary request is not supported for this handler");
+    }
+
+    fn handle_streaming_request(&mut self) -> HandlerStreamStepResult {
+        panic!("streaming request is not supported for this handler");
+    }
+
+    fn collect_metrics_into(&mut self, _metrics: &mut self::dag::executor::ExecutorMetrics) {
+        // Do nothing by default
+    }
+
+    fn into_boxed(self) -> Box<RequestHandler>
+    where
+        Self: 'static + Sized,
+    {
+        box self
+    }
+}
 
 #[derive(Debug)]
 pub struct ReqContext {
@@ -80,4 +107,4 @@ impl ReqContext {
 
 pub use self::dag::{ScanOn, Scanner};
 pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask,
-                         DEFAULT_REQUEST_MAX_HANDLE_SECS, REQ_TYPE_CHECKSUM, REQ_TYPE_DAG};
+                         DEFAULT_REQUEST_MAX_HANDLE_SECS};
