@@ -11,19 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use byteorder::{ReadBytesExt, WriteBytesExt};
+use byteorder::WriteBytesExt;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::{mem, str};
 
 use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Timelike, Utc, Weekday};
 
-use super::super::{Result, TEN_POW};
+use super::super::{Error, Result, TEN_POW};
 use coprocessor::codec::mysql::Decimal;
 use coprocessor::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
 use coprocessor::codec::mysql::{self, check_fsp, parse_frac, types};
-use util::codec::number::{NumberDecoder, NumberEncoder};
+use util::codec::BytesSlice;
+use util::codec::number::{self, NumberEncoder};
 const ZERO_DATETIME_STR: &str = "0000-00-00 00:00:00";
 const ZERO_DATE_STR: &str = "0000-00-00";
 /// In go, `time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC)` will be adjusted to
@@ -831,41 +832,50 @@ pub trait TimeEncoder: NumberEncoder {
     }
 }
 
-impl<T: Read> TimeDecoder for T {}
-pub trait TimeDecoder: NumberDecoder {
-    fn decode_time(&mut self) -> Result<Time> {
-        let year = i32::from(self.decode_u16()?);
-        let month = u32::from(self.read_u8()?);
-        let day = u32::from(self.read_u8()?);
-        let hour = u32::from(self.read_u8()?);
-        let minute = u32::from(self.read_u8()?);
-        let second = u32::from(self.read_u8()?);
-        let nanoseconds = 1000 * self.decode_u32()?;
-        let tp = self.read_u8()?;
-        let fsp = self.read_u8()?;
-        let tz = FixedOffset::east(0); // TODO
-        if year == 0 && month == 0 && day == 0 && hour == 0 && minute == 0 && second == 0
-            && nanoseconds == 0
-        {
-            return Ok(zero_datetime(&tz));
-        }
-        let t = if tp == types::TIMESTAMP {
-            let t = ymd_hms_nanos(&Utc, year, month, day, hour, minute, second, nanoseconds)?;
-            tz.from_utc_datetime(&t.naive_utc())
-        } else {
-            ymd_hms_nanos(
-                &FixedOffset::east(0),
-                year,
-                month,
-                day,
-                hour,
-                minute,
-                second,
-                nanoseconds,
-            )?
-        };
-        Time::new(t, tp, fsp as i8)
+/// `decode_time` decodes time encoded by `encode_time`.
+pub fn decode_time(data: &mut BytesSlice) -> Result<Time> {
+    let year = i32::from(number::decode_u16(data)?);
+    let (month, day, hour, minute, second) = if data.len() >= 5 {
+        (
+            u32::from(data[0]),
+            u32::from(data[1]),
+            u32::from(data[2]),
+            u32::from(data[3]),
+            u32::from(data[4]),
+        )
+    } else {
+        return Err(Error::unexpected_eof());
+    };
+    *data = &data[5..];
+    let nanoseconds = 1000 * number::decode_u32(data)?;
+    let (tp, fsp) = if data.len() >= 2 {
+        (data[0], data[1])
+    } else {
+        return Err(Error::unexpected_eof());
+    };
+    *data = &data[2..];
+    let tz = FixedOffset::east(0); // TODO
+    if year == 0 && month == 0 && day == 0 && hour == 0 && minute == 0 && second == 0
+        && nanoseconds == 0
+    {
+        return Ok(zero_datetime(&tz));
     }
+    let t = if tp == types::TIMESTAMP {
+        let t = ymd_hms_nanos(&Utc, year, month, day, hour, minute, second, nanoseconds)?;
+        tz.from_utc_datetime(&t.naive_utc())
+    } else {
+        ymd_hms_nanos(
+            &FixedOffset::east(0),
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            nanoseconds,
+        )?
+    };
+    Time::new(t, tp, fsp as i8)
 }
 
 #[cfg(test)]
@@ -1326,7 +1336,7 @@ mod test {
             let t = Time::parse_utc_datetime(s, fsp).unwrap();
             let mut buf = vec![];
             buf.encode_time(&t).unwrap();
-            let got = buf.as_slice().decode_time().unwrap();
+            let got = decode_time(&mut buf.as_slice()).unwrap();
             assert_eq!(got, t);
         }
     }

@@ -25,8 +25,9 @@ use coprocessor::dag::expr::EvalContext;
 // TODO: We should use same Error in mod `coprocessor`.
 use coprocessor::dag::expr::Error as ExprError;
 
+use util::codec::BytesSlice;
 use util::codec::bytes::BytesDecoder;
-use util::codec::number::{NumberDecoder, NumberEncoder};
+use util::codec::number::{self, NumberDecoder, NumberEncoder};
 use util::escape;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -1907,19 +1908,6 @@ pub trait DecimalEncoder: NumberEncoder {
 impl<T: Write> DecimalEncoder for T {}
 
 pub trait DecimalDecoder: BytesDecoder + NumberDecoder {
-    fn decode_decimal_from_chunk(&mut self) -> Result<Decimal> {
-        let int_cnt = self.read_u8()?;
-        let frac_cnt = self.read_u8()?;
-        let result_frac_cnt = self.read_u8()?;
-        let negative = self.read_u8()? == 1;
-        let mut d = Decimal::new(int_cnt, frac_cnt, negative);
-        d.result_frac_cnt = result_frac_cnt;
-        for id in 0..WORD_BUF_LEN {
-            d.word_buf[id as usize] = self.decode_i32_le()? as u32;
-        }
-        Ok(d)
-    }
-
     fn decode_decimal(&mut self) -> Result<Decimal> {
         if self.remaining() < 3 {
             return Err(box_err!("decimal too short: {} < 3", self.remaining()));
@@ -2009,6 +1997,27 @@ pub trait DecimalDecoder: BytesDecoder + NumberDecoder {
 }
 
 impl<T: BytesDecoder> DecimalDecoder for T {}
+
+/// `decode_decimal_from_chunk` decode Decimal encodeded by `encode_decimal_to_chunk`.
+pub fn decode_decimal_from_chunk(data: &mut BytesSlice) -> Result<Decimal> {
+    let mut d = if data.len() > 4 {
+        let int_cnt = data[0];
+        let frac_cnt = data[1];
+        let result_frac_cnt = data[2];
+        let negative = data[3] == 1;
+        let mut d = Decimal::new(int_cnt, frac_cnt, negative);
+        d.result_frac_cnt = result_frac_cnt;
+        *data = &data[4..];
+        d
+    } else {
+        return Err(Error::unexpected_eof());
+    };
+
+    for id in 0..WORD_BUF_LEN {
+        d.word_buf[id as usize] = number::decode_i32_le(data)? as u32;
+    }
+    Ok(d)
+}
 
 impl PartialEq for Decimal {
     fn eq(&self, right: &Decimal) -> bool {
@@ -2743,7 +2752,7 @@ mod test {
             let mut buf = vec![];
             buf.encode_decimal_to_chunk(&dec).unwrap();
             buf.resize(DECIMAL_STRUCT_SIZE, 0);
-            let decoded = buf.as_slice().decode_decimal_from_chunk().unwrap();
+            let decoded = decode_decimal_from_chunk(&mut buf.as_slice()).unwrap();
             assert_eq!(decoded, dec);
         }
     }

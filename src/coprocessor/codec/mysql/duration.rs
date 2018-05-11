@@ -13,11 +13,12 @@
 
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::time::Duration as StdDuration;
 use std::{str, i64, u64};
 use time::{self, Tm};
-use util::codec::number::{NumberDecoder, NumberEncoder};
+use util::codec::BytesSlice;
+use util::codec::number::{self, NumberEncoder};
 
 use super::super::Result;
 use super::{check_fsp, parse_frac, Decimal};
@@ -284,13 +285,11 @@ pub trait DurationEncoder: NumberEncoder {
     }
 }
 
-impl<T: Read> DurationDecoder for T {}
-pub trait DurationDecoder: NumberDecoder {
-    fn decode_duration(&mut self) -> Result<Duration> {
-        let nanos = self.decode_i64()?;
-        let fsp = self.decode_i64()?;
-        Duration::from_nanos(nanos, fsp as i8)
-    }
+/// `decode_duration` decodes duration encoded by `encode_duration`.
+pub fn decode_duration(data: &mut BytesSlice) -> Result<Duration> {
+    let nanos = number::decode_i64(data)?;
+    let fsp = number::decode_i64(data)?;
+    Duration::from_nanos(nanos, fsp as i8)
 }
 
 #[cfg(test)]
@@ -417,7 +416,7 @@ mod test {
             let mut t = Duration::parse(input.as_bytes(), fsp).unwrap();
             let mut buf = vec![];
             buf.encode_duration(&t).unwrap();
-            let got = buf.as_slice().decode_duration().unwrap();
+            let got = decode_duration(&mut buf.as_slice()).unwrap();
             assert_eq!(t, got);
         }
     }

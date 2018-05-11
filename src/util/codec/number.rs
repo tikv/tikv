@@ -171,14 +171,6 @@ pub trait NumberDecoder: Read {
         Ok(!v)
     }
 
-    fn decode_u32(&mut self) -> Result<u32> {
-        self.read_u32::<BigEndian>().map_err(From::from)
-    }
-
-    fn decode_u16(&mut self) -> Result<u16> {
-        self.read_u16::<BigEndian>().map_err(From::from)
-    }
-
     /// `decode_var_i64` decodes value encoded by `encode_var_i64` before.
     fn decode_var_i64(&mut self) -> Result<i64> {
         let v = self.decode_var_u64()?;
@@ -227,10 +219,6 @@ pub trait NumberDecoder: Read {
         self.read_u32::<LittleEndian>().map_err(From::from)
     }
 
-    fn decode_i32_le(&mut self) -> Result<i32> {
-        self.read_i32::<LittleEndian>().map_err(From::from)
-    }
-
     fn decode_f64_le(&mut self) -> Result<f64> {
         self.read_f64::<LittleEndian>().map_err(From::from)
     }
@@ -256,7 +244,7 @@ where
         *data = &data[size..];
         return Ok(f(buf));
     }
-    Err(Error::Io(io::Error::new(ErrorKind::UnexpectedEof, "eof")))
+    Err(Error::unexpected_eof())
 }
 
 /// `decode_i64` decodes value encoded by `encode_i64` before.
@@ -275,6 +263,18 @@ pub fn decode_i64_desc(data: &mut BytesSlice) -> Result<i64> {
 #[inline]
 pub fn decode_u64(data: &mut BytesSlice) -> Result<u64> {
     read_num_bytes(mem::size_of::<u64>(), data, BigEndian::read_u64)
+}
+
+/// `decode_u32` decodes value encoded by `encode_u32` before.
+#[inline]
+pub fn decode_u32(data: &mut BytesSlice) -> Result<u32> {
+    read_num_bytes(mem::size_of::<u32>(), data, BigEndian::read_u32)
+}
+
+/// `decode_u16` decodes value encoded by `encode_u16` before.
+#[inline]
+pub fn decode_u16(data: &mut BytesSlice) -> Result<u16> {
+    read_num_bytes(mem::size_of::<u16>(), data, BigEndian::read_u16)
 }
 
 /// `decode_u64_desc` decodes value encoded by `encode_u64_desc` before.
@@ -367,6 +367,12 @@ pub fn decode_u16_le(data: &mut BytesSlice) -> Result<u16> {
 #[inline]
 pub fn decode_u32_le(data: &mut BytesSlice) -> Result<u32> {
     read_num_bytes(mem::size_of::<u32>(), data, LittleEndian::read_u32)
+}
+
+/// `decode_i32_le` decodes value encoded by `encode_i32_le` before.
+#[inline]
+pub fn decode_i32_le(data: &mut BytesSlice) -> Result<i32> {
+    read_num_bytes(mem::size_of::<i32>(), data, LittleEndian::read_i32)
 }
 
 /// `decode_f64_le` decodes value encoded by `encode_f64_le` before.
