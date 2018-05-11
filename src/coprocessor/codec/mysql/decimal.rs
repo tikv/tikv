@@ -13,7 +13,7 @@
 
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::str::{self, FromStr};
 use std::{cmp, mem, i32, i64, u32, u64};
@@ -26,7 +26,6 @@ use coprocessor::dag::expr::EvalContext;
 // TODO: We should use same Error in mod `coprocessor`.
 use coprocessor::dag::expr::Error as ExprError;
 
-use util::codec::bytes::BytesDecoder;
 use util::escape;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -1890,7 +1889,12 @@ pub trait DecimalEncoder: Write {
 
 impl<T: Write> DecimalEncoder for T {}
 
-pub trait DecimalDecoder: BytesDecoder {
+pub trait DecimalDecoder: Read {
+    /// Get the remaining length in bytes of current reader.
+    fn remaining(&self) -> usize;
+
+    fn peak_u8(&self) -> Option<u8>;
+
     fn decode_decimal(&mut self) -> Result<Decimal> {
         if self.remaining() < 3 {
             return Err(box_err!("decimal too short: {} < 3", self.remaining()));
@@ -1979,7 +1983,19 @@ pub trait DecimalDecoder: BytesDecoder {
     }
 }
 
-impl<T: BytesDecoder> DecimalDecoder for T {}
+impl<'a> DecimalDecoder for &'a [u8] {
+    fn remaining(&self) -> usize {
+        self.len()
+    }
+
+    fn peak_u8(&self) -> Option<u8> {
+        if self.is_empty() {
+            None
+        } else {
+            Some(self[0])
+        }
+    }
+}
 
 impl PartialEq for Decimal {
     fn eq(&self, right: &Decimal) -> bool {
