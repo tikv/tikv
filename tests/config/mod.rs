@@ -81,22 +81,22 @@ fn test_serde_custom_tikv_config() {
     };
     value.readpool = ReadPoolConfig {
         storage: ReadPoolInstanceConfig {
-            high_concurrency: Some(1),
-            normal_concurrency: Some(3),
-            low_concurrency: Some(7),
-            max_tasks_high: Some(10000),
-            max_tasks_normal: Some(20000),
-            max_tasks_low: Some(30000),
-            stack_size: Some(ReadableSize::mb(20)),
+            high_concurrency: 1,
+            normal_concurrency: 3,
+            low_concurrency: 7,
+            max_tasks_high: 10000,
+            max_tasks_normal: 20000,
+            max_tasks_low: 30000,
+            stack_size: ReadableSize::mb(20),
         },
         coprocessor: ReadPoolInstanceConfig {
-            high_concurrency: Some(2),
-            normal_concurrency: Some(4),
-            low_concurrency: Some(6),
-            max_tasks_high: Some(20000),
-            max_tasks_normal: Some(30000),
-            max_tasks_low: Some(40000),
-            stack_size: Some(ReadableSize::mb(12)),
+            high_concurrency: 2,
+            normal_concurrency: 4,
+            low_concurrency: 6,
+            max_tasks_high: 20000,
+            max_tasks_normal: 30000,
+            max_tasks_low: 40000,
+            stack_size: ReadableSize::mb(12),
         },
     };
     value.metric = MetricConfig {
@@ -426,11 +426,23 @@ fn test_serde_custom_tikv_config() {
 
 #[test]
 fn test_serde_default_config() {
-    let custom = read_file_in_project_dir("tests/config/test-default1.toml");
-    let load: TiKvConfig = toml::from_str(&custom).unwrap();
-    assert_eq!(load, TiKvConfig::default());
+    let cfg: TiKvConfig = toml::from_str("").unwrap();
+    assert_eq!(cfg, TiKvConfig::default());
 
-    let custom = read_file_in_project_dir("tests/config/test-default2.toml");
-    let load: TiKvConfig = toml::from_str(&custom).unwrap();
-    assert_eq!(load, TiKvConfig::default());
+    let content = read_file_in_project_dir("tests/config/test-default.toml");
+    let cfg: TiKvConfig = toml::from_str(&content).unwrap();
+    assert_eq!(cfg, TiKvConfig::default());
+}
+
+#[test]
+fn test_readpool_default_config() {
+    let content = r#"
+        [readpool.storage]
+        high-concurrency = 1
+    "#;
+    let cfg: TiKvConfig = toml::from_str(content).unwrap();
+    let mut expected = TiKvConfig::default();
+    expected.readpool.storage.high_concurrency = 1;
+    expected.readpool.storage.max_tasks_high = 2000;
+    assert_eq!(cfg, expected);
 }

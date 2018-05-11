@@ -34,7 +34,7 @@ fn test_storage_1gc() {
     let pd_worker = FutureWorker::new("test future worker");
     let read_pool = ReadPool::new(
         "readpool",
-        &readpool::Config::default_for_test().to_base_storage(),
+        &readpool::SerdeConfigHelper::default_for_test().to_storage_config(),
         || || storage::ReadPoolContext::new(pd_worker.scheduler()),
     );
     let config = Config::default();
@@ -82,7 +82,7 @@ fn test_scheduler_leader_change_twice() {
     let pd_worker = FutureWorker::new("test future worker");
     let read_pool = ReadPool::new(
         "readpool",
-        &readpool::Config::default_for_test().to_base_storage(),
+        &readpool::SerdeConfigHelper::default_for_test().to_storage_config(),
         || || storage::ReadPoolContext::new(pd_worker.scheduler()),
     );
 
@@ -135,7 +135,7 @@ fn test_scheduler_leader_change_twice() {
         let pd_worker = FutureWorker::new("test future worker");
         let read_pool = ReadPool::new(
             "readpool",
-            &readpool::Config::default_for_test().to_base_storage(),
+            &readpool::SerdeConfigHelper::default_for_test().to_storage_config(),
             || || storage::ReadPoolContext::new(pd_worker.scheduler()),
         );
         let mut storage1 = Storage::from_engine(engine1, &config, read_pool).unwrap();

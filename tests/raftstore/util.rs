@@ -32,7 +32,7 @@ use tikv::raftstore::store::Msg as StoreMsg;
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Config as ServerConfig;
-use tikv::server::readpool::Config as ReadPoolInstanceConfig;
+use tikv::server::readpool::SerdeConfigHelper as ReadPoolInstanceConfigHelper;
 use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
 use tikv::util::config::*;
 use tikv::util::escape;
@@ -128,8 +128,8 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
 
 pub fn new_readpool_cfg() -> ReadPoolConfig {
     ReadPoolConfig {
-        storage: ReadPoolInstanceConfig::default_for_test(),
-        coprocessor: ReadPoolInstanceConfig::default_for_test(),
+        storage: ReadPoolInstanceConfigHelper::default_for_test().to_storage_config(),
+        coprocessor: ReadPoolInstanceConfigHelper::default_for_test().to_coprocessor_config(),
     }
 }
 

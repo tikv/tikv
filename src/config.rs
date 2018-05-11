@@ -34,7 +34,8 @@ use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::keys::region_raft_prefix_len;
 use server::Config as ServerConfig;
-use server::readpool::Config as ReadPoolInstanceConfig;
+use server::readpool::{Config as ReadPoolInstanceConfig,
+                       SerdeConfigHelper as ReadPoolInstanceConfigHelper};
 use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
               DEFAULT_ROCKSDB_SUB_DIR};
 use util::config::{self, compression_type_level_serde, ReadableDuration, ReadableSize, GB, KB, MB};
@@ -707,12 +708,24 @@ pub enum LogLevel {
     Off,
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Default)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
+    #[serde(deserialize_with = "ReadPoolInstanceConfigHelper::deserialize_storage")]
     pub storage: ReadPoolInstanceConfig,
+
+    #[serde(deserialize_with = "ReadPoolInstanceConfigHelper::deserialize_coprocessor")]
     pub coprocessor: ReadPoolInstanceConfig,
+}
+
+impl Default for ReadPoolConfig {
+    fn default() -> Self {
+        Self {
+            storage: ReadPoolInstanceConfigHelper::default().to_storage_config(),
+            coprocessor: ReadPoolInstanceConfigHelper::default().to_coprocessor_config(),
+        }
+    }
 }
 
 impl ReadPoolConfig {
@@ -851,7 +864,9 @@ impl TiKvConfig {
                 self.server.end_point_concurrency
             );
             let concurrency = self.server.end_point_concurrency.unwrap();
-            self.readpool.coprocessor.set_concurrency(concurrency);
+            self.readpool.coprocessor.high_concurrency = concurrency;
+            self.readpool.coprocessor.normal_concurrency = concurrency;
+            self.readpool.coprocessor.low_concurrency = concurrency;
         }
         if self.server.end_point_stack_size != None {
             warn!(
@@ -864,7 +879,7 @@ impl TiKvConfig {
                 "server.end_point_stack_size",
                 self.server.end_point_stack_size
             );
-            self.readpool.coprocessor.stack_size = self.server.end_point_stack_size;
+            self.readpool.coprocessor.stack_size = self.server.end_point_stack_size.unwrap();
         }
         if self.raft_store.clean_stale_peer_delay.as_secs() > 0 {
             let delay_secs = self.raft_store.clean_stale_peer_delay.as_secs()

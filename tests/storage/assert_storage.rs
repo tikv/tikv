@@ -36,7 +36,7 @@ impl Default for AssertionStorage {
         let pd_worker = FutureWorker::new("test future worker");
         let read_pool = ReadPool::new(
             "readpool",
-            &readpool::Config::default_for_test().to_base_storage(),
+            &readpool::SerdeConfigHelper::default_for_test().to_storage_config(),
             || || storage::ReadPoolContext::new(pd_worker.scheduler()),
         );
         AssertionStorage {
@@ -71,7 +71,7 @@ impl AssertionStorage {
         let pd_worker = FutureWorker::new("test future worker");
         let read_pool = ReadPool::new(
             "readpool",
-            &readpool::Config::default_for_test().to_base_storage(),
+            &readpool::SerdeConfigHelper::default_for_test().to_storage_config(),
             || || storage::ReadPoolContext::new(pd_worker.scheduler()),
         );
         self.store = SyncStorage::from_engine(engine, &Config::default(), read_pool);

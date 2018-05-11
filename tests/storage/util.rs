@@ -44,7 +44,7 @@ pub fn new_raft_storage_with_store_count(
     let pd_worker = FutureWorker::new("test future worker");
     let read_pool = ReadPool::new(
         "readpool",
-        &readpool::Config::default_for_test().to_base_storage(),
+        &readpool::SerdeConfigHelper::default_for_test().to_storage_config(),
         || || storage::ReadPoolContext::new(pd_worker.scheduler()),
     );
     let (cluster, engine, ctx) = new_raft_engine(count, key);

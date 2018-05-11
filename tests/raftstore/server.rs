@@ -127,11 +127,9 @@ impl Simulator for ServerCluster {
 
         // Create storage.
         let pd_worker = FutureWorker::new("test future worker");
-        let storage_read_pool = ReadPool::new(
-            "store-read",
-            &cfg.readpool.storage.to_base_storage(),
-            || || storage::ReadPoolContext::new(pd_worker.scheduler()),
-        );
+        let storage_read_pool = ReadPool::new("store-read", &cfg.readpool.storage, || {
+            || storage::ReadPoolContext::new(pd_worker.scheduler())
+        });
         let mut store =
             create_raft_storage(sim_router.clone(), &cfg.storage, storage_read_pool).unwrap();
         store.start(&cfg.storage).unwrap();
@@ -154,11 +152,9 @@ impl Simulator for ServerCluster {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
-        let cop_read_pool = ReadPool::new(
-            "cop",
-            &cfg.readpool.coprocessor.to_base_coprocessor(),
-            || || coprocessor::ReadPoolContext::new(pd_worker.scheduler()),
-        );
+        let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor, || {
+            || coprocessor::ReadPoolContext::new(pd_worker.scheduler())
+        });
         let mut server = None;
         for _ in 0..100 {
             server = Some(Server::new(

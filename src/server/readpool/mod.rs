@@ -24,7 +24,7 @@ use futures_cpupool::CpuFuture;
 use util;
 use util::futurepool::{self, FuturePool};
 
-pub use self::config::Config;
+pub use self::config::{Config, SerdeConfigHelper};
 pub use self::priority::Priority;
 
 const TICK_INTERVAL_SEC: u64 = 1;
@@ -55,11 +55,7 @@ impl<T: futurepool::Context + 'static> Clone for ReadPool<T> {
 impl<T: futurepool::Context + 'static> ReadPool<T> {
     // Rust does not support copying closures (RFC 2132) so that we need a closure builder.
     // TODO: Use a single closure once RFC 2132 is implemented.
-    pub fn new<F, CF>(
-        name_prefix: &str,
-        config: &self::config::BaseConfig,
-        context_factory_builder: F,
-    ) -> Self
+    pub fn new<F, CF>(name_prefix: &str, config: &Config, context_factory_builder: F) -> Self
     where
         F: futurepool::Factory<CF>,
         CF: futurepool::Factory<T>,
@@ -201,7 +197,7 @@ mod tests {
     fn test_future_execute() {
         let read_pool = ReadPool::new(
             "readpool",
-            &Config::default_for_test().to_base_storage(),
+            &SerdeConfigHelper::default_for_test().to_storage_config(),
             || || Context {},
         );
 
@@ -255,11 +251,11 @@ mod tests {
 
         let read_pool = ReadPool::new(
             "readpool",
-            &Config {
+            &SerdeConfigHelper {
                 high_concurrency: Some(2),
                 max_tasks_high: Some(4),
-                ..Config::default()
-            }.to_base_storage(),
+                ..SerdeConfigHelper::default()
+            }.to_storage_config(),
             || || Context {},
         );
 

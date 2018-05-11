@@ -1469,7 +1469,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test future worker");
         ReadPool::new(
             "readpool",
-            &readpool::Config::default_for_test().to_base_storage(),
+            &readpool::SerdeConfigHelper::default_for_test().to_storage_config(),
             || || ReadPoolContext::new(pd_worker.scheduler()),
         )
     }
