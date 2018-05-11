@@ -11,11 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use byteorder::{BigEndian, LittleEndian, ReadBytesExt, WriteBytesExt};
+// FIXME(shirly): remove following later
+#![allow(dead_code)]
+
+use byteorder::{BigEndian, ByteOrder, LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{self, ErrorKind, Read, Write};
 use std::mem;
 
-use super::{Error, Result};
+use super::{BytesSlice, Error, Result};
 
 const SIGN_MARK: u64 = 0x8000000000000000;
 pub const MAX_VAR_I64_LEN: usize = 10;
@@ -219,6 +222,148 @@ pub trait NumberDecoder: Read {
 
 impl<T: Read> NumberDecoder for T {}
 
+#[inline]
+fn read_num_bytes<T, F>(size: usize, data: &mut &[u8], f: F) -> Result<T>
+where
+    F: Fn(&[u8]) -> T,
+{
+    if data.len() >= size {
+        let buf = &data[..size];
+        *data = &data[size..];
+        return Ok(f(buf));
+    }
+    Err(Error::Io(io::Error::new(ErrorKind::UnexpectedEof, "eof")))
+}
+
+/// `decode_i64` decodes value encoded by `encode_i64` before.
+#[inline]
+pub fn decode_i64(data: &mut BytesSlice) -> Result<i64> {
+    decode_u64(data).map(order_decode_i64)
+}
+
+/// `decode_i64_desc` decodes value encoded by `encode_i64_desc` before.
+#[inline]
+pub fn decode_i64_desc(data: &mut BytesSlice) -> Result<i64> {
+    decode_u64_desc(data).map(order_decode_i64)
+}
+
+/// `decode_u64` decodes value encoded by `encode_u64` before.
+#[inline]
+pub fn decode_u64(data: &mut BytesSlice) -> Result<u64> {
+    read_num_bytes(mem::size_of::<u64>(), data, BigEndian::read_u64)
+}
+
+/// `decode_u64_desc` decodes value encoded by `encode_u64_desc` before.
+#[inline]
+pub fn decode_u64_desc(data: &mut BytesSlice) -> Result<u64> {
+    let v = decode_u64(data)?;
+    Ok(!v)
+}
+
+/// `decode_var_i64` decodes value encoded by `encode_var_i64` before.
+#[inline]
+pub fn decode_var_i64(data: &mut BytesSlice) -> Result<i64> {
+    let v = decode_var_u64(data)?;
+    let vx = v >> 1;
+    if v & 1 == 0 {
+        Ok(vx as i64)
+    } else {
+        Ok(!vx as i64)
+    }
+}
+
+/// `decode_var_u64` decodes value encoded by `encode_var_u64` before.
+#[inline]
+pub fn decode_var_u64(data: &mut BytesSlice) -> Result<u64> {
+    if !data.is_empty() {
+        // process with value < 127 independently at first
+        // since it matches most of the cases.
+        if data[0] < 0x80 {
+            let res = u64::from(data[0]) & 0x7f;
+            *data = unsafe { data.get_unchecked(1..) };
+            return Ok(res);
+        }
+
+        // process with data's len >=10 or data ends with var u64
+        if data.len() >= 10 || *data.last().unwrap() < 0x80 {
+            let mut res = 0;
+            for i in 0..9 {
+                let b = unsafe { *data.get_unchecked(i) };
+                res |= (u64::from(b) & 0x7f) << (i * 7);
+                if b < 0x80 {
+                    *data = unsafe { data.get_unchecked(i + 1..) };
+                    return Ok(res);
+                }
+            }
+            let b = unsafe { *data.get_unchecked(9) };
+            if b <= 1 {
+                res |= ((u64::from(b)) & 0x7f) << (9 * 7);
+                *data = unsafe { data.get_unchecked(10..) };
+                return Ok(res);
+            }
+            return Err(Error::Io(io::Error::new(
+                ErrorKind::InvalidData,
+                "overflow",
+            )));
+        }
+    }
+
+    // process data's len < 10 && data not end with var u64.
+    let mut res = 0;
+    for i in 0..data.len() {
+        let b = data[i];
+        res |= (u64::from(b) & 0x7f) << (i * 7);
+        if b < 0x80 {
+            *data = unsafe { data.get_unchecked(i + 1..) };
+            return Ok(res);
+        }
+    }
+    Err(Error::Io(io::Error::new(ErrorKind::UnexpectedEof, "eof")))
+}
+
+/// `decode_f64` decodes value encoded by `encode_f64` before.
+#[inline]
+pub fn decode_f64(data: &mut BytesSlice) -> Result<f64> {
+    decode_u64(data).map(order_decode_f64)
+}
+
+/// `decode_f64_desc` decodes value encoded by `encode_f64_desc` before.
+#[inline]
+pub fn decode_f64_desc(data: &mut BytesSlice) -> Result<f64> {
+    decode_u64_desc(data).map(order_decode_f64)
+}
+
+/// `decode_u16_le` decodes value encoded by `encode_u16_le` before.
+#[inline]
+pub fn decode_u16_le(data: &mut BytesSlice) -> Result<u16> {
+    read_num_bytes(mem::size_of::<u16>(), data, LittleEndian::read_u16)
+}
+
+/// `decode_u32_le` decodes value encoded by `encode_u32_le` before.
+#[inline]
+pub fn decode_u32_le(data: &mut BytesSlice) -> Result<u32> {
+    read_num_bytes(mem::size_of::<u32>(), data, LittleEndian::read_u32)
+}
+
+/// `decode_f64_le` decodes value encoded by `encode_f64_le` before.
+#[inline]
+pub fn decode_f64_le(data: &mut BytesSlice) -> Result<f64> {
+    read_num_bytes(mem::size_of::<f64>(), data, LittleEndian::read_f64)
+}
+
+/// `decode_i64_le` decodes value encoded by `encode_i64_le` before.
+#[inline]
+pub fn decode_i64_le(data: &mut BytesSlice) -> Result<i64> {
+    let v = decode_u64_le(data)?;
+    Ok(v as i64)
+}
+
+/// `decode_u64_le` decodes value encoded by `encode_u64_le` before.
+#[inline]
+pub fn decode_u64_le(data: &mut BytesSlice) -> Result<u64> {
+    read_num_bytes(mem::size_of::<u64>(), data, LittleEndian::read_u64)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -344,7 +489,7 @@ mod test {
             encoded.sort();
             let decoded: Vec<_> = encoded
                 .iter()
-                .map(|b| b.as_slice().$dec().unwrap())
+                .map(|b| $dec(&mut b.as_slice()).unwrap())
                 .collect();
             assert_eq!(decoded, $sorted);
         };
@@ -359,7 +504,7 @@ mod test {
                     let mut buf = vec![];
                     buf.$enc(v).unwrap();
                     assert!(buf.len() <= MAX_VAR_I64_LEN);
-                    assert_eq!(v, buf.as_slice().$dec().unwrap());
+                    assert_eq!(v, $dec(&mut buf.as_slice()).unwrap());
                 }
             }
         };
@@ -468,7 +613,7 @@ mod test {
             fn $tag() {
                 let mut buf = vec![0; 7];
                 check_error!(buf.as_mut_slice().$enc($case), ErrorKind::WriteZero);
-                check_error!(buf.as_slice().$dec(), ErrorKind::UnexpectedEof);
+                check_error!($dec(&mut buf.as_slice()), ErrorKind::UnexpectedEof);
             }
         };
     }

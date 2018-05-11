@@ -200,6 +200,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let mut options = Options::default();
         options.key_only = req.get_key_only();
+        options.reverse_scan = req.get_reverse();
 
         let future = self.storage
             .async_scan(
