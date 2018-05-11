@@ -6,7 +6,9 @@
 #    e.g.: 78_000 = "1.3m"
 
 # log level: trace, debug, info, warning, error, critical.
+# Note that `debug` and `trace` are only available in development builds.
 # log-level = "info"
+
 # file to store log, write to stderr if it's empty.
 # log-file = ""
 
