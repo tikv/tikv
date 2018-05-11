@@ -286,6 +286,143 @@ fn test_txn_store_scan() {
 }
 
 #[test]
+fn test_txn_store_reverse_scan() {
+    let store = AssertionStorage::default();
+
+    // ver10: A(10) - B(_) - C(10) - D(_) - E(10)
+    store.put_ok(b"A", b"A10", 5, 10);
+    store.put_ok(b"C", b"C10", 5, 10);
+    store.put_ok(b"E", b"E10", 5, 10);
+
+    let check_v10 = || {
+        store.reverse_scan_ok(b"Z", 0, 10, vec![]);
+        store.reverse_scan_ok(b"Z", 1, 10, vec![Some((b"E", b"E10"))]);
+        store.reverse_scan_ok(
+            b"Z",
+            2,
+            10,
+            vec![Some((b"E", b"E10")), Some((b"C", b"C10"))],
+        );
+        store.reverse_scan_ok(
+            b"Z",
+            3,
+            10,
+            vec![
+                Some((b"E", b"E10")),
+                Some((b"C", b"C10")),
+                Some((b"A", b"A10")),
+            ],
+        );
+        store.reverse_scan_ok(
+            b"Z",
+            4,
+            10,
+            vec![
+                Some((b"E", b"E10")),
+                Some((b"C", b"C10")),
+                Some((b"A", b"A10")),
+            ],
+        );
+        store.reverse_scan_ok(
+            b"E\x00",
+            3,
+            10,
+            vec![
+                Some((b"E", b"E10")),
+                Some((b"C", b"C10")),
+                Some((b"A", b"A10")),
+            ],
+        );
+        store.reverse_scan_ok(
+            b"E",
+            3,
+            10,
+            vec![Some((b"C", b"C10")), Some((b"A", b"A10"))],
+        );
+        store.reverse_scan_ok(b"", 1, 10, vec![]);
+    };
+    check_v10();
+
+    // ver20: A(10) - B(20) - C(10) - D(20) - E(10)
+    store.put_ok(b"B", b"B20", 15, 20);
+    store.put_ok(b"D", b"D20", 15, 20);
+
+    let check_v20 = || {
+        store.reverse_scan_ok(
+            b"Z",
+            5,
+            20,
+            vec![
+                Some((b"E", b"E10")),
+                Some((b"D", b"D20")),
+                Some((b"C", b"C10")),
+                Some((b"B", b"B20")),
+                Some((b"A", b"A10")),
+            ],
+        );
+        store.reverse_scan_ok(
+            b"C",
+            5,
+            20,
+            vec![Some((b"B", b"B20")), Some((b"A", b"A10"))],
+        );
+        store.reverse_scan_ok(b"D\x00", 1, 20, vec![Some((b"D", b"D20"))]);
+    };
+    check_v10();
+    check_v20();
+
+    // ver30: A(_) - B(20) - C(10) - D(_) - E(10)
+    store.delete_ok(b"A", 25, 30);
+    store.delete_ok(b"D", 25, 30);
+
+    let check_v30 = || {
+        store.reverse_scan_ok(
+            b"Z",
+            5,
+            30,
+            vec![
+                Some((b"E", b"E10")),
+                Some((b"C", b"C10")),
+                Some((b"B", b"B20")),
+            ],
+        );
+        store.reverse_scan_ok(b"E", 1, 30, vec![Some((b"C", b"C10"))]);
+        store.reverse_scan_ok(b"B\x00", 5, 30, vec![Some((b"B", b"B20"))]);
+    };
+    check_v10();
+    check_v20();
+    check_v30();
+
+    // ver40: A(_) - B(_) - C(40) - D(40) - E(10)
+    store.delete_ok(b"B", 35, 40);
+    store.put_ok(b"C", b"C40", 35, 40);
+    store.put_ok(b"D", b"D40", 35, 40);
+
+    let check_v40 = || {
+        store.reverse_scan_ok(
+            b"Z",
+            5,
+            40,
+            vec![
+                Some((b"E", b"E10")),
+                Some((b"D", b"D40")),
+                Some((b"C", b"C40")),
+            ],
+        );
+        store.reverse_scan_ok(
+            b"E",
+            5,
+            100,
+            vec![Some((b"D", b"D40")), Some((b"C", b"C40"))],
+        );
+    };
+    check_v10();
+    check_v20();
+    check_v30();
+    check_v40();
+}
+
+#[test]
 fn test_txn_store_scan_key_only() {
     let store = AssertionStorage::default();
     store.put_ok(b"A", b"A", 5, 10);
