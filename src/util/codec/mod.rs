@@ -16,7 +16,7 @@ pub mod number;
 
 use protobuf;
 use std::error;
-use std::io;
+use std::io::{self, ErrorKind};
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 
@@ -74,6 +74,9 @@ impl Error {
             }
             Error::Protobuf(_) | Error::Io(_) | Error::Other(_) => None,
         }
+    }
+    pub fn unexpected_eof() -> Error {
+        Error::Io(io::Error::new(ErrorKind::UnexpectedEof, "eof"))
     }
 }
 
