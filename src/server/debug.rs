@@ -231,14 +231,21 @@ impl Debugger {
     }
 
     /// Compact the cf[start..end) in the db.
-    pub fn compact(&self, db: DBType, cf: &str, start: &[u8], end: &[u8]) -> Result<()> {
+    pub fn compact(
+        &self,
+        db: DBType,
+        cf: &str,
+        start: &[u8],
+        end: &[u8],
+        threads: u32,
+    ) -> Result<()> {
         validate_db_and_cf(db, cf)?;
         let db = self.get_db_from_type(db)?;
         let handle = box_try!(get_cf_handle(db, cf));
         let start = if start.is_empty() { None } else { Some(start) };
         let end = if end.is_empty() { None } else { Some(end) };
         info!("Debugger starts manual comapct on {:?}.{}", db, cf);
-        compact_range(db, handle, start, end, false);
+        compact_range(db, handle, start, end, false, threads);
         info!("Debugger finishs manual comapct on {:?}.{}", db, cf);
         Ok(())
     }
