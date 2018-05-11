@@ -48,10 +48,6 @@ use super::metrics::*;
 use super::statistics::analyze::AnalyzeContext;
 use super::*;
 
-pub const REQ_TYPE_DAG: i64 = 103;
-pub const REQ_TYPE_ANALYZE: i64 = 104;
-pub const REQ_TYPE_CHECKSUM: i64 = 105;
-
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.
 pub const DEFAULT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
@@ -137,9 +133,17 @@ impl Host {
         let ctxd = pool.get_context_delegators();
         tracker.ctx_pool(ctxd);
 
+        let batch_row_limit = {
+            if !on_resp.is_streaming() {
+                self.batch_row_limit
+            } else {
+                self.stream_batch_row_limit
+            }
+        };
+
         match cop_req {
             CopRequest::DAG(dag) => {
-                let mut ctx = match DAGContext::new(dag, ranges, snap, req_ctx) {
+                let mut ctx = match DAGContext::new(dag, ranges, snap, req_ctx, batch_row_limit) {
                     Ok(ctx) => ctx,
                     Err(e) => {
                         on_resp.respond(err_resp(e, metrics));
@@ -147,10 +151,9 @@ impl Host {
                     }
                 };
                 if !on_resp.is_streaming() {
-                    let batch_row_limit = self.batch_row_limit;
                     let do_request = move |_| {
                         tracker.record_wait();
-                        let mut resp = ctx.handle_request(batch_row_limit).unwrap_or_else(|e| {
+                        let mut resp = ctx.handle_request().unwrap_or_else(|e| {
                             let mut metrics = tracker.get_basic_metrics();
                             err_resp(e, &mut metrics)
                         });
@@ -164,17 +167,15 @@ impl Host {
                     return;
                 }
                 // For streaming.
-                let batch_row_limit = self.stream_batch_row_limit;
                 let s = stream::unfold((ctx, false), move |(mut ctx, finished)| {
                     if finished {
                         return None;
                     }
                     tracker.record_wait();
-                    let (mut item, finished) = ctx.handle_streaming_request(batch_row_limit)
-                        .unwrap_or_else(|e| {
-                            let mut metrics = tracker.get_basic_metrics();
-                            (Some(err_resp(e, &mut metrics)), true)
-                        });
+                    let (mut item, finished) = ctx.handle_streaming_request().unwrap_or_else(|e| {
+                        let mut metrics = tracker.get_basic_metrics();
+                        (Some(err_resp(e, &mut metrics)), true)
+                    });
                     let mut exec_metrics = ExecutorMetrics::default();
                     ctx.collect_metrics_into(&mut exec_metrics);
                     tracker.record_handle(item.as_mut(), exec_metrics);
@@ -185,14 +186,15 @@ impl Host {
                 pool.spawn(move |_| on_resp.respond_stream(s)).forget();
             }
             CopRequest::Analyze(analyze) => {
-                let ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx);
-                let mut exec_metrics = ExecutorMetrics::default();
+                let mut ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx).unwrap();
                 let do_request = move |_| {
                     tracker.record_wait();
-                    let mut resp = ctx.handle_request(&mut exec_metrics).unwrap_or_else(|e| {
+                    let mut resp = ctx.handle_request().unwrap_or_else(|e| {
                         let mut metrics = tracker.get_basic_metrics();
                         err_resp(e, &mut metrics)
                     });
+                    let mut exec_metrics = ExecutorMetrics::default();
+                    ctx.collect_metrics_into(&mut exec_metrics);
                     tracker.record_handle(Some(&mut resp), exec_metrics);
                     on_resp.respond(resp);
                     future::ok::<_, ()>(())
@@ -200,14 +202,15 @@ impl Host {
                 pool.spawn(do_request).forget();
             }
             CopRequest::Checksum(checksum) => {
-                let ctx = ChecksumContext::new(checksum, ranges, snap, &req_ctx);
-                let mut exec_metrics = ExecutorMetrics::default();
+                let mut ctx = ChecksumContext::new(checksum, ranges, snap, &req_ctx).unwrap();
                 let do_request = move |_| {
                     tracker.record_wait();
-                    let mut resp = ctx.handle_request(&mut exec_metrics).unwrap_or_else(|e| {
+                    let mut resp = ctx.handle_request().unwrap_or_else(|e| {
                         let mut metrics = tracker.get_basic_metrics();
                         err_resp(e, &mut metrics)
                     });
+                    let mut exec_metrics = ExecutorMetrics::default();
+                    ctx.collect_metrics_into(&mut exec_metrics);
                     tracker.record_handle(Some(&mut resp), exec_metrics);
                     on_resp.respond(resp);
                     future::ok::<_, ()>(())
