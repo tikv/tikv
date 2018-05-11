@@ -168,7 +168,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_to_base() {
+    fn test_helper_to_config() {
         let cfg = SerdeConfigHelper {
             high_concurrency: Some(5),
             max_tasks_low: Some(100),
@@ -184,7 +184,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate() {
+    fn test_config_validate() {
         let cfg = SerdeConfigHelper::default().to_storage_config();
         assert!(cfg.validate().is_ok());
 
