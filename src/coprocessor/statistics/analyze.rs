@@ -143,7 +143,7 @@ impl RequestHandler for AnalyzeContext {
         }
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut self::dag::executor::ExecutorMetrics) {
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         metrics.merge(&mut self.metrics);
     }
 }

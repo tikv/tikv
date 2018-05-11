@@ -20,6 +20,8 @@ use std::io;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 
+pub type BytesSlice<'a> = &'a [u8];
+
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
