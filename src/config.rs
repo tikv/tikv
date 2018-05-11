@@ -713,7 +713,7 @@ pub mod log_level_serde {
     where
         S: Serializer,
     {
-        format!("{}", get_string_by_level(value)).serialize(serializer)
+        get_string_by_level(value).serialize(serializer)
     }
 }
 
