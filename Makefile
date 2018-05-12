@@ -59,6 +59,7 @@ fail_release:
 trace_test:
 	env CI=true SKIP_FORMAT_CHECK=true FAIL_POINT=1 ${PROJECT_DIR}/ci-build/test.sh
 
+test: SHELL=/bin/bash
 test:
 	# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
 	# again here. LOCAL_DIR is defined in .travis.yml.
