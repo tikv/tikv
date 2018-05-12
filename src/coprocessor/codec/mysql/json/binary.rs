@@ -16,7 +16,7 @@ use std::io::{Read, Write};
 use std::{str, f64};
 
 use byteorder::{ReadBytesExt, WriteBytesExt};
-use util::codec::number::{NumberDecoder, NumberEncoder};
+use util::codec::number::{self, NumberDecoder, NumberEncoder};
 
 use super::super::Result;
 use super::{Json, ERR_CONVERT_FAILED};
@@ -262,8 +262,8 @@ pub trait JsonDecoder: NumberDecoder {
         let mut value_entries_data = &data[key_entries_len..(key_entries_len + value_entries_len)];
         let mut key_offset = key_entries_len + value_entries_len;
         for _ in 0..element_count {
-            let key_real_offset = key_entries_data.decode_u32_le()?;
-            let key_len = key_entries_data.decode_u16_le()?;
+            let key_real_offset = number::decode_u32_le(&mut key_entries_data)?;
+            let key_len = number::decode_u16_le(&mut key_entries_data)?;
             let key_data = &data[key_offset..(key_offset + key_len as usize)];
             let key = String::from(str::from_utf8(key_data).unwrap());
             let value = value_entries_data.decode_json_item(&data[key_offset..], key_real_offset)?;
@@ -332,7 +332,7 @@ pub trait JsonDecoder: NumberDecoder {
         match code {
             TYPE_CODE_LITERAL => entry.decode_json_body(code),
             _ => {
-                let real_offset = entry.decode_u32_le().unwrap();
+                let real_offset = number::decode_u32_le(&mut entry).unwrap();
                 let offset_in_values = real_offset - data_start_position;
                 let mut value = &values_data[offset_in_values as usize..];
                 value.decode_json_body(code)
