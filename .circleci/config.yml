@@ -1,0 +1,103 @@
+version: 2
+jobs:
+  test:
+    working_directory: ~/tikv-ci
+    machine: true
+    environment:
+      # CircleCI does not support env variable interpolation, set those later
+      # Variables used by cargo
+      RUST_TEST_THREADS: "1"
+      RUST_BACKTRACE: "1"
+      RUSTFLAGS: "-Dwarnings"
+      FAIL_POINT: "1"
+    steps:
+      - run:
+          name: Updating PATH and Define Environment Variable at Runtime
+          # Define variables that need interpolation
+          # As CircleCI's each `run` declaration starts a new shell, we need to persist them to $BASH_ENV
+          command: |
+            echo 'export PATH=$HOME/.local/cmake/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH' >> $BASH_ENV
+            echo 'export LD_RUN_PATH=$LD_RUN_PATH:$HOME/.local/lib' >> $BASH_ENV
+            echo 'export DYLD_LIBRARY_PATH=$DYLD_LIBRARY_PATH:$HOME/.local/lib' >> $BASH_ENV
+            echo 'export LDFLAGS=-L$HOME/.local/lib' >> $BASH_ENV
+            echo 'export CPPFLAGS=-I$HOME/.local/include' >> $BASH_ENV
+            echo 'export CXXFLAGS=-I$HOME/.local/include' >> $BASH_ENV
+            echo 'export LOCAL_PREFIX=$HOME/.local' >> $BASH_ENV
+      - checkout
+      - run: 
+          name: Installing Build Dependencies
+          command: |
+            sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y;
+            sudo apt-get update -y;
+            sudo apt-get install -y g++-4.8 curl libdw-dev libelf-dev elfutils binutils-dev
+      - restore_cache:
+          name: Restoring ~/.local Cache
+          keys: 
+            - v1-local-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
+            - v1-local-{{ .Branch }}
+            - v1-local
+      - restore_cache:
+          name: Restoring ~/.cargo Cache
+          keys:
+            - v1-cargo-{{ .Branch }}-{{ checksum "Cargo.lock" }}
+            - v1-cargo-{{ .Branch }}
+            - v1-cargo
+      - run: 
+          name: Setting up Rust and the rest of the Build Environment
+          command: |
+            RUST_VERSION=`tail -n 1 RUST_VERSION`
+            if [[ ! -e $HOME/.cargo ]]; then
+              curl https://sh.rustup.rs -sSf |
+                sh -s -- --no-modify-path --default-toolchain ${RUST_VERSION} -y;
+              rustup default ${RUST_VERSION};
+            else
+              rustup default ${RUST_VERSION};
+            fi
+
+            make -f ci-build/Makefile prepare-rustfmt
+
+            if [[ ! -f $HOME/.local/cmake/bin/cmake ]]; then
+              curl https://cmake.org/files/v3.10/cmake-3.10.0-Linux-x86_64.tar.gz -sSf | tar xzf -;
+              rm -rf $HOME/.local/cmake
+              mv cmake-3.10.0-Linux-x86_64 $HOME/.local/cmake
+            fi
+      # check format first
+      -  run:
+          name: Checking Format
+          command: make format && git diff-index --quiet HEAD -- || (git diff; echo please make format and run tests before creating a PR!; exit 1)
+      - restore_cache:
+          name: Restoring ./target Cache  
+          keys:
+            - v1-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
+            - v1-target-{{ .Branch }}
+            - v1-target
+      - run: 
+          name: Building
+          command: env SKIP_TESTS=true make trace_test
+          no_output_timeout: 1800s
+      - save_cache:
+          name: Saving ./target Cache
+          key: v1-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
+          paths:
+            - target
+      - save_cache:
+          name: Saving ~/.cargo Cache
+          key: v1-cargo-{{ .Branch }}-{{ checksum "Cargo.lock" }}
+          paths:
+            - ~/.cargo
+      - save_cache:
+          name: Saving ~/.local Cache
+          key: v1-local-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
+          paths:
+            - ~/.local
+            - ~/.rustup
+      - run:
+          name: Testing
+          command: make trace_test
+          no_output_timeout: 1800s
+              
+workflows:
+  version: 2
+  ci-test:
+      jobs:
+        - test
