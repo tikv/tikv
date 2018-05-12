@@ -118,4 +118,5 @@ codegen-units = 4
 lto = true
 opt-level = 3
 debug = true
+# TODO: remove this once rust-lang/rust#50199 is resolved.
 codegen-units = 2
