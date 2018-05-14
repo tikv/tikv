@@ -35,6 +35,7 @@ pub struct AnalyzeContext {
     req: AnalyzeReq,
     snap: Option<SnapshotStore>,
     ranges: Vec<KeyRange>,
+    metrics: ExecutorMetrics,
 }
 
 impl AnalyzeContext {
@@ -43,57 +44,19 @@ impl AnalyzeContext {
         ranges: Vec<KeyRange>,
         snap: Box<Snapshot>,
         req_ctx: &ReqContext,
-    ) -> AnalyzeContext {
+    ) -> Result<AnalyzeContext> {
         let snap = SnapshotStore::new(
             snap,
             req.get_start_ts(),
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
         );
-        AnalyzeContext {
+        Ok(AnalyzeContext {
             req,
             snap: Some(snap),
             ranges,
-        }
-    }
-
-    pub fn handle_request(mut self, stats: &mut ExecutorMetrics) -> Result<Response> {
-        let ret = match self.req.get_tp() {
-            AnalyzeType::TypeIndex => {
-                let req = self.req.take_idx_req();
-                let mut scanner = IndexScanExecutor::new_with_cols_len(
-                    i64::from(req.get_num_columns()),
-                    mem::replace(&mut self.ranges, Vec::new()),
-                    self.snap.take().unwrap(),
-                )?;
-                let res = AnalyzeContext::handle_index(req, &mut scanner);
-                scanner.collect_metrics_into(stats);
-                res
-            }
-
-            AnalyzeType::TypeColumn => {
-                let col_req = self.req.take_col_req();
-                let snap = self.snap.take().unwrap();
-                let ranges = mem::replace(&mut self.ranges, Vec::new());
-                let mut builder = SampleBuilder::new(col_req, snap, ranges)?;
-                let res = AnalyzeContext::handle_column(&mut builder);
-                builder.data.collect_metrics_into(stats);
-                res
-            }
-        };
-        match ret {
-            Ok(data) => {
-                let mut resp = Response::new();
-                resp.set_data(data);
-                Ok(resp)
-            }
-            Err(Error::Other(e)) => {
-                let mut resp = Response::new();
-                resp.set_other_error(format!("{}", e));
-                Ok(resp)
-            }
-            Err(e) => Err(e),
-        }
+            metrics: ExecutorMetrics::default(),
+        })
     }
 
     // handle_column is used to process `AnalyzeColumnsReq`
@@ -137,6 +100,51 @@ impl AnalyzeContext {
         }
         let dt = box_try!(res.write_to_bytes());
         Ok(dt)
+    }
+}
+
+impl RequestHandler for AnalyzeContext {
+    fn handle_request(&mut self) -> Result<Response> {
+        let ret = match self.req.get_tp() {
+            AnalyzeType::TypeIndex => {
+                let req = self.req.take_idx_req();
+                let mut scanner = IndexScanExecutor::new_with_cols_len(
+                    i64::from(req.get_num_columns()),
+                    mem::replace(&mut self.ranges, Vec::new()),
+                    self.snap.take().unwrap(),
+                )?;
+                let res = AnalyzeContext::handle_index(req, &mut scanner);
+                scanner.collect_metrics_into(&mut self.metrics);
+                res
+            }
+
+            AnalyzeType::TypeColumn => {
+                let col_req = self.req.take_col_req();
+                let snap = self.snap.take().unwrap();
+                let ranges = mem::replace(&mut self.ranges, Vec::new());
+                let mut builder = SampleBuilder::new(col_req, snap, ranges)?;
+                let res = AnalyzeContext::handle_column(&mut builder);
+                builder.data.collect_metrics_into(&mut self.metrics);
+                res
+            }
+        };
+        match ret {
+            Ok(data) => {
+                let mut resp = Response::new();
+                resp.set_data(data);
+                Ok(resp)
+            }
+            Err(Error::Other(e)) => {
+                let mut resp = Response::new();
+                resp.set_other_error(format!("{}", e));
+                Ok(resp)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
+        metrics.merge(&mut self.metrics);
     }
 }
 
