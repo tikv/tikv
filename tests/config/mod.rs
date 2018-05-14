@@ -15,8 +15,8 @@ use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 
-use log::LogLevelFilter;
 use rocksdb::{CompactionPriority, DBCompactionStyle, DBCompressionType, DBRecoveryMode};
+use slog::Level;
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::pd::Config as PdConfig;
@@ -53,7 +53,7 @@ fn read_file_in_project_dir(path: &str) -> String {
 #[test]
 fn test_serde_custom_tikv_config() {
     let mut value = TiKvConfig::default();
-    value.log_level = LogLevelFilter::Debug;
+    value.log_level = Level::Debug;
     value.log_file = "foo".to_owned();
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.

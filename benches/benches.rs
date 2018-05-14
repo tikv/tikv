@@ -20,11 +20,17 @@
 
 extern crate kvproto;
 extern crate log;
+#[macro_use(slog_o, slog_kv)]
+extern crate slog;
 extern crate mio;
 extern crate protobuf;
 extern crate raft;
 extern crate rand;
 extern crate rocksdb;
+extern crate slog_async;
+extern crate slog_scope;
+extern crate slog_stdlog;
+extern crate slog_term;
 extern crate tempdir;
 extern crate test;
 extern crate tikv;
