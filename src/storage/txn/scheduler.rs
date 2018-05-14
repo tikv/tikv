@@ -1261,6 +1261,7 @@ impl Scheduler {
         cb_ctx: CbContext,
         snapshot: EngineResult<Box<Snapshot>>,
     ) {
+        fail_point!("scheduler_async_snapshot_finish");
         debug!(
             "receive snapshot finish msg for cids={:?}, cb_ctx={:?}",
             cids, cb_ctx
