@@ -35,11 +35,11 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::worker::apply::ExecResult;
 use raftstore::store::worker::{Apply, ApplyRes, ApplyTask};
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
-use raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
+use raftstore::store::{Callback, Config, ProposalContext, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
 
 use util::MustConsumeVec;
-use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
+use util::collections::{FlatMap, HashSet};
 use util::time::{duration_to_sec, monotonic_raw_now};
 use util::worker::{FutureWorker, Scheduler};
 
@@ -324,7 +324,7 @@ impl Peer {
             ..Default::default()
         };
 
-        let raft_group = RawNode::new(&raft_cfg, ps, &[])?;
+        let raft_group = RawNode::new(&raft_cfg, ps, vec![])?;
 
         let mut peer = Peer {
             kv_engine: store.kv_engine(),
@@ -1229,7 +1229,10 @@ impl Peer {
     /// 2. it's a follower, and it does not lag behind the leader a lot.
     ///    If a snapshot is involved between it and the Raft leader, it's not healthy since
     ///    it cannot works as a node in the quorum to receive replicating logs from leader.
-    fn count_healthy_node(&self, progress: Values<u64, Progress>) -> usize {
+    fn count_healthy_node<'a, I>(&self, progress: I) -> usize
+    where
+        I: Iterator<Item = &'a Progress>,
+    {
         let mut healthy = 0;
         for pr in progress {
             if pr.matched >= self.get_store().truncated_index() {
@@ -1519,7 +1522,12 @@ impl Peer {
 
         let sync_log = get_sync_log_from_request(&req);
         let propose_index = self.next_proposal_index();
-        self.raft_group.propose(data, sync_log)?;
+        let context = if !sync_log {
+            vec![]
+        } else {
+            vec![ProposalContext::SYNC_LOG.bits()]
+        };
+        self.raft_group.propose(context, data)?;
         if self.next_proposal_index() == propose_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
@@ -1598,7 +1606,8 @@ impl Peer {
         );
 
         let propose_index = self.next_proposal_index();
-        self.raft_group.propose_conf_change(cc)?;
+        self.raft_group
+            .propose_conf_change(vec![ProposalContext::SYNC_LOG.bits()], cc)?;
         if self.next_proposal_index() == propose_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
