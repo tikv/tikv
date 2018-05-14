@@ -156,6 +156,10 @@ impl MvccReader {
         ts: u64,
         reverse: bool,
     ) -> Result<Option<(u64, Write)>> {
+        info!(
+            "MvccReader.seek_write_impl begin: key = {}, ts = {}, reverse = {}",
+            key, ts, reverse
+        );
         if self.scan_mode.is_some() {
             if self.write_cursor.is_none() {
                 let iter_opt = IterOption::new(None, None, self.fill_cache);
@@ -179,18 +183,30 @@ impl MvccReader {
             cursor.near_seek(&key.append_ts(ts), &mut self.statistics.write)?
         };
         if !ok {
+            info!(
+                "MvccReader.seek_write_impl end: key = {}, ts = {}, reverse = {}, result = None",
+                key, ts, reverse
+            );
             return Ok(None);
         }
         let write_key = Key::from_encoded(cursor.key().to_vec());
         let commit_ts = write_key.decode_ts()?;
         let k = write_key.truncate_ts()?;
         if &k != key {
+            info!(
+                "MvccReader.seek_write_impl end: key = {}, ts = {}, reverse = {}, result = None",
+                key, ts, reverse
+            );
             return Ok(None);
         }
         let write = Write::parse(cursor.value())?;
         self.statistics.write.processed += 1;
         self.statistics.write.flow_stats.read_bytes += cursor.key().len() + cursor.value().len();
         self.statistics.write.flow_stats.read_keys += 1;
+        info!(
+            "MvccReader.seek_write_impl end: key = {}, ts = {}, reverse = {}, result = Some",
+            key, ts, reverse
+        );
         Ok(Some((commit_ts, write)))
     }
 
@@ -219,6 +235,7 @@ impl MvccReader {
     }
 
     pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
+        info!("MvccReader.get: key = {}, ts = {}", key, ts);
         // Check for locks that signal concurrent writes.
         match self.isolation_level {
             IsolationLevel::SI => ts = self.check_lock(key, ts)?,

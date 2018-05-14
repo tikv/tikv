@@ -681,6 +681,7 @@ fn process_write_impl(
     snapshot: Box<Snapshot>,
     statistics: &mut Statistics,
 ) -> Result<()> {
+    info!("storage.txn.scheduler.process_write_impl, cmd = {}", cmd);
     let (pr, modifies, rows) = match cmd {
         Command::Prewrite {
             ref ctx,

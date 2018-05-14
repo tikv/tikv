@@ -74,35 +74,41 @@ impl MvccTxn {
         ttl: u64,
         short_value: Option<Value>,
     ) {
+        info!("MvccTxn.lock_key key = {}", key);
         let lock = Lock::new(lock_type, primary, self.start_ts, ttl, short_value).to_bytes();
         self.write_size += CF_LOCK.len() + key.encoded().len() + lock.len();
         self.writes.push(Modify::Put(CF_LOCK, key, lock));
     }
 
     fn unlock_key(&mut self, key: Key) {
+        info!("MvccTxn.unlock_key key = {}", key);
         self.write_size += CF_LOCK.len() + key.encoded().len();
         self.writes.push(Modify::Delete(CF_LOCK, key));
     }
 
     fn put_value(&mut self, key: &Key, ts: u64, value: Value) {
+        info!("MvccTxn.put_value key = {}", key);
         let key = key.append_ts(ts);
         self.write_size += key.encoded().len() + value.len();
         self.writes.push(Modify::Put(CF_DEFAULT, key, value));
     }
 
     fn delete_value(&mut self, key: &Key, ts: u64) {
+        info!("MvccTxn.delete_value key = {}", key);
         let key = key.append_ts(ts);
         self.write_size += key.encoded().len();
         self.writes.push(Modify::Delete(CF_DEFAULT, key));
     }
 
     fn put_write(&mut self, key: &Key, ts: u64, value: Value) {
+        info!("MvccTxn.put_write key = {}", key);
         let key = key.append_ts(ts);
         self.write_size += CF_WRITE.len() + key.encoded().len() + value.len();
         self.writes.push(Modify::Put(CF_WRITE, key, value));
     }
 
     fn delete_write(&mut self, key: &Key, ts: u64) {
+        info!("MvccTxn.delete_write key = {}", key);
         let key = key.append_ts(ts);
         self.write_size += CF_WRITE.len() + key.encoded().len();
         self.writes.push(Modify::Delete(CF_WRITE, key));
