@@ -104,6 +104,7 @@ optional = true
 
 [replace]
 "protobuf:1.4.1" = { git = "https://github.com/stepancheg/rust-protobuf.git" }
+"raft:0.1.0" = { git = "https://github.com/hicqu/raft-rs", branch = "learner-vote-response" }
 
 [workspace]
 members = ["fuzz"]

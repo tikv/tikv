@@ -13,6 +13,7 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::collections::hash_map::Values;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -39,7 +40,7 @@ use raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
 
 use util::MustConsumeVec;
-use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
+use util::collections::{FlatMap, HashSet};
 use util::time::{duration_to_sec, monotonic_raw_now};
 use util::worker::{FutureWorker, Scheduler};
 
@@ -324,7 +325,7 @@ impl Peer {
             ..Default::default()
         };
 
-        let raft_group = RawNode::new(&raft_cfg, ps, &[])?;
+        let raft_group = RawNode::new(&raft_cfg, ps, vec![])?;
 
         let mut peer = Peer {
             kv_engine: store.kv_engine(),
