@@ -16,6 +16,7 @@ use super::write::{Write, WriteType};
 use super::{Error, Result};
 use kvproto::kvrpcpb::IsolationLevel;
 use raftstore::store::engine::IterOption;
+use std::time::Instant;
 use std::u64;
 use storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
 use storage::{Key, Value, CF_LOCK, CF_WRITE};
@@ -553,6 +554,8 @@ impl MvccReader {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
     use raftstore::store::RegionSnapshot;
@@ -560,7 +563,7 @@ mod tests {
     use rocksdb::{self, Writable, WriteBatch, DB};
     use std::sync::Arc;
     use std::u64;
-    use storage::engine::Modify;
+    use storage::engine::{Modify, ScanMode};
     use storage::mvcc::{MvccReader, MvccTxn};
     use storage::{make_key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempdir::TempDir;
@@ -610,6 +613,14 @@ mod tests {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(Box::new(snap), start_ts, None, IsolationLevel::SI, true);
             txn.commit(&k, commit_ts).unwrap();
+            self.write(txn.into_modifies());
+        }
+
+        fn rollback(&mut self, pk: &[u8], start_ts: u64) {
+            let k = make_key(pk);
+            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
+            let mut txn = MvccTxn::new(Box::new(snap), start_ts, None, IsolationLevel::SI, true);
+            txn.rollback(&k).unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -798,5 +809,53 @@ mod tests {
         assert_eq!(props.num_puts, 4);
         assert_eq!(props.num_versions, 5);
         assert_eq!(props.max_row_versions, 1);
+    }
+
+    #[test]
+    fn test_mvcc_reader_reverse_scan() {
+        let path = TempDir::new("_test_storage_mvcc_reader_reverse_scan").expect("");
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+
+        // Generate RocksDB tombstones in write cf.
+        let start_ts = 1;
+        for i in 0..256 {
+            for y in 0..256 {
+                let pk = &[i as u8, y as u8];
+                let m = Mutation::Put((make_key(pk), vec![]));
+                engine.prewrite(m, pk, start_ts);
+                engine.rollback(pk, 1 /* start_ts */);
+                // generate many RocksDB tombstones.
+                if !((i == 0 && y == 0) || (i == 255 && y == 255)) {
+                    engine.gc(pk, 2 /* safe_point */);
+                }
+            }
+        }
+
+        // Generate locks in lock cf.
+        for i in 0..256 {
+            let pk = &[i as u8];
+            let m = Mutation::Put((make_key(pk), vec![]));
+            engine.prewrite(m, pk, 3 /* start_ts */);
+        }
+
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let mut reader = MvccReader::new(
+            Box::new(snap),
+            Some(ScanMode::Backward),
+            false,
+            None,
+            None,
+            IsolationLevel::SI,
+        );
+        let row = &[255 as u8];
+        let k = make_key(row);
+
+        // Call reverse seek
+        let timer = Instant::now();
+        assert_eq!(reader.reverse_seek(k, 2 /* ts */).unwrap(), None);
+        println!("reverse scan elapsed: {:?}", timer.elapsed());
     }
 }
