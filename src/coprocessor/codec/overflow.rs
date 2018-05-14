@@ -93,22 +93,30 @@ pub fn mul_integer(a: u64, b: i64) -> Result<u64> {
     }
 }
 
-// div_i64 divides i64 a with b, returns i64 if no overflow error.
-// It just checks overflow, if b is zero, a "divide by zero" panic throws.
+// div_i64 divides i64 a with b, returns:
+// - an Error indicating overflow occurred or the divisor is 0
+// - i64 otherwise
 pub fn div_i64(a: i64, b: i64) -> Result<i64> {
-    match a.overflowing_div(b) {
-        (_res, true) => Err(Error::overflow(
-            "UNSIGNED BIGINT",
-            &format!("({} / {})", a, b),
-        )),
-        (res, false) => Ok(res),
+    if b == 0 {
+        Err(Error::division_by_zero())
+    } else {
+        match a.overflowing_div(b) {
+            (_res, true) => Err(Error::overflow(
+                "UNSIGNED BIGINT",
+                &format!("({} / {})", a, b),
+            )),
+            (res, false) => Ok(res),
+        }
     }
 }
 
-// div_u64_with_i64 divides u64 a with i64 b, returns u64 if no overflow error.
-// It just checks overflow, if b is zero, a "divide by zero" panic throws.
+// div_u64_with_i64 divides u64 a with i64 b, returns:
+// - an Error indicating overflow occurred or the divisor is 0
+// - u64 otherwise
 pub fn div_u64_with_i64(a: u64, b: i64) -> Result<u64> {
-    if b < 0 {
+    if b == 0 {
+        Err(Error::division_by_zero())
+    } else if b < 0 {
         if a != 0 && (b.overflowing_neg().0 as u64) <= a {
             Err(Error::overflow(
                 "UNSIGNED BIGINT",
@@ -122,10 +130,13 @@ pub fn div_u64_with_i64(a: u64, b: i64) -> Result<u64> {
     }
 }
 
-// div_i64_with_u64 divides i64 a with u64 b, returns i64 if no overflow error.
-// It just checks overflow, if b is zero, a "divide by zero" panic throws.
+// div_i64_with_u64 divides i64 a with u64 b, returns:
+// - an Error indicating overflow occurred or the divisor is 0
+// - u64 otherwise
 pub fn div_i64_with_u64(a: i64, b: u64) -> Result<u64> {
-    if a < 0 {
+    if b == 0 {
+        Err(Error::division_by_zero())
+    } else if a < 0 {
         if a.overflowing_neg().0 as u64 >= b {
             Err(Error::overflow(
                 "UNSIGNED BIGINT",
@@ -141,7 +152,7 @@ pub fn div_i64_with_u64(a: i64, b: u64) -> Result<u64> {
 
 #[cfg(test)]
 mod test {
-    use coprocessor::dag::expr::ERR_DATA_OUT_OF_RANGE;
+    use coprocessor::dag::expr::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
     use std::{i64, u64};
 
     macro_rules! do_test {
@@ -303,23 +314,18 @@ mod test {
             (-1, i64::MAX as u64, 0, false),
         ];
         do_test!(div_i64_with_u64_cases, div_i64_with_u64);
-    }
 
-    #[test]
-    #[should_panic(expected = "attempt to divide by zero")]
-    fn test_div_i64_zero() {
-        let _unused = super::div_i64(0, 0);
-    }
-
-    #[test]
-    #[should_panic(expected = "attempt to divide by zero")]
-    fn test_div_u64_with_i64_zero() {
-        let _unused = super::div_i64_with_u64(0, 0);
-    }
-
-    #[test]
-    #[should_panic(expected = "attempt to divide by zero")]
-    fn test_div_i64_with_u64_zero() {
-        let _unused = super::div_u64_with_i64(0, 0);
+        assert_eq!(
+            super::div_i64(0, 0).unwrap_err().code(),
+            ERR_DIVISION_BY_ZERO
+        );
+        assert_eq!(
+            super::div_u64_with_i64(0, 0).unwrap_err().code(),
+            ERR_DIVISION_BY_ZERO
+        );
+        assert_eq!(
+            super::div_i64_with_u64(0, 0).unwrap_err().code(),
+            ERR_DIVISION_BY_ZERO
+        );
     }
 }
