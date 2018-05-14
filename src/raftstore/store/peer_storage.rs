@@ -20,25 +20,26 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Instant;
 use std::{cmp, error, u64};
 
-use protobuf::Message;
-use rocksdb::{Writable, WriteBatch, DB};
-
-use super::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
-use super::keys::{self, enc_end_key, enc_start_key};
-use super::metrics::*;
-use super::peer::ReadyContext;
-use super::worker::RegionTask;
-use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftLocalState,
                              RaftSnapshotData, RegionLocalState};
+use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
+use rocksdb::{Writable, WriteBatch, DB};
+
 use raftstore::store::util::conf_state_from_region;
 use raftstore::{Error, Result};
 use storage::CF_RAFT;
 use util::worker::Scheduler;
 use util::{self, rocksdb};
+
+use super::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
+use super::keys::{self, enc_end_key, enc_start_key};
+use super::metrics::*;
+use super::peer::{EntryContext, ReadyContext};
+use super::worker::RegionTask;
+use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -761,8 +762,11 @@ impl PeerStorage {
         };
 
         for entry in entries {
-            if entry.get_sync_log() {
-                ready_ctx.sync_log = true;
+            if !ready_ctx.sync_log && !entry.get_context().is_empty() {
+                let ctx = EntryContext::from_bytes(entry.get_context());
+                if ctx.contains(EntryContext::SYNC_LOG) {
+                    ready_ctx.sync_log = true;
+                }
             }
             ready_ctx.raft_wb.put_msg(
                 &keys::raft_log_key(self.get_region_id(), entry.get_index()),

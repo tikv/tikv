@@ -173,10 +173,33 @@ impl<'a, T> ReadyContext<'a, T> {
 }
 
 bitflags! {
-    struct EntryContext: u64 {
-        const NONE  = 0b00000000;
-        const SPLIT = 0b00000001;
-        // TODO: const SYNC_LOG = 0b00000010;
+    pub struct EntryContext: u64 {
+        const NONE     = 0b00000000;
+        const SYNC_LOG = 0b00000001;
+        const SPLIT    = 0b00000010;
+    }
+}
+
+impl EntryContext {
+    pub fn to_vec(&self) -> Vec<u8> {
+        if *self == Self::NONE {
+            return vec![];
+        }
+        // In little-endian format.
+        let ctx = self.bits().to_le();
+        unsafe { mem::transmute::<u64, [u8; 8]>(ctx).to_vec() }
+    }
+
+    pub fn from_bytes(ctx: &[u8]) -> EntryContext {
+        if ctx.is_empty() {
+            return EntryContext::NONE;
+        } else if ctx.len() == 8 {
+            // In little-endian format.
+            let ctx_le = unsafe { *(ctx.as_ptr() as *const u64) };
+            let ctx = u64::from_le(ctx_le);
+            return EntryContext::from_bits_truncate(ctx);
+        }
+        panic!("invalid EntryContext {:?}", ctx);
     }
 }
 
@@ -925,7 +948,7 @@ impl Peer {
                 // We only care about split commands that are committed
                 // in the current term.
                 if split_to_be_updated && entry.term == self.term() {
-                    let ctx = EntryContext::from_bits_truncate(entry.context);
+                    let ctx = EntryContext::from_bytes(&entry.context);
                     if ctx.contains(EntryContext::SPLIT) {
                         self.last_committed_split_idx = entry.index;
                         split_to_be_updated = false;
@@ -1045,7 +1068,7 @@ impl Peer {
         if !self.is_leader() {
             return;
         }
-        if !self.ready_to_handle_read() {
+        if !self.last_committed_split_idx <= self.get_store().applied_index() {
             // A splitting leader should not renew its leader.
             // Because we split regions asynchronous, the leader may read stale results
             // if splitting runs slow on the leader.
@@ -1487,12 +1510,21 @@ impl Peer {
 
     fn pre_propose(&self, req: &mut RaftCmdRequest) -> Result<EntryContext> {
         self.coprocessor_host.pre_propose(self.region(), req)?;
+        let mut ctx = EntryContext::empty();
+
+        if get_sync_log_from_request(req) {
+            ctx.insert(EntryContext::SYNC_LOG);
+        }
 
         if !req.has_admin_request() {
-            Ok(EntryContext::NONE)
-        } else if req.get_admin_request().has_split() {
-            Ok(EntryContext::SPLIT)
-        } else if req.get_admin_request().has_prepare_merge() {
+            return Ok(ctx);
+        }
+
+        if req.get_admin_request().has_split() {
+            ctx.insert(EntryContext::SPLIT);
+        }
+
+        if req.get_admin_request().has_prepare_merge() {
             let last_index = self.raft_group.raft.raft_log.last_index();
             let min_progress = self.get_min_progress();
             let min_index = min_progress + 1;
@@ -1539,10 +1571,9 @@ impl Peer {
             req.mut_admin_request()
                 .mut_prepare_merge()
                 .set_min_index(min_index);
-            Ok(EntryContext::NONE)
-        } else {
-            Ok(EntryContext::NONE)
         }
+
+        Ok(ctx)
     }
 
     fn propose_normal(
@@ -1576,10 +1607,8 @@ impl Peer {
             return Err(Error::RaftEntryTooLarge(self.region_id, data.len() as u64));
         }
 
-        let sync_log = get_sync_log_from_request(&req);
         let propose_index = self.next_proposal_index();
-        self.raft_group
-            .propose_with_context(data, sync_log, ctx.bits())?;
+        self.raft_group.propose(ctx.to_vec(), data)?;
         if self.next_proposal_index() == propose_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
@@ -1658,7 +1687,8 @@ impl Peer {
         );
 
         let propose_index = self.next_proposal_index();
-        self.raft_group.propose_conf_change(cc)?;
+        self.raft_group
+            .propose_conf_change(EntryContext::SYNC_LOG.to_vec(), cc)?;
         if self.next_proposal_index() == propose_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
@@ -1804,7 +1834,11 @@ impl Peer {
         }
     }
 
-    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &T) -> Result<()> {
+    fn send_raft_message<T: Transport>(
+        &mut self,
+        mut msg: eraftpb::Message,
+        trans: &T,
+    ) -> Result<()> {
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
         // set current epoch
@@ -1836,6 +1870,17 @@ impl Peer {
 
         send_msg.set_from_peer(from_peer);
         send_msg.set_to_peer(to_peer);
+
+        // Backward compatibility for `sync-log`, it has been moved into `EntryContext`.
+        // TODO: remove it in the next major release.
+        for e in msg.mut_entries().iter_mut() {
+            if !e.get_context().is_empty() {
+                let ctx = EntryContext::from_bytes(e.get_context());
+                if ctx.contains(EntryContext::SYNC_LOG) {
+                    e.set_sync_log(true);
+                }
+            }
+        }
 
         // There could be two cases:
         // 1. Target peer already exists but has not established communication with leader yet
@@ -1975,6 +2020,30 @@ mod tests {
                 "{:?}",
                 tp
             );
+        }
+    }
+
+    #[test]
+    fn test_entry_context() {
+        let tbl: Vec<&[EntryContext]> = vec![
+            &[EntryContext::NONE],
+            &[EntryContext::SPLIT],
+            &[EntryContext::SYNC_LOG],
+            &[EntryContext::SPLIT, EntryContext::SYNC_LOG],
+        ];
+
+        for flags in tbl {
+            let mut ctx = EntryContext::empty();
+            for f in flags {
+                ctx.insert(*f);
+            }
+
+            let ser = ctx.to_vec();
+            let de = EntryContext::from_bytes(&ser);
+
+            for f in flags {
+                assert!(de.contains(*f), "{:?}", de);
+            }
         }
     }
 }
