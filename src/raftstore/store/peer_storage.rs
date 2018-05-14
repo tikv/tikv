@@ -28,6 +28,7 @@ use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 use rocksdb::{Writable, WriteBatch, DB};
 
+use raftstore::store::ProposalContext;
 use raftstore::store::util::conf_state_from_region;
 use raftstore::{Error, Result};
 use storage::CF_RAFT;
@@ -37,7 +38,7 @@ use util::{self, rocksdb};
 use super::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
 use super::keys::{self, enc_end_key, enc_start_key};
 use super::metrics::*;
-use super::peer::{EntryContext, ReadyContext};
+use super::peer::ReadyContext;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 
@@ -762,10 +763,17 @@ impl PeerStorage {
         };
 
         for entry in entries {
-            if !ready_ctx.sync_log && !entry.get_context().is_empty() {
-                let ctx = EntryContext::from_bytes(entry.get_context());
-                if ctx.contains(EntryContext::SYNC_LOG) {
+            if !ready_ctx.sync_log {
+                if entry.get_sync_log() {
                     ready_ctx.sync_log = true;
+                } else {
+                    let ctx = entry.get_context();
+                    if !ctx.is_empty() {
+                        let ctx = ProposalContext::from_bytes(ctx);
+                        if ctx.contains(ProposalContext::SYNC_LOG) {
+                            ready_ctx.sync_log = true;
+                        }
+                    }
                 }
             }
             ready_ctx.raft_wb.put_msg(

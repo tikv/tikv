@@ -39,7 +39,7 @@ use raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
 
 use util::MustConsumeVec;
-use util::collections::{FlatMap, HashMapValues, HashSet};
+use util::collections::{FlatMap, HashSet};
 use util::time::{duration_to_sec, monotonic_raw_now};
 use util::worker::{FutureWorker, Scheduler};
 
@@ -173,33 +173,31 @@ impl<'a, T> ReadyContext<'a, T> {
 }
 
 bitflags! {
-    pub struct EntryContext: u64 {
+    // TODO: maybe declare it as protobuf struct is better.
+    pub struct ProposalContext: u8 {
         const NONE     = 0b00000000;
         const SYNC_LOG = 0b00000001;
         const SPLIT    = 0b00000010;
     }
 }
 
-impl EntryContext {
+impl ProposalContext {
     pub fn to_vec(&self) -> Vec<u8> {
         if *self == Self::NONE {
             return vec![];
         }
-        // In little-endian format.
-        let ctx = self.bits().to_le();
-        unsafe { mem::transmute::<u64, [u8; 8]>(ctx).to_vec() }
+        let ctx = self.bits();
+        vec![ctx]
     }
 
-    pub fn from_bytes(ctx: &[u8]) -> EntryContext {
+    pub fn from_bytes(ctx: &[u8]) -> ProposalContext {
         if ctx.is_empty() {
-            return EntryContext::NONE;
-        } else if ctx.len() == 8 {
-            // In little-endian format.
-            let ctx_le = unsafe { *(ctx.as_ptr() as *const u64) };
-            let ctx = u64::from_le(ctx_le);
-            return EntryContext::from_bits_truncate(ctx);
+            ProposalContext::NONE
+        } else if ctx.len() == 1 {
+            ProposalContext::from_bits_truncate(ctx[0])
+        } else {
+            panic!("invalid ProposalContext {:?}", ctx);
         }
-        panic!("invalid EntryContext {:?}", ctx);
     }
 }
 
@@ -948,8 +946,8 @@ impl Peer {
                 // We only care about split commands that are committed
                 // in the current term.
                 if split_to_be_updated && entry.term == self.term() {
-                    let ctx = EntryContext::from_bytes(&entry.context);
-                    if ctx.contains(EntryContext::SPLIT) {
+                    let ctx = ProposalContext::from_bytes(&entry.context);
+                    if ctx.contains(ProposalContext::SPLIT) {
                         self.last_committed_split_idx = entry.index;
                         split_to_be_updated = false;
                     }
@@ -1278,7 +1276,10 @@ impl Peer {
     /// 2. it's a follower, and it does not lag behind the leader a lot.
     ///    If a snapshot is involved between it and the Raft leader, it's not healthy since
     ///    it cannot works as a node in the quorum to receive replicating logs from leader.
-    fn count_healthy_node(&self, progress: HashMapValues<u64, Progress>) -> usize {
+    fn count_healthy_node<'a, I>(&self, progress: I) -> usize
+    where
+        I: Iterator<Item = &'a Progress>,
+    {
         let mut healthy = 0;
         for pr in progress {
             if pr.matched >= self.get_store().truncated_index() {
@@ -1508,12 +1509,12 @@ impl Peer {
             .unwrap_or_default()
     }
 
-    fn pre_propose(&self, req: &mut RaftCmdRequest) -> Result<EntryContext> {
+    fn pre_propose(&self, req: &mut RaftCmdRequest) -> Result<ProposalContext> {
         self.coprocessor_host.pre_propose(self.region(), req)?;
-        let mut ctx = EntryContext::empty();
+        let mut ctx = ProposalContext::empty();
 
         if get_sync_log_from_request(req) {
-            ctx.insert(EntryContext::SYNC_LOG);
+            ctx.insert(ProposalContext::SYNC_LOG);
         }
 
         if !req.has_admin_request() {
@@ -1521,7 +1522,7 @@ impl Peer {
         }
 
         if req.get_admin_request().has_split() {
-            ctx.insert(EntryContext::SPLIT);
+            ctx.insert(ProposalContext::SPLIT);
         }
 
         if req.get_admin_request().has_prepare_merge() {
@@ -1688,7 +1689,7 @@ impl Peer {
 
         let propose_index = self.next_proposal_index();
         self.raft_group
-            .propose_conf_change(EntryContext::SYNC_LOG.to_vec(), cc)?;
+            .propose_conf_change(ProposalContext::SYNC_LOG.to_vec(), cc)?;
         if self.next_proposal_index() == propose_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
@@ -1871,12 +1872,12 @@ impl Peer {
         send_msg.set_from_peer(from_peer);
         send_msg.set_to_peer(to_peer);
 
-        // Backward compatibility for `sync-log`, it has been moved into `EntryContext`.
+        // Backward compatibility for `sync-log`, it has been moved into `ProposalContext`.
         // TODO: remove it in the next major release.
         for e in msg.mut_entries().iter_mut() {
             if !e.get_context().is_empty() {
-                let ctx = EntryContext::from_bytes(e.get_context());
-                if ctx.contains(EntryContext::SYNC_LOG) {
+                let ctx = ProposalContext::from_bytes(e.get_context());
+                if ctx.contains(ProposalContext::SYNC_LOG) {
                     e.set_sync_log(true);
                 }
             }
@@ -2025,21 +2026,21 @@ mod tests {
 
     #[test]
     fn test_entry_context() {
-        let tbl: Vec<&[EntryContext]> = vec![
-            &[EntryContext::NONE],
-            &[EntryContext::SPLIT],
-            &[EntryContext::SYNC_LOG],
-            &[EntryContext::SPLIT, EntryContext::SYNC_LOG],
+        let tbl: Vec<&[ProposalContext]> = vec![
+            &[ProposalContext::NONE],
+            &[ProposalContext::SPLIT],
+            &[ProposalContext::SYNC_LOG],
+            &[ProposalContext::SPLIT, ProposalContext::SYNC_LOG],
         ];
 
         for flags in tbl {
-            let mut ctx = EntryContext::empty();
+            let mut ctx = ProposalContext::empty();
             for f in flags {
                 ctx.insert(*f);
             }
 
             let ser = ctx.to_vec();
-            let de = EntryContext::from_bytes(&ser);
+            let de = ProposalContext::from_bytes(&ser);
 
             for f in flags {
                 assert!(de.contains(*f), "{:?}", de);
