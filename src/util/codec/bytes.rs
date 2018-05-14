@@ -154,7 +154,7 @@ pub fn decode_compact_bytes(data: &mut BytesSlice) -> Result<Vec<u8>> {
 }
 
 pub fn decode_bytes(data: &mut BytesSlice, desc: bool) -> Result<Vec<u8>> {
-    let mut key = Vec::with_capacity(data.len());
+    let mut key = Vec::with_capacity(data.len() / (ENC_GROUP_SIZE + 1) * ENC_GROUP_SIZE);
     let mut offset = 0;
     let chunk_len = ENC_GROUP_SIZE + 1;
     loop {
