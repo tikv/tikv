@@ -35,7 +35,12 @@ name = "tikv-fail"
 name = "tikv-importer"
 
 [dependencies]
-log = "0.3"
+log = "0.3.6"
+slog = "2.2"
+slog-async = "2.3"
+slog-scope = "4.0"
+slog-stdlog = "3.0"
+slog-term = "2.4"
 byteorder = "0.5"
 rand = "0.3"
 quick-error = "0.2"
