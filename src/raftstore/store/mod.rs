@@ -50,3 +50,10 @@ pub use self::transport::Transport;
 // Only used in tests
 #[cfg(test)]
 pub use self::worker::{SplitCheckRunner, SplitCheckTask};
+
+bitflags! {
+    // TODO: maybe declare it as protobuf struct is better.
+    struct ProposalContext: u8 {
+        const SYNC_LOG = 0b00000001;
+    }
+}
