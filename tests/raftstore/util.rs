@@ -190,6 +190,14 @@ pub fn new_get_cmd(key: &[u8]) -> Request {
     cmd
 }
 
+pub fn new_get_cf_cmd(cf: &str, key: &[u8]) -> Request {
+    let mut cmd = Request::new();
+    cmd.set_cmd_type(CmdType::Get);
+    cmd.mut_get().set_key(key.to_vec());
+    cmd.mut_get().set_cf(cf.to_string());
+    cmd
+}
+
 pub fn new_delete_cmd(cf: &str, key: &[u8]) -> Request {
     let mut cmd = Request::new();
     cmd.set_cmd_type(CmdType::Delete);
