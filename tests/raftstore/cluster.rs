@@ -109,6 +109,7 @@ impl<T: Simulator> Cluster<T> {
         sim: Arc<RwLock<T>>,
         pd_client: Arc<TestPdClient>,
     ) -> Cluster<T> {
+        // TODO: In the future, maybe it's better to test both case where `use_delete_range` is true and false
         Cluster {
             cfg: new_tikv_config(id),
             leaders: HashMap::new(),
@@ -580,15 +581,15 @@ impl<T: Simulator> Cluster<T> {
         panic!("request failed after retry for 20 times");
     }
 
-    pub fn get_region_not_eq(&self, key: &[u8], region: Option<&metapb::Region>) -> metapb::Region {
+    // Get region when the `filter` returns true.
+    pub fn get_region_with<F>(&self, key: &[u8], filter: F) -> metapb::Region
+    where
+        F: Fn(&metapb::Region) -> bool,
+    {
         for _ in 0..100 {
-            if let Ok(r) = self.pd_client.get_region(key) {
-                if let Some(region) = region {
-                    if region != &r {
-                        return r;
-                    }
-                } else {
-                    return r;
+            if let Ok(region) = self.pd_client.get_region(key) {
+                if filter(&region) {
+                    return region;
                 }
             }
             // We may meet range gap after split, so here we will
@@ -600,7 +601,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get_region(&self, key: &[u8]) -> metapb::Region {
-        self.get_region_not_eq(key, None)
+        self.get_region_with(key, |_| true)
     }
 
     pub fn get_region_id(&self, key: &[u8]) -> u64 {
@@ -612,17 +613,21 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        self.get_impl(key, false)
+        self.get_impl("default", key, false)
+    }
+
+    pub fn get_cf(&mut self, cf: &str, key: &[u8]) -> Option<Vec<u8>> {
+        self.get_impl(cf, key, false)
     }
 
     pub fn must_get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        self.get_impl(key, true)
+        self.get_impl("default", key, true)
     }
 
-    fn get_impl(&mut self, key: &[u8], read_quorum: bool) -> Option<Vec<u8>> {
+    fn get_impl(&mut self, cf: &str, key: &[u8], read_quorum: bool) -> Option<Vec<u8>> {
         let mut resp = self.request(
             key,
-            vec![new_get_cmd(key)],
+            vec![new_get_cf_cmd(cf, key)],
             read_quorum,
             Duration::from_secs(5),
         );
@@ -688,6 +693,7 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Delete);
     }
 
+    #[allow(dead_code)]
     pub fn must_delete_range(&mut self, start: &[u8], end: &[u8]) {
         self.must_delete_range_cf("default", start, end)
     }

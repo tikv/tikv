@@ -27,12 +27,11 @@ use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
 use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
 use raft::eraftpb::ConfChangeType;
 
-use tikv::config::{ReadPoolConfig, TiKvConfig};
+use tikv::config::*;
 use tikv::raftstore::Result;
 use tikv::raftstore::store::Msg as StoreMsg;
 use tikv::raftstore::store::*;
 use tikv::server::Config as ServerConfig;
-use tikv::server::readpool::Config as ReadPoolInstanceConfig;
 use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
 use tikv::util::config::*;
 use tikv::util::escape;
@@ -128,8 +127,18 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
 
 pub fn new_readpool_cfg() -> ReadPoolConfig {
     ReadPoolConfig {
-        storage: ReadPoolInstanceConfig::default_for_test(),
-        coprocessor: ReadPoolInstanceConfig::default_for_test(),
+        storage: StorageReadPoolConfig {
+            high_concurrency: 1,
+            normal_concurrency: 1,
+            low_concurrency: 1,
+            ..StorageReadPoolConfig::default()
+        },
+        coprocessor: CoprocessorReadPoolConfig {
+            high_concurrency: 1,
+            normal_concurrency: 1,
+            low_concurrency: 1,
+            ..CoprocessorReadPoolConfig::default()
+        },
     }
 }
 
@@ -187,6 +196,14 @@ pub fn new_get_cmd(key: &[u8]) -> Request {
     let mut cmd = Request::new();
     cmd.set_cmd_type(CmdType::Get);
     cmd.mut_get().set_key(key.to_vec());
+    cmd
+}
+
+pub fn new_get_cf_cmd(cf: &str, key: &[u8]) -> Request {
+    let mut cmd = Request::new();
+    cmd.set_cmd_type(CmdType::Get);
+    cmd.mut_get().set_key(key.to_vec());
+    cmd.mut_get().set_cf(cf.to_string());
     cmd
 }
 
@@ -393,15 +410,14 @@ pub fn must_read_on_peer<T: Simulator>(
     value: &[u8],
 ) {
     let timeout = Duration::from_secs(1);
-    let resp = read_on_peer(cluster, peer, region, key, false, timeout).unwrap();
-    let v = must_get_value(&resp);
-    if v != value {
-        panic!(
-            "read key {}, expect value {}, got {}",
+    match read_on_peer(cluster, peer, region, key, false, timeout) {
+        Ok(ref resp) if value == must_get_value(resp).as_slice() => (),
+        other => panic!(
+            "read key {}, expect value {:?}, got {:?}",
             escape(key),
-            escape(value),
-            escape(&v)
-        )
+            value,
+            other
+        ),
     }
 }
 

@@ -77,7 +77,7 @@ fn stale_read_during_splitting(right_derive: bool) {
     // A key that is covered by the old region and the new region.
     let stale_key = if right_derive { key1 } else { key2 };
     // Get the new region.
-    let region2 = cluster.get_region_not_eq(stale_key, Some(&region1));
+    let region2 = cluster.get_region_with(stale_key, |region| region != &region1);
 
     // Get the leader of the new region.
     let leader2 = {
