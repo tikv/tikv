@@ -1126,13 +1126,13 @@ impl PeerStorage {
 fn get_sync_log_from_entry(entry: &Entry) -> bool {
     if entry.get_sync_log() {
         return true;
-    } else {
-        let ctx = entry.get_context();
-        if !ctx.is_empty() {
-            let ctx = ProposalContext::from_bytes(ctx);
-            if ctx.contains(ProposalContext::SYNC_LOG) {
-                return true;
-            }
+    }
+
+    let ctx = entry.get_context();
+    if !ctx.is_empty() {
+        let ctx = ProposalContext::from_bytes(ctx);
+        if ctx.contains(ProposalContext::SYNC_LOG) {
+            return true;
         }
     }
 
