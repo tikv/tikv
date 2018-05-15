@@ -1747,29 +1747,30 @@ macro_rules! read_word {
     ($data:expr, $size:expr, $readed:ident) => {{
         let size = $size as usize;
         if $data.len() >= size {
-            let mut buf = $data[..size].to_vec();
-            *$data = &$data[size..];
+            let mut first = $data[0];
             if $readed == 0 {
-                buf[0] ^= 0x80;
+                first ^= 0x80;
                 $readed += size;
             }
             let res = match size {
-                1 => i32::from(buf[0] as i8) as u32,
-                2 => ((i32::from(buf[0] as i8) << 8) + i32::from(buf[1])) as u32,
+                1 => i32::from(first as i8) as u32,
+                2 => ((i32::from(first as i8) << 8) + i32::from($data[1])) as u32,
                 3 => {
-                    if buf[0] & 128 > 0 {
-                        (255 << 24) | (u32::from(buf[0]) << 16) | (u32::from(buf[1]) << 8)
-                            | u32::from(buf[2])
+                    if first & 128 > 0 {
+                        (255 << 24) | (u32::from(first) << 16) | (u32::from($data[1]) << 8)
+                            | u32::from($data[2])
                     } else {
-                        (u32::from(buf[0]) << 16) | (u32::from(buf[1]) << 8) | u32::from(buf[2])
+                        (u32::from(first) << 16) | (u32::from($data[1]) << 8) | u32::from($data[2])
                     }
                 }
                 4 => {
-                    ((i32::from(buf[0] as i8) << 24) + (i32::from(buf[1]) << 16)
-                        + (i32::from(buf[2]) << 8) + i32::from(buf[3])) as u32
+                    ((i32::from(first as i8) << 24) + (i32::from($data[1]) << 16)
+                        + (i32::from($data[2]) << 8) + i32::from($data[3]))
+                        as u32
                 }
                 _ => unreachable!(),
             };
+            *$data = &$data[size..];
             Ok(res)
         } else {
             Err(Error::unexpected_eof())
