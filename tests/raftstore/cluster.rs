@@ -109,6 +109,7 @@ impl<T: Simulator> Cluster<T> {
         sim: Arc<RwLock<T>>,
         pd_client: Arc<TestPdClient>,
     ) -> Cluster<T> {
+        // TODO: In the future, maybe it's better to test both case where `use_delete_range` is true and false
         Cluster {
             cfg: new_tikv_config(id),
             leaders: HashMap::new(),
@@ -594,17 +595,21 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        self.get_impl(key, false)
+        self.get_impl("default", key, false)
+    }
+
+    pub fn get_cf(&mut self, cf: &str, key: &[u8]) -> Option<Vec<u8>> {
+        self.get_impl(cf, key, false)
     }
 
     pub fn must_get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        self.get_impl(key, true)
+        self.get_impl("default", key, true)
     }
 
-    fn get_impl(&mut self, key: &[u8], read_quorum: bool) -> Option<Vec<u8>> {
+    fn get_impl(&mut self, cf: &str, key: &[u8], read_quorum: bool) -> Option<Vec<u8>> {
         let mut resp = self.request(
             key,
-            vec![new_get_cmd(key)],
+            vec![new_get_cf_cmd(cf, key)],
             read_quorum,
             Duration::from_secs(5),
         );
@@ -670,6 +675,7 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Delete);
     }
 
+    #[allow(dead_code)]
     pub fn must_delete_range(&mut self, start: &[u8], end: &[u8]) {
         self.must_delete_range_cf("default", start, end)
     }

@@ -1711,17 +1711,21 @@ impl ApplyDelegate {
             });
 
         // Delete all remaining keys.
-        util::delete_all_in_range_cf(&self.engine, cf, &start_key, &end_key, use_delete_range)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                    self.tag,
-                    escape(&start_key),
-                    escape(&end_key),
-                    cf,
-                    e
-                );
-            });
+        // If it's not CF_LOCK and use_delete_range is false, skip this step to speed up (#3034)
+        // TODO: Remove the `if` line after apply pool is implemented
+        if cf == CF_LOCK || use_delete_range {
+            util::delete_all_in_range_cf(&self.engine, cf, &start_key, &end_key, use_delete_range)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
+                        self.tag,
+                        escape(&start_key),
+                        escape(&end_key),
+                        cf,
+                        e
+                    );
+                });
+        }
 
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
