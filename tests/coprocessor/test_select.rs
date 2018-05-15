@@ -377,7 +377,7 @@ impl Store {
         let pd_worker = FutureWorker::new("test future worker");
         let read_pool = ReadPool::new(
             "readpool",
-            &readpool::SerdeConfigHelper::default_for_test().to_storage_config(),
+            &readpool::Config::default().with_concurrency_for_test(),
             || || storage::ReadPoolContext::new(pd_worker.scheduler()),
         );
         Store {
@@ -515,7 +515,7 @@ fn init_data_with_details(
     let pd_worker = FutureWorker::new("test-pd-worker");
     let pool = ReadPool::new(
         "readpool",
-        &readpool::SerdeConfigHelper::default_for_test().to_coprocessor_config(),
+        &readpool::Config::default().with_concurrency_for_test(),
         || || ReadPoolContext::new(pd_worker.scheduler()),
     );
     let mut end_point = WorkerBuilder::new("test select worker")

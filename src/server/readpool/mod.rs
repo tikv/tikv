@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod config;
+pub mod config;
 mod priority;
 
 use std::error::Error;
@@ -24,7 +24,7 @@ use futures_cpupool::CpuFuture;
 use util;
 use util::futurepool::{self, FuturePool};
 
-pub use self::config::{Config, SerdeConfigHelper};
+pub use self::config::Config;
 pub use self::priority::Priority;
 
 const TICK_INTERVAL_SEC: u64 = 1;
@@ -197,7 +197,7 @@ mod tests {
     fn test_future_execute() {
         let read_pool = ReadPool::new(
             "readpool",
-            &SerdeConfigHelper::default_for_test().to_storage_config(),
+            &Config::default().with_concurrency_for_test(),
             || || Context {},
         );
 
@@ -251,11 +251,11 @@ mod tests {
 
         let read_pool = ReadPool::new(
             "readpool",
-            &SerdeConfigHelper {
-                high_concurrency: Some(2),
-                max_tasks_high: Some(4),
-                ..SerdeConfigHelper::default()
-            }.to_storage_config(),
+            &Config {
+                high_concurrency: 2,
+                max_tasks_high: 4,
+                ..Config::default()
+            },
             || || Context {},
         );
 

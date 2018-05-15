@@ -32,7 +32,7 @@ fn bench_tombstone_scan() -> BenchSamples {
     let pd_worker = FutureWorker::new("test pd worker");
     let read_pool = ReadPool::new(
         "readpool",
-        &readpool::SerdeConfigHelper::default_for_test().to_storage_config(),
+        &readpool::Config::default().with_concurrency_for_test(),
         || || storage::ReadPoolContext::new(pd_worker.scheduler()),
     );
     let store = SyncStorage::new(&Default::default(), read_pool);

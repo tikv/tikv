@@ -23,7 +23,6 @@ use tikv::pd::Config as PdConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::Config as ServerConfig;
-use tikv::server::readpool::Config as ReadPoolInstanceConfig;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
 use tikv::util::security::SecurityConfig;
@@ -80,7 +79,7 @@ fn test_serde_custom_tikv_config() {
         snap_max_total_size: ReadableSize::gb(10),
     };
     value.readpool = ReadPoolConfig {
-        storage: ReadPoolInstanceConfig {
+        storage: StorageReadPoolConfig {
             high_concurrency: 1,
             normal_concurrency: 3,
             low_concurrency: 7,
@@ -89,7 +88,7 @@ fn test_serde_custom_tikv_config() {
             max_tasks_low: 30000,
             stack_size: ReadableSize::mb(20),
         },
-        coprocessor: ReadPoolInstanceConfig {
+        coprocessor: CoprocessorReadPoolConfig {
             high_concurrency: 2,
             normal_concurrency: 4,
             low_concurrency: 6,
@@ -443,6 +442,6 @@ fn test_readpool_default_config() {
     let cfg: TiKvConfig = toml::from_str(content).unwrap();
     let mut expected = TiKvConfig::default();
     expected.readpool.storage.high_concurrency = 1;
-    expected.readpool.storage.max_tasks_high = 2000;
+    // Note: max_tasks is unchanged!
     assert_eq!(cfg, expected);
 }

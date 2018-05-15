@@ -270,7 +270,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test future worker");
         let storage_read_pool = ReadPool::new(
             "storage-readpool",
-            &readpool::SerdeConfigHelper::default_for_test().to_storage_config(),
+            &readpool::Config::default().with_concurrency_for_test(),
             || || storage::ReadPoolContext::new(pd_worker.scheduler()),
         );
         let mut storage = Storage::new(&storage_cfg, storage_read_pool).unwrap();
@@ -291,7 +291,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let cop_read_pool = ReadPool::new(
             "cop-readpool",
-            &readpool::SerdeConfigHelper::default_for_test().to_coprocessor_config(),
+            &readpool::Config::default().with_concurrency_for_test(),
             || || coprocessor::ReadPoolContext::new(pd_worker.scheduler()),
         );
 

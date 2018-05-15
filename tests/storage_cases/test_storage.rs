@@ -1040,7 +1040,7 @@ fn test_conflict_commands_on_fault_engine() {
     let pd_worker = FutureWorker::new("test future worker");
     let read_pool = ReadPool::new(
         "readpool",
-        &readpool::SerdeConfigHelper::default_for_test().to_storage_config(),
+        &readpool::Config::default().with_concurrency_for_test(),
         || || storage::ReadPoolContext::new(pd_worker.scheduler()),
     );
     let config = Default::default();
