@@ -607,11 +607,12 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn get_impl(&mut self, cf: &str, key: &[u8], read_quorum: bool) -> Option<Vec<u8>> {
-        let req = match cf {
-            "default" => new_get_cmd(key),
-            _ => new_get_cf_cmd(cf, key),
-        };
-        let mut resp = self.request(key, vec![req], read_quorum, Duration::from_secs(5));
+        let mut resp = self.request(
+            key,
+            vec![new_get_cf_cmd(cf, key)],
+            read_quorum,
+            Duration::from_secs(5),
+        );
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
