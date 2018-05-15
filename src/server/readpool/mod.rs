@@ -254,7 +254,7 @@ mod tests {
             &Config {
                 high_concurrency: 2,
                 max_tasks_high: 4,
-                ..Config::default()
+                ..Config::default().with_concurrency_for_test()
             },
             || || Context {},
         );
