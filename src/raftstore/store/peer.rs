@@ -1058,7 +1058,7 @@ impl Peer {
             return;
         }
         if self.last_committed_split_idx > self.get_store().applied_index() {
-            // A splitting leader should not renew its leader.
+            // A splitting leader should not renew its lease.
             // Because we split regions asynchronous, the leader may read stale results
             // if splitting runs slow on the leader.
             debug!("{} prevents renew lease while splitting", self.tag);
