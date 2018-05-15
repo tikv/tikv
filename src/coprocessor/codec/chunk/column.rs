@@ -151,12 +151,12 @@ impl Column {
     }
 
     fn append_null_bitmap(&mut self, on: bool) {
-        let idx = self.length >> 3; // /8
+        let idx = self.length >> 3;
         if idx >= self.null_bitmap.len() {
             self.null_bitmap.push(0);
         }
         if on {
-            let pos = self.length & 7; // %8
+            let pos = self.length & 7;
             self.null_bitmap[idx] |= 1 << pos;
         } else {
             self.null_cnt += 1;

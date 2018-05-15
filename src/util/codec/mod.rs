@@ -75,7 +75,6 @@ impl Error {
             Error::Protobuf(_) | Error::Io(_) | Error::Other(_) => None,
         }
     }
-
     pub fn unexpected_eof() -> Error {
         Error::Io(io::Error::new(ErrorKind::UnexpectedEof, "eof"))
     }

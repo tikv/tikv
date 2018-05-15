@@ -1895,7 +1895,6 @@ pub trait DecimalEncoder: NumberEncoder {
         self.write_u8(v.int_cnt)?;
         self.write_u8(v.frac_cnt)?;
         self.write_u8(v.result_frac_cnt)?;
-        //TODO tidb do not have precision
         self.write_u8(v.negative as u8)?;
         let len = word_cnt!(v.int_cnt) + word_cnt!(v.frac_cnt);
         for id in 0..len as usize {

@@ -111,10 +111,6 @@ impl Row {
         self.c.num_cols()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.c.num_cols() == 0
-    }
-
     //next returns the next valid Row in the same Chunk.
     pub fn next(&self) -> Row {
         // TODO should we check the idx?
@@ -180,7 +176,6 @@ mod test {
         }
 
         assert_eq!(row.len(), data.len());
-        assert!(!row.is_empty());
         assert_eq!(row.idx(), 0);
         assert_eq!(row.next().idx(), arc_chunk.end().idx());
     }
