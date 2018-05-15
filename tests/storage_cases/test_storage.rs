@@ -1038,11 +1038,9 @@ fn test_conflict_commands_on_fault_engine() {
     let engine = EngineRocksdb::new(TEMP_DIR, ALL_CFS, None).unwrap();
     let box_engine = engine.clone_box();
     let pd_worker = FutureWorker::new("test future worker");
-    let read_pool = ReadPool::new(
-        "readpool",
-        &readpool::Config::default().with_concurrency_for_test(),
-        || || storage::ReadPoolContext::new(pd_worker.scheduler()),
-    );
+    let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+        || storage::ReadPoolContext::new(pd_worker.scheduler())
+    });
     let config = Default::default();
     let mut store = SyncStorage::prepare(box_engine, &config, read_pool);
     let async_storage = store.get_storage();

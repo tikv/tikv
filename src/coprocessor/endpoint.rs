@@ -754,7 +754,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let read_pool = ReadPool::new(
             "readpool",
-            &readpool::Config::default().with_concurrency(1),
+            &readpool::Config::default_with_concurrency(1),
             || || ReadPoolContext::new(pd_worker.scheduler()),
         );
         let end_point = Host::new(engine, worker.scheduler(), &cfg, read_pool);
@@ -783,7 +783,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let read_pool = ReadPool::new(
             "readpool",
-            &readpool::Config::default().with_concurrency(1),
+            &readpool::Config::default_with_concurrency(1),
             || || ReadPoolContext::new(pd_worker.scheduler()),
         );
         let mut end_point = Host::new(engine, worker.scheduler(), &cfg, read_pool);
@@ -854,7 +854,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let read_pool = ReadPool::new(
             "readpool",
-            &readpool::Config::default().with_concurrency(1),
+            &readpool::Config::default_with_concurrency(1),
             || || ReadPoolContext::new(pd_worker.scheduler()),
         );
         let mut end_point = Host::new(engine, worker.scheduler(), &cfg, read_pool);

@@ -32,23 +32,9 @@ pub struct Config {
     pub stack_size: ReadableSize,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            high_concurrency: 4,
-            normal_concurrency: 4,
-            low_concurrency: 4,
-            max_tasks_high: 4 * DEFAULT_MAX_TASKS_PER_CORE,
-            max_tasks_normal: 4 * DEFAULT_MAX_TASKS_PER_CORE,
-            max_tasks_low: 4 * DEFAULT_MAX_TASKS_PER_CORE,
-            stack_size: ReadableSize::mb(DEFAULT_STACK_SIZE_MB),
-        }
-    }
-}
-
 impl Config {
     /// Only used in tests.
-    pub fn with_concurrency(self, concurrency: usize) -> Self {
+    pub fn default_with_concurrency(concurrency: usize) -> Self {
         Self {
             high_concurrency: concurrency,
             normal_concurrency: concurrency,
@@ -56,12 +42,12 @@ impl Config {
             max_tasks_high: concurrency * DEFAULT_MAX_TASKS_PER_CORE,
             max_tasks_normal: concurrency * DEFAULT_MAX_TASKS_PER_CORE,
             max_tasks_low: concurrency * DEFAULT_MAX_TASKS_PER_CORE,
-            ..self
+            stack_size: ReadableSize::mb(DEFAULT_STACK_SIZE_MB),
         }
     }
 
-    /// Only used in tests
-    pub fn with_concurrency_for_test(self) -> Self {
-        self.with_concurrency(2)
+    /// Only used in tests.
+    pub fn default_for_test() -> Self {
+        Self::default_with_concurrency(2)
     }
 }

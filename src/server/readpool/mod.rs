@@ -195,11 +195,7 @@ mod tests {
 
     #[test]
     fn test_future_execute() {
-        let read_pool = ReadPool::new(
-            "readpool",
-            &Config::default().with_concurrency_for_test(),
-            || || Context {},
-        );
+        let read_pool = ReadPool::new("readpool", &Config::default_for_test(), || || Context {});
 
         expect_val(
             vec![1, 2, 4],
@@ -254,7 +250,7 @@ mod tests {
             &Config {
                 high_concurrency: 2,
                 max_tasks_high: 4,
-                ..Config::default().with_concurrency_for_test()
+                ..Config::default_for_test()
             },
             || || Context {},
         );

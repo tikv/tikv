@@ -32,11 +32,9 @@ fn test_storage_1gc() {
     let batch_snapshot_fp = "raftkv_async_batch_snapshot_finish";
     let (_cluster, engine, ctx) = new_raft_engine(3, "");
     let pd_worker = FutureWorker::new("test future worker");
-    let read_pool = ReadPool::new(
-        "readpool",
-        &readpool::Config::default().with_concurrency_for_test(),
-        || || storage::ReadPoolContext::new(pd_worker.scheduler()),
-    );
+    let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+        || storage::ReadPoolContext::new(pd_worker.scheduler())
+    });
     let config = Config::default();
     let mut storage = Storage::from_engine(engine.clone(), &config, read_pool).unwrap();
     storage.start(&config).unwrap();
@@ -80,11 +78,9 @@ fn test_scheduler_leader_change_twice() {
     cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
     let config = Config::default();
     let pd_worker = FutureWorker::new("test future worker");
-    let read_pool = ReadPool::new(
-        "readpool",
-        &readpool::Config::default().with_concurrency_for_test(),
-        || || storage::ReadPoolContext::new(pd_worker.scheduler()),
-    );
+    let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+        || storage::ReadPoolContext::new(pd_worker.scheduler())
+    });
 
     let engine0 = cluster.sim.rl().storages[&peers[0].get_id()].clone();
     let mut storage0 = Storage::from_engine(engine0.clone(), &config, read_pool).unwrap();

@@ -42,11 +42,9 @@ pub fn new_raft_storage_with_store_count(
     key: &str,
 ) -> (Cluster<ServerCluster>, SyncStorage, Context) {
     let pd_worker = FutureWorker::new("test future worker");
-    let read_pool = ReadPool::new(
-        "readpool",
-        &readpool::Config::default().with_concurrency_for_test(),
-        || || storage::ReadPoolContext::new(pd_worker.scheduler()),
-    );
+    let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+        || storage::ReadPoolContext::new(pd_worker.scheduler())
+    });
     let (cluster, engine, ctx) = new_raft_engine(count, key);
     (
         cluster,

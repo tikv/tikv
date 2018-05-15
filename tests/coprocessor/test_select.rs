@@ -374,11 +374,9 @@ pub struct Store {
 impl Store {
     fn new(engine: Box<Engine>) -> Store {
         let pd_worker = FutureWorker::new("test future worker");
-        let read_pool = ReadPool::new(
-            "readpool",
-            &readpool::Config::default().with_concurrency_for_test(),
-            || || storage::ReadPoolContext::new(pd_worker.scheduler()),
-        );
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+            || storage::ReadPoolContext::new(pd_worker.scheduler())
+        });
         Store {
             store: SyncStorage::from_engine(engine, &Default::default(), read_pool),
             current_ts: 1,
@@ -512,11 +510,9 @@ fn init_data_with_details(
         store.commit_with_ctx(ctx);
     }
     let pd_worker = FutureWorker::new("test-pd-worker");
-    let pool = ReadPool::new(
-        "readpool",
-        &readpool::Config::default().with_concurrency_for_test(),
-        || || ReadPoolContext::new(pd_worker.scheduler()),
-    );
+    let pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+        || ReadPoolContext::new(pd_worker.scheduler())
+    });
     let mut end_point = WorkerBuilder::new("test select worker")
         .batch_size(5)
         .create();
