@@ -4,7 +4,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 ## [2.0.1]
 ### Performance
-* Reduce thread_yield call
+* Reduced number of `thread_yield` calls
 * Fix the issue that `SELECT FOR UPDATE` prevents others from reading
 ### Improvements
 * More verbose logs for slow query
