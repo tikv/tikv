@@ -18,9 +18,9 @@ use std::result;
 
 use futures::sync::oneshot::Canceled;
 use grpc::Error as GrpcError;
-use uuid::{ParseError, Uuid};
 use kvproto::errorpb;
 use kvproto::metapb::*;
+use uuid::{ParseError, Uuid};
 
 use pd::{Error as PdError, RegionInfo};
 use raftstore::errors::Error as RaftStoreError;
