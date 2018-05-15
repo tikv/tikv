@@ -68,10 +68,11 @@ fn stale_read_during_splitting(right_derive: bool) {
     // Sleep for a while.
     // The TiKVs that have followers of the old region will elected a leader
     // of the new region.
-    //           TiKV 1  TiKV 2  TiKV 3
+    //           TiKV A  TiKV B  TiKV C
     // Region 1    L       F       F
     // Region 2    X       L       F
-    // L: leader, F: follower, X: peer is not ready.
+    // Note: A has the peer 3,
+    //       L: leader, F: follower, X: peer is not ready.
     thread::sleep(election_timeout);
 
     // A key that is covered by the old region and the new region.
@@ -186,8 +187,12 @@ fn must_not_eq_on_key(
     );
     debug!("key: {:?}, {:?} vs {:?}", key, value1, value2);
     assert_eq!(must_get_value(value2.as_ref().unwrap()).as_slice(), value);
-    // Error does not implement PartialEq, Option<RaftCmdResponse> does.
-    assert_ne!(value1.ok(), value2.ok());
+    // The old leader should return an error.
+    assert!(
+        value1.as_ref().unwrap().get_header().has_error(),
+        "{:?}",
+        value1
+    );
 }
 
 #[test]
