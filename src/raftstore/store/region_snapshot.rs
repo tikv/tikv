@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use raftstore::Result;
 use raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
+use raftstore::store::region_rc::RegionReferrer;
 use raftstore::store::{keys, util, PeerStorage};
 
 /// Snapshot of a region.
@@ -27,21 +28,27 @@ use raftstore::store::{keys, util, PeerStorage};
 pub struct RegionSnapshot {
     snap: SyncSnapshot,
     region: Arc<Region>,
+    referrer: Option<Arc<RegionReferrer>>,
 }
 
 impl RegionSnapshot {
     pub fn new(ps: &PeerStorage) -> RegionSnapshot {
-        RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.get_region().clone())
+        RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.get_region().clone(), None)
     }
 
     pub fn from_raw(db: Arc<DB>, region: Region) -> RegionSnapshot {
-        RegionSnapshot::from_snapshot(Snapshot::new(db).into_sync(), region)
+        RegionSnapshot::from_snapshot(Snapshot::new(db).into_sync(), region, None)
     }
 
-    pub fn from_snapshot(snap: SyncSnapshot, region: Region) -> RegionSnapshot {
+    pub fn from_snapshot(
+        snap: SyncSnapshot,
+        region: Region,
+        referrer: Option<Arc<RegionReferrer>>,
+    ) -> RegionSnapshot {
         RegionSnapshot {
             snap,
             region: Arc::new(region),
+            referrer,
         }
     }
 
@@ -49,6 +56,7 @@ impl RegionSnapshot {
         RegionSnapshot {
             snap: self.snap.clone(),
             region: Arc::clone(&self.region),
+            referrer: self.referrer.clone(),
         }
     }
 

@@ -15,6 +15,7 @@ use protobuf::{self, Message, RepeatedField};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
+use std::mem;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
@@ -60,6 +61,7 @@ use super::metrics::*;
 use super::msg::{Callback, ReadResponse};
 use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
+use super::region_rc::RegionRefCountUtil;
 use super::transport::Transport;
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, CleanupSSTTask,
@@ -1527,11 +1529,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             (left.clone(), right.clone())
         };
 
-        self.region_peers
-            .get_mut(&region_id)
-            .unwrap()
-            .mut_store()
-            .region = origin_region.clone();
+        let mut new_holders = {
+            let origin_peer = self.region_peers.get_mut(&region_id).unwrap();
+            origin_peer.mut_store().region = origin_region.clone();
+            RegionRefCountUtil::handle_region_split(&mut origin_peer.references)
+        };
+
         let new_region_id = new_region.get_id();
         if let Some(peer) = self.region_peers.get(&new_region_id) {
             // If the store received a raft msg with the new region raft group
@@ -1551,6 +1554,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 panic!("create new split region {:?} err {:?}", new_region, e);
             }
             Ok(mut new_peer) => {
+                mem::swap(&mut new_peer.references, &mut new_holders);
+
                 for peer in new_region.get_peers() {
                     // Add this peer to cache.
                     new_peer.insert_peer_cache(peer.clone());
@@ -1805,6 +1810,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             assert!(peer.pending_merge.is_some());
             peer.peer.clone()
         };
+        let mut source_references = {
+            let mut references = RegionRefCountUtil::init_region();
+            let peer = self.region_peers.get_mut(&source.get_id()).unwrap();
+            mem::swap(&mut references, &mut peer.references);
+            references
+        };
         self.destroy_peer(source.get_id(), source_peer, true);
         // If merge backward, then stale meta is clear when source region is destroyed.
         // So only forward needs to be considered.
@@ -1816,6 +1827,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region_id = region.get_id();
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         peer.mut_store().region = region;
+        RegionRefCountUtil::handle_region_merge(&mut source_references, &mut peer.references);
         if peer.is_leader() {
             info!("notify pd with merge {:?} into {:?}", source, peer.region());
             peer.heartbeat_pd(&self.pd_worker);

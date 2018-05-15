@@ -64,15 +64,17 @@ pub enum Task {
         region_id: u64,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
+        references: u64,
     },
 }
 
 impl Task {
-    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task {
+    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>, references: u64) -> Task {
         Task::Destroy {
             region_id,
             start_key,
             end_key,
+            references,
         }
     }
 }
@@ -86,12 +88,14 @@ impl Display for Task {
                 region_id,
                 ref start_key,
                 ref end_key,
+                references,
             } => write!(
                 f,
-                "Destroy {} [{}, {})",
+                "Destroy {} [{}, {}) ({} refs)",
                 region_id,
                 escape(start_key),
-                escape(end_key)
+                escape(end_key),
+                references,
             ),
         }
     }
@@ -484,6 +488,7 @@ impl Runner {
 
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
+        info!("Region task run: {}", task); // TODO: Remove it.
         match task {
             Task::Gen {
                 region_id,
@@ -500,6 +505,7 @@ impl Runnable<Task> for Runner {
                 region_id,
                 start_key,
                 end_key,
+                ..
             } => {
                 // try to delay the range deletion because
                 // there might be a coprocessor request related to this range

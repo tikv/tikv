@@ -886,16 +886,18 @@ impl PeerStorage {
 
     /// Delete all data belong to the region.
     /// If return Err, data may get partial deleted.
-    pub fn clear_data(&self) -> Result<()> {
+    pub fn clear_data(&self, references: u64) -> Result<()> {
         let (start_key, end_key) = (
             enc_start_key(self.get_region()),
             enc_end_key(self.get_region()),
         );
         let region_id = self.get_region_id();
-        box_try!(
-            self.region_sched
-                .schedule(RegionTask::destroy(region_id, start_key, end_key))
-        );
+        box_try!(self.region_sched.schedule(RegionTask::destroy(
+            region_id,
+            start_key,
+            end_key,
+            references,
+        )));
         Ok(())
     }
 
@@ -911,14 +913,16 @@ impl PeerStorage {
             box_try!(self.region_sched.schedule(RegionTask::destroy(
                 region_id,
                 old_start_key,
-                new_start_key
+                new_start_key,
+                0,
             )));
         }
         if new_end_key < old_end_key {
             box_try!(self.region_sched.schedule(RegionTask::destroy(
                 region_id,
                 new_end_key,
-                old_end_key
+                old_end_key,
+                0,
             )));
         }
         Ok(())

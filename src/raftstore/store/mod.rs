@@ -25,6 +25,7 @@ mod local_metrics;
 mod metrics;
 mod peer;
 mod peer_storage;
+mod region_rc;
 mod region_snapshot;
 mod snap;
 mod worker;
