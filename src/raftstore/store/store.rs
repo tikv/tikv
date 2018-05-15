@@ -681,8 +681,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         "{} async apply finish: {:?}",
                         self.region_peers
                             .get(&res.region_id)
-                            .map(|p| &p.tag)
-                            .unwrap_or(&self.tag),
+                            .map_or(&self.tag, |p| &p.tag),
                         res
                     );
                     let ApplyRes {
