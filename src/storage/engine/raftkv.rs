@@ -392,7 +392,6 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 ASYNC_REQUESTS_COUNTER_VEC
                     .with_label_values(&["snapshot", "success"])
                     .inc();
-                fail_point!("raftkv_async_snapshot_finish");
                 cb((cb_ctx, Ok(box s)))
             }
             Err(e) => {

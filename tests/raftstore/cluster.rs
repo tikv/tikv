@@ -301,13 +301,24 @@ impl<T: Simulator> Cluster<T> {
             })
     }
 
-    pub fn query_leader(&self, store_id: u64, region_id: u64) -> Option<metapb::Peer> {
+    pub fn query_leader(
+        &self,
+        store_id: u64,
+        region_id: u64,
+        timeout: Duration,
+    ) -> Option<metapb::Peer> {
         // To get region leader, we don't care real peer id, so use 0 instead.
         let peer = new_peer(store_id, 0);
         let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
-        let mut resp = match self.call_command(find_leader, Duration::from_secs(5)) {
+        let mut resp = match self.call_command(find_leader, timeout) {
             Ok(resp) => resp,
-            Err(_) => return None,
+            Err(err) => {
+                error!(
+                    "fail to get leader of region {} on store {}, error: {:?}",
+                    region_id, store_id, err
+                );
+                return None;
+            }
         };
         let mut region_leader = resp.take_status_response().take_region_leader();
         // NOTE: node id can't be 0.
@@ -345,7 +356,7 @@ impl<T: Simulator> Cluster<T> {
                     count += 1;
                     continue;
                 }
-                let l = self.query_leader(*store_id, region_id);
+                let l = self.query_leader(*store_id, region_id, Duration::from_millis(10));
                 if l.is_none() {
                     continue;
                 }
