@@ -73,7 +73,7 @@ bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.4", features = [ "serde", "v4" ] }
 grpcio = { version = "0.2", features = [ "secure" ] }
-raft = "0.1"
+raft = "0.2"
 crossbeam-channel = { version = "0.1", features = [ "nightly" ] }
 
 [target.'cfg(unix)'.dependencies]
@@ -87,6 +87,7 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
+branch = "release-2.0"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
@@ -118,3 +119,5 @@ codegen-units = 4
 lto = true
 opt-level = 3
 debug = true
+# TODO: remove this once rust-lang/rust#50199 is resolved.
+codegen-units = 2
