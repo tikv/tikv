@@ -30,17 +30,6 @@ use super::node::new_node_cluster;
 use super::transport_simulate::*;
 use super::util::*;
 
-fn configure_for_lease_read<T: Simulator>(cluster: &mut Cluster<T>) {
-    let base_tick = cluster.cfg.raft_store.raft_base_tick_interval.0;
-    let election_timeout = base_tick * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
-    // Use large peer check interval, abnormal and max leader missing duration to make a valid config,
-    // that is election timeout x 2 < peer stale state check < abnormal < max leader missing duration.
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration(election_timeout * 3);
-    cluster.cfg.raft_store.abnormal_leader_missing_duration =
-        ReadableDuration(election_timeout * 4);
-    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration(election_timeout * 5);
-}
-
 // A helper function for testing the lease reads and lease renewing.
 // The leader keeps a record of its leader lease, and uses the system's
 // monotonic raw clocktime to check whether its lease has expired.
