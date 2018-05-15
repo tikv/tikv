@@ -775,9 +775,9 @@ impl Peer {
     #[inline]
     fn ready_to_handle_read(&self) -> bool {
         // There may be some values that are not applied by this leader yet but the old leader,
-        // if applied_index_term isn't equal to current term,
+        // if applied_index_term isn't equal to current term.
         //
-        // Also, similar problem exists in split. If the old leader splits really slow,
+        // There may be stale read if the old leader splits really slow,
         // the new region may already elecetd a new leader while the old leader still think it
         // owns the splitted range.
 
@@ -1057,7 +1057,7 @@ impl Peer {
         if !self.is_leader() {
             return;
         }
-        if !self.last_committed_split_idx <= self.get_store().applied_index() {
+        if self.last_committed_split_idx > self.get_store().applied_index() {
             // A splitting leader should not renew its leader.
             // Because we split regions asynchronous, the leader may read stale results
             // if splitting runs slow on the leader.
@@ -1429,7 +1429,7 @@ impl Peer {
         metrics: &mut RaftProposeMetrics,
     ) -> bool {
         if let Err(e) = self.pre_read_index() {
-            debug!("{} prevents unsafe read index", self.tag);
+            debug!("{} prevents unsafe read index, err: {:?}", self.tag, e);
             metrics.unsafe_read_index += 1;
             cmd_resp::bind_error(&mut err_resp, e);
             cb.invoke_with_response(err_resp);

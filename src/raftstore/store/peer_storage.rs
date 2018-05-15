@@ -764,17 +764,7 @@ impl PeerStorage {
 
         for entry in entries {
             if !ready_ctx.sync_log {
-                if entry.get_sync_log() {
-                    ready_ctx.sync_log = true;
-                } else {
-                    let ctx = entry.get_context();
-                    if !ctx.is_empty() {
-                        let ctx = ProposalContext::from_bytes(ctx);
-                        if ctx.contains(ProposalContext::SYNC_LOG) {
-                            ready_ctx.sync_log = true;
-                        }
-                    }
-                }
+                ready_ctx.sync_log = get_sync_log_from_entry(entry);
             }
             ready_ctx.raft_wb.put_msg(
                 &keys::raft_log_key(self.get_region_id(), entry.get_index()),
@@ -1131,6 +1121,22 @@ impl PeerStorage {
             region: self.region.clone(),
         })
     }
+}
+
+fn get_sync_log_from_entry(entry: &Entry) -> bool {
+    if entry.get_sync_log() {
+        return true;
+    } else {
+        let ctx = entry.get_context();
+        if !ctx.is_empty() {
+            let ctx = ProposalContext::from_bytes(ctx);
+            if ctx.contains(ProposalContext::SYNC_LOG) {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 pub fn fetch_entries_to(
@@ -2146,5 +2152,32 @@ mod test {
         ))));
         let res = recover_safe!(|| s.check_applying_snap());
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_sync_log() {
+        let mut tbl = vec![];
+
+        // Do not sync empty entrise.
+        tbl.push((Entry::new(), false));
+
+        // Sync if sync_log is set.
+        let mut e = Entry::new();
+        e.set_sync_log(true);
+        tbl.push((e, true));
+
+        // Sync if context is marked sync.
+        let context = ProposalContext::SYNC_LOG.to_vec();
+        let mut e = Entry::new();
+        e.set_context(context);
+        tbl.push((e.clone(), true));
+
+        // Sync if sync_log is set and context is marked sync_log.
+        e.set_sync_log(true);
+        tbl.push((e, true));
+
+        for (e, sync) in tbl {
+            assert_eq!(get_sync_log_from_entry(&e), sync, "{:?}", e);
+        }
     }
 }
