@@ -23,9 +23,9 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::usize;
 
-use log::LogLevelFilter;
 use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
               DBCompressionType, DBOptions, DBRecoveryMode};
+use slog;
 use sys_info;
 
 use import::Config as ImportConfig;
@@ -695,16 +695,26 @@ impl Default for MetricConfig {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(remote = "LogLevelFilter")]
-#[serde(rename_all = "kebab-case")]
-pub enum LogLevel {
-    Info,
-    Trace,
-    Debug,
-    Warn,
-    Error,
-    Off,
+pub mod log_level_serde {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::{Error, Unexpected}};
+    use slog::Level;
+    use util::logger::{get_level_by_string, get_string_by_level};
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Level, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let string = String::deserialize(deserializer)?;
+        get_level_by_string(&string)
+            .ok_or_else(|| D::Error::invalid_value(Unexpected::Str(&string), &"a valid log level"))
+    }
+
+    pub fn serialize<S>(value: &Level, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        get_string_by_level(value).serialize(serializer)
+    }
 }
 
 macro_rules! readpool_config {
@@ -909,8 +919,8 @@ impl ReadPoolConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
-    #[serde(with = "LogLevel")]
-    pub log_level: LogLevelFilter,
+    #[serde(with = "log_level_serde")]
+    pub log_level: slog::Level,
     pub log_file: String,
     pub readpool: ReadPoolConfig,
     pub server: ServerConfig,
@@ -929,7 +939,7 @@ pub struct TiKvConfig {
 impl Default for TiKvConfig {
     fn default() -> TiKvConfig {
         TiKvConfig {
-            log_level: LogLevelFilter::Info,
+            log_level: slog::Level::Info,
             log_file: "".to_owned(),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
@@ -1179,6 +1189,8 @@ mod test {
     use tempdir::TempDir;
 
     use super::*;
+    use slog::Level;
+    use toml;
 
     #[test]
     fn test_check_critical_cfg_with() {
@@ -1255,5 +1267,44 @@ mod test {
         assert!(tikv_cfg.validate().is_err());
         tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur * 2);
         tikv_cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn test_parse_log_level() {
+        #[derive(Serialize, Deserialize, Debug)]
+        struct LevelHolder {
+            #[serde(with = "log_level_serde")]
+            v: Level,
+        }
+
+        let legal_cases = vec![
+            ("critical", Level::Critical),
+            ("error", Level::Error),
+            ("warning", Level::Warning),
+            ("debug", Level::Debug),
+            ("trace", Level::Trace),
+            ("info", Level::Info),
+        ];
+        for (serialized, deserialized) in legal_cases {
+            let holder = LevelHolder { v: deserialized };
+            let res_string = toml::to_string(&holder).unwrap();
+            let exp_string = format!("v = \"{}\"\n", serialized);
+            assert_eq!(res_string, exp_string);
+            let res_value: LevelHolder = toml::from_str(&exp_string).unwrap();
+            assert_eq!(res_value.v, deserialized);
+        }
+
+        let compatibility_cases = vec![("warn", Level::Warning)];
+        for (serialized, deserialized) in compatibility_cases {
+            let variant_string = format!("v = \"{}\"\n", serialized);
+            let res_value: LevelHolder = toml::from_str(&variant_string).unwrap();
+            assert_eq!(res_value.v, deserialized);
+        }
+
+        let illegal_cases = vec!["foobar", ""];
+        for case in illegal_cases {
+            let string = format!("v = \"{}\"\n", case);
+            toml::from_str::<LevelHolder>(&string).unwrap_err();
+        }
     }
 }
