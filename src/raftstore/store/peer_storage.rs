@@ -34,6 +34,7 @@ use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftLocalSta
                              RaftSnapshotData, RegionLocalState};
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
+use raftstore::store::ProposalContext;
 use raftstore::store::util::conf_state_from_region;
 use raftstore::{Error, Result};
 use storage::CF_RAFT;
@@ -763,6 +764,14 @@ impl PeerStorage {
         for entry in entries {
             if entry.get_sync_log() {
                 ready_ctx.sync_log = true;
+            } else {
+                let ctx = entry.get_context();
+                if !ctx.is_empty() {
+                    let ctx = ProposalContext::from_bits_truncate(ctx[0]);
+                    if ctx.contains(ProposalContext::SYNC_LOG) {
+                        ready_ctx.sync_log = true;
+                    }
+                }
             }
             ready_ctx.raft_wb.put_msg(
                 &keys::raft_log_key(self.get_region_id(), entry.get_index()),
