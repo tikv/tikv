@@ -402,15 +402,14 @@ pub fn must_read_on_peer<T: Simulator>(
     value: &[u8],
 ) {
     let timeout = Duration::from_secs(1);
-    let resp = read_on_peer(cluster, peer, region, key, false, timeout).unwrap();
-    let v = must_get_value(&resp);
-    if v != value {
-        panic!(
-            "read key {}, expect value {}, got {}",
+    match read_on_peer(cluster, peer, region, key, false, timeout) {
+        Ok(ref resp) if value == must_get_value(resp).as_slice() => (),
+        other => panic!(
+            "read key {}, expect value {:?}, got {:?}",
             escape(key),
-            escape(value),
-            escape(&v)
-        )
+            value,
+            other
+        ),
     }
 }
 
