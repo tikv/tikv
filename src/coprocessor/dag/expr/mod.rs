@@ -32,7 +32,6 @@ use std::str;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-use coprocessor::codec::mysql::decimal::DecimalDecoder;
 use coprocessor::codec::mysql::json::JsonDecoder;
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::mysql::{charset, types};
@@ -254,8 +253,7 @@ impl Expression {
                 .map(Datum::Dur)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
-            ExprType::MysqlDecimal => expr.get_val()
-                .decode_decimal()
+            ExprType::MysqlDecimal => Decimal::decode(&mut expr.get_val())
                 .map(Datum::Dec)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
