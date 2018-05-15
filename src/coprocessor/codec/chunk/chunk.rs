@@ -75,19 +75,14 @@ impl ArcChunk {
         }
     }
 
-    //get_row gets the Row in the chunk with the row index.
+    // get_row gets the Row in the chunk with the row index.
     pub fn get_row(&self, idx: usize) -> Row {
         Row::new(self.chunk.clone(), idx)
     }
-    // begin returns the first valid Row in the Chunk.
-    pub fn begin(&self) -> Row {
-        Row::new(self.chunk.clone(), 0)
-    }
 
-    //end returns a Row referring to the past-the-end element in the Chunk.
-    pub fn end(&self) -> Row {
-        let num_rows = self.chunk.num_rows();
-        Row::new(self.chunk.clone(), num_rows)
+    // iter returns an Iterator for Row in the Chunk.
+    pub fn iter(&self) -> RowIterator {
+        RowIterator::new(self.chunk.clone())
     }
 }
 
@@ -111,17 +106,36 @@ impl Row {
         self.c.num_cols()
     }
 
-    //next returns the next valid Row in the same Chunk.
-    pub fn next(&self) -> Row {
-        // TODO should we check the idx?
-        Row {
-            c: self.c.clone(),
-            idx: self.idx + 1,
-        }
-    }
-
     pub fn get_datum(&self, col_idx: usize, fp: &FieldType) -> Result<Datum> {
         self.c.columns[col_idx].get_datum(self.idx, fp)
+    }
+}
+
+pub struct RowIterator {
+    c: Arc<Chunk>,
+    idx: usize,
+}
+
+impl RowIterator {
+    fn new(chunk: Arc<Chunk>) -> RowIterator {
+        RowIterator {
+            c: chunk.clone(),
+            idx: 0,
+        }
+    }
+}
+
+impl Iterator for RowIterator {
+    type Item = Row;
+
+    fn next(&mut self) -> Option<Row> {
+        if self.idx < self.c.num_rows() {
+            let row = Row::new(self.c.clone(), self.idx);
+            self.idx += 1;
+            Some(row)
+        } else {
+            None
+        }
     }
 }
 
@@ -168,15 +182,14 @@ mod test {
             chunk.append_datum(col_id, val).unwrap();
         }
         let arc_chunk = ArcChunk::new(chunk);
-        let row = arc_chunk.begin();
+        for row in arc_chunk.iter() {
+            for col_id in 0..row.len() {
+                let got = row.get_datum(col_id, &fields[col_id]).unwrap();
+                assert_eq!(got, data[col_id]);
+            }
 
-        for col_id in 0..row.len() {
-            let got = row.get_datum(col_id, &fields[col_id]).unwrap();
-            assert_eq!(got, data[col_id]);
+            assert_eq!(row.len(), data.len());
+            assert_eq!(row.idx(), 0);
         }
-
-        assert_eq!(row.len(), data.len());
-        assert_eq!(row.idx(), 0);
-        assert_eq!(row.next().idx(), arc_chunk.end().idx());
     }
 }

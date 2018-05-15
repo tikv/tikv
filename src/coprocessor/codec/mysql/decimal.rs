@@ -1997,25 +1997,27 @@ pub trait DecimalDecoder: BytesDecoder + NumberDecoder {
 
 impl<T: BytesDecoder> DecimalDecoder for T {}
 
-/// `decode_decimal_from_chunk` decode Decimal encodeded by `encode_decimal_to_chunk`.
-pub fn decode_decimal_from_chunk(data: &mut BytesSlice) -> Result<Decimal> {
-    let mut d = if data.len() > 4 {
-        let int_cnt = data[0];
-        let frac_cnt = data[1];
-        let result_frac_cnt = data[2];
-        let negative = data[3] == 1;
-        let mut d = Decimal::new(int_cnt, frac_cnt, negative);
-        d.result_frac_cnt = result_frac_cnt;
-        *data = &data[4..];
-        d
-    } else {
-        return Err(Error::unexpected_eof());
-    };
+impl Decimal {
+    /// `decode_from_chunk` decode Decimal encodeded by `encode_decimal_to_chunk`.
+    pub fn decode_from_chunk(data: &mut BytesSlice) -> Result<Decimal> {
+        let mut d = if data.len() > 4 {
+            let int_cnt = data[0];
+            let frac_cnt = data[1];
+            let result_frac_cnt = data[2];
+            let negative = data[3] == 1;
+            let mut d = Decimal::new(int_cnt, frac_cnt, negative);
+            d.result_frac_cnt = result_frac_cnt;
+            *data = &data[4..];
+            d
+        } else {
+            return Err(Error::unexpected_eof());
+        };
 
-    for id in 0..WORD_BUF_LEN {
-        d.word_buf[id as usize] = number::decode_i32_le(data)? as u32;
+        for id in 0..WORD_BUF_LEN {
+            d.word_buf[id as usize] = number::decode_i32_le(data)? as u32;
+        }
+        Ok(d)
     }
-    Ok(d)
 }
 
 impl PartialEq for Decimal {
@@ -2751,7 +2753,7 @@ mod test {
             let mut buf = vec![];
             buf.encode_decimal_to_chunk(&dec).unwrap();
             buf.resize(DECIMAL_STRUCT_SIZE, 0);
-            let decoded = decode_decimal_from_chunk(&mut buf.as_slice()).unwrap();
+            let decoded = Decimal::decode_from_chunk(&mut buf.as_slice()).unwrap();
             assert_eq!(decoded, dec);
         }
     }

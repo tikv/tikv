@@ -13,9 +13,9 @@
 
 use super::Result;
 use coprocessor::codec::Datum;
-use coprocessor::codec::mysql::decimal::{decode_decimal_from_chunk, DECIMAL_STRUCT_SIZE};
-use coprocessor::codec::mysql::{duration, time, types, Decimal, DecimalEncoder, Duration,
-                                DurationEncoder, Json, JsonDecoder, JsonEncoder, Time, TimeEncoder};
+use coprocessor::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
+use coprocessor::codec::mysql::{types, Decimal, DecimalEncoder, Duration, DurationEncoder, Json,
+                                JsonDecoder, JsonEncoder, Time, TimeEncoder};
 use tipb::expression::FieldType;
 use util::codec::number::{NumberDecoder, NumberEncoder};
 #[derive(Default)]
@@ -247,7 +247,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        time::decode_time(&mut data)
+        Time::decode(&mut data)
     }
 
     pub fn append_duration(&mut self, d: &Duration) -> Result<()> {
@@ -259,7 +259,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        duration::decode_duration(&mut data)
+        Duration::decode(&mut data)
     }
 
     pub fn append_decimal(&mut self, d: &Decimal) -> Result<()> {
@@ -271,7 +271,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        decode_decimal_from_chunk(&mut data)
+        Decimal::decode_from_chunk(&mut data)
     }
 
     pub fn append_json(&mut self, j: &Json) -> Result<()> {

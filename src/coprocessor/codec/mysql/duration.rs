@@ -285,11 +285,13 @@ pub trait DurationEncoder: NumberEncoder {
     }
 }
 
-/// `decode_duration` decodes duration encoded by `encode_duration`.
-pub fn decode_duration(data: &mut BytesSlice) -> Result<Duration> {
-    let nanos = number::decode_i64(data)?;
-    let fsp = number::decode_i64(data)?;
-    Duration::from_nanos(nanos, fsp as i8)
+impl Duration {
+    /// `decode` decodes duration encoded by `encode_duration`.
+    pub fn decode(data: &mut BytesSlice) -> Result<Duration> {
+        let nanos = number::decode_i64(data)?;
+        let fsp = number::decode_i64(data)?;
+        Duration::from_nanos(nanos, fsp as i8)
+    }
 }
 
 #[cfg(test)]
@@ -416,7 +418,7 @@ mod test {
             let mut t = Duration::parse(input.as_bytes(), fsp).unwrap();
             let mut buf = vec![];
             buf.encode_duration(&t).unwrap();
-            let got = decode_duration(&mut buf.as_slice()).unwrap();
+            let got = Duration::decode(&mut buf.as_slice()).unwrap();
             assert_eq!(t, got);
         }
     }

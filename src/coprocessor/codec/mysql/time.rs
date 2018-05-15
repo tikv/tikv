@@ -832,50 +832,52 @@ pub trait TimeEncoder: NumberEncoder {
     }
 }
 
-/// `decode_time` decodes time encoded by `encode_time`.
-pub fn decode_time(data: &mut BytesSlice) -> Result<Time> {
-    let year = i32::from(number::decode_u16(data)?);
-    let (month, day, hour, minute, second) = if data.len() >= 5 {
-        (
-            u32::from(data[0]),
-            u32::from(data[1]),
-            u32::from(data[2]),
-            u32::from(data[3]),
-            u32::from(data[4]),
-        )
-    } else {
-        return Err(Error::unexpected_eof());
-    };
-    *data = &data[5..];
-    let nanoseconds = 1000 * number::decode_u32(data)?;
-    let (tp, fsp) = if data.len() >= 2 {
-        (data[0], data[1])
-    } else {
-        return Err(Error::unexpected_eof());
-    };
-    *data = &data[2..];
-    let tz = FixedOffset::east(0); // TODO
-    if year == 0 && month == 0 && day == 0 && hour == 0 && minute == 0 && second == 0
-        && nanoseconds == 0
-    {
-        return Ok(zero_datetime(&tz));
+impl Time {
+    /// `decode` decodes time encoded by `encode_time`.
+    pub fn decode(data: &mut BytesSlice) -> Result<Time> {
+        let year = i32::from(number::decode_u16(data)?);
+        let (month, day, hour, minute, second) = if data.len() >= 5 {
+            (
+                u32::from(data[0]),
+                u32::from(data[1]),
+                u32::from(data[2]),
+                u32::from(data[3]),
+                u32::from(data[4]),
+            )
+        } else {
+            return Err(Error::unexpected_eof());
+        };
+        *data = &data[5..];
+        let nanoseconds = 1000 * number::decode_u32(data)?;
+        let (tp, fsp) = if data.len() >= 2 {
+            (data[0], data[1])
+        } else {
+            return Err(Error::unexpected_eof());
+        };
+        *data = &data[2..];
+        let tz = FixedOffset::east(0); // TODO
+        if year == 0 && month == 0 && day == 0 && hour == 0 && minute == 0 && second == 0
+            && nanoseconds == 0
+        {
+            return Ok(zero_datetime(&tz));
+        }
+        let t = if tp == types::TIMESTAMP {
+            let t = ymd_hms_nanos(&Utc, year, month, day, hour, minute, second, nanoseconds)?;
+            tz.from_utc_datetime(&t.naive_utc())
+        } else {
+            ymd_hms_nanos(
+                &FixedOffset::east(0),
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                nanoseconds,
+            )?
+        };
+        Time::new(t, tp, fsp as i8)
     }
-    let t = if tp == types::TIMESTAMP {
-        let t = ymd_hms_nanos(&Utc, year, month, day, hour, minute, second, nanoseconds)?;
-        tz.from_utc_datetime(&t.naive_utc())
-    } else {
-        ymd_hms_nanos(
-            &FixedOffset::east(0),
-            year,
-            month,
-            day,
-            hour,
-            minute,
-            second,
-            nanoseconds,
-        )?
-    };
-    Time::new(t, tp, fsp as i8)
 }
 
 #[cfg(test)]
@@ -1336,7 +1338,7 @@ mod test {
             let t = Time::parse_utc_datetime(s, fsp).unwrap();
             let mut buf = vec![];
             buf.encode_time(&t).unwrap();
-            let got = decode_time(&mut buf.as_slice()).unwrap();
+            let got = Time::decode(&mut buf.as_slice()).unwrap();
             assert_eq!(got, t);
         }
     }
