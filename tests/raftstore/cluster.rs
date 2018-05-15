@@ -109,7 +109,7 @@ impl<T: Simulator> Cluster<T> {
         sim: Arc<RwLock<T>>,
         pd_client: Arc<TestPdClient>,
     ) -> Cluster<T> {
-        // TODO: In the future, maybe it's better to test both true and false
+        // TODO: In the future, maybe it's better to test both case where `use_delete_range` is true and false
         Cluster {
             cfg: new_tikv_config(id),
             leaders: HashMap::new(),
