@@ -27,12 +27,11 @@ use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
 use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
 use raft::eraftpb::ConfChangeType;
 
-use tikv::config::{ReadPoolConfig, TiKvConfig};
+use tikv::config::*;
 use tikv::raftstore::Result;
 use tikv::raftstore::store::Msg as StoreMsg;
 use tikv::raftstore::store::*;
 use tikv::server::Config as ServerConfig;
-use tikv::server::readpool::Config as ReadPoolInstanceConfig;
 use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
 use tikv::util::config::*;
 use tikv::util::escape;
@@ -128,8 +127,18 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
 
 pub fn new_readpool_cfg() -> ReadPoolConfig {
     ReadPoolConfig {
-        storage: ReadPoolInstanceConfig::default_for_test(),
-        coprocessor: ReadPoolInstanceConfig::default_for_test(),
+        storage: StorageReadPoolConfig {
+            high_concurrency: 1,
+            normal_concurrency: 1,
+            low_concurrency: 1,
+            ..StorageReadPoolConfig::default()
+        },
+        coprocessor: CoprocessorReadPoolConfig {
+            high_concurrency: 1,
+            normal_concurrency: 1,
+            low_concurrency: 1,
+            ..CoprocessorReadPoolConfig::default()
+        },
     }
 }
 
