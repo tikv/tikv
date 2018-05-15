@@ -11,14 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod config;
+pub mod config;
 mod priority;
 
-use futures::Future;
-use futures_cpupool::CpuFuture;
 use std::error::Error;
 use std::fmt;
 use std::time::Duration;
+
+use futures::Future;
+use futures_cpupool::CpuFuture;
 
 use util;
 use util::futurepool::{self, FuturePool};
@@ -167,7 +168,7 @@ mod tests {
     use std::sync::mpsc::{channel, Sender};
     use std::thread;
 
-    pub use super::*;
+    use super::*;
 
     type BoxError = Box<error::Error + Send + Sync>;
 
