@@ -4,12 +4,16 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 ## [2.0.1]
 ### Performance
-* Reduce thread_yield call
-* Enable read when lock by select for update
+* Reduced number of `thread_yield` calls
+* Fix the issue that `SELECT FOR UPDATE` prevents others from reading
 ### Improvements
 * More verbose logs for slow query
+* Speed up delete range
 ### Bug Fixes
-* Avoid block raftstore thread when generating snapshot
+* Fix the bug that raftstore is accidentally blocked when generating the snapshot
+* Fix the issue that Learner cannot be successfully elected in special conditions
+* Fix the issue that split might cause dirty read in extreme conditions
+* Correct the default value of the read thread pool configuration
 
 ## [2.0.0] - 2018-04-27
 ### Features
