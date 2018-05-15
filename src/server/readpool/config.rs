@@ -21,7 +21,7 @@ pub const DEFAULT_MAX_TASKS_PER_CORE: usize = 2 as usize * 1000;
 
 pub const DEFAULT_STACK_SIZE_MB: u64 = 10;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Config {
     pub high_concurrency: usize,
     pub normal_concurrency: usize,
