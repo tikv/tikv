@@ -175,7 +175,6 @@ impl<'a, T> ReadyContext<'a, T> {
 bitflags! {
     // TODO: maybe declare it as protobuf struct is better.
     pub struct ProposalContext: u8 {
-        const NONE     = 0b00000000;
         const SYNC_LOG = 0b00000001;
         const SPLIT    = 0b00000010;
     }
@@ -183,7 +182,7 @@ bitflags! {
 
 impl ProposalContext {
     pub fn to_vec(&self) -> Vec<u8> {
-        if *self == Self::NONE {
+        if self.is_empty() {
             return vec![];
         }
         let ctx = self.bits();
@@ -192,7 +191,7 @@ impl ProposalContext {
 
     pub fn from_bytes(ctx: &[u8]) -> ProposalContext {
         if ctx.is_empty() {
-            ProposalContext::NONE
+            ProposalContext::empty()
         } else if ctx.len() == 1 {
             ProposalContext::from_bits_truncate(ctx[0])
         } else {
@@ -754,8 +753,6 @@ impl Peer {
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
-                    // Reset last_committed_split_idx if leaders step down.
-                    self.last_committed_split_idx = 0;
                 }
                 _ => {}
             }
@@ -972,23 +969,21 @@ impl Peer {
 
     fn apply_reads(&mut self, ready: &Ready) {
         let mut propose_time = None;
-        if !ready.read_states.is_empty() {
-            if self.ready_to_handle_read() {
-                for state in &ready.read_states {
-                    let mut read = self.pending_reads.reads.pop_front().unwrap();
-                    assert_eq!(state.request_ctx.as_slice(), read.binary_id());
-                    for (req, cb) in read.cmds.drain(..) {
-                        cb.invoke_read(self.handle_read(req));
-                    }
-                    propose_time = Some(read.renew_lease_time);
+        if self.ready_to_handle_read() {
+            for state in &ready.read_states {
+                let mut read = self.pending_reads.reads.pop_front().unwrap();
+                assert_eq!(state.request_ctx.as_slice(), read.binary_id());
+                for (req, cb) in read.cmds.drain(..) {
+                    cb.invoke_read(self.handle_read(req));
                 }
-            } else {
-                for state in &ready.read_states {
-                    let read = &self.pending_reads.reads[self.pending_reads.ready_cnt];
-                    assert_eq!(state.request_ctx.as_slice(), read.binary_id());
-                    self.pending_reads.ready_cnt += 1;
-                    propose_time = Some(read.renew_lease_time);
-                }
+                propose_time = Some(read.renew_lease_time);
+            }
+        } else {
+            for state in &ready.read_states {
+                let read = &self.pending_reads.reads[self.pending_reads.ready_cnt];
+                assert_eq!(state.request_ctx.as_slice(), read.binary_id());
+                self.pending_reads.ready_cnt += 1;
+                propose_time = Some(read.renew_lease_time);
             }
         }
 
@@ -1509,6 +1504,56 @@ impl Peer {
             .unwrap_or_default()
     }
 
+    fn pre_propose_merge(&self, req: &mut RaftCmdRequest) -> Result<()> {
+        let last_index = self.raft_group.raft.raft_log.last_index();
+        let min_progress = self.get_min_progress();
+        let min_index = min_progress + 1;
+        if min_progress == 0 || last_index - min_progress > self.cfg.merge_max_log_gap {
+            return Err(box_err!(
+                "log gap ({}, {}] is too large, skip merge",
+                min_progress,
+                last_index
+            ));
+        }
+        let mut entry_size = 0;
+        for entry in self.raft_group.raft.raft_log.entries(min_index, NO_LIMIT)? {
+            entry_size += entry.get_data().len();
+            if entry.get_entry_type() == EntryType::EntryConfChange {
+                return Err(box_err!("log gap contains conf change, skip merging."));
+            }
+            if entry.get_data().is_empty() {
+                continue;
+            }
+            let cmd: RaftCmdRequest =
+                util::parse_data_at(entry.get_data(), entry.get_index(), &self.tag);
+            if !cmd.has_admin_request() {
+                continue;
+            }
+            let cmd_type = cmd.get_admin_request().get_cmd_type();
+            match cmd_type {
+                AdminCmdType::TransferLeader
+                | AdminCmdType::ComputeHash
+                | AdminCmdType::VerifyHash
+                | AdminCmdType::InvalidAdmin => continue,
+                _ => {}
+            }
+            // Any command that can change epoch or log gap should be rejected.
+            return Err(box_err!(
+                "log gap contains admin request {:?}, skip merging.",
+                cmd_type
+            ));
+        }
+        if entry_size as f64 > self.cfg.raft_entry_max_size.0 as f64 * 0.9 {
+            return Err(box_err!(
+                "log gap size exceed entry size limit, skip merging."
+            ));
+        }
+        req.mut_admin_request()
+            .mut_prepare_merge()
+            .set_min_index(min_index);
+        Ok(())
+    }
+
     fn pre_propose(&self, req: &mut RaftCmdRequest) -> Result<ProposalContext> {
         self.coprocessor_host.pre_propose(self.region(), req)?;
         let mut ctx = ProposalContext::empty();
@@ -1526,52 +1571,7 @@ impl Peer {
         }
 
         if req.get_admin_request().has_prepare_merge() {
-            let last_index = self.raft_group.raft.raft_log.last_index();
-            let min_progress = self.get_min_progress();
-            let min_index = min_progress + 1;
-            if min_progress == 0 || last_index - min_progress > self.cfg.merge_max_log_gap {
-                return Err(box_err!(
-                    "log gap ({}, {}] is too large, skip merge",
-                    min_progress,
-                    last_index
-                ));
-            }
-            let mut entry_size = 0;
-            for entry in self.raft_group.raft.raft_log.entries(min_index, NO_LIMIT)? {
-                entry_size += entry.get_data().len();
-                if entry.get_entry_type() == EntryType::EntryConfChange {
-                    return Err(box_err!("log gap contains conf change, skip merging."));
-                }
-                if entry.get_data().is_empty() {
-                    continue;
-                }
-                let cmd: RaftCmdRequest =
-                    util::parse_data_at(entry.get_data(), entry.get_index(), &self.tag);
-                if !cmd.has_admin_request() {
-                    continue;
-                }
-                let cmd_type = cmd.get_admin_request().get_cmd_type();
-                match cmd_type {
-                    AdminCmdType::TransferLeader
-                    | AdminCmdType::ComputeHash
-                    | AdminCmdType::VerifyHash
-                    | AdminCmdType::InvalidAdmin => continue,
-                    _ => {}
-                }
-                // Any command that can change epoch or log gap should be rejected.
-                return Err(box_err!(
-                    "log gap contains admin request {:?}, skip merging.",
-                    cmd_type
-                ));
-            }
-            if entry_size as f64 > self.cfg.raft_entry_max_size.0 as f64 * 0.9 {
-                return Err(box_err!(
-                    "log gap size exceed entry size limit, skip merging."
-                ));
-            }
-            req.mut_admin_request()
-                .mut_prepare_merge()
-                .set_min_index(min_index);
+            self.pre_propose_merge(req)?
         }
 
         Ok(ctx)
@@ -1835,11 +1835,7 @@ impl Peer {
         }
     }
 
-    fn send_raft_message<T: Transport>(
-        &mut self,
-        mut msg: eraftpb::Message,
-        trans: &T,
-    ) -> Result<()> {
+    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &T) -> Result<()> {
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
         // set current epoch
@@ -1871,17 +1867,6 @@ impl Peer {
 
         send_msg.set_from_peer(from_peer);
         send_msg.set_to_peer(to_peer);
-
-        // Backward compatibility for `sync-log`, it has been moved into `ProposalContext`.
-        // TODO: remove it in the next major release.
-        for e in msg.mut_entries().iter_mut() {
-            if !e.get_context().is_empty() {
-                let ctx = ProposalContext::from_bytes(e.get_context());
-                if ctx.contains(ProposalContext::SYNC_LOG) {
-                    e.set_sync_log(true);
-                }
-            }
-        }
 
         // There could be two cases:
         // 1. Target peer already exists but has not established communication with leader yet
@@ -2027,7 +2012,6 @@ mod tests {
     #[test]
     fn test_entry_context() {
         let tbl: Vec<&[ProposalContext]> = vec![
-            &[ProposalContext::NONE],
             &[ProposalContext::SPLIT],
             &[ProposalContext::SYNC_LOG],
             &[ProposalContext::SPLIT, ProposalContext::SYNC_LOG],
