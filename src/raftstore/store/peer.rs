@@ -975,10 +975,8 @@ impl Peer {
         self.mut_store().applied_index_term = applied_index_term;
         self.peer_stat.written_keys += apply_metrics.written_keys;
         self.peer_stat.written_bytes += apply_metrics.written_bytes;
-        let diff = {
-            self.delete_keys_hint += apply_metrics.delete_keys_hint;
-            self.size_diff_hint as i64 + apply_metrics.size_diff_hint
-        };
+        self.delete_keys_hint += apply_metrics.delete_keys_hint;
+        let diff = self.size_diff_hint as i64 + apply_metrics.size_diff_hint;
         self.size_diff_hint = cmp::max(diff, 0) as u64;
 
         if self.has_pending_snapshot() && self.ready_to_handle_pending_snap() {
@@ -997,12 +995,10 @@ impl Peer {
         self.pending_reads.gc();
     }
 
-    pub fn post_split(&mut self, apply_metrics: &ApplyMetrics) {
-        let diff = {
-            self.delete_keys_hint = apply_metrics.delete_keys_hint;
-            apply_metrics.size_diff_hint
-        };
-        self.size_diff_hint = cmp::max(diff, 0) as u64;
+    pub fn post_split(&mut self) {
+        // Reset delete_keys_hint and size_diff_hint.
+        self.delete_keys_hint = 0;
+        self.size_diff_hint = 0;
     }
 
     /// Try to renew leader lease.

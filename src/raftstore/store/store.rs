@@ -1540,7 +1540,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         left: metapb::Region,
         right: metapb::Region,
         right_derive: bool,
-        metrics: &ApplyMetrics,
     ) {
         let (origin_region, new_region) = if right_derive {
             (right.clone(), left.clone())
@@ -1551,7 +1550,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         {
             let peer = self.region_peers.get_mut(&region_id).unwrap();
             peer.mut_store().region = origin_region;
-            peer.post_split(metrics);
+            peer.post_split();
         }
         let new_region_id = new_region.get_id();
         if let Some(peer) = self.region_peers.get(&new_region_id) {
@@ -1941,7 +1940,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     left,
                     right,
                     right_derive,
-                } => self.on_ready_split_region(region_id, left, right, right_derive, metrics),
+                } => self.on_ready_split_region(region_id, left, right, right_derive),
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state, merged);
                 }
