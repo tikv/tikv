@@ -215,6 +215,7 @@ pub struct RaftProposeMetrics {
     pub all: u64,
     pub local_read: u64,
     pub read_index: u64,
+    pub unsafe_read_index: u64,
     pub normal: u64,
     pub transfer_leader: u64,
     pub conf_change: u64,
@@ -227,6 +228,7 @@ impl Default for RaftProposeMetrics {
             all: 0,
             local_read: 0,
             read_index: 0,
+            unsafe_read_index: 0,
             normal: 0,
             transfer_leader: 0,
             conf_change: 0,
@@ -256,6 +258,12 @@ impl RaftProposeMetrics {
                 .with_label_values(&["read_index"])
                 .inc_by(self.read_index as i64);
             self.read_index = 0;
+        }
+        if self.unsafe_read_index > 0 {
+            PEER_PROPOSAL_COUNTER_VEC
+                .with_label_values(&["unsafe_read_index"])
+                .inc_by(self.unsafe_read_index as i64);
+            self.unsafe_read_index = 0;
         }
         if self.normal > 0 {
             PEER_PROPOSAL_COUNTER_VEC
