@@ -22,6 +22,17 @@ use std::string::FromUtf8Error;
 
 pub type BytesSlice<'a> = &'a [u8];
 
+#[inline]
+pub fn read_slice<'a>(data: &mut BytesSlice<'a>, size: usize) -> Result<BytesSlice<'a>> {
+    if data.len() >= size {
+        let buf = &data[0..size];
+        *data = &data[size..];
+        Ok(buf)
+    } else {
+        Err(Error::unexpected_eof())
+    }
+}
+
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
