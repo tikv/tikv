@@ -46,6 +46,4 @@ mod overflow;
 pub mod table;
 
 pub use self::datum::Datum;
-pub use self::overflow::{add_integer, mul_integer, add_i64, add_u64, div_i64, div_i64_with_u64,
-                         div_u64_with_i64, mul_i64, mul_u64, sub_i64, sub_i64_with_u64, sub_u64,
-                         sub_u64_with_i64};
+pub use self::overflow::{div_i64, div_i64_with_u64, div_u64_with_i64};
