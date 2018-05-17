@@ -23,7 +23,6 @@ use tikv::pd::Config as PdConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::Config as ServerConfig;
-use tikv::server::readpool::Config as ReadPoolInstanceConfig;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
 use tikv::util::security::SecurityConfig;
@@ -80,7 +79,7 @@ fn test_serde_custom_tikv_config() {
         snap_max_total_size: ReadableSize::gb(10),
     };
     value.readpool = ReadPoolConfig {
-        storage: ReadPoolInstanceConfig {
+        storage: StorageReadPoolConfig {
             high_concurrency: 1,
             normal_concurrency: 3,
             low_concurrency: 7,
@@ -89,7 +88,7 @@ fn test_serde_custom_tikv_config() {
             max_tasks_low: 30000,
             stack_size: ReadableSize::mb(20),
         },
-        coprocessor: ReadPoolInstanceConfig {
+        coprocessor: CoprocessorReadPoolConfig {
             high_concurrency: 2,
             normal_concurrency: 4,
             low_concurrency: 6,
@@ -422,4 +421,27 @@ fn test_serde_custom_tikv_config() {
     assert_eq!(value, load);
     let dump = toml::to_string_pretty(&load).unwrap();
     assert_eq!(dump, custom);
+}
+
+#[test]
+fn test_serde_default_config() {
+    let cfg: TiKvConfig = toml::from_str("").unwrap();
+    assert_eq!(cfg, TiKvConfig::default());
+
+    let content = read_file_in_project_dir("tests/config/test-default.toml");
+    let cfg: TiKvConfig = toml::from_str(&content).unwrap();
+    assert_eq!(cfg, TiKvConfig::default());
+}
+
+#[test]
+fn test_readpool_default_config() {
+    let content = r#"
+        [readpool.storage]
+        high-concurrency = 1
+    "#;
+    let cfg: TiKvConfig = toml::from_str(content).unwrap();
+    let mut expected = TiKvConfig::default();
+    expected.readpool.storage.high_concurrency = 1;
+    // Note: max_tasks is unchanged!
+    assert_eq!(cfg, expected);
 }
