@@ -67,21 +67,23 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
 fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
 
+    let cf = "lock";
+
     for i in 1..1000 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
         let key = k.as_bytes();
         let value = v.as_bytes();
-        cluster.must_put(key, value);
-        let v = cluster.get(key);
+        cluster.must_put_cf(cf, key, value);
+        let v = cluster.get_cf(cf, key);
         assert_eq!(v, Some(value.to_vec()));
     }
 
-    cluster.must_delete_range(b"key1", b"key9999");
+    cluster.must_delete_range_cf(cf, b"key1", b"key9999");
 
     for i in 1..1000 {
         let k = format!("key{}", i);
         let key = k.as_bytes();
-        assert!(cluster.get(key).is_none());
+        assert!(cluster.get_cf(cf, key).is_none());
     }
 }
 
