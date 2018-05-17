@@ -70,7 +70,7 @@ fn test_storage_1gc() {
 #[test]
 fn test_scheduler_leader_change_twice() {
     let _guard = ::setup();
-    let snapshot_fp = "raftkv_async_snapshot_finish";
+    let snapshot_fp = "scheduler_async_snapshot_finish";
     let mut cluster = new_server_cluster(0, 2);
     cluster.run();
     let region0 = cluster.get_region(b"");
@@ -99,18 +99,8 @@ fn test_scheduler_leader_change_twice() {
             b"k".to_vec(),
             10,
             Options::default(),
-            box move |res: storage::Result<_>| match res {
-                Err(storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))))
-                | Err(storage::Error::Engine(engine::Error::Request(ref e))) => {
-                    assert!(e.has_stale_command(), "{:?}", e);
-                    prewrite_tx.send(false).unwrap();
-                }
-                Ok(_) => {
-                    prewrite_tx.send(true).unwrap();
-                }
-                _ => {
-                    panic!("expect stale command, but got {:?}", res);
-                }
+            box move |res: storage::Result<_>| {
+                prewrite_tx.send(res).unwrap();
             },
         )
         .unwrap();
@@ -121,40 +111,13 @@ fn test_scheduler_leader_change_twice() {
     cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
     fail::remove(snapshot_fp);
 
-    // the snapshot request may meet read index, scheduler will retry the request.
-    let ok = prewrite_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    if ok {
-        let region1 = cluster.get_region(b"");
-        cluster.must_transfer_leader(region1.get_id(), peers[1].clone());
-
-        let engine1 = cluster.sim.rl().storages[&peers[1].get_id()].clone();
-        let pd_worker = FutureWorker::new("test future worker");
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(pd_worker.scheduler())
-        });
-        let mut storage1 = Storage::from_engine(engine1, &config, read_pool).unwrap();
-        storage1.start(&config).unwrap();
-        let mut ctx1 = Context::new();
-        ctx1.set_region_id(region1.get_id());
-        ctx1.set_region_epoch(region1.get_region_epoch().clone());
-        ctx1.set_peer(peers[1].clone());
-
-        let (commit_tx, commit_rx) = channel();
-        storage1
-            .async_commit(
-                ctx1,
-                vec![make_key(b"k")],
-                10,
-                11,
-                box move |res: storage::Result<_>| {
-                    commit_tx.send(res).unwrap();
-                },
-            )
-            .unwrap();
-        // wait for the commit result.
-        let res = commit_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        if res.as_ref().is_err() {
-            panic!("expect Ok(_), but got {:?}", res);
+    match prewrite_rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+        Err(storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))))
+        | Err(storage::Error::Engine(engine::Error::Request(ref e))) => {
+            assert!(e.has_stale_command(), "{:?}", e);
+        }
+        res => {
+            panic!("expect stale command, but got {:?}", res);
         }
     }
 }

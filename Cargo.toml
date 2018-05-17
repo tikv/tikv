@@ -35,7 +35,12 @@ name = "tikv-fail"
 name = "tikv-importer"
 
 [dependencies]
-log = "0.3"
+log = "0.3.6"
+slog = "2.2"
+slog-async = "2.3"
+slog-scope = "4.0"
+slog-stdlog = "3.0"
+slog-term = "2.4"
 byteorder = "0.5"
 rand = "0.3"
 quick-error = "0.2"
@@ -71,9 +76,9 @@ rustc-serialize = "0.3"
 zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
-uuid = { version = "0.4", features = [ "serde", "v4" ] }
+uuid = { version = "0.6", features = [ "serde", "v4" ] }
 grpcio = { version = "0.2", features = [ "secure" ] }
-raft = "0.1"
+raft = "0.2"
 crossbeam-channel = { version = "0.1", features = [ "nightly" ] }
 
 [target.'cfg(unix)'.dependencies]
@@ -118,3 +123,5 @@ codegen-units = 4
 lto = true
 opt-level = 3
 debug = true
+# TODO: remove this once rust-lang/rust#50199 is resolved.
+codegen-units = 2

@@ -28,6 +28,8 @@ extern crate jemallocator;
 extern crate libc;
 #[macro_use]
 extern crate log;
+#[macro_use(slog_o, slog_kv)]
+extern crate slog;
 #[cfg(unix)]
 extern crate nix;
 extern crate prometheus;
@@ -35,6 +37,10 @@ extern crate rocksdb;
 extern crate serde_json;
 #[cfg(unix)]
 extern crate signal;
+extern crate slog_async;
+extern crate slog_scope;
+extern crate slog_stdlog;
+extern crate slog_term;
 extern crate tikv;
 extern crate toml;
 
@@ -143,10 +149,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {:?}", s)),
     );
-    let storage_read_pool = ReadPool::new("store-read", &cfg.readpool.storage, || {
-        let pd_sender = pd_sender.clone();
-        move || storage::ReadPoolContext::new(pd_sender.clone())
-    });
+    let storage_read_pool =
+        ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
+            let pd_sender = pd_sender.clone();
+            move || storage::ReadPoolContext::new(pd_sender.clone())
+        });
     let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage, storage_read_pool)
         .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 
@@ -180,7 +187,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     let server_cfg = Arc::new(cfg.server.clone());
     // Create server
-    let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor, || {
+    let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor.build_config(), || {
         let pd_sender = pd_sender.clone();
         move || coprocessor::ReadPoolContext::new(pd_sender.clone())
     });
@@ -302,7 +309,9 @@ fn main() {
                 .alias("log")
                 .takes_value(true)
                 .value_name("LEVEL")
-                .possible_values(&["trace", "debug", "info", "warn", "error", "off"])
+                .possible_values(&[
+                    "trace", "debug", "info", "warn", "warning", "error", "critical"
+                ])
                 .help("Sets log level"),
         )
         .arg(

@@ -20,10 +20,10 @@ use coprocessor::dag::expr::EvalContext;
 use util::collections::{HashMap, HashSet};
 use util::escape;
 
-use super::datum::DatumDecoder;
+//use super::datum::DatumDecoder;
 use super::mysql::{types, Duration, Time};
 use super::{datum, Datum, Result};
-use util::codec::bytes::BytesDecoder;
+use util::codec::BytesSlice;
 use util::codec::number::{NumberDecoder, NumberEncoder};
 
 // handle or index id
@@ -192,7 +192,7 @@ pub fn decode_index_key(
         if encoded.is_empty() {
             return Err(box_err!("{} is too short.", escape(encoded)));
         }
-        let mut v = encoded.decode_datum()?;
+        let mut v = datum::decode_datum(&mut encoded)?;
         v = unflatten(ctx, v, info)?;
         res.push(v);
     }
@@ -247,45 +247,45 @@ fn unflatten(ctx: &mut EvalContext, datum: Datum, col: &ColumnInfo) -> Result<Da
     }
 }
 
-pub trait TableDecoder: DatumDecoder {
-    // `decode_col_value` decodes data to a Datum according to the column info.
-    fn decode_col_value(&mut self, ctx: &mut EvalContext, col: &ColumnInfo) -> Result<Datum> {
-        let d = self.decode_datum()?;
-        unflatten(ctx, d, col)
-    }
+// `decode_col_value` decodes data to a Datum according to the column info.
+pub fn decode_col_value(
+    data: &mut BytesSlice,
+    ctx: &mut EvalContext,
+    col: &ColumnInfo,
+) -> Result<Datum> {
+    let d = datum::decode_datum(data)?;
+    unflatten(ctx, d, col)
+}
 
-    // `decode_row` decodes a byte slice into datums.
-    // TODO: We should only decode columns in the cols map.
-    // Row layout: colID1, value1, colID2, value2, .....
-    fn decode_row(
-        &mut self,
-        ctx: &mut EvalContext,
-        cols: &HashMap<i64, ColumnInfo>,
-    ) -> Result<HashMap<i64, Datum>> {
-        let mut values = self.decode()?;
-        if values.get(0).map_or(true, |d| *d == Datum::Null) {
-            return Ok(HashMap::default());
-        }
-        if values.len() & 1 == 1 {
-            return Err(box_err!("decoded row values' length should be even!"));
-        }
-        let mut row = HashMap::with_capacity_and_hasher(cols.len(), Default::default());
-        let mut drain = values.drain(..);
-        loop {
-            let id = match drain.next() {
-                None => return Ok(row),
-                Some(id) => id.i64(),
-            };
-            let v = drain.next().unwrap();
-            if let Some(ci) = cols.get(&id) {
-                let v = unflatten(ctx, v, ci)?;
-                row.insert(id, v);
-            }
+// `decode_row` decodes a byte slice into datums.
+// TODO: We should only decode columns in the cols map.
+// Row layout: colID1, value1, colID2, value2, .....
+pub fn decode_row(
+    data: &mut BytesSlice,
+    ctx: &mut EvalContext,
+    cols: &HashMap<i64, ColumnInfo>,
+) -> Result<HashMap<i64, Datum>> {
+    let mut values = datum::decode(data)?;
+    if values.get(0).map_or(true, |d| *d == Datum::Null) {
+        return Ok(HashMap::default());
+    }
+    if values.len() & 1 == 1 {
+        return Err(box_err!("decoded row values' length should be even!"));
+    }
+    let mut row = HashMap::with_capacity_and_hasher(cols.len(), Default::default());
+    let mut drain = values.drain(..);
+    loop {
+        let id = match drain.next() {
+            None => return Ok(row),
+            Some(id) => id.i64(),
+        };
+        let v = drain.next().unwrap();
+        if let Some(ci) = cols.get(&id) {
+            let v = unflatten(ctx, v, ci)?;
+            row.insert(id, v);
         }
     }
 }
-
-impl<T: BytesDecoder> TableDecoder for T {}
 
 #[derive(Debug)]
 pub struct RowColMeta {
@@ -361,7 +361,7 @@ pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
         let length = data.len();
         let mut tmp_data: &[u8] = data.as_ref();
         while !tmp_data.is_empty() && meta_map.len() < cols.len() {
-            let id = tmp_data.decode_datum()?.i64();
+            let id = datum::decode_datum(&mut tmp_data)?.i64();
             let offset = length - tmp_data.len();
             let (val, rem) = datum::split_datum(tmp_data, false)?;
             if cols.contains(&id) {
@@ -392,7 +392,7 @@ pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option
         if tmp_data.is_empty() {
             None
         } else {
-            Some(box_try!(tmp_data.decode_datum()).i64())
+            Some(box_try!(datum::decode_datum(&mut tmp_data)).i64())
         }
     };
     Ok((RowColsDict::new(meta_map, key), handle))
@@ -404,7 +404,7 @@ mod test {
 
     use tipb::schema::ColumnInfo;
 
-    use coprocessor::codec::datum::{self, Datum, DatumDecoder};
+    use coprocessor::codec::datum::{self, Datum};
     use coprocessor::codec::mysql::types;
     use util::codec::number::NumberEncoder;
     use util::collections::{HashMap, HashSet};
@@ -495,7 +495,7 @@ mod test {
         let bs = encode_row(col_values, &col_ids).unwrap();
         assert!(!bs.is_empty());
         let mut ctx = EvalContext::default();
-        let r = bs.as_slice().decode_row(&mut ctx, &cols).unwrap();
+        let r = decode_row(&mut bs.as_slice(), &mut ctx, &cols).unwrap();
         assert_eq!(row, r);
 
         let mut datums: HashMap<_, _>;
@@ -503,7 +503,7 @@ mod test {
         assert_eq!(col_encoded, datums);
 
         cols.insert(4, new_col_info(types::FLOAT));
-        let r = bs.as_slice().decode_row(&mut ctx, &cols).unwrap();
+        let r = decode_row(&mut bs.as_slice(), &mut ctx, &cols).unwrap();
         assert_eq!(row, r);
 
         col_id_set.insert(4);
@@ -512,7 +512,7 @@ mod test {
 
         cols.remove(&4);
         cols.remove(&3);
-        let r = bs.as_slice().decode_row(&mut ctx, &cols).unwrap();
+        let r = decode_row(&mut bs.as_slice(), &mut ctx, &cols).unwrap();
         row.remove(&3);
         assert_eq!(row, r);
 
@@ -525,8 +525,7 @@ mod test {
         let bs = encode_row(vec![], &[]).unwrap();
         assert!(!bs.is_empty());
         assert!(
-            bs.as_slice()
-                .decode_row(&mut ctx, &cols)
+            decode_row(&mut bs.as_slice(), &mut ctx, &cols)
                 .unwrap()
                 .is_empty()
         );
@@ -575,8 +574,7 @@ mod test {
             None
         } else {
             Some(
-                (handle_data.as_ref() as &[u8])
-                    .decode_datum()
+                datum::decode_datum(&mut (handle_data.as_ref() as &[u8]))
                     .unwrap()
                     .i64(),
             )
