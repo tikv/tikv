@@ -1,117 +1,71 @@
 version: 2
 jobs:
-  # Since RocksDB and TiKV require more than 4GB RAM to compile so we can't use docker.
-  test:
+  docker:
+    # Seems Circle can't build us on a container due to RAM.
     machine: true
-    environment:
-      # CircleCI does not support env variable interpolation, set those later
-      # Variables used by cargo
-      RUST_TEST_THREADS: "1"
-      RUST_BACKTRACE: "1"
-      RUSTFLAGS: "-Dwarnings"
-      FAIL_POINT: "1"
     steps:
-      - run:
-          name: Defining runtime determined environment variables
-          # Define variables that need interpolation
-          # As CircleCI's each `run` declaration starts a new shell, we need to persist them to $BASH_ENV
-          command: |
-            echo 'export PATH=$HOME/.local/cmake/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH' >> $BASH_ENV
-            echo 'export LD_RUN_PATH=$LD_RUN_PATH:$HOME/.local/lib' >> $BASH_ENV
-            echo 'export DYLD_LIBRARY_PATH=$DYLD_LIBRARY_PATH:$HOME/.local/lib' >> $BASH_ENV
-            echo 'export LDFLAGS=-L$HOME/.local/lib' >> $BASH_ENV
-            echo 'export CPPFLAGS=-I$HOME/.local/include' >> $BASH_ENV
-            echo 'export CXXFLAGS=-I$HOME/.local/include' >> $BASH_ENV
-            echo 'export LOCAL_PREFIX=$HOME/.local' >> $BASH_ENV
       - checkout
       - restore_cache:
-          name: Restoring ~/.cargo Cache
+          name: Restoring ~/docker Cache
           keys:
-            - cargo-{{checksum "RUST_VERSION" }}-{{ checksum "Cargo.lock" }}
+            - docker-{{ checksum "RUST_VERSION" }}-{{ checksum "Cargo.lock" }}
       - run:
-          name: Installing build dependencies
+          name: Rebuild docker image if necessary
+          no_output_timeout: 2400s
           command: |
-            sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y;
-            sudo apt-get update -y;
-            sudo apt-get install -y g++-4.8 libdw-dev libelf-dev elfutils binutils-dev curl git python golang
-      - run:
-          name: Installing Rust toolchain
-          command: |
-            RUST_VERSION=`tail -n 1 RUST_VERSION`
-            if [[ ! -e $HOME/.cargo ]]; then
-              curl https://sh.rustup.rs -sSf |
-                sh -s -- --no-modify-path --default-toolchain ${RUST_VERSION} -y;
-              rustup default ${RUST_VERSION};
-            else
-              rustup default ${RUST_VERSION};
-            fi
-      # Unfortunately the images CircleCI uses don't pull CMake 3.10 via apt which is what we need.
-      - run:
-          name: Installing CMake
-          command: |
-            if [[ ! -f $HOME/.local/cmake/bin/cmake ]]; then
-              curl https://cmake.org/files/v3.10/cmake-3.10.0-Linux-x86_64.tar.gz -sSf | tar xzf -;
-              rm -rf $HOME/.local/cmake
-              mv cmake-3.10.0-Linux-x86_64 $HOME/.local/cmake
-            fi
-      - run:
-          name: Fetching crates
-          command: cargo fetch
+            cd ~/project
+            # If one of these files changed we need to rebuild the image. Otherwise we can reuse.
+            git diff-index --name-only "HEAD^" | grep -e ci-build/Dockerfile -e Cargo.lock -e RUST_VERSION || [ ! -f  ~/docker/ci.tar.gz ] || exit 0
+
+            docker build -t pingcap/tikv-ci --force-rm --no-cache -f ci-build/Dockerfile .
+            mkdir -p ~/docker
+            docker save pingcap/tikv-ci > ~/docker/ci.tar.gz
       - save_cache:
-          name: Saving ~/.cargo Cache
-          # This should change each dependency update, or Rust version update.
-          key: cargo-{{ checksum "RUST_VERSION" }}-{{ checksum "Cargo.lock" }}
+          name: Saving ~/docker Cache
+          key: docker-{{ checksum "RUST_VERSION" }}-{{ checksum "Cargo.lock" }}
           paths:
-            - ~/.cargo
+            - ~/docker
+  test:
+    machine: true
+    steps:
+      - checkout
+      - restore_cache:
+          name: Restoring ~/docker Cache
+          keys:
+            - docker-{{ checksum "RUST_VERSION" }}-{{ checksum "Cargo.lock" }}
+      - run:
+          name: Loading docker image
+          command: zcat /home/travis/docker/ci.tar.gz | docker load
       - run:
           name: Testing
-          command: make trace_test
-          no_output_timeout: 1800s
-  # We can use the docker executor for format runs since we don't need so much memory.
+          command: |
+            cd ~/project
+            docker run -ti --rm -v `pwd`:`/build pingcap/tikv-ci bash -c "make trace_test"
   format:
-    docker:
-      - image: ubuntu:latest
+    machine: true
     steps:
-      - run:
-          name: Defining runtime determined environment variables
-          # Define variables that need interpolation
-          # As CircleCI's each `run` declaration starts a new shell, we need to persist them to $BASH_ENV
-          command: |
-            echo 'export PATH=$HOME/.cargo/bin:$HOME/.local/bin:$PATH' >> $BASH_ENV
-            echo 'export LD_RUN_PATH=$LD_RUN_PATH:$HOME/.local/lib' >> $BASH_ENV
-            echo 'export DYLD_LIBRARY_PATH=$DYLD_LIBRARY_PATH:$HOME/.local/lib' >> $BASH_ENV
-            echo 'export LDFLAGS=-L$HOME/.local/lib' >> $BASH_ENV
-            echo 'export CPPFLAGS=-I$HOME/.local/include' >> $BASH_ENV
-            echo 'export CXXFLAGS=-I$HOME/.local/include' >> $BASH_ENV
-            echo 'export LOCAL_PREFIX=$HOME/.local' >> $BASH_ENV
       - checkout
+      - restore_cache:
+          name: Restoring ~/docker Cache
+          keys:
+            - docker-{{ checksum "RUST_VERSION" }}-{{ checksum "Cargo.lock" }}
       - run:
-          name: Installing build dependencies
+          name: Loading docker image
+          command: zcat /home/travis/docker/ci.tar.gz | docker load
+      - run:
+          name: Testing
           command: |
-            apt-get update -y;
-            apt-get install -y curl make git
-      - run:
-          name: Installing Rust toolchain
-          command: |
-            RUST_VERSION=`tail -n 1 RUST_VERSION`
-            if [[ ! -e $HOME/.cargo ]]; then
-              curl https://sh.rustup.rs -sSf |
-                sh -s -- --no-modify-path --default-toolchain ${RUST_VERSION} -y;
-              rustup default ${RUST_VERSION};
-            else
-              rustup default ${RUST_VERSION};
-            fi
-      - run:
-          name: Installing rustfmt
-          command: |
-            make -f ci-build/Makefile prepare-rustfmt
-      - run:
-          name: Checking Format
-          command: make format && git diff-index --quiet HEAD -- || (git diff; echo please make format and run tests before creating a PR!; exit 1)
+            cd ~/project
+            docker run -ti --rm -v `pwd`:`/build pingcap/tikv-ci bash -c "make format && git diff-index --quiet HEAD -- || (git diff; echo please make format and run tests before creating a PR!; exit 1)"
 
 workflows:
   version: 2
   ci-test:
       jobs:
-        - format
-        - test
+        - docker
+        - format:
+            requires:
+              - docker
+        - test:
+            requires:
+              - docker
