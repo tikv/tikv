@@ -75,6 +75,56 @@ fn test_overlap_cleanup() {
     fail::remove(gen_snapshot_fp);
 }
 
+#[test]
+fn test_snapshot_between_save() {
+    let _guard = ::setup();
+    let mut cluster = new_node_cluster(0, 3);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let region_id = cluster.run_conf_change();
+
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+
+    // Add peer on store 3 so that it will be shutdown by fail point.
+    fail::cfg("raft_snapshot_between_save", "return").unwrap();
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    cluster.stop_node(3);
+
+    // Reset fail point and restart store 3.
+    fail::cfg("raft_snapshot_between_save", "off").unwrap();
+    cluster.run_node(3);
+
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+    fail::remove("raft_snapshot_between_save");
+}
+
+#[test]
+fn test_snapshot_apply_validate_fail() {
+    let _guard = ::setup();
+    let mut cluster = new_node_cluster(0, 3);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let region_id = cluster.run_conf_change();
+
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+
+    fail::cfg("raft_snapshot_validate", "return").unwrap();
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    must_get_none(&cluster.get_engine(3), b"k1");
+
+    fail::cfg("raft_snapshot_validate", "off").unwrap();
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    fail::remove("raft_snapshot_validate");
+}
+
 pub struct SnapshotNotifier {
     notifier: Mutex<Sender<()>>,
     pending_notify: AtomicUsize,

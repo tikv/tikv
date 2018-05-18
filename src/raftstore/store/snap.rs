@@ -579,6 +579,9 @@ impl Snap {
     }
 
     fn validate(&self, db: Arc<DB>) -> RaftStoreResult<()> {
+        fail_point!("raft_snapshot_validate", |_| Err(
+            RaftStoreError::Snapshot(Error::Other("validate".into()))
+        ));
         for cf_file in &self.cf_files {
             if cf_file.size == 0 {
                 // Skip empty file. The checksum of this cf file should be 0 and
