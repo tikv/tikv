@@ -8,21 +8,21 @@ jobs:
       - restore_cache:
           name: Restoring ~/docker Cache
           keys:
-            - docker-{{ checksum "RUST_VERSION" }}-{{ checksum "Cargo.lock" }}
+            - docker-{{ checksum "RUST_VERSION" }}{{ checksum "Cargo.lock" }}{{ checksum ".circleci/config.yml" }}
       - run:
           name: Rebuild docker image if necessary
           no_output_timeout: 2400s
           command: |
             cd ~/project
             # If one of these files changed we need to rebuild the image. Otherwise we can reuse.
-            git diff-index --name-only "HEAD^" | grep -e ci-build/Dockerfile -e Cargo.lock -e RUST_VERSION || [ ! -f  ~/docker/ci.tar.gz ] || exit 0
+            git diff-index --name-only "HEAD^" | grep -e ci-build/Dockerfile -e Cargo.lock -e RUST_VERSION || [ ! -f  ~/docker/ci ] || exit 0
 
             docker build -t pingcap/tikv-ci --force-rm --no-cache -f ci-build/Dockerfile .
             mkdir -p ~/docker
-            docker save pingcap/tikv-ci > ~/docker/ci.tar.gz
+            docker save pingcap/tikv-ci > ~/docker/ci
       - save_cache:
           name: Saving ~/docker Cache
-          key: docker-{{ checksum "RUST_VERSION" }}-{{ checksum "Cargo.lock" }}
+          key: docker-{{ checksum "RUST_VERSION" }}{{ checksum "Cargo.lock" }}{{ checksum ".circleci/config.yml" }}
           paths:
             - ~/docker
   test:
@@ -32,15 +32,16 @@ jobs:
       - restore_cache:
           name: Restoring ~/docker Cache
           keys:
-            - docker-{{ checksum "RUST_VERSION" }}-{{ checksum "Cargo.lock" }}
+            - docker-{{ checksum "RUST_VERSION" }}{{ checksum "Cargo.lock" }}{{ checksum ".circleci/config.yml" }}
       - run:
           name: Loading docker image
-          command: zcat /home/travis/docker/ci.tar.gz | docker load
+          command: |
+            docker load -i ~/docker/ci
       - run:
           name: Testing
           command: |
             cd ~/project
-            docker run -ti --rm -v `pwd`:`/build pingcap/tikv-ci bash -c "make trace_test"
+            docker run -ti --rm -v $HOME/project:/build pingcap/tikv-ci bash -c "make trace_test"
   format:
     machine: true
     steps:
@@ -48,15 +49,16 @@ jobs:
       - restore_cache:
           name: Restoring ~/docker Cache
           keys:
-            - docker-{{ checksum "RUST_VERSION" }}-{{ checksum "Cargo.lock" }}
+            - docker-{{ checksum "RUST_VERSION" }}{{ checksum "Cargo.lock" }}{{ checksum ".circleci/config.yml" }}
       - run:
           name: Loading docker image
-          command: zcat /home/travis/docker/ci.tar.gz | docker load
+          command: |
+            docker load -i ~/docker/ci
       - run:
           name: Testing
           command: |
             cd ~/project
-            docker run -ti --rm -v `pwd`:`/build pingcap/tikv-ci bash -c "make format && git diff-index --quiet HEAD -- || (git diff; echo please make format and run tests before creating a PR!; exit 1)"
+            docker run -ti --rm -v $HOME/project:/build pingcap/tikv-ci bash -c "make format && git diff-index --quiet HEAD -- || (git diff; echo please make format and run tests before creating a PR!; exit 1)"
 
 workflows:
   version: 2
