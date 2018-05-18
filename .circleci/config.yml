@@ -28,10 +28,6 @@ jobs:
           name: Restoring ~/.cargo Cache
           keys:
             - cargo-{{checksum "RUST_VERSION" }}-{{ checksum "Cargo.lock" }}
-      - restore_cache:
-          name: Restoring ./target Cache
-          keys:
-            - target-{{ checksum "RUST_VERSION" }}-{{ checksum "Cargo.lock" }}
       - run:
           name: Installing build dependencies
           command: |
@@ -61,23 +57,16 @@ jobs:
       - run:
           name: Fetching crates
           command: cargo fetch
-      - run:
-          name: Testing
-          command: make trace_test
-          no_output_timeout: 1800s
-      # Unfortunately we can't report success early here, but it would save time.
       - save_cache:
           name: Saving ~/.cargo Cache
           # This should change each dependency update, or Rust version update.
           key: cargo-{{ checksum "RUST_VERSION" }}-{{ checksum "Cargo.lock" }}
           paths:
             - ~/.cargo
-      - save_cache:
-          name: Saving ~/.target Cache
-          # This should change each Rust version.
-          key: target-{{ checksum "RUST_VERSION" }}-{{ checksum "Cargo.lock" }}
-          paths:
-            - .target
+      - run:
+          name: Testing
+          command: make trace_test
+          no_output_timeout: 1800s
   # We can use the docker executor for format runs since we don't need so much memory.
   format:
     docker:
