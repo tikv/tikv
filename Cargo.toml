@@ -35,7 +35,7 @@ name = "tikv-fail"
 name = "tikv-importer"
 
 [dependencies]
-log = "0.3.6"
+log = "0.3.9"
 slog = "2.2"
 slog-async = "2.3"
 slog-scope = "4.0"
