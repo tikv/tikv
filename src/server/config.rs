@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use super::Result;
+use grpc::CompressionAlgorithms;
 
 use coprocessor::DEFAULT_REQUEST_MAX_HANDLE_SECS;
 use util::collections::HashMap;
@@ -43,6 +44,14 @@ pub const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
 // Number of rows in each chunk for streaming coprocessor.
 pub const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GrpcCompressionType {
+    None,
+    Deflate,
+    Gzip,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -58,6 +67,8 @@ pub struct Config {
     pub advertise_addr: String,
     pub notify_capacity: usize,
     pub messages_per_tick: usize,
+    // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
+    pub grpc_compression_type: GrpcCompressionType,
     pub grpc_concurrency: usize,
     pub grpc_concurrent_stream: usize,
     pub grpc_raft_conn_num: usize,
@@ -96,6 +107,7 @@ impl Default for Config {
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             notify_capacity: DEFAULT_NOTIFY_CAPACITY,
             messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
+            grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
             grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
@@ -156,6 +168,14 @@ impl Config {
         }
 
         Ok(())
+    }
+
+    pub fn grpc_compression_algorithm(&self) -> CompressionAlgorithms {
+        match self.grpc_compression_type {
+            GrpcCompressionType::None => CompressionAlgorithms::None,
+            GrpcCompressionType::Deflate => CompressionAlgorithms::Deflate,
+            GrpcCompressionType::Gzip => CompressionAlgorithms::Gzip,
+        }
     }
 }
 
