@@ -113,6 +113,7 @@ fn send_snap(
     env: Arc<Environment>,
     mgr: SnapManager,
     security_mgr: Arc<SecurityManager>,
+    cfg: &Config,
     addr: &str,
     msg: RaftMessage,
 ) -> Result<impl Future<Item = SendStat, Error = Error>> {
@@ -150,8 +151,10 @@ fn send_snap(
     };
 
     let cb = ChannelBuilder::new(env)
-        .keepalive_time(Duration::from_secs(60))
-        .keepalive_timeout(Duration::from_secs(3));
+        .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
+        .keepalive_time(cfg.grpc_keepalive_time.0)
+        .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
+        .default_compression_algorithm(cfg.grpc_compression_algorithm());
 
     let channel = security_mgr.connect(cb, addr);
     let client = TikvClient::new(channel);
@@ -365,7 +368,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 let sending_count = Arc::clone(&self.sending_count);
                 sending_count.fetch_add(1, Ordering::SeqCst);
 
-                let f = future::result(send_snap(env, mgr, security_mgr, &addr, msg))
+                let f = future::result(send_snap(env, mgr, security_mgr, &self.cfg, &addr, msg))
                     .flatten()
                     .then(move |res| {
                         match res {
