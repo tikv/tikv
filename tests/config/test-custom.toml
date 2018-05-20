@@ -23,6 +23,7 @@ addr = "example.com:443"
 advertise-addr = "example.com:443"
 notify-capacity = 12345
 messages-per-tick = 123
+grpc-compression-type = "gzip"
 grpc-concurrency = 123
 grpc-concurrent-stream = 1234
 grpc-raft-conn-num = 123
