@@ -164,6 +164,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             self.snap_mgr.clone(),
             self.raft_router.clone(),
             security_mgr,
+            Arc::clone(&cfg),
         );
         box_try!(self.snap_worker.start(snap_runner));
         self.grpc_server.start();

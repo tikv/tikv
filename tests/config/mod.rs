@@ -62,6 +62,8 @@ fn test_serde_custom_tikv_config() {
         advertise_addr: "example.com:443".to_owned(),
         notify_capacity: 12_345,
         messages_per_tick: 123,
+        concurrent_send_snap_limit: 4,
+        concurrent_recv_snap_limit: 4,
         grpc_compression_type: GrpcCompressionType::Gzip,
         grpc_concurrency: 123,
         grpc_concurrent_stream: 1_234,
