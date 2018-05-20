@@ -114,6 +114,8 @@ fn test_serde_custom_tikv_config() {
         raft_base_tick_interval: ReadableDuration::secs(12),
         raft_heartbeat_ticks: 1,
         raft_election_timeout_ticks: 12,
+        raft_min_election_timeout_ticks: 14,
+        raft_max_election_timeout_ticks: 20,
         raft_max_size_per_msg: ReadableSize::mb(12),
         raft_max_inflight_msgs: 123,
         raft_entry_max_size: ReadableSize::mb(12),
