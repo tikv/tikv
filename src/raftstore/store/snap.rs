@@ -1311,7 +1311,7 @@ impl SnapManager {
         match self.core.wl().registry.entry(key) {
             Entry::Occupied(mut e) => {
                 if e.get().contains(&entry) && entry != SnapEntry::Sending {
-                    error!("{} is registered with {:?} multi times", e.key(), entry);
+                    debug!("{} is registered with {:?} multi times", e.key(), entry);
                     return Err(box_err!("Register {:?} multi times", entry));
                 }
                 // Push `SnapEntry::Sending` multi times is allowed.
@@ -1338,7 +1338,7 @@ impl SnapManager {
                     e.remove_entry();
                 }
             }
-            Entry::Vacant(e) => error!("stale deregister key: {} {:?}", e.key(), entry),
+            Entry::Vacant(e) => debug!("stale deregister key: {} {:?}", e.key(), entry),
         }
     }
 

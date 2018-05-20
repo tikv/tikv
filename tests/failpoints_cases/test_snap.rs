@@ -237,7 +237,6 @@ fn test_generate_snapshot() {
 // leader lose and regain leadership, it can send one snapshot multi times.
 #[test]
 fn test_snapshots_with_regain_leadership() {
-    ::util::ci_setup();
     let _guard = ::setup();
 
     let mut cluster = new_server_cluster(1, 3);
