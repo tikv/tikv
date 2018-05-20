@@ -23,6 +23,7 @@ use tikv::pd::Config as PdConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::Config as ServerConfig;
+use tikv::server::config::GrpcCompressionType;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
 use tikv::util::security::SecurityConfig;
@@ -63,6 +64,7 @@ fn test_serde_custom_tikv_config() {
         messages_per_tick: 123,
         concurrent_send_snap_limit: 4,
         concurrent_recv_snap_limit: 4,
+        grpc_compression_type: GrpcCompressionType::Gzip,
         grpc_concurrency: 123,
         grpc_concurrent_stream: 1_234,
         grpc_raft_conn_num: 123,

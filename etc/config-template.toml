@@ -50,6 +50,8 @@
 # maximum number of messages can be processed in one tick.
 # messages-per-tick = 4096
 
+# compression type for grpc channel, available values are no, deflate and gzip.
+# grpc-compression-type = "no"
 # size of thread pool for grpc server.
 # grpc-concurrency = 4
 # The number of max concurrent streams/requests on a client connection.
