@@ -698,14 +698,15 @@ impl Peer {
     }
 
     pub fn check_stale_state(&mut self) -> StaleState {
+        let naive_peer = !self.is_initialized() || self.raft_group.raft.is_learner;
         // Updates the `leader_missing_time` according to the current state.
         if self.leader_id() == raft::INVALID_ID {
             if self.leader_missing_time.is_none() {
                 self.leader_missing_time = Some(Instant::now())
             }
-        } else if self.is_initialized() {
+        } else if !naive_peer {
             // Reset leader_missing_time, if the peer has a leader and it is initialized.
-            // For an uninitialized peer, the leader id is unreliable.
+            // For an uninitialized peer and learner, the leader id is unreliable.
             self.leader_missing_time = None
         }
 
@@ -719,9 +720,9 @@ impl Peer {
         if duration >= self.cfg.max_leader_missing_duration.0 {
             // Resets the `leader_missing_time` to avoid sending the same tasks to
             // PD worker continuously during the leader missing timeout.
-            self.leader_missing_time = None;
+            self.leader_missing_time = Some(Instant::now());
             StaleState::ToValidate
-        } else if self.is_initialized() && duration >= self.cfg.abnormal_leader_missing_duration.0 {
+        } else if !naive_peer && duration >= self.cfg.abnormal_leader_missing_duration.0 {
             // A peer is considered as in the leader missing state
             // if it's initialized but is isolated from its leader or
             // something bad happens that the raft group can not elect a leader.
