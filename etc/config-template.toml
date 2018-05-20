@@ -61,6 +61,11 @@
 # Amount to read ahead on individual grpc streams.
 # grpc-stream-initial-window-size = "2MB"
 
+# How many snapshots can be sent concurrently.
+# concurrent-send-snap-limit = 32
+# How many snapshots can be recv concurrently.
+# concurrent-recv-snap-limit = 32
+
 # max count of tasks being handled, new tasks will be rejected.
 # end-point-max-tasks = 2000
 
