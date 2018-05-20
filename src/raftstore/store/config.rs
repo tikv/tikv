@@ -34,6 +34,8 @@ pub struct Config {
     pub raft_base_tick_interval: ReadableDuration,
     pub raft_heartbeat_ticks: usize,
     pub raft_election_timeout_ticks: usize,
+    pub raft_min_election_timeout_ticks: usize,
+    pub raft_max_election_timeout_ticks: usize,
     pub raft_max_size_per_msg: ReadableSize,
     pub raft_max_inflight_msgs: usize,
     // When the entry exceed the max size, reject to propose it.
@@ -129,6 +131,8 @@ impl Default for Config {
             raft_base_tick_interval: ReadableDuration::secs(1),
             raft_heartbeat_ticks: 2,
             raft_election_timeout_ticks: 10,
+            raft_min_election_timeout_ticks: 0,
+            raft_max_election_timeout_ticks: 0,
             raft_max_size_per_msg: ReadableSize::mb(1),
             raft_max_inflight_msgs: 256,
             raft_entry_max_size: ReadableSize::mb(8),
@@ -188,7 +192,7 @@ impl Config {
         self.raft_base_tick_interval.0 * self.raft_heartbeat_ticks as u32
     }
 
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&mut self) -> Result<()> {
         if self.raft_heartbeat_ticks == 0 {
             return Err(box_err!("heartbeat tick must greater than 0"));
         }
@@ -203,6 +207,25 @@ impl Config {
         if self.raft_election_timeout_ticks <= self.raft_heartbeat_ticks {
             return Err(box_err!(
                 "election tick must be greater than heartbeat tick"
+            ));
+        }
+
+        if self.raft_min_election_timeout_ticks == 0 {
+            self.raft_min_election_timeout_ticks = self.raft_election_timeout_ticks;
+        }
+
+        if self.raft_max_election_timeout_ticks == 0 {
+            self.raft_max_election_timeout_ticks = self.raft_election_timeout_ticks * 2;
+        }
+
+        if self.raft_min_election_timeout_ticks < self.raft_election_timeout_ticks
+            || self.raft_min_election_timeout_ticks >= self.raft_max_election_timeout_ticks
+        {
+            return Err(box_err!(
+                "invalid timeout range [{}, {}) for timeout {}",
+                self.raft_min_election_timeout_ticks,
+                self.raft_max_election_timeout_ticks,
+                self.raft_election_timeout_ticks
             ));
         }
 
@@ -280,7 +303,15 @@ mod tests {
     #[test]
     fn test_config_validate() {
         let mut cfg = Config::new();
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
+        assert_eq!(
+            cfg.raft_min_election_timeout_ticks,
+            cfg.raft_election_timeout_ticks
+        );
+        assert_eq!(
+            cfg.raft_max_election_timeout_ticks,
+            cfg.raft_election_timeout_ticks * 2
+        );
 
         cfg.raft_heartbeat_ticks = 0;
         assert!(cfg.validate().is_err());
@@ -289,6 +320,14 @@ mod tests {
         cfg.raft_election_timeout_ticks = 10;
         cfg.raft_heartbeat_ticks = 10;
         assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.raft_min_election_timeout_ticks = 5;
+        cfg.validate().unwrap_err();
+        cfg.raft_min_election_timeout_ticks = 25;
+        cfg.validate().unwrap_err();
+        cfg.raft_min_election_timeout_ticks = 10;
+        cfg.validate().unwrap();
 
         cfg.raft_heartbeat_ticks = 11;
         assert!(cfg.validate().is_err());
