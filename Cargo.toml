@@ -110,7 +110,7 @@ optional = true
 [replace]
 "protobuf:1.4.1" = { git = "https://github.com/stepancheg/rust-protobuf.git" }
 # TODO: use release version instead once tikv is protobuf 1.6 compatible.
-"raft:0.2.0" = { git = "https://github.com/pingcap/raft-rs.git", branch = "add-least-timeout" }
+"raft:0.2.0" = { git = "https://github.com/pingcap/raft-rs.git", branch = "timeout-range" }
 
 [workspace]
 members = ["fuzz"]
