@@ -84,9 +84,9 @@ impl<T: futurepool::Context + 'static> ReadPool<T> {
                 tick_interval,
                 context_factory_builder.build(),
             ),
-            max_tasks_high: config.max_tasks_high,
-            max_tasks_normal: config.max_tasks_normal,
-            max_tasks_low: config.max_tasks_low,
+            max_tasks_high: config.max_tasks_per_worker_high * config.high_concurrency,
+            max_tasks_normal: config.max_tasks_per_worker_normal * config.high_concurrency,
+            max_tasks_low: config.max_tasks_per_worker_low * config.high_concurrency,
         }
     }
 
@@ -249,7 +249,7 @@ mod tests {
             "readpool",
             &Config {
                 high_concurrency: 2,
-                max_tasks_high: 4,
+                max_tasks_per_worker_high: 2,
                 ..Config::default_for_test()
             },
             || || Context {},

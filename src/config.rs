@@ -726,9 +726,9 @@ macro_rules! readpool_config {
             pub high_concurrency: usize,
             pub normal_concurrency: usize,
             pub low_concurrency: usize,
-            pub max_tasks_high: usize,
-            pub max_tasks_normal: usize,
-            pub max_tasks_low: usize,
+            pub max_tasks_per_worker_high: usize,
+            pub max_tasks_per_worker_normal: usize,
+            pub max_tasks_per_worker_low: usize,
             pub stack_size: ReadableSize,
         }
 
@@ -738,9 +738,9 @@ macro_rules! readpool_config {
                     high_concurrency: self.high_concurrency,
                     normal_concurrency: self.normal_concurrency,
                     low_concurrency: self.low_concurrency,
-                    max_tasks_high: self.max_tasks_high,
-                    max_tasks_normal: self.max_tasks_normal,
-                    max_tasks_low: self.max_tasks_low,
+                    max_tasks_per_worker_high: self.max_tasks_per_worker_high,
+                    max_tasks_per_worker_normal: self.max_tasks_per_worker_normal,
+                    max_tasks_per_worker_low: self.max_tasks_per_worker_low,
                     stack_size: self.stack_size,
                 }
             }
@@ -768,31 +768,22 @@ macro_rules! readpool_config {
                         format!("readpool.{}.stack-size should be >= 2mb", $display_name).into(),
                     );
                 }
-                if self.max_tasks_high
-                    < self.high_concurrency * readpool::config::DEFAULT_MAX_TASKS_PER_CORE
-                {
+                if self.max_tasks_per_worker_high <= 1 {
                     return Err(format!(
-                        "readpool.{}.max-tasks-high should be >= {}",
-                        $display_name,
-                        self.high_concurrency * readpool::config::DEFAULT_MAX_TASKS_PER_CORE
+                        "readpool.{}.max-tasks-per-worker-high should be > 1",
+                        $display_name
                     ).into());
                 }
-                if self.max_tasks_normal
-                    < self.normal_concurrency * readpool::config::DEFAULT_MAX_TASKS_PER_CORE
-                {
+                if self.max_tasks_per_worker_normal <= 1 {
                     return Err(format!(
-                        "readpool.{}.max-tasks-normal should be >= {}",
-                        $display_name,
-                        self.normal_concurrency * readpool::config::DEFAULT_MAX_TASKS_PER_CORE
+                        "readpool.{}.max-tasks-per-worker-normal should be > 1",
+                        $display_name
                     ).into());
                 }
-                if self.max_tasks_low
-                    < self.low_concurrency * readpool::config::DEFAULT_MAX_TASKS_PER_CORE
-                {
+                if self.max_tasks_per_worker_low <= 1 {
                     return Err(format!(
-                        "readpool.{}.max-tasks-low should be >= {}",
-                        $display_name,
-                        self.low_concurrency * readpool::config::DEFAULT_MAX_TASKS_PER_CORE
+                        "readpool.{}.max-tasks-per-worker-low should be > 1",
+                        $display_name
                     ).into());
                 }
 
@@ -826,24 +817,27 @@ macro_rules! readpool_config {
                 assert!(invalid_cfg.validate().is_err());
 
                 let mut invalid_cfg = cfg.clone();
-                invalid_cfg.high_concurrency = 5;
-                invalid_cfg.max_tasks_high = 100;
+                invalid_cfg.max_tasks_per_worker_high = 0;
                 assert!(invalid_cfg.validate().is_err());
-                invalid_cfg.max_tasks_high = 10000;
+                invalid_cfg.max_tasks_per_worker_high = 1;
+                assert!(invalid_cfg.validate().is_err());
+                invalid_cfg.max_tasks_per_worker_high = 100;
                 assert!(cfg.validate().is_ok());
 
                 let mut invalid_cfg = cfg.clone();
-                invalid_cfg.normal_concurrency = 2;
-                invalid_cfg.max_tasks_normal = 2000;
+                invalid_cfg.max_tasks_per_worker_normal = 0;
                 assert!(invalid_cfg.validate().is_err());
-                invalid_cfg.max_tasks_normal = 4000;
+                invalid_cfg.max_tasks_per_worker_normal = 1;
+                assert!(invalid_cfg.validate().is_err());
+                invalid_cfg.max_tasks_per_worker_normal = 100;
                 assert!(cfg.validate().is_ok());
 
                 let mut invalid_cfg = cfg.clone();
-                invalid_cfg.low_concurrency = 2;
-                invalid_cfg.max_tasks_low = 123;
+                invalid_cfg.max_tasks_per_worker_low = 0;
                 assert!(invalid_cfg.validate().is_err());
-                invalid_cfg.max_tasks_low = 5000;
+                invalid_cfg.max_tasks_per_worker_low = 1;
+                assert!(invalid_cfg.validate().is_err());
+                invalid_cfg.max_tasks_per_worker_low = 100;
                 assert!(cfg.validate().is_ok());
             }
         }
@@ -860,12 +854,9 @@ impl Default for StorageReadPoolConfig {
             high_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
             normal_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
             low_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
-            max_tasks_high: DEFAULT_STORAGE_READPOOL_CONCURRENCY
-                * readpool::config::DEFAULT_MAX_TASKS_PER_CORE,
-            max_tasks_normal: DEFAULT_STORAGE_READPOOL_CONCURRENCY
-                * readpool::config::DEFAULT_MAX_TASKS_PER_CORE,
-            max_tasks_low: DEFAULT_STORAGE_READPOOL_CONCURRENCY
-                * readpool::config::DEFAULT_MAX_TASKS_PER_CORE,
+            max_tasks_per_worker_high: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
+            max_tasks_per_worker_normal: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
+            max_tasks_per_worker_low: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
             stack_size: ReadableSize::mb(readpool::config::DEFAULT_STACK_SIZE_MB),
         }
     }
@@ -891,9 +882,9 @@ impl Default for CoprocessorReadPoolConfig {
             high_concurrency: concurrency,
             normal_concurrency: concurrency,
             low_concurrency: concurrency,
-            max_tasks_high: concurrency * readpool::config::DEFAULT_MAX_TASKS_PER_CORE,
-            max_tasks_normal: concurrency * readpool::config::DEFAULT_MAX_TASKS_PER_CORE,
-            max_tasks_low: concurrency * readpool::config::DEFAULT_MAX_TASKS_PER_CORE,
+            max_tasks_per_worker_high: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
+            max_tasks_per_worker_normal: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
+            max_tasks_per_worker_low: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
             stack_size: ReadableSize::mb(readpool::config::DEFAULT_STACK_SIZE_MB),
         }
     }

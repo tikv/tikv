@@ -87,18 +87,18 @@ fn test_serde_custom_tikv_config() {
             high_concurrency: 1,
             normal_concurrency: 3,
             low_concurrency: 7,
-            max_tasks_high: 10000,
-            max_tasks_normal: 20000,
-            max_tasks_low: 30000,
+            max_tasks_per_worker_high: 1000,
+            max_tasks_per_worker_normal: 1500,
+            max_tasks_per_worker_low: 2500,
             stack_size: ReadableSize::mb(20),
         },
         coprocessor: CoprocessorReadPoolConfig {
             high_concurrency: 2,
             normal_concurrency: 4,
             low_concurrency: 6,
-            max_tasks_high: 20000,
-            max_tasks_normal: 30000,
-            max_tasks_low: 40000,
+            max_tasks_per_worker_high: 2000,
+            max_tasks_per_worker_normal: 1000,
+            max_tasks_per_worker_low: 3000,
             stack_size: ReadableSize::mb(12),
         },
     };
@@ -448,6 +448,5 @@ fn test_readpool_default_config() {
     let cfg: TiKvConfig = toml::from_str(content).unwrap();
     let mut expected = TiKvConfig::default();
     expected.readpool.storage.high_concurrency = 1;
-    // Note: max_tasks is unchanged!
     assert_eq!(cfg, expected);
 }

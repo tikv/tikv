@@ -19,12 +19,12 @@
 # normal-concurrency = 4
 # size of thread pool for low-priority operations
 # low-concurrency = 4
-# max running high-priority operations, reject if exceed
-# max-tasks-high = 8000
-# max running normal-priority operations, reject if exceed
-# max-tasks-normal = 8000
-# max running low-priority operations, reject if exceed
-# max-tasks-low = 8000
+# max running high-priority operations of each worker, reject if exceed
+# max-tasks-per-worker-high = 2000
+# max running normal-priority operations of each worker, reject if exceed
+# max-tasks-per-worker-normal = 2000
+# max running low-priority operations of each worker, reject if exceed
+# max-tasks-per-worker-low = 2000
 # size of stack size for each thread pool
 # stack-size = "10MB"
 
@@ -35,9 +35,9 @@
 # high-concurrency = 8
 # normal-concurrency = 8
 # low-concurrency = 8
-# max-tasks-high = 16000
-# max-tasks-normal = 16000
-# max-tasks-low = 16000
+# max-tasks-per-worker-high = 2000
+# max-tasks-per-worker-normal = 2000
+# max-tasks-per-worker-low = 2000
 # stack-size = "10MB"
 
 [server]
