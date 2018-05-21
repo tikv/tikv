@@ -205,7 +205,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     pub fn new(
         ch: StoreChannel,
         meta: metapb::Store,
-        cfg: Config,
+        mut cfg: Config,
         engines: Engines,
         trans: T,
         pd_client: Arc<C>,

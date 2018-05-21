@@ -35,7 +35,7 @@ name = "tikv-fail"
 name = "tikv-importer"
 
 [dependencies]
-log = "0.3.6"
+log = "0.3.9"
 slog = "2.2"
 slog-async = "2.3"
 slog-scope = "4.0"
@@ -109,6 +109,8 @@ optional = true
 
 [replace]
 "protobuf:1.4.1" = { git = "https://github.com/stepancheg/rust-protobuf.git" }
+# TODO: use release version instead once tikv is protobuf 1.6 compatible.
+"raft:0.2.0" = { git = "https://github.com/pingcap/raft-rs.git", branch = "timeout-range" }
 
 [workspace]
 members = ["fuzz"]
