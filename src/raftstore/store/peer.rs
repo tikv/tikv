@@ -593,12 +593,18 @@ impl Peer {
     }
 
     pub fn step(&mut self, m: eraftpb::Message) -> Result<()> {
-        // Pretend not received any heartbeats, and start a new election.
-        fail_point!(
-            "peer_campaign_before_step",
-            m.get_msg_type() == MessageType::MsgHeartbeat,
-            |_| self.raft_group.campaign().map_err(Error::from)
-        );
+        {
+            // Pretend not received any heartbeats, and start a new election.
+            let mut elected = false;
+            fail_point!(
+                "peer_campaign_before_step",
+                m.get_msg_type() == MessageType::MsgHeartbeat && !elected,
+                |_| {
+                    elected = true;
+                    self.raft_group.campaign().map_err(Error::from)
+                }
+            );
+        }
 
         fail_point!(
             "step_message_3_1",

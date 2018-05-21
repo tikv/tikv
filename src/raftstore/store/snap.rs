@@ -454,7 +454,7 @@ impl Snap {
         let create_new_file = |path: &PathBuf, typ: &str| {
             let f = OpenOptions::new().write(true).create_new(true).open(path);
             f.map_err(|e| {
-                error!("tmp {} file exists at {:?}", typ, path);
+                warn!("tmp {} file exists at {:?}", typ, path);
                 RaftStoreError::from(e)
             })
         };
@@ -1304,7 +1304,7 @@ impl SnapManager {
 
     // For `SnapEntry::Sending` we need to support register multi times because
     // Raft can send same snapshot to many peers (e.g. a follower and several learners).
-    // But for others, Only support register one time.
+    // But for other kinds, Only support registering at most one time for each of them.
     // TODO: make it work as a state machine, and change `Vec<SnapEntry>` to `SnapEntry`.
     pub fn register(&self, key: SnapKey, entry: SnapEntry) -> Result<()> {
         debug!("register [key: {}, entry: {:?}]", key, entry);
