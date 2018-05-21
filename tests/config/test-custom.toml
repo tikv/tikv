@@ -32,7 +32,6 @@ grpc-keepalive-time = "3s"
 grpc-keepalive-timeout = "1m"
 concurrent-send-snap-limit = 4
 concurrent-recv-snap-limit = 4
-end-point-max-tasks = 12
 end-point-recursion-limit = 100
 end-point-stream-channel-size = 16
 end-point-batch-row-limit = 64

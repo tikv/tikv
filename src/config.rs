@@ -1051,6 +1051,16 @@ impl TiKvConfig {
             );
             self.readpool.coprocessor.stack_size = self.server.end_point_stack_size.unwrap();
         }
+        if self.server.end_point_max_tasks != None {
+            warn!(
+                "deprecated configuration, {} is no longer used and ignored, please use {}.",
+                "server.end_point_max_tasks", "readpool.coprocessor.max-tasks-per-worker-xxx",
+            );
+            // Note:
+            // Our `end_point_max_tasks` is mostly mistakenly configured, so we don't override
+            // new configuration using old values.
+            self.server.end_point_max_tasks = None;
+        }
         if self.raft_store.clean_stale_peer_delay.as_secs() > 0 {
             let delay_secs = self.raft_store.clean_stale_peer_delay.as_secs()
                 + self.server.end_point_request_max_handle_duration.as_secs();

@@ -66,9 +66,6 @@
 # How many snapshots can be recv concurrently.
 # concurrent-recv-snap-limit = 32
 
-# max count of tasks being handled, new tasks will be rejected.
-# end-point-max-tasks = 2000
-
 # max recursion level allowed when decoding dag expression
 # end-point-recursion-limit = 1000
 
