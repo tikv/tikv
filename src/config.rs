@@ -1025,12 +1025,12 @@ impl TiKvConfig {
         if self.server.end_point_concurrency != None {
             warn!(
                 "deprecated configuration, {} has been moved to {}",
-                "server.end_point_concurrency", "readpool.coprocessor.xxx-concurrency",
+                "server.end-point-concurrency", "readpool.coprocessor.xxx-concurrency",
             );
             warn!(
                 "override {} with {}, {:?}",
                 "readpool.coprocessor.xxx-concurrency",
-                "server.end_point_concurrency",
+                "server.end-point-concurrency",
                 self.server.end_point_concurrency
             );
             let concurrency = self.server.end_point_concurrency.unwrap();
@@ -1041,12 +1041,12 @@ impl TiKvConfig {
         if self.server.end_point_stack_size != None {
             warn!(
                 "deprecated configuration, {} has been moved to {}",
-                "server.end_point_stack_size", "readpool.coprocessor.stack_size",
+                "server.end-point-stack-size", "readpool.coprocessor.stack-size",
             );
             warn!(
                 "override {} with {}, {:?}",
-                "readpool.coprocessor.stack_size",
-                "server.end_point_stack_size",
+                "readpool.coprocessor.stack-size",
+                "server.end-point-stack-size",
                 self.server.end_point_stack_size
             );
             self.readpool.coprocessor.stack_size = self.server.end_point_stack_size.unwrap();
@@ -1054,7 +1054,7 @@ impl TiKvConfig {
         if self.server.end_point_max_tasks != None {
             warn!(
                 "deprecated configuration, {} is no longer used and ignored, please use {}.",
-                "server.end_point_max_tasks", "readpool.coprocessor.max-tasks-per-worker-xxx",
+                "server.end-point-max-tasks", "readpool.coprocessor.max-tasks-per-worker-xxx",
             );
             // Note:
             // Our `end_point_max_tasks` is mostly mistakenly configured, so we don't override
