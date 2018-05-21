@@ -1282,8 +1282,12 @@ pub fn do_snapshot(
 
     let key = SnapKey::new(region_id, term, idx);
 
-    mgr.register(key.clone(), SnapEntry::Generating);
-    defer!(mgr.deregister(&key, &SnapEntry::Generating));
+    if !mgr.register(key.clone(), SnapEntry::Generating) {
+        return Err(RaftError::Store(
+            StorageError::SnapshotTemporarilyUnavailable,
+        ));
+    }
+    defer!(mgr.deregister(key.clone(), &SnapEntry::Generating));
 
     let state: RegionLocalState = snap.get_msg_cf(CF_RAFT, &keys::region_state_key(key.region_id))
         .and_then(|res| match res {

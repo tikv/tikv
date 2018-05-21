@@ -600,6 +600,7 @@ impl Peer {
             { self.peer.get_store_id() == 3 && self.region_id == 1 },
             |_| Ok(())
         );
+
         if self.is_leader() && m.get_from() != INVALID_ID {
             self.peer_heartbeats.insert(m.get_from(), Instant::now());
         }

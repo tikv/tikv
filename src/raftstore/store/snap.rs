@@ -447,26 +447,26 @@ impl Snap {
     ) -> RaftStoreResult<Snap> {
         let mut s = Snap::new(dir, key, size_track, false, false, deleter, limiter)?;
         s.set_snapshot_meta(snapshot_meta)?;
-
         if s.exists() {
             return Ok(s);
         }
+
+        let create_new_file = |path: &PathBuf| {
+            let f = OpenOptions::new().write(true).create_new(true).open(path);
+            f.map_err(|e| {
+                warn!("tmp file exists at {:?}", path);
+                RaftStoreError::from(e)
+            })
+        };
+
         for cf_file in &mut s.cf_files {
             if cf_file.size == 0 {
                 continue;
             }
-            let f = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&cf_file.tmp_path)?;
-            cf_file.file = Some(f);
+            cf_file.file = Some(create_new_file(&cf_file.tmp_path)?);
             cf_file.write_digest = Some(Digest::new(crc32::IEEE));
         }
-        let f = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&s.meta_file.tmp_path)?;
-        s.meta_file.file = Some(f);
+        s.meta_file.file = Some(create_new_file(&s.meta_file.tmp_path)?);
         Ok(s)
     }
 
@@ -1302,44 +1302,46 @@ impl SnapManager {
         self.max_total_size
     }
 
-    pub fn register(&self, key: SnapKey, entry: SnapEntry) {
+    // For `SnapEntry::Sending` we need to support register multi times because
+    // Raft can send same snapshot to many peers (e.g. a follower and several learners).
+    // But for other kinds, Only support registering at most one time for each of them.
+    // TODO: make it work as a state machine, and change `Vec<SnapEntry>` to `SnapEntry`.
+    pub fn register(&self, key: SnapKey, entry: SnapEntry) -> bool {
         debug!("register [key: {}, entry: {:?}]", key, entry);
         let mut core = self.core.wl();
         match core.registry.entry(key) {
             Entry::Occupied(mut e) => {
-                if e.get().contains(&entry) {
-                    warn!("{} is registered more than 1 time!!!", e.key());
-                    return;
+                if e.get().contains(&entry) && entry != SnapEntry::Sending {
+                    debug!("{} is registered with {:?} multi times", e.key(), entry);
+                    return false;
                 }
+                // Push `SnapEntry::Sending` multi times is allowed.
                 e.get_mut().push(entry);
             }
             Entry::Vacant(e) => {
                 e.insert(vec![entry]);
             }
         }
+        drop(core);
 
         notify_stats(self.ch.as_ref());
+        true
     }
 
-    pub fn deregister(&self, key: &SnapKey, entry: &SnapEntry) {
+    pub fn deregister(&self, key: SnapKey, entry: &SnapEntry) {
         debug!("deregister [key: {}, entry: {:?}]", key, entry);
-        let mut need_clean = false;
-        let mut handled = false;
-        let mut core = self.core.wl();
-        if let Some(e) = core.registry.get_mut(key) {
-            let last_len = e.len();
-            e.retain(|e| e != entry);
-            need_clean = e.is_empty();
-            handled = last_len > e.len();
+        match self.core.wl().registry.entry(key) {
+            Entry::Occupied(mut e) => {
+                if let Some(idx) = e.get().iter().position(|e| e == entry) {
+                    e.get_mut().swap_remove(idx);
+                    notify_stats(self.ch.as_ref());
+                }
+                if e.get().is_empty() {
+                    e.remove_entry();
+                }
+            }
+            Entry::Vacant(e) => debug!("stale deregister key: {} {:?}", e.key(), entry),
         }
-        if need_clean {
-            core.registry.remove(key);
-        }
-        if handled {
-            notify_stats(self.ch.as_ref());
-            return;
-        }
-        warn!("stale deregister key: {} {:?}", key, entry);
     }
 
     pub fn stats(&self) -> SnapStats {
@@ -2239,7 +2241,7 @@ mod test {
         let snap_keys = mgr.list_idle_snap().unwrap();
         assert!(snap_keys.is_empty());
         assert!(mgr.has_registered(key));
-        mgr.deregister(key, entry);
+        mgr.deregister(key.clone(), entry);
         let mut snap_keys = mgr.list_idle_snap().unwrap();
         assert_eq!(snap_keys.len(), 1);
         let snap_key = snap_keys.pop().unwrap().0;
@@ -2262,7 +2264,7 @@ mod test {
         let region = get_test_region(1, 1, 1);
 
         // Ensure the snapshot being built will not be deleted on GC.
-        src_mgr.register(key.clone(), SnapEntry::Generating);
+        assert!(src_mgr.register(key.clone(), SnapEntry::Generating));
         let mut s1 = src_mgr.get_snapshot_for_building(&key, &snapshot).unwrap();
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
@@ -2280,7 +2282,7 @@ mod test {
         check_registry_around_deregister(src_mgr.clone(), &key, &SnapEntry::Generating);
 
         // Ensure the snapshot being sent will not be deleted on GC.
-        src_mgr.register(key.clone(), SnapEntry::Sending);
+        assert!(src_mgr.register(key.clone(), SnapEntry::Sending));
         let mut s2 = src_mgr.get_snapshot_for_sending(&key).unwrap();
         let expected_size = s2.total_size().unwrap();
 
@@ -2290,7 +2292,7 @@ mod test {
         dst_mgr.init().unwrap();
 
         // Ensure the snapshot being received will not be deleted on GC.
-        dst_mgr.register(key.clone(), SnapEntry::Receiving);
+        assert!(dst_mgr.register(key.clone(), SnapEntry::Receiving));
         let mut s3 = dst_mgr.get_snapshot_for_receiving(&key, &v[..]).unwrap();
         let n = io::copy(&mut s2, &mut s3).unwrap();
         assert_eq!(n, expected_size);
@@ -2305,7 +2307,7 @@ mod test {
         let snap_key = snap_keys.pop().unwrap().0;
         assert_eq!(snap_key, key);
         assert!(!dst_mgr.has_registered(&snap_key));
-        dst_mgr.register(key.clone(), SnapEntry::Applying);
+        assert!(dst_mgr.register(key.clone(), SnapEntry::Applying));
         let s4 = dst_mgr.get_snapshot_for_applying(&key).unwrap();
         let s5 = dst_mgr.get_snapshot_for_applying(&key).unwrap();
         dst_mgr.delete_snapshot(&key, s4.as_ref(), false);
