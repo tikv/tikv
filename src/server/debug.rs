@@ -24,7 +24,7 @@ use protobuf::{self, Message, RepeatedField};
 
 use kvproto::debugpb::{DB as DBType, MODULE};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
-use kvproto::metapb::Region;
+use kvproto::metapb::{Peer, Region};
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::Entry;
 use rocksdb::{Kv, SeekKey, Writable, WriteBatch, WriteOptions, DB};
@@ -390,6 +390,7 @@ impl Debugger {
         &self,
         store_ids: Vec<u64>,
         region_ids: Option<Vec<u64>>,
+        keep_committed_logs: bool,
     ) -> Result<()> {
         let store_id = self.get_store_id()?;
         if store_ids.iter().any(|&s| s == store_id) {
@@ -399,6 +400,8 @@ impl Debugger {
         let wb = WriteBatch::new();
         let handle = box_try!(get_cf_handle(self.engines.kv_engine.as_ref(), CF_RAFT));
         let store_ids = HashSet::<u64>::from_iter(store_ids);
+
+        let count_voters = |peers: &[Peer]| peers.iter().filter(|p| !p.get_is_learner()).count();
 
         {
             let remove_stores = |key: &[u8], value: &[u8]| {
@@ -415,10 +418,21 @@ impl Debugger {
 
                 let mut new_peers = region_state.get_region().get_peers().to_owned();
                 new_peers.retain(|peer| !store_ids.contains(&peer.get_store_id()));
-                let new_peers_len = new_peers.len();
-                let old_peers_len = region_state.get_region().get_peers().len();
 
-                if new_peers_len < quorum(old_peers_len) {
+                let old_voters_len = count_voters(region_state.get_region().get_peers());
+                let new_voters_len = count_voters(&new_peers);
+
+                if new_voters_len < quorum(old_voters_len) {
+                    // If we want to keep committed logs not be overwritten
+                    // after the recover, this rule must be conformed:
+                    // quorum(old_voters) + quorum(new_voters) > len(old_voters).
+                    if keep_committed_logs && new_voters_len + 2 <= old_voters_len {
+                        return Err(box_err!(
+                            "committed logs could be overwritten for region {}",
+                            region_state.get_region().get_id()
+                        ));
+                    }
+
                     let region_id = region_state.get_region().get_id();
                     let old_peers = region_state.mut_region().take_peers();
                     info!(
@@ -1308,7 +1322,7 @@ mod tests {
 
         // Only remove specified stores from region 1.
         debugger
-            .remove_failed_stores(vec![13, 14, 21, 23], Some(vec![1]))
+            .remove_failed_stores(vec![13, 14, 21, 23], Some(vec![1]), false)
             .unwrap();
 
         // 13 and 14 should be removed from region 1.
@@ -1319,7 +1333,9 @@ mod tests {
         assert_eq!(region_state.get_region().get_peers().len(), 3);
 
         // Remove specified stores from all regions.
-        debugger.remove_failed_stores(vec![11, 23], None).unwrap();
+        debugger
+            .remove_failed_stores(vec![11, 23], None, false)
+            .unwrap();
 
         // 11 should be removed from region 1.
         let region_state = get_region_state(engine, 1);
@@ -1331,7 +1347,22 @@ mod tests {
 
         // Should fail when the store itself is in the failed list.
         init_region_state(engine, 3, &[100, 31, 32, 33]);
-        assert!(debugger.remove_failed_stores(vec![100], None).is_err());
+        assert!(
+            debugger
+                .remove_failed_stores(vec![100], None, false)
+                .is_err()
+        );
+
+        // Cases for keep_committed_logs is true.
+        init_region_state(engine, 4, &[11, 12, 13, 14, 15, 16]);
+        for (stores, ok) in vec![(vec![11, 12, 13], false), (vec![11, 12], true)] {
+            assert_eq!(
+                debugger
+                    .remove_failed_stores(stores, Some(vec![4]), true)
+                    .is_ok(),
+                ok
+            );
+        }
     }
 
     #[test]
