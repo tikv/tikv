@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use super::Result;
+use grpc::CompressionAlgorithms;
 
 use coprocessor::DEFAULT_REQUEST_MAX_HANDLE_SECS;
 use util::collections::HashMap;
@@ -43,6 +44,14 @@ pub const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
 // Number of rows in each chunk for streaming coprocessor.
 pub const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GrpcCompressionType {
+    None,
+    Deflate,
+    Gzip,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -58,12 +67,18 @@ pub struct Config {
     pub advertise_addr: String,
     pub notify_capacity: usize,
     pub messages_per_tick: usize,
+    // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
+    pub grpc_compression_type: GrpcCompressionType,
     pub grpc_concurrency: usize,
     pub grpc_concurrent_stream: usize,
     pub grpc_raft_conn_num: usize,
     pub grpc_stream_initial_window_size: ReadableSize,
     pub grpc_keepalive_time: ReadableDuration,
     pub grpc_keepalive_timeout: ReadableDuration,
+    /// How many snapshots can be sent concurrently.
+    pub concurrent_send_snap_limit: usize,
+    /// How many snapshots can be recv concurrently.
+    pub concurrent_recv_snap_limit: usize,
     pub end_point_max_tasks: usize,
     pub end_point_recursion_limit: u32,
     pub end_point_stream_channel_size: usize,
@@ -96,6 +111,7 @@ impl Default for Config {
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             notify_capacity: DEFAULT_NOTIFY_CAPACITY,
             messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
+            grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
             grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
@@ -104,6 +120,8 @@ impl Default for Config {
             // than 10 senconds.
             grpc_keepalive_time: ReadableDuration::secs(10),
             grpc_keepalive_timeout: ReadableDuration::secs(3),
+            concurrent_send_snap_limit: 32,
+            concurrent_recv_snap_limit: 32,
             end_point_concurrency: None, // deprecated
             end_point_max_tasks: DEFAULT_MAX_RUNNING_TASK_COUNT,
             end_point_stack_size: None, // deprecated
@@ -136,8 +154,21 @@ impl Config {
             ));
         }
 
-        if self.end_point_max_tasks == 0 {
-            return Err(box_err!("server.end-point-max-tasks should not be 0."));
+        let non_zero_entries = vec![
+            (
+                "concurrent-send-snap-limit",
+                self.concurrent_send_snap_limit,
+            ),
+            (
+                "concurrent-recv-snap-limit",
+                self.concurrent_recv_snap_limit,
+            ),
+            ("end-point-max-tasks", self.end_point_max_tasks),
+        ];
+        for (label, value) in non_zero_entries {
+            if value == 0 {
+                return Err(box_err!("server.{} should not be 0.", label));
+            }
         }
 
         if self.end_point_recursion_limit < 100 {
@@ -156,6 +187,14 @@ impl Config {
         }
 
         Ok(())
+    }
+
+    pub fn grpc_compression_algorithm(&self) -> CompressionAlgorithms {
+        match self.grpc_compression_type {
+            GrpcCompressionType::None => CompressionAlgorithms::None,
+            GrpcCompressionType::Deflate => CompressionAlgorithms::Deflate,
+            GrpcCompressionType::Gzip => CompressionAlgorithms::Gzip,
+        }
     }
 }
 
@@ -201,6 +240,14 @@ mod tests {
         assert!(cfg.advertise_addr.is_empty());
         cfg.validate().unwrap();
         assert_eq!(cfg.addr, cfg.advertise_addr);
+
+        let mut invalid_cfg = cfg.clone();
+        invalid_cfg.concurrent_send_snap_limit = 0;
+        assert!(invalid_cfg.validate().is_err());
+
+        let mut invalid_cfg = cfg.clone();
+        invalid_cfg.concurrent_recv_snap_limit = 0;
+        assert!(invalid_cfg.validate().is_err());
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.end_point_max_tasks = 0;
