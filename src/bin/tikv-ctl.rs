@@ -455,12 +455,7 @@ trait DebugExecutor {
     }
 
     /// Recover the cluster when given `store_ids` are failed.
-    fn remove_fail_stores(
-        &self,
-        store_ids: Vec<u64>,
-        region_ids: Option<Vec<u64>>,
-        keep_committed_logs: bool,
-    );
+    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>);
 
     fn check_region_consistency(&self, _: u64);
 
@@ -646,7 +641,7 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only avaliable for local mode");
     }
 
-    fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>, _: bool) {
+    fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>) {
         self.check_local_mode();
     }
 
@@ -754,14 +749,9 @@ impl DebugExecutor for Debugger {
         println!("all regions are healthy")
     }
 
-    fn remove_fail_stores(
-        &self,
-        store_ids: Vec<u64>,
-        region_ids: Option<Vec<u64>>,
-        keep_committed_logs: bool,
-    ) {
+    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>) {
         println!("removing stores {:?} from configrations...", store_ids);
-        self.remove_failed_stores(store_ids, region_ids, keep_committed_logs)
+        self.remove_failed_stores(store_ids, region_ids)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
         println!("success");
     }
@@ -1182,14 +1172,7 @@ fn main() {
                             .require_delimiter(true)
                             .value_delimiter(",")
                             .help("only for these regions"),
-                    )
-                    .arg(
-                        Arg::with_name("keep-committed-logs")
-                            .required(false)
-                            .long("keep-committed-logs")
-                            .help("guarantee never overwrite committed logs or not"),
-                    )
-
+                        )
                 ),
         )
         .subcommand(
@@ -1454,10 +1437,12 @@ fn main() {
                     .collect::<Result<Vec<_>, _>>()
                     .expect("parse regions fail")
             });
+            let stores = matches.values_of("stores").unwrap();
 
-            let store_ids = values_t!(matches, "stores", u64).expect("parse stores fail");
-            let keep_committed_logs = matches.is_present("keep-committed-logs");
-            debug_executor.remove_fail_stores(store_ids, region_ids, keep_committed_logs);
+            match stores.map(|s| s.parse()).collect::<Result<Vec<u64>, _>>() {
+                Ok(store_ids) => debug_executor.remove_fail_stores(store_ids, region_ids),
+                Err(e) => perror_and_exit("parse store id list", e),
+            }
         } else {
             eprintln!("{}", matches.usage());
         }

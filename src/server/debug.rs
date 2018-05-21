@@ -390,7 +390,6 @@ impl Debugger {
         &self,
         store_ids: Vec<u64>,
         region_ids: Option<Vec<u64>>,
-        keep_committed_logs: bool,
     ) -> Result<()> {
         let store_id = self.get_store_id()?;
         if store_ids.iter().any(|&s| s == store_id) {
@@ -402,6 +401,17 @@ impl Debugger {
         let store_ids = HashSet::<u64>::from_iter(store_ids);
 
         let count_voters = |peers: &[Peer]| peers.iter().filter(|p| !p.get_is_learner()).count();
+
+        // Try best to keep committed logs not be overwritten after
+        // the recover, in which case this rule must be conformed:
+        // quorum(old_voters) + quorum(new_voters) > len(old_voters).
+        let keep_committed_logs = |old_voters: usize, new_voters: usize| -> bool {
+            match (old_voters & 1, new_voters & 1) {
+                (1, 1) => new_voters + 2 > old_voters,
+                (0, 0) => new_voters + 4 > old_voters,
+                _ => new_voters + 3 > old_voters,
+            }
+        };
 
         {
             let remove_stores = |key: &[u8], value: &[u8]| {
@@ -416,35 +426,45 @@ impl Debugger {
                     return Ok(());
                 }
 
-                let mut new_peers = region_state.get_region().get_peers().to_owned();
-                new_peers.retain(|peer| !store_ids.contains(&peer.get_store_id()));
+                let old_peers = region_state.mut_region().take_peers();
+                let old_voters_len = count_voters(&old_peers);
 
-                let old_voters_len = count_voters(region_state.get_region().get_peers());
-                let new_voters_len = count_voters(&new_peers);
+                let (mut new_peers, mut removed_peers) = old_peers
+                    .iter()
+                    .cloned()
+                    .partition::<Vec<_>, _>(|peer| !store_ids.contains(&peer.get_store_id()));
 
-                if new_voters_len < quorum(old_voters_len) {
-                    // If we want to keep committed logs not be overwritten
-                    // after the recover, this rule must be conformed:
-                    // quorum(old_voters) + quorum(new_voters) > len(old_voters).
-                    if keep_committed_logs && new_voters_len + 2 <= old_voters_len {
-                        return Err(box_err!(
-                            "committed logs could be overwritten for region {}",
-                            region_state.get_region().get_id()
-                        ));
-                    }
-
-                    let region_id = region_state.get_region().get_id();
-                    let old_peers = region_state.mut_region().take_peers();
-                    info!(
-                        "region {} change peers from {:?}, to {:?}",
-                        region_id, old_peers, new_peers
-                    );
-                    // We need to leave epoch untouched to avoid inconsistency.
-                    region_state
-                        .mut_region()
-                        .set_peers(RepeatedField::from_vec(new_peers));
-                    box_try!(wb.put_msg_cf(handle, key, &region_state));
+                let rest_voters_len = count_voters(&new_peers);
+                if rest_voters_len >= quorum(old_voters_len) {
+                    return Ok(());
                 }
+
+                let mut new_voters_len = rest_voters_len;
+                while quorum(new_voters_len) <= rest_voters_len
+                    && !keep_committed_logs(old_voters_len, new_voters_len)
+                {
+                    let voter = removed_peers
+                        .iter()
+                        .position(|peer| !peer.get_is_learner())
+                        .map(|i| removed_peers.swap_remove(i))
+                        .unwrap();
+                    new_peers.push(voter);
+                    new_voters_len += 1;
+                }
+
+                info!(
+                    "region {} change peers from {:?}, to {:?}",
+                    region_state.get_region().get_id(),
+                    old_peers,
+                    new_peers
+                );
+
+                // We need to leave epoch untouched to avoid inconsistency.
+                region_state
+                    .mut_region()
+                    .set_peers(RepeatedField::from_vec(new_peers));
+                box_try!(wb.put_msg_cf(handle, key, &region_state));
+
                 Ok(())
             };
 
@@ -1322,7 +1342,7 @@ mod tests {
 
         // Only remove specified stores from region 1.
         debugger
-            .remove_failed_stores(vec![13, 14, 21, 23], Some(vec![1]), false)
+            .remove_failed_stores(vec![13, 14, 21, 23], Some(vec![1]))
             .unwrap();
 
         // 13 and 14 should be removed from region 1.
@@ -1333,9 +1353,7 @@ mod tests {
         assert_eq!(region_state.get_region().get_peers().len(), 3);
 
         // Remove specified stores from all regions.
-        debugger
-            .remove_failed_stores(vec![11, 23], None, false)
-            .unwrap();
+        debugger.remove_failed_stores(vec![11, 23], None).unwrap();
 
         // 11 should be removed from region 1.
         let region_state = get_region_state(engine, 1);
@@ -1347,21 +1365,26 @@ mod tests {
 
         // Should fail when the store itself is in the failed list.
         init_region_state(engine, 3, &[100, 31, 32, 33]);
-        assert!(
-            debugger
-                .remove_failed_stores(vec![100], None, false)
-                .is_err()
-        );
+        assert!(debugger.remove_failed_stores(vec![100], None).is_err());
 
-        // Cases for keep_committed_logs is true.
+        // Cases for try best to keep committed logs.
+        debugger.set_store_id(16);
         init_region_state(engine, 4, &[11, 12, 13, 14, 15, 16]);
-        for (stores, ok) in vec![(vec![11, 12, 13], false), (vec![11, 12], true)] {
-            assert_eq!(
-                debugger
-                    .remove_failed_stores(stores, Some(vec![4]), true)
-                    .is_ok(),
-                ok
-            );
+        for (failed, rest) in vec![
+            (vec![11], vec![11, 12, 13, 14, 15, 16]),
+            (vec![11, 12], vec![11, 12, 13, 14, 15, 16]),
+            (vec![11, 12, 13], vec![14, 15, 16, 11]),
+            (vec![11, 12, 13, 14], vec![15, 16]),
+            (vec![11, 12, 13, 14, 15], vec![16]),
+        ] {
+            assert!(debugger.remove_failed_stores(failed, Some(vec![4])).is_ok());
+            let peers = get_region_state(engine, 4)
+                .get_region()
+                .get_peers()
+                .iter()
+                .map(|p| p.get_store_id())
+                .collect::<Vec<_>>();
+            assert_eq!(peers, rest);
         }
     }
 
