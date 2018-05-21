@@ -13,12 +13,10 @@
 
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::str::{self, FromStr};
 use std::{cmp, mem, i32, i64, u32, u64};
-
-use byteorder::ReadBytesExt;
 
 use coprocessor::codec::{convert, Error, Result, TEN_POW};
 use coprocessor::dag::expr::EvalContext;
@@ -26,6 +24,7 @@ use coprocessor::dag::expr::EvalContext;
 // TODO: We should use same Error in mod `coprocessor`.
 use coprocessor::dag::expr::Error as ExprError;
 
+use util::codec::BytesSlice;
 use util::escape;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -1745,30 +1744,36 @@ macro_rules! write_word {
 }
 
 macro_rules! read_word {
-    ($reader:ident, $size:expr, $readed:ident) => {{
-        let buf = &mut [0; 4];
-        let size = $size;
-        $reader.read_exact(&mut buf[..size as usize])?;
-        if $readed == 0 {
-            buf[0] ^= 0x80;
-            $readed += size;
-        }
-        match size {
-            1 => i32::from(buf[0] as i8) as u32,
-            2 => ((i32::from(buf[0] as i8) << 8) + i32::from(buf[1])) as u32,
-            3 => {
-                if buf[0] & 128 > 0 {
-                    (255 << 24) | (u32::from(buf[0]) << 16) | (u32::from(buf[1]) << 8)
-                        | u32::from(buf[2])
-                } else {
-                    (u32::from(buf[0]) << 16) | (u32::from(buf[1]) << 8) | u32::from(buf[2])
+    ($data:expr, $size:expr, $readed:ident) => {{
+        let size = $size as usize;
+        if $data.len() >= size {
+            let mut first = $data[0];
+            if $readed == 0 {
+                first ^= 0x80;
+                $readed += size;
+            }
+            let res = match size {
+                1 => i32::from(first as i8) as u32,
+                2 => ((i32::from(first as i8) << 8) + i32::from($data[1])) as u32,
+                3 => {
+                    if first & 128 > 0 {
+                        (255 << 24) | (u32::from(first) << 16) | (u32::from($data[1]) << 8)
+                            | u32::from($data[2])
+                    } else {
+                        (u32::from(first) << 16) | (u32::from($data[1]) << 8) | u32::from($data[2])
+                    }
                 }
-            }
-            4 => {
-                ((i32::from(buf[0] as i8) << 24) + (i32::from(buf[1]) << 16)
-                    + (i32::from(buf[2]) << 8) + i32::from(buf[3])) as u32
-            }
-            _ => unreachable!(),
+                4 => {
+                    ((i32::from(first as i8) << 24) + (i32::from($data[1]) << 16)
+                        + (i32::from($data[2]) << 8) + i32::from($data[3]))
+                        as u32
+                }
+                _ => unreachable!(),
+            };
+            *$data = &$data[size..];
+            Ok(res)
+        } else {
+            Err(Error::unexpected_eof())
         }
     }};
 }
@@ -1889,19 +1894,15 @@ pub trait DecimalEncoder: Write {
 
 impl<T: Write> DecimalEncoder for T {}
 
-pub trait DecimalDecoder: Read {
-    /// Get the remaining length in bytes of current reader.
-    fn remaining(&self) -> usize;
-
-    fn peak_u8(&self) -> Option<u8>;
-
-    fn decode_decimal(&mut self) -> Result<Decimal> {
-        if self.remaining() < 3 {
-            return Err(box_err!("decimal too short: {} < 3", self.remaining()));
+impl Decimal {
+    /// `decode` decodes value encoded by `encode_decimal`.
+    #[allow(cyclomatic_complexity)]
+    pub fn decode(data: &mut BytesSlice) -> Result<Decimal> {
+        if data.len() < 3 {
+            return Err(box_err!("decimal too short: {} < 3", data.len()));
         }
-
-        let prec = self.read_u8()?;
-        let frac_cnt = self.read_u8()?;
+        let (prec, frac_cnt) = (data[0], data[1]);
+        *data = &data[2..];
 
         if prec < frac_cnt {
             return Err(box_err!(
@@ -1924,11 +1925,7 @@ pub trait DecimalDecoder: Read {
         if trailing_digits > 0 {
             frac_word_to += 1;
         }
-        let mask = if self.peak_u8().unwrap() & 0x80 > 0 {
-            0
-        } else {
-            u32::MAX
-        };
+        let mask = if data[0] & 0x80 > 0 { 0 } else { u32::MAX };
         let res = fix_word_cnt_err(int_word_to, frac_word_to, WORD_BUF_LEN);
         if !res.is_ok() {
             return Err(box_err!("decoding decimal failed: {:?}", res));
@@ -1940,7 +1937,7 @@ pub trait DecimalDecoder: Read {
         let mut _readed = 0;
         if leading_digits > 0 {
             let i = DIG_2_BYTES[leading_digits];
-            d.word_buf[word_idx] = read_word!(self, i, _readed) ^ mask;
+            d.word_buf[word_idx] = read_word!(data, i, _readed)? ^ mask;
             if d.word_buf[word_idx] >= TEN_POW[leading_digits + 1] {
                 return Err(box_err!("invalid leading digits for decimal number"));
             }
@@ -1951,7 +1948,7 @@ pub trait DecimalDecoder: Read {
             }
         }
         for _ in 0..int_word_cnt {
-            d.word_buf[word_idx] = read_word!(self, 4, _readed) ^ mask;
+            d.word_buf[word_idx] = read_word!(data, 4, _readed)? ^ mask;
             if d.word_buf[word_idx] > WORD_MAX {
                 return Err(box_err!("invalid int part for decimal number"));
             }
@@ -1962,14 +1959,14 @@ pub trait DecimalDecoder: Read {
             }
         }
         for _ in 0..frac_word_cnt {
-            d.word_buf[word_idx] = read_word!(self, 4, _readed) ^ mask;
+            d.word_buf[word_idx] = read_word!(data, 4, _readed)? ^ mask;
             if d.word_buf[word_idx] > WORD_MAX {
                 return Err(box_err!("invalid frac part decimal number"));
             }
             word_idx += 1;
         }
         if trailing_digits > 0 {
-            let x = read_word!(self, DIG_2_BYTES[trailing_digits], _readed) ^ mask;
+            let x = read_word!(data, DIG_2_BYTES[trailing_digits], _readed)? ^ mask;
             d.word_buf[word_idx] = x * TEN_POW[DIGITS_PER_WORD as usize - trailing_digits];
             if d.word_buf[word_idx] > WORD_MAX {
                 return Err(box_err!("invalid trailing digits for decimal number"));
@@ -1980,20 +1977,6 @@ pub trait DecimalDecoder: Read {
         }
         d.result_frac_cnt = frac_cnt;
         Ok(d)
-    }
-}
-
-impl<'a> DecimalDecoder for &'a [u8] {
-    fn remaining(&self) -> usize {
-        self.len()
-    }
-
-    fn peak_u8(&self) -> Option<u8> {
-        if self.is_empty() {
-            None
-        } else {
-            Some(self[0])
-        }
     }
 }
 
@@ -2700,7 +2683,7 @@ mod test {
             let dec = dec_str.parse::<Decimal>().unwrap();
             let mut buf = vec![];
             let res = buf.encode_decimal(&dec, prec, frac).unwrap();
-            let decoded = buf.as_slice().decode_decimal().unwrap();
+            let decoded = Decimal::decode(&mut buf.as_slice()).unwrap();
             let res = res.map(|_| decoded.to_string());
             assert_eq!(res, exp.map(|s| s.to_owned()));
         }
