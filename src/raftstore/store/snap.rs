@@ -670,6 +670,7 @@ impl Snap {
             f.flush()?;
         }
         fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
+        self.hold_tmp_files = false;
         Ok(())
     }
 
@@ -952,6 +953,7 @@ impl Snapshot for Snap {
             meta_file.sync_all()?;
         }
         fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
+        self.hold_tmp_files = false;
         Ok(())
     }
 
