@@ -859,7 +859,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "raft"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+source = "git+https://github.com/pingcap/raft-rs.git?branch=timeout-range#36d208dd6ab65482116f13a1f298a8c93195cfc6"
 dependencies = [
  "fxhash 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -867,6 +867,12 @@ dependencies = [
  "quick-error 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
+
+[[package]]
+name = "raft"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+replace = "raft 0.2.0 (git+https://github.com/pingcap/raft-rs.git?branch=timeout-range)"
 
 [[package]]
 name = "rand"
@@ -1155,7 +1161,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "backtrace 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "bitflags 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1211,7 +1217,7 @@ name = "tikv-fuzz"
 version = "0.0.1"
 dependencies = [
  "libfuzzer-sys 0.1.0 (git+https://github.com/rust-fuzz/libfuzzer-sys.git)",
- "tikv 2.0.1",
+ "tikv 2.0.2",
 ]
 
 [[package]]
@@ -1552,6 +1558,7 @@ dependencies = [
 "checksum quick-error 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "eda5fe9b71976e62bc81b781206aaa076401769b2143379d3eb2118388babac4"
 "checksum quine-mc_cluskey 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "a6683b0e23d80813b1a535841f0048c1537d3f86d63c999e8373b39a9b0eb74a"
 "checksum quote 0.3.12 (registry+https://github.com/rust-lang/crates.io-index)" = "e7b44fd83db28b83c1c58187159934906e5e955c812e211df413b76b03c909a5"
+"checksum raft 0.2.0 (git+https://github.com/pingcap/raft-rs.git?branch=timeout-range)" = "<none>"
 "checksum raft 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "833b9bacf973f6b77ff1be6bd5024a25eae15504bec8cb7efe4caa784adc859b"
 "checksum rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)" = "2791d88c6defac799c3f20d74f094ca33b9332612d9aef9078519c82e4fe04a5"
 "checksum rand 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)" = "eba5f8cb59cc50ed56be8880a5c7b496bfd9bd26394e176bc67884094145c2c5"

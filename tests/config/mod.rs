@@ -23,6 +23,7 @@ use tikv::pd::Config as PdConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::Config as ServerConfig;
+use tikv::server::config::GrpcCompressionType;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
 use tikv::util::security::SecurityConfig;
@@ -61,6 +62,9 @@ fn test_serde_custom_tikv_config() {
         advertise_addr: "example.com:443".to_owned(),
         notify_capacity: 12_345,
         messages_per_tick: 123,
+        concurrent_send_snap_limit: 4,
+        concurrent_recv_snap_limit: 4,
+        grpc_compression_type: GrpcCompressionType::Gzip,
         grpc_concurrency: 123,
         grpc_concurrent_stream: 1_234,
         grpc_raft_conn_num: 123,
@@ -110,6 +114,8 @@ fn test_serde_custom_tikv_config() {
         raft_base_tick_interval: ReadableDuration::secs(12),
         raft_heartbeat_ticks: 1,
         raft_election_timeout_ticks: 12,
+        raft_min_election_timeout_ticks: 14,
+        raft_max_election_timeout_ticks: 20,
         raft_max_size_per_msg: ReadableSize::mb(12),
         raft_max_inflight_msgs: 123,
         raft_entry_max_size: ReadableSize::mb(12),

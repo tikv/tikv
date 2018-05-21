@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "2.0.1"
+version = "2.0.2"
 keywords = ["KV", "distributed-systems", "raft"]
 build = "build.rs"
 
@@ -105,6 +105,8 @@ optional = true
 
 [replace]
 "protobuf:1.4.1" = { git = "https://github.com/stepancheg/rust-protobuf.git" }
+# TODO: use release version instead once tikv is protobuf 1.6 compatible.
+"raft:0.2.0" = { git = "https://github.com/pingcap/raft-rs.git", branch = "timeout-range" }
 
 [workspace]
 members = ["fuzz"]
