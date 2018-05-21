@@ -90,7 +90,6 @@ impl Host {
             last_req_id: 0,
             pool,
             basic_local_metrics: BasicLocalMetrics::default(),
-            // `cfg.end_point_max_tasks` is always `Some(..)`, see `compatible_adjust`.
             // TODO: Deprecate after totally switching to read pool
             max_running_task_count,
             batch_row_limit: cfg.end_point_batch_row_limit,
