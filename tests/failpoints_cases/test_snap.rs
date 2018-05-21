@@ -21,7 +21,7 @@ use std::*;
 use fail;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
-use tikv::raftstore::{Result, store::SnapKey};
+use tikv::raftstore::{Result, store::{Msg as StoreMsg, SnapKey}};
 use tikv::util::{HandyRwLock, config::*};
 
 use raftstore::cluster::Simulator;
@@ -245,6 +245,10 @@ fn test_snapshots_with_regain_leadership() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
+    let base_tick = cluster.cfg.raft_store.raft_base_tick_interval.clone();
+    let election_ticks = cluster.cfg.raft_store.raft_election_timeout_ticks << 1;
+    let election_timeout_ms = (election_ticks as u64) * base_tick.as_millis();
+
     cluster.run();
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
@@ -271,6 +275,19 @@ fn test_snapshots_with_regain_leadership() {
         }
     }
 
+    struct HeartbeatFilter;
+    impl Filter<StoreMsg> for HeartbeatFilter {
+        fn before(&self, msgs: &mut Vec<StoreMsg>) -> Result<()> {
+            msgs.retain(|store_msg| match store_msg {
+                StoreMsg::RaftMessage(m) => {
+                    m.get_message().get_msg_type() != MessageType::MsgHeartbeat
+                }
+                _ => true,
+            });
+            Ok(())
+        }
+    }
+
     let snap_counter = Arc::new(RwLock::new(HashMap::new()));
     cluster
         .sim
@@ -283,9 +300,9 @@ fn test_snapshots_with_regain_leadership() {
     must_no_empty_dir(cluster.get_snap_dir(3));
 
     // Let peer 3 start a new election.
-    fail::cfg("peer_campaign_before_step", "return").unwrap();
-    thread::sleep(Duration::from_millis(100));
-    fail::remove("peer_campaign_before_step");
+    cluster.sim.wl().add_recv_filter(3, box HeartbeatFilter {});
+    thread::sleep(Duration::from_millis(election_timeout_ms));
+    cluster.sim.wl().clear_recv_filters(3);
 
     // Wait for a while so that we can see the leader sends 2 same snapshots.
     let mut got_2 = false;
