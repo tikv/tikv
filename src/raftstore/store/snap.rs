@@ -451,10 +451,10 @@ impl Snap {
             return Ok(s);
         }
 
-        let create_new_file = |path: &PathBuf, typ: &str| {
+        let create_new_file = |path: &PathBuf| {
             let f = OpenOptions::new().write(true).create_new(true).open(path);
             f.map_err(|e| {
-                warn!("tmp {} file exists at {:?}", typ, path);
+                warn!("tmp file exists at {:?}", path);
                 RaftStoreError::from(e)
             })
         };
@@ -463,10 +463,10 @@ impl Snap {
             if cf_file.size == 0 {
                 continue;
             }
-            cf_file.file = Some(create_new_file(&cf_file.tmp_path, "cf")?);
+            cf_file.file = Some(create_new_file(&cf_file.tmp_path)?);
             cf_file.write_digest = Some(Digest::new(crc32::IEEE));
         }
-        s.meta_file.file = Some(create_new_file(&s.meta_file.tmp_path, "meta")?);
+        s.meta_file.file = Some(create_new_file(&s.meta_file.tmp_path)?);
         Ok(s)
     }
 
