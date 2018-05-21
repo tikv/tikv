@@ -105,18 +105,19 @@ impl Host {
     }
 
     fn handle_request(&mut self, snap: Box<Snapshot>, t: RequestTask) {
+        // Destruct `t` because we take ownership of its members later.
+        let (mut tracker, req_ctx, req_handler_builder, on_resp) =
+            (t.tracker, t.req_ctx, t.req_handler_builder, t.on_resp);
+
         // Collect metrics into it before requests enter into execute pool.
         // Otherwize collect into thread local contexts.
         let metrics = &mut self.basic_local_metrics;
 
-        if let Err(e) = t.req_ctx.check_if_outdated() {
+        if let Err(e) = req_ctx.check_if_outdated() {
             let resp = err_resp(e, metrics);
-            t.on_resp.respond(resp);
+            on_resp.respond(resp);
             return;
         }
-
-        let (mut tracker, req_ctx, req_handler_builder, on_resp) =
-            (t.tracker, t.req_ctx, t.req_handler_builder, t.on_resp);
 
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
         let pool = self.pool.get_pool_by_priority(priority);
@@ -130,12 +131,6 @@ impl Host {
                 on_resp.respond(err_resp(e, metrics));
             }
             Ok(mut handler) => {
-                if let Err(e) = req_ctx.check_if_outdated() {
-                    let resp = err_resp(e, metrics);
-                    on_resp.respond(resp);
-                    return;
-                }
-
                 if !on_resp.is_streaming() {
                     // unary
                     let do_request = move |_| {
@@ -417,14 +412,18 @@ impl RequestTask {
         // drop it in case of mistakenly using its fields
         drop(req);
 
+        let ranges_vec = ranges.to_vec();
+
+        let mut istream = CodedInputStream::from_bytes(&data);
+        istream.set_recursion_limit(recursion_limit);
+
         let mut is_table_scan = false;
         let mut is_desc_scan: Option<bool> = None; // only used in slow query logs
+
         let (req_ctx, req_handler_builder): (_, RequestHandlerBuilder) = match tp {
             REQ_TYPE_DAG => {
-                let mut is = CodedInputStream::from_bytes(&data);
-                is.set_recursion_limit(recursion_limit);
                 let mut dag = DAGRequest::new();
-                box_try!(dag.merge_from(&mut is));
+                box_try!(dag.merge_from(&mut istream));
                 if let Some(scan) = dag.get_executors().iter().next() {
                     // the first executor must be table scan or index scan.
                     is_table_scan = scan.get_tp() == ExecType::TypeTableScan;
@@ -441,18 +440,15 @@ impl RequestTask {
                     max_handle_duration,
                 ));
                 let req_ctx_clone = Arc::clone(&req_ctx);
-                let ranges = ranges.to_vec();
                 let builder = box move |snap| {
-                    DAGContext::new(dag, ranges, snap, req_ctx_clone, batch_row_limit)
+                    DAGContext::new(dag, ranges_vec, snap, req_ctx_clone, batch_row_limit)
                         .map(|ctx| ctx.into_boxed())
                 };
                 (req_ctx, builder)
             }
             REQ_TYPE_ANALYZE => {
-                let mut is = CodedInputStream::from_bytes(&data);
-                is.set_recursion_limit(recursion_limit);
                 let mut analyze = AnalyzeReq::new();
-                box_try!(analyze.merge_from(&mut is));
+                box_try!(analyze.merge_from(&mut istream));
                 is_table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
                 let req_ctx = Arc::new(ReqContext::new(
                     context,
@@ -461,18 +457,15 @@ impl RequestTask {
                     max_handle_duration,
                 ));
                 let req_ctx_clone = Arc::clone(&req_ctx);
-                let ranges = ranges.to_vec();
                 let builder = box move |snap| {
-                    AnalyzeContext::new(analyze, ranges, snap, &req_ctx_clone)
+                    AnalyzeContext::new(analyze, ranges_vec, snap, &req_ctx_clone)
                         .map(|ctx| ctx.into_boxed())
                 };
                 (req_ctx, builder)
             }
             REQ_TYPE_CHECKSUM => {
-                let mut is = CodedInputStream::from_bytes(&data);
-                is.set_recursion_limit(recursion_limit);
                 let mut checksum = ChecksumRequest::new();
-                box_try!(checksum.merge_from(&mut is));
+                box_try!(checksum.merge_from(&mut istream));
                 is_table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
                 let req_ctx = Arc::new(ReqContext::new(
                     context,
@@ -481,9 +474,8 @@ impl RequestTask {
                     max_handle_duration,
                 ));
                 let req_ctx_clone = Arc::clone(&req_ctx);
-                let ranges = ranges.to_vec();
                 let builder = box move |snap| {
-                    ChecksumContext::new(checksum, ranges, snap, &req_ctx_clone)
+                    ChecksumContext::new(checksum, ranges_vec, snap, &req_ctx_clone)
                         .map(|ctx| ctx.into_boxed())
                 };
                 (req_ctx, builder)
