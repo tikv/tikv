@@ -25,7 +25,8 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb_grpc::TikvClient;
 
-use raftstore::{Error as RaftStoreError, store::{SnapEntry, SnapKey, SnapManager, Snapshot}};
+use raftstore::Error as RaftStoreError;
+use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use util::DeferContext;
 use util::security::SecurityManager;
 use util::worker::Runnable;
@@ -140,7 +141,7 @@ fn send_snap(
     };
 
     // Register for sending must success.
-    mgr.register(key.clone(), SnapEntry::Sending).unwrap();
+    mgr.register(key.clone(), SnapEntry::Sending);
     let deregister = {
         let (mgr, key) = (mgr.clone(), key.clone());
         DeferContext::new(move || mgr.deregister(key.clone(), &SnapEntry::Sending))
@@ -275,8 +276,8 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
             }
 
             let context_key = context.key.clone();
-            if let Err(e) = snap_mgr.register(context.key.clone(), SnapEntry::Receiving) {
-                let raftstore_error = RaftStoreError::from(e);
+            if !snap_mgr.register(context.key.clone(), SnapEntry::Receiving) {
+                let raftstore_error = RaftStoreError::Snapshot(box_err!("Register"));
                 return box future::err(Error::from(raftstore_error));
             }
 

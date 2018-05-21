@@ -297,7 +297,7 @@ impl SnapContext {
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
-        self.mgr.register(snap_key.clone(), SnapEntry::Applying)?;
+        assert!(self.mgr.register(snap_key.clone(), SnapEntry::Applying));
         defer!({
             self.mgr.deregister(snap_key.clone(), &SnapEntry::Applying);
         });

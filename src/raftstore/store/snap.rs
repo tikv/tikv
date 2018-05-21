@@ -1306,14 +1306,14 @@ impl SnapManager {
     // Raft can send same snapshot to many peers (e.g. a follower and several learners).
     // But for other kinds, Only support registering at most one time for each of them.
     // TODO: make it work as a state machine, and change `Vec<SnapEntry>` to `SnapEntry`.
-    pub fn register(&self, key: SnapKey, entry: SnapEntry) -> Result<()> {
+    pub fn register(&self, key: SnapKey, entry: SnapEntry) -> bool {
         debug!("register [key: {}, entry: {:?}]", key, entry);
         let mut core = self.core.wl();
         match core.registry.entry(key) {
             Entry::Occupied(mut e) => {
                 if e.get().contains(&entry) && entry != SnapEntry::Sending {
                     debug!("{} is registered with {:?} multi times", e.key(), entry);
-                    return Err(box_err!("Register {:?} multi times", entry));
+                    return false;
                 }
                 // Push `SnapEntry::Sending` multi times is allowed.
                 e.get_mut().push(entry);
@@ -1325,7 +1325,7 @@ impl SnapManager {
         drop(core);
 
         notify_stats(self.ch.as_ref());
-        Ok(())
+        true
     }
 
     pub fn deregister(&self, key: SnapKey, entry: &SnapEntry) {
@@ -2264,9 +2264,7 @@ mod test {
         let region = get_test_region(1, 1, 1);
 
         // Ensure the snapshot being built will not be deleted on GC.
-        src_mgr
-            .register(key.clone(), SnapEntry::Generating)
-            .unwrap();
+        assert!(src_mgr.register(key.clone(), SnapEntry::Generating));
         let mut s1 = src_mgr.get_snapshot_for_building(&key, &snapshot).unwrap();
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
@@ -2284,7 +2282,7 @@ mod test {
         check_registry_around_deregister(src_mgr.clone(), &key, &SnapEntry::Generating);
 
         // Ensure the snapshot being sent will not be deleted on GC.
-        src_mgr.register(key.clone(), SnapEntry::Sending).unwrap();
+        assert!(src_mgr.register(key.clone(), SnapEntry::Sending));
         let mut s2 = src_mgr.get_snapshot_for_sending(&key).unwrap();
         let expected_size = s2.total_size().unwrap();
 
@@ -2294,7 +2292,7 @@ mod test {
         dst_mgr.init().unwrap();
 
         // Ensure the snapshot being received will not be deleted on GC.
-        dst_mgr.register(key.clone(), SnapEntry::Receiving).unwrap();
+        assert!(dst_mgr.register(key.clone(), SnapEntry::Receiving));
         let mut s3 = dst_mgr.get_snapshot_for_receiving(&key, &v[..]).unwrap();
         let n = io::copy(&mut s2, &mut s3).unwrap();
         assert_eq!(n, expected_size);
@@ -2309,7 +2307,7 @@ mod test {
         let snap_key = snap_keys.pop().unwrap().0;
         assert_eq!(snap_key, key);
         assert!(!dst_mgr.has_registered(&snap_key));
-        dst_mgr.register(key.clone(), SnapEntry::Applying).unwrap();
+        assert!(dst_mgr.register(key.clone(), SnapEntry::Applying));
         let s4 = dst_mgr.get_snapshot_for_applying(&key).unwrap();
         let s5 = dst_mgr.get_snapshot_for_applying(&key).unwrap();
         dst_mgr.delete_snapshot(&key, s4.as_ref(), false);

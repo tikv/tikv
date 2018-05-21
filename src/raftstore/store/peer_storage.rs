@@ -1282,7 +1282,7 @@ pub fn do_snapshot(
 
     let key = SnapKey::new(region_id, term, idx);
 
-    if mgr.register(key.clone(), SnapEntry::Generating).is_err() {
+    if !mgr.register(key.clone(), SnapEntry::Generating) {
         return Err(RaftError::Store(
             StorageError::SnapshotTemporarilyUnavailable,
         ));

@@ -87,7 +87,7 @@ impl Channel<RaftMessage> for ChannelTransport {
             };
             let to = match self.rl().snap_paths.get(&to_store) {
                 Some(p) => {
-                    p.0.register(key.clone(), SnapEntry::Receiving).unwrap();
+                    p.0.register(key.clone(), SnapEntry::Receiving);
                     let data = msg.get_message().get_snapshot().get_data();
                     p.0.get_snapshot_for_receiving(&key, data).unwrap()
                 }
