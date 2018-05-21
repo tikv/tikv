@@ -1308,7 +1308,8 @@ impl SnapManager {
     // TODO: make it work as a state machine, and change `Vec<SnapEntry>` to `SnapEntry`.
     pub fn register(&self, key: SnapKey, entry: SnapEntry) -> Result<()> {
         debug!("register [key: {}, entry: {:?}]", key, entry);
-        match self.core.wl().registry.entry(key) {
+        let mut core = self.core.wl();
+        match core.registry.entry(key) {
             Entry::Occupied(mut e) => {
                 if e.get().contains(&entry) && entry != SnapEntry::Sending {
                     debug!("{} is registered with {:?} multi times", e.key(), entry);
@@ -1321,6 +1322,7 @@ impl SnapManager {
                 e.insert(vec![entry]);
             }
         }
+        drop(core);
 
         notify_stats(self.ch.as_ref());
         Ok(())
