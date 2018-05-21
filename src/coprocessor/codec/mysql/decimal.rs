@@ -530,22 +530,45 @@ fn do_div_mod(
     do_mod: bool,
 ) -> Option<Res<Decimal>> {
     let r_frac_cnt = word_cnt!(rhs.frac_cnt) * DIGITS_PER_WORD;
-    let (r_idx, mut r_prec) = rhs.remove_leading_zeroes();
-    r_prec += r_frac_cnt;
-    if r_prec == 0 {
-        return None;
-    }
+    let (r_idx, r_prec) = {
+        let mut prec = rhs.int_cnt + r_frac_cnt;
+        let mut i = ((prec + DIGITS_PER_WORD - 1) % DIGITS_PER_WORD) + 1;
+        let mut word_idx = 0;
+        while prec > 0 && rhs.word_buf[word_idx] == 0 {
+            prec -= i;
+            i = DIGITS_PER_WORD;
+            word_idx += 1;
+        }
+        if prec == 0 {
+            return None;
+        } else {
+            prec -= count_leading_zeroes((prec - 1) % DIGITS_PER_WORD, rhs.word_buf[word_idx])
+        }
+        (word_idx, prec)
+    };
 
     let l_frac_cnt = word_cnt!(lhs.frac_cnt) * DIGITS_PER_WORD;
-    let (l_idx, mut l_prec) = lhs.remove_leading_zeroes();
-    l_prec += l_frac_cnt;
-    if l_prec == 0 {
-        lhs.reset_to_zero();
-        return Some(Res::Ok(lhs));
-    }
+    let (l_idx, l_prec) = {
+        let mut prec = lhs.int_cnt + l_frac_cnt;
+        let mut i = ((prec + DIGITS_PER_WORD - 1) % DIGITS_PER_WORD) + 1;
+        let mut word_idx = 0;
+        while prec > 0 && lhs.word_buf[word_idx] == 0 {
+            prec -= i;
+            i = DIGITS_PER_WORD;
+            word_idx += 1;
+        }
+        if prec == 0 {
+            lhs.reset_to_zero();
+            return Some(Res::Ok(lhs));
+        } else {
+            prec -= count_leading_zeroes((prec - 1) % DIGITS_PER_WORD, lhs.word_buf[word_idx])
+        }
+        (word_idx, prec)
+    };
 
     frac_incr = frac_incr.saturating_sub(l_frac_cnt - lhs.frac_cnt + r_frac_cnt - rhs.frac_cnt);
-    let mut int_cnt_to = (l_prec - l_frac_cnt) as i8 - (r_prec - r_frac_cnt) as i8;
+    let mut int_cnt_to =
+        l_prec.wrapping_sub(l_frac_cnt) as i8 - r_prec.wrapping_sub(r_frac_cnt) as i8;
     if lhs.word_buf[l_idx] >= rhs.word_buf[r_idx] {
         int_cnt_to += 1;
     }
@@ -659,7 +682,7 @@ fn do_div_mod(
             buf[l_idx] = dcarry as u32;
         }
         idx_to = 0;
-        let mut int_word_to = word_cnt!(l_prec - l_frac_cnt) as i8 - l_idx as i8;
+        let mut int_word_to = word_cnt!(l_prec.wrapping_sub(l_frac_cnt) as i8, i8) - l_idx as i8;
         let mut frac_word_to = word_cnt!(res.frac_cnt);
         if int_word_to == 0 && frac_word_to == 0 {
             lhs.reset_to_zero();
@@ -2940,7 +2963,11 @@ mod test {
                 Some("120.00000"),
             ),
             (5, "123", "0", None, None),
+            (5, "123", "0.0", None, None),
+            (5, "123", "00.0000000000", None, None),
             (5, "0", "0", None, None),
+            (5, "0.0", "0.0", None, None),
+            (5, "0.0000000000", "00.0000000000", None, None),
             (
                 5,
                 "-12193185.1853376",
@@ -2956,6 +2983,8 @@ mod test {
                 Some("0"),
             ),
             (5, "0", "987", Some("0"), Some("0")),
+            (5, "0.0", "987", Some("0"), Some("0")),
+            (5, "0.0000000000", "987", Some("0"), Some("0")),
             (5, "1", "3", Some("0.333333333"), Some("1")),
             (
                 5,
