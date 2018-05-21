@@ -124,7 +124,7 @@ impl Host {
         let ctxd = pool.get_context_delegators();
         tracker.ctx_pool(ctxd);
 
-        let handler: Result<Box<RequestHandler>> = req_handler_builder(snap);
+        let handler: Result<Box<RequestHandler>> = req_handler_builder(snap, req_ctx);
 
         match handler {
             Err(e) => {
@@ -373,7 +373,7 @@ impl Drop for RequestTracker {
 }
 
 pub struct RequestTask {
-    req_ctx: Arc<ReqContext>,
+    req_ctx: ReqContext,
     req_handler_builder: RequestHandlerBuilder,
     on_resp: OnResponse<Response>,
     tracker: RequestTracker,
@@ -420,7 +420,7 @@ impl RequestTask {
         let mut is_table_scan = false;
         let mut is_desc_scan: Option<bool> = None; // only used in slow query logs
 
-        let (req_ctx, req_handler_builder): (_, RequestHandlerBuilder) = match tp {
+        let (req_ctx, builder): (_, RequestHandlerBuilder) = match tp {
             REQ_TYPE_DAG => {
                 let mut dag = DAGRequest::new();
                 box_try!(dag.merge_from(&mut istream));
@@ -433,15 +433,14 @@ impl RequestTask {
                         is_desc_scan = Some(scan.get_idx_scan().get_desc());
                     }
                 }
-                let req_ctx = Arc::new(ReqContext::new(
+                let req_ctx = ReqContext::new(
                     context,
                     dag.get_start_ts(),
                     is_table_scan,
                     max_handle_duration,
-                ));
-                let req_ctx_clone = Arc::clone(&req_ctx);
-                let builder = box move |snap| {
-                    DAGContext::new(dag, ranges_vec, snap, req_ctx_clone, batch_row_limit)
+                );
+                let builder = box move |snap, req_ctx| {
+                    DAGContext::new(dag, ranges_vec, snap, req_ctx, batch_row_limit)
                         .map(|ctx| ctx.into_boxed())
                 };
                 (req_ctx, builder)
@@ -450,15 +449,14 @@ impl RequestTask {
                 let mut analyze = AnalyzeReq::new();
                 box_try!(analyze.merge_from(&mut istream));
                 is_table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
-                let req_ctx = Arc::new(ReqContext::new(
+                let req_ctx = ReqContext::new(
                     context,
                     analyze.get_start_ts(),
                     is_table_scan,
                     max_handle_duration,
-                ));
-                let req_ctx_clone = Arc::clone(&req_ctx);
-                let builder = box move |snap| {
-                    AnalyzeContext::new(analyze, ranges_vec, snap, &req_ctx_clone)
+                );
+                let builder = box move |snap, req_ctx| {
+                    AnalyzeContext::new(analyze, ranges_vec, snap, &req_ctx)
                         .map(|ctx| ctx.into_boxed())
                 };
                 (req_ctx, builder)
@@ -467,15 +465,14 @@ impl RequestTask {
                 let mut checksum = ChecksumRequest::new();
                 box_try!(checksum.merge_from(&mut istream));
                 is_table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
-                let req_ctx = Arc::new(ReqContext::new(
+                let req_ctx = ReqContext::new(
                     context,
                     checksum.get_start_ts(),
                     is_table_scan,
                     max_handle_duration,
-                ));
-                let req_ctx_clone = Arc::clone(&req_ctx);
-                let builder = box move |snap| {
-                    ChecksumContext::new(checksum, ranges_vec, snap, &req_ctx_clone)
+                );
+                let builder = box move |snap, req_ctx| {
+                    ChecksumContext::new(checksum, ranges_vec, snap, &req_ctx)
                         .map(|ctx| ctx.into_boxed())
                 };
                 (req_ctx, builder)
@@ -515,7 +512,7 @@ impl RequestTask {
 
         Ok(RequestTask {
             req_ctx,
-            req_handler_builder,
+            req_handler_builder: builder,
             on_resp,
             tracker,
         })

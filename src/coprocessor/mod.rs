@@ -66,7 +66,7 @@ trait RequestHandler: Send {
 
 /// `RequestHandlerBuilder` accepts a `Box<Snapshot>` and builds a `RequestHandler`.
 type RequestHandlerBuilder =
-    Box<FnBox(Box<storage::Snapshot + 'static>) -> Result<Box<RequestHandler>> + Send>;
+    Box<FnBox(Box<storage::Snapshot + 'static>, ReqContext) -> Result<Box<RequestHandler>> + Send>;
 
 #[derive(Debug)]
 pub struct ReqContext {
