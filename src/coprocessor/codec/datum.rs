@@ -20,8 +20,8 @@ use std::mem;
 use std::str::FromStr;
 use std::{str, i64};
 
-use super::mysql::{self, parse_json_path_expr, Decimal, DecimalDecoder, DecimalEncoder, Duration,
-                   Json, JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP};
+use super::mysql::{self, parse_json_path_expr, Decimal, DecimalEncoder, Duration, Json,
+                   JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP};
 use super::{convert, Error, Result};
 use coprocessor::dag::expr::EvalContext;
 use util::codec::bytes::{BytesDecoder, BytesEncoder, CompactBytesDecoder};
@@ -776,7 +776,7 @@ pub fn decode_datum(data: &mut BytesSlice) -> Result<Datum> {
                 let dur = Duration::from_nanos(nanos, MAX_FSP)?;
                 Ok(Datum::Dur(dur))
             }
-            DECIMAL_FLAG => data.decode_decimal().map(Datum::Dec),
+            DECIMAL_FLAG => Decimal::decode(data).map(Datum::Dec),
             VAR_INT_FLAG => number::decode_var_i64(data).map(Datum::I64),
             VAR_UINT_FLAG => number::decode_var_u64(data).map(Datum::U64),
             JSON_FLAG => Json::decode(data).map(Datum::Json),
