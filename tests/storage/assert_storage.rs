@@ -359,6 +359,41 @@ impl AssertionStorage {
         assert_eq!(expect_locks, locks);
     }
 
+    pub fn prewrite_conflict(
+        &self,
+        mutations: Vec<Mutation>,
+        cur_primary: &[u8],
+        cur_start_ts: u64,
+        confl_key: &[u8],
+        confl_ts: u64,
+    ) {
+        let err = self.store
+            .prewrite(
+                self.ctx.clone(),
+                mutations,
+                cur_primary.to_vec(),
+                cur_start_ts,
+            )
+            .unwrap_err();
+
+        match err {
+            storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict {
+                start_ts,
+                conflict_ts,
+                ref key,
+                ref primary,
+            })) => {
+                assert_eq!(cur_start_ts, start_ts);
+                assert_eq!(confl_ts, conflict_ts);
+                assert_eq!(key.to_owned(), confl_key.to_owned());
+                assert_eq!(primary.to_owned(), cur_primary.to_owned());
+            }
+            _ => {
+                panic!("expect conflict error, but got {:?}", err);
+            }
+        }
+    }
+
     pub fn commit_ok(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
         let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
         self.store
