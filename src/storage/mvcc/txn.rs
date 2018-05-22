@@ -129,7 +129,7 @@ impl MvccTxn {
                     return Err(Error::WriteConflict {
                         start_ts: self.start_ts,
                         conflict_ts: commit,
-                        key: key.encoded().to_owned(),
+                        key: key.raw()?,
                         primary: primary.to_vec(),
                     });
                 }
