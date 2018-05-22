@@ -1546,6 +1546,7 @@ impl ApplyDelegate {
                     );
                 }
 
+                let target_region_before_merge = delegate.region.clone();
                 let mut region = delegate.region.clone();
                 // Use a max value so that pd can ensure overlapped region has a priority.
                 let version = cmp::max(
@@ -1562,7 +1563,7 @@ impl ApplyDelegate {
                     .and_then(|_| {
                         // TODO: maybe all information needs to be filled?
                         let mut merging_state = MergeState::new();
-                        merging_state.set_target(region.clone());
+                        merging_state.set_target(target_region_before_merge);
                         write_peer_state(
                             &delegate.engines.kv,
                             ctx.wb(),
