@@ -824,6 +824,24 @@ fn test_txn_store_lock_primary() {
     );
 }
 
+#[test]
+fn test_txn_store_write_conflict() {
+    let store = AssertionStorage::default();
+    let key = b"key";
+    let primary = b"key";
+    let start_ts = 5;
+    let conflict_ts = 10;
+    store.put_ok(key, primary, start_ts, conflict_ts);
+    let start_ts2 = 6;
+    store.prewrite_conflict(
+        vec![Mutation::Put((make_key(key), primary.to_vec()))],
+        primary,
+        start_ts2,
+        key,
+        conflict_ts,
+    );
+}
+
 struct Oracle {
     ts: AtomicUsize,
 }
