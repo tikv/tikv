@@ -28,7 +28,7 @@ pub struct Chunk {
 }
 
 impl Chunk {
-    ///new creates a new chunk with field types and capacity.
+    /// Create a new chunk with field types and capacity.
     pub fn new(tps: &[FieldType], cap: usize) -> Chunk {
         let mut columns = Vec::with_capacity(tps.len());
         for tp in tps {
@@ -37,25 +37,25 @@ impl Chunk {
         Chunk { columns }
     }
 
-    // reset resets the chunk, so the memory it allocated can be reused.
-    // Make sure all the data in the chunk is not used anymore before you reuse this chunk.
+    /// Reset the chunk, so the memory it allocated can be reused.
+    /// Make sure all the data in the chunk is not used anymore before you reuse this chunk.
     pub fn reset(&mut self) {
         for column in &mut self.columns {
             column.reset();
         }
     }
 
-    // num_cols returns the number of rows in the chunk.
+    /// Get the number of rows in the chunk.
     pub fn num_cols(&self) -> usize {
         self.columns.len()
     }
 
-    // num_rows returns the number of rows in the chunk.
+    /// Get the number of rows in the chunk.
     pub fn num_rows(&self) -> usize {
         if self.columns.is_empty() {
             0
         } else {
-            self.columns[0].length()
+            self.columns[0].len()
         }
     }
 
@@ -75,12 +75,12 @@ impl ArcChunk {
         }
     }
 
-    // get_row gets the Row in the chunk with the row index.
+    /// Get the Row in the chunk with the row index.
     pub fn get_row(&self, idx: usize) -> Row {
         Row::new(self.chunk.clone(), idx)
     }
 
-    // iter returns an Iterator for Row in the Chunk.
+    // Get the Iterator for Row in the Chunk.
     pub fn iter(&self) -> RowIterator {
         RowIterator::new(self.chunk.clone())
     }
@@ -96,12 +96,12 @@ impl Row {
         Row { c, idx }
     }
 
-    //idx returns the row index of Chunk.
+    /// Get the row index of Chunk.
     pub fn idx(&self) -> usize {
         self.idx
     }
 
-    //len returns the number of values in the row.
+    /// Get the number of values in the row.
     pub fn len(&self) -> usize {
         self.c.num_cols()
     }

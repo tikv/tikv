@@ -18,6 +18,7 @@ use coprocessor::codec::mysql::{types, Decimal, DecimalEncoder, Duration, Durati
                                 JsonDecoder, JsonEncoder, Time, TimeEncoder};
 use tipb::expression::FieldType;
 use util::codec::number::{NumberDecoder, NumberEncoder};
+
 #[derive(Default)]
 pub struct Column {
     length: usize,
@@ -41,12 +42,12 @@ impl Column {
             | types::FLOAT
             | types::DOUBLE => {
                 //TODO:no Datum::F32
-                Column::new_fixed_column(8, init_cap)
+                Column::new_fixed_len(8, init_cap)
             }
             types::DURATION | types::DATE | types::DATETIME | types::TIMESTAMP => {
-                Column::new_fixed_column(16, init_cap)
+                Column::new_fixed_len(16, init_cap)
             }
-            types::NEW_DECIMAL => Column::new_fixed_column(DECIMAL_STRUCT_SIZE, init_cap),
+            types::NEW_DECIMAL => Column::new_fixed_len(DECIMAL_STRUCT_SIZE, init_cap),
             _ => Column::new_var_len_column(init_cap),
         }
     }
@@ -96,7 +97,7 @@ impl Column {
             Datum::Null => self.append_null(),
             Datum::I64(v) => self.append_i64(*v),
             Datum::U64(v) => self.append_u64(*v),
-            Datum::F64(ref v) => self.append_f64(*v),
+            Datum::F64(v) => self.append_f64(*v),
             Datum::Bytes(ref v) => self.append_bytes(v),
             Datum::Dec(ref v) => self.append_decimal(v),
             Datum::Dur(ref v) => self.append_duration(v),
@@ -106,10 +107,10 @@ impl Column {
         }
     }
 
-    pub fn new_fixed_column(fixed_len: usize, init_cap: usize) -> Column {
+    pub fn new_fixed_len(element_len: usize, init_cap: usize) -> Column {
         Column {
-            fixed_len,
-            data: Vec::with_capacity(fixed_len * init_cap),
+            fixed_len: element_len,
+            data: Vec::with_capacity(element_len * init_cap),
             null_bitmap: Vec::with_capacity(init_cap / 8),
             ..Default::default()
         }
@@ -286,7 +287,7 @@ impl Column {
         data.decode_json()
     }
 
-    pub fn length(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.length
     }
 }
