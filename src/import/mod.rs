@@ -11,10 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[allow(dead_code)]
+mod client;
+#[allow(dead_code)]
+mod common;
 mod config;
 mod engine;
 mod errors;
 mod metrics;
+#[allow(dead_code)]
+mod prepare;
 #[macro_use]
 mod service;
 mod kv_importer;
