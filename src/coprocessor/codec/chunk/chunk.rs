@@ -16,7 +16,6 @@
 use super::Result;
 use super::column::Column;
 use coprocessor::codec::Datum;
-use std::sync::Arc;
 use tipb::expression::FieldType;
 
 /// Chunk stores multiple rows of data in Apache Arrow format.
@@ -62,37 +61,29 @@ impl Chunk {
     pub fn append_datum(&mut self, col_idx: usize, v: &Datum) -> Result<()> {
         self.columns[col_idx].append_datum(v)
     }
-}
-
-struct ArcChunk {
-    chunk: Arc<Chunk>,
-}
-
-impl ArcChunk {
-    pub fn new(chunk: Chunk) -> ArcChunk {
-        ArcChunk {
-            chunk: Arc::new(chunk),
-        }
-    }
 
     /// Get the Row in the chunk with the row index.
-    pub fn get_row(&self, idx: usize) -> Row {
-        Row::new(self.chunk.clone(), idx)
+    pub fn get_row(&self, idx: usize) -> Option<Row> {
+        if idx < self.num_rows() {
+            Some(Row::new(self, idx))
+        } else {
+            None
+        }
     }
 
     // Get the Iterator for Row in the Chunk.
     pub fn iter(&self) -> RowIterator {
-        RowIterator::new(self.chunk.clone())
+        RowIterator::new(self)
     }
 }
 
-pub struct Row {
-    c: Arc<Chunk>,
+pub struct Row<'a> {
+    c: &'a Chunk,
     idx: usize,
 }
 
-impl Row {
-    pub fn new(c: Arc<Chunk>, idx: usize) -> Row {
+impl<'a> Row<'a> {
+    pub fn new(c: &'a Chunk, idx: usize) -> Row<'a> {
         Row { c, idx }
     }
 
@@ -111,26 +102,23 @@ impl Row {
     }
 }
 
-pub struct RowIterator {
-    c: Arc<Chunk>,
+pub struct RowIterator<'a> {
+    c: &'a Chunk,
     idx: usize,
 }
 
-impl RowIterator {
-    fn new(chunk: Arc<Chunk>) -> RowIterator {
-        RowIterator {
-            c: chunk.clone(),
-            idx: 0,
-        }
+impl<'a> RowIterator<'a> {
+    fn new(chunk: &'a Chunk) -> RowIterator<'a> {
+        RowIterator { c: chunk, idx: 0 }
     }
 }
 
-impl Iterator for RowIterator {
-    type Item = Row;
+impl<'a> Iterator for RowIterator<'a> {
+    type Item = Row<'a>;
 
-    fn next(&mut self) -> Option<Row> {
+    fn next(&mut self) -> Option<Row<'a>> {
         if self.idx < self.c.num_rows() {
-            let row = Row::new(self.c.clone(), self.idx);
+            let row = Row::new(self.c, self.idx);
             self.idx += 1;
             Some(row)
         } else {
@@ -181,8 +169,7 @@ mod test {
         for (col_id, val) in data.iter().enumerate() {
             chunk.append_datum(col_id, val).unwrap();
         }
-        let arc_chunk = ArcChunk::new(chunk);
-        for row in arc_chunk.iter() {
+        for row in chunk.iter() {
             for col_id in 0..row.len() {
                 let got = row.get_datum(col_id, &fields[col_id]).unwrap();
                 assert_eq!(got, data[col_id]);
