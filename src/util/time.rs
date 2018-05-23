@@ -45,11 +45,9 @@ pub fn duration_to_nanos(d: Duration) -> u64 {
 
 /// Get the current timestamp in seconds.
 #[inline]
-pub fn time_now_sec() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
+pub fn time_now_as_nanos() -> u64 {
+    let since_unix_epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    since_unix_epoch.as_secs() * 1_000_000_000 + u64::from(since_unix_epoch.subsec_nanos())
 }
 
 pub struct SlowTimer {
