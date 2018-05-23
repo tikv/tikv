@@ -15,6 +15,7 @@ use super::{BatchCallback, Callback, CbContext, Cursor, Engine, Error, Iterator 
             Modify, Result, ScanMode, Snapshot, TEMP_DIR};
 use kvproto::kvrpcpb::Context;
 use raftstore::store::engine::{IterOption, Peekable, SyncSnapshot as RocksSnapshot};
+use raftstore::store::{LocalRegionInfo, SeekLocalRegionFilter};
 use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::Deref;
@@ -195,6 +196,14 @@ impl Engine for EngineRocksdb {
                 .schedule(Task::SnapshotBatch(batch.len(), on_finished))
         );
         Ok(())
+    }
+
+    fn seek_local_region(
+        &self,
+        _from_key: &[u8],
+        _filter: SeekLocalRegionFilter,
+    ) -> Result<Option<LocalRegionInfo>> {
+        unimplemented!();
     }
 
     fn clone_box(&self) -> Box<Engine> {

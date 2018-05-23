@@ -66,7 +66,8 @@ use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, Clea
                     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
                     RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
                     SplitCheckTask, STALE_PEER_CHECK_INTERVAL};
-use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
+use super::{util, LocalRegionInfo, Msg, SeekLocalRegionCallback, SeekLocalRegionFilter,
+            SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use import::SSTImporter;
 
 type Key = Vec<u8>;
@@ -3130,6 +3131,29 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             error!("{} register cleanup import sst tick err: {:?}", self.tag, e);
         }
     }
+
+    fn seek_local_region(
+        &self,
+        from_key: &[u8],
+        filter: SeekLocalRegionFilter,
+        callback: SeekLocalRegionCallback,
+    ) {
+        let from_key = data_key(from_key);
+        for (_, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
+            let peer = self.region_peers.get(region_id);
+            if let Some(p) = peer {
+                if filter(p) {
+                    let region_info = LocalRegionInfo {
+                        local_peer: p.peer.clone(),
+                        region: p.region().clone(),
+                    };
+                    callback(Some(region_info));
+                    return;
+                }
+            }
+        }
+        callback(None);
+    }
 }
 
 fn new_admin_request(region_id: u64, peer: metapb::Peer) -> RaftCmdRequest {
@@ -3268,6 +3292,11 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             } => self.on_schedule_half_split_region(region_id, &region_epoch),
             Msg::MergeFail { region_id } => self.on_merge_fail(region_id),
             Msg::ValidateSSTResult { invalid_ssts } => self.on_validate_sst_result(invalid_ssts),
+            Msg::SeekLocalRegion {
+                from_key,
+                filter,
+                callback,
+            } => self.seek_local_region(&from_key, filter, callback),
         }
     }
 

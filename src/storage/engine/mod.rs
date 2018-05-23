@@ -20,6 +20,7 @@ use std::{error, result};
 pub use self::rocksdb::EngineRocksdb;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
+use raftstore::store::{LocalRegionInfo, SeekLocalRegionFilter};
 use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
 use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
@@ -116,6 +117,13 @@ pub trait Engine: Send + Debug {
     fn delete_cf(&self, ctx: &Context, cf: CfName, key: Key) -> Result<()> {
         self.write(ctx, vec![Modify::Delete(cf, key)])
     }
+
+    /// Find next local peer that satisfies the given predicate.
+    fn seek_local_region(
+        &self,
+        from: &[u8],
+        filter: SeekLocalRegionFilter,
+    ) -> Result<Option<LocalRegionInfo>>;
 
     /// Create a shared Engine pointer.
     fn clone_box(&self) -> Box<Engine + 'static>;

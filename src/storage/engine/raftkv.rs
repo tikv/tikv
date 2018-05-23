@@ -29,7 +29,7 @@ use raftstore::errors::Error as RaftServerError;
 use raftstore::store::engine::IterOption;
 use raftstore::store::engine::Peekable;
 use raftstore::store::{self, Callback as StoreCallback, ReadResponse, WriteResponse};
-use raftstore::store::{RegionIterator, RegionSnapshot};
+use raftstore::store::{LocalRegionInfo, RegionIterator, RegionSnapshot, SeekLocalRegionFilter};
 use rocksdb::TablePropertiesCollection;
 use server::transport::RaftStoreRouter;
 use storage::{self, engine, CfName, Key, Value, CF_DEFAULT};
@@ -475,6 +475,16 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                     .inc_by(batch_size as i64);
                 e.into()
             })
+    }
+
+    fn seek_local_region(
+        &self,
+        from: &[u8],
+        filter: SeekLocalRegionFilter,
+    ) -> engine::Result<Option<LocalRegionInfo>> {
+        self.router
+            .seek_local_region(from, filter)
+            .map_err(From::from)
     }
 
     fn clone_box(&self) -> Box<Engine> {

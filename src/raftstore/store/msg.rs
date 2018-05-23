@@ -16,6 +16,7 @@ use std::fmt;
 use std::time::Instant;
 
 use kvproto::import_sstpb::SSTMeta;
+use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
@@ -24,7 +25,7 @@ use raft::SnapshotStatus;
 use util::escape;
 use util::rocksdb::CompactedEvent;
 
-use super::RegionSnapshot;
+use super::{Peer, RegionSnapshot};
 
 #[derive(Debug)]
 pub struct ReadResponse {
@@ -37,9 +38,18 @@ pub struct WriteResponse {
     pub response: RaftCmdResponse,
 }
 
+#[derive(Debug)]
+pub struct LocalRegionInfo {
+    pub local_peer: metapb::Peer,
+    pub region: metapb::Region,
+}
+
 pub type ReadCallback = Box<FnBox(ReadResponse) + Send>;
 pub type WriteCallback = Box<FnBox(WriteResponse) + Send>;
 pub type BatchReadCallback = Box<FnBox(Vec<Option<ReadResponse>>) + Send>;
+
+pub type SeekLocalRegionCallback = Box<FnBox(Option<LocalRegionInfo>) + Send>;
+pub type SeekLocalRegionFilter = Box<Fn(&Peer) -> bool + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callbak for read only requests including `StatusRequest`,
@@ -181,6 +191,12 @@ pub enum Msg {
     ValidateSSTResult {
         invalid_ssts: Vec<SSTMeta>,
     },
+
+    SeekLocalRegion {
+        from_key: Vec<u8>,
+        filter: SeekLocalRegionFilter,
+        callback: SeekLocalRegionCallback,
+    },
 }
 
 impl fmt::Debug for Msg {
@@ -221,6 +237,9 @@ impl fmt::Debug for Msg {
             }
             Msg::MergeFail { region_id } => write!(fmt, "MergeFail region_id {}", region_id),
             Msg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
+            Msg::SeekLocalRegion { ref from_key, .. } => {
+                write!(fmt, "Seek Local Region from_key {:?}", from_key)
+            }
         }
     }
 }

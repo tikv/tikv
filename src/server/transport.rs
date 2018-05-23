@@ -14,7 +14,7 @@
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, RwLock};
 
 use super::metrics::*;
@@ -22,7 +22,8 @@ use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
 use raft::SnapshotStatus;
 use raftstore::Result as RaftStoreResult;
-use raftstore::store::{BatchReadCallback, Callback, Msg as StoreMsg, SignificantMsg, Transport};
+use raftstore::store::{BatchReadCallback, Callback, LocalRegionInfo, Msg as StoreMsg,
+                       SeekLocalRegionFilter, SignificantMsg, Transport};
 use server::Result;
 use server::raft_client::RaftClient;
 use util::HandyRwLock;
@@ -78,6 +79,35 @@ pub trait RaftStoreRouter: Send + Clone {
             region_id,
             to_peer_id,
             status,
+        })
+    }
+
+    // Find the next region that satisfies the given predicate
+    fn seek_local_region(
+        &self,
+        from_key: &[u8],
+        filter: SeekLocalRegionFilter,
+    ) -> RaftStoreResult<Option<LocalRegionInfo>> {
+        let (tx, rx) = channel();
+        let callback = box move |region_info| {
+            tx.send(region_info).unwrap_or_else(|e| {
+                error!(
+                    "raftstore failed to send seek_local_region result back to raft router: {:?}",
+                    e
+                );
+            });
+        };
+
+        self.try_send(StoreMsg::SeekLocalRegion {
+            from_key: from_key.to_vec(),
+            filter,
+            callback,
+        })?;
+        rx.recv().map_err(|e| {
+            box_err!(
+                "failed to receive seek_local_region result from raftstore: {:?}",
+                e
+            )
         })
     }
 }
