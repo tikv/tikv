@@ -2821,7 +2821,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 }
 
-#[allow(useless_let_if_seq)]
 fn maybe_report_split_pd(
     tag: &str,
     left: &mut Peer,
@@ -2829,18 +2828,17 @@ fn maybe_report_split_pd(
     pd_worker: &FutureWorker<PdTask>,
 ) {
     // Leader needs to heartbeat and report split.
-    let mut to_be_reported = false;
+    let left_leader = left.is_leader();
+    let right_leader = right.is_leader();
 
-    if left.is_leader() {
+    if left_leader {
         left.heartbeat_pd(pd_worker);
-        to_be_reported = true;
     }
-    if right.is_leader() {
+    if right_leader {
         right.heartbeat_pd(pd_worker);
-        to_be_reported = true;
     }
 
-    if to_be_reported {
+    if left_leader || right_leader {
         info!(
             "notify pd with split left {:?}, right {:?}",
             left.region(),
