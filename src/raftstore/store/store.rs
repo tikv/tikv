@@ -67,7 +67,7 @@ use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, Clea
                     RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
                     SplitCheckTask, STALE_PEER_CHECK_INTERVAL};
 use super::{util, LocalRegionInfo, Msg, SeekLocalRegionCallback, SeekLocalRegionFilter,
-            SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
+            SeekLocalRegionResult, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use import::SSTImporter;
 
 type Key = Vec<u8>;
@@ -3136,10 +3136,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         &self,
         from_key: &[u8],
         filter: SeekLocalRegionFilter,
+        mut limit: u32,
         callback: SeekLocalRegionCallback,
     ) {
         let from_key = data_key(from_key);
-        for (_, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
+        for (end_key, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
             let peer = self.region_peers.get(region_id);
             if let Some(p) = peer {
                 if filter(p) {
@@ -3147,12 +3148,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         local_peer: p.peer.clone(),
                         region: p.region().clone(),
                     };
-                    callback(Some(region_info));
+                    callback(SeekLocalRegionResult::Some(region_info));
                     return;
                 }
             }
+            limit -= 1;
+            if limit == 0 {
+                callback(SeekLocalRegionResult::LimitExceeded {
+                    next_key: end_key.clone(),
+                });
+                return;
+            }
         }
-        callback(None);
+        callback(SeekLocalRegionResult::Ended);
     }
 }
 
@@ -3295,8 +3303,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::SeekLocalRegion {
                 from_key,
                 filter,
+                limit,
                 callback,
-            } => self.seek_local_region(&from_key, filter, callback),
+            } => self.seek_local_region(&from_key, filter, limit, callback),
         }
     }
 

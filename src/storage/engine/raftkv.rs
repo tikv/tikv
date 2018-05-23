@@ -29,7 +29,8 @@ use raftstore::errors::Error as RaftServerError;
 use raftstore::store::engine::IterOption;
 use raftstore::store::engine::Peekable;
 use raftstore::store::{self, Callback as StoreCallback, ReadResponse, WriteResponse};
-use raftstore::store::{LocalRegionInfo, RegionIterator, RegionSnapshot, SeekLocalRegionFilter};
+use raftstore::store::{RegionIterator, RegionSnapshot, SeekLocalRegionFilter,
+                       SeekLocalRegionResult};
 use rocksdb::TablePropertiesCollection;
 use server::transport::RaftStoreRouter;
 use storage::{self, engine, CfName, Key, Value, CF_DEFAULT};
@@ -481,9 +482,10 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         &self,
         from: &[u8],
         filter: SeekLocalRegionFilter,
-    ) -> engine::Result<Option<LocalRegionInfo>> {
+        limit: u32,
+    ) -> engine::Result<SeekLocalRegionResult> {
         self.router
-            .seek_local_region(from, filter)
+            .seek_local_region(from, filter, limit)
             .map_err(From::from)
     }
 

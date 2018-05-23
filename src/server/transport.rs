@@ -22,8 +22,8 @@ use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
 use raft::SnapshotStatus;
 use raftstore::Result as RaftStoreResult;
-use raftstore::store::{BatchReadCallback, Callback, LocalRegionInfo, Msg as StoreMsg,
-                       SeekLocalRegionFilter, SignificantMsg, Transport};
+use raftstore::store::{BatchReadCallback, Callback, Msg as StoreMsg, SeekLocalRegionFilter,
+                       SeekLocalRegionResult, SignificantMsg, Transport};
 use server::Result;
 use server::raft_client::RaftClient;
 use util::HandyRwLock;
@@ -87,7 +87,8 @@ pub trait RaftStoreRouter: Send + Clone {
         &self,
         from_key: &[u8],
         filter: SeekLocalRegionFilter,
-    ) -> RaftStoreResult<Option<LocalRegionInfo>> {
+        limit: u32,
+    ) -> RaftStoreResult<SeekLocalRegionResult> {
         let (tx, rx) = channel();
         let callback = box move |region_info| {
             tx.send(region_info).unwrap_or_else(|e| {
@@ -101,6 +102,7 @@ pub trait RaftStoreRouter: Send + Clone {
         self.try_send(StoreMsg::SeekLocalRegion {
             from_key: from_key.to_vec(),
             filter,
+            limit,
             callback,
         })?;
         rx.recv().map_err(|e| {

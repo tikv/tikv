@@ -20,7 +20,7 @@ use std::{error, result};
 pub use self::rocksdb::EngineRocksdb;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
-use raftstore::store::{LocalRegionInfo, SeekLocalRegionFilter};
+use raftstore::store::{SeekLocalRegionFilter, SeekLocalRegionResult};
 use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
 use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
@@ -123,7 +123,8 @@ pub trait Engine: Send + Debug {
         &self,
         from: &[u8],
         filter: SeekLocalRegionFilter,
-    ) -> Result<Option<LocalRegionInfo>>;
+        limit: u32,
+    ) -> Result<SeekLocalRegionResult>;
 
     /// Create a shared Engine pointer.
     fn clone_box(&self) -> Box<Engine + 'static>;

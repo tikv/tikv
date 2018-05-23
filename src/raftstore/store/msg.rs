@@ -44,11 +44,17 @@ pub struct LocalRegionInfo {
     pub region: metapb::Region,
 }
 
+pub enum SeekLocalRegionResult {
+    Some(LocalRegionInfo),
+    LimitExceeded { next_key: Vec<u8> },
+    Ended,
+}
+
 pub type ReadCallback = Box<FnBox(ReadResponse) + Send>;
 pub type WriteCallback = Box<FnBox(WriteResponse) + Send>;
 pub type BatchReadCallback = Box<FnBox(Vec<Option<ReadResponse>>) + Send>;
 
-pub type SeekLocalRegionCallback = Box<FnBox(Option<LocalRegionInfo>) + Send>;
+pub type SeekLocalRegionCallback = Box<FnBox(SeekLocalRegionResult) + Send>;
 pub type SeekLocalRegionFilter = Box<Fn(&Peer) -> bool + Send>;
 
 /// Variants of callbacks for `Msg`.
@@ -195,6 +201,7 @@ pub enum Msg {
     SeekLocalRegion {
         from_key: Vec<u8>,
         filter: SeekLocalRegionFilter,
+        limit: u32,
         callback: SeekLocalRegionCallback,
     },
 }
