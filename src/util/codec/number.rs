@@ -80,6 +80,14 @@ pub trait NumberEncoder: Write {
         self.write_u64::<BigEndian>(!v).map_err(From::from)
     }
 
+    fn encode_u32(&mut self, v: u32) -> Result<()> {
+        self.write_u32::<BigEndian>(v).map_err(From::from)
+    }
+
+    fn encode_u16(&mut self, v: u16) -> Result<()> {
+        self.write_u16::<BigEndian>(v).map_err(From::from)
+    }
+
     /// `encode_var_i64` writes the encoded value to slice buf.
     /// Note that the encoded result is not memcomparable.
     fn encode_var_i64(&mut self, v: i64) -> Result<()> {
@@ -120,6 +128,10 @@ pub trait NumberEncoder: Write {
 
     fn encode_u32_le(&mut self, v: u32) -> Result<()> {
         self.write_u32::<LittleEndian>(v).map_err(From::from)
+    }
+
+    fn encode_i32_le(&mut self, v: i32) -> Result<()> {
+        self.write_i32::<LittleEndian>(v).map_err(From::from)
     }
 
     fn encode_f64_le(&mut self, v: f64) -> Result<()> {
@@ -232,7 +244,7 @@ where
         *data = &data[size..];
         return Ok(f(buf));
     }
-    Err(Error::Io(io::Error::new(ErrorKind::UnexpectedEof, "eof")))
+    Err(Error::unexpected_eof())
 }
 
 /// `decode_i64` decodes value encoded by `encode_i64` before.
@@ -251,6 +263,18 @@ pub fn decode_i64_desc(data: &mut BytesSlice) -> Result<i64> {
 #[inline]
 pub fn decode_u64(data: &mut BytesSlice) -> Result<u64> {
     read_num_bytes(mem::size_of::<u64>(), data, BigEndian::read_u64)
+}
+
+/// `decode_u32` decodes value encoded by `encode_u32` before.
+#[inline]
+pub fn decode_u32(data: &mut BytesSlice) -> Result<u32> {
+    read_num_bytes(mem::size_of::<u32>(), data, BigEndian::read_u32)
+}
+
+/// `decode_u16` decodes value encoded by `encode_u16` before.
+#[inline]
+pub fn decode_u16(data: &mut BytesSlice) -> Result<u16> {
+    read_num_bytes(mem::size_of::<u16>(), data, BigEndian::read_u16)
 }
 
 /// `decode_u64_desc` decodes value encoded by `encode_u64_desc` before.
@@ -318,7 +342,7 @@ pub fn decode_var_u64(data: &mut BytesSlice) -> Result<u64> {
             return Ok(res);
         }
     }
-    Err(Error::Io(io::Error::new(ErrorKind::UnexpectedEof, "eof")))
+    Err(Error::unexpected_eof())
 }
 
 /// `decode_f64` decodes value encoded by `encode_f64` before.
@@ -343,6 +367,12 @@ pub fn decode_u16_le(data: &mut BytesSlice) -> Result<u16> {
 #[inline]
 pub fn decode_u32_le(data: &mut BytesSlice) -> Result<u32> {
     read_num_bytes(mem::size_of::<u32>(), data, LittleEndian::read_u32)
+}
+
+/// `decode_i32_le` decodes value encoded by `encode_i32_le` before.
+#[inline]
+pub fn decode_i32_le(data: &mut BytesSlice) -> Result<i32> {
+    read_num_bytes(mem::size_of::<i32>(), data, LittleEndian::read_i32)
 }
 
 /// `decode_f64_le` decodes value encoded by `encode_f64_le` before.
@@ -476,6 +506,26 @@ mod test {
         f64::NEG_INFINITY,
     ];
 
+    const I32_TESTS: &[i32] = &[
+        i32::MIN,
+        i32::MAX,
+        0,
+        1,
+        2,
+        10,
+        20,
+        63,
+        64,
+        65,
+        127,
+        128,
+        129,
+        255,
+        256,
+        257,
+        -1024,
+    ];
+
     // use macro to generate order tests for number codecs.
     macro_rules! test_order {
         ($arr:expr, $sorted:expr, $enc:ident, $dec:ident) => {
@@ -532,6 +582,8 @@ mod test {
     }
 
     test_codec!(encode_i64, decode_i64, |a, b| a.cmp(b), I64_TESTS);
+    test_codec!(encode_u32, decode_u32, |a, b| a.cmp(b), U32_TESTS);
+    test_codec!(encode_u16, decode_u16, |a, b| a.cmp(b), U16_TESTS);
     test_codec!(encode_i64_desc, decode_i64_desc, |a, b| b.cmp(a), I64_TESTS);
     test_codec!(encode_u64, decode_u64, |a, b| a.cmp(b), U64_TESTS);
     test_codec!(encode_u64_desc, decode_u64_desc, |a, b| b.cmp(a), U64_TESTS);
@@ -560,6 +612,13 @@ mod test {
         encode_u64_le,
         decode_u64_le,
         U64_TESTS
+    );
+
+    test_serialize!(
+        var_i32_little_endian_codec,
+        encode_i32_le,
+        decode_i32_le,
+        I32_TESTS
     );
 
     test_serialize!(var_u16_codec, encode_u16_le, decode_u16_le, U16_TESTS);

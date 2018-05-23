@@ -28,6 +28,8 @@ extern crate jemallocator;
 extern crate libc;
 #[macro_use]
 extern crate log;
+#[macro_use(slog_o, slog_kv)]
+extern crate slog;
 #[cfg(unix)]
 extern crate nix;
 extern crate prometheus;
@@ -35,6 +37,10 @@ extern crate rocksdb;
 extern crate serde_json;
 #[cfg(unix)]
 extern crate signal;
+extern crate slog_async;
+extern crate slog_scope;
+extern crate slog_stdlog;
+extern crate slog_term;
 extern crate tikv;
 extern crate toml;
 

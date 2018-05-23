@@ -5,8 +5,10 @@
 #   Time(based on ms): ms, s, m, h
 #    e.g.: 78_000 = "1.3m"
 
-# log level: trace, debug, info, warn, error, off.
+# log level: trace, debug, info, warning, error, critical.
+# Note that `debug` and `trace` are only available in development builds.
 # log-level = "info"
+
 # file to store log, write to stderr if it's empty.
 # log-file = ""
 
@@ -48,6 +50,8 @@
 # maximum number of messages can be processed in one tick.
 # messages-per-tick = 4096
 
+# compression type for grpc channel, available values are no, deflate and gzip.
+# grpc-compression-type = "no"
 # size of thread pool for grpc server.
 # grpc-concurrency = 4
 # The number of max concurrent streams/requests on a client connection.
@@ -56,6 +60,11 @@
 # grpc-raft-conn-num = 10
 # Amount to read ahead on individual grpc streams.
 # grpc-stream-initial-window-size = "2MB"
+
+# How many snapshots can be sent concurrently.
+# concurrent-send-snap-limit = 32
+# How many snapshots can be recv concurrently.
+# concurrent-recv-snap-limit = 32
 
 # max count of tasks being handled, new tasks will be rejected.
 # end-point-max-tasks = 2000

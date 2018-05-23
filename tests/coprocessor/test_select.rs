@@ -23,7 +23,6 @@ use std::{cmp, mem};
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use kvproto::kvrpcpb::Context;
 use protobuf::{Message, RepeatedField};
-use tikv::coprocessor::codec::datum::DatumDecoder;
 use tikv::coprocessor::codec::{datum, table, Datum};
 use tikv::coprocessor::*;
 use tikv::server::readpool::{self, ReadPool};
@@ -55,7 +54,7 @@ pub fn next_id() -> i64 {
 
 fn check_chunk_datum_count(chunks: &[Chunk], datum_limit: usize) {
     let mut iter = chunks.iter();
-    let res = iter.any(|x| x.get_rows_data().decode().unwrap().len() != datum_limit);
+    let res = iter.any(|x| datum::decode(&mut x.get_rows_data()).unwrap().len() != datum_limit);
     if res {
         assert!(iter.next().is_none());
     }
@@ -87,7 +86,7 @@ impl Iterator for DAGChunkSpliter {
             } else if self.datums.is_empty() {
                 let chunk = self.chunks.remove(0);
                 let mut data = chunk.get_rows_data();
-                self.datums = data.decode().unwrap();
+                self.datums = datum::decode(&mut data).unwrap();
                 continue;
             }
             assert_eq!(self.datums.len() >= self.col_cnt, true);
