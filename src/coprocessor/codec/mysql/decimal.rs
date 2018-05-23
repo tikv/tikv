@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use byteorder::WriteBytesExt;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
@@ -25,6 +26,7 @@ use coprocessor::dag::expr::EvalContext;
 use coprocessor::dag::expr::Error as ExprError;
 
 use util::codec::BytesSlice;
+use util::codec::number::{self, NumberEncoder};
 use util::escape;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -807,6 +809,9 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
     }
     res.map(|_| dec)
 }
+
+/// `DECIMAL_STRUCT_SIZE`is the struct size of `Decimal`.
+pub const DECIMAL_STRUCT_SIZE: usize = 40;
 
 /// `Decimal` represents a decimal value.
 #[derive(Clone, Debug)]
@@ -1778,7 +1783,7 @@ macro_rules! read_word {
     }};
 }
 
-pub trait DecimalEncoder: Write {
+pub trait DecimalEncoder: NumberEncoder {
     /// Encode decimal to comparable bytes.
     // TODO: resolve following warnings.
     #[allow(cyclomatic_complexity)]
@@ -1890,6 +1895,18 @@ pub trait DecimalEncoder: Write {
         }
         Ok(res)
     }
+
+    fn encode_decimal_to_chunk(&mut self, v: &Decimal) -> Result<()> {
+        self.write_u8(v.int_cnt)?;
+        self.write_u8(v.frac_cnt)?;
+        self.write_u8(v.result_frac_cnt)?;
+        self.write_u8(v.negative as u8)?;
+        let len = word_cnt!(v.int_cnt) + word_cnt!(v.frac_cnt);
+        for id in 0..len as usize {
+            self.encode_i32_le(v.word_buf[id] as i32)?;
+        }
+        Ok(())
+    }
 }
 
 impl<T: Write> DecimalEncoder for T {}
@@ -1976,6 +1993,27 @@ impl Decimal {
             d.reset_to_zero();
         }
         d.result_frac_cnt = frac_cnt;
+        Ok(d)
+    }
+
+    /// `decode_from_chunk` decode Decimal encodeded by `encode_decimal_to_chunk`.
+    pub fn decode_from_chunk(data: &mut BytesSlice) -> Result<Decimal> {
+        let mut d = if data.len() > 4 {
+            let int_cnt = data[0];
+            let frac_cnt = data[1];
+            let result_frac_cnt = data[2];
+            let negative = data[3] == 1;
+            let mut d = Decimal::new(int_cnt, frac_cnt, negative);
+            d.result_frac_cnt = result_frac_cnt;
+            *data = &data[4..];
+            d
+        } else {
+            return Err(Error::unexpected_eof());
+        };
+
+        for id in 0..WORD_BUF_LEN {
+            d.word_buf[id as usize] = number::decode_i32_le(data)? as u32;
+        }
         Ok(d)
     }
 }
@@ -2686,6 +2724,35 @@ mod test {
             let decoded = Decimal::decode(&mut buf.as_slice()).unwrap();
             let res = res.map(|_| decoded.to_string());
             assert_eq!(res, exp.map(|s| s.to_owned()));
+        }
+    }
+
+    #[test]
+    fn test_chunk_codec() {
+        let cases = vec![
+            "-10.55",
+            "0.0123456789012345678912345",
+            "12345",
+            "12345",
+            "123.45",
+            ".00012345000098765",
+            ".00012345000098765",
+            ".12345000098765",
+            "1234500009876.5",
+            "111111111.11",
+            "000000000.01",
+            "123.4",
+            "1000",
+            "10000000000000000000.23",
+        ];
+
+        for dec_str in cases {
+            let dec = dec_str.parse::<Decimal>().unwrap();
+            let mut buf = vec![];
+            buf.encode_decimal_to_chunk(&dec).unwrap();
+            buf.resize(DECIMAL_STRUCT_SIZE, 0);
+            let decoded = Decimal::decode_from_chunk(&mut buf.as_slice()).unwrap();
+            assert_eq!(decoded, dec);
         }
     }
 
