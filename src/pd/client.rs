@@ -27,7 +27,7 @@ use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, Le
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 use pd::{Config, PdFuture};
 use util::security::SecurityManager;
-use util::time::{duration_to_sec, time_now_sec};
+use util::time::{duration_to_sec, time_now_as_nanos};
 use util::{Either, HandyRwLock};
 
 const CQ_COUNT: usize = 1;
@@ -302,7 +302,7 @@ impl PdClient for RpcClient {
         req.set_approximate_size(region_stat.approximate_size);
         let mut interval = pdpb::TimeInterval::new();
         interval.set_start_timestamp(region_stat.last_report_ts);
-        interval.set_end_timestamp(time_now_sec());
+        interval.set_end_timestamp(time_now_as_nanos());
         req.set_interval(interval);
 
         let executor = |client: &RwLock<Inner>, req: pdpb::RegionHeartbeatRequest| {
@@ -386,7 +386,7 @@ impl PdClient for RpcClient {
 
         let mut req = pdpb::StoreHeartbeatRequest::new();
         req.set_header(self.header());
-        stats.mut_interval().set_end_timestamp(time_now_sec());
+        stats.mut_interval().set_end_timestamp(time_now_as_nanos());
         req.set_stats(stats);
         let executor = move |client: &RwLock<Inner>, req: pdpb::StoreHeartbeatRequest| {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
