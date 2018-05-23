@@ -109,6 +109,7 @@ impl<T: Simulator> Cluster<T> {
         sim: Arc<RwLock<T>>,
         pd_client: Arc<TestPdClient>,
     ) -> Cluster<T> {
+        // TODO: In the future, maybe it's better to test both case where `use_delete_range` is true and false
         Cluster {
             cfg: new_tikv_config(id),
             leaders: HashMap::new(),
@@ -301,13 +302,24 @@ impl<T: Simulator> Cluster<T> {
             })
     }
 
-    pub fn query_leader(&self, store_id: u64, region_id: u64) -> Option<metapb::Peer> {
+    pub fn query_leader(
+        &self,
+        store_id: u64,
+        region_id: u64,
+        timeout: Duration,
+    ) -> Option<metapb::Peer> {
         // To get region leader, we don't care real peer id, so use 0 instead.
         let peer = new_peer(store_id, 0);
         let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
-        let mut resp = match self.call_command(find_leader, Duration::from_secs(5)) {
+        let mut resp = match self.call_command(find_leader, timeout) {
             Ok(resp) => resp,
-            Err(_) => return None,
+            Err(err) => {
+                error!(
+                    "fail to get leader of region {} on store {}, error: {:?}",
+                    region_id, store_id, err
+                );
+                return None;
+            }
         };
         let mut region_leader = resp.take_status_response().take_region_leader();
         // NOTE: node id can't be 0.
@@ -345,7 +357,7 @@ impl<T: Simulator> Cluster<T> {
                     count += 1;
                     continue;
                 }
-                let l = self.query_leader(*store_id, region_id);
+                let l = self.query_leader(*store_id, region_id, Duration::from_millis(10));
                 if l.is_none() {
                     continue;
                 }
@@ -569,20 +581,27 @@ impl<T: Simulator> Cluster<T> {
         panic!("request failed after retry for 20 times");
     }
 
-    pub fn get_region(&self, key: &[u8]) -> metapb::Region {
+    // Get region when the `filter` returns true.
+    pub fn get_region_with<F>(&self, key: &[u8], filter: F) -> metapb::Region
+    where
+        F: Fn(&metapb::Region) -> bool,
+    {
         for _ in 0..100 {
-            match self.pd_client.get_region(key) {
-                Ok(region) => return region,
-                Err(_) => {
-                    // We may meet range gap after split, so here we will
-                    // retry to get the region again.
-                    sleep_ms(20);
-                    continue;
+            if let Ok(region) = self.pd_client.get_region(key) {
+                if filter(&region) {
+                    return region;
                 }
-            };
+            }
+            // We may meet range gap after split, so here we will
+            // retry to get the region again.
+            sleep_ms(20);
         }
 
         panic!("find no region for {:?}", escape(key));
+    }
+
+    pub fn get_region(&self, key: &[u8]) -> metapb::Region {
+        self.get_region_with(key, |_| true)
     }
 
     pub fn get_region_id(&self, key: &[u8]) -> u64 {
@@ -594,17 +613,21 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        self.get_impl(key, false)
+        self.get_impl("default", key, false)
+    }
+
+    pub fn get_cf(&mut self, cf: &str, key: &[u8]) -> Option<Vec<u8>> {
+        self.get_impl(cf, key, false)
     }
 
     pub fn must_get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        self.get_impl(key, true)
+        self.get_impl("default", key, true)
     }
 
-    fn get_impl(&mut self, key: &[u8], read_quorum: bool) -> Option<Vec<u8>> {
+    fn get_impl(&mut self, cf: &str, key: &[u8], read_quorum: bool) -> Option<Vec<u8>> {
         let mut resp = self.request(
             key,
-            vec![new_get_cmd(key)],
+            vec![new_get_cf_cmd(cf, key)],
             read_quorum,
             Duration::from_secs(5),
         );
@@ -670,6 +693,7 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Delete);
     }
 
+    #[allow(dead_code)]
     pub fn must_delete_range(&mut self, start: &[u8], end: &[u8]) {
         self.must_delete_range_cf("default", start, end)
     }

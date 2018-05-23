@@ -27,12 +27,11 @@ use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
 use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
 use raft::eraftpb::ConfChangeType;
 
-use tikv::config::{ReadPoolConfig, TiKvConfig};
+use tikv::config::*;
+use tikv::raftstore::Result;
 use tikv::raftstore::store::Msg as StoreMsg;
 use tikv::raftstore::store::*;
-use tikv::raftstore::{Error, Result};
 use tikv::server::Config as ServerConfig;
-use tikv::server::readpool::Config as ReadPoolInstanceConfig;
 use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
 use tikv::util::config::*;
 use tikv::util::escape;
@@ -98,11 +97,11 @@ pub fn new_store_cfg() -> Config {
         // Use a value of 3 seconds as max_leader_missing_duration just for test.
         // In production environment, the value of max_leader_missing_duration
         // should be configured far beyond the election timeout.
-        max_leader_missing_duration: ReadableDuration::secs(3),
+        max_leader_missing_duration: ReadableDuration::secs(2),
         // To make a valid config, use a value of 2 seconds as
         // abnormal_leader_missing_duration and set
         // peer_stale_state_check_interval to 1 second.
-        abnormal_leader_missing_duration: ReadableDuration::secs(2),
+        abnormal_leader_missing_duration: ReadableDuration::millis(1500),
         peer_stale_state_check_interval: ReadableDuration::secs(1),
         pd_heartbeat_tick_interval: ReadableDuration::millis(20),
         region_split_check_diff: ReadableSize(10000),
@@ -128,8 +127,18 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
 
 pub fn new_readpool_cfg() -> ReadPoolConfig {
     ReadPoolConfig {
-        storage: ReadPoolInstanceConfig::default_for_test(),
-        coprocessor: ReadPoolInstanceConfig::default_for_test(),
+        storage: StorageReadPoolConfig {
+            high_concurrency: 1,
+            normal_concurrency: 1,
+            low_concurrency: 1,
+            ..StorageReadPoolConfig::default()
+        },
+        coprocessor: CoprocessorReadPoolConfig {
+            high_concurrency: 1,
+            normal_concurrency: 1,
+            low_concurrency: 1,
+            ..CoprocessorReadPoolConfig::default()
+        },
     }
 }
 
@@ -187,6 +196,14 @@ pub fn new_get_cmd(key: &[u8]) -> Request {
     let mut cmd = Request::new();
     cmd.set_cmd_type(CmdType::Get);
     cmd.mut_get().set_key(key.to_vec());
+    cmd
+}
+
+pub fn new_get_cf_cmd(cf: &str, key: &[u8]) -> Request {
+    let mut cmd = Request::new();
+    cmd.set_cmd_type(CmdType::Get);
+    cmd.mut_get().set_key(key.to_vec());
+    cmd.mut_get().set_cf(cf.to_string());
     cmd
 }
 
@@ -362,25 +379,27 @@ pub fn read_on_peer<T: Simulator>(
     peer: metapb::Peer,
     region: metapb::Region,
     key: &[u8],
+    read_quorum: bool,
     timeout: Duration,
-) -> Result<Vec<u8>> {
+) -> Result<RaftCmdResponse> {
     let mut request = new_request(
         region.get_id(),
         region.get_region_epoch().clone(),
         vec![new_get_cmd(key)],
-        false,
+        read_quorum,
     );
     request.mut_header().set_peer(peer);
-    let mut resp = cluster.call_command(request, timeout)?;
+    cluster.call_command(request, timeout)
+}
+
+pub fn must_get_value(resp: &RaftCmdResponse) -> Vec<u8> {
     if resp.get_header().has_error() {
-        return Err(Error::Other(box_err!(
-            resp.mut_header().take_error().take_message()
-        )));
+        panic!("failed to read {:?}", resp);
     }
     assert_eq!(resp.get_responses().len(), 1);
     assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
     assert!(resp.get_responses()[0].has_get());
-    Ok(resp.mut_responses()[0].mut_get().take_value())
+    resp.get_responses()[0].get_get().get_value().to_vec()
 }
 
 pub fn must_read_on_peer<T: Simulator>(
@@ -391,16 +410,14 @@ pub fn must_read_on_peer<T: Simulator>(
     value: &[u8],
 ) {
     let timeout = Duration::from_secs(1);
-    match read_on_peer(cluster, peer, region, key, timeout) {
-        Ok(v) => if v != value {
-            panic!(
-                "read key {}, expect value {}, got {}",
-                escape(key),
-                escape(value),
-                escape(&v)
-            )
-        },
-        Err(e) => panic!("failed to read for key {}, err {:?}", escape(key), e),
+    match read_on_peer(cluster, peer, region, key, false, timeout) {
+        Ok(ref resp) if value == must_get_value(resp).as_slice() => (),
+        other => panic!(
+            "read key {}, expect value {:?}, got {:?}",
+            escape(key),
+            value,
+            other
+        ),
     }
 }
 
@@ -411,12 +428,15 @@ pub fn must_error_read_on_peer<T: Simulator>(
     key: &[u8],
     timeout: Duration,
 ) {
-    if let Ok(value) = read_on_peer(cluster, peer, region, key, timeout) {
-        panic!(
-            "key {}, expect error but got {}",
-            escape(key),
-            escape(&value)
-        );
+    if let Ok(mut resp) = read_on_peer(cluster, peer, region, key, false, timeout) {
+        if !resp.get_header().has_error() {
+            let value = resp.mut_responses()[0].mut_get().take_value();
+            panic!(
+                "key {}, expect error but got {}",
+                escape(key),
+                escape(&value)
+            );
+        }
     }
 }
 
@@ -476,4 +496,15 @@ pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
     // Make merge check resume quickly.
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
+}
+
+pub fn configure_for_lease_read<T: Simulator>(cluster: &mut Cluster<T>) {
+    let base_tick = cluster.cfg.raft_store.raft_base_tick_interval.0;
+    let election_timeout = base_tick * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+    // Use large peer check interval, abnormal and max leader missing duration to make a valid config,
+    // that is election timeout x 2 < peer stale state check < abnormal < max leader missing duration.
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration(election_timeout * 3);
+    cluster.cfg.raft_store.abnormal_leader_missing_duration =
+        ReadableDuration(election_timeout * 4);
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration(election_timeout * 5);
 }

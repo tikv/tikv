@@ -200,6 +200,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let mut options = Options::default();
         options.key_only = req.get_key_only();
+        options.reverse_scan = req.get_reverse();
 
         let future = self.storage
             .async_scan(
@@ -584,6 +585,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         ctx.spawn(future);
     }
 
+    // WARNING: Currently this API may leave some dirty keys in TiKV. Be careful using this API.
     fn kv_delete_range(
         &self,
         ctx: RpcContext,
@@ -1263,8 +1265,22 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             lock_info.set_lock_ttl(ttl);
             key_error.set_locked(lock_info);
         }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict { .. }))
-        | storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
+        // failed in prewrite
+        storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict {
+            start_ts,
+            conflict_ts,
+            ref key,
+            ref primary,
+        })) => {
+            let mut write_conflict = WriteConflict::new();
+            write_conflict.set_start_ts(start_ts);
+            write_conflict.set_conflict_ts(conflict_ts);
+            write_conflict.set_key(key.to_owned());
+            write_conflict.set_primary(primary.to_owned());
+            key_error.set_conflict(write_conflict);
+        }
+        // failed in commit
+        storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
             warn!("txn conflicts: {:?}", err);
             key_error.set_retryable(format!("{:?}", err));
         }
@@ -1363,4 +1379,37 @@ fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<Key
             .collect(),
         Err(e) => vec![extract_key_error(&e)],
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use storage;
+    use storage::mvcc::Error as MvccError;
+    use storage::txn::Error as TxnError;
+
+    #[test]
+    fn test_extract_key_error_write_conflict() {
+        let start_ts = 110;
+        let conflict_ts = 108;
+        let key = b"key".to_vec();
+        let primary = b"primary".to_vec();
+        let case = storage::Error::from(TxnError::from(MvccError::WriteConflict {
+            start_ts,
+            conflict_ts,
+            key: key.clone(),
+            primary: primary.clone(),
+        }));
+        let mut expect = KeyError::new();
+        let mut write_conflict = WriteConflict::new();
+        write_conflict.set_start_ts(start_ts);
+        write_conflict.set_conflict_ts(conflict_ts);
+        write_conflict.set_key(key);
+        write_conflict.set_primary(primary);
+        expect.set_conflict(write_conflict);
+
+        let got = extract_key_error(&case);
+        assert_eq!(got, expect);
+    }
+
 }

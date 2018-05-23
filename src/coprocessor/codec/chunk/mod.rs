@@ -1,4 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
+// Copyright 2018 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,8 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod test_merge;
-mod test_pending_peers;
-mod test_snap;
-mod test_stale_read;
-mod test_storage;
+mod chunk;
+mod column;
+
+pub use util::codec::{Error, Result};
+
+#[cfg(test)]
+mod test {
+    use tipb::expression::FieldType;
+
+    pub fn field_type(tp: u8) -> FieldType {
+        let mut fp = FieldType::new();
+        fp.set_tp(i32::from(tp));
+        fp
+    }
+}

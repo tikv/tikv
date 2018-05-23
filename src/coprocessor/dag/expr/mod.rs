@@ -32,12 +32,11 @@ use std::str;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-use coprocessor::codec::mysql::decimal::DecimalDecoder;
 use coprocessor::codec::mysql::json::JsonDecoder;
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::mysql::{charset, types};
 use coprocessor::codec::{self, Datum};
-use util::codec::number::NumberDecoder;
+use util::codec::number::{self, NumberDecoder};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
@@ -219,6 +218,7 @@ impl Expression {
     }
 
     pub fn build(ctx: &mut EvalContext, mut expr: Expr) -> Result<Self> {
+        debug!("build expr:{:?}", expr);
         let tp = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
@@ -235,8 +235,7 @@ impl Expression {
             ExprType::String | ExprType::Bytes => {
                 Ok(Expression::new_const(Datum::Bytes(expr.take_val()), tp))
             }
-            ExprType::Float32 | ExprType::Float64 => expr.get_val()
-                .decode_f64()
+            ExprType::Float32 | ExprType::Float64 => number::decode_f64(&mut expr.get_val())
                 .map(Datum::F64)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
@@ -255,8 +254,7 @@ impl Expression {
                 .map(Datum::Dur)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
-            ExprType::MysqlDecimal => expr.get_val()
-                .decode_decimal()
+            ExprType::MysqlDecimal => Decimal::decode(&mut expr.get_val())
                 .map(Datum::Dec)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),

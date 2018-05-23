@@ -23,9 +23,9 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::usize;
 
-use log::LogLevelFilter;
 use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
               DBCompressionType, DBOptions, DBRecoveryMode};
+use slog;
 use sys_info;
 
 use import::Config as ImportConfig;
@@ -34,7 +34,7 @@ use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::keys::region_raft_prefix_len;
 use server::Config as ServerConfig;
-use server::readpool::Config as ReadPoolInstanceConfig;
+use server::readpool;
 use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
               DEFAULT_ROCKSDB_SUB_DIR};
 use util::config::{self, compression_type_level_serde, ReadableDuration, ReadableSize, GB, KB, MB};
@@ -695,33 +695,216 @@ impl Default for MetricConfig {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(remote = "LogLevelFilter")]
-#[serde(rename_all = "kebab-case")]
-pub enum LogLevel {
-    Info,
-    Trace,
-    Debug,
-    Warn,
-    Error,
-    Off,
+pub mod log_level_serde {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::{Error, Unexpected}};
+    use slog::Level;
+    use util::logger::{get_level_by_string, get_string_by_level};
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Level, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let string = String::deserialize(deserializer)?;
+        get_level_by_string(&string)
+            .ok_or_else(|| D::Error::invalid_value(Unexpected::Str(&string), &"a valid log level"))
+    }
+
+    pub fn serialize<S>(value: &Level, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        get_string_by_level(value).serialize(serializer)
+    }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+macro_rules! readpool_config {
+    ($struct_name:ident, $test_mod_name:ident, $display_name:expr) => {
+        #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+        #[serde(default)]
+        #[serde(rename_all = "kebab-case")]
+        pub struct $struct_name {
+            pub high_concurrency: usize,
+            pub normal_concurrency: usize,
+            pub low_concurrency: usize,
+            pub max_tasks_high: usize,
+            pub max_tasks_normal: usize,
+            pub max_tasks_low: usize,
+            pub stack_size: ReadableSize,
+        }
+
+        impl $struct_name {
+            pub fn build_config(&self) -> readpool::Config {
+                readpool::Config {
+                    high_concurrency: self.high_concurrency,
+                    normal_concurrency: self.normal_concurrency,
+                    low_concurrency: self.low_concurrency,
+                    max_tasks_high: self.max_tasks_high,
+                    max_tasks_normal: self.max_tasks_normal,
+                    max_tasks_low: self.max_tasks_low,
+                    stack_size: self.stack_size,
+                }
+            }
+
+            pub fn validate(&self) -> Result<(), Box<Error>> {
+                if self.high_concurrency == 0 {
+                    return Err(format!(
+                        "readpool.{}.high-concurrency should be > 0",
+                        $display_name
+                    ).into());
+                }
+                if self.normal_concurrency == 0 {
+                    return Err(format!(
+                        "readpool.{}.normal-concurrency should be > 0",
+                        $display_name
+                    ).into());
+                }
+                if self.low_concurrency == 0 {
+                    return Err(
+                        format!("readpool.{}.low-concurrency should be > 0", $display_name).into(),
+                    );
+                }
+                if self.stack_size.0 < ReadableSize::mb(2).0 {
+                    return Err(
+                        format!("readpool.{}.stack-size should be >= 2mb", $display_name).into(),
+                    );
+                }
+                if self.max_tasks_high
+                    < self.high_concurrency * readpool::config::DEFAULT_MAX_TASKS_PER_CORE
+                {
+                    return Err(format!(
+                        "readpool.{}.max-tasks-high should be >= {}",
+                        $display_name,
+                        self.high_concurrency * readpool::config::DEFAULT_MAX_TASKS_PER_CORE
+                    ).into());
+                }
+                if self.max_tasks_normal
+                    < self.normal_concurrency * readpool::config::DEFAULT_MAX_TASKS_PER_CORE
+                {
+                    return Err(format!(
+                        "readpool.{}.max-tasks-normal should be >= {}",
+                        $display_name,
+                        self.normal_concurrency * readpool::config::DEFAULT_MAX_TASKS_PER_CORE
+                    ).into());
+                }
+                if self.max_tasks_low
+                    < self.low_concurrency * readpool::config::DEFAULT_MAX_TASKS_PER_CORE
+                {
+                    return Err(format!(
+                        "readpool.{}.max-tasks-low should be >= {}",
+                        $display_name,
+                        self.low_concurrency * readpool::config::DEFAULT_MAX_TASKS_PER_CORE
+                    ).into());
+                }
+
+                Ok(())
+            }
+        }
+
+        #[cfg(test)]
+        mod $test_mod_name {
+            use super::*;
+
+            #[test]
+            fn test_validate() {
+                let cfg = $struct_name::default();
+                assert!(cfg.validate().is_ok());
+
+                let mut invalid_cfg = cfg.clone();
+                invalid_cfg.high_concurrency = 0;
+                assert!(invalid_cfg.validate().is_err());
+
+                let mut invalid_cfg = cfg.clone();
+                invalid_cfg.normal_concurrency = 0;
+                assert!(invalid_cfg.validate().is_err());
+
+                let mut invalid_cfg = cfg.clone();
+                invalid_cfg.low_concurrency = 0;
+                assert!(invalid_cfg.validate().is_err());
+
+                let mut invalid_cfg = cfg.clone();
+                invalid_cfg.stack_size = ReadableSize::mb(1);
+                assert!(invalid_cfg.validate().is_err());
+
+                let mut invalid_cfg = cfg.clone();
+                invalid_cfg.high_concurrency = 5;
+                invalid_cfg.max_tasks_high = 100;
+                assert!(invalid_cfg.validate().is_err());
+                invalid_cfg.max_tasks_high = 10000;
+                assert!(cfg.validate().is_ok());
+
+                let mut invalid_cfg = cfg.clone();
+                invalid_cfg.normal_concurrency = 2;
+                invalid_cfg.max_tasks_normal = 2000;
+                assert!(invalid_cfg.validate().is_err());
+                invalid_cfg.max_tasks_normal = 4000;
+                assert!(cfg.validate().is_ok());
+
+                let mut invalid_cfg = cfg.clone();
+                invalid_cfg.low_concurrency = 2;
+                invalid_cfg.max_tasks_low = 123;
+                assert!(invalid_cfg.validate().is_err());
+                invalid_cfg.max_tasks_low = 5000;
+                assert!(cfg.validate().is_ok());
+            }
+        }
+    };
+}
+
+const DEFAULT_STORAGE_READPOOL_CONCURRENCY: usize = 4;
+
+readpool_config!(StorageReadPoolConfig, storage_read_pool_test, "storage");
+
+impl Default for StorageReadPoolConfig {
+    fn default() -> Self {
+        Self {
+            high_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
+            normal_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
+            low_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
+            max_tasks_high: DEFAULT_STORAGE_READPOOL_CONCURRENCY
+                * readpool::config::DEFAULT_MAX_TASKS_PER_CORE,
+            max_tasks_normal: DEFAULT_STORAGE_READPOOL_CONCURRENCY
+                * readpool::config::DEFAULT_MAX_TASKS_PER_CORE,
+            max_tasks_low: DEFAULT_STORAGE_READPOOL_CONCURRENCY
+                * readpool::config::DEFAULT_MAX_TASKS_PER_CORE,
+            stack_size: ReadableSize::mb(readpool::config::DEFAULT_STACK_SIZE_MB),
+        }
+    }
+}
+
+const DEFAULT_COPROCESSOR_READPOOL_CONCURRENCY: usize = 8;
+
+readpool_config!(
+    CoprocessorReadPoolConfig,
+    coprocessor_read_pool_test,
+    "coprocessor"
+);
+
+impl Default for CoprocessorReadPoolConfig {
+    fn default() -> Self {
+        let cpu_num = sys_info::cpu_num().unwrap();
+        let concurrency = if cpu_num > 8 {
+            (f64::from(cpu_num) * 0.8) as usize
+        } else {
+            DEFAULT_COPROCESSOR_READPOOL_CONCURRENCY
+        };
+        Self {
+            high_concurrency: concurrency,
+            normal_concurrency: concurrency,
+            low_concurrency: concurrency,
+            max_tasks_high: concurrency * readpool::config::DEFAULT_MAX_TASKS_PER_CORE,
+            max_tasks_normal: concurrency * readpool::config::DEFAULT_MAX_TASKS_PER_CORE,
+            max_tasks_low: concurrency * readpool::config::DEFAULT_MAX_TASKS_PER_CORE,
+            stack_size: ReadableSize::mb(readpool::config::DEFAULT_STACK_SIZE_MB),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Default)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
-    pub storage: ReadPoolInstanceConfig,
-    pub coprocessor: ReadPoolInstanceConfig,
-}
-
-impl Default for ReadPoolConfig {
-    fn default() -> ReadPoolConfig {
-        ReadPoolConfig {
-            storage: ReadPoolInstanceConfig::default_for_storage(),
-            coprocessor: ReadPoolInstanceConfig::default_for_coprocessor(),
-        }
-    }
+    pub storage: StorageReadPoolConfig,
+    pub coprocessor: CoprocessorReadPoolConfig,
 }
 
 impl ReadPoolConfig {
@@ -736,8 +919,8 @@ impl ReadPoolConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
-    #[serde(with = "LogLevel")]
-    pub log_level: LogLevelFilter,
+    #[serde(with = "log_level_serde")]
+    pub log_level: slog::Level,
     pub log_file: String,
     pub readpool: ReadPoolConfig,
     pub server: ServerConfig,
@@ -756,7 +939,7 @@ pub struct TiKvConfig {
 impl Default for TiKvConfig {
     fn default() -> TiKvConfig {
         TiKvConfig {
-            log_level: LogLevelFilter::Info,
+            log_level: slog::Level::Info,
             log_file: "".to_owned(),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
@@ -1006,6 +1189,8 @@ mod test {
     use tempdir::TempDir;
 
     use super::*;
+    use slog::Level;
+    use toml;
 
     #[test]
     fn test_check_critical_cfg_with() {
@@ -1082,5 +1267,44 @@ mod test {
         assert!(tikv_cfg.validate().is_err());
         tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur * 2);
         tikv_cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn test_parse_log_level() {
+        #[derive(Serialize, Deserialize, Debug)]
+        struct LevelHolder {
+            #[serde(with = "log_level_serde")]
+            v: Level,
+        }
+
+        let legal_cases = vec![
+            ("critical", Level::Critical),
+            ("error", Level::Error),
+            ("warning", Level::Warning),
+            ("debug", Level::Debug),
+            ("trace", Level::Trace),
+            ("info", Level::Info),
+        ];
+        for (serialized, deserialized) in legal_cases {
+            let holder = LevelHolder { v: deserialized };
+            let res_string = toml::to_string(&holder).unwrap();
+            let exp_string = format!("v = \"{}\"\n", serialized);
+            assert_eq!(res_string, exp_string);
+            let res_value: LevelHolder = toml::from_str(&exp_string).unwrap();
+            assert_eq!(res_value.v, deserialized);
+        }
+
+        let compatibility_cases = vec![("warn", Level::Warning)];
+        for (serialized, deserialized) in compatibility_cases {
+            let variant_string = format!("v = \"{}\"\n", serialized);
+            let res_value: LevelHolder = toml::from_str(&variant_string).unwrap();
+            assert_eq!(res_value.v, deserialized);
+        }
+
+        let illegal_cases = vec!["foobar", ""];
+        for case in illegal_cases {
+            let string = format!("v = \"{}\"\n", case);
+            toml::from_str::<LevelHolder>(&string).unwrap_err();
+        }
     }
 }

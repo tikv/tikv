@@ -11,14 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Arguments;
-use std::io::{self, Write};
+use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use grpc;
-use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
-use time;
+use log::SetLoggerError;
+use slog::{self, Drain};
+use slog_scope;
+use slog_stdlog;
 
-pub use log::LogLevelFilter;
+pub use slog::Level;
 
 const ENABLED_TARGETS: &[&str] = &[
     "tikv::",
@@ -29,93 +30,70 @@ const ENABLED_TARGETS: &[&str] = &[
     "raft::",
 ];
 
-pub fn init_log<W: LogWriter + Sync + Send + 'static>(
-    writer: W,
-    level: LogLevelFilter,
-) -> Result<(), SetLoggerError> {
-    log::set_logger(|filter| {
-        filter.set(level);
-        grpc::redirect_log();
-        Box::new(Logger {
-            level,
-            writer,
-            tikv_only: false,
-        })
-    })
+pub fn init_log<D>(drain: D, level: Level) -> Result<(), SetLoggerError>
+where
+    D: Drain + Send + Sync + 'static + RefUnwindSafe + UnwindSafe,
+    <D as slog::Drain>::Err: ::std::fmt::Debug,
+{
+    grpc::redirect_log();
+
+    let drain = drain.filter_level(level).fuse();
+
+    let logger = slog::Logger::root(drain, slog_o!());
+
+    slog_scope::set_global_logger(logger).cancel_reset();
+    slog_stdlog::init()
 }
 
-pub fn init_log_for_tikv_only<W: LogWriter + Sync + Send + 'static>(
-    writer: W,
-    level: LogLevelFilter,
-) -> Result<(), SetLoggerError> {
-    log::set_logger(|filter| {
-        filter.set(level);
-        grpc::redirect_log();
-        Box::new(Logger {
-            level,
-            writer,
-            tikv_only: true,
-        })
-    })
+pub fn init_log_for_tikv_only<D>(drain: D, level: Level) -> Result<(), SetLoggerError>
+where
+    D: Drain + Send + Sync + 'static + RefUnwindSafe + UnwindSafe,
+    <D as slog::Drain>::Err: ::std::fmt::Debug,
+{
+    let filtered = drain.filter(|record| {
+        ENABLED_TARGETS
+            .iter()
+            .any(|target| record.module().starts_with(target))
+    });
+    init_log(filtered, level)
 }
 
-pub trait LogWriter {
-    fn write(&self, args: Arguments);
-}
-
-struct Logger<W: LogWriter> {
-    level: LogLevelFilter,
-    writer: W,
-    tikv_only: bool,
-}
-
-impl<W: LogWriter + Sync + Send> Log for Logger<W> {
-    fn enabled(&self, meta: &LogMetadata) -> bool {
-        meta.level() <= self.level
-    }
-
-    fn log(&self, record: &LogRecord) {
-        if self.tikv_only
-            && ENABLED_TARGETS
-                .iter()
-                .all(|target| !record.target().starts_with(target))
-        {
-            return;
-        }
-        if self.enabled(record.metadata()) {
-            let t = time::now();
-            let time_str = time::strftime("%Y/%m/%d %H:%M:%S.%f", &t).unwrap();
-            // TODO allow formatter to be configurable.
-            self.writer.write(format_args!(
-                "{} {}:{}: [{}] {}\n",
-                &time_str[..time_str.len() - 6],
-                record.location().file().rsplit('/').nth(0).unwrap(),
-                record.location().line(),
-                record.level(),
-                record.args()
-            ));
-        }
-    }
-}
-
-pub struct StderrLogger;
-
-impl LogWriter for StderrLogger {
-    #[inline]
-    fn write(&self, args: Arguments) {
-        let _ = io::stderr().write_fmt(args);
-    }
-}
-
-pub fn get_level_by_string(lv: &str) -> LogLevelFilter {
-    #![allow(match_same_arms)]
+pub fn get_level_by_string(lv: &str) -> Option<Level> {
     match &*lv.to_owned().to_lowercase() {
-        "trace" => LogLevelFilter::Trace,
-        "debug" => LogLevelFilter::Debug,
-        "info" => LogLevelFilter::Info,
-        "warn" => LogLevelFilter::Warn,
-        "error" => LogLevelFilter::Error,
-        "off" => LogLevelFilter::Off,
-        _ => LogLevelFilter::Info,
+        "critical" => Some(Level::Critical),
+        "error" => Some(Level::Error),
+        // We support `warn` due to legacy.
+        "warning" | "warn" => Some(Level::Warning),
+        "debug" => Some(Level::Debug),
+        "trace" => Some(Level::Trace),
+        "info" => Some(Level::Info),
+        _ => None,
     }
+}
+
+// The `to_string()` function of `slog::Level` produces values like `erro` and `trce` instead of
+// the full words. This produces the full word.
+pub fn get_string_by_level(lv: &Level) -> &'static str {
+    match lv {
+        Level::Critical => "critical",
+        Level::Error => "error",
+        Level::Warning => "warning",
+        Level::Debug => "debug",
+        Level::Trace => "trace",
+        Level::Info => "info",
+    }
+}
+
+#[test]
+fn test_get_level_by_string() {
+    // Ensure UPPER, Capitalized, and lower case all map over.
+    assert_eq!(Some(Level::Trace), get_level_by_string("TRACE"));
+    assert_eq!(Some(Level::Trace), get_level_by_string("Trace"));
+    assert_eq!(Some(Level::Trace), get_level_by_string("trace"));
+    // Due to legacy we need to ensure that `warn` maps to `Warning`.
+    assert_eq!(Some(Level::Warning), get_level_by_string("warn"));
+    assert_eq!(Some(Level::Warning), get_level_by_string("warning"));
+    // Ensure that all non-defined values map to `Info`.
+    assert_eq!(None, get_level_by_string("Off"));
+    assert_eq!(None, get_level_by_string("definitely not an option"));
 }
