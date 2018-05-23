@@ -11,26 +11,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rand::{self, Rng};
 use std::sync::Arc;
 use std::sync::mpsc::channel;
 use std::time::Duration;
 use std::{fs, thread};
 
+use rand::{self, Rng};
 use kvproto::metapb;
 use raft::eraftpb::MessageType;
 
-use super::cluster::{Cluster, Simulator};
-use super::node::new_node_cluster;
-use super::server::new_server_cluster;
-use super::transport_simulate::*;
-use super::util;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::engine::Iterable;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::{Callback, WriteResponse};
 use tikv::storage::{CF_DEFAULT, CF_WRITE};
 use tikv::util::config::*;
+
+use super::cluster::{Cluster, Simulator};
+use super::node::new_node_cluster;
+use super::server::new_server_cluster;
+use super::transport_simulate::*;
+use super::util;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
@@ -773,4 +774,48 @@ fn test_half_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(mid_key.as_slice(), right.get_start_key());
     assert_eq!(right.get_start_key(), left.get_end_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
+}
+
+fn test_split_heartbeat(right_derive: bool) {
+    // A 2 nodes cluster.
+    let mut cluster = new_node_cluster(0, 2);
+    cluster.cfg.raft_store.right_derive_when_split = right_derive;
+    cluster.run();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let old = pd_client.get_region(b"k1").unwrap();
+
+    // Filter new region's raft messages, so they never elects a leader.
+    // isolate region 1000 for region 1.
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1000, 1)));
+
+    let (tx, rx) = channel();
+    let c = Box::new(move |write_resp: WriteResponse| {
+        assert!(write_resp.response.has_header());
+        assert!(!write_resp.response.get_header().has_error());
+        assert!(write_resp.response.has_admin_response());
+        tx.send(()).unwrap();
+    });
+    cluster.split_region(&old, b"k2", Callback::Write(c));
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    let (old_key, new_key) = if right_derive {
+        (b"k3", b"k1")
+    } else {
+        (b"k1", b"k3")
+    };
+
+    // Wait old leader heartbeats.
+    cluster.get_region_with(old_key, |region| region != &old);
+    // The new region should not heartbeat PD.
+    pd_client.get_region(new_key).unwrap_err();
+}
+
+#[test]
+fn test_split_heartbeat_left_derive() {
+    test_split_heartbeat(false);
+}
+
+#[test]
+fn test_split_heartbeat_right_derive() {
+    test_split_heartbeat(true);
 }
