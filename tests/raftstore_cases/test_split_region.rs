@@ -16,9 +16,9 @@ use std::sync::mpsc::channel;
 use std::time::Duration;
 use std::{fs, thread};
 
-use rand::{self, Rng};
 use kvproto::metapb;
 use raft::eraftpb::MessageType;
+use rand::{self, Rng};
 
 use tikv::pd::PdClient;
 use tikv::raftstore::store::engine::Iterable;
@@ -784,8 +784,7 @@ fn test_split_heartbeat(right_derive: bool) {
     let pd_client = Arc::clone(&cluster.pd_client);
     let old = pd_client.get_region(b"k1").unwrap();
 
-    // Filter new region's raft messages, so they never elects a leader.
-    // isolate region 1000 for region 1.
+    // Isolate region 1000 for store 1, so they never elect a leader.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1000, 1)));
 
     let (tx, rx) = channel();
@@ -808,6 +807,11 @@ fn test_split_heartbeat(right_derive: bool) {
     cluster.get_region_with(old_key, |region| region != &old);
     // The new region should not heartbeat PD.
     pd_client.get_region(new_key).unwrap_err();
+
+    cluster.clear_send_filters();
+    // Sleep a while.
+    thread::sleep(Duration::from_secs(1));
+    pd_client.get_region(new_key).unwrap();
 }
 
 #[test]
