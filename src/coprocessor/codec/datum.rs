@@ -24,9 +24,9 @@ use super::mysql::{self, parse_json_path_expr, Decimal, DecimalEncoder, Duration
                    JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP};
 use super::{convert, Error, Result};
 use coprocessor::dag::expr::EvalContext;
-use util::codec::bytes::{BytesDecoder, BytesEncoder, CompactBytesDecoder};
+use util::codec::bytes::{self, BytesEncoder};
 use util::codec::number::NumberDecoder;
-use util::codec::{bytes, number, BytesSlice};
+use util::codec::{number, BytesSlice};
 use util::escape;
 
 pub const NIL_FLAG: u8 = 0;
@@ -767,8 +767,8 @@ pub fn decode_datum(data: &mut BytesSlice) -> Result<Datum> {
         match flag {
             INT_FLAG => number::decode_i64(data).map(Datum::I64),
             UINT_FLAG => number::decode_u64(data).map(Datum::U64),
-            BYTES_FLAG => data.decode_bytes(false).map(Datum::Bytes),
-            COMPACT_BYTES_FLAG => data.decode_compact_bytes().map(Datum::Bytes),
+            BYTES_FLAG => bytes::decode_bytes(data, false).map(Datum::Bytes),
+            COMPACT_BYTES_FLAG => bytes::decode_compact_bytes(data).map(Datum::Bytes),
             NIL_FLAG => Ok(Datum::Null),
             FLOAT_FLAG => number::decode_f64(data).map(Datum::F64),
             DURATION_FLAG => {
