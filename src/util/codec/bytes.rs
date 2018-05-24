@@ -11,10 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use byteorder::ReadBytesExt;
 use std::io::{Read, Write};
 
 use super::{BytesSlice, Error, Result};
-use util::codec::number::{self, NumberDecoder, NumberEncoder};
+use util::codec::number::{self, NumberEncoder};
 
 const ENC_GROUP_SIZE: usize = 8;
 const ENC_MARKER: u8 = b'\xff';
@@ -112,10 +113,19 @@ pub fn encoded_compact_len(mut encoded: &[u8]) -> usize {
     vn + (encoded.as_ptr() as usize - last_encoded)
 }
 
-pub trait CompactBytesFromFileDecoder: NumberDecoder {
+pub trait CompactBytesFromFileDecoder: Read {
     /// `decode_compact_bytes` decodes bytes which is encoded by `encode_compact_bytes` before.
     fn decode_compact_bytes(&mut self) -> Result<Vec<u8>> {
-        let vn = self.decode_var_i64()? as usize;
+        let mut var_data = Vec::with_capacity(number::MAX_VAR_I64_LEN);
+        while var_data.len() < number::MAX_VAR_U64_LEN {
+            let b = self.read_u8()?;
+            var_data.push(b);
+            if b < 0x80 {
+                break;
+            }
+        }
+        let vn = number::decode_var_i64(&mut var_data.as_slice())? as usize;
+
         let mut data = vec![0; vn];
         self.read_exact(&mut data)?;
         Ok(data)
