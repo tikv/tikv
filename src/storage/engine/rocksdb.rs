@@ -15,7 +15,7 @@ use super::{BatchCallback, Callback, CbContext, Cursor, Engine, Error, Iterator 
             Modify, Result, ScanMode, Snapshot, TEMP_DIR};
 use kvproto::kvrpcpb::Context;
 use raftstore::store::engine::{IterOption, Peekable, SyncSnapshot as RocksSnapshot};
-use raftstore::store::{SeekLocalRegionFilter, SeekLocalRegionResult};
+use raftstore::store::{SeekRegionFilter, SeekRegionResult};
 use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::Deref;
@@ -198,12 +198,12 @@ impl Engine for EngineRocksdb {
         Ok(())
     }
 
-    fn seek_local_region(
+    fn seek_region(
         &self,
         _from_key: &[u8],
-        _filter: SeekLocalRegionFilter,
+        _filter: SeekRegionFilter,
         _limit: u32,
-    ) -> Result<SeekLocalRegionResult> {
+    ) -> Result<SeekRegionResult> {
         unimplemented!();
     }
 

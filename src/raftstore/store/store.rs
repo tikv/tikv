@@ -54,7 +54,7 @@ use util::{escape, rocksdb};
 use super::cmd_resp::{bind_term, new_error};
 use super::config::Config;
 use super::engine::{Iterable, Mutable, Peekable, Snapshot as EngineSnapshot};
-use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
+use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key, origin_key};
 use super::local_metrics::RaftMetrics;
 use super::metrics::*;
 use super::msg::{Callback, ReadResponse};
@@ -66,8 +66,8 @@ use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, Clea
                     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
                     RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
                     SplitCheckTask, STALE_PEER_CHECK_INTERVAL};
-use super::{util, LocalRegionInfo, Msg, SeekLocalRegionCallback, SeekLocalRegionFilter,
-            SeekLocalRegionResult, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
+use super::{util, Msg, SeekRegionCallback, SeekRegionFilter, SeekRegionResult, SignificantMsg,
+            SnapKey, SnapManager, SnapshotDeleter, Tick};
 use import::SSTImporter;
 
 type Key = Vec<u8>;
@@ -3132,35 +3132,32 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn seek_local_region(
+    fn seek_region(
         &self,
         from_key: &[u8],
-        filter: SeekLocalRegionFilter,
+        filter: SeekRegionFilter,
         mut limit: u32,
-        callback: SeekLocalRegionCallback,
+        callback: SeekRegionCallback,
     ) {
         let from_key = data_key(from_key);
         for (end_key, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
-            let peer = self.region_peers.get(region_id);
-            if let Some(p) = peer {
-                if filter(p) {
-                    let region_info = LocalRegionInfo {
-                        local_peer: p.peer.clone(),
-                        region: p.region().clone(),
-                    };
-                    callback(SeekLocalRegionResult::Some(region_info));
-                    return;
-                }
+            let peer = &self.region_peers[region_id];
+            if filter(peer) {
+                callback(SeekRegionResult::Some {
+                    local_peer: peer.peer.clone(),
+                    region: peer.region().clone(),
+                });
+                return;
             }
             limit -= 1;
             if limit == 0 {
-                callback(SeekLocalRegionResult::LimitExceeded {
-                    next_key: end_key.clone(),
+                callback(SeekRegionResult::LimitExceeded {
+                    next_key: origin_key(end_key).to_vec(),
                 });
                 return;
             }
         }
-        callback(SeekLocalRegionResult::Ended);
+        callback(SeekRegionResult::Ended);
     }
 }
 
@@ -3300,12 +3297,12 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             } => self.on_schedule_half_split_region(region_id, &region_epoch),
             Msg::MergeFail { region_id } => self.on_merge_fail(region_id),
             Msg::ValidateSSTResult { invalid_ssts } => self.on_validate_sst_result(invalid_ssts),
-            Msg::SeekLocalRegion {
+            Msg::SeekRegion {
                 from_key,
                 filter,
                 limit,
                 callback,
-            } => self.seek_local_region(&from_key, filter, limit, callback),
+            } => self.seek_region(&from_key, filter, limit, callback),
         }
     }
 

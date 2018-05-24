@@ -20,7 +20,7 @@ use std::{error, result};
 pub use self::rocksdb::EngineRocksdb;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
-use raftstore::store::{SeekLocalRegionFilter, SeekLocalRegionResult};
+use raftstore::store::{SeekRegionFilter, SeekRegionResult};
 use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
 use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
@@ -119,12 +119,12 @@ pub trait Engine: Send + Debug {
     }
 
     /// Find next local peer that satisfies the given predicate.
-    fn seek_local_region(
+    fn seek_region(
         &self,
         from: &[u8],
-        filter: SeekLocalRegionFilter,
+        filter: SeekRegionFilter,
         limit: u32,
-    ) -> Result<SeekLocalRegionResult>;
+    ) -> Result<SeekRegionResult>;
 
     /// Create a shared Engine pointer.
     fn clone_box(&self) -> Box<Engine + 'static>;

@@ -38,15 +38,14 @@ pub struct WriteResponse {
     pub response: RaftCmdResponse,
 }
 
-#[derive(Debug)]
-pub struct LocalRegionInfo {
-    pub local_peer: metapb::Peer,
-    pub region: metapb::Region,
-}
-
-pub enum SeekLocalRegionResult {
-    Some(LocalRegionInfo),
-    LimitExceeded { next_key: Vec<u8> },
+pub enum SeekRegionResult {
+    Some {
+        local_peer: metapb::Peer,
+        region: metapb::Region,
+    },
+    LimitExceeded {
+        next_key: Vec<u8>,
+    },
     Ended,
 }
 
@@ -54,8 +53,8 @@ pub type ReadCallback = Box<FnBox(ReadResponse) + Send>;
 pub type WriteCallback = Box<FnBox(WriteResponse) + Send>;
 pub type BatchReadCallback = Box<FnBox(Vec<Option<ReadResponse>>) + Send>;
 
-pub type SeekLocalRegionCallback = Box<FnBox(SeekLocalRegionResult) + Send>;
-pub type SeekLocalRegionFilter = Box<Fn(&Peer) -> bool + Send>;
+pub type SeekRegionCallback = Box<FnBox(SeekRegionResult) + Send>;
+pub type SeekRegionFilter = Box<Fn(&Peer) -> bool + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callbak for read only requests including `StatusRequest`,
@@ -198,11 +197,11 @@ pub enum Msg {
         invalid_ssts: Vec<SSTMeta>,
     },
 
-    SeekLocalRegion {
+    SeekRegion {
         from_key: Vec<u8>,
-        filter: SeekLocalRegionFilter,
+        filter: SeekRegionFilter,
         limit: u32,
-        callback: SeekLocalRegionCallback,
+        callback: SeekRegionCallback,
     },
 }
 
@@ -244,8 +243,8 @@ impl fmt::Debug for Msg {
             }
             Msg::MergeFail { region_id } => write!(fmt, "MergeFail region_id {}", region_id),
             Msg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
-            Msg::SeekLocalRegion { ref from_key, .. } => {
-                write!(fmt, "Seek Local Region from_key {:?}", from_key)
+            Msg::SeekRegion { ref from_key, .. } => {
+                write!(fmt, "Seek Region from_key {:?}", from_key)
             }
         }
     }

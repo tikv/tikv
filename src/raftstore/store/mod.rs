@@ -33,9 +33,9 @@ pub use self::bootstrap::{bootstrap_store, clear_prepare_bootstrap, clear_prepar
                           prepare_bootstrap, write_prepare_bootstrap};
 pub use self::config::Config;
 pub use self::engine::{Iterable, Mutable, Peekable};
-pub use self::msg::{BatchReadCallback, Callback, LocalRegionInfo, Msg, ReadCallback, ReadResponse,
-                    SeekLocalRegionCallback, SeekLocalRegionFilter, SeekLocalRegionResult,
-                    SignificantMsg, Tick, WriteCallback, WriteResponse};
+pub use self::msg::{BatchReadCallback, Callback, Msg, ReadCallback, ReadResponse,
+                    SeekRegionCallback, SeekRegionFilter, SeekRegionResult, SignificantMsg, Tick,
+                    WriteCallback, WriteResponse};
 pub use self::peer::{Peer, ProposalContext};
 pub use self::peer_storage::{do_snapshot, init_apply_state, init_raft_state, write_peer_state,
                              CacheQueryStats, PeerStorage, SnapState, RAFT_INIT_LOG_INDEX,
