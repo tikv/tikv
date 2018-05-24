@@ -15,7 +15,7 @@ use super::Result;
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use coprocessor::codec::mysql::{types, Decimal, DecimalEncoder, Duration, DurationEncoder, Json,
-                                JsonDecoder, JsonEncoder, Time, TimeEncoder};
+                                JsonEncoder, Time, TimeEncoder};
 use tipb::expression::FieldType;
 use util::codec::number::{NumberDecoder, NumberEncoder};
 
@@ -284,7 +284,7 @@ impl Column {
         let start = self.var_offsets[idx];
         let end = self.var_offsets[idx + 1];
         let mut data = &self.data[start..end];
-        data.decode_json()
+        Json::decode(&mut data)
     }
 
     pub fn len(&self) -> usize {
