@@ -19,7 +19,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use test::Bencher;
 
-use tikv::coprocessor::codec::mysql::{Json, JsonDecoder, JsonEncoder};
+use tikv::coprocessor::codec::mysql::{Json, JsonEncoder};
 
 fn download_and_extract_file(url: &str) -> io::Result<String> {
     let mut dl_child = Command::new("curl")
@@ -125,7 +125,7 @@ fn bench_decode_binary(b: &mut Bencher) {
         .collect::<Vec<Vec<u8>>>();
     b.iter(|| {
         for binary in &binaries {
-            binary.as_slice().decode_json().unwrap();
+            Json::decode(&mut binary.as_slice()).unwrap();
         }
     });
 }
