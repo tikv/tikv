@@ -21,7 +21,7 @@ use std::str::FromStr;
 use std::{str, i64};
 
 use super::mysql::{self, parse_json_path_expr, Decimal, DecimalEncoder, Duration, Json,
-                   JsonDecoder, JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP};
+                   JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP};
 use super::{convert, Error, Result};
 use coprocessor::dag::expr::EvalContext;
 use util::codec::bytes::{self, BytesEncoder};
@@ -779,7 +779,7 @@ pub fn decode_datum(data: &mut BytesSlice) -> Result<Datum> {
             DECIMAL_FLAG => Decimal::decode(data).map(Datum::Dec),
             VAR_INT_FLAG => number::decode_var_i64(data).map(Datum::I64),
             VAR_UINT_FLAG => number::decode_var_u64(data).map(Datum::U64),
-            JSON_FLAG => data.decode_json().map(Datum::Json),
+            JSON_FLAG => Json::decode(data).map(Datum::Json),
             f => Err(invalid_type!("unsupported data type `{}`", f)),
         }
     } else {
@@ -951,7 +951,7 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
         JSON_FLAG => {
             let mut v = &buf[1..];
             let l = v.len();
-            v.decode_json()?;
+            Json::decode(&mut v)?;
             l - v.len()
         }
         f => return Err(invalid_type!("unsupported data type `{}`", f)),
