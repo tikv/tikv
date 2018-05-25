@@ -369,16 +369,10 @@ impl Peer {
         };
 
         let raft_group = RawNode::new(&raft_cfg, ps, vec![])?;
-        let meta_peer = if peer.is_learner {
-            util::new_learner_peer(store_id, peer.get_id())
-        } else {
-            util::new_peer(store_id, peer.get_id())
-        };
-
         let mut peer = Peer {
             kv_engine: store.kv_engine(),
             raft_engine: store.raft_engine(),
-            peer: meta_peer,
+            peer: peer,
             region_id: region.get_id(),
             raft_group,
             proposals: Default::default(),
@@ -906,6 +900,12 @@ impl Peer {
         }
 
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
+        self.peer = self.region()
+            .get_peers()
+            .iter()
+            .find(|p| p.get_id() == self.peer.get_id())
+            .unwrap()
+            .clone();
 
         if !self.is_leader() {
             fail_point!("raft_before_follower_send");

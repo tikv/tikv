@@ -1469,10 +1469,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 p.heartbeat_pd(&self.pd_worker);
             }
 
+            let peer_id = cp.peer.get_id();
             match change_type {
                 ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
                     let peer = cp.peer.clone();
-                    if p.peer.get_id() == peer.get_id() {
+                    if p.peer.get_id() == peer_id {
                         p.peer = peer.clone();
                     }
 
@@ -1486,7 +1487,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
                 ConfChangeType::RemoveNode => {
                     // Remove this peer from cache.
-                    let peer_id = cp.peer.get_id();
                     p.peer_heartbeats.remove(&peer_id);
                     if p.is_leader() {
                         p.peers_start_pending_time.retain(|&(p, _)| p != peer_id);
