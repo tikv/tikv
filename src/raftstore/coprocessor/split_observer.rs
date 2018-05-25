@@ -13,7 +13,7 @@
 
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
 use coprocessor::codec::table;
-use util::codec::bytes::{encode_bytes, BytesDecoder};
+use util::codec::bytes::{self, encode_bytes};
 
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
 use std::result::Result as StdResult;
@@ -31,7 +31,7 @@ impl SplitObserver {
             return Err("split key is expected!".to_owned());
         }
 
-        let mut key = match split.get_split_key().decode_bytes(false) {
+        let mut key = match bytes::decode_bytes(&mut split.get_split_key(), false) {
             Ok(x) => x,
             Err(_) => return Ok(()),
         };
