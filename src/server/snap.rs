@@ -79,6 +79,18 @@ impl Stream for SnapChunk {
             return Ok(Async::Ready(Some((t, write_flags))));
         }
 
+        // Pause sending the snapshot to emulate large snapshot cases.
+        {
+            let fp_last_chunk = || {
+                fail_point!(
+                    "snapshot_send_last_chunk",
+                    self.remain_bytes <= SNAP_CHUNK_LEN,
+                    |_| ()
+                );
+            };
+            fp_last_chunk();
+        }
+
         let mut buf = match self.remain_bytes {
             0 => return Ok(Async::Ready(None)),
             n if n > SNAP_CHUNK_LEN => vec![0; SNAP_CHUNK_LEN],

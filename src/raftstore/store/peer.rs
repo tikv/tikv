@@ -1795,8 +1795,19 @@ pub fn check_epoch(
 }
 
 impl Peer {
+    // If the `metapb::Peer` comes from raft messages, it maybe
+    // not trustable because learners won't know it until they
+    // receive snapshots.
     pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
-        self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
+        let mut peer_cache = self.peer_cache.borrow_mut();
+        peer_cache.entry(peer.get_id()).or_insert_with(|| {
+            self.region()
+                .get_peers()
+                .iter()
+                .find(|p| p.get_id() == peer.get_id())
+                .cloned()
+                .unwrap_or(peer)
+        });
     }
 
     pub fn remove_peer_from_cache(&mut self, peer_id: u64) {

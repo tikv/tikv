@@ -230,6 +230,28 @@ fn test_generate_snapshot() {
     fail::remove("snapshot_delete_after_send");
 }
 
+#[test]
+fn test_learner_with_slow_snapshot() {
+    let _guard = ::setup();
+
+    let mut cluster = new_server_cluster(0, 3);
+    configure_for_snapshot(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    (0..10).for_each(|_| cluster.must_put(b"k1", b"v1"));
+
+    fail::cfg("snapshot_send_last_chunk", "pause").unwrap();
+
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
+    // The learner should be still pending even if it has
+    // already sent some messages to leader.
+    must_no_empty_dir(cluster.get_snap_dir(2));
+    assert_eq!(pd_client.get_pending_peers()[&2], new_learner_peer(2, 2));
+
+    fail::remove("snapshot_send_last_chunk");
+}
+
 fn must_empty_dir(path: String) {
     for _ in 0..200 {
         let snap_dir = fs::read_dir(&path).unwrap();
@@ -240,4 +262,15 @@ fn must_empty_dir(path: String) {
         return;
     }
     panic!("the directory {:?} should be empty", path);
+}
+
+fn must_no_empty_dir(path: String) {
+    for _ in 0..200 {
+        let snap_dir = fs::read_dir(&path).unwrap();
+        if snap_dir.count() == 0 {
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+        return;
+    }
 }
