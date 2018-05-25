@@ -3141,18 +3141,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     ) {
         let from_key = data_key(from_key);
         for (end_key, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
+            if limit == 0 {
+                callback(SeekRegionResult::LimitExceeded {
+                    next_key: origin_key(end_key).to_vec(),
+                });
+                return;
+            }
+            limit -= 1;
+
             let peer = &self.region_peers[region_id];
             if filter(peer) {
                 callback(SeekRegionResult::Some {
                     local_peer: peer.peer.clone(),
                     region: peer.region().clone(),
-                });
-                return;
-            }
-            limit -= 1;
-            if limit == 0 {
-                callback(SeekRegionResult::LimitExceeded {
-                    next_key: origin_key(end_key).to_vec(),
                 });
                 return;
             }
