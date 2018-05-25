@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use byteorder::ReadBytesExt;
-use std::io::{Read, Write};
+use std::io::{BufRead, Write};
 
 use super::{BytesSlice, Error, Result};
 use util::codec::number::{self, NumberEncoder};
@@ -113,7 +113,7 @@ pub fn encoded_compact_len(mut encoded: &[u8]) -> usize {
     vn + (encoded.as_ptr() as usize - last_encoded)
 }
 
-pub trait CompactBytesFromFileDecoder: Read {
+pub trait CompactBytesFromFileDecoder: BufRead {
     /// `decode_compact_bytes` decodes bytes which is encoded by `encode_compact_bytes` before.
     fn decode_compact_bytes(&mut self) -> Result<Vec<u8>> {
         let mut var_data = Vec::with_capacity(number::MAX_VAR_I64_LEN);
@@ -132,7 +132,7 @@ pub trait CompactBytesFromFileDecoder: Read {
     }
 }
 
-impl<T: Read> CompactBytesFromFileDecoder for T {}
+impl<T: BufRead> CompactBytesFromFileDecoder for T {}
 
 /// Get the first encoded bytes's length in encoded.
 ///
