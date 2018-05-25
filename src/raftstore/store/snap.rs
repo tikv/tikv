@@ -32,7 +32,7 @@ use raftstore::store::Msg;
 use raftstore::store::util::check_key_in_region;
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::HandyRwLock;
-use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
+use util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use util::collections::{HashMap, HashMapEntry as Entry};
 use util::io_limiter::{IOLimiter, LimitWriter};
 use util::rocksdb::{prepare_sst_for_ingestion, validate_sst_for_ingestion};
@@ -792,7 +792,7 @@ pub fn build_plain_cf_file<E: BytesEncoder>(
     Ok((cf_key_count, cf_size))
 }
 
-fn apply_plain_cf_file<D: CompactBytesDecoder>(
+fn apply_plain_cf_file<D: CompactBytesFromFileDecoder>(
     decoder: &mut D,
     options: &ApplyOptions,
     handle: &CFHandle,

@@ -1278,6 +1278,8 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             write_conflict.set_key(key.to_owned());
             write_conflict.set_primary(primary.to_owned());
             key_error.set_conflict(write_conflict);
+            // for compatibility with older versions.
+            key_error.set_retryable(format!("{:?}", err));
         }
         // failed in commit
         storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
@@ -1407,6 +1409,7 @@ mod tests {
         write_conflict.set_key(key);
         write_conflict.set_primary(primary);
         expect.set_conflict(write_conflict);
+        expect.set_retryable(format!("{:?}", case));
 
         let got = extract_key_error(&case);
         assert_eq!(got, expect);
