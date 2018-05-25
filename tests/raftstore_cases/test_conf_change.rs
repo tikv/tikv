@@ -11,17 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use kvproto::metapb;
 use kvproto::raft_cmdpb::RaftResponseHeader;
 use kvproto::raft_serverpb::*;
-use raft::eraftpb::ConfChangeType;
+use raft::eraftpb::{ConfChangeType, MessageType};
 use tikv::pd::PdClient;
+use tikv::raftstore::Result;
 use tikv::raftstore::store::*;
 use tikv::storage::CF_RAFT;
+use tikv::util::HandyRwLock;
 
 use futures::Future;
 
@@ -685,4 +687,35 @@ fn test_node_learner_conf_change() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
     test_learner_conf_change(&mut cluster);
+}
+
+#[test]
+fn test_learner_with_slow_snapshot() {
+    let mut cluster = new_server_cluster(0, 3);
+    configure_for_snapshot(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    (0..10).for_each(|_| cluster.must_put(b"k1", b"v1"));
+
+    struct SnapshotFilter(Mutex<mpsc::Sender<()>>);
+    impl Filter<RaftMessage> for SnapshotFilter {
+        fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+            let old_len = msgs.len();
+            msgs.retain(|m| m.get_message().get_msg_type() != MessageType::MsgSnapshot);
+            if msgs.len() < old_len {
+                self.0.lock().unwrap().send(()).unwrap();
+            }
+            Ok(())
+        }
+    }
+
+    let (tx, rx) = mpsc::channel();
+    let snap_filter = box SnapshotFilter(Mutex::new(tx));
+    cluster.sim.wl().add_send_filter(1, snap_filter);
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
+
+    // The learner should be still pending.
+    rx.recv().unwrap();
+    assert_eq!(pd_client.get_pending_peers()[&2], new_learner_peer(2, 2));
 }
