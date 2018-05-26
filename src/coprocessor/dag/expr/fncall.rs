@@ -102,10 +102,6 @@ impl FnCall {
             | ScalarFuncSig::BitAndSig
             | ScalarFuncSig::BitOrSig
             | ScalarFuncSig::BitXorSig
-            | ScalarFuncSig::LeftShift
-            | ScalarFuncSig::RightShift
-            | ScalarFuncSig::RegexpSig
-            | ScalarFuncSig::RegexpBinarySig
             | ScalarFuncSig::DateFormatSig => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -190,9 +186,7 @@ impl FnCall {
             | ScalarFuncSig::FloorDecToInt
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
-            | ScalarFuncSig::BitCount
-            | ScalarFuncSig::BitNegSig
-            | ScalarFuncSig::BitLength => (1, 1),
+            | ScalarFuncSig::BitNegSig => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -229,19 +223,7 @@ impl FnCall {
             | ScalarFuncSig::InDecimal
             | ScalarFuncSig::InTime
             | ScalarFuncSig::InDuration
-            | ScalarFuncSig::InJson
-            | ScalarFuncSig::GreatestInt
-            | ScalarFuncSig::GreatestReal
-            | ScalarFuncSig::GreatestDecimal
-            | ScalarFuncSig::GreatestString
-            | ScalarFuncSig::GreatestTime
-            | ScalarFuncSig::LeastInt
-            | ScalarFuncSig::LeastReal
-            | ScalarFuncSig::LeastDecimal
-            | ScalarFuncSig::LeastString
-            | ScalarFuncSig::LeastTime
-            | ScalarFuncSig::IntervalInt
-            | ScalarFuncSig::IntervalReal => (2, usize::MAX),
+            | ScalarFuncSig::InJson => (2, usize::MAX),
 
             ScalarFuncSig::JsonSetSig
             | ScalarFuncSig::JsonInsertSig
@@ -469,8 +451,8 @@ dispatch_call! {
         PlusInt => plus_int,
         MinusInt => minus_int,
         MultiplyInt => multiply_int,
-        IntDivideInt => intdivide_int,
-        IntDivideDecimal => intdivide_decimal,
+        IntDivideInt => int_divide_int,
+        IntDivideDecimal => int_divide_decimal,
         ModInt => mod_int,
 
         LogicalAnd => logical_and,

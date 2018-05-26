@@ -198,16 +198,15 @@ impl FnCall {
         }
     }
 
-    pub fn intdivide_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+    pub fn int_divide_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
-
         if rhs == 0 {
             return Ok(None);
         }
-
-        let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
         let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
+
+        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+        let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
 
         let res = match (lus, rus) {
             (true, true) => Ok(((lhs as u64) / (rhs as u64)) as i64),
@@ -218,9 +217,9 @@ impl FnCall {
         res.map(Some)
     }
 
-    pub fn intdivide_decimal(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
+    pub fn int_divide_decimal(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
+        let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
         let overflow = Error::overflow("BIGINT", &format!("({} DIV {})", lhs, rhs));
         match lhs.into_owned() / rhs.into_owned() {
             Some(v) => match v {
@@ -237,11 +236,12 @@ impl FnCall {
     }
 
     pub fn mod_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let lhs = try_opt!(self.children[0].eval_real(ctx, row));
         let rhs = try_opt!(self.children[1].eval_real(ctx, row));
         if rhs == 0f64 {
             return Ok(None);
         }
+        let lhs = try_opt!(self.children[0].eval_real(ctx, row));
+
         let res = lhs % rhs;
         Ok(Some(res))
     }
@@ -251,8 +251,8 @@ impl FnCall {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
         let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
+        let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
         let overflow = Error::overflow("DECIMAL", &format!("({} % {})", lhs, rhs));
         match lhs.into_owned() % rhs.into_owned() {
             Some(v) => match v {
@@ -265,13 +265,15 @@ impl FnCall {
     }
 
     pub fn mod_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
-        let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
-        let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
         if rhs == 0 {
             return Ok(None);
         }
+        let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
+
+        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+        let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
+
         let res = match (lus, rus) {
             (true, true) => ((lhs as u64) % (rhs as u64)) as i64,
             (false, false) => lhs % rhs,
