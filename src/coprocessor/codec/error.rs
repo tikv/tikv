@@ -59,6 +59,12 @@ quick_error! {
             description("evaluation failed")
             display("{}", s)
         }
+        Regex(err: regex::Error) {
+            from()
+            description("regex error")
+            display("regex error: {}", err)
+            cause(err)
+        }
         Other(err: Box<error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
