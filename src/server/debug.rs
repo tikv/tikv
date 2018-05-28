@@ -402,17 +402,6 @@ impl Debugger {
 
         let count_voters = |peers: &[Peer]| peers.iter().filter(|p| !p.get_is_learner()).count();
 
-        // Try best to keep committed logs not be overwritten after
-        // the recover, in which case this rule must be conformed:
-        // quorum(old_voters) + quorum(new_voters) > len(old_voters).
-        let keep_committed_logs = |old_voters: usize, new_voters: usize| -> bool {
-            match (old_voters & 1, new_voters & 1) {
-                (1, 1) => new_voters + 2 > old_voters,
-                (0, 0) => new_voters + 4 > old_voters,
-                _ => new_voters + 3 > old_voters,
-            }
-        };
-
         {
             let remove_stores = |key: &[u8], value: &[u8]| {
                 let (_, suffix_type) = box_try!(keys::decode_region_meta_key(key));
@@ -429,40 +418,39 @@ impl Debugger {
                 let old_peers = region_state.mut_region().take_peers();
                 let old_voters_len = count_voters(&old_peers);
 
-                let (mut new_peers, mut removed_peers) = old_peers
+                let (mut rest_peers, mut removed_peers) = old_peers
                     .iter()
                     .cloned()
                     .partition::<Vec<_>, _>(|peer| !store_ids.contains(&peer.get_store_id()));
+                let rest_voters_len = count_voters(&rest_peers);
 
-                let rest_voters_len = count_voters(&new_peers);
                 if rest_voters_len >= quorum(old_voters_len) {
                     return Ok(());
                 }
 
-                let mut new_voters_len = rest_voters_len;
-                while quorum(new_voters_len) <= rest_voters_len
-                    && !keep_committed_logs(old_voters_len, new_voters_len)
-                {
+                let min_removed = old_voters_len - 2 * rest_voters_len + 1;
+                let mut removed_voters_len = count_voters(&removed_peers);
+                while removed_voters_len > min_removed {
                     let voter = removed_peers
                         .iter()
                         .position(|peer| !peer.get_is_learner())
                         .map(|i| removed_peers.swap_remove(i))
                         .unwrap();
-                    new_peers.push(voter);
-                    new_voters_len += 1;
+                    rest_peers.push(voter);
+                    removed_voters_len -= 1;
                 }
 
                 info!(
                     "region {} change peers from {:?}, to {:?}",
                     region_state.get_region().get_id(),
                     old_peers,
-                    new_peers
+                    rest_peers
                 );
 
                 // We need to leave epoch untouched to avoid inconsistency.
                 region_state
                     .mut_region()
-                    .set_peers(RepeatedField::from_vec(new_peers));
+                    .set_peers(RepeatedField::from_vec(rest_peers));
                 box_try!(wb.put_msg_cf(handle, key, &region_state));
 
                 Ok(())
@@ -1345,17 +1333,19 @@ mod tests {
             .remove_failed_stores(vec![13, 14, 21, 23], Some(vec![1]))
             .unwrap();
 
-        // 13 and 14 should be removed from region 1.
+        // 14 should be removed from region 1.
         let region_state = get_region_state(engine, 1);
-        assert_eq!(region_state.get_region().get_peers().len(), 2);
+        assert_eq!(region_state.get_region().get_peers().len(), 3);
         // 21 and 23 shouldn't be removed from region 2.
         let region_state = get_region_state(engine, 2);
         assert_eq!(region_state.get_region().get_peers().len(), 3);
 
         // Remove specified stores from all regions.
-        debugger.remove_failed_stores(vec![11, 23], None).unwrap();
+        debugger
+            .remove_failed_stores(vec![11, 12, 23], None)
+            .unwrap();
 
-        // 11 should be removed from region 1.
+        // 11 and 12 should be removed from region 1.
         let region_state = get_region_state(engine, 1);
         assert_eq!(region_state.get_region().get_peers().len(), 1);
 
@@ -1373,8 +1363,8 @@ mod tests {
         for (failed, rest) in vec![
             (vec![11], vec![11, 12, 13, 14, 15, 16]),
             (vec![11, 12], vec![11, 12, 13, 14, 15, 16]),
-            (vec![11, 12, 13], vec![14, 15, 16, 11]),
-            (vec![11, 12, 13, 14], vec![15, 16]),
+            (vec![11, 12, 13], vec![14, 15, 16, 11, 13]),
+            (vec![11, 12, 13, 14], vec![15, 16, 14]),
             (vec![11, 12, 13, 14, 15], vec![16]),
         ] {
             assert!(debugger.remove_failed_stores(failed, Some(vec![4])).is_ok());
