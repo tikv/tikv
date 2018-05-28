@@ -900,12 +900,15 @@ impl Peer {
         }
 
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
-        self.peer = self.region()
-            .get_peers()
-            .iter()
-            .find(|p| p.get_id() == self.peer.get_id())
-            .unwrap()
-            .clone();
+        if apply_snap_result.is_some() && self.peer.get_is_learner() {
+            // The peer may change from learner to voter after snapshot applied.
+            self.peer = self.region()
+                .get_peers()
+                .iter()
+                .find(|p| p.get_id() == self.peer.get_id())
+                .unwrap()
+                .clone();
+        }
 
         if !self.is_leader() {
             fail_point!("raft_before_follower_send");

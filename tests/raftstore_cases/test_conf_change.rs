@@ -719,3 +719,24 @@ fn test_learner_with_slow_snapshot() {
     rx.recv().unwrap();
     assert_eq!(pd_client.get_pending_peers()[&2], new_learner_peer(2, 2));
 }
+
+#[test]
+fn test_learner_promote_in_snapshot() {
+    let mut cluster = new_server_cluster(0, 3);
+    configure_for_snapshot(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+
+    cluster.stop_node(3);
+    pd_client.must_add_peer(r1, new_learner_peer(3, 3));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+    (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
+    cluster.run_node(3);
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+    pd_client.must_have_peer(r1, new_peer(3, 3));
+}
