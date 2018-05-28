@@ -372,7 +372,7 @@ impl Peer {
         let mut peer = Peer {
             kv_engine: store.kv_engine(),
             raft_engine: store.raft_engine(),
-            peer: peer,
+            peer,
             region_id: region.get_id(),
             raft_group,
             proposals: Default::default(),
