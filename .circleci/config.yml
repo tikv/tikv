@@ -23,6 +23,7 @@ jobs:
             echo 'export CPPFLAGS=-I$HOME/.local/include' >> $BASH_ENV
             echo 'export CXXFLAGS=-I$HOME/.local/include' >> $BASH_ENV
             echo 'export LOCAL_PREFIX=$HOME/.local' >> $BASH_ENV
+            # Print kernel config and log.
             cat /boot/config-`uname -r`
             dmesg
       - checkout

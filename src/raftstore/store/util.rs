@@ -423,16 +423,26 @@ mod tests {
     use storage::{Key, ALL_CFS};
     use util::properties::SizePropertiesCollectorFactory;
     use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
-    use util::time::monotonic_raw_now;
+    use util::time::{monotonic_now, monotonic_raw_now};
 
     #[test]
     fn test_lease() {
         #[inline]
         fn sleep_test(duration: TimeDuration, lease: &Lease, state: LeaseState) {
-            let start = monotonic_raw_now();
+            // In linux, sleep uses CLOCK_MONOTONIC.
+            let monotonic_start = monotonic_now();
+            // In linux, lease uses CLOCK_MONOTONIC_RAW.
+            let monotonic_raw_start = monotonic_raw_now();
             thread::sleep(duration.to_std().unwrap());
-            let end = monotonic_raw_now();
-            assert_eq!(lease.inspect(Some(end)), state, "elapsed {:?}", end - start);
+            let monotonic_end = monotonic_now();
+            let monotonic_raw_end = monotonic_raw_now();
+            assert_eq!(
+                lease.inspect(Some(monotonic_raw_end)),
+                state,
+                "elapsed monotonic_raw: {:?}, monotonic: {:?}",
+                monotonic_raw_end - monotonic_raw_start,
+                monotonic_end - monotonic_start
+            );
             assert_eq!(lease.inspect(None), state);
         }
 
