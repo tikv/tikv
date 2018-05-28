@@ -17,7 +17,7 @@ use std::fmt::{self, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::u64;
 
-use util::codec::bytes::BytesDecoder;
+use util::codec::bytes;
 use util::codec::number::{self, NumberDecoder, NumberEncoder};
 use util::{codec, escape};
 
@@ -70,7 +70,7 @@ impl Key {
 
     /// Gets the raw representation of this key.
     pub fn raw(&self) -> Result<Vec<u8>, codec::Error> {
-        self.0.as_slice().decode_bytes(false)
+        bytes::decode_bytes(&mut self.0.as_slice(), false)
     }
 
     /// Creates a key from encoded bytes.

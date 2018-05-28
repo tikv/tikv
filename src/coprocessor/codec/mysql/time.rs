@@ -11,17 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use byteorder::WriteBytesExt;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::str;
+use std::io::Write;
+use std::{mem, str};
 
 use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Timelike, Utc, Weekday};
 
-use super::super::{Result, TEN_POW};
+use super::super::{Error, Result, TEN_POW};
 use coprocessor::codec::mysql::Decimal;
 use coprocessor::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
 use coprocessor::codec::mysql::{self, check_fsp, parse_frac, types};
-
+use util::codec::BytesSlice;
+use util::codec::number::{self, NumberEncoder};
 const ZERO_DATETIME_STR: &str = "0000-00-00 00:00:00";
 const ZERO_DATE_STR: &str = "0000-00-00";
 /// In go, `time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC)` will be adjusted to
@@ -807,6 +810,76 @@ impl Display for Time {
     }
 }
 
+impl<T: Write> TimeEncoder for T {}
+pub trait TimeEncoder: NumberEncoder {
+    fn encode_time(&mut self, v: &Time) -> Result<()> {
+        if !v.is_zero() {
+            self.encode_u16(v.time.year() as u16)?;
+            self.write_u8(v.time.month() as u8)?;
+            self.write_u8(v.time.day() as u8)?;
+            self.write_u8(v.time.hour() as u8)?;
+            self.write_u8(v.time.minute() as u8)?;
+            self.write_u8(v.time.second() as u8)?;
+            self.encode_u32(v.time.nanosecond() / 1000)?;
+        } else {
+            let len = mem::size_of::<u16>() + mem::size_of::<u32>() + 5;
+            let buf = vec![0; len];
+            self.write_all(&buf)?;
+        }
+
+        self.write_u8(v.tp)?;
+        self.write_u8(v.fsp).map_err(From::from)
+    }
+}
+
+impl Time {
+    /// `decode` decodes time encoded by `encode_time`.
+    pub fn decode(data: &mut BytesSlice) -> Result<Time> {
+        let year = i32::from(number::decode_u16(data)?);
+        let (month, day, hour, minute, second) = if data.len() >= 5 {
+            (
+                u32::from(data[0]),
+                u32::from(data[1]),
+                u32::from(data[2]),
+                u32::from(data[3]),
+                u32::from(data[4]),
+            )
+        } else {
+            return Err(Error::unexpected_eof());
+        };
+        *data = &data[5..];
+        let nanoseconds = 1000 * number::decode_u32(data)?;
+        let (tp, fsp) = if data.len() >= 2 {
+            (data[0], data[1])
+        } else {
+            return Err(Error::unexpected_eof());
+        };
+        *data = &data[2..];
+        let tz = FixedOffset::east(0); // TODO
+        if year == 0 && month == 0 && day == 0 && hour == 0 && minute == 0 && second == 0
+            && nanoseconds == 0
+        {
+            return Ok(zero_datetime(&tz));
+        }
+        let t = if tp == types::TIMESTAMP {
+            let t = ymd_hms_nanos(&Utc, year, month, day, hour, minute, second, nanoseconds)?;
+            tz.from_utc_datetime(&t.naive_utc())
+        } else {
+            ymd_hms_nanos(
+                &FixedOffset::east(0),
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                nanoseconds,
+            )?
+        };
+        Time::new(t, tp, fsp as i8)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -1247,6 +1320,26 @@ mod test {
             let t = Time::parse_utc_datetime(s, 6).unwrap();
             let get = t.date_format(layout.to_string()).unwrap();
             assert_eq!(get, expect);
+        }
+    }
+
+    #[test]
+    fn test_chunk_codec() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4),
+            ("2012-12-31 11:30:45.123456", 6),
+            ("2012-12-31 11:30:45.123456", 0),
+            ("2012-12-31 11:30:45.999999", 0),
+            ("2017-01-05 08:40:59.575601", 0),
+            ("2017-01-05 23:59:59.575601", 0),
+            ("0000-00-00 00:00:00", 6),
+        ];
+        for (s, fsp) in cases {
+            let t = Time::parse_utc_datetime(s, fsp).unwrap();
+            let mut buf = vec![];
+            buf.encode_time(&t).unwrap();
+            let got = Time::decode(&mut buf.as_slice()).unwrap();
+            assert_eq!(got, t);
         }
     }
 }
