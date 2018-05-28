@@ -1358,6 +1358,17 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, Option<ExecResult>)> {
+        {
+            let apply_before_commit_merge = || {
+                fail_point!(
+                    "apply_before_commit_merge_except_1_4",
+                    { self.region_id() == 1 && self.id != 4 },
+                    |_| {}
+                );
+            };
+            apply_before_commit_merge();
+        }
+
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["commit_merge", "all"])
             .inc();
