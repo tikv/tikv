@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use self::gc_worker::GCWorker;
 use self::metrics::*;
 use self::mvcc::Lock;
 use self::txn::CMD_BATCH_SIZE;
@@ -32,6 +33,7 @@ use util::worker::{self, Builder, Worker};
 
 pub mod config;
 pub mod engine;
+mod gc_worker;
 mod metrics;
 pub mod mvcc;
 mod readpool_context;
@@ -417,9 +419,10 @@ pub struct Storage {
     worker_scheduler: worker::Scheduler<Msg>,
 
     read_pool: ReadPool<ReadPoolContext>,
+    gc_worker: GCWorker,
 
     // Storage configurations.
-    gc_ratio_threshold: f64,
+    // gc_ratio_threshold: f64,
     max_key_size: usize,
 }
 
@@ -438,12 +441,13 @@ impl Storage {
                 .create(),
         ));
         let worker_scheduler = worker.lock().unwrap().scheduler();
+        let gc_worker = GCWorker::new(engine.clone(), config.gc_ratio_threshold);
         Ok(Storage {
-            read_pool,
             engine,
             worker,
             worker_scheduler,
-            gc_ratio_threshold: config.gc_ratio_threshold,
+            read_pool,
+            gc_worker,
             max_key_size: config.max_key_size,
         })
     }
@@ -466,6 +470,7 @@ impl Storage {
             sched_pending_write_threshold,
         );
         worker.start(scheduler)?;
+        self.gc_worker.start()?;
         Ok(())
     }
 
@@ -480,6 +485,8 @@ impl Storage {
         if let Err(e) = h.join() {
             return Err(box_err!("failed to join sched_handle, err:{:?}", e));
         }
+
+        self.gc_worker.stop()?;
 
         info!("storage {:?} closed.", self.engine);
         Ok(())
@@ -863,16 +870,17 @@ impl Storage {
     }
 
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
-        let cmd = Command::Gc {
-            ctx,
-            safe_point,
-            ratio_threshold: self.gc_ratio_threshold,
-            scan_key: None,
-            keys: vec![],
-        };
-        let tag = cmd.tag();
-        self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        // let cmd = Command::Gc {
+        //     ctx,
+        //     safe_point,
+        //     ratio_threshold: self.gc_ratio_threshold,
+        //     scan_key: None,
+        //     keys: vec![],
+        // };
+        // let tag = cmd.tag();
+        // self.schedule(cmd, StorageCb::Boolean(callback))?;
+        self.gc_worker.async_gc(ctx, safe_point, callback)?;
+        // KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
