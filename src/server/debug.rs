@@ -14,7 +14,7 @@
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::HashSet;
-use std::iter::FromIterator;
+use std::iter::{FromIterator, IntoIterator};
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -400,7 +400,9 @@ impl Debugger {
         let handle = box_try!(get_cf_handle(self.engines.kv_engine.as_ref(), CF_RAFT));
         let store_ids = HashSet::<u64>::from_iter(store_ids);
 
-        let count_voters = |peers: &[Peer]| peers.iter().filter(|p| !p.get_is_learner()).count();
+        fn count_voters<'a, T: IntoIterator<Item = &'a Peer>>(peers: T) -> usize {
+            peers.into_iter().filter(|p| !p.get_is_learner()).count()
+        }
 
         {
             let remove_stores = |key: &[u8], value: &[u8]| {
@@ -415,41 +417,40 @@ impl Debugger {
                     return Ok(());
                 }
 
-                let old_peers = region_state.mut_region().take_peers();
+                let old_peers = region_state.mut_region().take_peers().into_vec();
                 let old_voters_len = count_voters(&old_peers);
 
-                let (mut rest_peers, removed_peers) = old_peers
-                    .iter()
-                    .cloned()
-                    .partition::<Vec<_>, _>(|peer| !store_ids.contains(&peer.get_store_id()));
-                let rest_voters_len = count_voters(&rest_peers);
+                let rest_voters_len = count_voters(
+                    old_peers
+                        .iter()
+                        .filter(|p| !store_ids.contains(&p.get_store_id())),
+                );
 
                 if rest_voters_len >= quorum(old_voters_len) {
                     return Ok(());
                 }
 
                 let min_removed = old_voters_len - 2 * rest_voters_len + 1;
-                let removed_voters_len = count_voters(&removed_peers);
-                if removed_voters_len > min_removed {
-                    rest_peers.extend(
-                        removed_peers
-                            .into_iter()
-                            .filter(|p| !p.get_is_learner())
-                            .take(removed_voters_len - min_removed),
-                    );
+                let mut new_peers = old_peers.clone();
+                for _ in 0..min_removed {
+                    let pos = new_peers
+                        .iter()
+                        .position(|p| !p.get_is_learner() && store_ids.contains(&p.get_store_id()))
+                        .unwrap();
+                    new_peers.swap_remove(pos);
                 }
 
                 info!(
                     "region {} change peers from {:?}, to {:?}",
                     region_state.get_region().get_id(),
                     old_peers,
-                    rest_peers
+                    new_peers,
                 );
 
                 // We need to leave epoch untouched to avoid inconsistency.
                 region_state
                     .mut_region()
-                    .set_peers(RepeatedField::from_vec(rest_peers));
+                    .set_peers(RepeatedField::from_vec(new_peers));
                 box_try!(wb.put_msg_cf(handle, key, &region_state));
 
                 Ok(())
@@ -1362,8 +1363,8 @@ mod tests {
         for (failed, rest) in vec![
             (vec![11], vec![11, 12, 13, 14, 15, 16]),
             (vec![11, 12], vec![11, 12, 13, 14, 15, 16]),
-            (vec![11, 12, 13], vec![14, 15, 16, 11, 12]),
-            (vec![11, 12, 13, 14], vec![15, 16, 14]),
+            (vec![11, 12, 13], vec![16, 12, 13, 14, 15]),
+            (vec![11, 12, 13, 14], vec![16, 15, 14]),
             (vec![11, 12, 13, 14, 15], vec![16]),
         ] {
             assert!(debugger.remove_failed_stores(failed, Some(vec![4])).is_ok());
