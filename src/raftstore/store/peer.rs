@@ -177,7 +177,8 @@ bitflags! {
     pub struct ProposalContext: u8 {
         const SYNC_LOG       = 0b00000001;
         const SPLIT          = 0b00000010;
-        const ROLLBACK_MERGE = 0b00000100;
+        const PREPARE_MERGE  = 0b00000100;
+        const ROLLBACK_MERGE = 0b00001000;
     }
 }
 
@@ -268,11 +269,11 @@ pub struct Peer {
     apply_scheduler: Scheduler<ApplyTask>,
 
     pub pending_remove: bool,
-    pub pending_merge: Option<MergeState>,
-    // Indicates the pending_merge is going to be rollbacked.
-    // It can only be set to true if the rollback merge command is committed
-    // in the current term.
-    pending_rollback_merge: bool,
+
+    // Indicates the region is going to be merged.
+    // It is set to true if the prepare merge is committed in the current term.
+    pending_merge: bool,
+    pub pending_merge_state: Option<MergeState>,
 
     marked_to_be_checked: bool,
 
@@ -383,8 +384,8 @@ impl Peer {
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
             marked_to_be_checked: false,
-            pending_merge: None,
-            pending_rollback_merge: false,
+            pending_merge_state: None,
+            pending_merge: false,
             leader_missing_time: Some(Instant::now()),
             tag,
             last_applying_idx: applied_index,
@@ -469,7 +470,7 @@ impl Peer {
             &kv_wb,
             &region,
             PeerState::Tombstone,
-            self.pending_merge.clone(),
+            self.pending_merge_state.clone(),
         )?;
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
@@ -793,10 +794,10 @@ impl Peer {
             // the old leader still think it owns the splitted range.
             && self.last_committed_split_idx <= self.get_store().applied_index()
             // There may be stale read if a target leader is in another store and
-            // applied commit merge, written new values, but this sibling peer
-            // does not apply commit merge, so the leader is not ready to read,
-            // until the merge is rollbacked.
-            && (self.pending_merge.is_none() || self.pending_rollback_merge)
+            // applied commit merge, written new values, but the sibling peer in
+            // this store does not apply commit merge, so the leader is not ready
+            // to read, until the merge is rollbacked.
+            && !self.pending_merge
     }
 
     pub fn take_apply_proposals(&mut self) -> Option<RegionProposal> {
@@ -936,7 +937,7 @@ impl Peer {
             // leader needs to update lease and last commited split index.
             let mut lease_to_be_updated = self.is_leader();
             let mut split_to_be_updated = self.is_leader();
-            let mut rollback_merge_to_be_update = self.is_leader();
+            let mut merge_to_be_update = self.is_leader();
             if !lease_to_be_updated {
                 // It's not leader anymore, we are safe to clear proposals. If it becomes leader
                 // again, the lease should be updated when election is finished, old proposals
@@ -954,19 +955,23 @@ impl Peer {
                     }
                 }
 
-                // We only care about split/rollback_merge commands that are committed
-                // in the current term.
-                if entry.term == self.term() && (split_to_be_updated || rollback_merge_to_be_update)
-                {
+                // We care about split/merge commands that are committed in the current term.
+                if entry.term == self.term() && (split_to_be_updated || merge_to_be_update) {
                     let ctx = ProposalContext::from_bytes(&entry.context);
                     if split_to_be_updated && ctx.contains(ProposalContext::SPLIT) {
                         self.last_committed_split_idx = entry.index;
                         split_to_be_updated = false;
                     }
-                    if rollback_merge_to_be_update && ctx.contains(ProposalContext::ROLLBACK_MERGE)
-                    {
-                        self.pending_rollback_merge = true;
-                        rollback_merge_to_be_update = true;
+                    if merge_to_be_update {
+                        if ctx.contains(ProposalContext::ROLLBACK_MERGE) {
+                            // We committed rollback merge, now we can unset the pending_merge.
+                            self.pending_merge = false;
+                            merge_to_be_update = false;
+                        } else if ctx.contains(ProposalContext::PREPARE_MERGE) {
+                            // We committed prepare merge, now we must set the pending_merge.
+                            self.pending_merge = true;
+                            merge_to_be_update = false;
+                        }
                     }
                 }
             }
@@ -1071,8 +1076,14 @@ impl Peer {
         self.size_diff_hint = 0;
     }
 
+    pub fn post_prepare_merge(&mut self) {
+        // Set pending_merge to true incase it reboots and
+        // a committed prepare merge is not applied yet.
+        self.pending_merge = true;
+    }
+
     pub fn post_rollback_merge(&mut self) {
-        self.pending_rollback_merge = false;
+        self.pending_merge = false;
     }
 
     /// Try to renew leader lease.
@@ -1088,7 +1099,7 @@ impl Peer {
             debug!("{} prevents renew lease while splitting", self.tag);
             return;
         }
-        if self.pending_merge.is_some() && !self.pending_rollback_merge {
+        if self.pending_merge {
             // A merging leader should not renew its lease.
             // Because we merge regions asynchronous, the leader may read stale results
             // if commit merge runs slow on sibling peers.
@@ -1436,8 +1447,8 @@ impl Peer {
         // we can local read, because there is no one can make change to
         // the range of the region excpet its leader in the current term.
         // See also in ready_to_handle_read().
-        if self.pending_merge.is_some() && !self.pending_rollback_merge {
-            Err(box_err!("can not read due to merge"))
+        if self.pending_merge {
+            Err(box_err!("can not read local due to merge"))
         } else {
             Ok(())
         }
@@ -1472,10 +1483,10 @@ impl Peer {
 
         // See more in ready_to_handle_read().
         if self.last_committed_split_idx > self.raft_group.get_store().applied_index() {
-            return Err(box_err!("can not read due to split"));
+            return Err(box_err!("can not read index due to split"));
         }
-        if self.pending_merge.is_some() && !self.pending_rollback_merge {
-            return Err(box_err!("can not read due to merge"));
+        if self.pending_merge {
+            return Err(box_err!("can not read index due to merge"));
         }
         Ok(())
     }
@@ -1626,7 +1637,8 @@ impl Peer {
         }
 
         if req.get_admin_request().has_prepare_merge() {
-            self.pre_propose_prepare_merge(req)?
+            self.pre_propose_prepare_merge(req)?;
+            ctx.insert(ProposalContext::PREPARE_MERGE);
         }
 
         if req.get_admin_request().has_rollback_merge() {
@@ -1641,7 +1653,7 @@ impl Peer {
         mut req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
     ) -> Result<u64> {
-        if self.pending_merge.is_some()
+        if self.pending_merge_state.is_some()
             && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge
         {
             return Err(box_err!("peer in merging mode, can't do proposal."));
@@ -1713,7 +1725,7 @@ impl Peer {
         req: &RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
     ) -> Result<u64> {
-        if self.pending_merge.is_some() {
+        if self.pending_merge_state.is_some() {
             return Err(box_err!("peer in merging mode, can't do proposal."));
         }
         if self.raft_group.raft.pending_conf_index > self.get_store().applied_index() {
@@ -2073,7 +2085,11 @@ mod tests {
         let tbl: Vec<&[ProposalContext]> = vec![
             &[ProposalContext::SPLIT],
             &[ProposalContext::SYNC_LOG],
+            &[ProposalContext::PREPARE_MERGE],
+            &[ProposalContext::ROLLBACK_MERGE],
             &[ProposalContext::SPLIT, ProposalContext::SYNC_LOG],
+            &[ProposalContext::PREPARE_MERGE, ProposalContext::SYNC_LOG],
+            &[ProposalContext::ROLLBACK_MERGE, ProposalContext::SYNC_LOG],
         ];
 
         for flags in tbl {
