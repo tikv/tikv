@@ -304,7 +304,7 @@ where
 #[cfg(test)]
 mod test {
     use super::{Error, EvalConfig, EvalContext, Expression, ERR_DATA_OUT_OF_RANGE,
-                FLAG_IGNORE_TRUNCATE};
+                ERR_DIVISION_BY_ZERO, FLAG_IGNORE_TRUNCATE};
     use coprocessor::codec::mysql::json::JsonEncoder;
     use coprocessor::codec::mysql::{charset, types, Decimal, DecimalEncoder, Duration, Json, Time};
     use coprocessor::codec::{convert, mysql, Datum};
@@ -326,6 +326,15 @@ mod test {
     #[inline]
     pub fn check_overflow(e: Error) -> Result<(), ()> {
         if e.code() == ERR_DATA_OUT_OF_RANGE {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    #[inline]
+    pub fn check_divide_by_zero(e: Error) -> Result<(), ()> {
+        if e.code() == ERR_DIVISION_BY_ZERO {
             Ok(())
         } else {
             Err(())
