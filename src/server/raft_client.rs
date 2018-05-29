@@ -61,6 +61,7 @@ impl Conn {
             .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
             .keepalive_time(cfg.grpc_keepalive_time.0)
             .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
+            .default_compression_algorithm(cfg.grpc_compression_algorithm())
             // hack: so it's different args, grpc will always create a new connection.
             .raw_cfg_int(
                 CString::new("random id").unwrap(),

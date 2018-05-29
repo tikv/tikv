@@ -225,7 +225,11 @@ impl FnCall {
             | ScalarFuncSig::JsonReplaceSig => (3, usize::MAX),
         };
         if args < min_args || args > max_args {
-            return Err(box_err!("unexpected arguments"));
+            return Err(box_err!(
+                "unexpected arguments: sig {:?} with {} args",
+                sig,
+                args
+            ));
         }
         let other_checks = match sig {
             ScalarFuncSig::JsonObjectSig => args & 1 == 0,
@@ -235,7 +239,11 @@ impl FnCall {
             _ => true,
         };
         if !other_checks {
-            return Err(box_err!("unexpected arguments"));
+            return Err(box_err!(
+                "unexpected arguments: sig {:?} with {} args",
+                sig,
+                args
+            ));
         }
         Ok(())
     }

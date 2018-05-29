@@ -205,7 +205,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     pub fn new(
         ch: StoreChannel,
         meta: metapb::Store,
-        cfg: Config,
+        mut cfg: Config,
         engines: Engines,
         trans: T,
         pd_client: Arc<C>,
@@ -2839,7 +2839,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Tick::CheckPeerStaleState,
             self.cfg.peer_stale_state_check_interval.as_millis(),
         ) {
-            error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
+            error!("{} register check peer state tick err: {:?}", self.tag, e);
         }
     }
 }
