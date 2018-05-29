@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -735,12 +736,28 @@ fn test_learner_promote_in_snapshot() {
     pd_client.must_add_peer(r1, new_learner_peer(3, 3));
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 
+    struct SnapshotCounter(Arc<AtomicUsize>);
+    impl Filter<RaftMessage> for SnapshotCounter {
+        fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+            let snapshot_count = msgs.iter()
+                .filter(|m| m.get_message().get_msg_type() == MessageType::MsgSnapshot)
+                .count();
+            self.0.fetch_add(snapshot_count, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
     cluster.stop_node(3);
     pd_client.must_add_peer(r1, new_peer(3, 3));
     (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
+
+    let snap_count = Arc::new(AtomicUsize::new(0));
+    let snap_counter = box SnapshotCounter(snap_count.clone());
+    cluster.sim.wl().add_send_filter(1, snap_counter);
 
     // peer 3 will be promoted by snapshot instead of normal proposal.
     cluster.run_node(3);
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
     pd_client.must_have_peer(r1, new_peer(3, 3));
+    assert_eq!(snap_count.load(Ordering::SeqCst), 1);
 }
