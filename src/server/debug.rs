@@ -418,7 +418,7 @@ impl Debugger {
                 let old_peers = region_state.mut_region().take_peers();
                 let old_voters_len = count_voters(&old_peers);
 
-                let (mut rest_peers, mut removed_peers) = old_peers
+                let (mut rest_peers, removed_peers) = old_peers
                     .iter()
                     .cloned()
                     .partition::<Vec<_>, _>(|peer| !store_ids.contains(&peer.get_store_id()));
@@ -429,15 +429,14 @@ impl Debugger {
                 }
 
                 let min_removed = old_voters_len - 2 * rest_voters_len + 1;
-                let mut removed_voters_len = count_voters(&removed_peers);
-                while removed_voters_len > min_removed {
-                    let voter = removed_peers
-                        .iter()
-                        .position(|peer| !peer.get_is_learner())
-                        .map(|i| removed_peers.swap_remove(i))
-                        .unwrap();
-                    rest_peers.push(voter);
-                    removed_voters_len -= 1;
+                let removed_voters_len = count_voters(&removed_peers);
+                if removed_voters_len > min_removed {
+                    rest_peers.extend(
+                        removed_peers
+                            .into_iter()
+                            .filter(|p| !p.get_is_learner())
+                            .take(removed_voters_len - min_removed),
+                    );
                 }
 
                 info!(
@@ -1363,7 +1362,7 @@ mod tests {
         for (failed, rest) in vec![
             (vec![11], vec![11, 12, 13, 14, 15, 16]),
             (vec![11, 12], vec![11, 12, 13, 14, 15, 16]),
-            (vec![11, 12, 13], vec![14, 15, 16, 11, 13]),
+            (vec![11, 12, 13], vec![14, 15, 16, 11, 12]),
             (vec![11, 12, 13, 14], vec![15, 16, 14]),
             (vec![11, 12, 13, 14, 15], vec![16]),
         ] {
