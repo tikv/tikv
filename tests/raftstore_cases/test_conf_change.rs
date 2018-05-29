@@ -732,10 +732,14 @@ fn test_learner_promote_in_snapshot() {
     pd_client.must_add_peer(r1, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
-    cluster.stop_node(3);
     pd_client.must_add_peer(r1, new_learner_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    cluster.stop_node(3);
     pd_client.must_add_peer(r1, new_peer(3, 3));
     (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
+
+    // peer 3 will be promoted by snapshot instead of normal proposal.
     cluster.run_node(3);
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
     pd_client.must_have_peer(r1, new_peer(3, 3));
