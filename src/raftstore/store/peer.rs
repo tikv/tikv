@@ -175,8 +175,9 @@ impl<'a, T> ReadyContext<'a, T> {
 bitflags! {
     // TODO: maybe declare it as protobuf struct is better.
     pub struct ProposalContext: u8 {
-        const SYNC_LOG = 0b00000001;
-        const SPLIT    = 0b00000010;
+        const SYNC_LOG       = 0b00000001;
+        const SPLIT          = 0b00000010;
+        const ROLLBACK_MERGE = 0b00000100;
     }
 }
 
@@ -268,6 +269,10 @@ pub struct Peer {
 
     pub pending_remove: bool,
     pub pending_merge: Option<MergeState>,
+    // Indicates the pending_merge is going to be rollbacked.
+    // It can only be set to true if the rollback merge command is committed
+    // in the current term.
+    pending_rollback_merge: bool,
 
     marked_to_be_checked: bool,
 
@@ -379,6 +384,7 @@ impl Peer {
             pending_remove: false,
             marked_to_be_checked: false,
             pending_merge: None,
+            pending_rollback_merge: false,
             leader_missing_time: Some(Instant::now()),
             tag,
             last_applying_idx: applied_index,
@@ -777,16 +783,20 @@ impl Peer {
 
     #[inline]
     fn ready_to_handle_read(&self) -> bool {
+        // TODO: It may cause read index waits a long time.
+
         // There may be some values that are not applied by this leader yet but the old leader,
         // if applied_index_term isn't equal to current term.
-        //
-        // There may be stale read if the old leader splits really slow,
-        // the new region may already elecetd a new leader while the old leader still think it
-        // owns the splitted range.
-
-        // TODO: It may cause read index waits a long time.
         self.get_store().applied_index_term == self.term()
+            // There may be stale read if the old leader splits really slow,
+            // the new region may already elecetd a new leader while
+            // the old leader still think it owns the splitted range.
             && self.last_committed_split_idx <= self.get_store().applied_index()
+            // There may be stale read if a target leader is in another store and
+            // applied commit merge, written new values, but this sibling peer
+            // does not apply commit merge, so the leader is not ready to read
+            // until the merge has been rollbacked.
+            && (self.pending_merge.is_none() || !self.pending_rollback_merge)
     }
 
     pub fn take_apply_proposals(&mut self) -> Option<RegionProposal> {
@@ -926,6 +936,7 @@ impl Peer {
             // leader needs to update lease and last commited split index.
             let mut lease_to_be_updated = self.is_leader();
             let mut split_to_be_updated = self.is_leader();
+            let mut rollback_merge_to_be_update = self.is_leader();
             if !lease_to_be_updated {
                 // It's not leader anymore, we are safe to clear proposals. If it becomes leader
                 // again, the lease should be updated when election is finished, old proposals
@@ -943,13 +954,19 @@ impl Peer {
                     }
                 }
 
-                // We only care about split commands that are committed
+                // We only care about split/rollback_merge commands that are committed
                 // in the current term.
-                if split_to_be_updated && entry.term == self.term() {
+                if entry.term == self.term() && (split_to_be_updated || rollback_merge_to_be_update)
+                {
                     let ctx = ProposalContext::from_bytes(&entry.context);
-                    if ctx.contains(ProposalContext::SPLIT) {
+                    if split_to_be_updated && ctx.contains(ProposalContext::SPLIT) {
                         self.last_committed_split_idx = entry.index;
                         split_to_be_updated = false;
+                    }
+                    if rollback_merge_to_be_update && ctx.contains(ProposalContext::ROLLBACK_MERGE)
+                    {
+                        self.pending_rollback_merge = true;
+                        rollback_merge_to_be_update = true;
                     }
                 }
             }
@@ -1054,6 +1071,10 @@ impl Peer {
         self.size_diff_hint = 0;
     }
 
+    pub fn post_rollback_merge(&mut self) {
+        self.pending_rollback_merge = false;
+    }
+
     /// Try to renew leader lease.
     fn maybe_renew_leader_lease(&mut self, ts: Timespec) {
         // A nonleader peer should never has leader lease.
@@ -1065,6 +1086,13 @@ impl Peer {
             // Because we split regions asynchronous, the leader may read stale results
             // if splitting runs slow on the leader.
             debug!("{} prevents renew lease while splitting", self.tag);
+            return;
+        }
+        if self.pending_merge.is_some() && !self.pending_rollback_merge {
+            // A merging leader should not renew its lease.
+            // Because we merge regions asynchronous, the leader may read stale results
+            // if commit merge runs slow on slibing peers.
+            debug!("{} prevents renew lease while merging", self.tag);
             return;
         }
         self.leader_lease.renew(ts);
@@ -1121,7 +1149,7 @@ impl Peer {
 
         let res = match self.get_handle_policy(&req) {
             Ok(RequestPolicy::ReadLocal) => {
-                self.read_local(req, cb, metrics);
+                self.read_local(req, err_resp, cb, metrics);
                 return false;
             }
             Ok(RequestPolicy::ReadIndex) => return self.read_index(req, err_resp, cb, metrics),
@@ -1402,7 +1430,33 @@ impl Peer {
         last_index <= status.progress[&peer_id].matched + TRANSFER_LEADER_ALLOW_LOG_LAG
     }
 
-    fn read_local(&mut self, req: RaftCmdRequest, cb: Callback, metrics: &mut RaftProposeMetrics) {
+    fn pre_read_local(&self) -> Result<()> {
+        // If the region is going to be merged, we can not perform local read
+        // even if it's in lease. But if there is a pending rollback merge,
+        // we can local read, because there is no one can make change to
+        // the range of the region excpet its leader in the current term.
+        // See also in ready_to_handle_read().
+        if self.pending_merge.is_some() && !self.pending_rollback_merge {
+            Err(box_err!("can not read due to merge"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn read_local(
+        &mut self,
+        req: RaftCmdRequest,
+        mut err_resp: RaftCmdResponse,
+        cb: Callback,
+        metrics: &mut RaftProposeMetrics,
+    ) {
+        if let Err(e) = self.pre_read_local() {
+            debug!("{} prevents unsafe local read, err: {:?}", self.tag, e);
+            metrics.unsafe_local_read += 1;
+            cmd_resp::bind_error(&mut err_resp, e);
+            cb.invoke_with_response(err_resp);
+            return;
+        }
         metrics.local_read += 1;
         cb.invoke_read(self.handle_read(req))
     }
@@ -1418,10 +1472,12 @@ impl Peer {
 
         // See more in ready_to_handle_read().
         if self.last_committed_split_idx > self.raft_group.get_store().applied_index() {
-            Err(box_err!("can not read due to split"))
-        } else {
-            Ok(())
+            return Err(box_err!("can not read due to split"));
         }
+        if self.pending_merge.is_some() && !self.pending_rollback_merge {
+            return Err(box_err!("can not read due to merge"));
+        }
+        Ok(())
     }
 
     fn read_index(
@@ -1503,7 +1559,7 @@ impl Peer {
             .unwrap_or_default()
     }
 
-    fn pre_propose_merge(&self, req: &mut RaftCmdRequest) -> Result<()> {
+    fn pre_propose_prepare_merge(&self, req: &mut RaftCmdRequest) -> Result<()> {
         let last_index = self.raft_group.raft.raft_log.last_index();
         let min_progress = self.get_min_progress();
         let min_index = min_progress + 1;
@@ -1570,7 +1626,11 @@ impl Peer {
         }
 
         if req.get_admin_request().has_prepare_merge() {
-            self.pre_propose_merge(req)?
+            self.pre_propose_prepare_merge(req)?
+        }
+
+        if req.get_admin_request().has_rollback_merge() {
+            ctx.insert(ProposalContext::ROLLBACK_MERGE);
         }
 
         Ok(ctx)

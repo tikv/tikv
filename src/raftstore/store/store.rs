@@ -1874,6 +1874,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             info!("{} notify pd with rollback merge {}", peer.tag, commit);
             peer.heartbeat_pd(&self.pd_worker);
         }
+        peer.post_rollback_merge();
     }
 
     fn on_merge_fail(&mut self, region_id: u64) {
