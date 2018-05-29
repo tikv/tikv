@@ -1683,7 +1683,7 @@ impl ApplyDelegate {
         mut self,
         ctx: ApplyContext,
         requests: Vec<Request>,
-    ) -> Box<Future<Item = RaftCmdFutureItem, Error = FutureError> + Send> {
+    ) -> impl Future<Item = RaftCmdFutureItem, Error = FutureError> {
         let mut responses = Vec::with_capacity(requests.len());
 
         let mut ranges = vec![];
@@ -1710,7 +1710,7 @@ impl ApplyDelegate {
 
             let mut resp = match resp {
                 Ok(r) => r,
-                Err(e) => return box future::err((self, ctx, e)),
+                Err(e) => return future::err((self, ctx, e)),
             };
             resp.set_cmd_type(cmd_type);
 
@@ -1737,7 +1737,7 @@ impl ApplyDelegate {
             None
         };
 
-        box future::ok((self, ctx, resp, exec_res))
+        future::ok((self, ctx, resp, exec_res))
     }
 
     fn handle_put(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
