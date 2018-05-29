@@ -71,21 +71,20 @@ struct CaseTraceLogger {
 impl Drain for CaseTraceLogger {
     type Ok = ();
     type Err = slog::Never;
-    fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
-        let tag = util::get_tag_from_thread_name().unwrap_or_else(|| "".into());
+    fn log(&self, record: &Record, _: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+        let tag = util::get_tag_from_thread_name().map_or_else(|| "".into(), |s| s + " ");
 
         let t = time::now();
-        let time_str = time::strftime("%y/%m/%d %h:%m:%s.%f", &t).unwrap();
+        let time_str = time::strftime("%Y/%m/%d %H:%M:%S.%f", &t).unwrap();
         // todo allow formatter to be configurable.
         let message = format!(
-            "{} {} {}:{}: [{}] {} {:?}\n",
+            "{}{} {}:{}: [{}] {}\n",
             tag,
             &time_str[..time_str.len() - 6],
             record.file().rsplit('/').nth(0).unwrap(),
             record.line(),
             record.level(),
             record.msg(),
-            values,
         );
 
         if let Some(ref out) = self.f {
