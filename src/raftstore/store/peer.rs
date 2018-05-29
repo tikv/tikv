@@ -794,9 +794,9 @@ impl Peer {
             && self.last_committed_split_idx <= self.get_store().applied_index()
             // There may be stale read if a target leader is in another store and
             // applied commit merge, written new values, but this sibling peer
-            // does not apply commit merge, so the leader is not ready to read
-            // until the merge has been rollbacked.
-            && (self.pending_merge.is_none() || !self.pending_rollback_merge)
+            // does not apply commit merge, so the leader is not ready to read,
+            // until the merge is rollbacked.
+            && (self.pending_merge.is_none() || self.pending_rollback_merge)
     }
 
     pub fn take_apply_proposals(&mut self) -> Option<RegionProposal> {
@@ -1091,7 +1091,7 @@ impl Peer {
         if self.pending_merge.is_some() && !self.pending_rollback_merge {
             // A merging leader should not renew its lease.
             // Because we merge regions asynchronous, the leader may read stale results
-            // if commit merge runs slow on slibing peers.
+            // if commit merge runs slow on sibling peers.
             debug!("{} prevents renew lease while merging", self.tag);
             return;
         }

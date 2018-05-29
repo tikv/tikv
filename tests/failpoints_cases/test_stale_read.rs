@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use std::sync::Arc;
 
 use fail;
 use kvproto::metapb::{Peer, Region};
@@ -21,8 +21,8 @@ use kvproto::metapb::{Peer, Region};
 use raftstore::cluster::Cluster;
 use raftstore::node::{new_node_cluster, NodeCluster};
 use raftstore::util::*;
-use tikv::raftstore::store::Callback;
 use tikv::pd::PdClient;
+use tikv::raftstore::store::Callback;
 
 fn stale_read_during_splitting(right_derive: bool) {
     let _guard = ::setup();
@@ -99,30 +99,63 @@ fn stale_read_during_splitting(right_derive: bool) {
         .call_command_on_node(leader2.get_store_id(), request, Duration::from_secs(5))
         .unwrap();
 
-    // LocalRead.
-    let read_quorum = false;
-    must_not_eq_on_key(
+    must_not_stale_read(
         &mut cluster,
         stale_key,
-        v3,
-        read_quorum,
         &region1,
         &leader1,
         &region2,
         &leader2,
+        apply_split,
+    );
+}
+
+fn must_not_stale_read(
+    cluster: &mut Cluster<NodeCluster>,
+    stale_key: &[u8],
+    old_region: &Region,
+    old_leader: &Peer,
+    new_region: &Region,
+    new_leader: &Peer,
+    fp: &str,
+) {
+    // A new value for key2.
+    let v3 = b"v3";
+    let mut request = new_request(
+        new_region.get_id(),
+        new_region.get_region_epoch().clone(),
+        vec![new_put_cf_cmd("default", stale_key, v3)],
+        false,
+    );
+    request.mut_header().set_peer(new_leader.clone());
+    cluster
+        .call_command_on_node(new_leader.get_store_id(), request, Duration::from_secs(5))
+        .unwrap();
+
+    // LocalRead.
+    let read_quorum = false;
+    must_not_eq_on_key(
+        cluster,
+        stale_key,
+        v3,
+        read_quorum,
+        old_region,
+        old_leader,
+        new_region,
+        new_leader,
     );
 
     // ReadIndex.
     let read_quorum = true;
     must_not_eq_on_key(
-        &mut cluster,
+        cluster,
         stale_key,
         v3,
         read_quorum,
-        &region1,
-        &leader1,
-        &region2,
-        &leader2,
+        old_region,
+        old_leader,
+        new_region,
+        new_leader,
     );
 
     // Leaders can always propose read index despite split.
@@ -131,9 +164,9 @@ fn stale_read_during_splitting(right_derive: bool) {
 
     // Can not execute reads that are queued.
     let value1 = read_on_peer(
-        &mut cluster,
-        leader1.clone(),
-        region1.clone(),
+        cluster,
+        old_leader.clone(),
+        old_region.clone(),
         stale_key,
         read_quorum,
         Duration::from_secs(1),
@@ -141,20 +174,20 @@ fn stale_read_during_splitting(right_derive: bool) {
     debug!("stale_key: {:?}, {:?}", stale_key, value1);
     value1.unwrap_err(); // Error::Timeout
 
-    // Split shall be processed on peer 3.
-    fail::remove(apply_split);
+    // Remove the fp.
+    fail::remove(fp);
 
-    // It should read an error stale epoch instead of timeout.
+    // It should read an error instead of timeout.
     let value1 = read_on_peer(
-        &mut cluster,
-        leader1.clone(),
-        region1.clone(),
+        cluster,
+        old_leader.clone(),
+        old_region.clone(),
         stale_key,
         read_quorum,
         Duration::from_secs(5),
     );
     debug!("stale_key: {:?}, {:?}", stale_key, value1);
-    assert!(value1.unwrap().get_header().get_error().has_stale_epoch());
+    assert!(value1.unwrap().get_header().has_error());
 
     // Clean up.
     fail::remove(propose_readindex);
@@ -187,7 +220,7 @@ fn must_not_eq_on_key(
         read_quorum,
         Duration::from_secs(1),
     );
-    debug!("stale read key: {:?}, {:?} vs {:?}", key, value1, value2);
+    debug!("stale_key: {:?}, {:?} vs {:?}", key, value1, value2);
     assert_eq!(must_get_value(value2.as_ref().unwrap()).as_slice(), value);
     // The old leader should return an error.
     assert!(
@@ -275,7 +308,7 @@ fn test_stale_read_during_merging() {
     // Region 1000   F       L       F
     //           after wait
     // Region    1   L       F       F
-    // Region 1000   X       L       X
+    // Region 1000   X       L       F
     // Note: L: leader, F: follower, X: peer is not exist.
     // TODO: what if cluster runs slow and lease is expired.
     // Epoch changed by prepare merge.
@@ -286,9 +319,13 @@ fn test_stale_read_during_merging() {
     // region1000 does prepare merge, it increases ver and conf_ver by 1.
     debug!("before merge: {:?} | {:?}", region1000, region1);
     let region1000_version = region1000.get_region_epoch().get_version() + 1;
-    region1000.mut_region_epoch().set_version(region1000_version);
+    region1000
+        .mut_region_epoch()
+        .set_version(region1000_version);
     let region1000_conf_version = region1000.get_region_epoch().get_conf_ver() + 1;
-    region1000.mut_region_epoch().set_conf_ver(region1000_conf_version);
+    region1000
+        .mut_region_epoch()
+        .set_conf_ver(region1000_conf_version);
 
     // Epoch changed by commit merge.
     region1 = cluster.get_region_with(key1, |region| region != &region1);
@@ -297,32 +334,13 @@ fn test_stale_read_during_merging() {
     // A key that is covered by region 1000 and region 1.
     let stale_key = key2;
 
-    // A new value for the stale_key.
-    let v3 = b"v3";
-    let mut request = new_request(
-        region1.get_id(),
-        region1.get_region_epoch().clone(),
-        vec![new_put_cf_cmd("default", stale_key, v3)],
-        false,
-    );
-    request.mut_header().set_peer(leader1.clone());
-    cluster
-        .call_command_on_node(leader1.get_store_id(), request, Duration::from_secs(5))
-        .unwrap();
-
-    // LocalRead.
-    let read_quorum = false;
-    must_not_eq_on_key(
+    must_not_stale_read(
         &mut cluster,
         stale_key,
-        v3,
-        read_quorum,
         &region1000,
         &leader1000,
         &region1,
         &leader1,
+        apply_commit_merge,
     );
-
-    // Clean up.
-    fail::remove(apply_commit_merge);
 }
