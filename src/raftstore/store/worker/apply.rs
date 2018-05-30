@@ -62,6 +62,7 @@ const WRITE_BATCH_MAX_KEYS: usize = 128;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 
 const APPLY_POOL_SIZE: usize = 4;
+const STACK_SIZE: usize = 10 * 1024 * 1024;
 
 pub struct PendingCmd {
     pub index: u64,
@@ -2255,9 +2256,6 @@ pub struct Runner {
     region_task_senders: HashMap<u64, UnboundedSender<RegionTask>>,
 }
 
-const POOL_SIZE: usize = 4;
-const STACK_SIZE: usize = 10 * 1024 * 1024;
-
 impl Runner {
     pub fn new<T, C>(
         store: &Store<T, C>,
@@ -2267,7 +2265,7 @@ impl Runner {
         apply_scheduler: Scheduler<Task>,
     ) -> Runner {
         let apply_pool = FuturePool::new(
-            POOL_SIZE,
+            APPLY_POOL_SIZE,
             STACK_SIZE,
             "apply-pool",
             Duration::from_secs(1),
@@ -2636,7 +2634,7 @@ mod tests {
         apply_scheduler: Scheduler<Task>,
     ) -> Runner {
         let apply_pool = FuturePool::new(
-            POOL_SIZE,
+            APPLY_POOL_SIZE,
             STACK_SIZE,
             "apply-pool",
             Duration::from_secs(1),
