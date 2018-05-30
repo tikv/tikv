@@ -616,11 +616,19 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_add_peer(r1, new_learner_peer(4, 10));
     must_get_equal(&engine_4, b"k2", b"v2");
 
+    // Can't transfer leader to learner.
+    pd_client.transfer_leader(r1, new_learner_peer(4, 10));
+    pd_client.must_leader(r1, new_peer(1, 1));
+
     // Promote learner (4 ,10) to voter.
     pd_client.must_add_peer(r1, new_peer(4, 10));
     pd_client.must_none_pending_peer(new_peer(4, 10));
     cluster.must_put(b"k3", b"v3");
     must_get_equal(&engine_4, b"k3", b"v3");
+
+    // Transfer leader to (4, 10) and check pd heartbeats from it.
+    pd_client.transfer_leader(r1, new_peer(4, 10));
+    pd_client.must_leader(r1, new_peer(4, 10));
 
     // Add learner on store which already has peer.
     pd_client.add_peer(r1, new_learner_peer(4, 10));
@@ -719,43 +727,6 @@ fn test_learner_with_slow_snapshot() {
     // The learner should be still pending.
     rx.recv().unwrap();
     assert_eq!(pd_client.get_pending_peers()[&2], new_learner_peer(2, 2));
-}
-
-#[test]
-fn test_learner_promote_in_proposal() {
-    let mut cluster = new_server_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-    let r1 = cluster.run_conf_change();
-    cluster.must_put(b"k1", b"v1");
-
-    struct ResponseFromLearner(Arc<AtomicBool>);
-    impl Filter<RaftMessage> for ResponseFromLearner {
-        fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
-            if !msgs.is_empty() {
-                let is_learner = msgs[msgs.len() - 1].get_from_peer().get_is_learner();
-                self.0.store(is_learner, Ordering::SeqCst);
-            }
-            Ok(())
-        }
-    }
-
-    pd_client.must_add_peer(r1, new_peer(2, 2));
-    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
-
-    let from_learner = Arc::new(AtomicBool::new(false));
-    let resp_from_learner = box ResponseFromLearner(from_learner.clone());
-    cluster.sim.wl().add_send_filter(3, resp_from_learner);
-
-    pd_client.must_add_peer(r1, new_learner_peer(3, 3));
-    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
-    assert_eq!(from_learner.load(Ordering::SeqCst), true);
-
-    pd_client.must_add_peer(r1, new_peer(3, 3));
-    cluster.must_put(b"k2", b"v2");
-    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
-    assert_eq!(from_learner.load(Ordering::SeqCst), false);
 }
 
 #[test]
