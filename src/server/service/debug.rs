@@ -366,6 +366,31 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
 
         self.handle_response(ctx, sink, f, TAG);
     }
+
+    fn get_region_properties(
+        &self,
+        ctx: RpcContext,
+        req: GetRegionPropertiesRequest,
+        sink: UnarySink<GetRegionPropertiesResponse>,
+    ) {
+        const TAG: &str = "get_region_properties";
+
+        let f = self.pool
+            .spawn(
+                future::ok(self.debugger.clone())
+                    .and_then(move |debugger| debugger.get_region_properties(req.get_region_id())),
+            )
+            .map(|props| {
+                let mut resp = GetRegionPropertiesResponse::new();
+                for (k, v) in props {
+                    resp.mut_names().push(k);
+                    resp.mut_values().push(v);
+                }
+                resp
+            });
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
 }
 
 fn region_detail<T: RaftStoreRouter>(
