@@ -422,7 +422,6 @@ pub struct Storage {
     gc_worker: GCWorker,
 
     // Storage configurations.
-    // gc_ratio_threshold: f64,
     max_key_size: usize,
 }
 

@@ -85,7 +85,7 @@ impl GCRunner {
         }
     }
 
-    fn clean_up_keys(
+    fn gc_clean_up_keys(
         &self,
         ctx: &Context,
         safe_point: u64,
@@ -116,18 +116,40 @@ impl GCRunner {
     }
 
     pub fn gc(&self, ctx: Context, safe_point: u64) -> Result<()> {
+        debug!(
+            "doing gc on region {}, safe_point {}",
+            ctx.region_id, safe_point
+        );
+
         let mut next_key = None;
         loop {
-            let (keys, next) = self.gc_scan_keys(&ctx, safe_point, next_key)?;
+            let (keys, next) = self.gc_scan_keys(&ctx, safe_point, next_key).map_err(|e| {
+                warn!("gc_scan_key failed on region {}: {:?}", safe_point, &e);
+                e
+            })?;
             if keys.is_none() {
                 break;
             }
 
-            next_key = self.clean_up_keys(&ctx, safe_point, keys.unwrap(), next)?;
+            next_key = self.gc_clean_up_keys(&ctx, safe_point, keys.unwrap(), next)
+                .map_err(|e| {
+                    warn!("gc_clean_up_keys failed on region {}: {:?}", safe_point, &e);
+                    e
+                })?;
             if next_key.is_none() {
                 break;
             }
+
+            debug!(
+                "doing gc on region {}, safe_point {}, scan_from {:?}",
+                ctx.region_id, safe_point, next_key
+            );
         }
+
+        debug!(
+            "gc on region {}, safe_point {} has finished",
+            ctx.region_id, safe_point
+        );
         Ok(())
     }
 }
@@ -166,7 +188,7 @@ impl GCWorker {
             .lock()
             .unwrap()
             .start(runner)
-            .map_err(Error::from)
+            .map_err(|e| box_err!("failed to start gc_worker, err: {:?}", e))
     }
 
     pub fn stop(&self) -> Result<()> {
