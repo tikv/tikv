@@ -909,11 +909,11 @@ impl Peer {
                 .unwrap()
                 .clone();
             if peer != self.peer {
-                let prev_peer = mem::replace(&mut self.peer, peer);
-                debug!(
+                info!(
                     "{} meta changed in applying snapshot, before: {:?}, after: {:?}",
-                    self.tag, prev_peer, self.peer
+                    self.tag, self.peer, peer
                 );
+                self.peer = peer;
             };
         }
 
