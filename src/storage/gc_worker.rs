@@ -33,9 +33,9 @@ impl Display for GCTask {
             Some(e) => format!("{{{}, {}}}", e.conf_ver, e.version),
         };
         f.debug_struct("GCTask")
-            .field("region", self.ctx.region_id)
-            .field("epoch", epoch)
-            .field("safe_point", self.safe_point)
+            .field("region", &self.ctx.region_id)
+            .field("epoch", &epoch)
+            .field("safe_point", &self.safe_point)
             .finish()
     }
 }
@@ -69,7 +69,7 @@ impl GCRunner {
             None,
             ctx.get_isolation_level(),
         );
-        if !reader.need_gc(safe_point, self.gc_ratio_threshold) {
+        if !reader.need_gc(safe_point, self.ratio_threshold) {
             Ok((None, None))
         } else {
             reader
