@@ -908,11 +908,13 @@ impl Peer {
                 .find(|p| p.get_id() == self.peer.get_id())
                 .unwrap()
                 .clone();
-            let prev_peer = mem::replace(&mut self.peer, peer);
-            debug!(
-                "{} meta changed in applying snapshot, before: {:?}, after: {:?}",
-                self.tag, prev_peer, self.peer
-            );
+            if peer != self.peer {
+                let prev_peer = mem::replace(&mut self.peer, peer);
+                debug!(
+                    "{} meta changed in applying snapshot, before: {:?}, after: {:?}",
+                    self.tag, prev_peer, self.peer
+                );
+            };
         }
 
         if !self.is_leader() {
