@@ -32,25 +32,25 @@ impl Display for GCTask {
             None => "None".to_string(),
             Some(e) => format!("{{{}, {}}}", e.conf_ver, e.version),
         };
-        write!(
-            f,
-            "GC task at region {}, epoch {}, safe_point {}",
-            self.ctx.region_id, epoch, self.safe_point
-        )
+        f.debug_struct("GCTask")
+            .field("region", self.ctx.region_id)
+            .field("epoch", epoch)
+            .field("safe_point", self.safe_point)
+            .finish()
     }
 }
 
 // `GCRunner` is used to perform GC on the engine
 struct GCRunner {
     engine: Box<Engine>,
-    gc_ratio_threshold: f64,
+    ratio_threshold: f64,
 }
 
 impl GCRunner {
-    pub fn new(engine: Box<Engine>, gc_ratio_threshold: f64) -> GCRunner {
+    pub fn new(engine: Box<Engine>, ratio_threshold: f64) -> GCRunner {
         GCRunner {
             engine,
-            gc_ratio_threshold,
+            ratio_threshold,
         }
     }
 
@@ -58,7 +58,7 @@ impl GCRunner {
         &self,
         ctx: &Context,
         safe_point: u64,
-        next_scan_key: Option<Key>,
+        from: Option<Key>,
     ) -> Result<(Option<Vec<Key>>, Option<Key>)> {
         let snapshot = self.engine.snapshot(ctx)?;
         let mut reader = MvccReader::new(
@@ -73,7 +73,7 @@ impl GCRunner {
             Ok((None, None))
         } else {
             reader
-                .scan_keys(next_scan_key, GC_BATCH_SIZE)
+                .scan_keys(from, GC_BATCH_SIZE)
                 .map_err(Error::from)
                 .and_then(|(keys, next)| {
                     if keys.is_empty() {
@@ -85,7 +85,7 @@ impl GCRunner {
         }
     }
 
-    fn gc_clean_up_keys(
+    fn gc_keys(
         &self,
         ctx: &Context,
         safe_point: u64,
@@ -124,16 +124,16 @@ impl GCRunner {
         let mut next_key = None;
         loop {
             let (keys, next) = self.gc_scan_keys(&ctx, safe_point, next_key).map_err(|e| {
-                warn!("gc_scan_key failed on region {}: {:?}", safe_point, &e);
+                warn!("gc_scan_keys failed on region {}: {:?}", safe_point, &e);
                 e
             })?;
             if keys.is_none() {
                 break;
             }
 
-            next_key = self.gc_clean_up_keys(&ctx, safe_point, keys.unwrap(), next)
+            next_key = self.gc_keys(&ctx, safe_point, keys.unwrap(), next)
                 .map_err(|e| {
-                    warn!("gc_clean_up_keys failed on region {}: {:?}", safe_point, &e);
+                    warn!("gc_keys failed on region {}: {:?}", safe_point, &e);
                     e
                 })?;
             if next_key.is_none() {
@@ -165,25 +165,25 @@ impl Runnable<GCTask> for GCRunner {
 #[derive(Clone)]
 pub struct GCWorker {
     engine: Box<Engine>,
-    gc_ratio_threshold: f64,
+    ratio_threshold: f64,
     worker: Arc<Mutex<Worker<GCTask>>>,
     worker_scheduler: worker::Scheduler<GCTask>,
 }
 
 impl GCWorker {
-    pub fn new(engine: Box<Engine>, gc_ratio_threshold: f64) -> GCWorker {
+    pub fn new(engine: Box<Engine>, ratio_threshold: f64) -> GCWorker {
         let worker = Arc::new(Mutex::new(Builder::new("gc-scheduler").create()));
         let worker_scheduler = worker.lock().unwrap().scheduler();
         GCWorker {
             engine,
-            gc_ratio_threshold,
+            ratio_threshold,
             worker,
             worker_scheduler,
         }
     }
 
     pub fn start(&self) -> Result<()> {
-        let runner = GCRunner::new(self.engine.clone(), self.gc_ratio_threshold);
+        let runner = GCRunner::new(self.engine.clone(), self.ratio_threshold);
         self.worker
             .lock()
             .unwrap()
