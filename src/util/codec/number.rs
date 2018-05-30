@@ -394,6 +394,17 @@ pub fn decode_u64_le(data: &mut BytesSlice) -> Result<u64> {
     read_num_bytes(mem::size_of::<u64>(), data, LittleEndian::read_u64)
 }
 
+#[inline]
+pub fn read_u8(data: &mut BytesSlice) -> Result<u8> {
+    if !data.is_empty() {
+        let v = data[0];
+        *data = &data[1..];
+        Ok(v)
+    } else {
+        Err(Error::unexpected_eof())
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
