@@ -160,7 +160,7 @@ impl Drop for Monitor {
 }
 
 use self::inner::monotonic_coarse_now;
-use self::inner::monotonic_now;
+pub use self::inner::monotonic_now;
 /// `monotonic_raw_now` returns the monotonic raw time since some unspecified starting point.
 pub use self::inner::monotonic_raw_now;
 
@@ -199,18 +199,22 @@ mod inner {
     use std::io;
     use time::Timespec;
 
+    #[inline]
     pub fn monotonic_raw_now() -> Timespec {
         get_time(libc::CLOCK_MONOTONIC_RAW)
     }
 
+    #[inline]
     pub fn monotonic_now() -> Timespec {
         get_time(libc::CLOCK_MONOTONIC)
     }
 
+    #[inline]
     pub fn monotonic_coarse_now() -> Timespec {
         get_time(libc::CLOCK_MONOTONIC_COARSE)
     }
 
+    #[inline]
     fn get_time(clock: libc::clockid_t) -> Timespec {
         let mut t = libc::timespec {
             tv_sec: 0,

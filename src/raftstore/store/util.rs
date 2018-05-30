@@ -423,10 +423,29 @@ mod tests {
     use storage::{Key, ALL_CFS};
     use util::properties::SizePropertiesCollectorFactory;
     use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
-    use util::time::monotonic_raw_now;
+    use util::time::{monotonic_now, monotonic_raw_now};
 
     #[test]
     fn test_lease() {
+        #[inline]
+        fn sleep_test(duration: TimeDuration, lease: &Lease, state: LeaseState) {
+            // In linux, sleep uses CLOCK_MONOTONIC.
+            let monotonic_start = monotonic_now();
+            // In linux, lease uses CLOCK_MONOTONIC_RAW.
+            let monotonic_raw_start = monotonic_raw_now();
+            thread::sleep(duration.to_std().unwrap());
+            let monotonic_end = monotonic_now();
+            let monotonic_raw_end = monotonic_raw_now();
+            assert_eq!(
+                lease.inspect(Some(monotonic_raw_end)),
+                state,
+                "elapsed monotonic_raw: {:?}, monotonic: {:?}",
+                monotonic_raw_end - monotonic_raw_start,
+                monotonic_end - monotonic_start
+            );
+            assert_eq!(lease.inspect(None), state);
+        }
+
         let duration = TimeDuration::milliseconds(1500);
 
         // Empty lease.
@@ -446,12 +465,7 @@ mod tests {
         assert_eq!(lease.inspect(None), LeaseState::Valid);
 
         // After lease expired time.
-        thread::sleep(duration.to_std().unwrap());
-        assert_eq!(
-            lease.inspect(Some(monotonic_raw_now())),
-            LeaseState::Expired
-        );
-        assert_eq!(lease.inspect(None), LeaseState::Expired);
+        sleep_test(duration, &lease, LeaseState::Expired);
 
         // Transit to the Suspect state.
         lease.suspect(monotonic_raw_now());
@@ -462,11 +476,7 @@ mod tests {
         assert_eq!(lease.inspect(None), LeaseState::Suspect);
 
         // After lease expired time. Always suspect.
-        thread::sleep(duration.to_std().unwrap());
-        assert_eq!(
-            lease.inspect(Some(monotonic_raw_now())),
-            LeaseState::Suspect
-        );
+        sleep_test(duration, &lease, LeaseState::Suspect);
 
         // Clear lease.
         lease.expire();
