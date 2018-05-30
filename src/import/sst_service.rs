@@ -80,7 +80,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                     .into_future()
                     .map_err(|(e, _)| Error::from(e))
                     .and_then(move |(chunk, stream)| {
-                        // The first message of the stream containas meta data
+                        // The first message of the stream containas metadata
                         // of the file.
                         let meta = match chunk {
                             Some(ref chunk) if chunk.has_meta() => chunk.get_meta(),
@@ -115,8 +115,9 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
 
     /// Ingest the file by sending a raft command to raftstore.
     ///
-    /// If the ingest fails due to region not found or epoch does not match, the
-    /// remaining files will eventually be cleaned up by CleanupSSTWorker.
+    /// If the ingestion fails because the region is not found or the epoch does
+    /// not match, the remaining files will eventually be cleaned up by
+    /// CleanupSSTWorker.
     fn ingest(&self, ctx: RpcContext, mut req: IngestRequest, sink: UnarySink<IngestResponse>) {
         let label = "ingest";
         let timer = Instant::now_coarse();
