@@ -22,8 +22,8 @@
 //! is usually run independently of TiKV.
 //!
 //! The `ImportSSTService` is used to ingest the generated SST files into TiKV's
-//! RocksDB instance. The ingesting process is `tidb-lightning` first upload SST
-//! files to the host where TiKV is located, and then call the `Ingest` RPC.
+//! RocksDB instance. The ingesting process: `tidb-lightning` first uploads SST
+//! files to the host where TiKV is located, and then calls the `Ingest` RPC.
 //! After `ImportSSTService` receives the RPC, it sends a message to raftstore
 //! thread to notify it of the ingesting operation.  This service is running
 //! inside TiKV because it needs to interact with raftstore.

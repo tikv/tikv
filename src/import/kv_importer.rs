@@ -184,7 +184,7 @@ impl EngineFile {
         self.engine.as_ref().unwrap().write(batch)
     }
 
-    /// Finish write and move files from temp directory to save directory.
+    /// Finish writing and moving files from temp directory to save directory.
     fn close(&mut self) -> Result<()> {
         self.engine.take().unwrap().flush(true)?;
         if self.path.save.exists() {

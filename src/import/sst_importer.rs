@@ -84,7 +84,7 @@ impl SSTImporter {
 /// ImportDir is responsible for operating SST files and related path
 /// calculations.
 ///
-/// The file being writing is stored in `$root/.temp/$file_name`. After writing
+/// The file being written is stored in `$root/.temp/$file_name`. After writing
 /// is completed, the file is moved to `$root/$file_name`. The file generated
 /// from the ingestion process will be placed in `$root/.clone/$file_name`.
 ///
