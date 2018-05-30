@@ -902,12 +902,17 @@ impl Peer {
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
         if apply_snap_result.is_some() && self.peer.get_is_learner() {
             // The peer may change from learner to voter after snapshot applied.
-            self.peer = self.region()
+            let peer = self.region()
                 .get_peers()
                 .iter()
                 .find(|p| p.get_id() == self.peer.get_id())
                 .unwrap()
                 .clone();
+            let prev_peer = mem::replace(&mut self.peer, peer);
+            debug!(
+                "{} meta changed in applying snapshot, before: {:?}, after: {:?}",
+                self.tag, prev_peer, self.peer
+            );
         }
 
         if !self.is_leader() {

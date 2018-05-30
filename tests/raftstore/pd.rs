@@ -814,7 +814,7 @@ impl TestPdClient {
         panic!("region {:?} is still not merged.", region.unwrap());
     }
 
-    pub fn must_leader(&self, region_id: u64, peer: metapb::Peer) {
+    pub fn region_leader_must_be(&self, region_id: u64, peer: metapb::Peer) {
         for _ in 0..500 {
             sleep_ms(10);
             if let Some(p) = self.cluster.rl().leaders.get(&region_id) {

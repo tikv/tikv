@@ -619,7 +619,7 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.transfer_leader(r1, new_learner_peer(4, 10));
     cluster.must_put(b"k3", b"v3");
     must_get_equal(&cluster.get_engine(4), b"k3", b"v3");
-    pd_client.must_leader(r1, new_peer(1, 1));
+    pd_client.region_leader_must_be(r1, new_peer(1, 1));
 
     // Promote learner (4 ,10) to voter.
     pd_client.must_add_peer(r1, new_peer(4, 10));
@@ -629,7 +629,7 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Transfer leader to (4, 10) and check pd heartbeats from it.
     pd_client.transfer_leader(r1, new_peer(4, 10));
-    pd_client.must_leader(r1, new_peer(4, 10));
+    pd_client.region_leader_must_be(r1, new_peer(4, 10));
 
     // Add learner on store which already has peer.
     pd_client.add_peer(r1, new_learner_peer(4, 10));
@@ -768,6 +768,8 @@ fn test_learner_with_slow_snapshot() {
     count.store(0, Ordering::SeqCst);
     cluster.run_node(3);
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
-    pd_client.must_have_peer(r1, new_peer(3, 3));
+    // Transfer leader so that peer 3 can report to pd with `Peer` in memory.
+    pd_client.transfer_leader(r1, new_peer(3, 3));
+    pd_client.region_leader_must_be(r1, new_peer(3, 3));
     assert_eq!(count.load(Ordering::SeqCst), 1);
 }

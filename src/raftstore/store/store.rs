@@ -1473,7 +1473,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             match change_type {
                 ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
                     let peer = cp.peer.clone();
-                    if p.peer_id() == peer_id {
+                    if p.peer_id() == peer_id && p.peer.get_is_learner() {
                         p.peer = peer.clone();
                     }
 
