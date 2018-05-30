@@ -17,7 +17,7 @@ use coprocessor::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use coprocessor::codec::mysql::{types, Decimal, DecimalEncoder, Duration, DurationEncoder, Json,
                                 JsonEncoder, Time, TimeEncoder};
 use tipb::expression::FieldType;
-use util::codec::number::{NumberDecoder, NumberEncoder};
+use util::codec::number::{self, NumberEncoder};
 
 #[derive(Default)]
 pub struct Column {
@@ -193,7 +193,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.decode_i64_le()
+        number::decode_i64_le(&mut data)
     }
 
     pub fn append_u64(&mut self, v: u64) -> Result<()> {
@@ -205,7 +205,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.decode_u64_le()
+        number::decode_u64_le(&mut data)
     }
 
     pub fn append_f64(&mut self, v: f64) -> Result<()> {
@@ -217,7 +217,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.decode_f64_le()
+        number::decode_f64_le(&mut data)
     }
 
     fn finished_append_var(&mut self) -> Result<()> {
