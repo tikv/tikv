@@ -139,7 +139,6 @@ impl Runnable<GCTask> for GCRunner {
     }
 }
 
-
 // `GCWorker` is used to schedule GC operations
 #[derive(Clone)]
 pub struct GCWorker {

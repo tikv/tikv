@@ -871,7 +871,9 @@ impl Storage {
 
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
         self.gc_worker.async_gc(ctx, safe_point, callback)?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[CMD_TAG_GC]).inc();
+        KV_COMMAND_COUNTER_VEC
+            .with_label_values(&[CMD_TAG_GC])
+            .inc();
         Ok(())
     }
 
