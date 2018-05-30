@@ -715,19 +715,18 @@ fn test_learner_with_slow_snapshot() {
 
     impl Filter<RaftMessage> for SnapshotFilter {
         fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
-            if self.filter.load(Ordering::SeqCst) {
-                let old_len = msgs.len();
-                msgs.retain(|m| m.get_message().get_msg_type() != MessageType::MsgSnapshot);
-                if msgs.len() < old_len {
-                    self.count.fetch_add(old_len - msgs.len(), Ordering::SeqCst);
-                    return Err(box_err!("send snapshot fail"));
-                }
-                return Ok(());
-            }
             let count = msgs.iter()
                 .filter(|m| m.get_message().get_msg_type() == MessageType::MsgSnapshot)
                 .count();
             self.count.fetch_add(count, Ordering::SeqCst);
+
+            if self.filter.load(Ordering::SeqCst) {
+                let old_len = msgs.len();
+                msgs.retain(|m| m.get_message().get_msg_type() != MessageType::MsgSnapshot);
+                if msgs.len() < old_len {
+                    return Err(box_err!("send snapshot fail"));
+                }
+            }
             Ok(())
         }
     }
@@ -758,6 +757,7 @@ fn test_learner_with_slow_snapshot() {
 
     // Add a learner peer and test promoting it with snapshot instead of proposal.
     pd_client.must_add_peer(r1, new_learner_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 
     cluster.stop_node(3);
     pd_client.must_add_peer(r1, new_peer(3, 3));
@@ -765,8 +765,8 @@ fn test_learner_with_slow_snapshot() {
     (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
 
     // peer 3 will be promoted by snapshot instead of normal proposal.
-    cluster.run_node(3);
     count.store(0, Ordering::SeqCst);
+    cluster.run_node(3);
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
     pd_client.must_have_peer(r1, new_peer(3, 3));
     assert_eq!(count.load(Ordering::SeqCst), 1);

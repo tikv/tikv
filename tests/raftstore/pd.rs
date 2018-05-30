@@ -818,7 +818,7 @@ impl TestPdClient {
         for _ in 0..500 {
             sleep_ms(10);
             if let Some(p) = self.cluster.rl().leaders.get(&region_id) {
-                if p == &peer {
+                if *p == peer {
                     return;
                 }
             }
