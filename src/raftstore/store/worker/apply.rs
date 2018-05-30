@@ -18,6 +18,7 @@ use std::collections::VecDeque;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::mem;
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
@@ -1182,12 +1183,12 @@ impl ApplyDelegate {
         mut ctx: ApplyContext,
         req: &AdminRequest,
     ) -> Box<Future<Item = AdminCmdFutureItem, Error = FutureError> + Send> {
-        let id = self.id;
-        let region_id = self.region_id();
+        let _id = self.id;
+        let _region_id = self.region_id();
         let apply_before_split = || {
             fail_point!(
                 "apply_before_split_1_3",
-                { id == 3 && region_id == 1 },
+                { _id == 3 && _region_id == 1 },
                 |_| {}
             );
         };
@@ -2138,7 +2139,7 @@ pub enum RegionTask {
     Suicide(Suicide),
     Proposal(RegionProposal),
     Borrow(BorrowDelegate),
-    Stop(u64),
+    Stop((u64, Sender<()>)),
 }
 
 impl RegionTask {
@@ -2424,9 +2425,10 @@ impl Runner {
                             // Exit current task
                             box future::err(())
                         }
-                        RegionTask::Stop(region_id) => {
+                        RegionTask::Stop((region_id, stop_tx)) => {
                             assert_eq!(delegate.region_id(), region_id);
                             delegate.destroy();
+                            stop_tx.send(()).unwrap();
 
                             // Exit current task
                             box future::err(())
@@ -2526,9 +2528,15 @@ impl Runner {
     }
 
     fn handle_shutdown(&mut self) {
-        // Todo: wait all regions finished.
+        let mut total: u64 = 0;
+        let (stop_tx, stop_rx) = mpsc::channel();
         for (region_id, tx) in self.region_task_senders.drain() {
-            let _ = tx.unbounded_send(RegionTask::Stop(region_id));
+            if let Ok(()) = tx.unbounded_send(RegionTask::Stop((region_id, stop_tx.clone()))) {
+                total += 1;
+            }
+        }
+        for _ in 0..total {
+            let _ = stop_rx.recv();
         }
     }
 
