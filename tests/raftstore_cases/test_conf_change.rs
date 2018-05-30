@@ -11,8 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
 use std::thread;
 use std::time::Duration;
 
@@ -709,41 +708,51 @@ fn test_learner_with_slow_snapshot() {
     let r1 = cluster.run_conf_change();
     (0..10).for_each(|_| cluster.must_put(b"k1", b"v1"));
 
-    struct SnapshotFilter(Mutex<mpsc::Sender<()>>);
+    struct SnapshotFilter {
+        count: Arc<AtomicUsize>,
+        filter: Arc<AtomicBool>,
+    }
+
     impl Filter<RaftMessage> for SnapshotFilter {
         fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
-            let old_len = msgs.len();
-            msgs.retain(|m| m.get_message().get_msg_type() != MessageType::MsgSnapshot);
-            if msgs.len() < old_len {
-                self.0.lock().unwrap().send(()).unwrap();
+            if self.filter.load(Ordering::SeqCst) {
+                let old_len = msgs.len();
+                msgs.retain(|m| m.get_message().get_msg_type() != MessageType::MsgSnapshot);
+                if msgs.len() < old_len {
+                    self.count.fetch_add(old_len - msgs.len(), Ordering::SeqCst);
+                    return Err(box_err!("send snapshot fail"));
+                }
+                return Ok(());
             }
-            Ok(())
-        }
-    }
-
-    struct SnapshotCounter(Arc<AtomicUsize>);
-    impl Filter<RaftMessage> for SnapshotCounter {
-        fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
-            let snapshot_count = msgs.iter()
+            let count = msgs.iter()
                 .filter(|m| m.get_message().get_msg_type() == MessageType::MsgSnapshot)
                 .count();
-            self.0.fetch_add(snapshot_count, Ordering::SeqCst);
+            self.count.fetch_add(count, Ordering::SeqCst);
             Ok(())
         }
     }
 
+    let count = Arc::new(AtomicUsize::new(0));
+    let filter = Arc::new(AtomicBool::new(true));
+    let snap_filter = box SnapshotFilter {
+        count: Arc::clone(&count),
+        filter: Arc::clone(&filter),
+    };
+
     // New added learner should keep pending until snapshot is applied.
-    let (tx, rx) = mpsc::channel();
-    let snap_filter = box SnapshotFilter(Mutex::new(tx));
     cluster.sim.wl().add_send_filter(1, snap_filter);
     pd_client.must_add_peer(r1, new_learner_peer(2, 2));
-    rx.recv().unwrap();
+    for _ in 0..500 {
+        sleep_ms(10);
+        if count.load(Ordering::SeqCst) > 0 {
+            break;
+        }
+    }
+    assert!(count.load(Ordering::SeqCst) > 0);
     assert_eq!(pd_client.get_pending_peers()[&2], new_learner_peer(2, 2));
 
     // Clear snapshot filter and promote peer 2 to voter.
-    cluster.sim.wl().clear_send_filters(1);
-    cluster.stop_node(1); // Restart leader so that it will retry send snapshots.
-    cluster.run_node(1);
+    filter.store(false, Ordering::SeqCst);
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     pd_client.must_add_peer(r1, new_peer(2, 2));
 
@@ -755,13 +764,10 @@ fn test_learner_with_slow_snapshot() {
     // Ensure raftstore will gc all applied raft logs.
     (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
 
-    let snap_count = Arc::new(AtomicUsize::new(0));
-    let snap_counter = box SnapshotCounter(snap_count.clone());
-    cluster.sim.wl().add_send_filter(1, snap_counter);
-
     // peer 3 will be promoted by snapshot instead of normal proposal.
     cluster.run_node(3);
+    count.store(0, Ordering::SeqCst);
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
     pd_client.must_have_peer(r1, new_peer(3, 3));
-    assert_eq!(snap_count.load(Ordering::SeqCst), 1);
+    assert_eq!(count.load(Ordering::SeqCst), 1);
 }
