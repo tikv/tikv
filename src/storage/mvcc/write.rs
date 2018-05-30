@@ -16,7 +16,7 @@ use super::lock::LockType;
 use super::{Error, Result};
 use byteorder::ReadBytesExt;
 use storage::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
-use util::codec::number::{MAX_VAR_U64_LEN, NumberDecoder, NumberEncoder};
+use util::codec::number::{self, MAX_VAR_U64_LEN, NumberEncoder};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WriteType {
@@ -93,7 +93,7 @@ impl Write {
             return Err(Error::BadFormatWrite);
         }
         let write_type = WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)?;
-        let start_ts = b.decode_var_u64()?;
+        let start_ts = number::decode_var_u64(&mut b)?;
         if b.is_empty() {
             return Ok(Write::new(write_type, start_ts, None));
         }

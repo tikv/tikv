@@ -23,7 +23,7 @@ use rocksdb::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFac
               UserCollectedProperties};
 use storage::mvcc::{Write, WriteType};
 use storage::types;
-use util::codec::number::{NumberDecoder, NumberEncoder};
+use util::codec::number::{self, NumberEncoder};
 use util::codec::{Error, Result};
 
 const PROP_NUM_ERRORS: &str = "tikv.num_errors";
@@ -244,12 +244,12 @@ impl IndexHandles {
     fn decode(mut buf: &[u8]) -> Result<IndexHandles> {
         let mut res = BTreeMap::new();
         while !buf.is_empty() {
-            let klen = buf.decode_u64()?;
+            let klen = number::decode_u64(&mut buf)?;
             let mut k = vec![0; klen as usize];
             buf.read_exact(&mut k)?;
             let mut v = IndexHandle::default();
-            v.size = buf.decode_u64()?;
-            v.offset = buf.decode_u64()?;
+            v.size = number::decode_u64(&mut buf)?;
+            v.offset = number::decode_u64(&mut buf)?;
             res.insert(k, v);
         }
         Ok(IndexHandles(res))
@@ -438,7 +438,7 @@ pub trait DecodeProperties {
 
     fn decode_u64(&self, k: &str) -> Result<u64> {
         let mut buf = self.decode(k)?;
-        buf.decode_u64()
+        number::decode_u64(&mut buf)
     }
 
     fn decode_handles(&self, k: &str) -> Result<IndexHandles> {
