@@ -420,25 +420,29 @@ impl Debugger {
                 let old_peers = region_state.mut_region().take_peers().into_vec();
                 let old_voters_len = count_voters(&old_peers);
 
-                let rest_voters_len = count_voters(
+                let survivor_voters_len = count_voters(
                     old_peers
                         .iter()
                         .filter(|p| !store_ids.contains(&p.get_store_id())),
                 );
 
-                if rest_voters_len >= quorum(old_voters_len) {
+                if survivor_voters_len >= quorum(old_voters_len) {
                     return Ok(());
                 }
 
-                let min_removed = old_voters_len - 2 * rest_voters_len + 1;
+                let min_removed = old_voters_len - 2 * survivor_voters_len + 1;
                 let mut new_peers = old_peers.clone();
-                for _ in 0..min_removed {
-                    let pos = new_peers
-                        .iter()
-                        .position(|p| !p.get_is_learner() && store_ids.contains(&p.get_store_id()))
-                        .unwrap();
-                    new_peers.swap_remove(pos);
-                }
+
+                let mut removed = 0;
+                new_peers.retain(|p| {
+                    if removed < min_removed && !p.get_is_learner()
+                        && store_ids.contains(&p.get_store_id())
+                    {
+                        removed += 1;
+                        return false;
+                    }
+                    true
+                });
 
                 info!(
                     "region {} change peers from {:?}, to {:?}",
@@ -1323,9 +1327,18 @@ mod tests {
         debugger.set_store_id(100);
         let engine = debugger.engines.kv_engine.as_ref();
 
+        let get_region_stores = |engine: &DB, region_id: u64| {
+            get_region_state(engine, region_id)
+                .get_region()
+                .get_peers()
+                .iter()
+                .map(|p| p.get_store_id())
+                .collect::<Vec<_>>()
+        };
+
         // region 1 with peers at stores 11, 12, 13 and 14.
         init_region_state(engine, 1, &[11, 12, 13, 14]);
-        // region 2 with peers at stores 21, 22, 23.
+        // region 2 with peers at stores 21, 22 and 23.
         init_region_state(engine, 2, &[21, 22, 23]);
 
         // Only remove specified stores from region 1.
@@ -1333,12 +1346,11 @@ mod tests {
             .remove_failed_stores(vec![13, 14, 21, 23], Some(vec![1]))
             .unwrap();
 
-        // 14 should be removed from region 1.
-        let region_state = get_region_state(engine, 1);
-        assert_eq!(region_state.get_region().get_peers().len(), 3);
+        // 13 should be removed from region 1.
+        assert_eq!(get_region_stores(engine, 1), &[11, 12, 14]);
+
         // 21 and 23 shouldn't be removed from region 2.
-        let region_state = get_region_state(engine, 2);
-        assert_eq!(region_state.get_region().get_peers().len(), 3);
+        assert_eq!(get_region_stores(engine, 2), &[21, 22, 23]);
 
         // Remove specified stores from all regions.
         debugger
@@ -1346,35 +1358,27 @@ mod tests {
             .unwrap();
 
         // 11 and 12 should be removed from region 1.
-        let region_state = get_region_state(engine, 1);
-        assert_eq!(region_state.get_region().get_peers().len(), 1);
+        assert_eq!(get_region_stores(engine, 1), &[14]);
 
         // 23 shouldn't be removed from region 2 because there's still a quorom.
-        let region_state = get_region_state(engine, 2);
-        assert_eq!(region_state.get_region().get_peers().len(), 3);
+        assert_eq!(get_region_stores(engine, 2), &[21, 22, 23]);
 
         // Should fail when the store itself is in the failed list.
         init_region_state(engine, 3, &[100, 31, 32, 33]);
         assert!(debugger.remove_failed_stores(vec![100], None).is_err());
 
-        // Cases for try best to keep committed logs.
+        // Cases for try best to make new cluster have more stores.
         debugger.set_store_id(16);
         init_region_state(engine, 4, &[11, 12, 13, 14, 15, 16]);
         for (failed, rest) in vec![
             (vec![11], vec![11, 12, 13, 14, 15, 16]),
             (vec![11, 12], vec![11, 12, 13, 14, 15, 16]),
-            (vec![11, 12, 13], vec![16, 12, 13, 14, 15]),
-            (vec![11, 12, 13, 14], vec![16, 15, 14]),
+            (vec![11, 12, 13], vec![12, 13, 14, 15, 16]),
+            (vec![11, 12, 13, 14], vec![14, 15, 16]),
             (vec![11, 12, 13, 14, 15], vec![16]),
         ] {
             assert!(debugger.remove_failed_stores(failed, Some(vec![4])).is_ok());
-            let peers = get_region_state(engine, 4)
-                .get_region()
-                .get_peers()
-                .iter()
-                .map(|p| p.get_store_id())
-                .collect::<Vec<_>>();
-            assert_eq!(peers, rest);
+            assert_eq!(get_region_stores(engine, 4), rest);
         }
     }
 
