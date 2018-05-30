@@ -618,6 +618,8 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Can't transfer leader to learner.
     pd_client.transfer_leader(r1, new_learner_peer(4, 10));
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(4), b"k3", b"v3");
     pd_client.must_leader(r1, new_peer(1, 1));
 
     // Promote learner (4 ,10) to voter.
@@ -719,31 +721,6 @@ fn test_learner_with_slow_snapshot() {
         }
     }
 
-    let (tx, rx) = mpsc::channel();
-    let snap_filter = box SnapshotFilter(Mutex::new(tx));
-    cluster.sim.wl().add_send_filter(1, snap_filter);
-    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
-
-    // The learner should be still pending.
-    rx.recv().unwrap();
-    assert_eq!(pd_client.get_pending_peers()[&2], new_learner_peer(2, 2));
-}
-
-#[test]
-fn test_learner_promote_in_snapshot() {
-    let mut cluster = new_server_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-    let r1 = cluster.run_conf_change();
-    cluster.must_put(b"k1", b"v1");
-
-    pd_client.must_add_peer(r1, new_peer(2, 2));
-    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
-
-    pd_client.must_add_peer(r1, new_learner_peer(3, 3));
-    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
-
     struct SnapshotCounter(Arc<AtomicUsize>);
     impl Filter<RaftMessage> for SnapshotCounter {
         fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
@@ -754,6 +731,24 @@ fn test_learner_promote_in_snapshot() {
             Ok(())
         }
     }
+
+    // New added learner should keep pending until snapshot is applied.
+    let (tx, rx) = mpsc::channel();
+    let snap_filter = box SnapshotFilter(Mutex::new(tx));
+    cluster.sim.wl().add_send_filter(1, snap_filter);
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
+    rx.recv().unwrap();
+    assert_eq!(pd_client.get_pending_peers()[&2], new_learner_peer(2, 2));
+
+    // Clear snapshot filter and promote peer 2 to voter.
+    cluster.sim.wl().clear_send_filters(1);
+    cluster.stop_node(1); // Restart leader so that it will retry send snapshots.
+    cluster.run_node(1);
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    // Add a learner peer and test promoting it with snapshot instead of proposal.
+    pd_client.must_add_peer(r1, new_learner_peer(3, 3));
 
     cluster.stop_node(3);
     pd_client.must_add_peer(r1, new_peer(3, 3));
