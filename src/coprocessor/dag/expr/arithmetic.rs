@@ -218,20 +218,14 @@ impl FnCall {
     }
 
     pub fn int_divide_decimal(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
-        let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
-        let overflow = Error::overflow("BIGINT", &format!("({} DIV {})", lhs, rhs));
-        match lhs.into_owned() / rhs.into_owned() {
-            Some(v) => match v {
-                Res::Ok(v) => match v.as_i64() {
-                    Res::Ok(v_i64) => Ok(Some(v_i64)),
-                    Res::Truncated(v_i64) => Ok(Some(v_i64)),
-                    Res::Overflow(_) => Err(overflow),
-                },
-                Res::Truncated(v) => Err(Error::Truncated(format!("{} truncated", v))),
-                Res::Overflow(_) => Err(overflow),
+        match self.divide_decimal(ctx, row) {
+            Ok(Some(v)) => match v.as_i64() {
+                Res::Ok(v_i64) => Ok(Some(v_i64)),
+                Res::Truncated(v_i64) => Ok(Some(v_i64)),
+                Res::Overflow(_) => Err(Error::overflow("BIGINT", &v.to_string())),
             },
-            None => Ok(None),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
         }
     }
 
