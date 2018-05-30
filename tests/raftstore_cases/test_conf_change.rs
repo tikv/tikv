@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -757,6 +757,7 @@ fn test_learner_promote_in_snapshot() {
 
     cluster.stop_node(3);
     pd_client.must_add_peer(r1, new_peer(3, 3));
+    // Ensure raftstore will gc all applied raft logs.
     (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
 
     let snap_count = Arc::new(AtomicUsize::new(0));
