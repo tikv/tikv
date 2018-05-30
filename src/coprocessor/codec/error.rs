@@ -21,9 +21,7 @@ use std::string::FromUtf8Error;
 use std::{error, str};
 use tipb::expression::ScalarFuncSig;
 use tipb::select;
-
 use regex::Error as RegexpError;
-
 use util;
 
 pub const ERR_UNKNOWN: i32 = 1105;
@@ -58,12 +56,6 @@ quick_error! {
         Eval(s: String,code:i32) {
             description("evaluation failed")
             display("{}", s)
-        }
-        Regex(err: regex::Error) {
-            from()
-            description("regex error")
-            display("regex error: {}", err)
-            cause(err)
         }
         Other(err: Box<error::Error + Send + Sync>) {
             from()

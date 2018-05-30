@@ -104,8 +104,6 @@ impl ScalarFunc {
             | ScalarFuncSig::BitAndSig
             | ScalarFuncSig::BitOrSig
             | ScalarFuncSig::BitXorSig
-            | ScalarFuncSig::RegexpSig
-            | ScalarFuncSig::RegexpBinarySig
             | ScalarFuncSig::LeftShift
             | ScalarFuncSig::RightShift
             | ScalarFuncSig::Pow
@@ -778,12 +776,8 @@ dispatch_call! {
         CaseWhenInt => case_when_int,
         GreatestInt => greatest_int,
         LeastInt => least_int,
-        IntervalInt => interval_int,
-        IntervalReal => interval_real,
 
         LikeSig => like,
-        RegexpSig => regexp,
-        RegexpBinarySig => regexp_binary,
 
         BitAndSig => bit_and,
         BitNegSig => bit_neg,
