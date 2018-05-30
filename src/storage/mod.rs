@@ -870,17 +870,8 @@ impl Storage {
     }
 
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
-        // let cmd = Command::Gc {
-        //     ctx,
-        //     safe_point,
-        //     ratio_threshold: self.gc_ratio_threshold,
-        //     scan_key: None,
-        //     keys: vec![],
-        // };
-        // let tag = cmd.tag();
-        // self.schedule(cmd, StorageCb::Boolean(callback))?;
         self.gc_worker.async_gc(ctx, safe_point, callback)?;
-        // KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[CMD_TAG_GC]).inc();
         Ok(())
     }
 

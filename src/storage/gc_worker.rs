@@ -40,40 +40,17 @@ impl Display for GCTask {
     }
 }
 
-#[derive(Clone)]
-pub struct GCWorker {
+// `GCRunner` is used to perform GC on the engine
+struct GCRunner {
     engine: Box<Engine>,
     gc_ratio_threshold: f64,
-    worker: Arc<Mutex<Worker<GCTask>>>,
-    worker_scheduler: worker::Scheduler<GCTask>,
 }
 
-impl GCWorker {
-    pub fn new(engine: Box<Engine>, gc_ratio_threshold: f64) -> GCWorker {
-        let worker = Arc::new(Mutex::new(Builder::new("gc-scheduler").create()));
-        let worker_scheduler = worker.lock().unwrap().scheduler();
-        GCWorker {
+impl GCRunner {
+    pub fn new(engine: Box<Engine>, gc_ratio_threshold: f64) -> GCRunner {
+        GCRunner {
             engine,
             gc_ratio_threshold,
-            worker,
-            worker_scheduler,
-        }
-    }
-
-    pub fn start(&self) -> Result<()> {
-        self.worker
-            .lock()
-            .unwrap()
-            .start(self.clone())
-            .map_err(Error::from)
-    }
-
-    pub fn stop(&self) -> Result<()> {
-        let h = self.worker.lock().unwrap().stop().unwrap();
-        if let Err(e) = h.join() {
-            Err(box_err!("failed to join gc_worker handle, err: {:?}", e))
-        } else {
-            Ok(())
         }
     }
 
@@ -108,7 +85,7 @@ impl GCWorker {
         }
     }
 
-    fn do_gc(
+    fn clean_up_keys(
         &self,
         ctx: &Context,
         safe_point: u64,
@@ -146,12 +123,60 @@ impl GCWorker {
                 break;
             }
 
-            next_key = self.do_gc(&ctx, safe_point, keys.unwrap(), next)?;
+            next_key = self.clean_up_keys(&ctx, safe_point, keys.unwrap(), next)?;
             if next_key.is_none() {
                 break;
             }
         }
         Ok(())
+    }
+}
+
+impl Runnable<GCTask> for GCRunner {
+    fn run(&mut self, task: GCTask) {
+        let result = self.gc(task.ctx, task.safe_point);
+        (task.callback)(result);
+    }
+}
+
+
+// `GCWorker` is used to schedule GC operations
+#[derive(Clone)]
+pub struct GCWorker {
+    engine: Box<Engine>,
+    gc_ratio_threshold: f64,
+    worker: Arc<Mutex<Worker<GCTask>>>,
+    worker_scheduler: worker::Scheduler<GCTask>,
+}
+
+impl GCWorker {
+    pub fn new(engine: Box<Engine>, gc_ratio_threshold: f64) -> GCWorker {
+        let worker = Arc::new(Mutex::new(Builder::new("gc-scheduler").create()));
+        let worker_scheduler = worker.lock().unwrap().scheduler();
+        GCWorker {
+            engine,
+            gc_ratio_threshold,
+            worker,
+            worker_scheduler,
+        }
+    }
+
+    pub fn start(&self) -> Result<()> {
+        let runner = GCRunner::new(self.engine.clone(), self.gc_ratio_threshold);
+        self.worker
+            .lock()
+            .unwrap()
+            .start(runner)
+            .map_err(Error::from)
+    }
+
+    pub fn stop(&self) -> Result<()> {
+        let h = self.worker.lock().unwrap().stop().unwrap();
+        if let Err(e) = h.join() {
+            Err(box_err!("failed to join gc_worker handle, err: {:?}", e))
+        } else {
+            Ok(())
+        }
     }
 
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
@@ -162,11 +187,5 @@ impl GCWorker {
                 callback,
             })
             .map_err(|e| box_err!("failed to schedule gc task: {:?}", e))
-    }
-}
-
-impl Runnable<GCTask> for GCWorker {
-    fn run(&mut self, task: GCTask) {
-        (task.callback)(self.gc(task.ctx, task.safe_point));
     }
 }

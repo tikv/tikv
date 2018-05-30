@@ -52,7 +52,7 @@ fn test_storage_1gc() {
     // Old GC command is blocked at snapshot stage, the other one will get ServerIsBusy error.
     let (tx2, rx2) = channel();
     storage
-        .async_gc(Context::new(), 1, box move |res: storage::Result<()>| {
+        .async_gc(Context::new(), 1, box move |_res: storage::Result<()>| {
             // match res {
             //     Err(storage::Error::SchedTooBusy) => {}
             //     _ => panic!("expect too busy"),
