@@ -1583,15 +1583,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     campaigned =
                         new_peer.maybe_campaign(origin_peer, &mut self.pending_raft_groups);
 
-                    if origin_peer.is_leader() {
-                        // Notify pd immediately to let it update the region meta.
-                        if let Err(e) = if right_derive {
-                            report_split_pd(&mut new_peer, origin_peer, &self.pd_worker)
-                        } else {
-                            report_split_pd(origin_peer, &mut new_peer, &self.pd_worker)
-                        } {
-                            error!("{} failed to notify pd: {}", self.tag, e);
-                        }
+                    // Try notify pd immediately to let it update the region meta.
+                    if right_derive {
+                        maybe_report_split_pd(
+                            &self.tag,
+                            &mut new_peer,
+                            origin_peer,
+                            &self.pd_worker,
+                        );
+                    } else {
+                        maybe_report_split_pd(
+                            &self.tag,
+                            origin_peer,
+                            &mut new_peer,
+                            &self.pd_worker,
+                        );
                     }
                 }
 
@@ -2844,27 +2850,41 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 }
 
-fn report_split_pd(
+fn maybe_report_split_pd(
+    tag: &str,
     left: &mut Peer,
     right: &mut Peer,
     pd_worker: &FutureWorker<PdTask>,
-) -> ::std::result::Result<(), Stopped<PdTask>> {
-    info!(
-        "notify pd with split left {:?}, right {:?}",
-        left.region(),
-        right.region()
-    );
-    right.heartbeat_pd(pd_worker);
-    left.heartbeat_pd(pd_worker);
+) {
+    // Leader needs to heartbeat and report split.
+    let left_leader = left.is_leader();
+    let right_leader = right.is_leader();
 
-    // Now pd only uses ReportSplit for history operation show,
-    // so we send it independently here.
-    let task = PdTask::ReportSplit {
-        left: left.region().clone(),
-        right: right.region().clone(),
-    };
+    if left_leader {
+        left.heartbeat_pd(pd_worker);
+    }
+    if right_leader {
+        right.heartbeat_pd(pd_worker);
+    }
 
-    pd_worker.schedule(task)
+    if left_leader || right_leader {
+        info!(
+            "notify pd with split left {:?}, right {:?}",
+            left.region(),
+            right.region()
+        );
+
+        // Now pd only uses ReportSplit for history operation show,
+        // so we send it independently here.
+        let task = PdTask::ReportSplit {
+            left: left.region().clone(),
+            right: right.region().clone(),
+        };
+
+        if let Err(e) = pd_worker.schedule(task) {
+            error!("{} failed to notify pd: {}", tag, e);
+        }
+    }
 }
 
 // Consistency Check implementation.
