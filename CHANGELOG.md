@@ -2,6 +2,11 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [2.0.3]
+### Bug Fixes
+* Correct wrong peer meta for learners
+* Report an error instead of getting a result if divisor/dividend is 0 in do_div_mod
+
 ## [2.0.2]
 ### Improvements
 * Support configuring more gRPC related parameters
