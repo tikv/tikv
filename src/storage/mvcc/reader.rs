@@ -411,9 +411,10 @@ impl MvccReader {
                 }
             };
 
-            if (desc && w_user_key.is_some()
-                && w_user_key.as_ref().unwrap().encoded().as_slice() != key.encoded().as_slice())
-                || !write_valid
+            if !write_valid
+                || (desc && w_user_key.is_some()
+                    && w_user_key.as_ref().unwrap().encoded().as_slice()
+                        != key.encoded().as_slice())
             {
                 match self.isolation_level {
                     IsolationLevel::SI => {
