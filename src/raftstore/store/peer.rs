@@ -287,7 +287,7 @@ impl Peer {
     // for this store.
     pub fn create<T, C>(store: &mut Store<T, C>, region: &metapb::Region) -> Result<Peer> {
         let store_id = store.store_id();
-        let peer_id = match util::find_peer(region, store_id) {
+        let meta_peer = match util::find_peer(region, store_id) {
             None => {
                 return Err(box_err!(
                     "find no peer for store {} in region {:?}",
@@ -295,31 +295,43 @@ impl Peer {
                     region
                 ))
             }
-            Some(peer) => peer.get_id(),
+            Some(peer) => peer.clone(),
         };
 
         info!(
             "[region {}] create peer with id {}",
             region.get_id(),
-            peer_id
+            meta_peer.get_id(),
         );
-        Peer::new(store, region, peer_id)
+        Peer::new(store, region, meta_peer)
     }
 
     // The peer can be created from another node with raft membership changes, and we only
     // know the region_id and peer_id when creating this replicated peer, the region info
     // will be retrieved later after applying snapshot.
-    pub fn replicate<T, C>(store: &mut Store<T, C>, region_id: u64, peer_id: u64) -> Result<Peer> {
+    pub fn replicate<T, C>(
+        store: &mut Store<T, C>,
+        region_id: u64,
+        peer: metapb::Peer,
+    ) -> Result<Peer> {
         // We will remove tombstone key when apply snapshot
-        info!("[region {}] replicate peer with id {}", region_id, peer_id);
+        info!(
+            "[region {}] replicate peer with id {}",
+            region_id,
+            peer.get_id()
+        );
 
         let mut region = metapb::Region::new();
         region.set_id(region_id);
-        Peer::new(store, &region, peer_id)
+        Peer::new(store, &region, peer)
     }
 
-    fn new<T, C>(store: &mut Store<T, C>, region: &metapb::Region, peer_id: u64) -> Result<Peer> {
-        if peer_id == raft::INVALID_ID {
+    fn new<T, C>(
+        store: &mut Store<T, C>,
+        region: &metapb::Region,
+        peer: metapb::Peer,
+    ) -> Result<Peer> {
+        if peer.get_id() == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
         }
 
@@ -327,7 +339,7 @@ impl Peer {
 
         let store_id = store.store_id();
         let sched = store.snap_scheduler();
-        let tag = format!("[region {}] {}", region.get_id(), peer_id);
+        let tag = format!("[region {}] {}", region.get_id(), peer.get_id());
 
         let ps = PeerStorage::new(
             store.kv_engine(),
@@ -341,7 +353,7 @@ impl Peer {
         let applied_index = ps.applied_index();
 
         let raft_cfg = raft::Config {
-            id: peer_id,
+            id: peer.get_id(),
             peers: vec![],
             election_tick: cfg.raft_election_timeout_ticks,
             heartbeat_tick: cfg.raft_heartbeat_ticks,
@@ -357,11 +369,10 @@ impl Peer {
         };
 
         let raft_group = RawNode::new(&raft_cfg, ps, vec![])?;
-
         let mut peer = Peer {
             kv_engine: store.kv_engine(),
             raft_engine: store.raft_engine(),
-            peer: util::new_peer(store_id, peer_id),
+            peer,
             region_id: region.get_id(),
             raft_group,
             proposals: Default::default(),
@@ -889,6 +900,22 @@ impl Peer {
         }
 
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
+        if apply_snap_result.is_some() && self.peer.get_is_learner() {
+            // The peer may change from learner to voter after snapshot applied.
+            let peer = self.region()
+                .get_peers()
+                .iter()
+                .find(|p| p.get_id() == self.peer.get_id())
+                .unwrap()
+                .clone();
+            if peer != self.peer {
+                info!(
+                    "{} meta changed in applying snapshot, before: {:?}, after: {:?}",
+                    self.tag, self.peer, peer
+                );
+                self.peer = peer;
+            };
+        }
 
         if !self.is_leader() {
             fail_point!("raft_before_follower_send");
