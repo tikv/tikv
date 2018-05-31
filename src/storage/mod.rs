@@ -45,6 +45,7 @@ pub use self::engine::raftkv::RaftKv;
 pub use self::engine::{new_local_engine, CFStatistics, Cursor, Engine, Error as EngineError,
                        FlowStatistics, Iterator, Modify, ScanMode, Snapshot, Statistics,
                        StatisticsSummary, TEMP_DIR};
+pub use self::gc_worker::GC_MAX_PENDING;
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
 pub use self::types::{make_key, Key, KvPair, MvccInfo, Value};
@@ -1383,6 +1384,9 @@ quick_error! {
         }
         SchedTooBusy {
             description("scheduler is too busy")
+        }
+        GCWorkerTooBusy {
+            description("gc worker is too busy")
         }
         KeyTooLarge(size: usize, limit: usize) {
             description("max key size exceeded")

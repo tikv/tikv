@@ -18,7 +18,9 @@ use super::{Callback, Error, Key, Result};
 use kvproto::kvrpcpb::Context;
 use std::fmt::{self, Display, Formatter};
 use std::sync::{Arc, Mutex};
-use util::worker::{self, Builder, Runnable, Worker};
+use util::worker::{self, Builder, Runnable, ScheduleError, Worker};
+
+pub const GC_MAX_PENDING: usize = 10;
 
 struct GCTask {
     pub ctx: Context,
@@ -172,7 +174,11 @@ pub struct GCWorker {
 
 impl GCWorker {
     pub fn new(engine: Box<Engine>, ratio_threshold: f64) -> GCWorker {
-        let worker = Arc::new(Mutex::new(Builder::new("gc-scheduler").create()));
+        let worker = Arc::new(Mutex::new(
+            Builder::new("gc-scheduler")
+                .pending_capacity(GC_MAX_PENDING)
+                .create(),
+        ));
         let worker_scheduler = worker.lock().unwrap().scheduler();
         GCWorker {
             engine,
@@ -207,6 +213,12 @@ impl GCWorker {
                 safe_point,
                 callback,
             })
-            .map_err(|e| box_err!("failed to schedule gc task: {:?}", e))
+            .or_else(|e| match e {
+                ScheduleError::Full(task) => {
+                    (task.callback)(Err(Error::GCWorkerTooBusy));
+                    Ok(())
+                }
+                _ => Err(box_err!("failed to schedule gc task: {:?}", e)),
+            })
     }
 }
