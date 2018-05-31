@@ -790,7 +790,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        let peer = Peer::replicate(self, region_id, target.get_id())?;
+        // New created peers should know it's learner or not.
+        let peer = Peer::replicate(self, region_id, target.clone())?;
         // following snapshot may overlap, should insert into region_ranges after
         // snapshot is applied.
         self.region_peers.insert(region_id, peer);
@@ -1468,10 +1469,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 p.heartbeat_pd(&self.pd_worker);
             }
 
+            let peer_id = cp.peer.get_id();
             match change_type {
                 ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
-                    // Add this peer to cache and heartbeats.
                     let peer = cp.peer.clone();
+                    if p.peer_id() == peer_id && p.peer.get_is_learner() {
+                        p.peer = peer.clone();
+                    }
+
+                    // Add this peer to cache and heartbeats.
                     let now = Instant::now();
                     p.peer_heartbeats.insert(peer.get_id(), now);
                     if p.is_leader() {
@@ -1481,7 +1487,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
                 ConfChangeType::RemoveNode => {
                     // Remove this peer from cache.
-                    let peer_id = cp.peer.get_id();
                     p.peer_heartbeats.remove(&peer_id);
                     if p.is_leader() {
                         p.peers_start_pending_time.retain(|&(p, _)| p != peer_id);

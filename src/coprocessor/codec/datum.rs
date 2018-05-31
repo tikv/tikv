@@ -25,7 +25,6 @@ use super::mysql::{self, parse_json_path_expr, Decimal, DecimalEncoder, Duration
 use super::{convert, Error, Result};
 use coprocessor::dag::expr::EvalContext;
 use util::codec::bytes::{self, BytesEncoder};
-use util::codec::number::NumberDecoder;
 use util::codec::{number, BytesSlice};
 use util::escape;
 
@@ -939,13 +938,13 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
         VAR_INT_FLAG => {
             let mut v = &buf[1..];
             let l = v.len();
-            v.decode_var_i64()?;
+            number::decode_var_i64(&mut v)?;
             l - v.len()
         }
         VAR_UINT_FLAG => {
             let mut v = &buf[1..];
             let l = v.len();
-            v.decode_var_u64()?;
+            number::decode_var_u64(&mut v)?;
             l - v.len()
         }
         JSON_FLAG => {

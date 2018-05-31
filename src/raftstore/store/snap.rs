@@ -14,7 +14,7 @@
 use std::cmp::Reverse;
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, Metadata};
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{self, BufReader, ErrorKind, Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
@@ -970,7 +970,7 @@ impl Snapshot for Snap {
             let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, cf_file.cf));
             if plain_file_used(cf_file.cf) {
                 let mut file = box_try!(File::open(&cf_file.path));
-                apply_plain_cf_file(&mut file, &options, cf_handle)?;
+                apply_plain_cf_file(&mut BufReader::new(file), &options, cf_handle)?;
             } else {
                 let mut ingest_opt = IngestExternalFileOptions::new();
                 ingest_opt.move_files(true);
