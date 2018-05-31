@@ -17,6 +17,8 @@ use std::io::Write;
 use std::time::Duration as StdDuration;
 use std::{str, i64, u64};
 use time::{self, Tm};
+use util::codec::BytesSlice;
+use util::codec::number::{self, NumberEncoder};
 
 use super::super::Result;
 use super::{check_fsp, parse_frac, Decimal};
@@ -275,6 +277,23 @@ impl Ord for Duration {
     }
 }
 
+impl<T: Write> DurationEncoder for T {}
+pub trait DurationEncoder: NumberEncoder {
+    fn encode_duration(&mut self, v: &Duration) -> Result<()> {
+        self.encode_i64(v.to_nanos())?;
+        self.encode_i64(i64::from(v.fsp))
+    }
+}
+
+impl Duration {
+    /// `decode` decodes duration encoded by `encode_duration`.
+    pub fn decode(data: &mut BytesSlice) -> Result<Duration> {
+        let nanos = number::decode_i64(data)?;
+        let fsp = number::decode_i64(data)?;
+        Duration::from_nanos(nanos, fsp as i8)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -380,6 +399,27 @@ mod test {
             t.round_frac(fsp).unwrap();
             let res = format!("{}", t);
             assert_eq!(exp, res);
+        }
+    }
+
+    #[test]
+    fn test_codec() {
+        let cases = vec![
+            ("11:30:45.123456", 4),
+            ("11:30:45.123456", 6),
+            ("11:30:45.123456", 0),
+            ("11:59:59.999999", 3),
+            ("1 11:30:45.123456", 1),
+            ("1 11:30:45.999999", 4),
+            ("-1 11:30:45.999999", 0),
+            ("-1 11:59:59.9999", 2),
+        ];
+        for (input, fsp) in cases {
+            let mut t = Duration::parse(input.as_bytes(), fsp).unwrap();
+            let mut buf = vec![];
+            buf.encode_duration(&t).unwrap();
+            let got = Duration::decode(&mut buf.as_slice()).unwrap();
+            assert_eq!(t, got);
         }
     }
 }

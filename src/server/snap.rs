@@ -32,15 +32,11 @@ use util::worker::Runnable;
 
 use super::metrics::*;
 use super::transport::RaftStoreRouter;
-use super::{Error, Result};
+use super::{Config, Error, Result};
 
 pub type Callback = Box<FnBox(Result<()>) + Send>;
 
 const DEFAULT_POOL_SIZE: usize = 4;
-// How many snapshots can be sent concurrently.
-const MAX_SENDER_CONCURRENT: usize = 16;
-// How many snapshots can be recv concurrently.
-const MAX_RECEIVER_CONCURRENT: usize = 16;
 
 pub enum Task {
     Recv {
@@ -117,6 +113,7 @@ fn send_snap(
     env: Arc<Environment>,
     mgr: SnapManager,
     security_mgr: Arc<SecurityManager>,
+    cfg: &Config,
     addr: &str,
     msg: RaftMessage,
 ) -> Result<impl Future<Item = SendStat, Error = Error>> {
@@ -154,8 +151,10 @@ fn send_snap(
     };
 
     let cb = ChannelBuilder::new(env)
-        .keepalive_time(Duration::from_secs(60))
-        .keepalive_timeout(Duration::from_secs(3));
+        .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
+        .keepalive_time(cfg.grpc_keepalive_time.0)
+        .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
+        .default_compression_algorithm(cfg.grpc_compression_algorithm());
 
     let channel = security_mgr.connect(cb, addr);
     let client = TikvClient::new(channel);
@@ -296,6 +295,7 @@ pub struct Runner<R: RaftStoreRouter + 'static> {
     pool: CpuPool,
     raft_router: R,
     security_mgr: Arc<SecurityManager>,
+    cfg: Arc<Config>,
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
 }
@@ -306,6 +306,7 @@ impl<R: RaftStoreRouter + 'static> Runner<R> {
         snap_mgr: SnapManager,
         r: R,
         security_mgr: Arc<SecurityManager>,
+        cfg: Arc<Config>,
     ) -> Runner<R> {
         Runner {
             env,
@@ -316,6 +317,7 @@ impl<R: RaftStoreRouter + 'static> Runner<R> {
                 .create(),
             raft_router: r,
             security_mgr,
+            cfg,
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
         }
@@ -326,7 +328,8 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
     fn run(&mut self, task: Task) {
         match task {
             Task::Recv { stream, sink } => {
-                if self.recving_count.load(Ordering::SeqCst) >= MAX_RECEIVER_CONCURRENT {
+                if self.recving_count.load(Ordering::SeqCst) >= self.cfg.concurrent_recv_snap_limit
+                {
                     warn!("too many recving snapshot tasks, ignore");
                     let status = RpcStatus::new(RpcStatusCode::ResourceExhausted, None);
                     self.pool.spawn(sink.fail(status)).forget();
@@ -348,7 +351,8 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 self.pool.spawn(f).forget();
             }
             Task::Send { addr, msg, cb } => {
-                if self.sending_count.load(Ordering::SeqCst) >= MAX_SENDER_CONCURRENT {
+                if self.sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit
+                {
                     warn!(
                         "too many sending snapshot tasks, drop Send Snap[to: {}, snap: {:?}]",
                         addr, msg
@@ -364,7 +368,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 let sending_count = Arc::clone(&self.sending_count);
                 sending_count.fetch_add(1, Ordering::SeqCst);
 
-                let f = future::result(send_snap(env, mgr, security_mgr, &addr, msg))
+                let f = future::result(send_snap(env, mgr, security_mgr, &self.cfg, &addr, msg))
                     .flatten()
                     .then(move |res| {
                         match res {

@@ -14,7 +14,7 @@
 use std::cmp::Reverse;
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, Metadata};
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{self, BufReader, ErrorKind, Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
@@ -32,7 +32,7 @@ use raftstore::store::Msg;
 use raftstore::store::util::check_key_in_region;
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::HandyRwLock;
-use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
+use util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use util::collections::{HashMap, HashMapEntry as Entry};
 use util::io_limiter::{IOLimiter, LimitWriter};
 use util::rocksdb::{prepare_sst_for_ingestion, validate_sst_for_ingestion};
@@ -320,6 +320,7 @@ pub struct Snap {
     meta_file: MetaFile,
     size_track: Arc<AtomicU64>,
     limiter: Option<Arc<IOLimiter>>,
+    hold_tmp_files: bool,
 }
 
 impl Snap {
@@ -377,6 +378,7 @@ impl Snap {
             meta_file,
             size_track,
             limiter,
+            hold_tmp_files: false,
         };
 
         // load snapshot meta if meta_file exists
@@ -447,10 +449,17 @@ impl Snap {
     ) -> RaftStoreResult<Snap> {
         let mut s = Snap::new(dir, key, size_track, false, false, deleter, limiter)?;
         s.set_snapshot_meta(snapshot_meta)?;
-
         if s.exists() {
             return Ok(s);
         }
+
+        let f = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&s.meta_file.tmp_path)?;
+        s.meta_file.file = Some(f);
+        s.hold_tmp_files = true;
+
         for cf_file in &mut s.cf_files {
             if cf_file.size == 0 {
                 continue;
@@ -462,11 +471,6 @@ impl Snap {
             cf_file.file = Some(f);
             cf_file.write_digest = Some(Digest::new(crc32::IEEE));
         }
-        let f = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&s.meta_file.tmp_path)?;
-        s.meta_file.file = Some(f);
         Ok(s)
     }
 
@@ -484,12 +488,18 @@ impl Snap {
         if self.exists() {
             return Ok(());
         }
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&self.meta_file.tmp_path)?;
+        self.meta_file.file = Some(file);
+        self.hold_tmp_files = true;
+
         for cf_file in &mut self.cf_files {
             if plain_file_used(cf_file.cf) {
                 let f = OpenOptions::new()
                     .write(true)
-                    .create(true)
-                    .truncate(true)
+                    .create_new(true)
                     .open(&cf_file.tmp_path)?;
                 cf_file.file = Some(f);
             } else {
@@ -506,11 +516,6 @@ impl Snap {
                 cf_file.sst_writer = Some(writer);
             }
         }
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&self.meta_file.tmp_path)?;
-        self.meta_file.file = Some(file);
         Ok(())
     }
 
@@ -665,6 +670,7 @@ impl Snap {
             f.flush()?;
         }
         fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
+        self.hold_tmp_files = false;
         Ok(())
     }
 
@@ -786,7 +792,7 @@ pub fn build_plain_cf_file<E: BytesEncoder>(
     Ok((cf_key_count, cf_size))
 }
 
-fn apply_plain_cf_file<D: CompactBytesDecoder>(
+fn apply_plain_cf_file<D: CompactBytesFromFileDecoder>(
     decoder: &mut D,
     options: &ApplyOptions,
     handle: &CFHandle,
@@ -871,14 +877,18 @@ impl Snapshot for Snap {
     fn delete(&self) {
         debug!("deleting {}", self.path());
         for cf_file in &self.cf_files {
-            delete_file_if_exist(&cf_file.tmp_path);
             delete_file_if_exist(&cf_file.clone_path);
+            if self.hold_tmp_files {
+                delete_file_if_exist(&cf_file.tmp_path);
+            }
             if delete_file_if_exist(&cf_file.path) {
                 self.size_track.fetch_sub(cf_file.size, Ordering::SeqCst);
             }
         }
-        delete_file_if_exist(&self.meta_file.tmp_path);
         delete_file_if_exist(&self.meta_file.path);
+        if self.hold_tmp_files {
+            delete_file_if_exist(&self.meta_file.tmp_path);
+        }
     }
 
     fn meta(&self) -> io::Result<Metadata> {
@@ -943,6 +953,7 @@ impl Snapshot for Snap {
             meta_file.sync_all()?;
         }
         fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
+        self.hold_tmp_files = false;
         Ok(())
     }
 
@@ -959,7 +970,7 @@ impl Snapshot for Snap {
             let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, cf_file.cf));
             if plain_file_used(cf_file.cf) {
                 let mut file = box_try!(File::open(&cf_file.path));
-                apply_plain_cf_file(&mut file, &options, cf_handle)?;
+                apply_plain_cf_file(&mut BufReader::new(file), &options, cf_handle)?;
             } else {
                 let mut ingest_opt = IngestExternalFileOptions::new();
                 ingest_opt.move_files(true);

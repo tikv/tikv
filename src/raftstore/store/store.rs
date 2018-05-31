@@ -61,7 +61,7 @@ use super::msg::{Callback, ReadResponse};
 use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
 use super::transport::Transport;
-use super::worker::apply::{ChangePeer, ExecResult};
+use super::worker::apply::{ApplyMetrics, ApplyRes, ChangePeer, ExecResult};
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, CleanupSSTTask,
                     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
                     RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
@@ -205,7 +205,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     pub fn new(
         ch: StoreChannel,
         meta: metapb::Store,
-        cfg: Config,
+        mut cfg: Config,
         engines: Engines,
         trans: T,
         pd_client: Arc<C>,
@@ -677,12 +677,31 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         loop {
             match self.apply_res_receiver.as_ref().unwrap().try_recv() {
                 Ok(ApplyTaskRes::Applys(multi_res)) => for res in multi_res {
-                    if let Some(p) = self.region_peers.get_mut(&res.region_id) {
-                        debug!("{} async apply finish: {:?}", p.tag, res);
-                        p.post_apply(&res, &mut self.pending_raft_groups, &mut self.store_stat);
+                    debug!(
+                        "{} async apply finish: {:?}",
+                        self.region_peers
+                            .get(&res.region_id)
+                            .map_or(&self.tag, |p| &p.tag),
+                        res
+                    );
+                    let ApplyRes {
+                        region_id,
+                        apply_state,
+                        applied_index_term,
+                        exec_res,
+                        metrics,
+                        merged,
+                    } = res;
+                    self.on_ready_result(region_id, merged, exec_res, &metrics);
+                    if let Some(p) = self.region_peers.get_mut(&region_id) {
+                        p.post_apply(
+                            &mut self.pending_raft_groups,
+                            apply_state,
+                            applied_index_term,
+                            merged,
+                            &metrics,
+                        );
                     }
-                    self.store_stat.lock_cf_bytes_written += res.metrics.lock_cf_written_bytes;
-                    self.on_ready_result(res.region_id, res.merged, res.exec_res);
                 },
                 Ok(ApplyTaskRes::Destroy(p)) => {
                     let store_id = self.store_id();
@@ -771,7 +790,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        let peer = Peer::replicate(self, region_id, target.get_id())?;
+        // New created peers should know it's learner or not.
+        let peer = Peer::replicate(self, region_id, target.clone())?;
         // following snapshot may overlap, should insert into region_ranges after
         // snapshot is applied.
         self.region_peers.insert(region_id, peer);
@@ -1449,10 +1469,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 p.heartbeat_pd(&self.pd_worker);
             }
 
+            let peer_id = cp.peer.get_id();
             match change_type {
                 ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
-                    // Add this peer to cache and heartbeats.
                     let peer = cp.peer.clone();
+                    if p.peer_id() == peer_id && p.peer.get_is_learner() {
+                        p.peer = peer.clone();
+                    }
+
+                    // Add this peer to cache and heartbeats.
                     let now = Instant::now();
                     p.peer_heartbeats.insert(peer.get_id(), now);
                     if p.is_leader() {
@@ -1462,7 +1487,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
                 ConfChangeType::RemoveNode => {
                     // Remove this peer from cache.
-                    let peer_id = cp.peer.get_id();
                     p.peer_heartbeats.remove(&peer_id);
                     if p.is_leader() {
                         p.peers_start_pending_time.retain(|&(p, _)| p != peer_id);
@@ -1527,11 +1551,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             (left.clone(), right.clone())
         };
 
-        self.region_peers
-            .get_mut(&region_id)
-            .unwrap()
-            .mut_store()
-            .region = origin_region.clone();
+        {
+            let peer = self.region_peers.get_mut(&region_id).unwrap();
+            peer.mut_store().region = origin_region;
+            peer.post_split();
+        }
         let new_region_id = new_region.get_id();
         if let Some(peer) = self.region_peers.get(&new_region_id) {
             // If the store received a raft msg with the new region raft group
@@ -1898,7 +1922,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .insert(enc_end_key(&region), region.get_id());
     }
 
-    fn on_ready_result(&mut self, region_id: u64, merged: bool, exec_results: Vec<ExecResult>) {
+    fn on_ready_result(
+        &mut self,
+        region_id: u64,
+        merged: bool,
+        exec_results: Vec<ExecResult>,
+        metrics: &ApplyMetrics,
+    ) {
+        self.store_stat.lock_cf_bytes_written += metrics.lock_cf_written_bytes;
+        self.store_stat.engine_total_bytes_written += metrics.written_bytes;
+        self.store_stat.engine_total_keys_written += metrics.written_keys;
+
         // handle executing committed log results
         for result in exec_results {
             match result {
@@ -2810,7 +2844,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Tick::CheckPeerStaleState,
             self.cfg.peer_stale_state_check_interval.as_millis(),
         ) {
-            error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
+            error!("{} register check peer state tick err: {:?}", self.tag, e);
         }
     }
 }

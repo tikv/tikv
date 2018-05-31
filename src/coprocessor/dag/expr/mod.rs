@@ -32,12 +32,10 @@ use std::str;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-use coprocessor::codec::mysql::decimal::DecimalDecoder;
-use coprocessor::codec::mysql::json::JsonDecoder;
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::mysql::{charset, types};
 use coprocessor::codec::{self, Datum};
-use util::codec::number::NumberDecoder;
+use util::codec::number;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
@@ -219,29 +217,26 @@ impl Expression {
     }
 
     pub fn build(ctx: &mut EvalContext, mut expr: Expr) -> Result<Self> {
+        debug!("build expr:{:?}", expr);
         let tp = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
-            ExprType::Int64 => expr.get_val()
-                .decode_i64()
+            ExprType::Int64 => number::decode_i64(&mut expr.get_val())
                 .map(Datum::I64)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
-            ExprType::Uint64 => expr.get_val()
-                .decode_u64()
+            ExprType::Uint64 => number::decode_u64(&mut expr.get_val())
                 .map(Datum::U64)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
             ExprType::String | ExprType::Bytes => {
                 Ok(Expression::new_const(Datum::Bytes(expr.take_val()), tp))
             }
-            ExprType::Float32 | ExprType::Float64 => expr.get_val()
-                .decode_f64()
+            ExprType::Float32 | ExprType::Float64 => number::decode_f64(&mut expr.get_val())
                 .map(Datum::F64)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
-            ExprType::MysqlTime => expr.get_val()
-                .decode_u64()
+            ExprType::MysqlTime => number::decode_u64(&mut expr.get_val())
                 .and_then(|i| {
                     let fsp = tp.get_decimal() as i8;
                     let t = tp.get_tp() as u8;
@@ -249,19 +244,16 @@ impl Expression {
                 })
                 .map(|t| Expression::new_const(Datum::Time(t), tp))
                 .map_err(Error::from),
-            ExprType::MysqlDuration => expr.get_val()
-                .decode_i64()
+            ExprType::MysqlDuration => number::decode_i64(&mut expr.get_val())
                 .and_then(|n| Duration::from_nanos(n, MAX_FSP))
                 .map(Datum::Dur)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
-            ExprType::MysqlDecimal => expr.get_val()
-                .decode_decimal()
+            ExprType::MysqlDecimal => Decimal::decode(&mut expr.get_val())
                 .map(Datum::Dec)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
-            ExprType::MysqlJson => expr.get_val()
-                .decode_json()
+            ExprType::MysqlJson => Json::decode(&mut expr.get_val())
                 .map(Datum::Json)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
@@ -280,7 +272,7 @@ impl Expression {
                     })
             }
             ExprType::ColumnRef => {
-                let offset = expr.get_val().decode_i64().map_err(Error::from)? as usize;
+                let offset = number::decode_i64(&mut expr.get_val()).map_err(Error::from)? as usize;
                 let column = Column { offset, tp };
                 Ok(Expression::ColumnRef(column))
             }
