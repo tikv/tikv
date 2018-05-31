@@ -100,10 +100,10 @@ impl KVImporter {
     }
 }
 
-/// EngineDir is responsible for calculating engine directories.
+/// EngineDir is responsible for managing engine directories.
 ///
-/// The temp RocksDB engine is placed in `$root/.temp/$uuid`. After writing is
-/// completed, the files are stored in `$root/$uuid`.
+/// The temporary RocksDB engine is placed in `$root/.temp/$uuid`. After writing
+/// is completed, the files are stored in `$root/$uuid`.
 pub struct EngineDir {
     opts: DbConfig,
     root_dir: PathBuf,
@@ -163,7 +163,7 @@ impl fmt::Debug for EnginePath {
 }
 
 /// EngineFile creates an engine in the temp directory for writing, and when
-/// writing is complete, it moves files to the save directory.
+/// writing is completed, it moves files to the save directory.
 pub struct EngineFile {
     uuid: Uuid,
     path: EnginePath,
@@ -184,7 +184,7 @@ impl EngineFile {
         self.engine.as_ref().unwrap().write(batch)
     }
 
-    /// Finish writing and moving files from temp directory to save directory.
+    /// Finish writing and move files from temp directory to save directory.
     fn close(&mut self) -> Result<()> {
         self.engine.take().unwrap().flush(true)?;
         if self.path.save.exists() {
