@@ -31,7 +31,7 @@ use prometheus::local::LocalHistogram;
 use raftstore::store::Callback;
 use raftstore::store::Msg;
 use raftstore::store::store::StoreInfo;
-use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
+use raftstore::store::util::{get_region_approximate_stats, is_epoch_stale};
 use storage::FlowStatistics;
 use util::collections::HashMap;
 use util::escape;
@@ -544,7 +544,12 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             } => {
                 let approximate_size = match region_size {
                     Some(size) => size,
-                    None => get_region_approximate_size(&self.db, &region).unwrap_or(0),
+                    None => {
+                        // TODO: report the number of records too.
+                        let (_, size) =
+                            get_region_approximate_stats(&self.db, &region).unwrap_or((0, 0));
+                        size
+                    }
                 };
                 let (
                     read_bytes_delta,
