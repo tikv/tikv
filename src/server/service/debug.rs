@@ -382,9 +382,11 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
             )
             .map(|props| {
                 let mut resp = GetRegionPropertiesResponse::new();
-                for (k, v) in props {
-                    resp.mut_names().push(k);
-                    resp.mut_values().push(v);
+                for (name, value) in props {
+                    let mut prop = Property::new();
+                    prop.set_name(name);
+                    prop.set_value(value);
+                    resp.mut_props().push(prop);
                 }
                 resp
             });

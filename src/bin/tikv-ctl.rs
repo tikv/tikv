@@ -670,8 +670,8 @@ impl DebugExecutor for DebugClient {
         req.set_region_id(region_id);
         let resp = self.get_region_properties(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_region_properties", e));
-        for (name, value) in resp.get_names().iter().zip(resp.get_values().iter()) {
-            println!("{}: {}", name, value);
+        for prop in resp.get_props() {
+            println!("{}: {}", prop.get_name(), prop.get_value());
         }
     }
 }
