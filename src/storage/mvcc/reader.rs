@@ -383,15 +383,12 @@ impl MvccReader {
                         && w_user_key.as_ref().unwrap().encoded().as_slice()
                             < key.encoded().as_slice()
                     {
-                        debug!("ignore near_reverse_seek for write cf");
+                        debug!("Ignore near_reverse_seek {:?} for write cf", key);
+                    } else if w_cur.near_reverse_seek(&key, &mut self.statistics.write)? {
+                        w_user_key = Some(Key::from_encoded(w_cur.key().to_vec()).truncate_ts()?);
                     } else {
-                        if w_cur.near_reverse_seek(&key, &mut self.statistics.write)? {
-                            w_user_key =
-                                Some(Key::from_encoded(w_cur.key().to_vec()).truncate_ts()?);
-                        } else {
-                            w_user_key = None;
-                            write_valid = false;
-                        }
+                        w_user_key = None;
+                        write_valid = false;
                     }
                 }
                 if lock_valid {
@@ -424,10 +421,8 @@ impl MvccReader {
                     }
                     IsolationLevel::RC => {}
                 }
-            } else {
-                if let Some(v) = self.get(&key, ts)? {
-                    return Ok(Some((key, v)));
-                }
+            } else if let Some(v) = self.get(&key, ts)? {
+                return Ok(Some((key, v)));
             }
         }
     }
