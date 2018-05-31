@@ -30,7 +30,7 @@ pub const FLAG_IGNORE_TRUNCATE: u64 = 1;
 pub const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
 // `FLAG_PAD_CHAR_TO_FULL_LENGTH` indicates if sql_mode 'PAD_CHAR_TO_FULL_LENGTH' is set.
 pub const FLAG_PAD_CHAR_TO_FULL_LENGTH: u64 = 1 << 2;
-/// FlagInInsertStmt indicates if this is a INSERT statement.
+/// `FLAG_IN_INSERT_STMT` indicates if this is a INSERT statement.
 pub const FLAG_IN_INSERT_STMT: u64 = 1 << 3;
 /// `FLAG_IN_UPDATE_OR_DELETE_STMT` indicates if this is a UPDATE statement or a DELETE statement.
 pub const FLAG_IN_UPDATE_OR_DELETE_STMT: u64 = 1 << 4;
