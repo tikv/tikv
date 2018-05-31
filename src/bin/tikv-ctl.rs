@@ -455,7 +455,7 @@ trait DebugExecutor {
     }
 
     /// Recover the cluster when given `store_ids` are failed.
-    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>);
+    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>, force: bool);
 
     fn check_region_consistency(&self, _: u64);
 
@@ -641,7 +641,7 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only avaliable for local mode");
     }
 
-    fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>) {
+    fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>, _: bool) {
         self.check_local_mode();
     }
 
@@ -749,9 +749,9 @@ impl DebugExecutor for Debugger {
         println!("all regions are healthy")
     }
 
-    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>) {
+    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>, force: bool) {
         println!("removing stores {:?} from configrations...", store_ids);
-        self.remove_failed_stores(store_ids, region_ids)
+        self.remove_failed_stores(store_ids, region_ids, force)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
         println!("success");
     }
@@ -1173,6 +1173,12 @@ fn main() {
                             .value_delimiter(",")
                             .help("only for these regions"),
                         )
+                    .arg(
+                        Arg::with_name("force")
+                            .takes_value(false)
+                            .long("force")
+                            .help("force remove failed stores even if the survivor quorum is too small")
+                        )
                 ),
         )
         .subcommand(
@@ -1432,17 +1438,14 @@ fn main() {
         debug_executor.recover_regions_mvcc(mgr, &cfg, regions);
     } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
         if let Some(matches) = matches.subcommand_matches("remove-fail-stores") {
+            let store_ids = values_t!(matches, "stores", u64).expect("parse stores fail");
             let region_ids = matches.values_of("regions").map(|ids| {
                 ids.map(|r| r.parse())
                     .collect::<Result<Vec<_>, _>>()
                     .expect("parse regions fail")
             });
-            let stores = matches.values_of("stores").unwrap();
-
-            match stores.map(|s| s.parse()).collect::<Result<Vec<u64>, _>>() {
-                Ok(store_ids) => debug_executor.remove_fail_stores(store_ids, region_ids),
-                Err(e) => perror_and_exit("parse store id list", e),
-            }
+            let force = matches.is_present("force");
+            debug_executor.remove_fail_stores(store_ids, region_ids, force);
         } else {
             eprintln!("{}", matches.usage());
         }
