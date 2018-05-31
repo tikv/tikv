@@ -131,7 +131,7 @@ jobs:
             sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y;
             sudo apt-get update -y;
             sudo apt-get install -y g++-4.8 curl libdw-dev libelf-dev elfutils binutils-dev;
-            sudo apt-get install -y libssl-dev pkg-config cmake zlib1g-dev;
+            sudo apt-get install -y libssl-dev pkg-config zlib1g-dev;
       - restore_cache:
           name: Restoring ~/.local Cache
           keys:
