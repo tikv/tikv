@@ -415,7 +415,8 @@ impl MvccReader {
             };
 
             if (desc && w_user_key.is_some()
-                && w_user_key.as_ref().unwrap().encoded().as_slice() != key.encoded().as_slice()) || !write_valid
+                && w_user_key.as_ref().unwrap().encoded().as_slice() != key.encoded().as_slice())
+                || !write_valid
             {
                 match self.isolation_level {
                     IsolationLevel::SI => {
@@ -577,7 +578,7 @@ impl MvccReader {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Instant, Duration};
+    use std::time::{Duration, Instant};
 
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
@@ -651,7 +652,8 @@ mod tests {
             let k = make_key(pk);
             loop {
                 let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-                let mut txn = MvccTxn::new(Box::new(snap), safe_point, None, IsolationLevel::SI, true);
+                let mut txn =
+                    MvccTxn::new(Box::new(snap), safe_point, None, IsolationLevel::SI, true);
                 txn.gc(&k, safe_point).unwrap();
                 let modifies = txn.into_modifies();
                 if modifies.is_empty() {
@@ -843,7 +845,8 @@ mod tests {
 
     #[test]
     fn test_mvcc_reader_reverse_seek() {
-        let path = TempDir::new("_test_storage_mvcc_reader_reverse_seek_many_tombstones").expect("");
+        let path =
+            TempDir::new("_test_storage_mvcc_reader_reverse_seek_many_tombstones").expect("");
         let path = path.path().to_str().unwrap();
         let region = make_region(1, vec![], vec![]);
         let db = open_db(path, true);
