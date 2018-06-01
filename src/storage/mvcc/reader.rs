@@ -196,26 +196,31 @@ impl MvccReader {
 
     fn check_lock(&mut self, key: &Key, ts: u64) -> Result<u64> {
         if let Some(lock) = self.load_lock(key)? {
-            if lock.ts > ts || lock.lock_type == LockType::Lock {
-                // ignore lock when lock.ts > ts or lock's type is Lock
-                return Ok(ts);
-            }
-
-            if ts == u64::MAX && key.raw()? == lock.primary {
-                // when ts==u64::MAX(which means to get latest committed version for
-                // primary key),and current key is the primary key, returns the latest
-                // commit version's value
-                return Ok(lock.ts - 1);
-            }
-            // There is a pending lock. Client should wait or clean it.
-            return Err(Error::KeyIsLocked {
-                key: key.raw()?,
-                primary: lock.primary,
-                ts: lock.ts,
-                ttl: lock.ttl,
-            });
+            return self.check_lock_impl(key, ts, lock);
         }
         Ok(ts)
+    }
+
+    fn check_lock_impl(&self, key: &Key, ts: u64, lock: Lock) -> Result<u64> {
+        if lock.ts > ts || lock.lock_type == LockType::Lock {
+            // ignore lock when lock.ts > ts or lock's type is Lock
+            return Ok(ts);
+        }
+
+        if ts == u64::MAX && key.raw()? == lock.primary {
+            // when ts==u64::MAX(which means to get latest committed version for
+            // primary key),and current key is the primary key, returns the latest
+            // commit version's value
+            return Ok(lock.ts - 1);
+        }
+
+        // There is a pending lock. Client should wait or clean it.
+        Err(Error::KeyIsLocked {
+            key: key.raw()?,
+            primary: lock.primary,
+            ts: lock.ts,
+            ttl: lock.ttl,
+        })
     }
 
     pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
@@ -279,7 +284,7 @@ impl MvccReader {
                 self.fill_cache,
             );
             let iter = self.snapshot
-                .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false))?;
+                .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))?;
             self.write_cursor = Some(iter);
         }
         Ok(())
@@ -363,31 +368,23 @@ impl MvccReader {
     }
 
     pub fn reverse_seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
-        assert!(self.scan_mode.is_some());
+        assert!(
+            self.scan_mode.is_some() && *self.scan_mode.as_ref().unwrap() == ScanMode::Backward
+        );
         self.create_write_cursor()?;
         self.create_lock_cursor()?;
 
-        // When `self.scan_mode` is Backward, the scan mode of `self.write_cursor` is Mixed,
-        // to prevent potential back and forward iterating for write cf, we use `w_user_key`
-        // to store the current user key of write cf.
-        let desc = *self.scan_mode.as_ref().unwrap() == ScanMode::Backward;
         let (mut write_valid, mut lock_valid) = (true, true);
-        let mut w_user_key: Option<Key> = None;
         loop {
             key = {
                 let w_cur = self.write_cursor.as_mut().unwrap();
                 let l_cur = self.lock_cursor.as_mut().unwrap();
-                let mut l_key = None;
+                let (mut w_key, mut l_key) = (None, None);
                 if write_valid {
-                    if desc && w_user_key.is_some()
-                        && w_user_key.as_ref().unwrap().encoded().as_slice()
-                            < key.encoded().as_slice()
-                    {
-                        debug!("Ignore near_reverse_seek {:?} for write cf", key);
-                    } else if w_cur.near_reverse_seek(&key, &mut self.statistics.write)? {
-                        w_user_key = Some(Key::from_encoded(w_cur.key().to_vec()).truncate_ts()?);
+                    if w_cur.near_reverse_seek(&key, &mut self.statistics.write)? {
+                        w_key = Some(w_cur.key());
                     } else {
-                        w_user_key = None;
+                        w_key = None;
                         write_valid = false;
                     }
                 }
@@ -399,32 +396,85 @@ impl MvccReader {
                         lock_valid = false;
                     }
                 }
-                match (w_user_key.clone(), l_key) {
+                match (w_key, l_key) {
                     (None, None) => return Ok(None),
                     (None, Some(k)) => Key::from_encoded(k.to_vec()),
-                    (Some(k), None) => k,
-                    (Some(wk), Some(lk)) => if wk.encoded().as_slice() < lk {
+                    (Some(k), None) => Key::from_encoded(k.to_vec()).truncate_ts()?,
+                    (Some(wk), Some(lk)) => if wk < lk {
                         Key::from_encoded(lk.to_vec())
                     } else {
-                        wk
+                        Key::from_encoded(wk.to_vec()).truncate_ts()?
                     },
                 }
             };
 
-            if !write_valid
-                || (desc && w_user_key.is_some()
-                    && w_user_key.as_ref().unwrap().encoded().as_slice()
-                        != key.encoded().as_slice())
-            {
-                match self.isolation_level {
-                    IsolationLevel::SI => {
-                        self.check_lock(&key, ts)?;
-                    }
-                    IsolationLevel::RC => {}
-                }
-            } else if let Some(v) = self.get(&key, ts)? {
+            if let Some(v) = self.reverse_get_impl(&key, ts)? {
                 return Ok(Some((key, v)));
             }
+            if !self.write_cursor.as_mut().unwrap().valid() {
+                write_valid = false;
+            }
+        }
+    }
+
+    fn reverse_get_impl(&mut self, user_key: &Key, ts: u64) -> Result<Option<Value>> {
+        assert!(self.lock_cursor.is_some());
+        assert!(self.write_cursor.is_some());
+
+        // Check lock.
+        match self.isolation_level {
+            IsolationLevel::SI => {
+                let lock = {
+                    let l_cur = self.lock_cursor.as_mut().unwrap();
+                    if l_cur.valid() && l_cur.key() == user_key.encoded().as_slice() {
+                        Some(Lock::parse(l_cur.value())?)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(l) = lock {
+                    self.check_lock_impl(user_key, ts, l)?;
+                }
+            }
+            IsolationLevel::RC => {}
+        }
+
+        // Get value for this user key.
+        // Todo: limit the loop times when there are many versions for the user key.
+        let mut last_value = None;
+        loop {
+            let mut write = {
+                let w_cur = self.write_cursor.as_mut().unwrap();
+                if !w_cur.valid() {
+                    return Ok(last_value);
+                }
+                let w_key = Key::from_encoded(w_cur.key().to_vec());
+                let commit_ts = w_key.decode_ts()?;
+                let key = w_key.truncate_ts()?;
+                if &key != user_key || ts < commit_ts {
+                    return Ok(last_value);
+                }
+                Write::parse(w_cur.value())?
+            };
+
+            match write.write_type {
+                WriteType::Put => {
+                    if write.short_value.is_some() {
+                        if self.key_only {
+                            last_value = Some(vec![]);
+                        } else {
+                            last_value = write.short_value.take();
+                        }
+                    } else {
+                        last_value = Some(self.load_data(user_key, write.start_ts)?);
+                    }
+                }
+                WriteType::Delete => last_value = None,
+                WriteType::Lock | WriteType::Rollback => {}
+            }
+
+            let w_cur = self.write_cursor.as_mut().unwrap();
+            w_cur.prev(&mut self.statistics.write);
         }
     }
 
@@ -574,8 +624,6 @@ impl MvccReader {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
-
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
     use raftstore::store::RegionSnapshot;
@@ -886,8 +934,9 @@ mod tests {
 
         // Call reverse seek
         let ts = 2;
-        let timer = Instant::now();
         assert_eq!(reader.reverse_seek(k, ts).unwrap(), None);
-        assert!(timer.elapsed() < Duration::from_secs(10));
+        let statistics = reader.get_statistics();
+        assert_eq!(statistics.lock.prev, 256);
+        assert_eq!(statistics.write.prev, 1);
     }
 }
