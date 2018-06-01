@@ -1022,7 +1022,7 @@ impl TiKvConfig {
             }
             self.raft_store.region_split_size = default_raft_store.region_split_size;
         }
-        if self.server.end_point_concurrency != None {
+        if self.server.end_point_concurrency.is_some() {
             warn!(
                 "deprecated configuration, {} has been moved to {}",
                 "server.end-point-concurrency", "readpool.coprocessor.xxx-concurrency",
@@ -1038,7 +1038,7 @@ impl TiKvConfig {
             self.readpool.coprocessor.normal_concurrency = concurrency;
             self.readpool.coprocessor.low_concurrency = concurrency;
         }
-        if self.server.end_point_stack_size != None {
+        if self.server.end_point_stack_size.is_some() {
             warn!(
                 "deprecated configuration, {} has been moved to {}",
                 "server.end-point-stack-size", "readpool.coprocessor.stack-size",
@@ -1051,7 +1051,7 @@ impl TiKvConfig {
             );
             self.readpool.coprocessor.stack_size = self.server.end_point_stack_size.unwrap();
         }
-        if self.server.end_point_max_tasks != None {
+        if self.server.end_point_max_tasks.is_some() {
             warn!(
                 "deprecated configuration, {} is no longer used and ignored, please use {}.",
                 "server.end-point-max-tasks", "readpool.coprocessor.max-tasks-per-worker-xxx",
