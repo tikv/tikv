@@ -2033,7 +2033,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         &mut self,
         msg: &RaftCmdRequest,
     ) -> Result<Option<RaftCmdResponse>> {
-        self.validate_store_id(msg)?;
+        util::check_store_id(msg, self.store_id())?;
         if msg.has_status_request() {
             // For status commands, we handle it here directly.
             let resp = self.execute_status_command(msg)?;
@@ -2116,14 +2116,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Callback::BatchRead(on_finished) => on_finished(ret),
             _ => unreachable!(),
         }
-    }
-
-    fn validate_store_id(&self, msg: &RaftCmdRequest) -> Result<()> {
-        let store_id = msg.get_header().get_peer().get_store_id();
-        if store_id != self.store.get_id() {
-            return Err(Error::StoreNotMatch(store_id, self.store.get_id()));
-        }
-        Ok(())
     }
 
     fn validate_region(&self, msg: &RaftCmdRequest) -> Result<()> {

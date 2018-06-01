@@ -259,6 +259,14 @@ pub fn check_epoch(
     Ok(())
 }
 
+pub fn check_store_id(req: &RaftCmdRequest, store_id: u64,) -> Result<()> {
+    let id = req.get_header().get_peer().get_store_id();
+    if id != store_id {
+        return Err(Error::StoreNotMatch(id, store_id));
+    }
+    Ok(())
+}
+
 pub fn get_region_properties_cf(
     db: &DB,
     cfname: &str,
