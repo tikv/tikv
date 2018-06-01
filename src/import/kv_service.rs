@@ -82,6 +82,9 @@ impl ImportKv for ImportKVService {
                     .into_future()
                     .map_err(|(e, _)| Error::from(e))
                     .and_then(move |(chunk, stream)| {
+                        // The first message of the stream specifies the uuid of
+                        // the corresponding engine.
+                        // The engine should be opened before any write.
                         let head = match chunk {
                             Some(ref chunk) if chunk.has_head() => chunk.get_head(),
                             _ => return Err(Error::InvalidChunk),
