@@ -915,8 +915,8 @@ impl Default for SchedContext {
             processing_read_duration: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
             processing_write_duration: SCHED_PROCESSING_WRITE_HISTOGRAM_VEC.local(),
             command_keyread_duration: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
-            command_gc_skipped_counter: KV_COMMAND_GC_SKIPPED_COUNTER.local(),
-            command_gc_empty_range_counter: KV_COMMAND_GC_EMPTY_RANGE_COUNTER.local(),
+            command_gc_skipped_counter: KV_GC_SKIPPED_COUNTER.local(),
+            command_gc_empty_range_counter: KV_GC_EMPTY_RANGE_COUNTER.local(),
         }
     }
 }
