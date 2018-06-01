@@ -33,6 +33,8 @@ use util::rocksdb::{new_engine_opt, CFOptions};
 
 use super::Result;
 
+/// Engine wraps rocksdb::DB with customized options to support efficient bulk
+/// write.
 pub struct Engine {
     db: Arc<DB>,
     uuid: Uuid,

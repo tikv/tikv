@@ -19,7 +19,7 @@ use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
 
 use storage::SnapshotStore;
-use util::codec::number::NumberDecoder;
+use util::codec::number;
 use util::collections::HashSet;
 
 use coprocessor::codec::datum::{self, Datum};
@@ -65,7 +65,7 @@ impl ExprColumnRefVisitor {
 
     pub fn visit(&mut self, expr: &Expr) -> Result<()> {
         if expr.get_tp() == ExprType::ColumnRef {
-            let offset = box_try!(expr.get_val().decode_i64()) as usize;
+            let offset = box_try!(number::decode_i64(&mut expr.get_val())) as usize;
             if offset >= self.cols_len {
                 return Err(Error::Other(box_err!(
                     "offset {} overflow, should be less than {}",
