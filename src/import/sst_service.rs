@@ -30,6 +30,10 @@ use super::metrics::*;
 use super::service::*;
 use super::{Config, Error, SSTImporter};
 
+/// ImportSSTService provides tikv-server with the ability to ingest SST files.
+///
+/// It saves the SST sent from client to a file and then sends a command to
+/// raftstore to trigger the ingest process.
 #[derive(Clone)]
 pub struct ImportSSTService<Router> {
     cfg: Config,
@@ -58,6 +62,7 @@ impl<Router: RaftStoreRouter> ImportSSTService<Router> {
 }
 
 impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
+    /// Receive SST from client and save the file for later ingesting.
     fn upload(
         &self,
         ctx: RpcContext,
@@ -75,6 +80,8 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                     .into_future()
                     .map_err(|(e, _)| Error::from(e))
                     .and_then(move |(chunk, stream)| {
+                        // The first message of the stream contains metadata
+                        // of the file.
                         let meta = match chunk {
                             Some(ref chunk) if chunk.has_meta() => chunk.get_meta(),
                             _ => return Err(Error::InvalidChunk),
@@ -106,6 +113,11 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         )
     }
 
+    /// Ingest the file by sending a raft command to raftstore.
+    ///
+    /// If the ingestion fails because the region is not found or the epoch does
+    /// not match, the remaining files will eventually be cleaned up by
+    /// CleanupSSTWorker.
     fn ingest(&self, ctx: RpcContext, mut req: IngestRequest, sink: UnarySink<IngestResponse>) {
         let label = "ingest";
         let timer = Instant::now_coarse();
