@@ -22,7 +22,7 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::{Arc, Mutex};
 use util::worker::{self, Builder, Runnable, ScheduleError, Worker};
 
-pub const GC_MAX_PENDING: usize = 10;
+pub const GC_MAX_PENDING: usize = 2;
 
 struct GCTask {
     pub ctx: Context,
