@@ -58,7 +58,7 @@ use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use super::local_metrics::RaftMetrics;
 use super::metrics::*;
 use super::msg::{Callback, ReadResponse};
-use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
+use super::peer::{ConsistencyState, Peer, ReadyContext, StaleState};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
 use super::transport::Transport;
 use super::worker::apply::{ApplyMetrics, ApplyRes, ChangePeer, ExecResult};
@@ -2154,7 +2154,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Err(Error::StaleCommand);
         }
 
-        let res = peer::check_epoch(peer.region(), msg, true);
+        let res = util::check_epoch(msg, peer.region(), true);
         if let Err(Error::StaleEpoch(msg, mut new_regions)) = res {
             // Attach the region which might be split from the current region. But it doesn't
             // matter if the region is not split from the current region. If the region meta
