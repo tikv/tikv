@@ -81,7 +81,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
     fn add_checker(&self, ctx: &mut ObserverContext, host: &mut Host, engine: &DB) {
         let region = ctx.region();
         let region_id = region.get_id();
-        let (_, region_size) = match util::get_region_approximate_stats(engine, region) {
+        let region_size = match util::get_region_approximate_size(engine, region) {
             Ok(size) => size,
             Err(e) => {
                 warn!(
@@ -147,7 +147,7 @@ mod tests {
     use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
     use storage::ALL_CFS;
     use util::config::ReadableSize;
-    use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
+    use util::properties::SizePropertiesCollectorFactory;
     use util::rocksdb::{new_engine_opt, CFOptions};
     use util::transport::RetryableSendCh;
     use util::worker::Runnable;
@@ -160,8 +160,6 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
-        let f = Box::new(MvccPropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
         let f = Box::new(SizePropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
         let cfs_opts = ALL_CFS
