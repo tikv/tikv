@@ -368,6 +368,7 @@ impl Peer {
             check_quorum: true,
             tag: tag.clone(),
             skip_bcast_commit: true,
+            pre_vote: true,
             ..Default::default()
         };
 
@@ -594,6 +595,8 @@ impl Peer {
             match msg_type {
                 MessageType::MsgAppend => metrics.append += 1,
                 MessageType::MsgAppendResponse => metrics.append_resp += 1,
+                MessageType::MsgRequestPreVote => metrics.prevote += 1,
+                MessageType::MsgRequestPreVoteResponse => metrics.prevote_resp += 1,
                 MessageType::MsgRequestVote => metrics.vote += 1,
                 MessageType::MsgRequestVoteResponse => metrics.vote_resp += 1,
                 MessageType::MsgSnapshot => metrics.snapshot += 1,
@@ -611,7 +614,17 @@ impl Peer {
 
                     metrics.timeout_now += 1;
                 }
-                _ => {}
+                // We do not care about these message types for metrics.
+                // Explicitly declare them so when we add new message types we are forced to
+                // decide.
+                MessageType::MsgHup
+                | MessageType::MsgBeat
+                | MessageType::MsgPropose
+                | MessageType::MsgUnreachable
+                | MessageType::MsgSnapStatus
+                | MessageType::MsgCheckQuorum
+                | MessageType::MsgReadIndex
+                | MessageType::MsgReadIndexResp => {}
             }
         }
         Ok(())
