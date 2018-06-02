@@ -24,6 +24,8 @@ use super::{ImportKVService, KVImporter};
 
 const MAX_GRPC_MSG_LEN: usize = 32 * 1024 * 1024;
 
+/// ImportKVServer is a gRPC server that provides service to write key-value
+/// pairs into RocksDB engines for later ingesting into tikv-server.
 pub struct ImportKVServer {
     grpc_server: GrpcServer,
 }
