@@ -14,7 +14,7 @@ TiKV has the following primary features:
 
 - **Coprocessor support:** Similar to Hbase, TiKV implements a coprocessor framework to support distributed computing.
 
-- **Cooperates with [TiDB](https://github.com/pingcap/tidb):** Thanks to the internal optimization, TiKV and TiDB can work together to be a compelling database solution with high horizontal scalability, externally-consistent transations, and support for RDMBS and NoSQL design patterns.
+- **Cooperates with [TiDB](https://github.com/pingcap/tidb):** Thanks to the internal optimization, TiKV and TiDB can work together to be a compelling database solution with high horizontal scalability, externally-consistent transations, and support for RDBMS and NoSQL design patterns.
 
 
 ## The TiKV Software Stack
