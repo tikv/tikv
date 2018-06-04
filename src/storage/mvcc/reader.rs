@@ -496,10 +496,11 @@ impl MvccReader {
         // After several prev, we still not get the latest version for the specified ts,
         // use seek to locate the latest version.
         let key = user_key.append_ts(ts);
-        assert!(self.write_cursor
+        let valid = self.write_cursor
             .as_mut()
             .unwrap()
-            .internal_seek(&key, &mut self.statistics.write)?);
+            .internal_seek(&key, &mut self.statistics.write)?;
+        assert!(valid);
         loop {
             let mut write = {
                 // If we reach the last handled key, it means we have check all versions
