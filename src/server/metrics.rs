@@ -16,7 +16,8 @@ use prometheus::*;
 lazy_static! {
     pub static ref SEND_SNAP_HISTOGRAM: Histogram = register_histogram!(
         "tikv_server_send_snapshot_duration_seconds",
-        "Bucketed histogram of server send snapshots duration"
+        "Bucketed histogram of server send snapshots duration",
+        exponential_buckets(0.05, 2.0, 20).unwrap()
     ).unwrap();
     pub static ref SNAP_TASK_COUNTER: IntCounterVec = register_int_counter_vec!(
         "tikv_server_snapshot_task_total",
