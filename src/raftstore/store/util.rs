@@ -230,32 +230,32 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
 }
 
 /// Get the approximate number of records in the region.
-pub fn get_region_approximate_count(db: &DB, region: &metapb::Region) -> Result<u64> {
+pub fn get_region_approximate_rows(db: &DB, region: &metapb::Region) -> Result<u64> {
     let cf = rocksdb_util::get_cf_handle(db, CF_WRITE)?;
     let start = keys::enc_start_key(region);
     let end = keys::enc_end_key(region);
     let range = Range::new(&start, &end);
-    let (mut count, _) = db.get_approximate_memtable_stats_cf(cf, &range);
+    let (mut rows, _) = db.get_approximate_memtable_stats_cf(cf, &range);
     let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
     for (_, v) in &*collection {
         let props = RowsProperties::decode(v.user_collected_properties())?;
-        count += props.get_approximate_rows_in_range(&start, &end);
+        rows += props.get_approximate_rows_in_range(&start, &end);
     }
-    Ok(count)
+    Ok(rows)
 }
 
 pub struct RegionApproximateStat {
     /// the approximate number of records in the region.
-    pub count: u64,
+    pub rows: u64,
     /// the approximate size of the region.
     pub size: u64,
 }
 
 impl RegionApproximateStat {
     pub fn new(db: &DB, region: &metapb::Region) -> Result<RegionApproximateStat> {
-        let count = get_region_approximate_count(db, region)?;
+        let rows = get_region_approximate_rows(db, region)?;
         let size = get_region_approximate_size(db, region)?;
-        Ok(RegionApproximateStat { count, size })
+        Ok(RegionApproximateStat { rows, size })
     }
 }
 
@@ -691,7 +691,7 @@ mod tests {
         let region_stat = RegionApproximateStat::new(&db, &region).unwrap();
         assert_eq!(region_stat.size, (write_cf_size + default_cf_size) as u64);
         // The number of records in region is the number of records in write cf.
-        assert_eq!(region_stat.count, cases.len() as u64);
+        assert_eq!(region_stat.rows, cases.len() as u64);
 
         let size = get_region_approximate_size_cf(&db, CF_DEFAULT, &region).unwrap();
         assert_eq!(size, default_cf_size as u64);
