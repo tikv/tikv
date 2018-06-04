@@ -244,11 +244,19 @@ pub fn get_region_approximate_count(db: &DB, region: &metapb::Region) -> Result<
     Ok(count)
 }
 
-/// Get the approximate number of records and size in the region.
-pub fn get_region_approximate_stats(db: &DB, region: &metapb::Region) -> Result<(u64, u64)> {
-    let count = get_region_approximate_count(db, region)?;
-    let size = get_region_approximate_size(db, region)?;
-    Ok((count, size))
+pub struct RegionApproximateStat {
+    /// the approximate number of records in the region.
+    pub count: u64,
+    /// the approximate size of the region.
+    pub size: u64,
+}
+
+impl RegionApproximateStat {
+    pub fn new(db: &DB, region: &metapb::Region) -> Result<RegionApproximateStat> {
+        let count = get_region_approximate_count(db, region)?;
+        let size = get_region_approximate_size(db, region)?;
+        Ok(RegionApproximateStat { count, size })
+    }
 }
 
 /// Check if replicas of two regions are on the same stores.
@@ -680,10 +688,10 @@ mod tests {
         }
 
         let region = make_region(1, vec![], vec![]);
-        let (count, size) = get_region_approximate_stats(&db, &region).unwrap();
-        assert_eq!(size, (write_cf_size + default_cf_size) as u64);
+        let region_stat = RegionApproximateStat::new(&db, &region).unwrap();
+        assert_eq!(region_stat.size, (write_cf_size + default_cf_size) as u64);
         // The number of records in region is the number of records in write cf.
-        assert_eq!(count, cases.len() as u64);
+        assert_eq!(region_stat.count, cases.len() as u64);
 
         let size = get_region_approximate_size_cf(&db, CF_DEFAULT, &region).unwrap();
         assert_eq!(size, default_cf_size as u64);
