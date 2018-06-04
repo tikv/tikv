@@ -75,11 +75,12 @@ impl GCRunner {
     }
 
     // Scan keys in the region. Returns scanned keys if any, and a key indicating scan progress
-    fn gc_scan_keys(
+    fn scan_keys(
         &mut self,
         ctx: &Context,
         safe_point: u64,
         from: Option<Key>,
+        limit: usize,
     ) -> Result<(Option<Vec<Key>>, Option<Key>)> {
         let is_range_start_gc = from.is_none();
 
@@ -92,12 +93,14 @@ impl GCRunner {
             None,
             ctx.get_isolation_level(),
         );
-        let res = if !reader.need_gc(safe_point, self.ratio_threshold) {
+
+        let need_gc = (!is_range_start_gc) || reader.need_gc(safe_point, self.ratio_threshold);
+        let res = if !need_gc {
             self.skipped_counter.inc();
             Ok((None, None))
         } else {
             reader
-                .scan_keys(from, GC_BATCH_SIZE)
+                .scan_keys(from, limit)
                 .map_err(Error::from)
                 .and_then(|(keys, next)| {
                     if keys.is_empty() {
@@ -156,10 +159,11 @@ impl GCRunner {
 
         let mut next_key = None;
         loop {
-            let (keys, next) = self.gc_scan_keys(&ctx, safe_point, next_key).map_err(|e| {
-                warn!("gc_scan_keys failed on region {}: {:?}", safe_point, &e);
-                e
-            })?;
+            let (keys, next) = self.scan_keys(&ctx, safe_point, next_key, GC_BATCH_SIZE)
+                .map_err(|e| {
+                    warn!("scan_keys failed on region {}: {:?}", safe_point, &e);
+                    e
+                })?;
             if keys.is_none() {
                 break;
             }
@@ -226,7 +230,7 @@ pub struct GCWorker {
 impl GCWorker {
     pub fn new(engine: Box<Engine>, ratio_threshold: f64) -> GCWorker {
         let worker = Arc::new(Mutex::new(
-            Builder::new("gc-scheduler")
+            Builder::new("gc-worker")
                 .pending_capacity(GC_MAX_PENDING)
                 .create(),
         ));
