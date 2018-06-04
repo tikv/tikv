@@ -428,6 +428,7 @@ impl MvccReader {
                 let lock = {
                     let l_cur = self.lock_cursor.as_mut().unwrap();
                     if l_cur.valid() && l_cur.key() == user_key.encoded().as_slice() {
+                        self.statistics.lock.processed += 1;
                         Some(Lock::parse(l_cur.value())?)
                     } else {
                         None
@@ -442,11 +443,11 @@ impl MvccReader {
 
         // Get value for this user key.
         let mut round = 0;
-        let mut last_value = None;
+        let mut lastest_version = (None /* start_ts */, None /* short value */);
         let mut last_handled_key: Option<Vec<u8>> = None;
         loop {
             if !self.write_cursor.as_mut().unwrap().valid() {
-                return Ok(last_value);
+                return self.get_value(user_key, lastest_version.0, lastest_version.1);
             }
 
             if round >= SEEK_BOUND {
@@ -455,37 +456,35 @@ impl MvccReader {
             round += 1;
 
             let mut write = {
-                let w_cur = self.write_cursor.as_mut().unwrap();
-                last_handled_key = Some(w_cur.key().to_vec());
-                let w_key = Key::from_encoded(w_cur.key().to_vec());
-                let commit_ts = w_key.decode_ts()?;
-                let key = w_key.truncate_ts()?;
+                let (commit_ts, key) = {
+                    let w_cur = self.write_cursor.as_mut().unwrap();
+                    last_handled_key = Some(w_cur.key().to_vec());
+                    let w_key = Key::from_encoded(w_cur.key().to_vec());
+                    (w_key.decode_ts()?, w_key.truncate_ts()?)
+                };
 
                 // reach neighbour user key or can't see this version.
-                if &key != user_key || ts < commit_ts {
+                if ts < commit_ts || &key != user_key {
                     assert!(&key <= user_key);
-                    return Ok(last_value);
+                    return self.get_value(user_key, lastest_version.0, lastest_version.1);
                 }
-                Write::parse(w_cur.value())?
+                self.statistics.write.processed += 1;
+                Write::parse(self.write_cursor.as_mut().unwrap().value())?
             };
 
-            // The reason we save the last_value but not the last_key is that if we
-            // only save the last_key, we must turn the iterator's direction from
-            // backward to forward when using the last_key to get the value, turn
-            // around the iterator's direction is expensive.
             match write.write_type {
                 WriteType::Put => {
                     if write.short_value.is_some() {
                         if self.key_only {
-                            last_value = Some(vec![]);
+                            lastest_version = (None, Some(vec![]));
                         } else {
-                            last_value = write.short_value.take();
+                            lastest_version = (None, write.short_value.take());
                         }
                     } else {
-                        last_value = Some(self.load_data(user_key, write.start_ts)?);
+                        lastest_version = (Some(write.start_ts), None);
                     }
                 }
-                WriteType::Delete => last_value = None,
+                WriteType::Delete => lastest_version = (None, None),
                 WriteType::Lock | WriteType::Rollback => {}
             }
             self.write_cursor
@@ -503,19 +502,21 @@ impl MvccReader {
             .internal_seek(&key, &mut self.statistics.write)?);
         loop {
             let mut write = {
-                let w_cur = self.write_cursor.as_mut().unwrap();
-
                 // If we reach the last handled key, it means we have check all versions
                 // for this user key.
-                if w_cur.key() >= last_handled_key.as_ref().unwrap().as_slice() {
-                    return Ok(last_value);
+                if self.write_cursor.as_mut().unwrap().key()
+                    >= last_handled_key.as_ref().unwrap().as_slice()
+                {
+                    return self.get_value(user_key, lastest_version.0, lastest_version.1);
                 }
 
+                let w_cur = self.write_cursor.as_mut().unwrap();
                 let w_key = Key::from_encoded(w_cur.key().to_vec());
                 let commit_ts = w_key.decode_ts()?;
                 assert!(commit_ts <= ts);
                 let key = w_key.truncate_ts()?;
                 assert_eq!(&key, user_key);
+                self.statistics.write.processed += 1;
                 Write::parse(w_cur.value())?
             };
 
@@ -528,6 +529,7 @@ impl MvccReader {
                             return Ok(write.short_value.take());
                         }
                     } else {
+                        self.statistics.data.processed += 1;
                         return Ok(Some(self.load_data(user_key, write.start_ts)?));
                     }
                 }
@@ -537,6 +539,20 @@ impl MvccReader {
                     assert!(w_cur.next(&mut self.statistics.write));
                 }
             }
+        }
+    }
+
+    fn get_value(
+        &mut self,
+        user_key: &Key,
+        start_ts: Option<u64>,
+        short_value: Option<Vec<u8>>,
+    ) -> Result<Option<Value>> {
+        if let Some(ts) = start_ts {
+            self.statistics.data.processed += 1;
+            Ok(Some(self.load_data(user_key, ts)?))
+        } else {
+            Ok(short_value)
         }
     }
 
