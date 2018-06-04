@@ -327,7 +327,7 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     if l_frac_word_cnt > r_frac_word_cnt {
         let l_stop = l_start + l_int_word_cnt as usize + r_frac_word_cnt as usize;
         if l_frac_word_cnt < frac_word_to {
-            idx_to = (frac_word_to - l_frac_word_cnt) as usize;
+            idx_to -= (frac_word_to - l_frac_word_cnt) as usize;
         }
         while l_idx > l_stop {
             idx_to -= 1;
@@ -337,7 +337,7 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     } else {
         let r_stop = r_start + r_int_word_cnt as usize + l_frac_word_cnt as usize;
         if frac_word_to > r_frac_word_cnt {
-            idx_to = (frac_word_to - r_frac_word_cnt) as usize;
+            idx_to -= (frac_word_to - r_frac_word_cnt) as usize;
         }
         while r_idx > r_stop {
             idx_to -= 1;
