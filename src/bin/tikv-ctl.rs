@@ -480,6 +480,8 @@ trait DebugExecutor {
     fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str);
 
     fn dump_metrics(&self, tags: Vec<&str>);
+
+    fn dump_region_properties(&self, region_id: u64);
 }
 
 impl DebugExecutor for DebugClient {
@@ -628,6 +630,16 @@ impl DebugExecutor for DebugClient {
             .unwrap_or_else(|e| perror_and_exit("DebugClient::modify_tikv_config", e));
         println!("success");
     }
+
+    fn dump_region_properties(&self, region_id: u64) {
+        let mut req = GetRegionPropertiesRequest::new();
+        req.set_region_id(region_id);
+        let resp = self.get_region_properties(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_region_properties", e));
+        for prop in resp.get_props() {
+            println!("{}: {}", prop.get_name(), prop.get_value());
+        }
+    }
 }
 
 impl DebugExecutor for Debugger {
@@ -735,6 +747,14 @@ impl DebugExecutor for Debugger {
     fn modify_tikv_config(&self, _: MODULE, _: &str, _: &str) {
         eprintln!("only support remote mode");
         process::exit(-1);
+    }
+
+    fn dump_region_properties(&self, region_id: u64) {
+        let props = self.get_region_properties(region_id)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get_region_properties", e));
+        for (name, value) in props {
+            println!("{}: {}", name, value);
+        }
     }
 }
 
@@ -1182,7 +1202,19 @@ fn main() {
                         .takes_value(true)
                         .help("meta file path"),
                  ),
+        )
+        .subcommand(
+            SubCommand::with_name("region-properties")
+                .about("show region properties")
+                .arg(
+                    Arg::with_name("region")
+                        .short("r")
+                        .required(true)
+                        .takes_value(true)
+                        .help("the target region id"),
+                ),
         );
+
     let matches = app.clone().get_matches();
 
     let hex_key = matches.value_of("hex-to-escaped");
@@ -1331,6 +1363,9 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("metrics") {
         let tags = Vec::from_iter(matches.values_of("tag").unwrap());
         debug_executor.dump_metrics(tags)
+    } else if let Some(matches) = matches.subcommand_matches("region-properties") {
+        let region_id = value_t_or_exit!(matches.value_of("region"), u64);
+        debug_executor.dump_region_properties(region_id)
     } else {
         let _ = app.print_help();
     }
