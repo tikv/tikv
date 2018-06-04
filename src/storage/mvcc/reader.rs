@@ -22,6 +22,7 @@ use storage::{Key, Value, CF_LOCK, CF_WRITE};
 use util::properties::MvccProperties;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
+const SEEK_BOUND: usize = 8;
 
 pub struct MvccReader {
     snapshot: Box<Snapshot>,
@@ -368,9 +369,7 @@ impl MvccReader {
     }
 
     pub fn reverse_seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
-        assert!(
-            self.scan_mode.is_some() && *self.scan_mode.as_ref().unwrap() == ScanMode::Backward
-        );
+        assert!(*self.scan_mode.as_ref().unwrap() == ScanMode::Backward);
         self.create_write_cursor()?;
         self.create_lock_cursor()?;
 
@@ -411,6 +410,8 @@ impl MvccReader {
             if let Some(v) = self.reverse_get_impl(&key, ts)? {
                 return Ok(Some((key, v)));
             }
+
+            // reverse_get_impl may call write_cursor's prev.
             if !self.write_cursor.as_mut().unwrap().valid() {
                 write_valid = false;
             }
@@ -440,23 +441,37 @@ impl MvccReader {
         }
 
         // Get value for this user key.
-        // Todo: limit the loop times when there are many versions for the user key.
+        let mut round = 0;
         let mut last_value = None;
+        let mut last_handled_key: Option<Vec<u8>> = None;
         loop {
+            if !self.write_cursor.as_mut().unwrap().valid() {
+                return Ok(last_value);
+            }
+
+            if round > SEEK_BOUND {
+                break;
+            }
+            round += 1;
+
             let mut write = {
                 let w_cur = self.write_cursor.as_mut().unwrap();
-                if !w_cur.valid() {
-                    return Ok(last_value);
-                }
+                last_handled_key = Some(w_cur.key().to_vec());
                 let w_key = Key::from_encoded(w_cur.key().to_vec());
                 let commit_ts = w_key.decode_ts()?;
                 let key = w_key.truncate_ts()?;
+
+                // reach neighbour user key or can't see this version.
                 if &key != user_key || ts < commit_ts {
                     return Ok(last_value);
                 }
                 Write::parse(w_cur.value())?
             };
 
+            // The reason we save the last_value but not the last_key is that if we
+            // only save the last_key, we must turn the iterator's direction from
+            // backward to forward when using the last_key to get the value, turn
+            // around the iterator's direction is expensive.
             match write.write_type {
                 WriteType::Put => {
                     if write.short_value.is_some() {
@@ -472,9 +487,55 @@ impl MvccReader {
                 WriteType::Delete => last_value = None,
                 WriteType::Lock | WriteType::Rollback => {}
             }
+            self.write_cursor
+                .as_mut()
+                .unwrap()
+                .prev(&mut self.statistics.write);
+        }
 
-            let w_cur = self.write_cursor.as_mut().unwrap();
-            w_cur.prev(&mut self.statistics.write);
+        // After several prev, we still not get the latest version for the specified ts,
+        // use seek to locate the latest version.
+        let key = user_key.append_ts(ts);
+        assert!(self.write_cursor
+            .as_mut()
+            .unwrap()
+            .internal_seek(&key, &mut self.statistics.write)?);
+        loop {
+            let mut write = {
+                let w_cur = self.write_cursor.as_mut().unwrap();
+
+                // If we reach the last handled key, it means we have check all versions
+                // for this user key.
+                if w_cur.key() >= last_handled_key.as_ref().unwrap().as_slice() {
+                    return Ok(last_value);
+                }
+
+                let w_key = Key::from_encoded(w_cur.key().to_vec());
+                let commit_ts = w_key.decode_ts()?;
+                assert!(commit_ts <= ts);
+                let key = w_key.truncate_ts()?;
+                assert_eq!(&key, user_key);
+                Write::parse(w_cur.value())?
+            };
+
+            match write.write_type {
+                WriteType::Put => {
+                    if write.short_value.is_some() {
+                        if self.key_only {
+                            return Ok(Some(vec![]));
+                        } else {
+                            return Ok(write.short_value.take());
+                        }
+                    } else {
+                        return Ok(Some(self.load_data(user_key, write.start_ts)?));
+                    }
+                }
+                WriteType::Delete => return Ok(None),
+                WriteType::Lock | WriteType::Rollback => {
+                    let w_cur = self.write_cursor.as_mut().unwrap();
+                    assert!(w_cur.next(&mut self.statistics.write));
+                }
+            }
         }
     }
 
