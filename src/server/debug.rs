@@ -13,12 +13,12 @@
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::HashSet;
 use std::iter::FromIterator;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{error, result};
+use util::collections::HashSet;
 
 use protobuf::{self, Message, RepeatedField};
 
