@@ -80,8 +80,8 @@ mod test {
     use coprocessor::codec::datum::Datum;
     use rand::{Rng, SeedableRng, StdRng};
     use std::cmp::min;
-    use std::collections::HashMap;
     use util::as_slice;
+    use util::collections::HashMap;
     use zipf::ZipfDistribution;
 
     impl CMSketch {
@@ -110,7 +110,7 @@ mod test {
 
     fn average_error(depth: usize, width: usize, total: u32, max_value: usize, s: f64) -> u64 {
         let mut c = CMSketch::new(depth, width).unwrap();
-        let mut map: HashMap<u64, u32> = HashMap::new();
+        let mut map: HashMap<u64, u32> = HashMap::default();
         let seed: &[_] = &[1, 2, 3, 4];
         let mut gen: ZipfDistribution<StdRng> =
             ZipfDistribution::new(SeedableRng::from_seed(seed), max_value, s).unwrap();

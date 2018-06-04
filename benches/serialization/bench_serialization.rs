@@ -17,8 +17,8 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, Request};
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use rand::{thread_rng, Rng};
-use std::collections::HashMap;
 use test::Bencher;
+use tikv::util::collections::HashMap;
 
 #[inline]
 fn gen_rand_str(len: usize) -> Vec<u8> {
@@ -62,7 +62,7 @@ fn decode(data: &[u8]) {
 fn bench_encode_one(b: &mut Bencher) {
     let key = gen_rand_str(30);
     let value = gen_rand_str(256);
-    let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
+    let mut map: HashMap<&[u8], &[u8]> = HashMap::default();
     map.insert(&key, &value);
     b.iter(|| {
         encode(&map);
@@ -73,7 +73,7 @@ fn bench_encode_one(b: &mut Bencher) {
 fn bench_decode_one(b: &mut Bencher) {
     let key = gen_rand_str(30);
     let value = gen_rand_str(256);
-    let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
+    let mut map: HashMap<&[u8], &[u8]> = HashMap::default();
     map.insert(&key, &value);
     let data = encode(&map);
     b.iter(|| {
@@ -87,7 +87,7 @@ fn bench_encode_two(b: &mut Bencher) {
     let value_for_lock = gen_rand_str(10);
     let key_for_data = gen_rand_str(30);
     let value_for_data = gen_rand_str(256);
-    let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
+    let mut map: HashMap<&[u8], &[u8]> = HashMap::default();
     map.insert(&key_for_lock, &value_for_lock);
     map.insert(&key_for_data, &value_for_data);
     b.iter(|| {
@@ -101,7 +101,7 @@ fn bench_decode_two(b: &mut Bencher) {
     let value_for_lock = gen_rand_str(10);
     let key_for_data = gen_rand_str(30);
     let value_for_data = gen_rand_str(256);
-    let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
+    let mut map: HashMap<&[u8], &[u8]> = HashMap::default();
     map.insert(&key_for_lock, &value_for_lock);
     map.insert(&key_for_data, &value_for_data);
     let data = encode(&map);
