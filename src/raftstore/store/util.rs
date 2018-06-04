@@ -259,12 +259,23 @@ pub fn check_epoch(
     Ok(())
 }
 
-pub fn check_store_id(req: &RaftCmdRequest, store_id: u64,) -> Result<()> {
-    let id = req.get_header().get_peer().get_store_id();
-    if id != store_id {
-        return Err(Error::StoreNotMatch(id, store_id));
+pub fn check_store_id(req: &RaftCmdRequest, store_id: u64) -> Result<()> {
+    let peer = req.get_header().get_peer();
+    if peer.get_store_id() != store_id {
+        Err(Error::StoreNotMatch(peer.get_store_id(), store_id))
+    } else {
+        Ok(())
     }
-    Ok(())
+}
+
+pub fn check_term(req: &RaftCmdRequest, term: u64) -> Result<()> {
+    let header = req.get_header();
+    // If header's term is 2 verions behind current term, leadership may have been changed away.
+    if header.get_term() > 0 && term > header.get_term() + 1 {
+        Err(Error::StaleCommand)
+    } else {
+        Ok(())
+    }
 }
 
 pub fn get_region_properties_cf(

@@ -2029,17 +2029,62 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
+    fn check_msg_peer(&self, msg: &RaftCmdRequest) -> Result<&Peer> {
+        let region_id = msg.get_header().get_region_id();
+        let peer_id = msg.get_header().get_peer().get_id();
+
+        let peer = match self.region_peers.get(&region_id) {
+            Some(peer) => peer,
+            None => return Err(Error::RegionNotFound(region_id)),
+        };
+        if !peer.is_leader() {
+            return Err(Error::NotLeader(
+                region_id,
+                peer.get_peer_from_cache(peer.leader_id()),
+            ));
+        }
+        if peer.peer_id() != peer_id {
+            return Err(box_err!(
+                "mismatch peer id {} != {}",
+                peer.peer_id(),
+                peer_id
+            ));
+        }
+        Ok(peer)
+    }
+
     fn pre_propose_raft_command(
         &mut self,
         msg: &RaftCmdRequest,
     ) -> Result<Option<RaftCmdResponse>> {
+        // Check store_id, make sure that the msg is dispatched to the right place.
         util::check_store_id(msg, self.store_id())?;
         if msg.has_status_request() {
             // For status commands, we handle it here directly.
             let resp = self.execute_status_command(msg)?;
             return Ok(Some(resp));
         }
-        self.validate_region(msg)?;
+
+        // Check whether the store has the right peer to handle the request.
+        let peer = self.check_msg_peer(msg)?;
+        // The term in the msg must be the same as the peer's.
+        util::check_term(msg, peer.term())?;
+
+        if let Err(Error::StaleEpoch(msg, mut new_regions)) =
+            util::check_epoch(msg, peer.region(), true)
+        {
+            // Attach the region which might be split from the current region. But it doesn't
+            // matter if the region is not split from the current region. If the region meta
+            // received by the TiKV driver is newer than the meta cached in the driver, the meta is
+            // updated.
+            let sibling_region_id = self.find_sibling_region(peer.region());
+            if let Some(sibling_region_id) = sibling_region_id {
+                let sibling_region = self.region_peers[&sibling_region_id].region();
+                new_regions.push(sibling_region.to_owned());
+            }
+            return Err(Error::StaleEpoch(msg, new_regions));
+        }
+
         Ok(None)
     }
 
@@ -2116,50 +2161,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Callback::BatchRead(on_finished) => on_finished(ret),
             _ => unreachable!(),
         }
-    }
-
-    fn validate_region(&self, msg: &RaftCmdRequest) -> Result<()> {
-        let region_id = msg.get_header().get_region_id();
-        let peer_id = msg.get_header().get_peer().get_id();
-
-        let peer = match self.region_peers.get(&region_id) {
-            Some(peer) => peer,
-            None => return Err(Error::RegionNotFound(region_id)),
-        };
-        if !peer.is_leader() {
-            return Err(Error::NotLeader(
-                region_id,
-                peer.get_peer_from_cache(peer.leader_id()),
-            ));
-        }
-        if peer.peer_id() != peer_id {
-            return Err(box_err!(
-                "mismatch peer id {} != {}",
-                peer.peer_id(),
-                peer_id
-            ));
-        }
-
-        let header = msg.get_header();
-        // If header's term is 2 verions behind current term, leadership may have been changed away.
-        if header.get_term() > 0 && peer.term() > header.get_term() + 1 {
-            return Err(Error::StaleCommand);
-        }
-
-        let res = util::check_epoch(msg, peer.region(), true);
-        if let Err(Error::StaleEpoch(msg, mut new_regions)) = res {
-            // Attach the region which might be split from the current region. But it doesn't
-            // matter if the region is not split from the current region. If the region meta
-            // received by the TiKV driver is newer than the meta cached in the driver, the meta is
-            // updated.
-            let sibling_region_id = self.find_sibling_region(peer.region());
-            if let Some(sibling_region_id) = sibling_region_id {
-                let sibling_region = self.region_peers[&sibling_region_id].region();
-                new_regions.push(sibling_region.to_owned());
-            }
-            return Err(Error::StaleEpoch(msg, new_regions));
-        }
-        res
     }
 
     pub fn find_sibling_region(&self, region: &metapb::Region) -> Option<u64> {
