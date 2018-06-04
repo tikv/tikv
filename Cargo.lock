@@ -483,12 +483,12 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git?branch=upgrade-protobuf#f52a602ac9e33c36ab59a0c7483065a9ea954e12"
+source = "git+https://github.com/pingcap/kvproto.git?branch=upgrade-protobuf#79f1bd53d897d8ebe45ebacf15b0f16df7882627"
 dependencies = [
  "futures 0.1.17 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "raft 0.2.0 (git+https://github.com/pingcap/raft-rs)",
+ "raft 0.2.0 (git+https://github.com/pingcap/raft-rs?rev=f271cd0dae4c868b2d92e19fe6c14e000598ea76)",
 ]
 
 [[package]]
@@ -835,13 +835,7 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "1.4.1"
-source = "git+https://github.com/stepancheg/rust-protobuf.git#51f50fb4d9c937e37f0eaf61866738a254da4d0e"
-
-[[package]]
-name = "protobuf"
-version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-replace = "protobuf 1.4.1 (git+https://github.com/stepancheg/rust-protobuf.git)"
 
 [[package]]
 name = "protobuf"
@@ -880,7 +874,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "raft"
 version = "0.2.0"
-source = "git+https://github.com/pingcap/raft-rs#f271cd0dae4c868b2d92e19fe6c14e000598ea76"
+source = "git+https://github.com/pingcap/raft-rs?rev=f271cd0dae4c868b2d92e19fe6c14e000598ea76#f271cd0dae4c868b2d92e19fe6c14e000598ea76"
 dependencies = [
  "fxhash 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -893,7 +887,7 @@ dependencies = [
 name = "raft"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-replace = "raft 0.2.0 (git+https://github.com/pingcap/raft-rs)"
+replace = "raft 0.2.0 (git+https://github.com/pingcap/raft-rs?rev=f271cd0dae4c868b2d92e19fe6c14e000598ea76)"
 
 [[package]]
 name = "rand"
@@ -1271,7 +1265,7 @@ dependencies = [
  "murmur3 0.4.0 (git+https://github.com/pingcap/murmur3.git)",
  "nix 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "prometheus 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "protobuf 1.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "protobuf 2.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "raft 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1290,7 +1284,7 @@ dependencies = [
  "sys-info 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "time 0.1.38 (registry+https://github.com/rust-lang/crates.io-index)",
- "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)",
+ "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git?branch=upgrade-protobuf)",
  "tokio-core 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-timer 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "toml 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1322,9 +1316,9 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#2d5073e5521a10f8db2adc0eaab2c46ca0a151d9"
+source = "git+https://github.com/pingcap/tipb.git?branch=upgrade-protobuf#ef59298f8705d5b1924cf339f8b23e69d4c4f0a9"
 dependencies = [
- "protobuf 1.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "protobuf 2.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -1641,7 +1635,6 @@ dependencies = [
 "checksum pkg-config 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)" = "8cee804ecc7eaf201a4a207241472cc870e825206f6c031e3ee2a72fa425f2fa"
 "checksum procinfo 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)" = "f42e8578852a3306838981aedad8c5642ba794929aa12af0c9eb6c072b77af6c"
 "checksum prometheus 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)" = "f295b3b36c4469d22b445dd5a83479d9b73e87c619c45f68066b3b36d9b8903d"
-"checksum protobuf 1.4.1 (git+https://github.com/stepancheg/rust-protobuf.git)" = "<none>"
 "checksum protobuf 1.4.1 (registry+https://github.com/rust-lang/crates.io-index)" = "568a15e4d572d9a5e63ae3a55f84328c984842887db179b40b4cc6a608bac6a4"
 "checksum protobuf 2.0.2 (registry+https://github.com/rust-lang/crates.io-index)" = "a163be69698a5cb7baa28819474344d3a268b3f3e41877e61d5555e3d3add1af"
 "checksum pulldown-cmark 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "d6fdf85cda6cadfae5428a54661d431330b312bc767ddbc57adbedc24da66e32"
@@ -1649,7 +1642,7 @@ dependencies = [
 "checksum quick-error 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "eda5fe9b71976e62bc81b781206aaa076401769b2143379d3eb2118388babac4"
 "checksum quine-mc_cluskey 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "a6683b0e23d80813b1a535841f0048c1537d3f86d63c999e8373b39a9b0eb74a"
 "checksum quote 0.3.12 (registry+https://github.com/rust-lang/crates.io-index)" = "e7b44fd83db28b83c1c58187159934906e5e955c812e211df413b76b03c909a5"
-"checksum raft 0.2.0 (git+https://github.com/pingcap/raft-rs)" = "<none>"
+"checksum raft 0.2.0 (git+https://github.com/pingcap/raft-rs?rev=f271cd0dae4c868b2d92e19fe6c14e000598ea76)" = "<none>"
 "checksum raft 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "833b9bacf973f6b77ff1be6bd5024a25eae15504bec8cb7efe4caa784adc859b"
 "checksum rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)" = "2791d88c6defac799c3f20d74f094ca33b9332612d9aef9078519c82e4fe04a5"
 "checksum rand 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)" = "eba5f8cb59cc50ed56be8880a5c7b496bfd9bd26394e176bc67884094145c2c5"
@@ -1697,7 +1690,7 @@ dependencies = [
 "checksum thread_local 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)" = "8576dbbfcaef9641452d5cf0df9b0e7eeab7694956dd33bb61515fb8f18cfdd5"
 "checksum thread_local 0.3.5 (registry+https://github.com/rust-lang/crates.io-index)" = "279ef31c19ededf577bfd12dfae728040a21f635b06a24cd670ff510edd38963"
 "checksum time 0.1.38 (registry+https://github.com/rust-lang/crates.io-index)" = "d5d788d3aa77bc0ef3e9621256885555368b47bd495c13dd2e7413c89f845520"
-"checksum tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)" = "<none>"
+"checksum tipb 0.0.1 (git+https://github.com/pingcap/tipb.git?branch=upgrade-protobuf)" = "<none>"
 "checksum tokio-core 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)" = "99e958104a67877907c1454386d5482fe8e965a55d60be834a15a44328e7dc76"
 "checksum tokio-io 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "48f55df1341bb92281f229a6030bc2abffde2c7a44c6d6b802b7687dd8be0775"
 "checksum tokio-timer 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "86f33def658c14724fc13ec6289b3875a8152ee8ae767a5b1ccbded363b03db8"

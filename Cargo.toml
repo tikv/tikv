@@ -51,7 +51,7 @@ libc = "0.2"
 crc = "1.2"
 fs2 = "0.4"
 clippy = {version = "*", optional = true}
-protobuf = "1.4"
+protobuf = "~2.0"
 nix = "0.9.0"
 utime = "0.2"
 chrono = "0.4"
@@ -92,10 +92,11 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
-branch = "upgrade-protobuf"
+branch = "upgrade-protobuf" # TODO: remove it.
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
+branch = "upgrade-protobuf" # TODO: remove it.
 
 [dependencies.prometheus]
 version = "0.4"
@@ -108,9 +109,9 @@ branch = "dev"
 features = ["profiling"]
 optional = true
 
+# TODO: remove it.
 [replace]
-"protobuf:1.4.1" = { git = "https://github.com/stepancheg/rust-protobuf.git" }
-"raft:0.2.0" = { git = "https://github.com/pingcap/raft-rs", branch = "master" }
+"raft:0.2.0" = { git = "https://github.com/pingcap/raft-rs", rev = "f271cd0dae4c868b2d92e19fe6c14e000598ea76" }
 
 [workspace]
 members = ["fuzz"]
