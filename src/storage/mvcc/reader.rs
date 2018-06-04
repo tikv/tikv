@@ -449,7 +449,7 @@ impl MvccReader {
                 return Ok(last_value);
             }
 
-            if round > SEEK_BOUND {
+            if round >= SEEK_BOUND {
                 break;
             }
             round += 1;
@@ -463,6 +463,7 @@ impl MvccReader {
 
                 // reach neighbour user key or can't see this version.
                 if &key != user_key || ts < commit_ts {
+                    assert!(&key <= user_key);
                     return Ok(last_value);
                 }
                 Write::parse(w_cur.value())?
@@ -949,7 +950,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mvcc_reader_reverse_seek() {
+    fn test_mvcc_reader_reverse_seek_many_tombstones() {
         let path =
             TempDir::new("_test_storage_mvcc_reader_reverse_seek_many_tombstones").expect("");
         let path = path.path().to_str().unwrap();
@@ -999,5 +1000,150 @@ mod tests {
         let statistics = reader.get_statistics();
         assert_eq!(statistics.lock.prev, 256);
         assert_eq!(statistics.write.prev, 1);
+    }
+
+    #[test]
+    fn test_mvcc_reader_reverse_seek_basic() {
+        let path = TempDir::new("_test_storage_mvcc_reader_reverse_seek_basic").expect("");
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+
+        // Generate 5 Put for key [10].
+        let k = &[10 as u8];
+        for ts in 0..5 {
+            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            engine.prewrite(m, k, ts);
+            engine.commit(k, ts, ts);
+        }
+
+        // Generate 10 Put for key [9].
+        let k = &[9 as u8];
+        for ts in 0..10 {
+            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            engine.prewrite(m, k, ts);
+            engine.commit(k, ts, ts);
+        }
+
+        // Generate 5 Put and 5 Rollback for key [8].
+        let k = &[8 as u8];
+        for ts in 0..10 {
+            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            engine.prewrite(m, k, ts);
+            if ts < 5 {
+                engine.commit(k, ts, ts);
+            } else {
+                engine.rollback(k, ts);
+            }
+        }
+
+        // Generate 5 Put 1 delete and 4 Rollback for key [7].
+        let k = &[7 as u8];
+        for ts in 0..5 {
+            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            engine.prewrite(m, k, ts);
+            engine.commit(k, ts, ts);
+        }
+        {
+            let ts = 5;
+            let m = Mutation::Delete(make_key(k));
+            engine.prewrite(m, k, ts);
+            engine.commit(k, ts, ts);
+        }
+        for ts in 6..10 {
+            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            engine.prewrite(m, k, ts);
+            engine.rollback(k, ts);
+        }
+
+        // Generate 1 PUT for key [6].
+        let k = &[6 as u8];
+        for ts in 0..1 {
+            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            engine.prewrite(m, k, ts);
+            engine.commit(k, ts, ts);
+        }
+
+        // Generate 20 Rollback for key [5].
+        let k = &[5 as u8];
+        for ts in 0..20 {
+            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            engine.prewrite(m, k, ts);
+            engine.rollback(k, ts);
+        }
+
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let mut reader = MvccReader::new(
+            Box::new(snap),
+            Some(ScanMode::Backward),
+            false,
+            None,
+            None,
+            IsolationLevel::SI,
+        );
+
+        let ts = 20;
+        // Use 5 prev to get key [10] value [4].
+        assert_eq!(
+            reader.reverse_seek(make_key(&[11 as u8]), ts).unwrap(),
+            Some((make_key(&[10 as u8]), vec![4 as u8]))
+        );
+        assert_eq!(reader.get_statistics().write.seek_for_prev, 1);
+        assert_eq!(reader.get_statistics().write.prev, 5);
+        assert_eq!(reader.get_statistics().write.get, 0);
+        assert_eq!(reader.get_statistics().write.next, 0);
+        assert_eq!(reader.get_statistics().write.seek, 0);
+
+        // Use SEEK_BOUND prev and 1 seek to get key [9] value [9].
+        // So the total prev = 5 + 8 = 13, total seek = 1.
+        assert_eq!(
+            reader.reverse_seek(make_key(&[10 as u8]), ts).unwrap(),
+            Some((make_key(&[9 as u8]), vec![9 as u8]))
+        );
+        assert_eq!(reader.get_statistics().write.seek_for_prev, 1);
+        assert_eq!(reader.get_statistics().write.prev, 13);
+        assert_eq!(reader.get_statistics().write.get, 0);
+        assert_eq!(reader.get_statistics().write.next, 0);
+        assert_eq!(reader.get_statistics().write.seek, 1);
+
+        // Use SEEK_BOUND + 1 prev (1 in near_reverse_seek and SEEK_BOUND in reverse_get_impl),
+        // 1 seek and 2 next to get key [8] value [4].
+        // So the total prev = 13 + 8 + 1 = 22, total next = 2, total seek = 1 + 1.
+        assert_eq!(
+            reader.reverse_seek(make_key(&[9 as u8]), ts).unwrap(),
+            Some((make_key(&[8 as u8]), vec![4 as u8]))
+        );
+        assert_eq!(reader.get_statistics().write.seek_for_prev, 1);
+        assert_eq!(reader.get_statistics().write.prev, 22);
+        assert_eq!(reader.get_statistics().write.get, 0);
+        assert_eq!(reader.get_statistics().write.next, 2);
+        assert_eq!(reader.get_statistics().write.seek, 2);
+
+        // key [7] will cause SEEK_BOUND + 3 prev (3 in near_reverse_seek and SEEK_BOUND in
+        // reverse_get_impl), 1 seek and 2 next and get DEL.
+        // key [6] will cause 4 prev (3 in near_reverse_seek and 1 in reverse_get_impl).
+        // So the total prev = 22 + 8 + 3 + 4 = 37, total next = 2 + 2, total seek = 2 + 1.
+        assert_eq!(
+            reader.reverse_seek(make_key(&[8 as u8]), ts).unwrap(),
+            Some((make_key(&[6 as u8]), vec![0 as u8]))
+        );
+        assert_eq!(reader.get_statistics().write.seek_for_prev, 1);
+        assert_eq!(reader.get_statistics().write.prev, 37);
+        assert_eq!(reader.get_statistics().write.get, 0);
+        assert_eq!(reader.get_statistics().write.next, 4);
+        assert_eq!(reader.get_statistics().write.seek, 3);
+
+        // key [5] will cause SEEK_BOUND prev ( SEEK_BOUND in reverse_get_impl), 1 seek and 12 next (
+        // in reverse_get_impl(key[5])) and get none.
+        // And then will call near_reverse_seek(key[5]) to fetch the previous key, this will cause
+        // 13 prev in near_reverse_seek.
+        // So the total prev = 37 + 8 + 13 = 58, total next = 4 + 12, total seek = 3 + 1.
+        assert_eq!(reader.reverse_seek(make_key(&[6 as u8]), ts).unwrap(), None);
+        assert_eq!(reader.get_statistics().write.seek_for_prev, 1);
+        assert_eq!(reader.get_statistics().write.prev, 58);
+        assert_eq!(reader.get_statistics().write.get, 0);
+        assert_eq!(reader.get_statistics().write.next, 16);
+        assert_eq!(reader.get_statistics().write.seek, 4);
     }
 }
