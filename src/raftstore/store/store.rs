@@ -2031,8 +2031,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn check_msg_peer(&self, msg: &RaftCmdRequest) -> Result<&Peer> {
         let region_id = msg.get_header().get_region_id();
-        let peer_id = msg.get_header().get_peer().get_id();
-
         let peer = match self.region_peers.get(&region_id) {
             Some(peer) => peer,
             None => return Err(Error::RegionNotFound(region_id)),
@@ -2041,13 +2039,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Err(Error::NotLeader(
                 region_id,
                 peer.get_peer_from_cache(peer.leader_id()),
-            ));
-        }
-        if peer.peer_id() != peer_id {
-            return Err(box_err!(
-                "mismatch peer id {} != {}",
-                peer.peer_id(),
-                peer_id
             ));
         }
         Ok(peer)
@@ -2067,7 +2058,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // Check whether the store has the right peer to handle the request.
         let peer = self.check_msg_peer(msg)?;
-        // The term in the msg must be the same as the peer's.
+        // peer_id must be the same as peer's.
+        util::check_peer_id(msg, peer.peer_id())?;
+        // Check whether the term is stale.
         util::check_term(msg, peer.term())?;
 
         if let Err(Error::StaleEpoch(msg, mut new_regions)) =
