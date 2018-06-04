@@ -77,7 +77,7 @@ zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
-grpcio = { version = "0.2", features = [ "secure" ] }
+grpcio = { version = "0.3", features = [ "secure" ] }
 raft = "0.2"
 crossbeam-channel = { version = "0.1", features = [ "nightly" ] }
 
@@ -92,6 +92,7 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
+branch = "upgrade-protobuf"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
@@ -109,8 +110,7 @@ optional = true
 
 [replace]
 "protobuf:1.4.1" = { git = "https://github.com/stepancheg/rust-protobuf.git" }
-# TODO: use release version instead once tikv is protobuf 1.6 compatible.
-"raft:0.2.0" = { git = "https://github.com/pingcap/raft-rs.git", branch = "timeout-range" }
+"raft:0.2.0" = { git = "https://github.com/pingcap/raft-rs", branch = "master" }
 
 [workspace]
 members = ["fuzz"]

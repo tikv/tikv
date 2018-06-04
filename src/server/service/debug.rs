@@ -366,6 +366,15 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
 
         self.handle_response(ctx, sink, f, TAG);
     }
+
+    fn get_region_properties(
+        &self,
+        _: RpcContext,
+        _: GetRegionPropertiesRequest,
+        _: UnarySink<GetRegionPropertiesResponse>,
+    ) {
+        unimplemented!();
+    }
 }
 
 fn region_detail<T: RaftStoreRouter>(
