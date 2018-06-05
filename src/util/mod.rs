@@ -452,6 +452,24 @@ impl<T> Drop for MustConsumeVec<T> {
     }
 }
 
+/// Unknown enum values are stored in unknown fields since rust-protobuf
+/// 1.5.0, instead of reporting error when parse the message. So we must
+/// check the unknown fields if the enum's default value isn't invalid.
+///
+/// `pb_unknown_enum` returns true if the message's unknown fields contain
+/// an enum with id `field_id`. `field_id` for a given enum can be checked
+/// from proto files.
+///
+/// This should be removed after `ProtobufEnumOrUnknown`
+/// [implemented]https://github.com/stepancheg/rust-protobuf/issues/233).
+pub fn pb_unknown_enum<M: Message>(m: &M, field_id: u32) -> bool {
+    m.get_unknown_fields()
+        .fields
+        .as_ref()
+        .and_then(|map| map.get(&field_id))
+        .is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

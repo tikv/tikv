@@ -49,7 +49,7 @@ use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::collections::HashMap;
 use util::time::{duration_to_sec, Instant, SlowTimer};
 use util::worker::Runnable;
-use util::{escape, rocksdb, MustConsumeVec};
+use util::{escape, pb_unknown_enum, rocksdb, MustConsumeVec};
 
 use super::metrics::*;
 
@@ -1373,6 +1373,9 @@ impl ApplyDelegate {
             ),
         };
         match state.get_state() {
+            PeerState::Normal if pb_unknown_enum(&state, 1) => {
+                panic!("{} meets unknown PeerState", self.tag);
+            }
             PeerState::Normal | PeerState::Merging => {}
             _ => panic!(
                 "{} unexpected state of merging region {:?}",
