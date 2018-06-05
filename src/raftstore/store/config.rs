@@ -64,6 +64,9 @@ pub struct Config {
     pub region_compact_check_step: u64,
     /// Minimum number of tombstones to trigger manual compaction.
     pub region_compact_min_tombstones: u64,
+    /// Minimum percentage of tombstones to trigger manual compaction.
+    /// Should between 1 and 100.
+    pub region_compact_tombstones_ratio: u64,
     pub pd_heartbeat_tick_interval: ReadableDuration,
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
     pub snap_mgr_gc_tick_interval: ReadableDuration,
@@ -147,6 +150,7 @@ impl Default for Config {
             region_compact_check_interval: ReadableDuration::minutes(5),
             region_compact_check_step: 100,
             region_compact_min_tombstones: 10000,
+            region_compact_tombstones_ratio: 30,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             notify_capacity: 40960,
@@ -287,6 +291,13 @@ impl Config {
                 "max leader missing {} ms is less than abnormal leader missing {} ms",
                 max_leader_missing,
                 abnormal_leader_missing
+            ));
+        }
+
+        if self.region_compact_tombstones_ratio < 1 || self.region_compact_tombstones_ratio > 100 {
+            return Err(box_err!(
+                "region-compact-tombstones-ratio must between 1 and 100, current value is {}",
+                self.region_compact_tombstones_ratio
             ));
         }
 
