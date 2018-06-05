@@ -170,7 +170,7 @@ impl FnCall {
         let lhs = try_opt!(self.children[0].eval_real(ctx, row));
         let rhs = try_opt!(self.children[1].eval_real(ctx, row));
         if rhs == 0f64 {
-            return Ok(None);
+            return ctx.handle_division_by_zero().map(|()| None);
         }
         let res = lhs / rhs;
         if res.is_infinite() {
@@ -194,7 +194,7 @@ impl FnCall {
                 Res::Truncated(v) => Err(Error::Truncated(format!("{} truncated", v))),
                 Res::Overflow(_) => Err(overflow),
             },
-            None => Ok(None),
+            None => ctx.handle_division_by_zero().map(|()| None),
         }
     }
 }
@@ -203,8 +203,11 @@ impl FnCall {
 mod test {
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::{mysql, Datum};
-    use coprocessor::dag::expr::test::{check_overflow, datum_expr, fncall_expr, str2dec};
-    use coprocessor::dag::expr::{EvalContext, Expression};
+    use coprocessor::dag::expr::err;
+    use coprocessor::dag::expr::test::{check_divide_by_zero, check_overflow, datum_expr,
+                                       fncall_expr, str2dec};
+    use coprocessor::dag::expr::*;
+    use std::sync::Arc;
     use std::{f64, i64, u64};
     use tipb::expression::ScalarFuncSig;
 
@@ -507,6 +510,78 @@ mod test {
             let op = Expression::build(&mut ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_divide_by_zero() {
+        let data = vec![
+            (
+                ScalarFuncSig::DivideReal,
+                Datum::F64(f64::MAX),
+                Datum::F64(f64::from(0)),
+            ),
+            (
+                ScalarFuncSig::DivideReal,
+                Datum::F64(f64::MAX),
+                Datum::F64(0.00000),
+            ),
+            (
+                ScalarFuncSig::DivideDecimal,
+                str2dec("12.3"),
+                str2dec("0.0"),
+            ),
+            (
+                ScalarFuncSig::DivideDecimal,
+                str2dec("12.3"),
+                str2dec("-0.0"),
+            ),
+        ];
+
+        let cases = vec![
+            //(flag,sql_mode,strict_sql_mode=>is_ok,has_warning)
+            (0, 0, false, true, true), //warning
+            (
+                FLAG_IN_UPDATE_OR_DELETE_STMT,
+                MODE_ERROR_FOR_DIVISION_BY_ZERO,
+                true,
+                false,
+                false,
+            ), //error
+            (FLAG_IN_UPDATE_OR_DELETE_STMT, 0, true, true, false), //ok
+            (
+                FLAG_IN_UPDATE_OR_DELETE_STMT | FLAG_DIVIDED_BY_ZERO_AS_WARNING,
+                MODE_ERROR_FOR_DIVISION_BY_ZERO,
+                true,
+                true,
+                true,
+            ), //warning
+        ];
+        for (sig, left, right) in data {
+            let lhs = datum_expr(left);
+            let rhs = datum_expr(right);
+            let fncall = fncall_expr(sig, &[lhs, rhs]);
+            for (flag, sql_mode, strict_sql_mode, is_ok, has_warning) in &cases {
+                let mut cfg = EvalConfig::new(0, *flag).unwrap();
+                cfg.set_sql_mode(*sql_mode);
+                cfg.set_strict_sql_mode(*strict_sql_mode);
+                let mut ctx = EvalContext::new(Arc::new(cfg));
+                let op = Expression::build(&mut ctx, fncall.clone()).unwrap();
+                let got = op.eval(&mut ctx, &[]);
+                if *is_ok {
+                    assert_eq!(got.unwrap(), Datum::Null);
+                } else {
+                    assert!(check_divide_by_zero(got.unwrap_err()).is_ok());
+                }
+                if *has_warning {
+                    assert_eq!(
+                        ctx.take_warnings().warnings[0].get_code(),
+                        err::ERR_DIVISION_BY_ZERO
+                    );
+                } else {
+                    assert!(ctx.take_warnings().warnings.is_empty());
+                }
+            }
         }
     }
 }
