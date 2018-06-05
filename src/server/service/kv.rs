@@ -1231,7 +1231,7 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
         | Err(Error::Txn(TxnError::Mvcc(MvccError::Engine(EngineError::Request(ref e))))) => {
             Some(e.to_owned())
         }
-        Err(Error::SchedTooBusy) => {
+        Err(Error::SchedTooBusy) | Err(Error::GCWorkerTooBusy) => {
             let mut err = RegionError::new();
             let mut server_is_busy_err = ServerIsBusy::new();
             server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
