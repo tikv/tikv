@@ -217,12 +217,12 @@ where
             state.queue.push(task);
             cvar.notify_one();
         }
-        self.task_count.fetch_add(1, AtomicOrdering::SeqCst);
+        self.task_count.fetch_add(1, AtomicOrdering::Relaxed);
     }
 
     #[inline]
     pub fn get_task_count(&self) -> usize {
-        self.task_count.load(AtomicOrdering::SeqCst)
+        self.task_count.load(AtomicOrdering::Relaxed)
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
@@ -311,7 +311,7 @@ where
             self.ctx.on_task_started();
             (task.task).call_box((&mut self.ctx,));
             self.ctx.on_task_finished();
-            self.task_count.fetch_sub(1, AtomicOrdering::SeqCst);
+            self.task_count.fetch_sub(1, AtomicOrdering::Relaxed);
             if self.task_counter == self.tasks_per_tick {
                 self.task_counter = 0;
                 self.ctx.on_tick();

@@ -166,14 +166,14 @@ impl<T: Display> Scheduler<T> {
                 _ => unreachable!(),
             }
         }
-        self.counter.fetch_add(1, Ordering::SeqCst);
+        self.counter.fetch_add(1, Ordering::Relaxed);
         self.metrics_pending_task_count.inc();
         Ok(())
     }
 
     /// Check if underlying worker can't handle task immediately.
     pub fn is_busy(&self) -> bool {
-        self.counter.load(Ordering::SeqCst) > 0
+        self.counter.load(Ordering::Relaxed) > 0
     }
 }
 
@@ -277,7 +277,7 @@ fn poll<R, T, U>(
             // before `run_batch`.
             let batch_len = batch.len();
             runner.run_batch(&mut batch);
-            counter.fetch_sub(batch_len, Ordering::SeqCst);
+            counter.fetch_sub(batch_len, Ordering::Relaxed);
             metrics_pending_task_count.sub(batch_len as i64);
             metrics_handled_task_count.inc_by(batch_len as i64);
             batch.clear();

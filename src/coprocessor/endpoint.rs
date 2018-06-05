@@ -96,7 +96,7 @@ impl Host {
 
     #[inline]
     fn running_task_count(&self) -> usize {
-        self.running_task_count.load(Ordering::Acquire)
+        self.running_task_count.load(Ordering::Relaxed)
     }
 
     fn notify_failed<E: Into<Error> + Debug>(&mut self, e: E, reqs: Vec<RequestTask>) {
@@ -285,7 +285,7 @@ struct RequestTracker {
 
 impl RequestTracker {
     fn task_count(&mut self, running_task_count: Arc<AtomicUsize>) {
-        running_task_count.fetch_add(1, Ordering::Release);
+        running_task_count.fetch_add(1, Ordering::Relaxed);
         self.running_task_count = Some(running_task_count);
     }
 
@@ -357,7 +357,7 @@ impl RequestTracker {
 impl Drop for RequestTracker {
     fn drop(&mut self) {
         if let Some(task_count) = self.running_task_count.take() {
-            task_count.fetch_sub(1, Ordering::Release);
+            task_count.fetch_sub(1, Ordering::Relaxed);
         }
 
         if self.total_handle_time > SLOW_QUERY_LOWER_BOUND {

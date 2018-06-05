@@ -215,7 +215,7 @@ impl<T: Context + 'static> FuturePool<T> {
     /// Get current running task count
     #[inline]
     pub fn get_running_task_count(&self) -> usize {
-        self.running_task_count.load(Ordering::Acquire)
+        self.running_task_count.load(Ordering::Relaxed)
     }
 
     /// TODO: Remove this interface to avoid accessing context delegators from outside.
@@ -239,14 +239,14 @@ impl<T: Context + 'static> FuturePool<T> {
             future_factory(delegators.clone()).then(move |r| {
                 let delegator = delegators.get_current_thread_delegator();
                 delegator.on_task_finish();
-                running_task_count.fetch_sub(1, Ordering::Release);
+                running_task_count.fetch_sub(1, Ordering::Relaxed);
                 metrics_pending_task_count.dec();
                 metrics_handled_task_count.inc();
                 r
             })
         };
 
-        self.running_task_count.fetch_add(1, Ordering::Release);
+        self.running_task_count.fetch_add(1, Ordering::Relaxed);
         self.metrics_pending_task_count.inc();
         self.pool.spawn_fn(func)
     }
