@@ -22,7 +22,7 @@ use storage::{Key, Value, CF_LOCK, CF_WRITE};
 use util::properties::MvccProperties;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
-const SEEK_BOUND: usize = 8;
+const REVERSE_SEEK_BOUND: usize = 8;
 
 pub struct MvccReader {
     snapshot: Box<Snapshot>,
@@ -450,7 +450,7 @@ impl MvccReader {
                 return self.get_value(user_key, lastest_version.0, lastest_version.1);
             }
 
-            if round >= SEEK_BOUND {
+            if round >= REVERSE_SEEK_BOUND {
                 break;
             }
             round += 1;
@@ -550,8 +550,12 @@ impl MvccReader {
         short_value: Option<Vec<u8>>,
     ) -> Result<Option<Value>> {
         if let Some(ts) = start_ts {
-            self.statistics.data.processed += 1;
-            Ok(Some(self.load_data(user_key, ts)?))
+            if self.key_only {
+                Ok(Some(vec![]))
+            } else {
+                self.statistics.data.processed += 1;
+                Ok(Some(self.load_data(user_key, ts)?))
+            }
         } else {
             Ok(short_value)
         }
