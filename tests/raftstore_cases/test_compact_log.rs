@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
+use tikv::util::collections::HashMap;
 
 use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
 use protobuf;
@@ -31,7 +31,7 @@ fn get_msg_cf_or_default<M: protobuf::Message + Default>(engine: &DB, cf: &str, 
 fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
 
-    let mut before_states = HashMap::new();
+    let mut before_states = HashMap::default();
 
     for (&id, engines) in &cluster.engines {
         let mut state: RaftApplyState =
@@ -59,7 +59,7 @@ fn check_compacted(
     compact_count: u64,
 ) -> bool {
     // Every peer must have compacted logs, so the truncate log state index/term must > than before.
-    let mut compacted_idx = HashMap::new();
+    let mut compacted_idx = HashMap::default();
 
     for (&id, engines) in all_engines {
         let mut state: RaftApplyState =
@@ -102,7 +102,7 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.must_put(b"k1", b"v1");
 
-    let mut before_states = HashMap::new();
+    let mut before_states = HashMap::default();
 
     for (&id, engines) in &cluster.engines {
         must_get_equal(&engines.kv_engine, b"k1", b"v1");
@@ -158,7 +158,7 @@ fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.must_put(b"k1", b"v1");
 
-    let mut before_states = HashMap::new();
+    let mut before_states = HashMap::default();
 
     for (&id, engines) in &cluster.engines {
         must_get_equal(&engines.kv_engine, b"k1", b"v1");
@@ -215,7 +215,7 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.must_put(b"k1", b"v1");
 
-    let mut before_states = HashMap::new();
+    let mut before_states = HashMap::default();
 
     for (&id, engines) in &cluster.engines {
         if id == 1 {

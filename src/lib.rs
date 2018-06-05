@@ -46,11 +46,11 @@ extern crate crc;
 extern crate crossbeam_channel;
 #[macro_use]
 extern crate fail;
-extern crate flat_map;
 extern crate fnv;
 extern crate fs2;
 extern crate futures;
 extern crate futures_cpupool;
+extern crate fxhash;
 extern crate grpcio as grpc;
 extern crate indexmap;
 extern crate kvproto;
