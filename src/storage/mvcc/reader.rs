@@ -22,7 +22,7 @@ use storage::{Key, Value, CF_LOCK, CF_WRITE};
 use util::properties::MvccProperties;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
-const REVERSE_SEEK_BOUND: usize = 8;
+const REVERSE_SEEK_BOUND: usize = 16;
 
 pub struct MvccReader {
     snapshot: Box<Snapshot>,
