@@ -530,7 +530,6 @@ impl MvccReader {
                             return Ok(write.short_value.take());
                         }
                     } else {
-                        self.statistics.data.processed += 1;
                         return Ok(Some(self.load_data(user_key, write.start_ts)?));
                     }
                 }
@@ -550,12 +549,7 @@ impl MvccReader {
         short_value: Option<Vec<u8>>,
     ) -> Result<Option<Value>> {
         if let Some(ts) = start_ts {
-            if self.key_only {
-                Ok(Some(vec![]))
-            } else {
-                self.statistics.data.processed += 1;
-                Ok(Some(self.load_data(user_key, ts)?))
-            }
+            Ok(Some(self.load_data(user_key, ts)?))
         } else {
             Ok(short_value)
         }
