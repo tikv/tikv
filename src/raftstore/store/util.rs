@@ -446,10 +446,11 @@ mod tests {
             assert_eq!(lease.inspect(None), state);
         }
 
-        let duration = TimeDuration::milliseconds(1500);
-
+        // Sleeps longer than the lease, clocks may be unstable in VMs.
+        let sleep_duration = TimeDuration::milliseconds(1500);
+        let lease_duration = TimeDuration::milliseconds(1500);
         // Empty lease.
-        let mut lease = Lease::new(duration);
+        let mut lease = Lease::new(lease_duration);
         assert_eq!(
             lease.inspect(Some(monotonic_raw_now())),
             LeaseState::Expired
@@ -457,7 +458,7 @@ mod tests {
 
         let now = monotonic_raw_now();
         let next_expired_time = lease.next_expired_time(now);
-        assert_eq!(next_expired_time, now + duration);
+        assert_eq!(next_expired_time, now + lease_duration);
 
         // Transit to the Valid state.
         lease.renew(now);
@@ -465,7 +466,7 @@ mod tests {
         assert_eq!(lease.inspect(None), LeaseState::Valid);
 
         // After lease expired time.
-        sleep_test(duration, &lease, LeaseState::Expired);
+        sleep_test(sleep_duration, &lease, LeaseState::Expired);
 
         // Transit to the Suspect state.
         lease.suspect(monotonic_raw_now());
@@ -476,7 +477,7 @@ mod tests {
         assert_eq!(lease.inspect(None), LeaseState::Suspect);
 
         // After lease expired time. Always suspect.
-        sleep_test(duration, &lease, LeaseState::Suspect);
+        sleep_test(sleep_duration, &lease, LeaseState::Suspect);
 
         // Clear lease.
         lease.expire();
