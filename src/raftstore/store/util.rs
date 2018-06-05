@@ -191,7 +191,7 @@ pub fn is_epoch_stale(epoch: &metapb::RegionEpoch, check_epoch: &metapb::RegionE
         || epoch.get_conf_ver() < check_epoch.get_conf_ver()
 }
 
-pub fn check_epoch(
+pub fn check_region_epoch(
     req: &RaftCmdRequest,
     region: &metapb::Region,
     include_region: bool,
@@ -234,7 +234,7 @@ pub fn check_epoch(
         || (check_ver && from_epoch.get_version() < latest_epoch.get_version())
     {
         debug!(
-            "[region {}] received stale epoch {:?}, mime: {:?}",
+            "[region {}] received stale epoch {:?}, mine: {:?}",
             region.get_id(),
             from_epoch,
             latest_epoch
@@ -259,36 +259,36 @@ pub fn check_epoch(
     Ok(())
 }
 
+#[inline]
 pub fn check_store_id(req: &RaftCmdRequest, store_id: u64) -> Result<()> {
     let peer = req.get_header().get_peer();
     if peer.get_store_id() != store_id {
-        Err(Error::StoreNotMatch(peer.get_store_id(), store_id))
-    } else {
-        Ok(())
+        return Err(Error::StoreNotMatch(peer.get_store_id(), store_id));
     }
+    Ok(())
 }
 
+#[inline]
 pub fn check_term(req: &RaftCmdRequest, term: u64) -> Result<()> {
     let header = req.get_header();
     // If header's term is 2 verions behind current term, leadership may have been changed away.
     if header.get_term() > 0 && term > header.get_term() + 1 {
-        Err(Error::StaleCommand)
-    } else {
-        Ok(())
+        return Err(Error::StaleCommand);
     }
+    Ok(())
 }
 
+#[inline]
 pub fn check_peer_id(req: &RaftCmdRequest, peer_id: u64) -> Result<()> {
     let header = req.get_header();
     if header.get_peer().get_id() != peer_id {
-        Err(box_err!(
+        return Err(box_err!(
             "mismatch peer id {} != {}",
             header.get_peer().get_id(),
             peer_id
-        ))
-    } else {
-        Ok(())
+        ));
     }
+    Ok(())
 }
 
 pub fn get_region_properties_cf(
@@ -512,19 +512,21 @@ mod tests {
     use std::process;
     use std::thread;
 
-    use kvproto::metapb;
+    use kvproto::metapb::{self, RegionEpoch};
+    use kvproto::raft_cmdpb::AdminRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use raft::eraftpb::{ConfChangeType, Message, MessageType};
     use rocksdb::{ColumnFamilyOptions, DBOptions, SeekKey, Writable, WriteBatch, DB};
     use tempdir::TempDir;
     use time::Duration as TimeDuration;
 
-    use super::*;
     use raftstore::store::peer_storage;
     use storage::{Key, ALL_CFS};
     use util::properties::SizePropertiesCollectorFactory;
     use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
     use util::time::{monotonic_now, monotonic_raw_now};
+
+    use super::*;
 
     #[test]
     fn test_lease() {
@@ -973,5 +975,118 @@ mod tests {
         check_sibling(&r1, &r3, false);
         check_sibling(&r2, &r4, false);
         check_sibling(&r1, &r4, false);
+    }
+
+    #[test]
+    fn test_check_store_id() {
+        let mut req = RaftCmdRequest::new();
+        req.mut_header().mut_peer().set_store_id(1);
+        check_store_id(&req, 1).unwrap();
+        check_store_id(&req, 2).unwrap_err();
+    }
+
+    #[test]
+    fn test_check_peer_id() {
+        let mut req = RaftCmdRequest::new();
+        req.mut_header().mut_peer().set_id(1);
+        check_peer_id(&req, 1).unwrap();
+        check_peer_id(&req, 2).unwrap_err();
+    }
+
+    #[test]
+    fn test_check_term() {
+        let mut req = RaftCmdRequest::new();
+        req.mut_header().set_term(7);
+        check_term(&req, 7).unwrap();
+        check_term(&req, 8).unwrap();
+        // If header's term is 2 verions behind current term,
+        // leadership may have been changed away.
+        check_term(&req, 9).unwrap_err();
+        check_term(&req, 10).unwrap_err();
+    }
+
+    #[test]
+    fn test_check_region_epoch() {
+        let mut epoch = RegionEpoch::new();
+        epoch.set_conf_ver(2);
+        epoch.set_version(2);
+        let mut region = metapb::Region::new();
+        region.set_region_epoch(epoch.clone());
+
+        // Epoch is required for most requests even if it's empty.
+        check_region_epoch(&RaftCmdRequest::new(), &region, false).unwrap_err();
+
+        // These admin commands do not require epoch.
+        for ty in &[
+            AdminCmdType::CompactLog,
+            AdminCmdType::InvalidAdmin,
+            AdminCmdType::ComputeHash,
+            AdminCmdType::VerifyHash,
+        ] {
+            let mut admin = AdminRequest::new();
+            admin.set_cmd_type(*ty);
+            let mut req = RaftCmdRequest::new();
+            req.set_admin_request(admin);
+
+            // It is Okay if req does not have region epoch.
+            check_region_epoch(&req, &region, false).unwrap();
+
+            req.mut_header().set_region_epoch(epoch.clone());
+            check_region_epoch(&req, &region, true).unwrap();
+            check_region_epoch(&req, &region, false).unwrap();
+        }
+
+        // These admin commands requires epoch.version.
+        for ty in &[
+            AdminCmdType::Split,
+            AdminCmdType::PrepareMerge,
+            AdminCmdType::CommitMerge,
+            AdminCmdType::RollbackMerge,
+            AdminCmdType::TransferLeader,
+        ] {
+            let mut admin = AdminRequest::new();
+            admin.set_cmd_type(*ty);
+            let mut req = RaftCmdRequest::new();
+            req.set_admin_request(admin);
+
+            // Error if req does not have region epoch.
+            check_region_epoch(&req, &region, false).unwrap_err();
+
+            let mut stale_version_epoch = epoch.clone();
+            stale_version_epoch.set_version(1);
+            let mut stale_region = metapb::Region::new();
+            stale_region.set_region_epoch(stale_version_epoch.clone());
+            req.mut_header()
+                .set_region_epoch(stale_version_epoch.clone());
+            check_region_epoch(&req, &stale_region, false).unwrap();
+            check_region_epoch(&req, &region, false).unwrap_err();
+            check_region_epoch(&req, &region, true).unwrap_err();
+        }
+
+        // These admin commands requires epoch.conf_version.
+        for ty in &[
+            AdminCmdType::ChangePeer,
+            AdminCmdType::PrepareMerge,
+            AdminCmdType::CommitMerge,
+            AdminCmdType::RollbackMerge,
+            AdminCmdType::TransferLeader,
+        ] {
+            let mut admin = AdminRequest::new();
+            admin.set_cmd_type(*ty);
+            let mut req = RaftCmdRequest::new();
+            req.set_admin_request(admin);
+
+            // Error if req does not have region epoch.
+            check_region_epoch(&req, &region, false).unwrap_err();
+
+            let mut stale_conf_epoch = epoch.clone();
+            stale_conf_epoch.set_conf_ver(1);
+            let mut stale_region = metapb::Region::new();
+            stale_region.set_region_epoch(stale_conf_epoch.clone());
+            req.mut_header().set_region_epoch(stale_conf_epoch.clone());
+            check_region_epoch(&req, &stale_region, false).unwrap();
+            check_region_epoch(&req, &region, false).unwrap_err();
+            check_region_epoch(&req, &region, true).unwrap_err();
+        }
     }
 }

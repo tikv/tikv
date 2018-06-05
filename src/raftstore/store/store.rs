@@ -2063,22 +2063,22 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // Check whether the term is stale.
         util::check_term(msg, peer.term())?;
 
-        if let Err(Error::StaleEpoch(msg, mut new_regions)) =
-            util::check_epoch(msg, peer.region(), true)
-        {
-            // Attach the region which might be split from the current region. But it doesn't
-            // matter if the region is not split from the current region. If the region meta
-            // received by the TiKV driver is newer than the meta cached in the driver, the meta is
-            // updated.
-            let sibling_region_id = self.find_sibling_region(peer.region());
-            if let Some(sibling_region_id) = sibling_region_id {
-                let sibling_region = self.region_peers[&sibling_region_id].region();
-                new_regions.push(sibling_region.to_owned());
+        match util::check_region_epoch(msg, peer.region(), true) {
+            Err(Error::StaleEpoch(msg, mut new_regions)) => {
+                // Attach the region which might be split from the current region. But it doesn't
+                // matter if the region is not split from the current region. If the region meta
+                // received by the TiKV driver is newer than the meta cached in the driver, the meta is
+                // updated.
+                let sibling_region_id = self.find_sibling_region(peer.region());
+                if let Some(sibling_region_id) = sibling_region_id {
+                    let sibling_region = self.region_peers[&sibling_region_id].region();
+                    new_regions.push(sibling_region.to_owned());
+                }
+                Err(Error::StaleEpoch(msg, new_regions))
             }
-            return Err(Error::StaleEpoch(msg, new_regions));
+            Err(e) => Err(e),
+            Ok(()) => Ok(None),
         }
-
-        Ok(None)
     }
 
     fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback) {

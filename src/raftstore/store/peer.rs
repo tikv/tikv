@@ -52,7 +52,7 @@ use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::store::{DestroyPeerJob, Store};
 use super::transport::Transport;
-use super::util::{self, check_epoch, Lease, LeaseState};
+use super::util::{self, check_region_epoch, Lease, LeaseState};
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
@@ -1864,7 +1864,7 @@ impl Peer {
     }
 
     fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<ReadResponse> {
-        check_epoch(req, self.region(), true)?;
+        check_region_epoch(req, self.region(), true)?;
         let mut need_snapshot = false;
         let snapshot = Snapshot::new(Arc::clone(&self.kv_engine));
         let requests = req.get_requests();
