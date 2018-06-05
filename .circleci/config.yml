@@ -65,8 +65,8 @@ jobs:
             cat /boot/config-`uname -r`
             dmesg
             # Force a clock update and stop ntp.
-            sudo ntpd -gq
             sudo service ntp stop
+            sudo ntpd -gq
       # check format first
       -  run:
           name: Checking Format
