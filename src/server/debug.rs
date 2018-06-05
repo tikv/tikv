@@ -13,12 +13,12 @@
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::HashSet;
 use std::iter::FromIterator;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{error, result};
+use util::collections::HashSet;
 
 use protobuf::{self, Message, RepeatedField};
 
@@ -39,6 +39,7 @@ use storage::types::{truncate_ts, Key};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::config::ReadableSize;
 use util::escape;
+use util::properties::MvccProperties;
 use util::rocksdb::{compact_range, get_cf_handle};
 use util::worker::Worker;
 
@@ -516,6 +517,53 @@ impl Debugger {
             )));
         }
         Ok(())
+    }
+
+    fn get_region_state(&self, region_id: u64) -> Result<RegionLocalState> {
+        let region_state_key = keys::region_state_key(region_id);
+        let region_state = box_try!(
+            self.engines
+                .kv_engine
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+        );
+        match region_state {
+            Some(v) => Ok(v),
+            None => Err(Error::NotFound(format!("region {}", region_id))),
+        }
+    }
+
+    pub fn get_region_properties(&self, region_id: u64) -> Result<Vec<(String, String)>> {
+        let region_state = self.get_region_state(region_id)?;
+        let region = region_state.get_region();
+        let db = &self.engines.kv_engine;
+
+        let mut num_entries = 0;
+        let mut mvcc_properties = MvccProperties::new();
+        let collection = box_try!(raftstore_util::get_region_properties_cf(
+            db,
+            CF_WRITE,
+            region
+        ));
+        for (_, v) in &*collection {
+            num_entries += v.num_entries();
+            let mvcc = box_try!(MvccProperties::decode(v.user_collected_properties()));
+            mvcc_properties.add(&mvcc);
+        }
+
+        let res = [
+            ("num_files", collection.len() as u64),
+            ("num_entries", num_entries),
+            ("num_deletes", num_entries - mvcc_properties.num_versions),
+            ("mvcc.min_ts", mvcc_properties.min_ts),
+            ("mvcc.max_ts", mvcc_properties.max_ts),
+            ("mvcc.num_rows", mvcc_properties.num_rows),
+            ("mvcc.num_puts", mvcc_properties.num_puts),
+            ("mvcc.num_versions", mvcc_properties.num_versions),
+            ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
+        ].iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Ok(res)
     }
 }
 
