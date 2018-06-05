@@ -81,9 +81,7 @@ impl GCRunner {
         safe_point: u64,
         from: Option<Key>,
         limit: usize,
-    ) -> Result<(Option<Vec<Key>>, Option<Key>)> {
-        let is_range_start_gc = from.is_none();
-
+    ) -> Result<(Vec<Key>, Option<Key>)> {
         let snapshot = self.engine.snapshot(ctx)?;
         let mut reader = MvccReader::new(
             snapshot,
@@ -94,22 +92,24 @@ impl GCRunner {
             ctx.get_isolation_level(),
         );
 
-        let need_gc = (!is_range_start_gc) || reader.need_gc(safe_point, self.ratio_threshold);
+        // If from.is_none() is false, it must not be the first scan of a region.
+        // So we must continue doing GC.
+        let need_gc = (!from.is_none()) || reader.need_gc(safe_point, self.ratio_threshold);
         let res = if !need_gc {
             self.skipped_counter.inc();
-            Ok((None, None))
+            Ok((vec![], None))
         } else {
             reader
-                .scan_keys(from, limit)
+                .scan_keys(from.clone(), limit)
                 .map_err(Error::from)
                 .and_then(|(keys, next)| {
                     if keys.is_empty() {
-                        if is_range_start_gc {
+                        if from.is_none() {
                             self.empty_range_counter.inc();
                         }
-                        Ok((None, None))
+                        Ok((keys, None))
                     } else {
-                        Ok((Some(keys), next))
+                        Ok((keys, next))
                     }
                 })
         };
@@ -164,23 +164,17 @@ impl GCRunner {
                     warn!("scan_keys failed on region {}: {:?}", safe_point, &e);
                     e
                 })?;
-            if keys.is_none() {
+            if keys.is_empty() {
                 break;
             }
 
-            next_key = self.gc_keys(&ctx, safe_point, keys.unwrap(), next)
-                .map_err(|e| {
-                    warn!("gc_keys failed on region {}: {:?}", safe_point, &e);
-                    e
-                })?;
+            next_key = self.gc_keys(&ctx, safe_point, keys, next).map_err(|e| {
+                warn!("gc_keys failed on region {}: {:?}", safe_point, &e);
+                e
+            })?;
             if next_key.is_none() {
                 break;
             }
-
-            debug!(
-                "doing gc on region {}, safe_point {}, scan_from {:?}",
-                ctx.region_id, safe_point, next_key
-            );
         }
 
         debug!(
