@@ -17,8 +17,8 @@ use super::mvcc::{MvccReader, MvccTxn, MAX_TXN_WRITE_SIZE};
 use super::txn::GC_BATCH_SIZE;
 use super::{Callback, Error, Key, Result};
 use kvproto::kvrpcpb::Context;
-use prometheus::local::{LocalHistogram, LocalIntCounter, LocalIntCounterVec};
 use std::fmt::{self, Display, Formatter};
+use std::mem;
 use std::sync::{Arc, Mutex};
 use util::worker::{self, Builder, Runnable, ScheduleError, Worker};
 
@@ -50,12 +50,6 @@ struct GCRunner {
     ratio_threshold: f64,
 
     stats: StatisticsSummary,
-    empty_range_counter: LocalIntCounter,
-    skipped_counter: LocalIntCounter,
-    duration_histogram: LocalHistogram,
-    gctask_counter: LocalIntCounter,
-    gctask_fail_counter: LocalIntCounter,
-    gc_keys_counter: LocalIntCounterVec,
 }
 
 impl GCRunner {
@@ -65,12 +59,6 @@ impl GCRunner {
             ratio_threshold,
 
             stats: StatisticsSummary::default(),
-            empty_range_counter: KV_GC_EMPTY_RANGE_COUNTER.local(),
-            skipped_counter: KV_GC_SKIPPED_COUNTER.local(),
-            duration_histogram: GC_DURATION_HISTOGRAM.local(),
-            gctask_counter: GC_GCTASK_COUNTER.local(),
-            gctask_fail_counter: GC_GCTASK_FAIL_COUNTER.local(),
-            gc_keys_counter: GC_KEYS_COUNTER_VEC.local(),
         }
     }
 
@@ -96,7 +84,7 @@ impl GCRunner {
         // So we must continue doing GC.
         let need_gc = (!from.is_none()) || reader.need_gc(safe_point, self.ratio_threshold);
         let res = if !need_gc {
-            self.skipped_counter.inc();
+            KV_GC_SKIPPED_COUNTER.inc();
             Ok((vec![], None))
         } else {
             reader
@@ -105,7 +93,7 @@ impl GCRunner {
                 .and_then(|(keys, next)| {
                     if keys.is_empty() {
                         if from.is_none() {
-                            self.empty_range_counter.inc();
+                            KV_GC_EMPTY_RANGE_COUNTER.inc();
                         }
                         Ok((keys, None))
                     } else {
@@ -150,7 +138,7 @@ impl GCRunner {
     }
 
     pub fn gc(&mut self, ctx: Context, safe_point: u64) -> Result<()> {
-        let _gc_timer = self.duration_histogram.start_coarse_timer();
+        let _gc_timer = GC_DURATION_HISTOGRAM.start_coarse_timer();
 
         debug!(
             "doing gc on region {}, safe_point {}",
@@ -187,28 +175,23 @@ impl GCRunner {
 
 impl Runnable<GCTask> for GCRunner {
     fn run(&mut self, task: GCTask) {
-        self.gctask_counter.inc();
+        GC_GCTASK_COUNTER.inc();
         let result = self.gc(task.ctx, task.safe_point);
         if result.is_err() {
-            self.gctask_fail_counter.inc();
+            GC_GCTASK_FAIL_COUNTER.inc();
         }
         (task.callback)(result);
     }
 
     fn on_tick(&mut self) {
-        for (cf, details) in self.stats.stat.details() {
+        let stats = mem::replace(&mut self.stats, StatisticsSummary::default());
+        for (cf, details) in stats.stat.details() {
             for (tag, count) in details {
-                self.gc_keys_counter
+                GC_KEYS_COUNTER_VEC
                     .with_label_values(&[cf, tag])
                     .inc_by(count as i64);
             }
         }
-        self.empty_range_counter.flush();
-        self.skipped_counter.flush();
-        self.duration_histogram.flush();
-        self.gctask_counter.flush();
-        self.gctask_fail_counter.flush();
-        self.gc_keys_counter.flush();
     }
 }
 
