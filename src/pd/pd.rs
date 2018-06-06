@@ -31,7 +31,7 @@ use prometheus::local::LocalHistogram;
 use raftstore::store::Callback;
 use raftstore::store::Msg;
 use raftstore::store::store::StoreInfo;
-use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
+use raftstore::store::util::{is_epoch_stale, RegionApproximateStat};
 use storage::FlowStatistics;
 use util::collections::HashMap;
 use util::escape;
@@ -57,7 +57,7 @@ pub enum Task {
         pending_peers: Vec<metapb::Peer>,
         written_bytes: u64,
         written_keys: u64,
-        region_size: Option<u64>,
+        approximate_stat: Option<RegionApproximateStat>,
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
@@ -540,11 +540,11 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 pending_peers,
                 written_bytes,
                 written_keys,
-                region_size,
+                approximate_stat,
             } => {
-                let approximate_size = match region_size {
-                    Some(size) => size,
-                    None => get_region_approximate_size(&self.db, &region).unwrap_or(0),
+                let approximate_stat = match approximate_stat {
+                    Some(stat) => stat,
+                    None => RegionApproximateStat::new(&self.db, &region).unwrap_or_default(), //get_region_approximate_size(&self.db, &region).unwrap_or(0),
                 };
                 let (
                     read_bytes_delta,
@@ -585,7 +585,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                         written_keys: written_keys_delta,
                         read_bytes: read_bytes_delta,
                         read_keys: read_keys_delta,
-                        approximate_size,
+                        approximate_stat,
                         last_report_ts,
                     },
                 )
