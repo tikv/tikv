@@ -32,12 +32,9 @@ struct GCTask {
 
 impl Display for GCTask {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let epoch = match self.ctx.region_epoch.as_ref() {
-            None => "None".to_string(),
-            Some(e) => format!("{{{}, {}}}", e.conf_ver, e.version),
-        };
+        let epoch = format!("{:?}", self.ctx.region_epoch.as_ref());
         f.debug_struct("GCTask")
-            .field("region", &self.ctx.region_id)
+            .field("region", &self.ctx.get_region_id())
             .field("epoch", &epoch)
             .field("safe_point", &self.safe_point)
             .finish()
@@ -142,7 +139,8 @@ impl GCRunner {
 
         debug!(
             "doing gc on region {}, safe_point {}",
-            ctx.region_id, safe_point
+            ctx.get_region_id(),
+            safe_point
         );
 
         let mut next_key = None;
@@ -167,7 +165,8 @@ impl GCRunner {
 
         debug!(
             "gc on region {}, safe_point {} has finished",
-            ctx.region_id, safe_point
+            ctx.get_region_id(),
+            safe_point
         );
         Ok(())
     }
