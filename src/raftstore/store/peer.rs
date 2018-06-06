@@ -1950,7 +1950,7 @@ impl<'r, 'e, 't> ReadExecutor<'r, 'e, 't> {
     }
 
     fn do_get(&self, req: &Request, snap: &Snapshot) -> Result<Response> {
-        // TODO: the get_get looks wried, maybe we should figure out a better name later.
+        // TODO: the get_get looks weird, maybe we should figure out a better name later.
         let key = req.get_get().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, self.region)?;
@@ -1998,8 +1998,8 @@ impl<'r, 'e, 't> ReadExecutor<'r, 'e, 't> {
                 CmdType::Prewrite
                 | CmdType::Put
                 | CmdType::Delete
-                | CmdType::IngestSST
                 | CmdType::DeleteRange
+                | CmdType::IngestSST
                 | CmdType::Invalid => unreachable!(),
             };
             resp.set_cmd_type(cmd_type);
