@@ -12,6 +12,43 @@
 // limitations under the License.
 
 use prometheus::*;
+use prometheus_static_metric::make_static_metric;
+
+make_static_metric! {
+    label_enum GrpcTypes {
+        kv_get,
+        kv_scan,
+        kv_prewrite,
+        kv_commit,
+        kv_cleanup,
+        kv_batchget,
+        kv_batch_rollback,
+        kv_scan_lock,
+        kv_resolve_lock,
+        kv_gc,
+        kv_delete_range,
+        raw_get,
+        raw_batch_get,
+        raw_scan,
+        raw_batch_scan,
+        raw_put,
+        raw_batch_put,
+        raw_delete,
+        raw_delete_range,
+        raw_batch_delete,
+        coprocessor,
+        coprocessor_stream,
+        mvcc_get_by_key,
+        mvcc_get_by_start_ts,
+        split_region,
+    }
+    pub struct GrpcMsgHistogramVec: Histogram {
+        "type" => GrpcTypes,
+    }
+    pub struct GrpcMsgFailCounterVec: IntCounter {
+        "type" => GrpcTypes,
+    }
+}
 
 lazy_static! {
     pub static ref SEND_SNAP_HISTOGRAM: Histogram = register_histogram!(

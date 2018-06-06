@@ -101,6 +101,10 @@ version = "0.4"
 default-features = false
 features = ["nightly", "push", "process"]
 
+[dependencies.prometheus-static-metric]
+git = "https://github.com/pingcap/rust-prometheus.git"
+branch = "wenxuan/static-metric-v3"
+
 [dependencies.jemallocator]
 git = "https://github.com/busyjay/jemallocator.git"
 branch = "dev"
