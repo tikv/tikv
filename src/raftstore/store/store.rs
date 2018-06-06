@@ -2029,7 +2029,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
-    fn check_msg_peer(&self, msg: &RaftCmdRequest) -> Result<&Peer> {
+    fn check_propose_peer(&self, msg: &RaftCmdRequest) -> Result<&Peer> {
         let region_id = msg.get_header().get_region_id();
         let peer = match self.region_peers.get(&region_id) {
             Some(peer) => peer,
@@ -2057,7 +2057,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         // Check whether the store has the right peer to handle the request.
-        let peer = self.check_msg_peer(msg)?;
+        let peer = self.check_propose_peer(msg)?;
         // peer_id must be the same as peer's.
         util::check_peer_id(msg, peer.peer_id())?;
         // Check whether the term is stale.
