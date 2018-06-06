@@ -44,7 +44,7 @@ impl Display for GCTask {
     }
 }
 
-// `GCRunner` is used to perform GC on the engine
+/// `GCRunner` is used to perform GC on the engine
 struct GCRunner {
     engine: Box<Engine>,
     ratio_threshold: f64,
@@ -62,7 +62,7 @@ impl GCRunner {
         }
     }
 
-    // Scan keys in the region. Returns scanned keys if any, and a key indicating scan progress
+    /// Scan keys in the region. Returns scanned keys if any, and a key indicating scan progress
     fn scan_keys(
         &mut self,
         ctx: &Context,
@@ -82,8 +82,8 @@ impl GCRunner {
 
         // If from.is_none() is false, it must not be the first scan of a region.
         // So we must continue doing GC.
-        let need_gc = (!from.is_none()) || reader.need_gc(safe_point, self.ratio_threshold);
-        let res = if !need_gc {
+        let skip_gc = from.is_none() && !reader.need_gc(safe_point, self.ratio_threshold);
+        let res = if skip_gc {
             KV_GC_SKIPPED_COUNTER.inc();
             Ok((vec![], None))
         } else {
@@ -105,7 +105,7 @@ impl GCRunner {
         res
     }
 
-    // Clean up outdated data.
+    /// Clean up outdated data.
     fn gc_keys(
         &mut self,
         ctx: &Context,
@@ -195,7 +195,7 @@ impl Runnable<GCTask> for GCRunner {
     }
 }
 
-// `GCWorker` is used to schedule GC operations
+/// `GCWorker` is used to schedule GC operations
 #[derive(Clone)]
 pub struct GCWorker {
     engine: Box<Engine>,
