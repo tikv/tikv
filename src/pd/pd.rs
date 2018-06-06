@@ -544,7 +544,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             } => {
                 let approximate_stat = match approximate_stat {
                     Some(stat) => stat,
-                    None => RegionApproximateStat::new(&self.db, &region).unwrap_or_default(), //get_region_approximate_size(&self.db, &region).unwrap_or(0),
+                    None => RegionApproximateStat::new(&self.db, &region).unwrap_or_default(),
                 };
                 let (
                     read_bytes_delta,
