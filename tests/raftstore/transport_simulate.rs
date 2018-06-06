@@ -20,12 +20,12 @@ use tikv::server::transport::*;
 use tikv::util::{transport, Either, HandyRwLock};
 
 use rand;
-use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::sync::atomic::*;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
 use std::{thread, time, usize};
+use tikv::util::collections::{HashMap, HashSet};
 
 pub trait Channel<M>: Send + Clone {
     fn send(&self, m: M) -> Result<()>;
@@ -422,7 +422,7 @@ impl CollectSnapshotFilter {
         CollectSnapshotFilter {
             dropped: AtomicBool::new(false),
             stale: AtomicBool::new(false),
-            pending_msg: Mutex::new(HashMap::new()),
+            pending_msg: Mutex::new(HashMap::default()),
             pending_count_sender: Mutex::new(sender),
         }
     }
