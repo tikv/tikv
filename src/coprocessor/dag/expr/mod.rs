@@ -35,7 +35,7 @@ use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::mysql::{charset, types};
 use coprocessor::codec::{self, Datum};
-use util::codec::number::{self, NumberDecoder};
+use util::codec::number;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
@@ -221,13 +221,11 @@ impl Expression {
         let tp = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
-            ExprType::Int64 => expr.get_val()
-                .decode_i64()
+            ExprType::Int64 => number::decode_i64(&mut expr.get_val())
                 .map(Datum::I64)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
-            ExprType::Uint64 => expr.get_val()
-                .decode_u64()
+            ExprType::Uint64 => number::decode_u64(&mut expr.get_val())
                 .map(Datum::U64)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
@@ -238,8 +236,7 @@ impl Expression {
                 .map(Datum::F64)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
-            ExprType::MysqlTime => expr.get_val()
-                .decode_u64()
+            ExprType::MysqlTime => number::decode_u64(&mut expr.get_val())
                 .and_then(|i| {
                     let fsp = tp.get_decimal() as i8;
                     let t = tp.get_tp() as u8;
@@ -247,8 +244,7 @@ impl Expression {
                 })
                 .map(|t| Expression::new_const(Datum::Time(t), tp))
                 .map_err(Error::from),
-            ExprType::MysqlDuration => expr.get_val()
-                .decode_i64()
+            ExprType::MysqlDuration => number::decode_i64(&mut expr.get_val())
                 .and_then(|n| Duration::from_nanos(n, MAX_FSP))
                 .map(Datum::Dur)
                 .map(|e| Expression::new_const(e, tp))
@@ -276,7 +272,7 @@ impl Expression {
                     })
             }
             ExprType::ColumnRef => {
-                let offset = expr.get_val().decode_i64().map_err(Error::from)? as usize;
+                let offset = number::decode_i64(&mut expr.get_val()).map_err(Error::from)? as usize;
                 let column = Column { offset, tp };
                 Ok(Expression::ColumnRef(column))
             }
@@ -304,7 +300,7 @@ where
 #[cfg(test)]
 mod test {
     use super::{Error, EvalConfig, EvalContext, Expression, ERR_DATA_OUT_OF_RANGE,
-                FLAG_IGNORE_TRUNCATE};
+                ERR_DIVISION_BY_ZERO, FLAG_IGNORE_TRUNCATE};
     use coprocessor::codec::mysql::json::JsonEncoder;
     use coprocessor::codec::mysql::{charset, types, Decimal, DecimalEncoder, Duration, Json, Time};
     use coprocessor::codec::{convert, mysql, Datum};
@@ -326,6 +322,15 @@ mod test {
     #[inline]
     pub fn check_overflow(e: Error) -> Result<(), ()> {
         if e.code() == ERR_DATA_OUT_OF_RANGE {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    #[inline]
+    pub fn check_divide_by_zero(e: Error) -> Result<(), ()> {
+        if e.code() == ERR_DIVISION_BY_ZERO {
             Ok(())
         } else {
             Err(())

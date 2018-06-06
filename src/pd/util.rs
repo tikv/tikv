@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
 use std::result;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
+use util::collections::HashSet;
 
 use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
@@ -329,7 +329,7 @@ pub fn validate_endpoints(
     security_mgr: &SecurityManager,
 ) -> Result<(PdClient, GetMembersResponse)> {
     let len = cfg.endpoints.len();
-    let mut endpoints_set = HashSet::with_capacity(len);
+    let mut endpoints_set = HashSet::with_capacity_and_hasher(len, Default::default());
 
     let mut members = None;
     let mut cluster_id = None;
