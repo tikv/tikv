@@ -12,7 +12,7 @@ Please **NOTE** that:
 - Do not assume the code is self-evident
 - Do not assume reviewers understand the original issue
 
-## What are the type of the changes (mandatory)?
+## What are the type of the changes? (mandatory)
 
 The currently defined types are listed below, please pick one of the types for this PR by removing the others:
 - New feature (non-breaking change which adds functionality)
@@ -20,11 +20,11 @@ The currently defined types are listed below, please pick one of the types for t
 - Bug fix (non-breaking change which fixes an issue)
 - Breaking change (fix or feature that would cause existing functionality to not work as expected)
 
-## How has this PR been tested (mandatory)?
+## How has this PR been tested? (mandatory)
 
 Please describe the tests that you ran to verify your changes. Have you finished unit tests, integration tests, or manual tests?
 
-## Does this PR affect documentation (docs/docs-cn) update? (optional)
+## Does this PR affect documentation (docs/docs-cn) update? (mandatory)
 
 If there is document change, please file a PR in ([docs](https://github.com/pingcap/docs) and [docs-cn](https://github.com/pingcap/docs-cn)) and add the PR number here.
 
