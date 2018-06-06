@@ -323,7 +323,7 @@ impl MvccReader {
     }
 
     pub fn seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
-        assert!(self.scan_mode.is_some());
+        assert!(*self.scan_mode.as_ref().unwrap() == ScanMode::Forward);
         self.create_write_cursor()?;
         self.create_lock_cursor()?;
 
