@@ -22,7 +22,7 @@ use storage::{Key, Value, CF_LOCK, CF_WRITE};
 use util::properties::MvccProperties;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
-const REVERSE_SEEK_BOUND: usize = 16;
+const REVERSE_SEEK_BOUND: usize = 32;
 
 pub struct MvccReader {
     snapshot: Box<Snapshot>,
@@ -450,6 +450,12 @@ impl MvccReader {
                 return self.get_value(user_key, lastest_version.0, lastest_version.1);
             }
 
+            // When there are many versions for this user key, after several tries,
+            // we will use seek to locate the right position. But this will turn around
+            // the write cf's iterator's direction inside RocksDB, and the next user key
+            // need to turn back the direction to backward. As we have tested, turn around
+            // iterator's direction from forward to backward is as expensive as seek in
+            // RocksDB, so don't set REVERSE_SEEK_BOUND too small.
             if round >= REVERSE_SEEK_BOUND {
                 break;
             }
