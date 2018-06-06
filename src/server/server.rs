@@ -66,7 +66,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         // TODO: Remove once endpoint itself is passed to here.
         cop_readpool: ReadPool<coprocessor::ReadPoolContext>,
         raft_router: T,
-        resolver: S,
+        resolver: Arc<S>,
         snap_mgr: SnapManager,
         debug_engines: Option<Engines>,
         import_service: Option<ImportSSTService<T>>,
@@ -81,6 +81,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             Arc::clone(&env),
             Arc::clone(cfg),
             Arc::clone(security_mgr),
+            resolver,
         )));
         let end_point_worker = WorkerBuilder::new("end-point-worker")
             .batch_size(DEFAULT_COPROCESSOR_BATCH)
@@ -124,12 +125,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             SocketAddr::new(IpAddr::from_str(host)?, port as u16)
         };
 
-        let trans = ServerTransport::new(
-            raft_client,
-            snap_worker.scheduler(),
-            raft_router.clone(),
-            resolver,
-        );
+        let trans = ServerTransport::new(raft_client, snap_worker.scheduler(), raft_router.clone());
 
         let svr = Server {
             env: Arc::clone(&env),
@@ -192,42 +188,39 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::*;
     use std::sync::mpsc::*;
     use std::sync::*;
     use std::time::Duration;
 
     use super::*;
 
-    use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
     use super::super::transport::RaftStoreRouter;
-    use super::super::{Config, Result};
+    use futures::future;
+    use kvproto::metapb;
     use kvproto::raft_serverpb::RaftMessage;
+    use pd::{LamePdClient, PdFuture};
     use raftstore::Result as RaftStoreResult;
-    use raftstore::store::Msg as StoreMsg;
     use raftstore::store::transport::Transport;
-    use raftstore::store::*;
+    use raftstore::store::{Msg as StoreMsg, SignificantMsg};
     use server::readpool::{self, ReadPool};
     use storage::{self, Config as StorageConfig, Storage};
     use util::security::SecurityConfig;
     use util::worker::FutureWorker;
 
     #[derive(Clone)]
-    struct MockResolver {
-        quick_fail: Arc<AtomicBool>,
+    struct MockPdClient {
         addr: Arc<Mutex<Option<String>>>,
     }
 
-    impl StoreAddrResolver for MockResolver {
-        fn resolve(&self, _: u64, cb: ResolveCallback) -> Result<()> {
-            if self.quick_fail.load(Ordering::SeqCst) {
-                return Err(box_err!("quick fail"));
-            }
+    impl LamePdClient for MockPdClient {
+        fn get_store(&self, _: u64) -> PdFuture<metapb::Store> {
             let addr = self.addr.lock().unwrap();
-            cb(addr.as_ref()
-                .map(|s| s.to_owned())
-                .ok_or(box_err!("not set")));
-            Ok(())
+            if addr.is_none() {
+                return Box::new(future::err(box_err!("not set")));
+            }
+            let mut store = metapb::Store::new();
+            store.set_address(addr.as_ref().unwrap().clone());
+            Box::new(future::ok(store))
         }
     }
 
@@ -261,8 +254,8 @@ mod tests {
         }
     }
 
-    #[test]
     // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
+    #[test]
     fn test_peer_resolve() {
         let mut cfg = Config::default();
         let storage_cfg = StorageConfig::default();
@@ -285,7 +278,6 @@ mod tests {
         };
 
         let addr = Arc::new(Mutex::new(None));
-        let quick_fail = Arc::new(AtomicBool::new(false));
         let cfg = Arc::new(cfg);
         let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
 
@@ -303,10 +295,9 @@ mod tests {
             storage,
             cop_read_pool,
             router,
-            MockResolver {
-                quick_fail: Arc::clone(&quick_fail),
+            Arc::new(MockPdClient {
                 addr: Arc::clone(&addr),
-            },
+            }),
             SnapManager::new("", None),
             None,
             None,
@@ -316,29 +307,17 @@ mod tests {
 
         let mut trans = server.transport();
         trans.report_unreachable(RaftMessage::new());
-        let mut resp = significant_msg_receiver.try_recv().unwrap();
+        let resp = significant_msg_receiver.try_recv().unwrap();
         assert!(is_unreachable_to(&resp, 0, 0), "{:?}", resp);
-
-        let mut msg = RaftMessage::new();
-        msg.set_region_id(1);
-        trans.send(msg.clone()).unwrap();
-        trans.flush();
-        resp = significant_msg_receiver.try_recv().unwrap();
-        assert!(is_unreachable_to(&resp, 1, 0), "{:?}", resp);
 
         *addr.lock().unwrap() = Some(format!("{}", server.listening_addr()));
 
-        trans.send(msg.clone()).unwrap();
+        let mut msg = RaftMessage::new();
+        msg.set_region_id(1);
+        trans.send(msg).unwrap();
         trans.flush();
         assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok());
 
-        msg.mut_to_peer().set_store_id(2);
-        msg.set_region_id(2);
-        quick_fail.store(true, Ordering::SeqCst);
-        trans.send(msg.clone()).unwrap();
-        trans.flush();
-        resp = significant_msg_receiver.try_recv().unwrap();
-        assert!(is_unreachable_to(&resp, 2, 0), "{:?}", resp);
         server.stop().unwrap();
     }
 }

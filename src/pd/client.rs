@@ -151,22 +151,32 @@ impl PdClient for RpcClient {
         Ok(())
     }
 
-    fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
-        let _timer = PD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["get_store"])
-            .start_coarse_timer();
+    fn get_store(&self, store_id: u64) -> PdFuture<metapb::Store> {
+        let timer = Instant::now();
 
         let mut req = pdpb::GetStoreRequest::new();
         req.set_header(self.header());
         req.set_store_id(store_id);
 
-        let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+        let executor = move |client: &RwLock<Inner>, req: pdpb::GetStoreRequest| {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-            client.get_store_opt(&req, option)
-        })?;
-        check_resp_header(resp.get_header())?;
+            let handler = client
+                .rl()
+                .client
+                .get_store_async_opt(&req, option)
+                .unwrap();
+            Box::new(handler.map_err(Error::Grpc).and_then(move |mut resp| {
+                PD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["get_store"])
+                    .observe(duration_to_sec(timer.elapsed()));
+                check_resp_header(resp.get_header())?;
+                Ok(resp.take_store())
+            })) as PdFuture<_>
+        };
 
-        Ok(resp.take_store())
+        self.leader_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
     }
 
     fn get_all_stores(&self) -> Result<Vec<metapb::Store>> {

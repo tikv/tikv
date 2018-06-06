@@ -70,7 +70,6 @@ use tikv::pd::{PdClient, RpcClient};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::{self, new_compaction_listener, Engines, SnapManagerBuilder};
 use tikv::server::readpool::ReadPool;
-use tikv::server::resolve;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::storage::{self, DEFAULT_ROCKSDB_SUB_DIR};
@@ -137,8 +136,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     // Create pd client and pd worker
     let pd_client = Arc::new(pd_client);
     let pd_worker = FutureWorker::new("pd worker");
-    let (mut worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
-        .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
     let pd_sender = pd_worker.scheduler();
 
     // Create kv engine, storage.
@@ -198,7 +195,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         storage.clone(),
         cop_read_pool,
         raft_router,
-        resolver,
+        pd_client.clone(),
         snap_mgr.clone(),
         Some(engines.clone()),
         Some(import_service),
@@ -254,9 +251,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     node.stop()
         .unwrap_or_else(|e| fatal!("failed to stop node: {:?}", e));
-    if let Some(Err(e)) = worker.stop().map(|j| j.join()) {
-        info!("ignore failure when stopping resolver: {:?}", e);
-    }
 }
 
 fn main() {

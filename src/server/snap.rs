@@ -21,6 +21,7 @@ use futures::{future, Async, Future, Poll, Stream};
 use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 use grpc::{ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus,
            RpcStatusCode, WriteFlags};
+use kvproto::metapb::Peer;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb_grpc::TikvClient;
@@ -31,6 +32,7 @@ use util::security::SecurityManager;
 use util::worker::Runnable;
 
 use super::metrics::*;
+use super::raft_client::Address;
 use super::transport::RaftStoreRouter;
 use super::{Config, Error, Result};
 
@@ -44,7 +46,8 @@ pub enum Task {
         sink: ClientStreamingSink<Done>,
     },
     Send {
-        addr: String,
+        target: Peer,
+        addr: Address,
         msg: RaftMessage,
         cb: Callback,
     },
@@ -55,8 +58,10 @@ impl Display for Task {
         match *self {
             Task::Recv { .. } => write!(f, "Recv"),
             Task::Send {
-                ref addr, ref msg, ..
-            } => write!(f, "Send Snap[to: {}, snap: {:?}]", addr, msg),
+                ref target,
+                ref msg,
+                ..
+            } => write!(f, "Send Snap[to: {:?}, snap: {:?}]", target, msg),
         }
     }
 }
@@ -114,7 +119,7 @@ fn send_snap(
     mgr: SnapManager,
     security_mgr: Arc<SecurityManager>,
     cfg: &Config,
-    addr: &str,
+    addr: Address,
     msg: RaftMessage,
 ) -> Result<impl Future<Item = SendStat, Error = Error>> {
     assert!(msg.get_message().has_snapshot());
@@ -150,23 +155,36 @@ fn send_snap(
         }
     };
 
+    fail_point!("snapshot_before_send", |_| Err(box_err!(
+        "abort snapshot by fp"
+    )));
+
     let cb = ChannelBuilder::new(env)
         .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
         .keepalive_time(cfg.grpc_keepalive_time.0)
         .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
         .default_compression_algorithm(cfg.grpc_compression_algorithm());
 
-    let channel = security_mgr.connect(cb, addr);
-    let client = TikvClient::new(channel);
-    let (sink, receiver) = client.snapshot()?;
-
-    let send = chunks.forward(sink).map_err(Error::from);
-    let send = send.and_then(|(s, _)| receiver.map_err(Error::from).map(|_| s))
-        .then(move |result| {
+    Ok(addr.map_err(|e| Error::Other(box_err!(e)))
+        .and_then(move |addr| {
+            let channel = security_mgr.connect(cb, &addr);
+            let client = TikvClient::new(channel);
+            client
+                .snapshot()
+                .map(|(l, r)| (client, l, r))
+                .map_err(Error::from)
+        })
+        .and_then(|(client, sink, receiver)| {
+            chunks
+                .forward(sink)
+                .map(|(s, _)| ((client, s), receiver))
+                .map_err(Error::from)
+        })
+        .and_then(|(res, receiver)| receiver.map(|_| res).map_err(Error::from))
+        .then(move |res| {
             send_timer.observe_duration();
             drop(deregister);
-            drop(client);
-            result.map(|s| {
+            res.map(|(_, s)| {
                 fail_point!("snapshot_delete_after_send");
                 s.snap.delete();
                 // TODO: improve it after rustc resolves the bug.
@@ -178,8 +196,7 @@ fn send_snap(
                     elapsed: timer.elapsed(),
                 }
             })
-        });
-    Ok(send)
+        }))
 }
 
 struct RecvSnapContext {
@@ -350,12 +367,17 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 });
                 self.pool.spawn(f).forget();
             }
-            Task::Send { addr, msg, cb } => {
+            Task::Send {
+                target,
+                addr,
+                msg,
+                cb,
+            } => {
                 if self.sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit
                 {
                     warn!(
-                        "too many sending snapshot tasks, drop Send Snap[to: {}, snap: {:?}]",
-                        addr, msg
+                        "too many sending snapshot tasks, drop Send Snap[to: {:?}, snap: {:?}]",
+                        target, msg
                     );
                     cb(Err(Error::Other("Too many sending snapshot tasks".into())));
                     return;
@@ -368,19 +390,23 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 let sending_count = Arc::clone(&self.sending_count);
                 sending_count.fetch_add(1, Ordering::SeqCst);
 
-                let f = future::result(send_snap(env, mgr, security_mgr, &self.cfg, &addr, msg))
+                let f = future::result(send_snap(env, mgr, security_mgr, &self.cfg, addr, msg))
                     .flatten()
                     .then(move |res| {
                         match res {
                             Ok(stat) => {
                                 info!(
-                                    "[region {}] sent snapshot {} [size: {}, dur: {:?}]",
-                                    stat.key.region_id, stat.key, stat.total_size, stat.elapsed,
+                                    "[region {}] sent snapshot {} to {:?} [size: {}, dur: {:?}]",
+                                    stat.key.region_id,
+                                    stat.key,
+                                    target,
+                                    stat.total_size,
+                                    stat.elapsed,
                                 );
                                 cb(Ok(()));
                             }
                             Err(e) => {
-                                error!("failed to send snap to {}: {:?}", addr, e);
+                                error!("failed to send snap to {:?}: {:?}", target, e);
                                 cb(Err(e));
                             }
                         };

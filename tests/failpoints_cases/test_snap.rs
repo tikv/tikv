@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::*;
@@ -77,16 +76,12 @@ fn test_overlap_cleanup() {
 
 pub struct SnapshotNotifier {
     notifier: Mutex<Sender<()>>,
-    pending_notify: AtomicUsize,
-    ready_notify: Arc<AtomicBool>,
 }
 
 impl SnapshotNotifier {
-    pub fn new(notifier: Sender<()>, ready_notify: Arc<AtomicBool>) -> SnapshotNotifier {
+    pub fn new(notifier: Sender<()>) -> SnapshotNotifier {
         SnapshotNotifier {
             notifier: Mutex::new(notifier),
-            ready_notify,
-            pending_notify: AtomicUsize::new(0),
         }
     }
 }
@@ -94,39 +89,20 @@ impl SnapshotNotifier {
 impl Filter<RaftMessage> for SnapshotNotifier {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         for msg in msgs.iter() {
-            if msg.get_message().get_msg_type() == MessageType::MsgSnapshot
-                && self.ready_notify.load(Ordering::SeqCst)
-            {
-                self.pending_notify.fetch_add(1, Ordering::SeqCst);
+            if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
+                let _ = self.notifier.lock().unwrap().send(());
             }
         }
 
         Ok(())
     }
-
-    fn after(&self, _: Result<()>) -> Result<()> {
-        while self.pending_notify.load(Ordering::SeqCst) > 0 {
-            debug!("notify snapshot");
-            self.pending_notify.fetch_sub(1, Ordering::SeqCst);
-            let _ = self.notifier.lock().unwrap().send(());
-        }
-        Ok(())
-    }
 }
 
-// When resolving remote address, all messages will be dropped and
-// report unreachable. However unreachable won't reset follower's
-// progress if it's in Snapshot state. So trying to send a snapshot
-// when the address is being resolved will leave follower's progress
-// stay in Snapshot forever.
+// It should retry when fail to send snapshot.
 #[test]
-fn test_server_snapshot_on_resolve_failure() {
+fn test_server_snapshot_failure() {
     let _guard = ::setup();
     let mut cluster = new_server_cluster(1, 4);
-    configure_for_snapshot(&mut cluster);
-
-    let on_resolve_fp = "transport_snapshot_on_resolve";
-    let on_send_store_fp = "transport_on_send_store";
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
@@ -137,57 +113,28 @@ fn test_server_snapshot_on_resolve_failure() {
     pd_client.must_remove_peer(1, new_peer(4, 4));
     cluster.must_put(b"k1", b"v1");
 
-    let ready_notify = Arc::default();
     let (notify_tx, notify_rx) = mpsc::channel();
-    cluster.sim.write().unwrap().add_send_filter(
-        1,
-        box SnapshotNotifier::new(notify_tx, Arc::clone(&ready_notify)),
-    );
-
-    let (drop_snapshot_tx, drop_snapshot_rx) = mpsc::channel();
     cluster
         .sim
         .write()
         .unwrap()
-        .add_recv_filter(4, box DropSnapshotFilter::new(drop_snapshot_tx));
+        .add_send_filter(1, box SnapshotNotifier::new(notify_tx));
+
+    fail::cfg("snapshot_before_send", "return(failure)").unwrap();
 
     pd_client.add_peer(1, new_peer(4, 5));
 
-    // The leader is trying to send snapshots, but the filter drops snapshots.
-    drop_snapshot_rx
-        .recv_timeout(Duration::from_secs(3))
-        .unwrap();
-
-    // "return(4)" those failure occurs if TiKV resolves or sends to store 4.
-    fail::cfg(on_resolve_fp, "return(4)").unwrap();
-    fail::cfg(on_send_store_fp, "return(4)").unwrap();
-
-    // We are ready to recv notify.
-    ready_notify.store(true, Ordering::SeqCst);
+    // First try should fail.
+    notify_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    // Second try means retry is working.
     notify_rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
-    let engine4 = cluster.get_engine(4);
-    must_get_none(&engine4, b"k1");
-    cluster.sim.write().unwrap().clear_recv_filters(4);
+    fail::remove("snapshot_before_send");
 
-    // Remove the on_send_store_fp.
-    // Now it will resolve the store 4's address via heartbeat messages,
-    // so snapshots works fine.
-    //
-    // But keep the on_resolve_fp.
-    // Any snapshot messages that has been sent before will meet the
-    // injected resolve failure eventually.
-    // It perverts a race condition, remove the on_resolve_fp before snapshot
-    // messages meet the failpoint, that fails the test.
-    fail::remove(on_send_store_fp);
-
-    notify_rx.recv_timeout(Duration::from_secs(3)).unwrap();
     cluster.must_put(b"k2", b"v2");
+    let engine4 = cluster.get_engine(4);
     must_get_equal(&engine4, b"k1", b"v1");
     must_get_equal(&engine4, b"k2", b"v2");
-
-    // Clean up.
-    fail::remove(on_resolve_fp);
 }
 
 #[test]

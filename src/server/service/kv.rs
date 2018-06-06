@@ -43,7 +43,7 @@ use util::worker::Scheduler;
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 
 #[derive(Clone)]
-pub struct Service<T: RaftStoreRouter + 'static> {
+pub struct Service<T: RaftStoreRouter> {
     // For handling KV requests.
     storage: Storage,
     // For handling coprocessor requests.
@@ -117,7 +117,7 @@ impl Metrics {
     }
 }
 
-impl<T: RaftStoreRouter + 'static> Service<T> {
+impl<T: RaftStoreRouter> Service<T> {
     pub fn new(
         storage: Storage,
         end_point_scheduler: Scheduler<EndPointTask>,

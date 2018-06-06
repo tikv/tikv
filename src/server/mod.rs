@@ -34,7 +34,7 @@ pub use self::config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Error, Result};
 pub use self::node::{create_raft_storage, Node};
 pub use self::raft_client::RaftClient;
-pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
+pub use self::resolve::StoreAddrResolver;
 pub use self::server::Server;
 pub use self::transport::{ServerRaftStoreRouter, ServerTransport};
 

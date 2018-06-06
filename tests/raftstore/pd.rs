@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use futures::future::{err, ok};
+use futures::future::{err, ok, result};
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::{Future, Stream};
 use tokio_timer::Timer;
@@ -909,9 +909,11 @@ impl PdClient for TestPdClient {
         self.cluster.wl().put_store(store)
     }
 
-    fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
-        self.check_bootstrap()?;
-        self.cluster.rl().get_store(store_id)
+    fn get_store(&self, store_id: u64) -> PdFuture<metapb::Store> {
+        Box::new(result(
+            self.check_bootstrap()
+                .and_then(|_| self.cluster.rl().get_store(store_id)),
+        ))
     }
 
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {

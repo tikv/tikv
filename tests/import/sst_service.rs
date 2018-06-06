@@ -27,7 +27,7 @@ use kvproto::tikvpb_grpc::*;
 
 use tikv::import::test_helpers::*;
 use tikv::pd::PdClient;
-use tikv::util::HandyRwLock;
+use tikv::server::StoreAddrResolver;
 
 use raftstore::cluster::Cluster;
 use raftstore::server::*;
@@ -59,7 +59,8 @@ fn new_cluster_and_tikv_import_client(
     let ch = {
         let env = Arc::new(Environment::new(1));
         let node = ctx.get_peer().get_store_id();
-        ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(node))
+        let addr = cluster.pd_client.resolve(node).wait().unwrap();
+        ChannelBuilder::new(env).connect(&addr)
     };
     let tikv = TikvClient::new(ch.clone());
     let import = ImportSstClient::new(ch.clone());

@@ -30,15 +30,13 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager};
 use tikv::raftstore::{store, Result};
 use tikv::server::readpool::ReadPool;
-use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::transport::ServerRaftStoreRouter;
-use tikv::server::{create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient,
-                   Server, ServerTransport};
+use tikv::server::{create_raft_storage, Config, Error, Node, RaftClient, Server, ServerTransport};
 use tikv::storage::{self, Engine};
 use tikv::util::security::SecurityManager;
 use tikv::util::transport::SendCh;
-use tikv::util::worker::{FutureWorker, Worker};
+use tikv::util::worker::FutureWorker;
 
 use super::cluster::{Cluster, Simulator};
 use super::pd::TestPdClient;
@@ -47,15 +45,14 @@ use super::util::create_test_engine;
 
 type SimulateStoreTransport = SimulateTransport<StoreMsg, ServerRaftStoreRouter>;
 type SimulateServerTransport =
-    SimulateTransport<RaftMessage, ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
+    SimulateTransport<RaftMessage, ServerTransport<SimulateStoreTransport, TestPdClient>>;
 
 struct ServerMeta {
     node: Node<TestPdClient>,
-    server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
+    server: Server<SimulateStoreTransport, TestPdClient>,
     router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     store_ch: SendCh<StoreMsg>,
-    worker: Worker<ResolveTask>,
 }
 
 pub struct ServerCluster {
@@ -64,7 +61,7 @@ pub struct ServerCluster {
     pub storages: HashMap<u64, Box<Engine>>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
-    raft_client: RaftClient,
+    raft_client: RaftClient<TestPdClient>,
 }
 
 impl ServerCluster {
@@ -76,18 +73,20 @@ impl ServerCluster {
                 .build(),
         );
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
+        let raft_client = RaftClient::new(
+            env,
+            Arc::new(Config::default()),
+            security_mgr,
+            Arc::clone(&pd_client),
+        );
         ServerCluster {
             metas: HashMap::default(),
             addrs: HashMap::default(),
             pd_client,
             storages: HashMap::default(),
             snap_paths: HashMap::default(),
-            raft_client: RaftClient::new(env, Arc::new(Config::default()), security_mgr),
+            raft_client,
         }
-    }
-
-    pub fn get_addr(&self, node_id: u64) -> &str {
-        &self.addrs[&node_id]
     }
 }
 
@@ -148,7 +147,6 @@ impl Simulator for ServerCluster {
         );
 
         // Create pd client, snapshot manager, server.
-        let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
         let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch));
         let pd_worker = FutureWorker::new("test-pd-worker");
         let server_cfg = Arc::new(cfg.server.clone());
@@ -165,7 +163,7 @@ impl Simulator for ServerCluster {
                 store.clone(),
                 cop_read_pool.clone(),
                 sim_router.clone(),
-                resolver.clone(),
+                Arc::clone(&self.pd_client),
                 snap_mgr.clone(),
                 Some(engines.clone()),
                 Some(import_service.clone()),
@@ -226,7 +224,6 @@ impl Simulator for ServerCluster {
                 server,
                 router: sim_router,
                 sim_trans: simulate_trans,
-                worker,
             },
         );
         self.addrs.insert(node_id, format!("{}", addr));
@@ -246,7 +243,6 @@ impl Simulator for ServerCluster {
         if let Some(mut meta) = self.metas.remove(&node_id) {
             meta.server.stop().unwrap();
             meta.node.stop().unwrap();
-            meta.worker.stop().unwrap().join().unwrap();
         }
     }
 
@@ -269,8 +265,7 @@ impl Simulator for ServerCluster {
 
     fn send_raft_msg(&mut self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
         let store_id = raft_msg.get_to_peer().get_store_id();
-        let addr = self.get_addr(store_id).to_owned();
-        self.raft_client.send(store_id, &addr, raft_msg).unwrap();
+        self.raft_client.send(store_id, raft_msg).unwrap();
         self.raft_client.flush();
         Ok(())
     }

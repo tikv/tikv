@@ -19,6 +19,7 @@
 #![feature(box_syntax)]
 #![feature(integer_atomics)]
 #![feature(entry_or_default)]
+#![feature(option_filter)]
 #![cfg_attr(feature = "dev", feature(plugin))]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
@@ -48,6 +49,7 @@ extern crate crossbeam_channel;
 extern crate fail;
 extern crate fnv;
 extern crate fs2;
+#[macro_use]
 extern crate futures;
 extern crate futures_cpupool;
 extern crate fxhash;

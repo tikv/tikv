@@ -26,7 +26,6 @@ use raftstore::store::{BatchReadCallback, Callback, Msg as StoreMsg, Significant
 use server::Result;
 use server::raft_client::RaftClient;
 use util::HandyRwLock;
-use util::collections::HashSet;
 use util::transport::SendCh;
 use util::worker::Scheduler;
 
@@ -141,11 +140,9 @@ where
     T: RaftStoreRouter + 'static,
     S: StoreAddrResolver + 'static,
 {
-    raft_client: Arc<RwLock<RaftClient>>,
+    raft_client: Arc<RwLock<RaftClient<S>>>,
     snap_scheduler: Scheduler<SnapTask>,
     pub raft_router: T,
-    resolving: Arc<RwLock<HashSet<u64>>>,
-    resolver: S,
 }
 
 impl<T, S> Clone for ServerTransport<T, S>
@@ -158,131 +155,33 @@ where
             raft_client: Arc::clone(&self.raft_client),
             snap_scheduler: self.snap_scheduler.clone(),
             raft_router: self.raft_router.clone(),
-            resolving: Arc::clone(&self.resolving),
-            resolver: self.resolver.clone(),
         }
     }
 }
 
 impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTransport<T, S> {
     pub fn new(
-        raft_client: Arc<RwLock<RaftClient>>,
+        raft_client: Arc<RwLock<RaftClient<S>>>,
         snap_scheduler: Scheduler<SnapTask>,
         raft_router: T,
-        resolver: S,
     ) -> ServerTransport<T, S> {
         ServerTransport {
             raft_client,
             snap_scheduler,
             raft_router,
-            resolving: Arc::new(RwLock::new(Default::default())),
-            resolver,
         }
     }
 
     fn send_store(&self, store_id: u64, msg: RaftMessage) {
-        // Wrapping the fail point in a closure, so we can modify
-        // local variables without return,
-        let transport_on_send_store_fp = || {
-            fail_point!("transport_on_send_store", |sid| if let Some(sid) = sid {
-                let sid: u64 = sid.parse().unwrap();
-                if sid == store_id {
-                    self.raft_client.wl().addrs.remove(&store_id);
-                }
-            })
-        };
-        transport_on_send_store_fp();
-        // check the corresponding token for store.
-        // TODO: avoid clone
-        let addr = self.raft_client.rl().addrs.get(&store_id).cloned();
-        if let Some(addr) = addr {
-            self.write_data(store_id, &addr, msg);
-            return;
-        }
-
-        // No connection, try to resolve it.
-        if self.resolving.rl().contains(&store_id) {
-            RESOLVE_STORE_COUNTER
-                .with_label_values(&["resolving"])
-                .inc();
-            // If we are resolving the address, drop the message here.
-            debug!(
-                "store {} address is being resolved, drop msg {:?}",
-                store_id, msg
-            );
-            self.report_unreachable(msg);
-            return;
-        }
-
-        debug!("begin to resolve store {} address", store_id);
-        RESOLVE_STORE_COUNTER.with_label_values(&["resolve"]).inc();
-
-        self.resolving.wl().insert(store_id);
-        self.resolve(store_id, msg);
-    }
-
-    // TODO: remove allow unused mut.
-    // Compiler warns `mut addr ` and `mut transport_on_resolve_fp`, when we enable
-    // the `no-fail` feature.
-    #[allow(unused_mut)]
-    fn resolve(&self, store_id: u64, msg: RaftMessage) {
-        let trans = self.clone();
-        let msg1 = msg.clone();
-        let cb = box move |mut addr: Result<String>| {
-            {
-                // Wrapping the fail point in a closure, so we can modify
-                // local variables without return.
-                let mut transport_on_resolve_fp = || {
-                    fail_point!(
-                        "transport_snapshot_on_resolve",
-                        msg.get_message().get_msg_type() == MessageType::MsgSnapshot,
-                        |sid| if let Some(sid) = sid {
-                            use std::mem;
-                            let sid: u64 = sid.parse().unwrap();
-                            if sid == store_id {
-                                mem::swap(&mut addr, &mut Err(box_err!("injected failure")));
-                            }
-                        }
-                    )
-                };
-                transport_on_resolve_fp();
-            }
-
-            // clear resolving.
-            trans.resolving.wl().remove(&store_id);
-            if let Err(e) = addr {
-                RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
-                error!("resolve store {} address failed {:?}", store_id, e);
-                trans.report_unreachable(msg);
-                return;
-            }
-
-            RESOLVE_STORE_COUNTER.with_label_values(&["success"]).inc();
-            let addr = addr.unwrap();
-            info!("resolve store {} address ok, addr {}", store_id, addr);
-            trans.raft_client.wl().addrs.insert(store_id, addr.clone());
-            trans.write_data(store_id, &addr, msg);
-            // There may be no messages in the near future, so flush it immediately.
-            trans.raft_client.wl().flush();
-        };
-        if let Err(e) = self.resolver.resolve(store_id, cb) {
-            error!("resolve store {} address failed {:?}", store_id, e);
-            self.resolving.wl().remove(&store_id);
-            RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
-            self.report_unreachable(msg1);
-        }
-    }
-
-    fn write_data(&self, store_id: u64, addr: &str, msg: RaftMessage) {
         if msg.get_message().has_snapshot() {
-            return self.send_snapshot_sock(addr, msg);
+            return self.send_snapshot_sock(store_id, msg);
         }
-        if let Err(e) = self.raft_client.wl().send(store_id, addr, msg) {
+        if let Err(e) = self.raft_client.wl().send(store_id, msg) {
             error!("send raft msg err {:?}", e);
         }
     }
 
-    fn send_snapshot_sock(&self, addr: &str, msg: RaftMessage) {
+    fn send_snapshot_sock(&self, store_id: u64, msg: RaftMessage) {
         let rep = self.new_snapshot_reporter(&msg);
         let cb = box move |res: Result<()>| {
             if res.is_err() {
@@ -291,15 +190,20 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
                 rep.report(SnapshotStatus::Finish);
             }
         };
+        let region_id = msg.get_region_id();
+        let from = msg.get_from_peer().get_id();
+        let target = msg.get_to_peer().to_owned();
+        let addr = self.raft_client.wl().addr(store_id);
         if let Err(e) = self.snap_scheduler.schedule(SnapTask::Send {
-            addr: addr.to_owned(),
+            target,
+            addr,
             msg,
             cb,
         }) {
-            if let SnapTask::Send { cb, .. } = e.into_inner() {
+            if let SnapTask::Send { cb, target, .. } = e.into_inner() {
                 error!(
-                    "channel is unavaliable, failed to schedule snapshot to {}",
-                    addr
+                    "[region {}] {} channel is unavaliable, failed to schedule snapshot to {:?}",
+                    region_id, from, target
                 );
                 cb(Err(box_err!("failed to schedule snapshot")));
             }

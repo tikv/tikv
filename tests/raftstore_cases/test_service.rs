@@ -15,12 +15,12 @@ use std::sync::Arc;
 
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::raftstore::store::{keys, Mutable, Peekable};
+use tikv::server::StoreAddrResolver;
 use tikv::storage::mvcc::{Lock, LockType};
 use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT};
-use tikv::util::HandyRwLock;
 
 use futures::{future, Future, Sink, Stream};
-use grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
+use grpc::{Channel, ChannelBuilder, Environment, Error, RpcStatusCode};
 use kvproto::coprocessor::*;
 use kvproto::debugpb_grpc::DebugClient;
 use kvproto::kvrpcpb::*;
@@ -33,7 +33,7 @@ use rocksdb::Writable;
 use super::cluster::Cluster;
 use super::server::*;
 
-fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
+fn new_cluster_then_connect_leader() -> (Cluster<ServerCluster>, Channel, Context) {
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
     cluster.run();
@@ -46,17 +46,19 @@ fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
     ctx.set_peer(leader.clone());
     ctx.set_region_epoch(epoch);
 
-    (cluster, leader, ctx)
+    let addr = cluster
+        .pd_client
+        .resolve(leader.get_store_id())
+        .wait()
+        .unwrap();
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&addr);
+    (cluster, channel, ctx)
 }
 
 fn must_new_cluster_and_kv_client() -> (Cluster<ServerCluster>, TikvClient, Context) {
-    let (cluster, leader, ctx) = must_new_cluster();
-
-    let env = Arc::new(Environment::new(1));
-    let channel =
-        ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(leader.get_store_id()));
+    let (cluster, channel, ctx) = new_cluster_then_connect_leader();
     let client = TikvClient::new(channel);
-
     (cluster, client, ctx)
 }
 
@@ -516,14 +518,9 @@ fn test_split_region() {
 }
 
 fn must_new_cluster_and_debug_client() -> (Cluster<ServerCluster>, DebugClient, u64) {
-    let (cluster, leader, _) = must_new_cluster();
-
-    let env = Arc::new(Environment::new(1));
-    let channel =
-        ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(leader.get_store_id()));
+    let (cluster, channel, ctx) = new_cluster_then_connect_leader();
     let client = DebugClient::new(channel);
-
-    (cluster, client, leader.get_store_id())
+    (cluster, client, ctx.get_peer().get_store_id())
 }
 
 #[test]

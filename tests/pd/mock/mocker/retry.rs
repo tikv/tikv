@@ -59,10 +59,10 @@ impl PdMocker for Retry {
         }
     }
 
-    fn get_store(&self, _: &GetStoreRequest) -> Option<Result<GetStoreResponse>> {
+    fn get_region(&self, _: &GetRegionRequest) -> Option<Result<GetRegionResponse>> {
         if self.is_ok() {
             info!("[Retry] get_store returns Ok(_)");
-            Some(Ok(GetStoreResponse::new()))
+            Some(Ok(GetRegionResponse::new()))
         } else {
             info!("[Retry] get_store returns Err(_)");
             Some(Err("please retry".to_owned()))

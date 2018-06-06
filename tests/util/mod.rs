@@ -107,7 +107,7 @@ impl Drop for CaseTraceLogger {
 }
 
 // A help function to initial logger.
-fn init_log() {
+pub fn init_log() {
     let output = env::var("LOG_FILE").ok();
     let level = logger::get_level_by_string(&env::var("LOG_LEVEL").unwrap_or_else(|_| "debug".to_owned()))
         .unwrap();

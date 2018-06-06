@@ -78,7 +78,7 @@ fn test_rpc_client() {
     assert_eq!(tmp_stores.len(), 1);
     assert_eq!(tmp_stores[0], store);
 
-    let tmp_store = client.get_store(store_id).unwrap();
+    let tmp_store = client.get_store(store_id).wait().unwrap();
     assert_eq!(tmp_store.get_id(), store.get_id());
 
     let region_key = region.get_start_key();
@@ -191,7 +191,7 @@ fn test_retry_async() {
 #[test]
 fn test_retry_sync() {
     let sync = |client: &RpcClient| {
-        client.get_store(1).unwrap();
+        client.get_region(b"").unwrap();
     };
     test_retry(sync)
 }
