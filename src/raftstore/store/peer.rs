@@ -39,7 +39,7 @@ use raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
 
 use util::MustConsumeVec;
-use util::collections::{FlatMap, HashSet};
+use util::collections::{HashMap, HashSet};
 use util::time::{duration_to_sec, monotonic_raw_now};
 use util::worker::{FutureWorker, Scheduler};
 
@@ -227,7 +227,7 @@ pub struct Peer {
     kv_engine: Arc<DB>,
     raft_engine: Arc<DB>,
     cfg: Rc<Config>,
-    peer_cache: RefCell<FlatMap<u64, metapb::Peer>>,
+    peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
     pub peer: metapb::Peer,
     region_id: u64,
     pub raft_group: RawNode<PeerStorage>,
@@ -235,7 +235,7 @@ pub struct Peer {
     apply_proposals: Vec<Proposal>,
     pending_reads: ReadIndexQueue,
     // Record the last instant of each peer's heartbeat response.
-    pub peer_heartbeats: FlatMap<u64, Instant>,
+    pub peer_heartbeats: HashMap<u64, Instant>,
 
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
@@ -378,8 +378,8 @@ impl Peer {
             proposals: Default::default(),
             apply_proposals: vec![],
             pending_reads: Default::default(),
-            peer_cache: RefCell::new(FlatMap::default()),
-            peer_heartbeats: FlatMap::default(),
+            peer_cache: RefCell::new(HashMap::default()),
+            peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
             coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
