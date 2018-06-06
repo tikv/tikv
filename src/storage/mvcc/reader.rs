@@ -412,7 +412,7 @@ impl MvccReader {
             }
 
             // reverse_get_impl may call write_cursor's prev.
-            if !self.write_cursor.as_mut().unwrap().valid() {
+            if !self.write_cursor.as_ref().unwrap().valid() {
                 write_valid = false;
             }
         }
@@ -425,17 +425,10 @@ impl MvccReader {
         // Check lock.
         match self.isolation_level {
             IsolationLevel::SI => {
-                let lock = {
-                    let l_cur = self.lock_cursor.as_mut().unwrap();
-                    if l_cur.valid() && l_cur.key() == user_key.encoded().as_slice() {
-                        self.statistics.lock.processed += 1;
-                        Some(Lock::parse(l_cur.value())?)
-                    } else {
-                        None
-                    }
-                };
-                if let Some(l) = lock {
-                    self.check_lock_impl(user_key, ts, l)?;
+                let l_cur = self.lock_cursor.as_ref().unwrap();
+                if l_cur.valid() && l_cur.key() == user_key.encoded().as_slice() {
+                    self.statistics.lock.processed += 1;
+                    self.check_lock_impl(user_key, ts, Lock::parse(l_cur.value())?)?;
                 }
             }
             IsolationLevel::RC => {}
@@ -463,7 +456,7 @@ impl MvccReader {
 
             let mut write = {
                 let (commit_ts, key) = {
-                    let w_cur = self.write_cursor.as_mut().unwrap();
+                    let w_cur = self.write_cursor.as_ref().unwrap();
                     last_handled_key = Some(w_cur.key().to_vec());
                     let w_key = Key::from_encoded(w_cur.key().to_vec());
                     (w_key.decode_ts()?, w_key.truncate_ts()?)
@@ -475,7 +468,7 @@ impl MvccReader {
                     return self.get_value(user_key, lastest_version.0, lastest_version.1);
                 }
                 self.statistics.write.processed += 1;
-                Write::parse(self.write_cursor.as_mut().unwrap().value())?
+                Write::parse(self.write_cursor.as_ref().unwrap().value())?
             };
 
             match write.write_type {
@@ -511,13 +504,13 @@ impl MvccReader {
             let mut write = {
                 // If we reach the last handled key, it means we have checked all versions
                 // for this user key.
-                if self.write_cursor.as_mut().unwrap().key()
+                if self.write_cursor.as_ref().unwrap().key()
                     >= last_handled_key.as_ref().unwrap().as_slice()
                 {
                     return self.get_value(user_key, lastest_version.0, lastest_version.1);
                 }
 
-                let w_cur = self.write_cursor.as_mut().unwrap();
+                let w_cur = self.write_cursor.as_ref().unwrap();
                 let w_key = Key::from_encoded(w_cur.key().to_vec());
                 let commit_ts = w_key.decode_ts()?;
                 assert!(commit_ts <= ts);
