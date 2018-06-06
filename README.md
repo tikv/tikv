@@ -140,7 +140,21 @@ Read our configuration guide to learn about the various [configuration options](
 
 ## Contributing
 
+Contributions are welcome! For beginners, we have prepared many suitable tasks for you. Please checkout our [Help Wanted issues](https://github.com/pingcap/tikv/issues?q=is%3Aissue+is%3Aopen+label%3A%22S%3A+HelpWanted%22) for a list, in which we have also marked the difficulty level we thought. If you are planning something big, for example, relates to multiple components or changes current behaviors, make sure to open an issue to discuss with us before going on :)
+
 See [CONTRIBUTING](./CONTRIBUTING.md) for details on submitting patches and the contribution workflow.
+
+In addition, TiKV team actively develops and maintains a bunch of dependencies used in TiKV, which you may also interested in:
+
+- [rust-prometheus](https://github.com/pingcap/rust-prometheus): The Prometheus client for Rust, our metric collecting and reporting library
+
+- [rust-rocksdb](https://github.com/pingcap/rust-rocksdb): Our RocksDB binding and wrapper for Rust
+
+- [raft-rs](https://github.com/pingcap/raft-rs): The Raft distributed consensus algorithm implemented in Rust
+
+- [grpc-rs](https://github.com/pingcap/grpc-rs): The gRPC library for Rust built on C Core library and futures
+
+- [fail-rs](https://github.com/pingcap/fail-rs): Fail points for Rust
 
 
 ## License
