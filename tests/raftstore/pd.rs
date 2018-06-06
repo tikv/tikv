@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -30,6 +30,7 @@ use raft::eraftpb;
 use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
 use tikv::raftstore::store::util::check_key_in_region;
+use tikv::util::collections::{HashMap, HashSet};
 use tikv::util::{escape, Either, HandyRwLock};
 
 struct Store {
@@ -235,18 +236,18 @@ impl Cluster {
 
         Cluster {
             meta,
-            stores: HashMap::new(),
+            stores: HashMap::default(),
             regions: BTreeMap::new(),
-            region_id_keys: HashMap::new(),
-            region_sizes: HashMap::new(),
+            region_id_keys: HashMap::default(),
+            region_sizes: HashMap::default(),
             base_id: AtomicUsize::new(1000),
-            store_stats: HashMap::new(),
+            store_stats: HashMap::default(),
             split_count: 0,
-            operators: HashMap::new(),
+            operators: HashMap::default(),
             enable_peer_count_check: true,
-            leaders: HashMap::new(),
-            down_peers: HashMap::new(),
-            pending_peers: HashMap::new(),
+            leaders: HashMap::default(),
+            down_peers: HashMap::default(),
+            pending_peers: HashMap::default(),
             is_bootstraped: false,
         }
     }
@@ -812,6 +813,18 @@ impl TestPdClient {
             return;
         }
         panic!("region {:?} is still not merged.", region.unwrap());
+    }
+
+    pub fn region_leader_must_be(&self, region_id: u64, peer: metapb::Peer) {
+        for _ in 0..500 {
+            sleep_ms(10);
+            if let Some(p) = self.cluster.rl().leaders.get(&region_id) {
+                if *p == peer {
+                    return;
+                }
+            }
+        }
+        panic!("region {} must have leader: {:?}", region_id, peer);
     }
 
     // check whether region is split by split_key or not.

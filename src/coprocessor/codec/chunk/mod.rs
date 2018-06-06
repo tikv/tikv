@@ -1,4 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
+// Copyright 2018 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,9 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use fxhash::FxHashMap as HashMap;
-pub use fxhash::FxHashSet as HashSet;
-pub use std::collections::hash_map::Entry as HashMapEntry;
+mod chunk;
+mod column;
 
-pub use indexmap::IndexMap as OrderMap;
-pub use indexmap::map::Entry as OrderMapEntry;
+pub use util::codec::{Error, Result};
+
+#[cfg(test)]
+mod test {
+    use tipb::expression::FieldType;
+
+    pub fn field_type(tp: u8) -> FieldType {
+        let mut fp = FieldType::new();
+        fp.set_tp(i32::from(tp));
+        fp
+    }
+}
