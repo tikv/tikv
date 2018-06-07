@@ -17,12 +17,14 @@ mod util;
 
 mod config;
 pub mod errors;
+#[cfg(test)]
 mod lame_client;
 pub mod pd;
 
 pub use self::client::RpcClient;
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
+#[cfg(test)]
 pub use self::lame_client::LamePdClient;
 pub use self::pd::{Runner as PdRunner, Task as PdTask};
 pub use self::util::RECONNECT_INTERVAL_SEC;

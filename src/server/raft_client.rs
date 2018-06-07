@@ -95,7 +95,7 @@ impl ConnectionBuilder {
             // is printed during resolve.
             .select(addr.map_err(|_| ()).and_then(move |addr| {
                 info!(
-                    "server: new connection with store {}({}) {}",
+                    "new connection to store {}({}) {}",
                     store_id, version, addr
                 );
 
@@ -103,7 +103,6 @@ impl ConnectionBuilder {
                 let client = TikvClient::new(channel);
                 let (sink, resp) = client.raft().unwrap();
                 let (mut tx_close, rx_close) = oneshot::channel::<()>();
-                let store_id = store_id;
                 client.spawn(
                     sink.sink_map_err(Error::from)
                         .send_all(rx.map(stream::iter_ok).flatten().map_err(|()| Error::Sink))
@@ -277,7 +276,7 @@ impl<S: StoreAddrResolver> RaftClient<S> {
         }
     }
 
-    fn get_conn(&mut self, region_id: u64, store_id: u64) -> &mut Conn {
+    fn conn_mut(&mut self, region_id: u64, store_id: u64) -> &mut Conn {
         let index = region_id as usize % self.ctx.cfg.grpc_raft_conn_num;
         match self.conns.entry((store_id, index)) {
             Entry::Occupied(e) => e.into_mut(),
@@ -295,7 +294,7 @@ impl<S: StoreAddrResolver> RaftClient<S> {
 
     // TODO: limit the sending messages.
     pub fn send(&mut self, store_id: u64, msg: RaftMessage) -> Result<()> {
-        let conn = self.get_conn(msg.region_id, store_id);
+        let conn = self.conn_mut(msg.region_id, store_id);
         let msg = (msg, WriteFlags::default().buffer_hint(true));
         if conn.buffer.len() < MSG_BUFFER_LIMIT {
             conn.buffer.push_back(msg);
