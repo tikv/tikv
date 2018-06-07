@@ -57,7 +57,6 @@ struct ServerMeta {
 
 pub struct ServerCluster {
     metas: HashMap<u64, ServerMeta>,
-    addrs: HashMap<u64, String>,
     pub storages: HashMap<u64, Box<Engine>>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
@@ -81,7 +80,6 @@ impl ServerCluster {
         );
         ServerCluster {
             metas: HashMap::default(),
-            addrs: HashMap::default(),
             pd_client,
             storages: HashMap::default(),
             snap_paths: HashMap::default(),
@@ -107,12 +105,6 @@ impl Simulator for ServerCluster {
             let p = self.snap_paths[&node_id].path().to_str().unwrap();
             (p.to_owned(), None)
         };
-
-        // Now we cache the store address, so here we should re-use last
-        // listening address for the same store.
-        if let Some(addr) = self.addrs.get(&node_id) {
-            cfg.server.addr = addr.clone();
-        }
 
         // Initialize raftstore channels.
         let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
@@ -226,7 +218,6 @@ impl Simulator for ServerCluster {
                 sim_trans: simulate_trans,
             },
         );
-        self.addrs.insert(node_id, format!("{}", addr));
 
         (node_id, engines, path)
     }
