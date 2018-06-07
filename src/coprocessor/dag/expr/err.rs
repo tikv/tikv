@@ -23,6 +23,7 @@ use util::codec::Error as CError;
 
 pub const ERR_UNKNOWN: i32 = 1105;
 pub const ERR_TRUNCATED: i32 = 1265;
+pub const ERR_DIVISION_BY_ZERO: i32 = 1365;
 pub const ERR_UNKNOWN_TIMEZONE: i32 = 1298;
 pub const ERR_DATA_OUT_OF_RANGE: i32 = 1690;
 pub const ERR_TRUNCATE_WRONG_VALUE: i32 = 1292;
@@ -96,6 +97,11 @@ impl Error {
     pub fn unknown_timezone(tz: i64) -> Error {
         let msg = format!("unknown or incorrect time zone: {}", tz);
         Error::Eval(msg, ERR_UNKNOWN_TIMEZONE)
+    }
+
+    pub fn division_by_zero() -> Error {
+        let msg = "Division by 0";
+        Error::Eval(msg.into(), ERR_DIVISION_BY_ZERO)
     }
 
     pub fn code(&self) -> i32 {
