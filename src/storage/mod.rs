@@ -33,7 +33,7 @@ use util::worker::{self, Builder, Worker};
 
 pub mod config;
 pub mod engine;
-mod gc_worker;
+pub mod gc_worker;
 mod metrics;
 pub mod mvcc;
 mod readpool_context;
@@ -45,7 +45,6 @@ pub use self::engine::raftkv::RaftKv;
 pub use self::engine::{new_local_engine, CFStatistics, Cursor, Engine, Error as EngineError,
                        FlowStatistics, Iterator, Modify, ScanMode, Snapshot, Statistics,
                        StatisticsSummary, TEMP_DIR};
-pub use self::gc_worker::GC_MAX_PENDING;
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
 pub use self::types::{make_key, Key, KvPair, MvccInfo, Value};

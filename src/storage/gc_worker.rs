@@ -22,7 +22,7 @@ use std::mem;
 use std::sync::{Arc, Mutex};
 use util::worker::{self, Builder, Runnable, ScheduleError, Worker};
 
-pub const GC_MAX_PENDING: usize = 2;
+pub const GC_MAX_PENDING_TASKS: usize = 2;
 
 struct GCTask {
     pub ctx: Context,
@@ -206,7 +206,7 @@ impl GCWorker {
     pub fn new(engine: Box<Engine>, ratio_threshold: f64) -> GCWorker {
         let worker = Arc::new(Mutex::new(
             Builder::new("gc-worker")
-                .pending_capacity(GC_MAX_PENDING)
+                .pending_capacity(GC_MAX_PENDING_TASKS)
                 .create(),
         ));
         let worker_scheduler = worker.lock().unwrap().scheduler();

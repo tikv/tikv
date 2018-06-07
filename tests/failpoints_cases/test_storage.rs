@@ -21,6 +21,7 @@ use storage::util::new_raft_engine;
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage;
 use tikv::storage::config::Config;
+use tikv::storage::gc_worker::GC_MAX_PENDING_TASKS;
 use tikv::storage::*;
 use tikv::util::HandyRwLock;
 use tikv::util::worker::FutureWorker;
@@ -40,7 +41,7 @@ fn test_storage_gcworker_busy() {
     fail::cfg(snapshot_fp, "pause").unwrap();
     let (tx1, rx1) = channel();
     // Schedule `GC_MAX_PENDING` GC requests.
-    for _i in 0..GC_MAX_PENDING {
+    for _i in 0..GC_MAX_PENDING_TASKS {
         let tx1 = tx1.clone();
         storage
             .async_gc(ctx.clone(), 1, box move |res: storage::Result<()>| {
@@ -74,7 +75,7 @@ fn test_storage_gcworker_busy() {
 
     rx2.recv().unwrap();
     fail::remove(snapshot_fp);
-    for _ in 0..(GC_MAX_PENDING + 1) {
+    for _ in 0..(GC_MAX_PENDING_TASKS + 1) {
         rx1.recv().unwrap();
     }
 }
