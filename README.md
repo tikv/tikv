@@ -28,9 +28,6 @@ TiKV has the following primary features:
 
 When a node starts, the metadata of the Node, Store and Region are registered into PD. The status of each Region and Store is reported to PD regularly.
 
-## TiKV Documentation
-
-See [TiKV Documentation](https://github.com/pingcap/tikv/wiki/TiKV-Documentation).
 
 ## Your First Test Drive
 
@@ -134,6 +131,8 @@ TiKV is a component in the TiDB project. To run TiKV you must build and run it w
 Currently the only interface to TiKV is the [TiDB Go client](https://github.com/pingcap/tidb/tree/master/store/tikv) and the [TiSpark Java client](https://github.com/pingcap/tispark/tree/master/tikv-client/src/main/java/com/pingcap/tikv).
 
 **We would love it if you developed drivers in other languages.**
+
+Also please refer to our [wiki page](https://github.com/pingcap/tikv/wiki/TiKV-Documentation) for the documentation. The documentation for TiKV is very simple for now, but we are continuously improving it! We also appreciate your contributions on it.
 
 
 ### Configuration
