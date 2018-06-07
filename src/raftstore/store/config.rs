@@ -25,6 +25,8 @@ use util::config::{ReadableDuration, ReadableSize};
 pub struct Config {
     // true for high reliability, prevent data loss when power failure.
     pub sync_log: bool,
+    // minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
+    pub prevote: bool,
     pub raftdb_path: String,
 
     // store capacity. 0 means no limit.
@@ -129,6 +131,7 @@ impl Default for Config {
         let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
             sync_log: true,
+            prevote: true,
             raftdb_path: String::new(),
             capacity: ReadableSize(0),
             raft_base_tick_interval: ReadableDuration::secs(1),

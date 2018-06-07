@@ -368,7 +368,7 @@ impl Peer {
             check_quorum: true,
             tag: tag.clone(),
             skip_bcast_commit: true,
-            pre_vote: true,
+            pre_vote: cfg.prevote,
             ..Default::default()
         };
 
