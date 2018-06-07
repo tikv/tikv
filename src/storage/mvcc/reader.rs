@@ -22,6 +22,13 @@ use storage::{Key, Value, CF_LOCK, CF_WRITE};
 use util::properties::MvccProperties;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
+
+// When there are many versions for the user key, after several tries,
+// we will use seek to locate the right position. But this will turn around
+// the write cf's iterator's direction inside RocksDB, and the next user key
+// need to turn back the direction to backward. As we have tested, turn around
+// iterator's direction from forward to backward is as expensive as seek in
+// RocksDB, so don't set REVERSE_SEEK_BOUND too small.
 const REVERSE_SEEK_BOUND: u64 = 32;
 
 pub struct MvccReader {
@@ -435,24 +442,13 @@ impl MvccReader {
         }
 
         // Get value for this user key.
-        let mut round = 0;
+        // At first, we use several prev to try to get the latest version.
         let mut lastest_version = (None /* start_ts */, None /* short value */);
         let mut last_handled_key: Option<Vec<u8>> = None;
-        loop {
+        for _ in 0..REVERSE_SEEK_BOUND {
             if !self.write_cursor.as_mut().unwrap().valid() {
                 return self.get_value(user_key, lastest_version.0, lastest_version.1);
             }
-
-            // When there are many versions for this user key, after several tries,
-            // we will use seek to locate the right position. But this will turn around
-            // the write cf's iterator's direction inside RocksDB, and the next user key
-            // need to turn back the direction to backward. As we have tested, turn around
-            // iterator's direction from forward to backward is as expensive as seek in
-            // RocksDB, so don't set REVERSE_SEEK_BOUND too small.
-            if round >= REVERSE_SEEK_BOUND {
-                break;
-            }
-            round += 1;
 
             let mut write = {
                 let (commit_ts, key) = {
