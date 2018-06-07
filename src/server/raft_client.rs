@@ -36,9 +36,10 @@ use util::security::SecurityManager;
 
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: usize = 10 * 1024 * 1024;
+// `VecDeque` adds another slot for giving capacity.
 const PRESERVED_MSG_BUFFER_COUNT: usize = 1024 - 1;
 // TODO: make it configurable and become a limit on size instead of count.
-const MSG_BUFFER_LIMIT: usize = 102399;
+const MSG_BUFFER_LIMIT: usize = 102400 - 1;
 
 static CONN_ID: AtomicUsize = ATOMIC_USIZE_INIT;
 
