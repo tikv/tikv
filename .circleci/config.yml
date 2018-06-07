@@ -23,9 +23,6 @@ jobs:
             echo 'export CPPFLAGS=-I$HOME/.local/include' >> $BASH_ENV
             echo 'export CXXFLAGS=-I$HOME/.local/include' >> $BASH_ENV
             echo 'export LOCAL_PREFIX=$HOME/.local' >> $BASH_ENV
-            # Print kernel config and log.
-            cat /boot/config-`uname -r`
-            dmesg
       - checkout
       - run:
           name: Installing Build Dependencies
@@ -64,6 +61,12 @@ jobs:
               rm -rf $HOME/.local/cmake
               mv cmake-3.10.0-Linux-x86_64 $HOME/.local/cmake
             fi
+            # Print kernel config and log.
+            cat /boot/config-`uname -r`
+            dmesg
+            # Force a clock update and stop ntp.
+            sudo service ntp stop
+            sudo ntpd -gq
       # check format first
       -  run:
           name: Checking Format
