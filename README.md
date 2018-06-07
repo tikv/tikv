@@ -28,6 +28,9 @@ TiKV has the following primary features:
 
 When a node starts, the metadata of the Node, Store and Region are registered into PD. The status of each Region and Store is reported to PD regularly.
 
+# TiKV Documentation
+
+See [TiKV Documentation](https://github.com/pingcap/tikv/wiki/TiKV-Documentation).
 
 ## Your First Test Drive
 
