@@ -223,7 +223,6 @@ impl FnCall {
             ScalarFuncSig::JsonSetSig
             | ScalarFuncSig::JsonInsertSig
             | ScalarFuncSig::JsonReplaceSig => (3, usize::MAX),
-
             _ => unimplemented!(),
         };
         if args < min_args || args > max_args {

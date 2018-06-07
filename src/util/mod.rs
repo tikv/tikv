@@ -453,8 +453,8 @@ impl<T> Drop for MustConsumeVec<T> {
 }
 
 /// Unknown enum values are stored in unknown fields since rust-protobuf
-/// 1.5.0, instead of reporting error when parse the message. So we must
-/// check the unknown fields if the enum's default value isn't invalid.
+/// 1.5.0, instead of reporting error when parse the message. So we need
+/// to check the unknown fields contain the enum or not.
 ///
 /// `pb_unknown_enum` returns true if the message's unknown fields contain
 /// an enum with id `field_id`. `field_id` for a given enum can be checked
