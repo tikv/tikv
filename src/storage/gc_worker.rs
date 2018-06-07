@@ -77,7 +77,7 @@ impl GCRunner {
             ctx.get_isolation_level(),
         );
 
-        // If from.is_none() is false, it must not be the first scan of a region.
+        // If from.is_some(), it must not be the first scan of the region.
         // So we must continue doing GC.
         let skip_gc = from.is_none() && !reader.need_gc(safe_point, self.ratio_threshold);
         let res = if skip_gc {
@@ -89,13 +89,12 @@ impl GCRunner {
                 .map_err(Error::from)
                 .and_then(|(keys, next)| {
                     if keys.is_empty() {
+                        assert!(next.is_none());
                         if from.is_none() {
                             KV_GC_EMPTY_RANGE_COUNTER.inc();
                         }
-                        Ok((keys, None))
-                    } else {
-                        Ok((keys, next))
                     }
+                    Ok((keys, next))
                 })
         };
         self.stats.add_statistics(reader.get_statistics());
