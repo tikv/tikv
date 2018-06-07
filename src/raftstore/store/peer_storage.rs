@@ -255,7 +255,7 @@ pub struct PeerStorage {
     pub kv_engine: Arc<DB>,
     pub raft_engine: Arc<DB>,
 
-    pub region: metapb::Region,
+    region: metapb::Region,
     pub raft_state: RaftLocalState,
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
@@ -623,6 +623,10 @@ impl PeerStorage {
 
     pub fn get_region(&self) -> &metapb::Region {
         &self.region
+    }
+
+    pub fn region_mut(&mut self) -> &mut metapb::Region {
+        &mut self.region
     }
 
     pub fn raw_snapshot(&self) -> DbSnapshot {
