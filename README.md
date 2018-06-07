@@ -30,7 +30,7 @@ When a node starts, the metadata of the Node, Store and Region are registered in
 
 ## TiKV Documentation
 
-See [TiKV Documentation](../wiki/TiKV-Documentation).
+See [TiKV Documentation](https://github.com/pingcap/tikv/wiki/TiKV-Documentation).
 
 ## Your First Test Drive
 
