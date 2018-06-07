@@ -45,11 +45,10 @@ extern crate tikv;
 extern crate toml;
 
 #[cfg(unix)]
-mod profiling;
 #[macro_use]
-mod setup;
-use setup::*;
-mod signal_handler;
+mod utils;
+use utils::setup::*;
+use utils::signal_handler;
 
 use std::process;
 use std::sync::atomic::Ordering;
