@@ -15,42 +15,50 @@ use std::fs;
 use std::io::{Error, ErrorKind, Read, Result};
 use std::sync::Mutex;
 
-use prometheus::core::{Collector, Desc};
-use prometheus::{self, proto, CounterVec, Opts};
-
 use libc::{self, pid_t};
+use prometheus::core::{Collector, Desc};
+use prometheus::{self, proto, CounterVec, IntGaugeVec, Opts};
 
 /// monitor current process's threads.
 pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
     let pid = unsafe { libc::getpid() };
     let tc = ThreadsCollector::new(pid, namespace);
-    prometheus::register(Box::new(tc)).map_err(|e| to_err(format!("{:?}", e)))?;
-
-    Ok(())
+    prometheus::register(Box::new(tc)).map_err(|e| to_io_err(format!("{:?}", e)))
 }
 
+/// A collector to collect threads metrics, including CPU usage
+/// and threads state.
 struct ThreadsCollector {
-    pid: pid_t,
+    pid: Mutex<pid_t>,
     descs: Vec<Desc>,
-    cpu_totals: Mutex<CounterVec>,
+    cpu_totals: CounterVec,
+    threads_state: IntGaugeVec,
 }
 
 impl ThreadsCollector {
     fn new<S: Into<String>>(pid: pid_t, namespace: S) -> ThreadsCollector {
+        let mut descs: Vec<Desc> = vec![];
+        let ns = namespace.into();
         let cpu_totals = CounterVec::new(
             Opts::new(
                 "thread_cpu_seconds_total",
                 "Total user and system CPU time spent in \
                  seconds by threads.",
-            ).namespace(namespace),
+            ).namespace(ns.clone()),
             &["name", "tid"],
         ).unwrap();
-        let descs = cpu_totals.desc().into_iter().cloned().collect();
+        descs.extend(cpu_totals.desc().into_iter().cloned());
+        let threads_state = IntGaugeVec::new(
+            Opts::new("threads_state", "Number of threads in each state.").namespace(ns),
+            &["state"],
+        ).unwrap();
+        descs.extend(threads_state.desc().into_iter().cloned());
 
         ThreadsCollector {
-            pid,
+            pid: Mutex::new(pid),
             descs,
-            cpu_totals: Mutex::new(cpu_totals),
+            cpu_totals,
+            threads_state,
         }
     }
 }
@@ -61,23 +69,41 @@ impl Collector for ThreadsCollector {
     }
 
     fn collect(&self) -> Vec<proto::MetricFamily> {
-        let cpu_totals = self.cpu_totals.lock().unwrap();
-        let tids = get_thread_ids(self.pid).unwrap();
+        // Synchronous collecting.
+        let pid = self.pid.lock().unwrap();
+        // Clean previous threads state.
+        self.threads_state.reset();
+        let tids = get_thread_ids(*pid).unwrap();
         for tid in tids {
-            if let Ok((tname, utime, stime)) = get_thread_stat(self.pid, tid) {
+            if let Ok(Stat {
+                name,
+                state,
+                utime,
+                stime,
+            }) = Stat::collect(*pid, tid)
+            {
+                // Threads CPU time.
                 let total = (utime + stime) / *CLK_TCK;
-                let cpu_total = cpu_totals
-                    .get_metric_with_label_values(&[&tname, &format!("{}", tid)])
+                let cpu_total = self.cpu_totals
+                    .get_metric_with_label_values(&[&name, &format!("{}", tid)])
                     .unwrap();
                 let past = cpu_total.get();
                 let delta = total - past;
                 if delta > 0.0 {
                     cpu_total.inc_by(delta);
                 }
+
+                // Threads states.
+                let state = self.threads_state
+                    .get_metric_with_label_values(&[&state])
+                    .unwrap();
+                state.inc();
             }
         }
 
-        cpu_totals.collect()
+        let mut mfs = self.cpu_totals.collect();
+        mfs.extend(self.threads_state.collect());
+        mfs
     }
 }
 
@@ -142,31 +168,62 @@ fn get_thread_name(tid: pid_t, stat: &str) -> Result<(String, usize)> {
         return Ok((name, end));
     }
 
-    Err(to_err(format!("can not find thread name, stat: {}", stat)))
+    Err(to_io_err(format!(
+        "can not find thread name, stat: {}",
+        stat
+    )))
 }
 
-fn to_err(s: String) -> Error {
+fn to_io_err(s: String) -> Error {
     Error::new(ErrorKind::Other, s)
 }
 
-// See more man proc.
-// Index of utime and stime.
-const CPU_INDEX: [usize; 2] = [14 - 1, 15 - 1];
-
-fn get_thread_stat(pid: pid_t, tid: pid_t) -> Result<(String, f64, f64)> {
-    let mut stat = String::new();
-    fs::File::open(format!("/proc/{}/task/{}/stat", pid, tid))
-        .and_then(|mut f| f.read_to_string(&mut stat))?;
-    get_thread_stat_internal(tid, &stat)
+struct Stat {
+    name: String,
+    state: String,
+    utime: f64,
+    stime: f64,
 }
 
-// Extracted from `get_thread_stat`, for test purpose.
-fn get_thread_stat_internal(tid: pid_t, stat: &str) -> Result<(String, f64, f64)> {
+impl Stat {
+    /// See more man proc.
+    /// Index of utime and stime.
+    const CPU_INDEX: [usize; 2] = [14 - 1, 15 - 1];
+    /// Index of state.
+    const PROCESS_STATE_INDEX: usize = 3 - 1;
+
+    fn collect(pid: pid_t, tid: pid_t) -> Result<Stat> {
+        let mut stat = String::new();
+        fs::File::open(format!("/proc/{}/task/{}/stat", pid, tid))
+            .and_then(|mut f| f.read_to_string(&mut stat))?;
+        get_thread_stat_internal(tid, &stat)
+    }
+}
+
+// Extracted from `Stat::collect`, for test purpose.
+fn get_thread_stat_internal(tid: pid_t, stat: &str) -> Result<Stat> {
     let (name, end) = get_thread_name(tid, stat)?;
     let stats: Vec<_> = (&stat[end + 2..]).split_whitespace().collect(); // excluding ") ".
-    let utime = stats[CPU_INDEX[0] - 2]; // pid and comm is truncated.
-    let stime = stats[CPU_INDEX[1] - 2];
-    Ok((name, utime.parse().unwrap(), stime.parse().unwrap()))
+    let utime = stats
+        .get(Stat::CPU_INDEX[0] - 2) // -2 because pid and comm is truncated.
+        .unwrap_or(&"0")
+        .parse()
+        .map_err(|e| to_io_err(format!("{:?}: {}", e, stat)))?;
+    let stime = stats
+        .get(Stat::CPU_INDEX[1] - 2)
+        .unwrap_or(&"0")
+        .parse()
+        .map_err(|e| to_io_err(format!("{:?}: {}", e, stat)))?;
+    let state = stats
+        .get(Stat::PROCESS_STATE_INDEX - 2)
+        .unwrap_or(&"unknown")
+        .to_string();
+    Ok(Stat {
+        name,
+        state,
+        utime,
+        stime,
+    })
 }
 
 lazy_static! {
@@ -185,6 +242,8 @@ mod tests {
 
     use libc;
 
+    use super::*;
+
     #[test]
     fn test_thread_stat() {
         let name = "theadnametest66";
@@ -200,13 +259,13 @@ mod tests {
         rx1.recv().unwrap();
 
         let pid = unsafe { libc::getpid() };
-        let tids = super::get_thread_ids(pid).unwrap();
+        let tids = get_thread_ids(pid).unwrap();
         assert!(tids.len() >= 2);
 
         tids.iter()
             .find(|t| {
-                super::get_thread_stat(pid, **t)
-                    .map(|stat| stat.0 == name)
+                Stat::collect(pid, **t)
+                    .map(|stat| stat.name == name)
                     .unwrap_or(false)
             })
             .unwrap();
@@ -227,13 +286,13 @@ mod tests {
             ("1 ((a b )) 1", "a_b_", 9),
         ];
         for &(i, o, idx) in &cases {
-            let (name, end) = super::get_thread_name(1, i).unwrap();
+            let (name, end) = get_thread_name(1, i).unwrap();
             assert_eq!(name, o);
             assert_eq!(end, idx);
         }
 
-        assert_eq!(super::get_thread_name(1, "(@#)").unwrap().0, "1");
-        assert!(super::get_thread_name(1, "invalid_stat").is_err());
+        assert_eq!(get_thread_name(1, "(@#)").unwrap().0, "1");
+        assert!(get_thread_name(1, "invalid_stat").is_err());
     }
 
     #[test]
@@ -244,9 +303,20 @@ mod tests {
                       0 0 245 0 0 6417696 6421000 8478720 140732554851684 140732554851747 \
                       140732554851747 140732554854339 0";
 
-        let (name, utime, stime) = super::get_thread_stat_internal(2810, sample).unwrap();
+        let Stat {
+            name,
+            state,
+            utime,
+            stime,
+        } = get_thread_stat_internal(2810, sample).unwrap();
         assert_eq!(name, "test_thd");
+        assert_eq!(state, "S");
         assert_eq!(utime as i64, 839);
         assert_eq!(stime as i64, 138);
+    }
+
+    #[test]
+    fn test_smoke() {
+        monitor_threads("smoke").unwrap();
     }
 }
