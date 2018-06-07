@@ -15,7 +15,7 @@ use prometheus::local::LocalIntCounterVec;
 use storage::engine::Statistics;
 
 /// `ExecutorMetrics` is metrics collected from executors group by request.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct ExecutorMetrics {
     pub cf_stats: Statistics,
     pub scan_counter: ScanCounter,
@@ -34,7 +34,7 @@ impl ExecutorMetrics {
 }
 
 /// `ScanCounter` is for recording range query and point query.
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct ScanCounter {
     pub range: usize,
     pub point: usize,
@@ -75,7 +75,7 @@ impl ScanCounter {
 }
 
 /// `ExecCounter` is for recording number of each executor.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct ExecCounter {
     pub aggregation: i64,
     pub index_scan: i64,

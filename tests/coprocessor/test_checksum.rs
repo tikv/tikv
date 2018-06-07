@@ -18,6 +18,7 @@ use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::Message;
 use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
 
+use tikv::coprocessor::dag::{ScanOn, Scanner};
 use tikv::coprocessor::*;
 use tikv::storage::SnapshotStore;
 

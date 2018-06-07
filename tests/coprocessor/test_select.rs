@@ -864,7 +864,7 @@ fn test_stream_batch_row_limit() {
         assert_eq!(end[end.len() - 1], end_last_byte);
     };
 
-    let resps = handle_streaming_select(&end_point, req, check_range);
+    let resps = handle_streaming_select(&end_point, req, stream_row_limit, check_range);
     assert_eq!(resps.len(), 3);
     let expected_output_counts = vec![vec![2 as i64], vec![2 as i64], vec![1 as i64]];
     for (i, resp) in resps.into_iter().enumerate() {
@@ -1518,7 +1518,14 @@ fn test_reverse() {
 pub fn handle_request(end_point: &Worker<EndPointTask>, req: Request) -> Response {
     let (tx, rx) = oneshot::channel();
     let on_resp = OnResponse::Unary(tx);
-    let req = RequestTask::new(String::from("127.0.0.1"), req, on_resp, 100).unwrap();
+    let req = RequestTask::new(
+        String::from("127.0.0.1"),
+        req,
+        on_resp,
+        100,
+        64,
+        Duration::from_secs(60),
+    ).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();
     rx.wait().unwrap()
 }
@@ -1534,6 +1541,7 @@ fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectRespon
 fn handle_streaming_select<F>(
     end_point: &Worker<EndPointTask>,
     req: Request,
+    batch_row_limit: usize,
     mut check_range: F,
 ) -> Vec<StreamResponse>
 where
@@ -1545,6 +1553,8 @@ where
         req,
         OnResponse::Streaming(stream_tx),
         100,
+        batch_row_limit,
+        Duration::from_secs(60),
     ).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();
     stream_rx

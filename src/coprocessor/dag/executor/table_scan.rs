@@ -22,6 +22,7 @@ use storage::{Key, SnapshotStore};
 use util::collections::HashSet;
 
 use coprocessor::codec::table;
+use coprocessor::dag::{ScanOn, Scanner};
 use coprocessor::util;
 use coprocessor::*;
 

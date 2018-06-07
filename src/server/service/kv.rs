@@ -13,6 +13,9 @@
 
 use futures::sync::{mpsc as futures_mpsc, oneshot};
 use futures::{future, stream, Future, Sink, Stream};
+use std::iter::{self, FromIterator};
+use std::time::Duration;
+
 use grpc::{ClientStreamingSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
            RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
 use kvproto::coprocessor::*;
@@ -23,7 +26,6 @@ use kvproto::raft_serverpb::*;
 use kvproto::tikvpb_grpc;
 use prometheus::Histogram;
 use protobuf::RepeatedField;
-use std::iter::{self, FromIterator};
 
 use coprocessor::local_metrics::BasicLocalMetrics;
 use coprocessor::{err_resp, EndPointTask, RequestTask};
@@ -53,8 +55,11 @@ pub struct Service<T: RaftStoreRouter + 'static> {
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
     recursion_limit: u32,
+    batch_row_limit: usize,
+    stream_batch_row_limit: usize,
     metrics: Metrics,
     stream_channel_size: usize,
+    max_handle_duration: Duration,
 }
 
 #[derive(Clone)]
@@ -118,13 +123,17 @@ impl Metrics {
 }
 
 impl<T: RaftStoreRouter + 'static> Service<T> {
+    #[allow(too_many_arguments)]
     pub fn new(
         storage: Storage,
         end_point_scheduler: Scheduler<EndPointTask>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         recursion_limit: u32,
+        batch_row_limit: usize,
+        stream_batch_row_limit: usize,
         stream_channel_size: usize,
+        max_handle_duration: Duration,
     ) -> Service<T> {
         Service {
             storage,
@@ -132,8 +141,11 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
             ch,
             snap_scheduler,
             recursion_limit,
+            batch_row_limit,
+            stream_batch_row_limit,
             metrics: Metrics::new(),
             stream_channel_size,
+            max_handle_duration,
         }
     }
 
@@ -962,7 +974,14 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let (tx, rx) = oneshot::channel();
         let on_resp = OnResponse::Unary(tx);
-        let req_task = match RequestTask::new(ctx.peer(), req, on_resp, self.recursion_limit) {
+        let req_task = match RequestTask::new(
+            ctx.peer(),
+            req,
+            on_resp,
+            self.recursion_limit,
+            self.batch_row_limit,
+            self.max_handle_duration,
+        ) {
             Ok(req_task) => req_task,
             Err(e) => {
                 let mut metrics = BasicLocalMetrics::default();
@@ -1006,7 +1025,14 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let (tx, rx) = futures_mpsc::channel(self.stream_channel_size);
         let on_resp = OnResponse::Streaming(tx);
-        let req_task = match RequestTask::new(ctx.peer(), req, on_resp, self.recursion_limit) {
+        let req_task = match RequestTask::new(
+            ctx.peer(),
+            req,
+            on_resp,
+            self.recursion_limit,
+            self.stream_batch_row_limit,
+            self.max_handle_duration,
+        ) {
             Ok(req_task) => req_task,
             Err(e) => {
                 let mut metrics = BasicLocalMetrics::default();

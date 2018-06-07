@@ -13,7 +13,7 @@
 
 mod checksum;
 pub mod codec;
-mod dag;
+pub mod dag;
 mod endpoint;
 mod error;
 pub mod local_metrics;
@@ -23,13 +23,16 @@ mod statistics;
 mod util;
 
 pub use self::endpoint::err_resp;
+pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask};
 pub use self::error::{Error, Result};
 pub use self::readpool_context::Context as ReadPoolContext;
 
+use std::boxed::FnBox;
 use std::time::Duration;
 
 use kvproto::{coprocessor as coppb, kvrpcpb};
 
+use storage;
 use util::time::Instant;
 
 pub const REQ_TYPE_DAG: i64 = 103;
@@ -61,6 +64,10 @@ trait RequestHandler: Send {
     }
 }
 
+/// `RequestHandlerBuilder` accepts a `Box<Snapshot>` and builds a `RequestHandler`.
+type RequestHandlerBuilder =
+    Box<FnBox(Box<storage::Snapshot + 'static>, ReqContext) -> Result<Box<RequestHandler>> + Send>;
+
 #[derive(Debug)]
 pub struct ReqContext {
     pub context: kvrpcpb::Context,
@@ -71,19 +78,21 @@ pub struct ReqContext {
 }
 
 impl ReqContext {
-    pub fn new(ctx: &kvrpcpb::Context, txn_start_ts: u64, table_scan: bool) -> ReqContext {
+    pub fn new(
+        context: kvrpcpb::Context,
+        txn_start_ts: u64,
+        table_scan: bool,
+        max_handle_duration: Duration,
+    ) -> ReqContext {
         let start_time = Instant::now_coarse();
+        let deadline = start_time + max_handle_duration;
         ReqContext {
-            context: ctx.clone(),
+            context,
             table_scan,
             txn_start_ts,
             start_time,
-            deadline: start_time,
+            deadline,
         }
-    }
-
-    pub fn set_max_handle_duration(&mut self, request_max_handle_duration: Duration) {
-        self.deadline = self.start_time + request_max_handle_duration;
     }
 
     #[inline]
@@ -104,7 +113,3 @@ impl ReqContext {
         Ok(())
     }
 }
-
-pub use self::dag::{ScanOn, Scanner};
-pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask,
-                         DEFAULT_REQUEST_MAX_HANDLE_SECS};
