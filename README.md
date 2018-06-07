@@ -144,7 +144,7 @@ Contributions are welcome! For beginners, we have prepared many suitable tasks f
 
 See [CONTRIBUTING](./CONTRIBUTING.md) for details on submitting patches and the contribution workflow.
 
-In addition, TiKV team actively develops and maintains a bunch of dependencies used in TiKV, which you may also interested in:
+In addition, TiKV team actively develops and maintains a bunch of dependencies used in TiKV, which you may be also interested in:
 
 - [rust-prometheus](https://github.com/pingcap/rust-prometheus): The Prometheus client for Rust, our metric collecting and reporting library
 
@@ -152,7 +152,7 @@ In addition, TiKV team actively develops and maintains a bunch of dependencies u
 
 - [raft-rs](https://github.com/pingcap/raft-rs): The Raft distributed consensus algorithm implemented in Rust
 
-- [grpc-rs](https://github.com/pingcap/grpc-rs): The gRPC library for Rust built on C Core library and futures
+- [grpc-rs](https://github.com/pingcap/grpc-rs): The gRPC library for Rust built on gRPC C Core library and Rust Futures
 
 - [fail-rs](https://github.com/pingcap/fail-rs): Fail points for Rust
 
