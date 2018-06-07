@@ -621,7 +621,7 @@ impl PeerStorage {
         self.apply_state.get_truncated_state().get_term()
     }
 
-    pub fn get_region(&self) -> &metapb::Region {
+    pub fn region(&self) -> &metapb::Region {
         &self.region
     }
 
@@ -661,7 +661,7 @@ impl PeerStorage {
             return false;
         }
         let snap_epoch = snap_data.get_region().get_region_epoch();
-        let latest_epoch = self.get_region().get_region_epoch();
+        let latest_epoch = self.region.get_region_epoch();
         if snap_epoch.get_conf_ver() < latest_epoch.get_conf_ver() {
             info!(
                 "{} snapshot epoch {:?} < {:?}, generate again.",
@@ -885,8 +885,8 @@ impl PeerStorage {
     /// If return Err, data may get partial deleted.
     pub fn clear_data(&self) -> Result<()> {
         let (start_key, end_key) = (
-            enc_start_key(self.get_region()),
-            enc_end_key(self.get_region()),
+            enc_start_key(&self.region),
+            enc_end_key(&self.region),
         );
         let region_id = self.get_region_id();
         box_try!(
@@ -899,8 +899,8 @@ impl PeerStorage {
     /// Delete all data that is not covered by `new_region`.
     fn clear_extra_data(&self, new_region: &metapb::Region) -> Result<()> {
         let (old_start_key, old_end_key) = (
-            enc_start_key(self.get_region()),
-            enc_end_key(self.get_region()),
+            enc_start_key(&self.region),
+            enc_end_key(&self.region),
         );
         let (new_start_key, new_end_key) = (enc_start_key(new_region), enc_end_key(new_region));
         let region_id = new_region.get_id();

@@ -462,7 +462,7 @@ impl Peer {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = Instant::now();
 
-        let region = self.get_store().get_region().clone();
+        let region = self.region().clone();
         info!("{} begin to destroy", self.tag);
 
         // Set Tombstone state explicitly
@@ -518,7 +518,7 @@ impl Peer {
     }
 
     pub fn region(&self) -> &metapb::Region {
-        self.get_store().get_region()
+        self.get_store().region()
     }
 
     /// Set the region of a peer.
@@ -637,7 +637,7 @@ impl Peer {
         }
 
         // Insert heartbeats in case that some peers never response heartbeats.
-        let region = self.raft_group.get_store().get_region();
+        let region = self.raft_group.get_store().region();
         for peer in region.get_peers() {
             self.peer_heartbeats
                 .entry(peer.get_id())
@@ -1844,7 +1844,7 @@ impl Peer {
         }
 
         // Try to find in region, if found, set in cache.
-        for peer in self.get_store().get_region().get_peers() {
+        for peer in self.region().get_peers() {
             if peer.get_id() == peer_id {
                 self.peer_cache.borrow_mut().insert(peer_id, peer.clone());
                 return Some(peer.clone());
