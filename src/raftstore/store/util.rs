@@ -262,20 +262,23 @@ pub fn check_region_epoch(
 #[inline]
 pub fn check_store_id(req: &RaftCmdRequest, store_id: u64) -> Result<()> {
     let peer = req.get_header().get_peer();
-    if peer.get_store_id() != store_id {
-        return Err(Error::StoreNotMatch(peer.get_store_id(), store_id));
+    if peer.get_store_id() == store_id {
+        Ok(())
+    } else {
+        Err(Error::StoreNotMatch(peer.get_store_id(), store_id))
     }
-    Ok(())
 }
 
 #[inline]
 pub fn check_term(req: &RaftCmdRequest, term: u64) -> Result<()> {
     let header = req.get_header();
-    // If header's term is 2 verions behind current term, leadership may have been changed away.
-    if header.get_term() > 0 && term > header.get_term() + 1 {
-        return Err(Error::StaleCommand);
+    if header.get_term() == 0 || term <= header.get_term() + 1 {
+        Ok(())
+    } else {
+        // If header's term is 2 verions behind current term,
+        // leadership may have been changed away.
+        Err(Error::StaleCommand)
     }
-    Ok(())
 }
 
 #[inline]
