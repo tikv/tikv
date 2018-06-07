@@ -228,7 +228,11 @@ type SubTmp = (usize, usize, u8);
 /// calculate the carry for lhs - rhs, returns the carry and needed temporary results for
 /// beginning a subtraction.
 ///
-/// The new carry can be None if lhs is equals to rhs.
+/// The new carry can be:
+///     1. None if lhs is equals to rhs.
+///     2. Some(0) if abs(lhs) > abs(rhs),
+///     3. Some(1) if abs(lhs) < abs(rhs).
+/// l_frac_word_cnt and r_frac_word_cnt do not contain the suffix 0 when r_int_word_cnt == l_int_word_cnt.
 #[inline]
 fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, SubTmp) {
     let (l_int_word_cnt, mut l_frac_word_cnt) = (word_cnt!(lhs.int_cnt), word_cnt!(lhs.frac_cnt));
@@ -254,9 +258,11 @@ fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, Sub
     } else if r_int_word_cnt == l_int_word_cnt {
         let mut l_end = (l_stop + l_frac_word_cnt as usize - 1) as isize;
         let mut r_end = (r_stop + r_frac_word_cnt as usize - 1) as isize;
+        // trims suffix 0
         while l_idx as isize <= l_end && lhs.word_buf[l_end as usize] == 0 {
             l_end -= 1;
         }
+        // trims suffix 0
         while r_idx as isize <= r_end && rhs.word_buf[r_end as usize] == 0 {
             r_end -= 1;
         }
@@ -287,7 +293,7 @@ fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, Sub
     (carry, frac_word_to, l_res, r_res)
 }
 
-/// subtract rhs from lhs.
+/// subtract rhs from lhs when lhs.negative=rhs.negative.
 fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     let (carry, mut frac_word_to, l_res, r_res) = calc_sub_carry(lhs, rhs);
     if carry.is_none() {
@@ -298,6 +304,7 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     let (mut l_start, mut l_int_word_cnt, mut l_frac_word_cnt) = l_res;
     let (mut r_start, mut r_int_word_cnt, mut r_frac_word_cnt) = r_res;
 
+    // determine the res.negative and make the abs(lhs) > abs(rhs).
     let negative = if carry.unwrap() > 0 {
         mem::swap(&mut lhs, &mut rhs);
         mem::swap(&mut l_start, &mut r_start);
@@ -324,10 +331,12 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     let mut res = res.map(|_| Decimal::new(int_cnt, frac_cnt, negative));
     let mut l_idx = l_start + l_int_word_cnt as usize + l_frac_word_cnt as usize;
     let mut r_idx = r_start + r_int_word_cnt as usize + r_frac_word_cnt as usize;
+    // adjust `l_idx` and `r_idx` to the same position of digits after the point.
     if l_frac_word_cnt > r_frac_word_cnt {
         let l_stop = l_start + l_int_word_cnt as usize + r_frac_word_cnt as usize;
         if l_frac_word_cnt < frac_word_to {
-            idx_to = (frac_word_to - l_frac_word_cnt) as usize;
+            // It happens only when suffix 0 exist(3.10000000000-2.00).
+            idx_to -= (frac_word_to - l_frac_word_cnt) as usize;
         }
         while l_idx > l_stop {
             idx_to -= 1;
@@ -337,7 +346,8 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     } else {
         let r_stop = r_start + r_int_word_cnt as usize + l_frac_word_cnt as usize;
         if frac_word_to > r_frac_word_cnt {
-            idx_to = (frac_word_to - r_frac_word_cnt) as usize;
+            // It happens only when suffix 0 exist(3.00-2.00000000000).
+            idx_to -= (frac_word_to - r_frac_word_cnt) as usize;
         }
         while r_idx > r_stop {
             idx_to -= 1;
@@ -2820,6 +2830,8 @@ mod test {
             ("-123.45", "-12345", Res::Ok("12221.55")),
             ("-12345", "123.45", Res::Ok("-12468.45")),
             ("12345", "-123.45", Res::Ok("12468.45")),
+            ("3.10000000000", "2.00", Res::Ok("1.10000000000")),
+            ("3.00", "2.0000000000000", Res::Ok("1.0000000000000")),
         ];
 
         for (lhs_str, rhs_str, exp) in cases {
