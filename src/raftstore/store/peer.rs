@@ -526,7 +526,7 @@ impl Peer {
     /// This will update the region of the peer, caller must ensure the region
     /// has been preserved in a durable device.
     pub fn set_region(&mut self, region: metapb::Region) {
-        *self.mut_store().region_mut() = region;
+        self.mut_store().set_region(region);
     }
 
     pub fn peer_id(&self) -> u64 {

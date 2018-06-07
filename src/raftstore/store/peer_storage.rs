@@ -625,8 +625,8 @@ impl PeerStorage {
         &self.region
     }
 
-    pub fn region_mut(&mut self) -> &mut metapb::Region {
-        &mut self.region
+    pub fn set_region(&mut self, region: metapb::Region) {
+        self.region = region;
     }
 
     pub fn raw_snapshot(&self) -> DbSnapshot {
