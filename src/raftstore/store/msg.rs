@@ -164,7 +164,7 @@ pub enum Msg {
     },
 
     // For region stat
-    ApproximateRegionStat {
+    RegionApproximateStat {
         region_id: u64,
         stat: RegionApproximateStat,
     },
@@ -208,12 +208,12 @@ impl fmt::Debug for Msg {
                 ref split_key,
                 ..
             } => write!(fmt, "Split region {} at key {:?}", region_id, split_key),
-            Msg::ApproximateRegionStat {
+            Msg::RegionApproximateStat {
                 region_id,
                 ref stat,
             } => write!(
                 fmt,
-                "Approximate region stat [region_id: {}, stat: {:?}]",
+                "Region's approximate stat [region_id: {}, stat: {:?}]",
                 region_id, stat
             ),
             Msg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),

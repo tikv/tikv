@@ -99,7 +99,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
 
         let region_size = region_stat.size;
 
-        let res = Msg::ApproximateRegionStat {
+        let res = Msg::RegionApproximateStat {
             region_id,
             stat: region_stat,
         };
@@ -202,7 +202,7 @@ mod tests {
         runnable.run(SplitCheckTask::new(region.clone(), true));
         // size has not reached the max_size 100 yet.
         match rx.try_recv() {
-            Ok(Msg::ApproximateRegionStat { region_id, .. }) => {
+            Ok(Msg::RegionApproximateStat { region_id, .. }) => {
                 assert_eq!(region_id, region.get_id());
             }
             others => panic!("expect recv empty, but got {:?}", others),
@@ -219,7 +219,7 @@ mod tests {
 
         runnable.run(SplitCheckTask::new(region.clone(), true));
         match rx.try_recv() {
-            Ok(Msg::ApproximateRegionStat { region_id, .. }) => {
+            Ok(Msg::RegionApproximateStat { region_id, .. }) => {
                 assert_eq!(region_id, region.get_id());
             }
             others => panic!("expect approximate region size, but got {:?}", others),
@@ -253,7 +253,7 @@ mod tests {
 
         runnable.run(SplitCheckTask::new(region.clone(), true));
         match rx.try_recv() {
-            Ok(Msg::ApproximateRegionStat { region_id, .. }) => {
+            Ok(Msg::RegionApproximateStat { region_id, .. }) => {
                 assert_eq!(region_id, region.get_id());
             }
             others => panic!("expect approximate region size, but got {:?}", others),

@@ -28,7 +28,7 @@ use config::DbConfig;
 use storage::CF_DEFAULT;
 use storage::types::Key;
 use util::config::MB;
-use util::rocksdb::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
+use util::rocksdb::properties::SizePropertiesCollectorFactory;
 use util::rocksdb::{new_engine_opt, CFOptions};
 
 use super::Result;
@@ -122,9 +122,6 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions) {
     // Add size properties to get approximate ranges wihout scan.
     let f = Box::new(SizePropertiesCollectorFactory::default());
     cf_opts.add_table_properties_collector_factory("tikv.size-properties-collector", f);
-    let f = Box::new(MvccPropertiesCollectorFactory::default());
-    cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
-
     (db_opts, CFOptions::new(CF_DEFAULT, cf_opts))
 }
 

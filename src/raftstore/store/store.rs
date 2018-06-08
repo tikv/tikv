@@ -3263,7 +3263,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 );
                 self.on_prepare_split_region(region_id, region_epoch, split_key, callback);
             }
-            Msg::ApproximateRegionStat { region_id, stat } => {
+            Msg::RegionApproximateStat { region_id, stat } => {
                 self.on_approximate_region_stat(region_id, stat)
             }
             Msg::CompactedEvent(event) => self.on_compaction_finished(event),
