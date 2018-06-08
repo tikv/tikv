@@ -245,6 +245,7 @@ impl GCWorker {
             })
             .or_else(|e| match e {
                 ScheduleError::Full(task) => {
+                    GC_TOO_BUSY_COUNTER.inc();
                     (task.callback)(Err(Error::GCWorkerTooBusy));
                     Ok(())
                 }

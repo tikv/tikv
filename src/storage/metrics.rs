@@ -112,6 +112,10 @@ lazy_static! {
         "tikv_gcworker_gc_task_fail",
         "Counter of gc tasks that is failed"
     ).unwrap();
+    pub static ref GC_TOO_BUSY_COUNTER: IntCounter = register_int_counter!(
+        "tikv_gc_worker_too_busy",
+        "Counter of occurrence of gc_worker being too busy"
+    ).unwrap();
     pub static ref GC_KEYS_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_gcworker_gc_keys",
         "Counter of keys affected during gc",
