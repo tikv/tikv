@@ -13,6 +13,7 @@
 
 //! Core data types.
 
+use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::u64;
@@ -144,6 +145,12 @@ impl Display for Key {
 impl PartialEq for Key {
     fn eq(&self, other: &Key) -> bool {
         self.0 == other.0
+    }
+}
+
+impl PartialOrd for Key {
+    fn partial_cmp(&self, other: &Key) -> Option<Ordering> {
+        Some(self.0.cmp(&other.0))
     }
 }
 
