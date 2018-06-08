@@ -884,10 +884,7 @@ impl PeerStorage {
     /// Delete all data belong to the region.
     /// If return Err, data may get partial deleted.
     pub fn clear_data(&self) -> Result<()> {
-        let (start_key, end_key) = (
-            enc_start_key(self.region()),
-            enc_end_key(self.region()),
-        );
+        let (start_key, end_key) = (enc_start_key(self.region()), enc_end_key(self.region()));
         let region_id = self.get_region_id();
         box_try!(
             self.region_sched
@@ -898,10 +895,8 @@ impl PeerStorage {
 
     /// Delete all data that is not covered by `new_region`.
     fn clear_extra_data(&self, new_region: &metapb::Region) -> Result<()> {
-        let (old_start_key, old_end_key) = (
-            enc_start_key(self.region()),
-            enc_end_key(self.region()),
-        );
+        let (old_start_key, old_end_key) =
+            (enc_start_key(self.region()), enc_end_key(self.region()));
         let (new_start_key, new_end_key) = (enc_start_key(new_region), enc_end_key(new_region));
         let region_id = new_region.get_id();
         if old_start_key < new_start_key {
