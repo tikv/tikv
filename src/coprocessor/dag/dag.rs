@@ -49,6 +49,12 @@ impl DAGContext {
         if req.has_max_warning_count() {
             eval_cfg.set_max_warning_cnt(req.get_max_warning_count() as usize);
         }
+        if req.has_sql_mode() {
+            eval_cfg.set_sql_mode(req.get_sql_mode())
+        }
+        if req.has_is_strict_sql_mode() {
+            eval_cfg.set_strict_sql_mode(req.get_is_strict_sql_mode());
+        }
         let store = SnapshotStore::new(
             snap,
             req.get_start_ts(),
