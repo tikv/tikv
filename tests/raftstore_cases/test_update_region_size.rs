@@ -14,8 +14,8 @@
 use std::sync::Arc;
 use std::{thread, time};
 
-use tikv::util::config::*;
 use tikv::pd::PdClient;
+use tikv::util::config::*;
 
 use super::cluster::{Cluster, Simulator};
 use super::server::new_server_cluster;

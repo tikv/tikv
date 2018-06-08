@@ -11,13 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use sys_info;
+use super::Result;
 
+use coprocessor::DEFAULT_REQUEST_MAX_HANDLE_SECS;
 use util::collections::HashMap;
 use util::config::{self, ReadableDuration, ReadableSize};
-use coprocessor::DEFAULT_REQUEST_MAX_HANDLE_SECS;
 use util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
-use super::Result;
 
 pub use raftstore::store::Config as RaftStoreConfig;
 pub use storage::Config as StorageConfig;
@@ -31,9 +30,6 @@ const DEFAULT_GRPC_CONCURRENT_STREAM: usize = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 10;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
 const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
-// Enpoints may occur very deep recursion,
-// so enlarge their stack size to 10 MB.
-const DEFAULT_ENDPOINT_STACK_SIZE_MB: u64 = 10;
 
 // Assume a request can be finished in 1ms, a request at position x will wait about
 // 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
@@ -51,7 +47,8 @@ pub const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    #[serde(skip)] pub cluster_id: u64,
+    #[serde(skip)]
+    pub cluster_id: u64,
 
     // Server listening address.
     pub addr: String,
@@ -65,9 +62,9 @@ pub struct Config {
     pub grpc_concurrent_stream: usize,
     pub grpc_raft_conn_num: usize,
     pub grpc_stream_initial_window_size: ReadableSize,
-    pub end_point_concurrency: usize,
+    pub grpc_keepalive_time: ReadableDuration,
+    pub grpc_keepalive_timeout: ReadableDuration,
     pub end_point_max_tasks: usize,
-    pub end_point_stack_size: ReadableSize,
     pub end_point_recursion_limit: u32,
     pub end_point_stream_channel_size: usize,
     pub end_point_batch_row_limit: usize,
@@ -77,17 +74,21 @@ pub struct Config {
     pub snap_max_total_size: ReadableSize,
 
     // Server labels to specify some attributes about this server.
-    #[serde(with = "config::order_map_serde")] pub labels: HashMap<String, String>,
+    pub labels: HashMap<String, String>,
+
+    // deprecated. use readpool.coprocessor.xx_concurrency.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub end_point_concurrency: Option<usize>,
+
+    // deprecated. use readpool.coprocessor.stack_size.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub end_point_stack_size: Option<ReadableSize>,
 }
 
 impl Default for Config {
     fn default() -> Config {
-        let cpu_num = sys_info::cpu_num().unwrap();
-        let concurrency = if cpu_num > 8 {
-            (f64::from(cpu_num) * 0.8) as usize
-        } else {
-            4
-        };
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
@@ -99,9 +100,13 @@ impl Default for Config {
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
             grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
             grpc_stream_initial_window_size: ReadableSize(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE),
-            end_point_concurrency: concurrency,
+            // There will be a heartbeat every secs, it's weird a connection will be idle for more
+            // than 10 senconds.
+            grpc_keepalive_time: ReadableDuration::secs(10),
+            grpc_keepalive_timeout: ReadableDuration::secs(3),
+            end_point_concurrency: None, // deprecated
             end_point_max_tasks: DEFAULT_MAX_RUNNING_TASK_COUNT,
-            end_point_stack_size: ReadableSize::mb(DEFAULT_ENDPOINT_STACK_SIZE_MB),
+            end_point_stack_size: None, // deprecated
             end_point_recursion_limit: 1000,
             end_point_stream_channel_size: 8,
             end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,
@@ -131,20 +136,8 @@ impl Config {
             ));
         }
 
-        if self.end_point_concurrency == 0 {
-            return Err(box_err!("server.end-point-concurrency should not be 0."));
-        }
-
         if self.end_point_max_tasks == 0 {
             return Err(box_err!("server.end-point-max-tasks should not be 0."));
-        }
-
-        // 2MB is the default stack size for threads in rust, but endpoints may occur
-        // very deep recursion, 2MB considered too small.
-        //
-        // See more: https://doc.rust-lang.org/std/thread/struct.Builder.html#method.stack_size
-        if self.end_point_stack_size.0 < ReadableSize::mb(2).0 {
-            return Err(box_err!("server.end-point-stack-size is too small."));
         }
 
         if self.end_point_recursion_limit < 100 {
@@ -208,14 +201,6 @@ mod tests {
         assert!(cfg.advertise_addr.is_empty());
         cfg.validate().unwrap();
         assert_eq!(cfg.addr, cfg.advertise_addr);
-
-        let mut invalid_cfg = cfg.clone();
-        invalid_cfg.end_point_concurrency = 0;
-        assert!(invalid_cfg.validate().is_err());
-
-        let mut invalid_cfg = cfg.clone();
-        invalid_cfg.end_point_stack_size = ReadableSize::mb(1);
-        assert!(invalid_cfg.validate().is_err());
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.end_point_max_tasks = 0;

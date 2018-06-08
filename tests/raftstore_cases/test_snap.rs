@@ -12,22 +12,22 @@
 // limitations under the License.
 
 use std::fs;
-use std::time::{Duration, Instant};
-use std::sync::{Arc, Mutex, RwLock};
-use std::sync::mpsc::{self, Sender};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
+use kvproto::raft_serverpb::RaftMessage;
+use raft::eraftpb::{Message, MessageType};
 use tikv::raftstore::Result;
 use tikv::raftstore::store::Msg;
 use tikv::util::HandyRwLock;
 use tikv::util::config::*;
-use raft::eraftpb::{Message, MessageType};
-use kvproto::raft_serverpb::RaftMessage;
 
-use super::transport_simulate::*;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
+use super::transport_simulate::*;
 use super::util::*;
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {

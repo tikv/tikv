@@ -44,7 +44,7 @@ run:
 release:
 	@cargo build --release --features "${ENABLE_FEATURES}"
 	@mkdir -p ${BIN_PATH}
-	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-fail ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
+	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-fail ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
 
 unportable_release:
 	ROCKSDB_SYS_PORTABLE=0 make release
@@ -78,7 +78,8 @@ bench:
 	RUST_BACKTRACE=1 cargo run --release --bin bench-tikv --features "${ENABLE_FEATURES}"
 
 format:
-	@cargo fmt --all -- --write-mode diff >/dev/null || cargo fmt --all
+	@cargo fmt --all -- --write-mode diff >/dev/null || \
+	cargo fmt --all
 
 clean:
-	cargo clean
+	@cargo clean

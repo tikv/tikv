@@ -13,12 +13,12 @@
 
 extern crate protobuf;
 
-use std::collections::HashMap;
-use test::Bencher;
-use rand::{thread_rng, Rng};
+use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, Request};
 use protobuf::Message;
 use raft::eraftpb::Entry;
-use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, Request};
+use rand::{thread_rng, Rng};
+use std::collections::HashMap;
+use test::Bencher;
 
 #[inline]
 fn gen_rand_str(len: usize) -> Vec<u8> {

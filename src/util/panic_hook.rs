@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::panic::{self, PanicInfo};
 use std::cell::RefCell;
+use std::panic::{self, PanicInfo};
 use std::sync::{Once, ONCE_INIT};
 use std::{process, thread};
 
@@ -63,7 +63,7 @@ fn track_hook(p: &PanicInfo) {
 }
 
 /// Exit the whole process when panic.
-pub fn set_exit_hook() {
+pub fn set_exit_hook(panic_abort: bool) {
     // HACK! New a backtrace ahead for caching necessary elf sections of this
     // tikv-server, in case it can not open more files during panicking
     // which leads to no stack info (0x5648bdfe4ff2 - <no info>).
@@ -104,6 +104,10 @@ pub fn set_exit_hook() {
         } else {
             orig_hook(info);
         }
-        process::exit(1);
+        if panic_abort {
+            process::abort();
+        } else {
+            process::exit(1);
+        }
     })
 }

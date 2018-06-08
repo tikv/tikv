@@ -13,41 +13,42 @@
 
 use std::sync::Arc;
 
+use kvproto::coprocessor::KeyRange;
 use tipb::executor::{self, ExecType};
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
-use kvproto::coprocessor::KeyRange;
 
-use coprocessor::codec::mysql;
-use coprocessor::codec::datum::{self, Datum};
-use coprocessor::codec::table::{RowColsDict, TableDecoder};
-use coprocessor::endpoint::get_pk;
-use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings};
-use coprocessor::{Error, Result};
 use storage::SnapshotStore;
 use util::codec::number::NumberDecoder;
 use util::collections::HashSet;
 
-mod scanner;
-mod table_scan;
+use coprocessor::codec::datum::{self, Datum};
+use coprocessor::codec::mysql;
+use coprocessor::codec::table::{RowColsDict, TableDecoder};
+use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings};
+use coprocessor::util;
+use coprocessor::*;
+
+mod aggregate;
+mod aggregation;
 mod index_scan;
+mod limit;
+mod scanner;
 mod selection;
+mod table_scan;
 mod topn;
 mod topn_heap;
-mod limit;
-mod aggregation;
-mod aggregate;
 
 mod metrics;
 
-pub use self::table_scan::TableScanExecutor;
-pub use self::index_scan::IndexScanExecutor;
-pub use self::selection::SelectionExecutor;
-pub use self::topn::TopNExecutor;
-pub use self::limit::LimitExecutor;
 pub use self::aggregation::{HashAggExecutor, StreamAggExecutor};
-pub use self::scanner::{ScanOn, Scanner};
+pub use self::index_scan::IndexScanExecutor;
+pub use self::limit::LimitExecutor;
 pub use self::metrics::*;
+pub use self::scanner::{ScanOn, Scanner};
+pub use self::selection::SelectionExecutor;
+pub use self::table_scan::TableScanExecutor;
+pub use self::topn::TopNExecutor;
 
 pub struct ExprColumnRefVisitor {
     cols_offset: HashSet<usize>,
@@ -58,7 +59,7 @@ impl ExprColumnRefVisitor {
     pub fn new(cols_len: usize) -> ExprColumnRefVisitor {
         ExprColumnRefVisitor {
             cols_offset: HashSet::default(),
-            cols_len: cols_len,
+            cols_len,
         }
     }
 
@@ -101,10 +102,7 @@ pub struct Row {
 
 impl Row {
     pub fn new(handle: i64, data: RowColsDict) -> Row {
-        Row {
-            handle: handle,
-            data: data,
-        }
+        Row { handle, data }
     }
 
     // get binary of each column in order of columns
@@ -112,7 +110,7 @@ impl Row {
         let mut res = Vec::with_capacity(columns.len());
         for col in columns {
             if col.get_pk_handle() {
-                let v = get_pk(col, self.handle);
+                let v = util::get_pk(col, self.handle);
                 let bt = box_try!(datum::encode_value(&[v]));
                 res.push(bt);
                 continue;
@@ -165,12 +163,13 @@ pub fn build_exec(
     store: SnapshotStore,
     ranges: Vec<KeyRange>,
     ctx: Arc<EvalConfig>,
+    collect: bool,
 ) -> Result<DAGExecutor> {
     let mut execs = execs.into_iter();
     let first = execs
         .next()
         .ok_or_else(|| Error::Other(box_err!("has no executor")))?;
-    let (mut src, columns) = build_first_executor(first, store, ranges)?;
+    let (mut src, columns) = build_first_executor(first, store, ranges, collect)?;
     let mut has_aggr = false;
     for mut exec in execs {
         let curr: Box<Executor + Send> = match exec.get_tp() {
@@ -213,8 +212,8 @@ pub fn build_exec(
     }
     Ok(DAGExecutor {
         exec: src,
-        columns: columns,
-        has_aggr: has_aggr,
+        columns,
+        has_aggr,
     })
 }
 
@@ -224,11 +223,17 @@ fn build_first_executor(
     mut first: executor::Executor,
     store: SnapshotStore,
     ranges: Vec<KeyRange>,
+    collect: bool,
 ) -> Result<FirstExecutor> {
     match first.get_tp() {
         ExecType::TypeTableScan => {
             let cols = Arc::new(first.get_tbl_scan().get_columns().to_vec());
-            let ex = Box::new(TableScanExecutor::new(first.get_tbl_scan(), ranges, store)?);
+            let ex = Box::new(TableScanExecutor::new(
+                first.get_tbl_scan(),
+                ranges,
+                store,
+                collect,
+            )?);
             Ok((ex, cols))
         }
         ExecType::TypeIndexScan => {
@@ -239,6 +244,7 @@ fn build_first_executor(
                 ranges,
                 store,
                 unique,
+                collect,
             )?);
             Ok((ex, cols))
         }
@@ -260,7 +266,7 @@ pub fn inflate_with_col_for_dag(
     for offset in offsets {
         let col = &columns[*offset];
         if col.get_pk_handle() {
-            let v = get_pk(col, h);
+            let v = util::get_pk(col, h);
             res[*offset] = v;
         } else {
             let col_id = col.get_column_id();

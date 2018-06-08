@@ -11,51 +11,53 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::{cmp, mem, slice};
+use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::{cmp, mem, slice};
 
-use time::Timespec;
-use rocksdb::{WriteBatch, DB};
-use rocksdb::rocksdb_options::WriteOptions;
-use protobuf::{self, Message};
 use kvproto::metapb;
-use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
+use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
                           RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftMessage};
-use kvproto::pdpb::PeerStats;
+use protobuf::{self, Message};
+use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
+use rocksdb::rocksdb_options::WriteOptions;
+use rocksdb::{WriteBatch, DB};
+use time::Timespec;
 
 use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
            INVALID_INDEX, NO_LIMIT};
-use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
-use raftstore::store::worker::{apply, Proposal, RegionProposal};
 use raftstore::store::worker::apply::ExecResult;
 use raftstore::store::worker::{Apply, ApplyRes, ApplyTask};
+use raftstore::store::worker::{apply, Proposal, RegionProposal};
+use raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
+use raftstore::{Error, Result};
 
 use util::MustConsumeVec;
-use util::worker::{FutureWorker, Scheduler};
-use util::time::{duration_to_sec, monotonic_raw_now};
 use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
+use util::time::{duration_to_sec, monotonic_raw_now};
+use util::worker::{FutureWorker, Scheduler};
 
 use pd::{PdTask, INVALID_ID};
 
-use super::store::{DestroyPeerJob, Store, StoreStat};
-use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
-use super::util::{self, Lease, LeaseState};
 use super::cmd_resp;
-use super::transport::Transport;
 use super::engine::Snapshot;
-use super::metrics::*;
 use super::local_metrics::{RaftMessageMetrics, RaftMetrics, RaftProposeMetrics, RaftReadyMetrics};
+use super::metrics::*;
+use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
+use super::store::{DestroyPeerJob, Store, StoreStat};
+use super::transport::Transport;
+use super::util::{self, Lease, LeaseState};
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
+
+const SHRINK_CACHE_CAPACITY: usize = 64;
 
 struct ReadIndexRequest {
     id: u64,
@@ -90,6 +92,13 @@ impl ReadIndexQueue {
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
             }
+        }
+    }
+
+    fn gc(&mut self) {
+        if self.reads.capacity() > SHRINK_CACHE_CAPACITY && self.reads.len() < SHRINK_CACHE_CAPACITY
+        {
+            self.reads.shrink_to_fit();
         }
     }
 }
@@ -132,6 +141,13 @@ impl ProposalQueue {
     fn clear(&mut self) {
         self.queue.clear();
     }
+
+    fn gc(&mut self) {
+        if self.queue.capacity() > SHRINK_CACHE_CAPACITY && self.queue.len() < SHRINK_CACHE_CAPACITY
+        {
+            self.queue.shrink_to_fit();
+        }
+    }
 }
 
 pub struct ReadyContext<'a, T: 'a> {
@@ -144,13 +160,13 @@ pub struct ReadyContext<'a, T: 'a> {
 }
 
 impl<'a, T> ReadyContext<'a, T> {
-    pub fn new(metrics: &'a mut RaftMetrics, t: &'a T, cap: usize) -> ReadyContext<'a, T> {
+    pub fn new(metrics: &'a mut RaftMetrics, trans: &'a T, cap: usize) -> ReadyContext<'a, T> {
         ReadyContext {
             kv_wb: WriteBatch::new(),
             raft_wb: WriteBatch::with_capacity(DEFAULT_APPEND_WB_SIZE),
             sync_log: false,
-            metrics: metrics,
-            trans: t,
+            metrics,
+            trans,
             ready_res: Vec::with_capacity(cap),
         }
     }
@@ -281,7 +297,6 @@ impl Peer {
 
         let store_id = store.store_id();
         let sched = store.snap_scheduler();
-        let peer_cache = FlatMap::default();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
 
         let ps = PeerStorage::new(
@@ -316,11 +331,11 @@ impl Peer {
             raft_engine: store.raft_engine(),
             peer: util::new_peer(store_id, peer_id),
             region_id: region.get_id(),
-            raft_group: raft_group,
+            raft_group,
             proposals: Default::default(),
             apply_proposals: vec![],
             pending_reads: Default::default(),
-            peer_cache: RefCell::new(peer_cache),
+            peer_cache: RefCell::new(FlatMap::default()),
             peer_heartbeats: FlatMap::default(),
             peers_start_pending_time: vec![],
             coprocessor_host: Arc::clone(&store.coprocessor_host),
@@ -333,7 +348,7 @@ impl Peer {
             marked_to_be_checked: false,
             pending_merge: None,
             leader_missing_time: Some(Instant::now()),
-            tag: tag,
+            tag,
             last_applying_idx: applied_index,
             last_compacted_idx: 0,
             consistency_state: ConsistencyState {
@@ -344,7 +359,7 @@ impl Peer {
             raft_log_size_hint: 0,
             raft_entry_max_size: cfg.raft_entry_max_size.0,
             leader_lease: Lease::new(cfg.raft_store_max_leader_lease()),
-            cfg: cfg,
+            cfg,
             pending_messages: vec![],
             peer_stat: PeerStat::default(),
         };
@@ -392,8 +407,8 @@ impl Peer {
         };
         self.pending_remove = true;
         Some(DestroyPeerJob {
-            async_remove: async_remove,
-            initialized: initialized,
+            async_remove,
+            initialized,
             region_id: self.region_id,
             peer: self.peer.clone(),
         })
@@ -519,9 +534,7 @@ impl Peer {
     {
         for msg in msgs {
             let msg_type = msg.get_msg_type();
-
             self.send_raft_message(msg, trans)?;
-
             match msg_type {
                 MessageType::MsgAppend => metrics.append += 1,
                 MessageType::MsgAppendResponse => metrics.append_resp += 1,
@@ -572,7 +585,8 @@ impl Peer {
         }
 
         // Insert heartbeats in case that some peers never response heartbeats.
-        for peer in self.region().get_peers().to_owned() {
+        let region = self.raft_group.get_store().get_region();
+        for peer in region.get_peers() {
             self.peer_heartbeats
                 .entry(peer.get_id())
                 .or_insert_with(Instant::now);
@@ -601,7 +615,9 @@ impl Peer {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
         let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
-        for (id, progress) in status.progress {
+
+        let progresses = status.progress.iter().chain(&status.learner_progress);
+        for (&id, progress) in progresses {
             if id == self.peer.get_id() {
                 continue;
             }
@@ -612,7 +628,9 @@ impl Peer {
                         .iter()
                         .any(|&(pid, _)| pid == id)
                     {
-                        self.peers_start_pending_time.push((id, Instant::now()));
+                        let now = Instant::now();
+                        self.peers_start_pending_time.push((id, now));
+                        debug!("{} peer {} start pending at {:?}", self.tag, id, now);
                     }
                 }
             }
@@ -637,8 +655,8 @@ impl Peer {
                 if progress.matched >= truncated_idx {
                     let (_, pending_after) = self.peers_start_pending_time.swap_remove(i);
                     let elapsed = duration_to_sec(pending_after.elapsed());
-                    info!(
-                        "{} peer {} has caugth up logs, elapsed: {}",
+                    debug!(
+                        "{} peer {} has caught up logs, elapsed: {}",
                         self.tag, peer_id, elapsed
                     );
                     return true;
@@ -893,6 +911,7 @@ impl Peer {
             // line won't be called twice for the same snapshot.
             self.raft_group.advance_apply(self.last_applying_idx);
         }
+        self.proposals.gc();
     }
 
     fn apply_reads(&mut self, ready: &Ready) {
@@ -984,6 +1003,7 @@ impl Peer {
             }
             self.pending_reads.ready_cnt = 0;
         }
+        self.pending_reads.gc();
     }
 
     fn renew_leader_lease(&mut self, ts: Timespec) {
@@ -1219,7 +1239,8 @@ impl Peer {
         healthy
     }
 
-    /// Check whether it's safe to propose the specified conf change request.
+    /// Validate the `ConfChange` request and check whether it's safe to
+    /// propose the specified conf change request.
     /// It's safe iff at least the quorum of the Raft group is still healthy
     /// right after that conf change is applied.
     /// Define the total number of nodes in current Raft cluster to be `total`.
@@ -1232,9 +1253,20 @@ impl Peer {
     ///    the peer to be removed should not be the leader.
     fn check_conf_change(&self, cmd: &RaftCmdRequest) -> Result<()> {
         let change_peer = apply::get_change_peer_cmd(cmd).unwrap();
-
         let change_type = change_peer.get_change_type();
         let peer = change_peer.get_peer();
+
+        // Check the request itself is valid or not.
+        match (change_type, peer.get_is_learner()) {
+            (ConfChangeType::AddNode, true) | (ConfChangeType::AddLearnerNode, false) => {
+                warn!(
+                    "{} conf change type: {:?}, but got peer {:?}",
+                    self.tag, change_type, peer
+                );
+                return Err(box_err!("invalid conf change request"));
+            }
+            _ => {}
+        }
 
         if change_type == ConfChangeType::RemoveNode && !self.cfg.allow_remove_leader
             && peer.get_id() == self.peer_id()
@@ -1255,15 +1287,27 @@ impl Peer {
 
         match change_type {
             ConfChangeType::AddNode => {
-                status.progress.insert(peer.get_id(), Progress::default());
+                if let Some(mut progress) = status.learner_progress.remove(&peer.get_id()) {
+                    // For promote learner to voter.
+                    progress.is_learner = false;
+                    status.progress.insert(peer.get_id(), progress);
+                } else {
+                    status.progress.insert(peer.get_id(), Progress::default());
+                }
             }
             ConfChangeType::RemoveNode => {
+                if peer.get_is_learner() {
+                    // If the node is a learner, we can return directly.
+                    return Ok(());
+                }
                 if status.progress.remove(&peer.get_id()).is_none() {
                     // It's always safe to remove a unexisting node.
                     return Ok(());
                 }
             }
-            ConfChangeType::AddLearnerNode => unimplemented!(),
+            ConfChangeType::AddLearnerNode => {
+                return Ok(());
+            }
         }
         let healthy = self.count_healthy_node(status.progress.values());
         let quorum_after_change = raft::quorum(status.progress.len());
@@ -1354,12 +1398,12 @@ impl Peer {
             return false;
         }
 
-        let mut v = MustConsumeVec::with_capacity("callback of index read", 1);
-        v.push((req, cb));
+        let mut cmds = MustConsumeVec::with_capacity("callback of index read", 1);
+        cmds.push((req, cb));
         self.pending_reads.reads.push_back(ReadIndexRequest {
-            id: id,
-            cmds: v,
-            renew_lease_time: renew_lease_time,
+            id,
+            cmds,
+            renew_lease_time,
         });
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
@@ -1368,7 +1412,7 @@ impl Peer {
             let req = RaftCmdRequest::new();
             if let Ok(index) = self.propose_normal(req, metrics) {
                 let meta = ProposalMeta {
-                    index: index,
+                    index,
                     term: self.term(),
                     renew_lease_time: Some(renew_lease_time),
                 };
@@ -1541,7 +1585,6 @@ impl Peer {
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
 
         let change_peer = apply::get_change_peer_cmd(&req).unwrap();
-
         let mut cc = eraftpb::ConfChange::new();
         cc.set_change_type(change_peer.get_change_type());
         cc.set_node_id(change_peer.get_peer().get_id());
@@ -1568,7 +1611,7 @@ impl Peer {
     fn handle_read(&mut self, req: RaftCmdRequest) -> ReadResponse {
         let mut resp = self.exec_read(&req).unwrap_or_else(|e| {
             match e {
-                Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
+                Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
                 _ => error!("{} execute raft command err: {:?}", self.tag, e),
             }
             ReadResponse {
@@ -1708,7 +1751,6 @@ impl Peer {
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
 
         let from_peer = self.peer.clone();
-
         let to_peer = match self.get_peer_from_cache(msg.get_to()) {
             Some(p) => p,
             None => {

@@ -18,7 +18,7 @@ use std::result;
 
 use futures::sync::oneshot::Canceled;
 use grpc::Error as GrpcError;
-use uuid::ParseError;
+use uuid::{ParseError, Uuid};
 
 use raftstore::errors::Error as RaftStoreError;
 use util::codec::Error as CodecError;
@@ -76,12 +76,13 @@ quick_error! {
         InvalidSSTPath(path: PathBuf) {
             display("Invalid SST path {:?}", path)
         }
-        TokenExists(token: usize) {
-            display("Token {} exists", token)
+        EngineInUse(uuid: Uuid) {
+            display("Engine {} is in use", uuid)
         }
-        TokenNotFound(token: usize) {
-            display("Token {} not found", token)
+        EngineNotFound(uuid: Uuid) {
+            display("Engine {} not found", uuid)
         }
+        InvalidChunk {}
     }
 }
 

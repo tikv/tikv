@@ -11,23 +11,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use byteorder::{BigEndian, ReadBytesExt};
+use std::iter::Peekable;
 use std::mem;
 use std::vec::IntoIter;
-use std::iter::Peekable;
-use byteorder::{BigEndian, ReadBytesExt};
 
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::IndexScan;
 use tipb::schema::ColumnInfo;
 
 use coprocessor::codec::{datum, mysql, table};
-use coprocessor::endpoint::is_point;
-use coprocessor::{Error, Result};
+use coprocessor::util;
+use coprocessor::*;
+
 use storage::{Key, SnapshotStore};
 
-use super::{Executor, Row};
-use super::scanner::{ScanOn, Scanner};
 use super::ExecutorMetrics;
+use super::scanner::{ScanOn, Scanner};
+use super::{Executor, Row};
 
 pub struct IndexScanExecutor {
     store: SnapshotStore,
@@ -41,7 +42,8 @@ pub struct IndexScanExecutor {
     scan_range: KeyRange,
     scanner: Option<Scanner>,
     unique: bool,
-    count: i64,
+    // The number of scan keys for each range.
+    counts: Option<Vec<i64>>,
     metrics: ExecutorMetrics,
     first_collect: bool,
 }
@@ -52,6 +54,7 @@ impl IndexScanExecutor {
         mut key_ranges: Vec<KeyRange>,
         store: SnapshotStore,
         unique: bool,
+        collect: bool,
     ) -> Result<IndexScanExecutor> {
         box_try!(table::check_table_ranges(&key_ranges));
         let mut pk_col = None;
@@ -64,18 +67,18 @@ impl IndexScanExecutor {
             pk_col = Some(cols.pop().unwrap());
         }
         let col_ids = cols.iter().map(|c| c.get_column_id()).collect();
-
+        let counts = if collect { Some(Vec::default()) } else { None };
         Ok(IndexScanExecutor {
-            store: store,
-            desc: desc,
-            col_ids: col_ids,
-            pk_col: pk_col,
+            store,
+            desc,
+            col_ids,
+            pk_col,
             key_ranges: key_ranges.into_iter().peekable(),
             current_range: None,
             scan_range: KeyRange::default(),
             scanner: None,
-            unique: unique,
-            count: 0,
+            unique,
+            counts,
             metrics: Default::default(),
             first_collect: true,
         })
@@ -89,16 +92,16 @@ impl IndexScanExecutor {
         box_try!(table::check_table_ranges(&key_ranges));
         let col_ids: Vec<i64> = (0..cols).collect();
         Ok(IndexScanExecutor {
-            store: store,
+            store,
             desc: false,
-            col_ids: col_ids,
+            col_ids,
             pk_col: None,
             key_ranges: key_ranges.into_iter().peekable(),
             current_range: None,
             scan_range: KeyRange::default(),
             scanner: None,
             unique: false,
-            count: 0,
+            counts: None,
             metrics: ExecutorMetrics::default(),
             first_collect: true,
         })
@@ -158,7 +161,7 @@ impl IndexScanExecutor {
     }
 
     fn is_point(&self, range: &KeyRange) -> bool {
-        self.unique && is_point(range)
+        self.unique && util::is_point(range)
     }
 }
 
@@ -166,14 +169,21 @@ impl Executor for IndexScanExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
-                self.count += 1;
+                if let Some(counts) = self.counts.as_mut() {
+                    counts.last_mut().map_or((), |val| *val += 1);
+                }
                 return Ok(Some(row));
             }
             if let Some(range) = self.key_ranges.next() {
+                if let Some(counts) = self.counts.as_mut() {
+                    counts.push(0)
+                };
                 self.current_range = Some(range.clone());
                 if self.is_point(&range) {
                     if let Some(row) = self.get_row_from_point(range)? {
-                        self.count += 1;
+                        if let Some(counts) = self.counts.as_mut() {
+                            counts.last_mut().map_or((), |val| *val += 1);
+                        }
                         return Ok(Some(row));
                     }
                     continue;
@@ -193,7 +203,7 @@ impl Executor for IndexScanExecutor {
 
     fn start_scan(&mut self) {
         if let Some(range) = self.current_range.as_ref() {
-            if !is_point(range) {
+            if !util::is_point(range) {
                 let scanner = self.scanner.as_ref().unwrap();
                 return scanner.start_scan(&mut self.scan_range);
             }
@@ -212,7 +222,7 @@ impl Executor for IndexScanExecutor {
         let mut ret_range = mem::replace(&mut self.scan_range, KeyRange::default());
         match self.current_range.as_ref() {
             Some(range) => {
-                if !is_point(range) {
+                if !util::is_point(range) {
                     let scanner = self.scanner.as_ref().unwrap();
                     if scanner.stop_scan(&mut ret_range) {
                         return Some(ret_range);
@@ -232,14 +242,16 @@ impl Executor for IndexScanExecutor {
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
-        counts.push(self.count);
-        self.count = 0;
+        if let Some(cur_counts) = self.counts.as_mut() {
+            counts.append(cur_counts);
+            cur_counts.push(0);
+        }
     }
 
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         metrics.merge(&mut self.metrics);
         if let Some(scanner) = self.scanner.as_mut() {
-            scanner.collect_statistics_into(&mut self.metrics.cf_stats);
+            scanner.collect_statistics_into(&mut metrics.cf_stats);
         }
         if self.first_collect {
             metrics.executor_count.index_scan += 1;
@@ -250,20 +262,20 @@ impl Executor for IndexScanExecutor {
 
 #[cfg(test)]
 pub mod test {
-    use std::i64;
     use byteorder::{BigEndian, WriteBytesExt};
+    use std::i64;
 
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
     use tipb::schema::ColumnInfo;
 
-    use coprocessor::codec::mysql::types;
     use coprocessor::codec::datum::{self, Datum};
-    use util::collections::HashMap;
+    use coprocessor::codec::mysql::types;
     use storage::SnapshotStore;
+    use util::collections::HashMap;
 
-    use super::*;
     use super::super::scanner::test::{new_col_info, Data, TestStore};
+    use super::*;
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;
@@ -341,9 +353,9 @@ pub mod test {
             kv_data.push((idx_key, value));
         }
         Data {
-            kv_data: kv_data,
-            expect_rows: expect_rows,
-            cols: cols,
+            kv_data,
+            expect_rows,
+            cols,
         }
     }
 
@@ -392,9 +404,9 @@ pub mod test {
             IndexTestWrapper {
                 data: test_data,
                 store: test_store,
-                scan: scan,
+                scan,
                 ranges: key_ranges,
-                cols: cols,
+                cols,
             }
         }
     }
@@ -429,7 +441,7 @@ pub mod test {
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
         let mut scanner =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, false).unwrap();
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, false, false).unwrap();
 
         for handle in 0..KEY_NUMBER / 2 {
             let row = scanner.next().unwrap().unwrap();
@@ -483,7 +495,7 @@ pub mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut scanner =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique).unwrap();
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique, true).unwrap();
         for handle in 0..KEY_NUMBER {
             let row = scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
@@ -496,8 +508,8 @@ pub mod test {
             }
         }
         assert!(scanner.next().unwrap().is_none());
-        let expected_counts = vec![KEY_NUMBER as i64];
-        let mut counts = Vec::with_capacity(1);
+        let expected_counts = vec![1, 3, 1, 5, 0];
+        let mut counts = Vec::with_capacity(5);
         scanner.collect_output_counts(&mut counts);
         assert_eq!(expected_counts, counts);
     }
@@ -535,7 +547,7 @@ pub mod test {
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
         let mut scanner =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique).unwrap();
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique, false).unwrap();
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;
@@ -559,7 +571,7 @@ pub mod test {
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
         let mut scanner =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, false).unwrap();
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, false, false).unwrap();
 
         for handle in 0..KEY_NUMBER {
             let row = scanner.next().unwrap().unwrap();

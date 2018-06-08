@@ -13,25 +13,25 @@
 
 use std::sync::Arc;
 
-use tikv::util::HandyRwLock;
-use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT};
-use tikv::storage::mvcc::{Lock, LockType};
-use tikv::raftstore::store::{keys, Mutable, Peekable};
 use tikv::coprocessor::REQ_TYPE_DAG;
+use tikv::raftstore::store::{keys, Mutable, Peekable};
+use tikv::storage::mvcc::{Lock, LockType};
+use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT};
+use tikv::util::HandyRwLock;
 
-use kvproto::kvrpcpb::*;
-use kvproto::raft_serverpb::*;
-use kvproto::coprocessor::*;
-use kvproto::{debugpb, metapb, raft_serverpb};
-use kvproto::tikvpb_grpc::TikvClient;
-use kvproto::debugpb_grpc::DebugClient;
-use raft::eraftpb;
-use rocksdb::Writable;
 use futures::{future, Future, Sink, Stream};
 use grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
+use kvproto::coprocessor::*;
+use kvproto::debugpb_grpc::DebugClient;
+use kvproto::kvrpcpb::*;
+use kvproto::raft_serverpb::*;
+use kvproto::tikvpb_grpc::TikvClient;
+use kvproto::{debugpb, metapb, raft_serverpb};
+use raft::eraftpb;
+use rocksdb::Writable;
 
-use super::server::*;
 use super::cluster::Cluster;
+use super::server::*;
 
 fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
     let count = 1;

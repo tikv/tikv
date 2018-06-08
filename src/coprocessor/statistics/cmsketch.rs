@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use byteorder::{ByteOrder, LittleEndian};
-use protobuf::RepeatedField;
 use murmur3::murmur3_x64_128;
+use protobuf::RepeatedField;
 use tipb::analyze;
 
 /// `CMSketch` is used to estimate point queries.
@@ -75,14 +75,14 @@ impl CMSketch {
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
-    use std::cmp::min;
-    use rand::{Rng, SeedableRng, StdRng};
-    use zipf::ZipfDistribution;
+    use super::*;
     use coprocessor::codec::datum;
     use coprocessor::codec::datum::Datum;
+    use rand::{Rng, SeedableRng, StdRng};
+    use std::cmp::min;
+    use std::collections::HashMap;
     use util::as_slice;
-    use super::*;
+    use zipf::ZipfDistribution;
 
     impl CMSketch {
         fn query(&self, bytes: &[u8]) -> u32 {

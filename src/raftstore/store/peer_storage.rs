@@ -11,33 +11,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::rc::Rc;
 use std::cell::RefCell;
-use std::{cmp, error, u64};
-use std::time::Instant;
 use std::collections::VecDeque;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::time::Instant;
+use std::{cmp, error, u64};
 
-use rocksdb::{Writable, WriteBatch, DB};
 use protobuf::Message;
+use rocksdb::{Writable, WriteBatch, DB};
 
+use super::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
+use super::keys::{self, enc_end_key, enc_start_key};
+use super::metrics::*;
+use super::peer::ReadyContext;
+use super::worker::RegionTask;
+use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 use kvproto::metapb::{self, Region};
-use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftLocalState,
                              RaftSnapshotData, RegionLocalState};
+use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
+use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
+use raftstore::store::util::conf_state_from_region;
+use raftstore::{Error, Result};
+use storage::CF_RAFT;
 use util::worker::Scheduler;
 use util::{self, rocksdb};
-use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
-use raftstore::{Error, Result};
-use super::worker::RegionTask;
-use super::keys::{self, enc_end_key, enc_start_key};
-use super::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
-use super::peer::ReadyContext;
-use super::metrics::*;
-use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
-use storage::CF_RAFT;
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -123,8 +124,8 @@ struct EntryCache {
 }
 
 impl EntryCache {
-    fn first_index(&self) -> u64 {
-        self.cache.front().map_or(u64::MAX, |e| e.get_index())
+    fn first_index(&self) -> Option<u64> {
+        self.cache.front().map(|e| e.get_index())
     }
 
     fn fetch_entries_to(
@@ -211,17 +212,15 @@ impl EntryCache {
     }
 
     pub fn compact_to(&mut self, idx: u64) {
-        let cache_first_idx = match self.cache.front() {
-            None => return,
-            Some(e) => e.get_index(),
-        };
-
+        let cache_first_idx = self.first_index().unwrap_or(u64::MAX);
         if cache_first_idx > idx {
             return;
         }
         let cache_last_idx = self.cache.back().unwrap().get_index();
+        // Use `cache_last_idx + 1` to make sure cache can be cleared completely
+        // if neccessary.
         self.cache
-            .drain(..(cmp::min(cache_last_idx, idx) - cache_first_idx) as usize);
+            .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize);
         if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY
         {
             // So the peer storage doesn't have much writes since the proposal of compaction,
@@ -241,12 +240,10 @@ impl CacheQueryStats {
     pub fn flush(&mut self) {
         RAFT_ENTRY_FETCHES
             .with_label_values(&["hit"])
-            .inc_by(self.hit as f64)
-            .unwrap();
+            .inc_by(self.hit as i64);
         RAFT_ENTRY_FETCHES
             .with_label_values(&["miss"])
-            .inc_by(self.miss as f64)
-            .unwrap();
+            .inc_by(self.miss as i64);
         self.hit = 0;
         self.miss = 0;
     }
@@ -480,19 +477,19 @@ impl PeerStorage {
         let last_term = init_last_term(&raft_engine, region, &raft_state, &apply_state)?;
 
         Ok(PeerStorage {
-            kv_engine: kv_engine,
-            raft_engine: raft_engine,
+            kv_engine,
+            raft_engine,
             region: region.clone(),
-            raft_state: raft_state,
-            apply_state: apply_state,
+            raft_state,
+            apply_state,
             snap_state: RefCell::new(SnapState::Relax),
-            region_sched: region_sched,
+            region_sched,
             snap_tried_cnt: RefCell::new(0),
-            tag: tag,
+            tag,
             applied_index_term: RAFT_INIT_LOG_TERM,
-            last_term: last_term,
+            last_term,
             cache: EntryCache::default(),
-            stats: stats,
+            stats,
         })
     }
 
@@ -502,7 +499,6 @@ impl PeerStorage {
 
     pub fn initial_state(&self) -> raft::Result<RaftState> {
         let hard_state = self.raft_state.get_hard_state().clone();
-        let mut conf_state = ConfState::new();
         if hard_state == HardState::new() {
             assert!(
                 !self.is_initialized(),
@@ -513,18 +509,13 @@ impl PeerStorage {
             );
 
             return Ok(RaftState {
-                hard_state: hard_state,
-                conf_state: conf_state,
+                hard_state,
+                conf_state: ConfState::default(),
             });
         }
-
-        for p in self.region.get_peers() {
-            conf_state.mut_nodes().push(p.get_id());
-        }
-
         Ok(RaftState {
-            hard_state: hard_state,
-            conf_state: conf_state,
+            hard_state,
+            conf_state: conf_state_from_region(&self.region),
         })
     }
 
@@ -552,7 +543,7 @@ impl PeerStorage {
         if low == high {
             return Ok(ents);
         }
-        let cache_low = self.cache.first_index();
+        let cache_low = self.cache.first_index().unwrap_or(u64::MAX);
         let region_id = self.get_region_id();
         if high <= cache_low {
             // not overlap
@@ -798,6 +789,24 @@ impl PeerStorage {
         self.cache.compact_to(idx);
     }
 
+    pub fn maybe_gc_cache(&mut self, replicated_idx: u64, apply_idx: u64) {
+        if replicated_idx == apply_idx {
+            // The region is inactive, clear the cache immediately.
+            self.cache.compact_to(apply_idx + 1);
+        } else {
+            let cache_first_idx = match self.cache.first_index() {
+                None => return,
+                Some(idx) => idx,
+            };
+            if cache_first_idx > replicated_idx + 1 {
+                // Catching up log requires accessing fs already, let's optimize for
+                // the common case.
+                // Maybe gc to second least replicated_idx is better.
+                self.cache.compact_to(apply_idx + 1);
+            }
+        }
+    }
+
     // Apply the peer with given snapshot.
     pub fn apply_snapshot(
         &mut self,
@@ -1002,7 +1011,7 @@ impl PeerStorage {
         self.set_snap_state(SnapState::Applying(Arc::clone(&status)));
         let task = RegionTask::Apply {
             region_id: self.get_region_id(),
-            status: status,
+            status,
         };
         // TODO: gracefully remove region instead.
         self.region_sched
@@ -1106,7 +1115,7 @@ impl PeerStorage {
         self.region = snap_region;
 
         Some(ApplySnapResult {
-            prev_region: prev_region,
+            prev_region,
             region: self.region.clone(),
         })
     }
@@ -1154,7 +1163,7 @@ pub fn fetch_entries_to(
         &start_key,
         &end_key,
         true, // fill_cache
-        &mut |_, value| {
+        |_, value| {
             let mut entry = Entry::new();
             entry.merge_from_bytes(value)?;
 
@@ -1201,7 +1210,7 @@ pub fn clear_meta(
     let mut first_index = last_index + 1;
     let begin_log_key = keys::raft_log_key(region_id, 0);
     let end_log_key = keys::raft_log_key(region_id, first_index);
-    raft_engine.scan(&begin_log_key, &end_log_key, false, &mut |key, _| {
+    raft_engine.scan(&begin_log_key, &end_log_key, false, |key, _| {
         first_index = keys::raft_log_index(key).unwrap();
         Ok(false)
     })?;
@@ -1277,11 +1286,7 @@ pub fn do_snapshot(
     snapshot.mut_metadata().set_index(key.idx);
     snapshot.mut_metadata().set_term(key.term);
 
-    let mut conf_state = ConfState::new();
-    for p in state.get_region().get_peers() {
-        conf_state.mut_nodes().push(p.get_id());
-    }
-
+    let conf_state = conf_state_from_region(state.get_region());
     snapshot.mut_metadata().set_conf_state(conf_state);
 
     let mut s = mgr.get_snapshot_for_building(&key, snap)?;
@@ -1390,27 +1395,27 @@ impl Storage for PeerStorage {
 
 #[cfg(test)]
 mod test {
-    use std::sync::*;
-    use std::sync::atomic::*;
-    use std::sync::mpsc::*;
-    use std::rc::Rc;
-    use std::cell::RefCell;
-    use std::time::Duration;
-    use std::path::Path;
-    use raft::eraftpb::{ConfState, Entry};
     use kvproto::raft_serverpb::RaftSnapshotData;
-    use raft::{Error as RaftError, StorageError};
-    use tempdir::*;
     use protobuf;
-    use raftstore::store::{bootstrap, Engines};
+    use raft::eraftpb::HardState;
+    use raft::eraftpb::{ConfState, Entry};
+    use raft::{Error as RaftError, StorageError};
+    use raftstore::store::local_metrics::RaftMetrics;
     use raftstore::store::worker::RegionRunner;
     use raftstore::store::worker::RegionTask;
-    use raftstore::store::local_metrics::RaftMetrics;
-    use util::worker::{Scheduler, Worker};
-    use util::rocksdb::new_engine;
-    use storage::{ALL_CFS, CF_DEFAULT};
-    use raft::eraftpb::HardState;
+    use raftstore::store::{bootstrap, Engines};
     use rocksdb::WriteBatch;
+    use std::cell::RefCell;
+    use std::path::Path;
+    use std::rc::Rc;
+    use std::sync::atomic::*;
+    use std::sync::mpsc::*;
+    use std::sync::*;
+    use std::time::Duration;
+    use storage::{ALL_CFS, CF_DEFAULT};
+    use tempdir::*;
+    use util::rocksdb::new_engine;
+    use util::worker::{Scheduler, Worker};
 
     use super::*;
 
@@ -1521,7 +1526,7 @@ mod test {
         );
         store
             .kv_engine
-            .scan_cf(CF_RAFT, &meta_start, &meta_end, false, &mut |_, _| {
+            .scan_cf(CF_RAFT, &meta_start, &meta_end, false, |_, _| {
                 count += 1;
                 Ok(true)
             })
@@ -1533,7 +1538,7 @@ mod test {
         );
         store
             .kv_engine
-            .scan_cf(CF_RAFT, &raft_start, &raft_end, false, &mut |_, _| {
+            .scan_cf(CF_RAFT, &raft_start, &raft_end, false, |_, _| {
                 count += 1;
                 Ok(true)
             })
@@ -1541,7 +1546,7 @@ mod test {
 
         store
             .raft_engine
-            .scan(&raft_start, &raft_end, false, &mut |_, _| {
+            .scan(&raft_start, &raft_end, false, |_, _| {
                 count += 1;
                 Ok(true)
             })
@@ -1694,6 +1699,7 @@ mod test {
             mgr,
             0,
             true,
+            Duration::from_secs(0),
         );
         worker.start(runner).unwrap();
         let snap = s.snapshot();
@@ -1958,6 +1964,12 @@ mod test {
         exp_res = (1..7).map(|i| new_entry(i, 8)).collect();
         validate_cache(&store, &exp_res);
         assert!(store.cache.cache.capacity() < cap as usize);
+
+        // compact all
+        store.compact_to(cap + 2);
+        validate_cache(&store, &[]);
+        // invalid compaction should be ignored.
+        store.compact_to(cap);
     }
 
     #[test]
@@ -1983,6 +1995,7 @@ mod test {
             mgr.clone(),
             0,
             true,
+            Duration::from_secs(0),
         );
         worker.start(runner).unwrap();
         assert!(s1.snapshot().is_err());

@@ -12,16 +12,23 @@
 // limitations under the License.
 
 mod config;
+mod engine;
 mod errors;
 mod metrics;
 #[macro_use]
 mod service;
-mod sst_service;
+mod kv_importer;
+mod kv_server;
+mod kv_service;
 mod sst_importer;
+mod sst_service;
 
 pub mod test_helpers;
 
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
-pub use self::sst_service::ImportSSTService;
+pub use self::kv_importer::KVImporter;
+pub use self::kv_server::ImportKVServer;
+pub use self::kv_service::ImportKVService;
 pub use self::sst_importer::SSTImporter;
+pub use self::sst_service::ImportSSTService;

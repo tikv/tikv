@@ -11,50 +11,46 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::thread;
-use std::sync::{mpsc, Arc};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc};
+use std::thread;
 use std::time::Duration;
 
-use grpc::EnvBuilder;
 use futures::Future;
 use futures_cpupool::Builder;
+use grpc::EnvBuilder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
 use tikv::pd::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
 use tikv::util::security::{SecurityConfig, SecurityManager};
 
-use super::mock::mocker::*;
 use super::mock::Server as MockServer;
+use super::mock::mocker::*;
 use util;
 
-fn new_config(eps: Vec<String>) -> Config {
+fn new_config(eps: Vec<(String, u16)>) -> Config {
     let mut cfg = Config::default();
-    cfg.endpoints = eps;
+    cfg.endpoints = eps.into_iter()
+        .map(|addr| format!("{}:{}", addr.0, addr.1))
+        .collect();
     cfg
 }
 
-fn new_client(eps: Vec<String>) -> RpcClient {
+fn new_client(eps: Vec<(String, u16)>, mgr: Option<Arc<SecurityManager>>) -> RpcClient {
     let cfg = new_config(eps);
-    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    let mgr =
+        mgr.unwrap_or_else(|| Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()));
     RpcClient::new(&cfg, mgr).unwrap()
 }
 
 #[test]
 fn test_rpc_client() {
     let eps_count = 1;
-    let se = Arc::new(Service::new());
-    let server = MockServer::run::<Service>(eps_count, Arc::clone(&se), None);
-    let eps: Vec<String> = server
-        .bind_addrs()
-        .into_iter()
-        .map(|addr| format!("{}:{}", addr.0, addr.1))
-        .collect();
+    let server = MockServer::new(eps_count);
+    let eps = server.bind_addrs();
 
-    thread::sleep(Duration::from_secs(1));
-
-    let client = new_client(eps.clone());
+    let client = new_client(eps.clone(), None);
     assert_ne!(client.get_cluster_id().unwrap(), 0);
 
     let store_id = client.alloc_id().unwrap();
@@ -98,7 +94,7 @@ fn test_rpc_client() {
 
     let mut prev_id = 0;
     for _ in 0..100 {
-        let client = new_client(eps.clone());
+        let client = new_client(eps.clone(), None);
         let alloc_id = client.alloc_id().unwrap();
         assert!(alloc_id > prev_id);
         prev_id = alloc_id;
@@ -139,18 +135,9 @@ fn test_rpc_client() {
 #[test]
 fn test_reboot() {
     let eps_count = 1;
-    let se = Arc::new(Service::new());
-    let al = Arc::new(AlreadyBootstrapped);
-    let server = MockServer::run(eps_count, Arc::clone(&se), Some(al));
-    let eps: Vec<String> = server
-        .bind_addrs()
-        .into_iter()
-        .map(|addr| format!("{}:{}", addr.0, addr.1))
-        .collect();
-
-    thread::sleep(Duration::from_secs(1));
-
-    let client = new_client(eps);
+    let server = MockServer::with_case(eps_count, Arc::new(AlreadyBootstrapped));
+    let eps = server.bind_addrs();
+    let client = new_client(eps, None);
 
     assert!(!client.is_cluster_bootstrapped().unwrap());
 
@@ -165,22 +152,14 @@ fn test_reboot() {
 #[test]
 fn test_validate_endpoints() {
     let eps_count = 3;
-    let se = Arc::new(Service::new());
-    let sp = Arc::new(Split::new());
-    let server = MockServer::run(eps_count, se, Some(sp));
+    let server = MockServer::with_case(eps_count, Arc::new(Split::new()));
     let env = Arc::new(
         EnvBuilder::new()
             .cq_count(1)
             .name_prefix(thd_name!("test_pd"))
             .build(),
     );
-    let eps: Vec<String> = server
-        .bind_addrs()
-        .into_iter()
-        .map(|addr| format!("{}:{}", addr.0, addr.1))
-        .collect();
-
-    thread::sleep(Duration::from_secs(1));
+    let eps = server.bind_addrs();
 
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     assert!(validate_endpoints(env, &new_config(eps), &mgr).is_err());
@@ -188,19 +167,12 @@ fn test_validate_endpoints() {
 
 fn test_retry<F: Fn(&RpcClient)>(func: F) {
     let eps_count = 1;
-    let se = Arc::new(Service::new());
     // Retry mocker returns `Err(_)` for most request, here two thirds are `Err(_)`.
     let retry = Arc::new(Retry::new(3));
-    let server = MockServer::run(eps_count, Arc::clone(&se), Some(retry));
-    let eps: Vec<String> = server
-        .bind_addrs()
-        .into_iter()
-        .map(|addr| format!("{}:{}", addr.0, addr.1))
-        .collect();
+    let server = MockServer::with_case(eps_count, retry);
+    let eps = server.bind_addrs();
 
-    thread::sleep(Duration::from_secs(1));
-
-    let client = new_client(eps);
+    let client = new_client(eps, None);
 
     for _ in 0..3 {
         func(&client);
@@ -224,22 +196,14 @@ fn test_retry_sync() {
     test_retry(sync)
 }
 
-#[test]
-fn test_restart_leader() {
-    let eps_count = 3;
+fn restart_leader(mgr: SecurityManager) {
+    let mgr = Arc::new(mgr);
     // Service has only one GetMembersResponse, so the leader never changes.
-    let se = Arc::new(Service::new());
-    // Start mock servers.
-    let server = MockServer::run::<Service>(eps_count, Arc::clone(&se), None);
-    let eps: Vec<String> = server
-        .bind_addrs()
-        .into_iter()
-        .map(|addr| format!("{}:{}", addr.0, addr.1))
-        .collect();
+    let mut server =
+        MockServer::<Service>::with_configuration(&mgr, vec![("127.0.0.1".to_owned(), 0); 3], None);
+    let eps = server.bind_addrs();
 
-    thread::sleep(Duration::from_secs(2));
-
-    let client = new_client(eps);
+    let client = new_client(eps.clone(), Some(Arc::clone(&mgr)));
     // Put a region.
     let store_id = client.alloc_id().unwrap();
     let mut store = metapb::Store::new();
@@ -264,94 +228,38 @@ fn test_restart_leader() {
         .unwrap()
         .unwrap();
 
-    // Get the random binded addrs.
-    let eps = server.bind_addrs();
-
-    // Kill servers.
-    drop(server);
-    // Restart them again.
-    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
-    let _server = MockServer::run_with_eps::<Service>(&mgr, eps, Arc::clone(&se), None);
+    // Stop servers and restart them again.
+    server.stop();
+    server.start(&mgr, eps);
 
     // RECONNECT_INTERVAL_SEC is 1s.
     thread::sleep(Duration::from_secs(1));
 
-    let region = client.get_region_by_id(region.get_id());
-    region.wait().unwrap();
+    let region = client.get_region_by_id(region.get_id()).wait().unwrap();
+    assert_eq!(region.unwrap().get_id(), region_id);
 }
 
-// A copy of test_restart_leader with secure connections
 #[test]
-fn test_secure_restart_leader() {
-    // Service has only one GetMembersResponse, so the leader never changes.
-    let se = Arc::new(Service::new());
+fn test_restart_leader_insecure() {
+    let mgr = SecurityManager::new(&SecurityConfig::default()).unwrap();
+    restart_leader(mgr)
+}
+
+#[test]
+fn test_restart_leader_secure() {
     let security_cfg = util::new_security_cfg();
-    let mgr = Arc::new(SecurityManager::new(&security_cfg).unwrap());
-    // Start mock servers.
-    let eps: Vec<(String, u16)> = (0..3).map(|_| ("127.0.0.1".to_owned(), 0)).collect();
-    let server = MockServer::run_with_eps::<Service>(&mgr, eps, Arc::clone(&se), None);
-    let eps: Vec<String> = server
-        .bind_addrs()
-        .into_iter()
-        .map(|addr| format!("{}:{}", addr.0, addr.1))
-        .collect();
-
-    thread::sleep(Duration::from_secs(2));
-
-    let cfg = new_config(eps);
-    let client = RpcClient::new(&cfg, Arc::clone(&mgr)).unwrap();
-    // Put a region.
-    let store_id = client.alloc_id().unwrap();
-    let mut store = metapb::Store::new();
-    store.set_id(store_id);
-
-    let peer_id = client.alloc_id().unwrap();
-    let mut peer = metapb::Peer::new();
-    peer.set_id(peer_id);
-    peer.set_store_id(store_id);
-
-    let region_id = client.alloc_id().unwrap();
-    let mut region = metapb::Region::new();
-    region.set_id(region_id);
-    region.mut_peers().push(peer);
-    client
-        .bootstrap_cluster(store.clone(), region.clone())
-        .unwrap();
-
-    let region = client.get_region_by_id(region_id).wait().unwrap().unwrap();
-    assert_eq!(region.get_id(), region_id);
-
-    // Get the random binded addrs.
-    let eps = server.bind_addrs().into_iter().collect();
-
-    // Kill servers.
-    drop(server);
-    // Restart them again.
-    let _server = MockServer::run_with_eps::<Service>(&mgr, eps, Arc::clone(&se), None);
-
-    // RECONNECT_INTERVAL_SEC is 1s.
-    thread::sleep(Duration::from_secs(1));
-
-    let region = client.get_region_by_id(region_id).wait().unwrap().unwrap();
-    assert_eq!(region.get_id(), region_id);
+    let mgr = SecurityManager::new(&security_cfg).unwrap();
+    restart_leader(mgr)
 }
 
 #[test]
 fn test_change_leader_async() {
     let eps_count = 3;
-    let se = Arc::new(Service::new());
-    let lc = Arc::new(LeaderChange::new());
-    let server = MockServer::run(eps_count, Arc::clone(&se), Some(Arc::clone(&lc)));
-    let eps: Vec<String> = server
-        .bind_addrs()
-        .into_iter()
-        .map(|addr| format!("{}:{}", addr.0, addr.1))
-        .collect();
-
-    thread::sleep(Duration::from_secs(1));
+    let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
+    let eps = server.bind_addrs();
 
     let counter = Arc::new(AtomicUsize::new(0));
-    let client = new_client(eps);
+    let client = new_client(eps, None);
     let counter1 = Arc::clone(&counter);
     client.handle_reconnect(move || {
         counter1.fetch_add(1, Ordering::SeqCst);
@@ -376,17 +284,10 @@ fn test_change_leader_async() {
 #[test]
 fn test_region_heartbeat_on_leader_change() {
     let eps_count = 3;
-    let se = Arc::new(Service::new());
-    let lc = Arc::new(LeaderChange::new());
-    let server = MockServer::run(eps_count, Arc::clone(&se), Some(Arc::clone(&lc)));
-    let eps: Vec<String> = server
-        .bind_addrs()
-        .into_iter()
-        .map(|addr| format!("{}:{}", addr.0, addr.1))
-        .collect();
-    thread::sleep(Duration::from_secs(1));
+    let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
+    let eps = server.bind_addrs();
 
-    let client = new_client(eps);
+    let client = new_client(eps, None);
     let poller = Builder::new()
         .pool_size(1)
         .name_prefix(thd_name!("poller"))

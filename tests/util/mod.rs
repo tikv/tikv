@@ -12,10 +12,10 @@
 // limitations under the License.
 
 use rand::{self, Rng, ThreadRng};
-use std::io::{self, Write};
 use std::env;
 use std::fmt::Arguments;
 use std::fs::File;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -34,8 +34,8 @@ pub struct KvGenerator {
 impl KvGenerator {
     pub fn new(key_len: usize, value_len: usize) -> KvGenerator {
         KvGenerator {
-            key_len: key_len,
-            value_len: value_len,
+            key_len,
+            value_len,
             rng: rand::thread_rng(),
         }
     }
@@ -88,13 +88,25 @@ impl Drop for CaseTraceLogger {
 }
 
 // A help function to initial logger.
-pub fn init_log() {
+fn init_log() {
     let output = env::var("LOG_FILE").ok();
     let level =
         logger::get_level_by_string(&env::var("LOG_LEVEL").unwrap_or_else(|_| "debug".to_owned()));
     let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
     // we don't mind set it multiple times.
     let _ = logger::init_log_for_tikv_only(CaseTraceLogger { f: writer }, level);
+}
+
+/// Set up ci test fail case log.
+pub fn ci_setup() {
+    if env::var("CI").is_ok() && env::var("LOG_FILE").is_ok() {
+        init_log();
+    }
+    if env::var("PANIC_ABORT").is_ok() {
+        // Panics as aborts, it's helpful for debugging,
+        // but also stops tests immediately.
+        util::panic_hook::set_exit_hook(true);
+    }
 }
 
 pub fn new_security_cfg() -> SecurityConfig {

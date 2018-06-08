@@ -15,36 +15,39 @@ use rocksdb::DB;
 
 use util::config::ReadableSize;
 
-use super::super::{Coprocessor, ObserverContext, SplitCheckObserver};
-use super::Status;
+use super::super::{Coprocessor, ObserverContext, SplitCheckObserver, SplitChecker};
+use super::Host;
 
 const BUCKET_NUMBER_LIMIT: usize = 1024;
 const BUCKET_SIZE_LIMIT_MB: u64 = 512;
 
-#[derive(Default)]
-pub struct HalfStatus {
+pub struct Checker {
     buckets: Vec<Vec<u8>>,
     cur_bucket_size: u64,
     each_bucket_size: u64,
 }
 
-impl HalfStatus {
-    fn new(each_bucket_size: u64) -> HalfStatus {
-        HalfStatus {
-            each_bucket_size: each_bucket_size,
-            ..Default::default()
+impl Checker {
+    fn new(each_bucket_size: u64) -> Checker {
+        Checker {
+            each_bucket_size,
+            cur_bucket_size: 0,
+            buckets: vec![],
         }
     }
+}
 
-    pub fn push_data(&mut self, key: &[u8], value_size: u64) {
+impl SplitChecker for Checker {
+    fn on_kv(&mut self, _: &mut ObserverContext, key: &[u8], value_size: u64) -> bool {
         if self.buckets.is_empty() || self.cur_bucket_size >= self.each_bucket_size {
             self.buckets.push(key.to_vec());
             self.cur_bucket_size = 0;
         }
         self.cur_bucket_size += key.len() as u64 + value_size;
+        false
     }
 
-    pub fn split_key(mut self) -> Option<Vec<u8>> {
+    fn split_key(&mut self) -> Option<Vec<u8>> {
         let mid = self.buckets.len() / 2;
         if mid == 0 {
             None
@@ -68,7 +71,7 @@ impl HalfCheckObserver {
             half_split_bucket_size = bucket_size_limit;
         }
         HalfCheckObserver {
-            half_split_bucket_size: half_split_bucket_size,
+            half_split_bucket_size,
         }
     }
 }
@@ -76,29 +79,11 @@ impl HalfCheckObserver {
 impl Coprocessor for HalfCheckObserver {}
 
 impl SplitCheckObserver for HalfCheckObserver {
-    fn new_split_check_status(
-        &self,
-        _ctx: &mut ObserverContext,
-        status: &mut Status,
-        _engine: &DB,
-    ) {
-        if status.auto_split {
+    fn add_checker(&self, _: &mut ObserverContext, host: &mut Host, _: &DB) {
+        if host.auto_split() {
             return;
         }
-        status.half = Some(HalfStatus::new(self.half_split_bucket_size));
-    }
-
-    fn on_split_check(
-        &self,
-        _: &mut ObserverContext,
-        status: &mut Status,
-        key: &[u8],
-        value_size: u64,
-    ) -> Option<Vec<u8>> {
-        if let Some(status) = status.half.as_mut() {
-            status.push_data(key, value_size);
-        }
-        None
+        host.add_checker(Box::new(Checker::new(self.half_split_bucket_size)))
     }
 }
 
@@ -107,21 +92,21 @@ mod tests {
     use std::sync::Arc;
     use std::sync::mpsc;
 
-    use tempdir::TempDir;
-    use rocksdb::Writable;
     use kvproto::metapb::Peer;
-    use rocksdb::{ColumnFamilyOptions, DBOptions};
     use kvproto::metapb::Region;
+    use rocksdb::Writable;
+    use rocksdb::{ColumnFamilyOptions, DBOptions};
+    use tempdir::TempDir;
 
-    use storage::ALL_CFS;
     use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
-    use util::rocksdb::{new_engine_opt, CFOptions};
-    use util::worker::Runnable;
-    use util::transport::RetryableSendCh;
+    use storage::ALL_CFS;
     use util::config::ReadableSize;
+    use util::rocksdb::{new_engine_opt, CFOptions};
+    use util::transport::RetryableSendCh;
+    use util::worker::Runnable;
 
-    use raftstore::coprocessor::{Config, CoprocessorHost};
     use super::*;
+    use raftstore::coprocessor::{Config, CoprocessorHost};
 
     #[test]
     fn test_split_check() {
@@ -156,7 +141,7 @@ mod tests {
             engine.put(&s, &s).unwrap();
         }
 
-        runnable.run(SplitCheckTask::new(&region, false));
+        runnable.run(SplitCheckTask::new(region.clone(), false));
         loop {
             match rx.try_recv() {
                 Ok(Msg::SplitRegion {

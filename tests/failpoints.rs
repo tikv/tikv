@@ -48,17 +48,17 @@ extern crate tipb;
 extern crate tokio_timer;
 extern crate toml;
 
+#[cfg(not(feature = "no-fail"))]
+mod failpoints_cases;
 #[allow(dead_code)]
 mod raftstore;
 #[allow(dead_code)]
 mod storage;
 #[allow(dead_code)]
 mod util;
-#[cfg(not(feature = "no-fail"))]
-mod failpoints_cases;
 
 use std::sync::*;
-use std::{env, thread};
+use std::thread;
 
 use tikv::util::panic_hook;
 
@@ -66,11 +66,7 @@ lazy_static! {
     /// Failpoints are global structs, hence rules set in different cases
     /// may affect each other. So use a global lock to synchronize them.
     static ref LOCK: Mutex<()> = {
-        // Set up ci test fail case log.
-        if env::var("CI").is_ok() && env::var("LOG_FILE").is_ok() {
-            self::util::init_log();
-        }
-
+        util::ci_setup();
         Mutex::new(())
     };
 }

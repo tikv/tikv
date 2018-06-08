@@ -11,20 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use kvproto::coprocessor::KeyRange;
 use std::io::Write;
 use std::{cmp, u8};
 use tipb::schema::ColumnInfo;
-use kvproto::coprocessor::KeyRange;
 
 use coprocessor::dag::expr::EvalContext;
-use util::escape;
 use util::collections::{HashMap, HashSet};
+use util::escape;
 
-use util::codec::number::{NumberDecoder, NumberEncoder};
-use util::codec::bytes::BytesDecoder;
 use super::datum::DatumDecoder;
-use super::{datum, Datum, Result};
 use super::mysql::{types, Duration, Time};
+use super::{datum, Datum, Result};
+use util::codec::bytes::BytesDecoder;
+use util::codec::number::{NumberDecoder, NumberEncoder};
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -79,6 +79,18 @@ pub fn check_table_ranges(ranges: &[KeyRange]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+pub fn decode_table_id(key: &[u8]) -> Result<i64> {
+    if !key.starts_with(TABLE_PREFIX) {
+        return Err(invalid_type!(
+            "record key expected, but got {}",
+            escape(key)
+        ));
+    }
+
+    let mut remaining = &key[TABLE_PREFIX.len()..];
+    remaining.decode_i64()
 }
 
 pub fn flatten(data: Datum) -> Result<Datum> {
@@ -292,19 +304,13 @@ pub struct RowColsDict {
 
 impl RowColMeta {
     pub fn new(offset: usize, length: usize) -> RowColMeta {
-        RowColMeta {
-            offset: offset,
-            length: length,
-        }
+        RowColMeta { offset, length }
     }
 }
 
 impl RowColsDict {
-    pub fn new(cols: HashMap<i64, RowColMeta>, val: Vec<u8>) -> RowColsDict {
-        RowColsDict {
-            value: val,
-            cols: cols,
-        }
+    pub fn new(cols: HashMap<i64, RowColMeta>, value: Vec<u8>) -> RowColsDict {
+        RowColsDict { value, cols }
     }
 
     pub fn len(&self) -> usize {
@@ -398,8 +404,8 @@ mod test {
 
     use tipb::schema::ColumnInfo;
 
-    use coprocessor::codec::mysql::types;
     use coprocessor::codec::datum::{self, Datum, DatumDecoder};
+    use coprocessor::codec::mysql::types;
     use util::codec::number::NumberEncoder;
     use util::collections::{HashMap, HashSet};
 
@@ -627,5 +633,19 @@ mod test {
         range.set_start(small_key);
         range.set_end(b"xx".to_vec());
         assert!(check_table_ranges(&[range]).is_err());
+    }
+
+    #[test]
+    fn test_decode_table_id() {
+        let tests = vec![0, 2, 3, 1024, i64::MAX];
+        for &tid in &tests {
+            let mut buf = vec![];
+            buf.encode_i64(1).unwrap();
+            let k = encode_row_key(tid, &buf);
+            assert_eq!(tid, decode_table_id(&k).unwrap());
+            let k = encode_index_seek_key(tid, 1, &k);
+            assert_eq!(tid, decode_table_id(&k).unwrap());
+            assert!(decode_table_id(b"xxx").is_err());
+        }
     }
 }

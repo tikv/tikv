@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
-use storage::{Key, Value, CF_LOCK, CF_WRITE};
-use super::{Error, Result};
-use super::lock::Lock;
+use super::lock::{Lock, LockType};
 use super::write::{Write, WriteType};
+use super::{Error, Result};
+use kvproto::kvrpcpb::IsolationLevel;
 use raftstore::store::engine::IterOption;
 use std::u64;
-use kvproto::kvrpcpb::IsolationLevel;
+use storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
+use storage::{Key, Value, CF_LOCK, CF_WRITE};
 use util::properties::MvccProperties;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
@@ -50,17 +50,17 @@ impl MvccReader {
         isolation_level: IsolationLevel,
     ) -> MvccReader {
         MvccReader {
-            snapshot: snapshot,
+            snapshot,
             statistics: Statistics::default(),
             data_cursor: None,
             lock_cursor: None,
             write_cursor: None,
-            scan_mode: scan_mode,
-            isolation_level: isolation_level,
+            scan_mode,
+            isolation_level,
             key_only: false,
-            fill_cache: fill_cache,
-            lower_bound: lower_bound,
-            upper_bound: upper_bound,
+            fill_cache,
+            lower_bound,
+            upper_bound,
         }
     }
 
@@ -194,34 +194,34 @@ impl MvccReader {
         Ok(Some((commit_ts, write)))
     }
 
-    fn check_lock(&mut self, key: &Key, mut ts: u64) -> Result<Option<u64>> {
+    fn check_lock(&mut self, key: &Key, ts: u64) -> Result<u64> {
         if let Some(lock) = self.load_lock(key)? {
-            if lock.ts <= ts {
-                if ts == u64::MAX && key.raw()? == lock.primary {
-                    // when ts==u64::MAX(which means to get latest committed version for
-                    // primary key),and current key is the primary key, returns the latest
-                    // commit version's value
-                    ts = lock.ts - 1;
-                } else {
-                    // There is a pending lock. Client should wait or clean it.
-                    return Err(Error::KeyIsLocked {
-                        key: key.raw()?,
-                        primary: lock.primary,
-                        ts: lock.ts,
-                        ttl: lock.ttl,
-                    });
-                }
+            if lock.ts > ts || lock.lock_type == LockType::Lock {
+                // ignore lock when lock.ts > ts or lock's type is Lock
+                return Ok(ts);
             }
+
+            if ts == u64::MAX && key.raw()? == lock.primary {
+                // when ts==u64::MAX(which means to get latest committed version for
+                // primary key),and current key is the primary key, returns the latest
+                // commit version's value
+                return Ok(lock.ts - 1);
+            }
+            // There is a pending lock. Client should wait or clean it.
+            return Err(Error::KeyIsLocked {
+                key: key.raw()?,
+                primary: lock.primary,
+                ts: lock.ts,
+                ttl: lock.ttl,
+            });
         }
-        Ok(Some(ts))
+        Ok(ts)
     }
 
     pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
         // Check for locks that signal concurrent writes.
         match self.isolation_level {
-            IsolationLevel::SI => if let Some(new_ts) = self.check_lock(key, ts)? {
-                ts = new_ts;
-            },
+            IsolationLevel::SI => ts = self.check_lock(key, ts)?,
             IsolationLevel::RC => {}
         }
         loop {
@@ -309,8 +309,7 @@ impl MvccReader {
 
         while ok {
             if Write::parse(cursor.value())?.start_ts == ts {
-                return Ok(Some(Key::from_encoded(cursor.key().to_vec())
-                    .truncate_ts()?));
+                return Ok(Some(Key::from_encoded(cursor.key().to_vec()).truncate_ts()?));
             }
             ok = cursor.next(&mut self.statistics.write);
         }
@@ -554,19 +553,19 @@ impl MvccReader {
 
 #[cfg(test)]
 mod tests {
-    use std::u64;
-    use kvproto::metapb::{Peer, Region};
     use kvproto::kvrpcpb::IsolationLevel;
-    use rocksdb::{self, Writable, WriteBatch, DB};
-    use std::sync::Arc;
-    use storage::{make_key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use storage::engine::Modify;
-    use storage::mvcc::{MvccReader, MvccTxn};
-    use tempdir::TempDir;
+    use kvproto::metapb::{Peer, Region};
     use raftstore::store::RegionSnapshot;
     use raftstore::store::keys;
-    use util::rocksdb::{self as rocksdb_util, CFOptions};
+    use rocksdb::{self, Writable, WriteBatch, DB};
+    use std::sync::Arc;
+    use std::u64;
+    use storage::engine::Modify;
+    use storage::mvcc::{MvccReader, MvccTxn};
+    use storage::{make_key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use tempdir::TempDir;
     use util::properties::{MvccProperties, MvccPropertiesCollectorFactory};
+    use util::rocksdb::{self as rocksdb_util, CFOptions};
 
     struct RegionEngine {
         db: Arc<DB>,
@@ -577,7 +576,7 @@ mod tests {
         pub fn new(db: Arc<DB>, region: Region) -> RegionEngine {
             RegionEngine {
                 db: Arc::clone(&db),
-                region: region,
+                region,
             }
         }
 

@@ -11,16 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tikv::storage::{self, Engine};
-use tikv::storage::config::Config;
+use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::Context;
 use raftstore::cluster::Cluster;
 use raftstore::server::ServerCluster;
 use raftstore::server::new_server_cluster;
-use tikv::util::HandyRwLock;
 use tikv::server::readpool::{self, ReadPool};
+use tikv::storage::config::Config;
+use tikv::storage::{self, Engine};
+use tikv::util::HandyRwLock;
 use tikv::util::worker::FutureWorker;
-use super::sync_storage::SyncStorage;
 
 pub fn new_raft_engine(count: usize, key: &str) -> (Cluster<ServerCluster>, Box<Engine>, Context) {
     let mut cluster = new_server_cluster(0, count);

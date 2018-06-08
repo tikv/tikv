@@ -46,25 +46,20 @@ extern crate tokio_timer;
 extern crate toml;
 extern crate uuid;
 
+mod config;
+mod coprocessor;
+mod import;
+mod pd;
 mod raftstore;
 mod raftstore_cases;
-mod coprocessor;
 mod storage;
 mod storage_cases;
 mod util;
-mod pd;
-mod config;
-mod import;
 
-use std::env;
-
+// The prefix "_" here is to guarantee running this case first.
 #[test]
 fn _0_ci_setup() {
-    // Set up ci test fail case log.
-    // The prefix "_" here is to guarantee running this case first.
-    if env::var("CI").is_ok() && env::var("LOG_FILE").is_ok() {
-        self::util::init_log();
-    }
+    util::ci_setup();
 }
 
 #[test]
