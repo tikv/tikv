@@ -11,7 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use slog::{Drain, Logger};
+use slog_async::Async;
+use slog_term::{FullFormat, PlainDecorator, TermDecorator};
 use std::env;
+use std::io::BufWriter;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
 
@@ -21,7 +25,7 @@ use tikv::config::{MetricConfig, TiKvConfig};
 use tikv::util;
 use tikv::util::collections::HashMap;
 use tikv::util::file_log::RotatingFileLogger;
-use tikv::util::logger::{self, StderrLogger};
+use tikv::util::logger;
 
 // A workaround for checking if log is initialized.
 pub static LOG_INITIALIZED: AtomicBool = ATOMIC_BOOL_INIT;
@@ -39,18 +43,28 @@ macro_rules! fatal {
 
 pub fn init_log(config: &TiKvConfig) {
     if config.log_file.is_empty() {
-        logger::init_log(StderrLogger, config.log_level).unwrap_or_else(|e| {
+        let decorator = TermDecorator::new().build();
+        let drain = FullFormat::new(decorator).build().fuse();
+        let drain = Async::new(drain).build().fuse();
+        let logger = Logger::root_typed(drain, slog_o!());
+        logger::init_log(logger, config.log_level).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {:?}", e);
         });
     } else {
-        let w = RotatingFileLogger::new(&config.log_file).unwrap_or_else(|e| {
-            fatal!(
-                "failed to initialize log with file {:?}: {:?}",
-                config.log_file,
-                e
-            );
-        });
-        logger::init_log(w, config.log_level).unwrap_or_else(|e| {
+        let logger = BufWriter::new(RotatingFileLogger::new(&config.log_file).unwrap_or_else(
+            |e| {
+                fatal!(
+                    "failed to initialize log with file {:?}: {:?}",
+                    config.log_file,
+                    e
+                );
+            },
+        ));
+        let decorator = PlainDecorator::new(logger);
+        let drain = FullFormat::new(decorator).build().fuse();
+        let drain = Async::new(drain).build().fuse();
+        let logger = Logger::root_typed(drain, slog_o!());
+        logger::init_log(logger, config.log_level).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {:?}", e);
         });
     }
@@ -77,7 +91,7 @@ pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
 
 pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches) {
     if let Some(level) = matches.value_of("log-level") {
-        config.log_level = logger::get_level_by_string(level);
+        config.log_level = logger::get_level_by_string(level).unwrap();
     }
 
     if let Some(file) = matches.value_of("log-file") {

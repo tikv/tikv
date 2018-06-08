@@ -26,7 +26,7 @@ use rocksdb::rocksdb_options::WriteOptions;
 use rocksdb::{Writable, WriteBatch, DB};
 use uuid::Uuid;
 
-use kvproto::importpb::SSTMeta;
+use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType,
                           CommitMergeRequest, RaftCmdRequest, RaftCmdResponse, Request, Response};
@@ -1093,6 +1093,15 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, Option<ExecResult>)> {
+        let apply_before_split = || {
+            fail_point!(
+                "apply_before_split_1_3",
+                { self.id == 3 && self.region_id() == 1 },
+                |_| {}
+            );
+        };
+        apply_before_split();
+
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["split", "all"])
             .inc();
@@ -1711,17 +1720,21 @@ impl ApplyDelegate {
             });
 
         // Delete all remaining keys.
-        util::delete_all_in_range_cf(&self.engine, cf, &start_key, &end_key, use_delete_range)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                    self.tag,
-                    escape(&start_key),
-                    escape(&end_key),
-                    cf,
-                    e
-                );
-            });
+        // If it's not CF_LOCK and use_delete_range is false, skip this step to speed up (#3034)
+        // TODO: Remove the `if` line after apply pool is implemented
+        if cf == CF_LOCK || use_delete_range {
+            util::delete_all_in_range_cf(&self.engine, cf, &start_key, &end_key, use_delete_range)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
+                        self.tag,
+                        escape(&start_key),
+                        escape(&end_key),
+                        cf,
+                        e
+                    );
+                });
+        }
 
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 

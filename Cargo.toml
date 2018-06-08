@@ -35,7 +35,12 @@ name = "tikv-fail"
 name = "tikv-importer"
 
 [dependencies]
-log = "0.3"
+log = "0.3.9"
+slog = "2.2"
+slog-async = "2.3"
+slog-scope = "4.0"
+slog-stdlog = "3.0"
+slog-term = "2.4"
 byteorder = "0.5"
 rand = "0.3"
 quick-error = "0.2"
@@ -57,7 +62,6 @@ url = "1.5"
 regex = "0.1"
 fnv = "1.0"
 sys-info = "0.5.1"
-flat_map = "0.0.4"
 indexmap = { version = "1.0", features = ["serde-1"] }
 mio = "0.5"
 futures = "0.1"
@@ -71,10 +75,11 @@ rustc-serialize = "0.3"
 zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
-uuid = { version = "0.4", features = [ "serde", "v4" ] }
+uuid = { version = "0.6", features = [ "serde", "v4" ] }
 grpcio = { version = "0.2", features = [ "secure" ] }
-raft = "0.1"
+raft = "0.2"
 crossbeam-channel = { version = "0.1", features = [ "nightly" ] }
+fxhash = "0.2"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.4"
@@ -104,6 +109,8 @@ optional = true
 
 [replace]
 "protobuf:1.4.1" = { git = "https://github.com/stepancheg/rust-protobuf.git" }
+# TODO: use release version instead once tikv is protobuf 1.6 compatible.
+"raft:0.2.0" = { git = "https://github.com/pingcap/raft-rs.git", branch = "timeout-range" }
 
 [workspace]
 members = ["fuzz"]
@@ -118,3 +125,5 @@ codegen-units = 4
 lto = true
 opt-level = 3
 debug = true
+# TODO: remove this once rust-lang/rust#50199 is resolved.
+codegen-units = 2

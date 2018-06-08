@@ -17,6 +17,7 @@
 #![allow(needless_pass_by_value)]
 #![allow(cyclomatic_complexity)]
 
+#[macro_use]
 extern crate clap;
 extern crate futures;
 extern crate grpcio;
@@ -28,7 +29,7 @@ extern crate rustc_serialize;
 extern crate tikv;
 extern crate toml;
 
-use rustc_serialize::hex::{FromHex, ToHex};
+use rustc_serialize::hex::{FromHex, FromHexError, ToHex};
 use std::cmp::Ordering;
 use std::error::Error;
 use std::fs::File;
@@ -386,10 +387,11 @@ trait DebugExecutor {
         cf: &str,
         from: Option<Vec<u8>>,
         to: Option<Vec<u8>>,
+        threads: u32,
     ) {
         let from = from.unwrap_or_default();
         let to = to.unwrap_or_default();
-        self.do_compaction(db, cf, &from, &to);
+        self.do_compaction(db, cf, &from, &to, threads);
         println!(
             "store:{:?} compact db:{:?} cf:{} range:[{:?}, {:?}) success!",
             address.unwrap_or("local"),
@@ -400,12 +402,19 @@ trait DebugExecutor {
         );
     }
 
-    fn compact_region(&self, address: Option<&str>, db: DBType, cf: &str, region_id: u64) {
+    fn compact_region(
+        &self,
+        address: Option<&str>,
+        db: DBType,
+        cf: &str,
+        region_id: u64,
+        threads: u32,
+    ) {
         let region_local = self.get_region_info(region_id).region_local_state.unwrap();
         let r = region_local.get_region();
         let from = keys::data_key(r.get_start_key());
         let to = keys::data_end_key(r.get_end_key());
-        self.do_compaction(db, cf, &from, &to);
+        self.do_compaction(db, cf, &from, &to, threads);
         println!(
             "store:{:?} compact_region db:{:?} cf:{} range:[{:?}, {:?}) success!",
             address.unwrap_or("local"),
@@ -499,7 +508,7 @@ trait DebugExecutor {
         limit: u64,
     ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
 
-    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8]);
+    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8], threads: u32);
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
 
@@ -508,6 +517,8 @@ trait DebugExecutor {
     fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str);
 
     fn dump_metrics(&self, tags: Vec<&str>);
+
+    fn dump_region_properties(&self, region_id: u64);
 }
 
 impl DebugExecutor for DebugClient {
@@ -589,12 +600,13 @@ impl DebugExecutor for DebugClient {
         ) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
-    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8]) {
+    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8], threads: u32) {
         let mut req = CompactRequest::new();
         req.set_db(db);
         req.set_cf(cf.to_owned());
         req.set_from_key(from.to_owned());
         req.set_to_key(to.to_owned());
+        req.set_threads(threads);
         self.compact(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::compact", e));
     }
@@ -659,6 +671,16 @@ impl DebugExecutor for DebugClient {
             .unwrap_or_else(|e| perror_and_exit("DebugClient::modify_tikv_config", e));
         println!("success");
     }
+
+    fn dump_region_properties(&self, region_id: u64) {
+        let mut req = GetRegionPropertiesRequest::new();
+        req.set_region_id(region_id);
+        let resp = self.get_region_properties(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_region_properties", e));
+        for prop in resp.get_props() {
+            println!("{}: {}", prop.get_name(), prop.get_value());
+        }
+    }
 }
 
 impl DebugExecutor for Debugger {
@@ -705,8 +727,8 @@ impl DebugExecutor for Debugger {
         Box::new(stream) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
-    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8]) {
-        self.compact(db, cf, from, to)
+    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8], threads: u32) {
+        self.compact(db, cf, from, to, threads)
             .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
     }
 
@@ -807,6 +829,14 @@ impl DebugExecutor for Debugger {
     fn modify_tikv_config(&self, _: MODULE, _: &str, _: &str) {
         eprintln!("only support remote mode");
         process::exit(-1);
+    }
+
+    fn dump_region_properties(&self, region_id: u64) {
+        let props = self.get_region_properties(region_id)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get_region_properties", e));
+        for (name, value) in props {
+            println!("{}: {}", name, value);
+        }
     }
 }
 
@@ -1119,6 +1149,14 @@ fn main() {
                         .help(raw_key_hint)
                 )
                 .arg(
+                    Arg::with_name("threads")
+                        .short("n")
+                        .long("threads")
+                        .takes_value(true)
+                        .default_value("8")
+                        .help("number of threads in one compaction")
+                )
+                .arg(
                     Arg::with_name("region")
                     .short("r")
                     .long("region")
@@ -1334,8 +1372,27 @@ fn main() {
                         .long("to")
                         .takes_value(true)
                         .help(raw_key_hint)
+                )
+                .arg(
+                    Arg::with_name("threads")
+                        .short("n")
+                        .long("threads")
+                        .takes_value(true)
+                        .default_value("8")
+                        .help("number of threads in one compaction")
                 ),
-    );
+        )
+        .subcommand(
+            SubCommand::with_name("region-properties")
+                .about("show region properties")
+                .arg(
+                    Arg::with_name("region")
+                        .short("r")
+                        .required(true)
+                        .takes_value(true)
+                        .help("the target region id"),
+                ),
+        );
 
     let matches = app.clone().get_matches();
 
@@ -1343,7 +1400,7 @@ fn main() {
     let escaped_key = matches.value_of("escaped-to-hex");
     match (hex_key, escaped_key) {
         (Some(hex), None) => {
-            println!("{}", escape(&from_hex(hex)));
+            println!("{}", escape(&from_hex(hex).unwrap()));
             return;
         }
         (None, Some(escaped)) => {
@@ -1366,7 +1423,8 @@ fn main() {
         let cfs = Vec::from_iter(sub_cmd.values_of("cf").unwrap());
         let from_key = sub_cmd.value_of("from").map(|k| unescape(k));
         let to_key = sub_cmd.value_of("to").map(|k| unescape(k));
-        return compact_whole_cluster(pd, db_type, cfs, from_key, to_key, mgr);
+        let threads = value_t_or_exit!(sub_cmd.value_of("threads"), u32);
+        return compact_whole_cluster(pd, db_type, cfs, from_key, to_key, threads, mgr);
     }
 
     let db = matches.value_of("db");
@@ -1440,10 +1498,11 @@ fn main() {
         let cf = matches.value_of("cf").unwrap();
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
+        let threads = value_t_or_exit!(matches.value_of("threads"), u32);
         if let Some(region) = matches.value_of("region") {
-            debug_executor.compact_region(host, db_type, cf, region.parse().unwrap());
+            debug_executor.compact_region(host, db_type, cf, region.parse().unwrap(), threads);
         } else {
-            debug_executor.compact(host, db_type, cf, from_key, to_key);
+            debug_executor.compact(host, db_type, cf, from_key, to_key, threads);
         }
     } else if let Some(matches) = matches.subcommand_matches("tombstone") {
         let regions = matches
@@ -1507,6 +1566,9 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("metrics") {
         let tags = Vec::from_iter(matches.values_of("tag").unwrap());
         debug_executor.dump_metrics(tags)
+    } else if let Some(matches) = matches.subcommand_matches("region-properties") {
+        let region_id = value_t_or_exit!(matches.value_of("region"), u64);
+        debug_executor.dump_region_properties(region_id)
     } else {
         let _ = app.print_help();
     }
@@ -1528,12 +1590,12 @@ fn get_module_type(module: &str) -> MODULE {
     }
 }
 
-fn from_hex(key: &str) -> Vec<u8> {
+fn from_hex(key: &str) -> Result<Vec<u8>, FromHexError> {
     const HEX_PREFIX: &str = "0x";
     if key.starts_with(HEX_PREFIX) {
-        return key[2..].from_hex().unwrap();
+        return key[2..].from_hex();
     }
-    key.from_hex().unwrap()
+    key.from_hex()
 }
 
 fn convert_gbmb(mut bytes: u64) -> String {
@@ -1599,6 +1661,7 @@ fn compact_whole_cluster(
     cfs: Vec<&str>,
     from: Option<Vec<u8>>,
     to: Option<Vec<u8>>,
+    threads: u32,
     mgr: Arc<SecurityManager>,
 ) {
     let mut cfg = PdConfig::default();
@@ -1623,7 +1686,14 @@ fn compact_whole_cluster(
         let h = thread::spawn(move || {
             let debug_executor = new_debug_executor(None, None, Some(&addr), None, mgr);
             for cf in cfs {
-                debug_executor.compact(Some(&addr), db_type, cf.as_str(), from.clone(), to.clone());
+                debug_executor.compact(
+                    Some(&addr),
+                    db_type,
+                    cf.as_str(),
+                    from.clone(),
+                    to.clone(),
+                    threads,
+                );
             }
         });
         handles.push(h);

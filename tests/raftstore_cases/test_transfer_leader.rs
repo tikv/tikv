@@ -49,7 +49,10 @@ fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     req.mut_header().set_peer(leader);
     cluster.call_command(req, Duration::from_secs(3)).unwrap();
     thread::sleep(reserved_time);
-    assert_eq!(cluster.query_leader(2, 1), Some(new_peer(2, 2)));
+    assert_eq!(
+        cluster.query_leader(2, 1, Duration::from_secs(5)),
+        Some(new_peer(2, 2))
+    );
 
     let mut req = new_request(
         region.get_id(),

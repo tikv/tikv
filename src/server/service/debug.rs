@@ -229,6 +229,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
                     req.get_cf(),
                     req.get_from_key(),
                     req.get_to_key(),
+                    req.get_threads(),
                 )
                 .map(|_| CompactResponse::default())
         });
@@ -362,6 +363,33 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
                 debugger.modify_tikv_config(module, &config_name, &config_value)
             }))
             .map(|_| ModifyTikvConfigResponse::new());
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
+
+    fn get_region_properties(
+        &self,
+        ctx: RpcContext,
+        req: GetRegionPropertiesRequest,
+        sink: UnarySink<GetRegionPropertiesResponse>,
+    ) {
+        const TAG: &str = "get_region_properties";
+
+        let f = self.pool
+            .spawn(
+                future::ok(self.debugger.clone())
+                    .and_then(move |debugger| debugger.get_region_properties(req.get_region_id())),
+            )
+            .map(|props| {
+                let mut resp = GetRegionPropertiesResponse::new();
+                for (name, value) in props {
+                    let mut prop = Property::new();
+                    prop.set_name(name);
+                    prop.set_value(value);
+                    resp.mut_props().push(prop);
+                }
+                resp
+            });
 
         self.handle_response(ctx, sink, f, TAG);
     }

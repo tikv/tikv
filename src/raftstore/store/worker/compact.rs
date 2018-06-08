@@ -100,7 +100,14 @@ impl Runner {
             .start_coarse_timer();
         let start = start_key.as_ref().map(Vec::as_slice);
         let end = end_key.as_ref().map(Vec::as_slice);
-        compact_range(&self.engine, handle, start, end, false);
+        compact_range(
+            &self.engine,
+            handle,
+            start,
+            end,
+            false,
+            1, /* threads */
+        );
         compact_range_timer.observe_duration();
         Ok(())
     }

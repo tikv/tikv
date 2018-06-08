@@ -24,7 +24,7 @@ use protobuf::{CodedInputStream, Message as PbMsg};
 
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use kvproto::errorpb::{self, ServerIsBusy};
-use kvproto::kvrpcpb::{CommandPri, HandleTime, IsolationLevel};
+use kvproto::kvrpcpb::{CommandPri, HandleTime};
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::checksum::{ChecksumRequest, ChecksumScanOn};
 use tipb::executor::ExecType;
@@ -46,19 +46,13 @@ use super::dag::executor::ExecutorMetrics;
 use super::local_metrics::BasicLocalMetrics;
 use super::metrics::*;
 use super::statistics::analyze::AnalyzeContext;
-use super::{Error, ReadPoolContext, Result};
-
-pub const REQ_TYPE_DAG: i64 = 103;
-pub const REQ_TYPE_ANALYZE: i64 = 104;
-pub const REQ_TYPE_CHECKSUM: i64 = 105;
+use super::*;
 
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.
 pub const DEFAULT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 // If handle time is larger than the lower bound, the query is considered as slow query.
 const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
-
-pub const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
 const OUTDATED_ERROR_MSG: &str = "request outdated.";
 
@@ -71,7 +65,9 @@ pub struct Host {
     last_req_id: u64,
     pool: ReadPool<ReadPoolContext>,
     basic_local_metrics: BasicLocalMetrics,
+    // TODO: Deprecate after totally switching to read pool
     max_running_task_count: usize,
+    // TODO: Deprecate after totally switching to read pool
     running_task_count: Arc<AtomicUsize>,
     batch_row_limit: usize,
     stream_batch_row_limit: usize,
@@ -85,6 +81,8 @@ impl Host {
         cfg: &Config,
         pool: ReadPool<ReadPoolContext>,
     ) -> Host {
+        // Use read pool's max task config
+        let max_running_task_count = pool.get_max_tasks();
         Host {
             engine,
             sched,
@@ -92,15 +90,18 @@ impl Host {
             last_req_id: 0,
             pool,
             basic_local_metrics: BasicLocalMetrics::default(),
-            max_running_task_count: cfg.end_point_max_tasks,
+            // TODO: Deprecate after totally switching to read pool
+            max_running_task_count,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             request_max_handle_duration: cfg.end_point_request_max_handle_duration.0,
+            // TODO: Deprecate after totally switching to read pool
             running_task_count: Arc::new(AtomicUsize::new(0)),
         }
     }
 
     #[inline]
+    // TODO: Deprecate after totally switching to read pool
     fn running_task_count(&self) -> usize {
         self.running_task_count.load(Ordering::Acquire)
     }
@@ -139,9 +140,17 @@ impl Host {
         let ctxd = pool.get_context_delegators();
         tracker.ctx_pool(ctxd);
 
+        let batch_row_limit = {
+            if !on_resp.is_streaming() {
+                self.batch_row_limit
+            } else {
+                self.stream_batch_row_limit
+            }
+        };
+
         match cop_req {
             CopRequest::DAG(dag) => {
-                let mut ctx = match DAGContext::new(dag, ranges, snap, req_ctx) {
+                let mut ctx = match DAGContext::new(dag, ranges, snap, req_ctx, batch_row_limit) {
                     Ok(ctx) => ctx,
                     Err(e) => {
                         on_resp.respond(err_resp(e, metrics));
@@ -149,10 +158,9 @@ impl Host {
                     }
                 };
                 if !on_resp.is_streaming() {
-                    let batch_row_limit = self.batch_row_limit;
                     let do_request = move |_| {
                         tracker.record_wait();
-                        let mut resp = ctx.handle_request(batch_row_limit).unwrap_or_else(|e| {
+                        let mut resp = ctx.handle_request().unwrap_or_else(|e| {
                             let mut metrics = tracker.get_basic_metrics();
                             err_resp(e, &mut metrics)
                         });
@@ -166,17 +174,15 @@ impl Host {
                     return;
                 }
                 // For streaming.
-                let batch_row_limit = self.stream_batch_row_limit;
                 let s = stream::unfold((ctx, false), move |(mut ctx, finished)| {
                     if finished {
                         return None;
                     }
                     tracker.record_wait();
-                    let (mut item, finished) = ctx.handle_streaming_request(batch_row_limit)
-                        .unwrap_or_else(|e| {
-                            let mut metrics = tracker.get_basic_metrics();
-                            (Some(err_resp(e, &mut metrics)), true)
-                        });
+                    let (mut item, finished) = ctx.handle_streaming_request().unwrap_or_else(|e| {
+                        let mut metrics = tracker.get_basic_metrics();
+                        (Some(err_resp(e, &mut metrics)), true)
+                    });
                     let mut exec_metrics = ExecutorMetrics::default();
                     ctx.collect_metrics_into(&mut exec_metrics);
                     tracker.record_handle(item.as_mut(), exec_metrics);
@@ -187,14 +193,15 @@ impl Host {
                 pool.spawn(move |_| on_resp.respond_stream(s)).forget();
             }
             CopRequest::Analyze(analyze) => {
-                let ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx);
-                let mut exec_metrics = ExecutorMetrics::default();
+                let mut ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx).unwrap();
                 let do_request = move |_| {
                     tracker.record_wait();
-                    let mut resp = ctx.handle_request(&mut exec_metrics).unwrap_or_else(|e| {
+                    let mut resp = ctx.handle_request().unwrap_or_else(|e| {
                         let mut metrics = tracker.get_basic_metrics();
                         err_resp(e, &mut metrics)
                     });
+                    let mut exec_metrics = ExecutorMetrics::default();
+                    ctx.collect_metrics_into(&mut exec_metrics);
                     tracker.record_handle(Some(&mut resp), exec_metrics);
                     on_resp.respond(resp);
                     future::ok::<_, ()>(())
@@ -202,14 +209,15 @@ impl Host {
                 pool.spawn(do_request).forget();
             }
             CopRequest::Checksum(checksum) => {
-                let ctx = ChecksumContext::new(checksum, ranges, snap, &req_ctx);
-                let mut exec_metrics = ExecutorMetrics::default();
+                let mut ctx = ChecksumContext::new(checksum, ranges, snap, &req_ctx).unwrap();
                 let do_request = move |_| {
                     tracker.record_wait();
-                    let mut resp = ctx.handle_request(&mut exec_metrics).unwrap_or_else(|e| {
+                    let mut resp = ctx.handle_request().unwrap_or_else(|e| {
                         let mut metrics = tracker.get_basic_metrics();
                         err_resp(e, &mut metrics)
                     });
+                    let mut exec_metrics = ExecutorMetrics::default();
+                    ctx.collect_metrics_into(&mut exec_metrics);
                     tracker.record_handle(Some(&mut resp), exec_metrics);
                     on_resp.respond(resp);
                     future::ok::<_, ()>(())
@@ -256,39 +264,6 @@ enum CopRequest {
 }
 
 #[derive(Debug)]
-pub struct ReqContext {
-    pub start_time: Instant,
-    pub deadline: Instant,
-    pub isolation_level: IsolationLevel,
-    pub fill_cache: bool,
-    pub table_scan: bool, // Whether is a table scan request.
-}
-
-impl ReqContext {
-    #[inline]
-    fn get_scan_tag(&self) -> &'static str {
-        if self.table_scan {
-            STR_REQ_TYPE_SELECT
-        } else {
-            STR_REQ_TYPE_INDEX
-        }
-    }
-
-    pub fn check_if_outdated(&self) -> Result<()> {
-        let now = Instant::now_coarse();
-        if self.deadline <= now {
-            let elapsed = now.duration_since(self.start_time);
-            return Err(Error::Outdated(elapsed, self.get_scan_tag()));
-        }
-        Ok(())
-    }
-
-    pub fn set_max_handle_duration(&mut self, request_max_handle_duration: Duration) {
-        self.deadline = self.start_time + request_max_handle_duration;
-    }
-}
-
-#[derive(Debug)]
 struct RequestTracker {
     running_task_count: Option<Arc<AtomicUsize>>,
     ctx_pool: Option<futurepool::ContextDelegators<ReadPoolContext>>,
@@ -311,6 +286,7 @@ struct RequestTracker {
     first_range: Option<KeyRange>,
     scan_tag: &'static str,
     pri_str: &'static str,
+    desc_scan: Option<bool>, // only applicable to DAG requests
     peer: String,
 }
 
@@ -399,14 +375,18 @@ impl Drop for RequestTracker {
             };
 
             info!(
-                "[region {}] from {:?} handle {:?} table id {:?} [{}] takes {:?} [keys: {}, hit: {}, \
-                 ranges: {} ({:?})]",
+                "[region {}] [slow-query] execute takes {:?}, wait takes {:?}, \
+                 peer: {:?}, start_ts: {:?}, table_id: {:?}, \
+                 scan_type: {} (desc: {:?}) \
+                 [keys: {}, hit: {}, ranges: {} ({:?})]",
                 self.region_id,
+                self.total_handle_time,
+                self.wait_time,
                 self.peer,
                 self.txn_start_ts,
                 table_id,
                 self.scan_tag,
-                self.total_handle_time,
+                self.desc_scan,
                 self.exec_metrics.cf_stats.total_op_count(),
                 self.exec_metrics.cf_stats.total_processed(),
                 self.ranges_len,
@@ -472,6 +452,7 @@ impl RequestTask {
         recursion_limit: u32,
     ) -> Result<RequestTask> {
         let mut table_scan = false;
+        let mut is_desc_scan: Option<bool> = None; // only used in slow query logs
         let (start_ts, cop_req) = match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut is = CodedInputStream::from_bytes(req.get_data());
@@ -479,7 +460,13 @@ impl RequestTask {
                 let mut dag = DAGRequest::new();
                 box_try!(dag.merge_from(&mut is));
                 if let Some(scan) = dag.get_executors().iter().next() {
+                    // the first executor must be table scan or index scan.
                     table_scan = scan.get_tp() == ExecType::TypeTableScan;
+                    if table_scan {
+                        is_desc_scan = Some(scan.get_tbl_scan().get_desc());
+                    } else {
+                        is_desc_scan = Some(scan.get_idx_scan().get_desc());
+                    }
                 }
                 (dag.get_start_ts(), CopRequest::DAG(dag))
             }
@@ -504,13 +491,7 @@ impl RequestTask {
 
         let start_time = Instant::now_coarse();
 
-        let req_ctx = ReqContext {
-            start_time,
-            deadline: start_time,
-            isolation_level: req.get_context().get_isolation_level(),
-            fill_cache: !req.get_context().get_not_fill_cache(),
-            table_scan,
-        };
+        let req_ctx = ReqContext::new(req.get_context(), start_ts, table_scan);
 
         let request_tracker = RequestTracker {
             running_task_count: None,
@@ -532,6 +513,7 @@ impl RequestTask {
             first_range: req.get_ranges().get(0).cloned(),
             scan_tag: req_ctx.get_scan_tag(),
             pri_str: get_req_pri_str(req.get_context().get_priority()),
+            desc_scan: is_desc_scan,
             peer,
         };
 
@@ -733,8 +715,6 @@ pub fn err_resp(e: Error, metrics: &mut BasicLocalMetrics) -> Response {
     err_multi_resp(e, 1, metrics)
 }
 
-pub const STR_REQ_TYPE_SELECT: &str = "select";
-pub const STR_REQ_TYPE_INDEX: &str = "index";
 pub const STR_REQ_PRI_LOW: &str = "low";
 pub const STR_REQ_PRI_NORMAL: &str = "normal";
 pub const STR_REQ_PRI_HIGH: &str = "high";
@@ -761,21 +741,15 @@ mod tests {
     use tipb::select::DAGRequest;
 
     use util::config::ReadableDuration;
-    use util::time::Instant;
     use util::worker::{Builder as WorkerBuilder, FutureWorker};
 
     #[test]
     fn test_get_reg_scan_tag() {
-        let mut ctx = ReqContext {
-            start_time: Instant::now_coarse(),
-            deadline: Instant::now_coarse(),
-            isolation_level: IsolationLevel::RC,
-            fill_cache: true,
-            table_scan: true,
-        };
-        assert_eq!(ctx.get_scan_tag(), STR_REQ_TYPE_SELECT);
+        let context = kvrpcpb::Context::new();
+        let mut ctx = ReqContext::new(&context, 0, true);
+        assert_eq!(ctx.get_scan_tag(), "select");
         ctx.table_scan = false;
-        assert_eq!(ctx.get_scan_tag(), STR_REQ_TYPE_INDEX);
+        assert_eq!(ctx.get_scan_tag(), "index");
     }
 
     #[test]

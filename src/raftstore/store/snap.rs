@@ -14,9 +14,9 @@
 use std::cmp::Reverse;
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, Metadata};
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{self, BufReader, ErrorKind, Read, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::{error, result, str, thread, time, u64};
 
@@ -32,7 +32,7 @@ use raftstore::store::Msg;
 use raftstore::store::util::check_key_in_region;
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::HandyRwLock;
-use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
+use util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use util::collections::{HashMap, HashMapEntry as Entry};
 use util::io_limiter::{IOLimiter, LimitWriter};
 use util::rocksdb::{prepare_sst_for_ingestion, validate_sst_for_ingestion};
@@ -318,15 +318,16 @@ pub struct Snap {
     cf_files: Vec<CfFile>,
     cf_index: usize,
     meta_file: MetaFile,
-    size_track: Arc<RwLock<u64>>,
+    size_track: Arc<AtomicU64>,
     limiter: Option<Arc<IOLimiter>>,
+    hold_tmp_files: bool,
 }
 
 impl Snap {
     fn new<T: Into<PathBuf>>(
         dir: T,
         key: &SnapKey,
-        size_track: Arc<RwLock<u64>>,
+        size_track: Arc<AtomicU64>,
         is_sending: bool,
         to_build: bool,
         deleter: Box<SnapshotDeleter>,
@@ -377,6 +378,7 @@ impl Snap {
             meta_file,
             size_track,
             limiter,
+            hold_tmp_files: false,
         };
 
         // load snapshot meta if meta_file exists
@@ -406,7 +408,7 @@ impl Snap {
         dir: T,
         key: &SnapKey,
         snap: &DbSnapshot,
-        size_track: Arc<RwLock<u64>>,
+        size_track: Arc<AtomicU64>,
         deleter: Box<SnapshotDeleter>,
         limiter: Option<Arc<IOLimiter>>,
     ) -> RaftStoreResult<Snap> {
@@ -418,7 +420,7 @@ impl Snap {
     pub fn new_for_sending<T: Into<PathBuf>>(
         dir: T,
         key: &SnapKey,
-        size_track: Arc<RwLock<u64>>,
+        size_track: Arc<AtomicU64>,
         deleter: Box<SnapshotDeleter>,
     ) -> RaftStoreResult<Snap> {
         let mut s = Snap::new(dir, key, size_track, true, false, deleter, None)?;
@@ -441,16 +443,23 @@ impl Snap {
         dir: T,
         key: &SnapKey,
         snapshot_meta: SnapshotMeta,
-        size_track: Arc<RwLock<u64>>,
+        size_track: Arc<AtomicU64>,
         deleter: Box<SnapshotDeleter>,
         limiter: Option<Arc<IOLimiter>>,
     ) -> RaftStoreResult<Snap> {
         let mut s = Snap::new(dir, key, size_track, false, false, deleter, limiter)?;
         s.set_snapshot_meta(snapshot_meta)?;
-
         if s.exists() {
             return Ok(s);
         }
+
+        let f = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&s.meta_file.tmp_path)?;
+        s.meta_file.file = Some(f);
+        s.hold_tmp_files = true;
+
         for cf_file in &mut s.cf_files {
             if cf_file.size == 0 {
                 continue;
@@ -462,18 +471,13 @@ impl Snap {
             cf_file.file = Some(f);
             cf_file.write_digest = Some(Digest::new(crc32::IEEE));
         }
-        let f = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&s.meta_file.tmp_path)?;
-        s.meta_file.file = Some(f);
         Ok(s)
     }
 
     pub fn new_for_applying<T: Into<PathBuf>>(
         dir: T,
         key: &SnapKey,
-        size_track: Arc<RwLock<u64>>,
+        size_track: Arc<AtomicU64>,
         deleter: Box<SnapshotDeleter>,
     ) -> RaftStoreResult<Snap> {
         let s = Snap::new(dir, key, size_track, false, false, deleter, None)?;
@@ -484,12 +488,18 @@ impl Snap {
         if self.exists() {
             return Ok(());
         }
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&self.meta_file.tmp_path)?;
+        self.meta_file.file = Some(file);
+        self.hold_tmp_files = true;
+
         for cf_file in &mut self.cf_files {
             if plain_file_used(cf_file.cf) {
                 let f = OpenOptions::new()
                     .write(true)
-                    .create(true)
-                    .truncate(true)
+                    .create_new(true)
                     .open(&cf_file.tmp_path)?;
                 cf_file.file = Some(f);
             } else {
@@ -506,11 +516,6 @@ impl Snap {
                 cf_file.sst_writer = Some(writer);
             }
         }
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&self.meta_file.tmp_path)?;
-        self.meta_file.file = Some(file);
         Ok(())
     }
 
@@ -646,9 +651,7 @@ impl Snap {
                 fs::rename(&cf_file.tmp_path, &cf_file.path)?;
                 cf_file.size = size;
                 // add size
-                let mut size_track = self.size_track.wl();
-                *size_track = size_track.saturating_add(size);
-
+                self.size_track.fetch_add(size, Ordering::SeqCst);
                 cf_file.checksum = calc_crc32(&cf_file.path)?;
             } else {
                 // Clean up the `tmp_path` if this cf file is empty.
@@ -667,6 +670,7 @@ impl Snap {
             f.flush()?;
         }
         fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
+        self.hold_tmp_files = false;
         Ok(())
     }
 
@@ -788,7 +792,7 @@ pub fn build_plain_cf_file<E: BytesEncoder>(
     Ok((cf_key_count, cf_size))
 }
 
-fn apply_plain_cf_file<D: CompactBytesDecoder>(
+fn apply_plain_cf_file<D: CompactBytesFromFileDecoder>(
     decoder: &mut D,
     options: &ApplyOptions,
     handle: &CFHandle,
@@ -873,16 +877,18 @@ impl Snapshot for Snap {
     fn delete(&self) {
         debug!("deleting {}", self.path());
         for cf_file in &self.cf_files {
-            delete_file_if_exist(&cf_file.tmp_path);
-            if file_exists(&cf_file.path) {
-                let mut size_track = self.size_track.wl();
-                *size_track = size_track.saturating_sub(cf_file.size);
-            }
-            delete_file_if_exist(&cf_file.path);
             delete_file_if_exist(&cf_file.clone_path);
+            if self.hold_tmp_files {
+                delete_file_if_exist(&cf_file.tmp_path);
+            }
+            if delete_file_if_exist(&cf_file.path) {
+                self.size_track.fetch_sub(cf_file.size, Ordering::SeqCst);
+            }
         }
-        delete_file_if_exist(&self.meta_file.tmp_path);
         delete_file_if_exist(&self.meta_file.path);
+        if self.hold_tmp_files {
+            delete_file_if_exist(&self.meta_file.tmp_path);
+        }
     }
 
     fn meta(&self) -> io::Result<Metadata> {
@@ -936,8 +942,7 @@ impl Snapshot for Snap {
             }
 
             fs::rename(&cf_file.tmp_path, &cf_file.path)?;
-            let mut size_track = self.size_track.wl();
-            *size_track = size_track.saturating_add(cf_file.size);
+            self.size_track.fetch_add(cf_file.size, Ordering::SeqCst);
         }
         // write meta file
         let mut v = vec![];
@@ -948,6 +953,7 @@ impl Snapshot for Snap {
             meta_file.sync_all()?;
         }
         fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
+        self.hold_tmp_files = false;
         Ok(())
     }
 
@@ -964,7 +970,7 @@ impl Snapshot for Snap {
             let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, cf_file.cf));
             if plain_file_used(cf_file.cf) {
                 let mut file = box_try!(File::open(&cf_file.path));
-                apply_plain_cf_file(&mut file, &options, cf_handle)?;
+                apply_plain_cf_file(&mut BufReader::new(file), &options, cf_handle)?;
             } else {
                 let mut ingest_opt = IngestExternalFileOptions::new();
                 ingest_opt.move_files(true);
@@ -1091,8 +1097,7 @@ pub struct SnapStats {
 struct SnapManagerCore {
     base: String,
     registry: HashMap<SnapKey, Vec<SnapEntry>>,
-    // put snap_size under core so we don't need to worry about deadlock.
-    snap_size: Arc<RwLock<u64>>,
+    snap_size: Arc<AtomicU64>,
 }
 
 fn notify_stats(ch: Option<&SendCh<Msg>>) {
@@ -1132,7 +1137,6 @@ impl SnapManager {
                 format!("{} should be a directory", path.display()),
             ));
         }
-        let mut size = core.snap_size.wl();
         for f in fs::read_dir(path)? {
             let p = f?;
             if p.file_type()?.is_file() {
@@ -1141,7 +1145,7 @@ impl SnapManager {
                         fs::remove_file(p.path())?;
                     } else if s.ends_with(SST_FILE_SUFFIX) {
                         let len = p.metadata()?.len();
-                        *size += len;
+                        core.snap_size.fetch_add(len, Ordering::SeqCst);
                     }
                 }
             }
@@ -1300,11 +1304,9 @@ impl SnapManager {
     /// Get the approximate size of snap file exists in snap directory.
     ///
     /// Return value is not guaranteed to be accurate.
-    #[allow(let_and_return)]
     pub fn get_total_snap_size(&self) -> u64 {
         let core = self.core.rl();
-        let size = *core.snap_size.rl();
-        size
+        core.snap_size.load(Ordering::SeqCst)
     }
 
     pub fn max_total_snap_size(&self) -> u64 {
@@ -1432,7 +1434,7 @@ impl SnapManagerBuilder {
             core: Arc::new(RwLock::new(SnapManagerCore {
                 base: path.into(),
                 registry: map![],
-                snap_size: Arc::new(RwLock::new(0)),
+                snap_size: Arc::new(AtomicU64::new(0)),
             })),
             ch,
             limiter,
@@ -1447,8 +1449,7 @@ mod test {
     use std::fs::{self, File, OpenOptions};
     use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::sync::Arc;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::*;
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use tempdir::TempDir;
 
     use super::{ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder, Snapshot,
@@ -1465,7 +1466,7 @@ mod test {
     use raftstore::store::keys;
     use raftstore::store::peer_storage::JOB_STATUS_RUNNING;
     use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use util::{rocksdb, HandyRwLock};
+    use util::rocksdb;
 
     const TEST_STORE_ID: u64 = 1;
     const TEST_KEY: &[u8] = b"akey";
@@ -1645,7 +1646,7 @@ mod test {
 
         let src_dir = TempDir::new("test-snap-file-src").unwrap();
         let key = SnapKey::new(region_id, 1, 1);
-        let size_track = Arc::new(RwLock::new(0));
+        let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(DummyDeleter {});
         let mut s1 = Snap::new_for_building(
             src_dir.path(),
@@ -1657,7 +1658,7 @@ mod test {
         ).unwrap();
         // Ensure that this snapshot file doesn't exist before being built.
         assert!(!s1.exists());
-        assert_eq!(*size_track.rl(), 0);
+        assert_eq!(size_track.load(Ordering::SeqCst), 0);
 
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
@@ -1674,7 +1675,7 @@ mod test {
         assert!(s1.exists());
         let total_size = s1.total_size().unwrap();
         // Ensure the `size_track` is modified correctly.
-        let size = *size_track.rl();
+        let size = size_track.load(Ordering::SeqCst);
         assert_eq!(size, total_size);
         assert_eq!(stat.size as u64, size);
         assert_eq!(stat.kv_count, get_kv_count(&snapshot));
@@ -1711,13 +1712,13 @@ mod test {
         assert!(s3.exists());
 
         // Ensure the tracked size is handled correctly after receiving a snapshot.
-        assert_eq!(*size_track.rl(), size * 2);
+        assert_eq!(size_track.load(Ordering::SeqCst), size * 2);
 
         // Ensure `delete()` works to delete the source snapshot.
         s2.delete();
         assert!(!s2.exists());
         assert!(!s1.exists());
-        assert_eq!(*size_track.rl(), size);
+        assert_eq!(size_track.load(Ordering::SeqCst), size);
 
         // Ensure a snapshot could be applied to DB.
         let mut s4 =
@@ -1742,7 +1743,7 @@ mod test {
         s4.delete();
         assert!(!s4.exists());
         assert!(!s3.exists());
-        assert_eq!(*size_track.rl(), 0);
+        assert_eq!(size_track.load(Ordering::SeqCst), 0);
 
         // Verify the data is correct after applying snapshot.
         assert_eq_db(db, dst_db.as_ref());
@@ -1767,7 +1768,7 @@ mod test {
 
         let dir = TempDir::new("test-snap-validation").unwrap();
         let key = SnapKey::new(region_id, 1, 1);
-        let size_track = Arc::new(RwLock::new(0));
+        let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(DummyDeleter {});
         let mut s1 = Snap::new_for_building(
             dir.path(),
@@ -1909,7 +1910,7 @@ mod test {
         from_dir: &TempDir,
         to_dir: &TempDir,
         key: &SnapKey,
-        size_track: Arc<RwLock<u64>>,
+        size_track: Arc<AtomicU64>,
         snapshot_meta: SnapshotMeta,
         deleter: Box<DummyDeleter>,
     ) {
@@ -1946,7 +1947,7 @@ mod test {
 
         let dir = TempDir::new("test-snap-corruption").unwrap();
         let key = SnapKey::new(region_id, 1, 1);
-        let size_track = Arc::new(RwLock::new(0));
+        let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(DummyDeleter {});
         let mut s1 = Snap::new_for_building(
             dir.path(),
@@ -2058,7 +2059,7 @@ mod test {
 
         let dir = TempDir::new("test-snap-corruption-meta").unwrap();
         let key = SnapKey::new(region_id, 1, 1);
-        let size_track = Arc::new(RwLock::new(0));
+        let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(DummyDeleter {});
         let mut s1 = Snap::new_for_building(
             dir.path(),
@@ -2169,7 +2170,7 @@ mod test {
         let db_dir = TempDir::new("test-snap-mgr-delete-temp-files-v2-db").unwrap();
         let snapshot = DbSnapshot::new(get_test_db(&db_dir).unwrap());
         let key1 = SnapKey::new(1, 1, 1);
-        let size_track = Arc::new(RwLock::new(0));
+        let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(mgr.clone());
         let mut s1 = Snap::new_for_building(
             &path,

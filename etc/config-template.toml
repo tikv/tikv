@@ -5,8 +5,10 @@
 #   Time(based on ms): ms, s, m, h
 #    e.g.: 78_000 = "1.3m"
 
-# log level: trace, debug, info, warn, error, off.
+# log level: trace, debug, info, warning, error, critical.
+# Note that `debug` and `trace` are only available in development builds.
 # log-level = "info"
+
 # file to store log, write to stderr if it's empty.
 # log-file = ""
 
@@ -17,12 +19,12 @@
 # normal-concurrency = 4
 # size of thread pool for low-priority operations
 # low-concurrency = 4
-# max running high-priority operations, reject if exceed
-# max-tasks-high = 8000
-# max running normal-priority operations, reject if exceed
-# max-tasks-normal = 8000
-# max running low-priority operations, reject if exceed
-# max-tasks-low = 8000
+# max running high-priority operations of each worker, reject if exceed
+# max-tasks-per-worker-high = 2000
+# max running normal-priority operations of each worker, reject if exceed
+# max-tasks-per-worker-normal = 2000
+# max running low-priority operations of each worker, reject if exceed
+# max-tasks-per-worker-low = 2000
 # size of stack size for each thread pool
 # stack-size = "10MB"
 
@@ -33,9 +35,9 @@
 # high-concurrency = 8
 # normal-concurrency = 8
 # low-concurrency = 8
-# max-tasks-high = 16000
-# max-tasks-normal = 16000
-# max-tasks-low = 16000
+# max-tasks-per-worker-high = 2000
+# max-tasks-per-worker-normal = 2000
+# max-tasks-per-worker-low = 2000
 # stack-size = "10MB"
 
 [server]
@@ -48,6 +50,8 @@
 # maximum number of messages can be processed in one tick.
 # messages-per-tick = 4096
 
+# compression type for grpc channel, available values are none, deflate and gzip.
+# grpc-compression-type = "none"
 # size of thread pool for grpc server.
 # grpc-concurrency = 4
 # The number of max concurrent streams/requests on a client connection.
@@ -57,8 +61,10 @@
 # Amount to read ahead on individual grpc streams.
 # grpc-stream-initial-window-size = "2MB"
 
-# max count of tasks being handled, new tasks will be rejected.
-# end-point-max-tasks = 2000
+# How many snapshots can be sent concurrently.
+# concurrent-send-snap-limit = 32
+# How many snapshots can be recv concurrently.
+# concurrent-recv-snap-limit = 32
 
 # max recursion level allowed when decoding dag expression
 # end-point-recursion-limit = 1000

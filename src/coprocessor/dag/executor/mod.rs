@@ -19,12 +19,12 @@ use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
 
 use storage::SnapshotStore;
-use util::codec::number::NumberDecoder;
+use util::codec::number;
 use util::collections::HashSet;
 
 use coprocessor::codec::datum::{self, Datum};
 use coprocessor::codec::mysql;
-use coprocessor::codec::table::{RowColsDict, TableDecoder};
+use coprocessor::codec::table::{self, RowColsDict};
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings};
 use coprocessor::util;
 use coprocessor::*;
@@ -65,7 +65,7 @@ impl ExprColumnRefVisitor {
 
     pub fn visit(&mut self, expr: &Expr) -> Result<()> {
         if expr.get_tp() == ExprType::ColumnRef {
-            let offset = box_try!(expr.get_val().decode_i64()) as usize;
+            let offset = box_try!(number::decode_i64(&mut expr.get_val())) as usize;
             if offset >= self.cols_len {
                 return Err(Error::Other(box_err!(
                     "offset {} overflow, should be less than {}",
@@ -273,13 +273,17 @@ pub fn inflate_with_col_for_dag(
             let value = match values.get(col_id) {
                 None if col.has_default_val() => {
                     // TODO: optimize it to decode default value only once.
-                    box_try!(col.get_default_val().decode_col_value(ctx, col))
+                    box_try!(table::decode_col_value(
+                        &mut col.get_default_val(),
+                        ctx,
+                        col
+                    ))
                 }
                 None if mysql::has_not_null_flag(col.get_flag() as u64) => {
                     return Err(box_err!("column {} of {} is missing", col_id, h));
                 }
                 None => Datum::Null,
-                Some(mut bs) => box_try!(bs.decode_col_value(ctx, col)),
+                Some(mut bs) => box_try!(table::decode_col_value(&mut bs, ctx, col)),
             };
             res[*offset] = value;
         }

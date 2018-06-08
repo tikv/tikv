@@ -15,8 +15,8 @@ use super::super::types::Value;
 use super::{Error, Result};
 use byteorder::ReadBytesExt;
 use storage::{Mutation, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
-use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
-use util::codec::number::{MAX_VAR_U64_LEN, NumberDecoder, NumberEncoder};
+use util::codec::bytes::{self, BytesEncoder};
+use util::codec::number::{self, MAX_VAR_U64_LEN, NumberEncoder};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LockType {
@@ -103,10 +103,13 @@ impl Lock {
             return Err(Error::BadFormatLock);
         }
         let lock_type = LockType::from_u8(b.read_u8()?).ok_or(Error::BadFormatLock)?;
-        let primary = b.decode_compact_bytes()?;
-        let ts = b.decode_var_u64()?;
-        let ttl =
-            if b.is_empty() { 0 } else { b.decode_var_u64()? };
+        let primary = bytes::decode_compact_bytes(&mut b)?;
+        let ts = number::decode_var_u64(&mut b)?;
+        let ttl = if b.is_empty() {
+            0
+        } else {
+            number::decode_var_u64(&mut b)?
+        };
 
         if b.is_empty() {
             return Ok(Lock::new(lock_type, primary, ts, ttl, None));

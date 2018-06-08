@@ -18,14 +18,13 @@ use protobuf::{Message as PbMsg, RepeatedField};
 use tipb::schema::ColumnInfo;
 use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 
+use storage::{Snapshot, SnapshotStore};
+
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::codec::mysql;
 use coprocessor::dag::expr::EvalConfig;
-use coprocessor::endpoint::ReqContext;
 use coprocessor::util;
 use coprocessor::*;
-
-use storage::{Snapshot, SnapshotStore};
 
 use super::executor::{build_exec, Executor, ExecutorMetrics, Row};
 
@@ -35,6 +34,7 @@ pub struct DAGContext {
     req_ctx: ReqContext,
     exec: Box<Executor + Send>,
     output_offsets: Vec<u32>,
+    batch_row_limit: usize,
 }
 
 impl DAGContext {
@@ -43,16 +43,23 @@ impl DAGContext {
         ranges: Vec<KeyRange>,
         snap: Box<Snapshot>,
         req_ctx: ReqContext,
+        batch_row_limit: usize,
     ) -> Result<DAGContext> {
         let mut eval_cfg = box_try!(EvalConfig::new(req.get_time_zone_offset(), req.get_flags(),));
         if req.has_max_warning_count() {
             eval_cfg.set_max_warning_cnt(req.get_max_warning_count() as usize);
         }
+        if req.has_sql_mode() {
+            eval_cfg.set_sql_mode(req.get_sql_mode())
+        }
+        if req.has_is_strict_sql_mode() {
+            eval_cfg.set_strict_sql_mode(req.get_is_strict_sql_mode());
+        }
         let store = SnapshotStore::new(
             snap,
             req.get_start_ts(),
-            req_ctx.isolation_level,
-            req_ctx.fill_cache,
+            req_ctx.context.get_isolation_level(),
+            !req_ctx.context.get_not_fill_cache(),
         );
 
         let dag_executor = build_exec(
@@ -68,17 +75,38 @@ impl DAGContext {
             req_ctx,
             exec: dag_executor.exec,
             output_offsets: req.take_output_offsets(),
+            batch_row_limit,
         })
     }
 
-    pub fn handle_request(&mut self, batch_row_limit: usize) -> Result<Response> {
+    fn make_stream_response(&mut self, chunk: Chunk, range: Option<KeyRange>) -> Result<Response> {
+        let mut s_resp = StreamResponse::new();
+        s_resp.set_encode_type(EncodeType::TypeDefault);
+        s_resp.set_data(box_try!(chunk.write_to_bytes()));
+        if let Some(eval_warnings) = self.exec.take_eval_warnings() {
+            s_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
+            s_resp.set_warning_count(eval_warnings.warning_cnt as i64);
+        }
+        self.exec.collect_output_counts(s_resp.mut_output_counts());
+
+        let mut resp = Response::new();
+        resp.set_data(box_try!(s_resp.write_to_bytes()));
+        if let Some(range) = range {
+            resp.set_range(range);
+        }
+        Ok(resp)
+    }
+}
+
+impl RequestHandler for DAGContext {
+    fn handle_request(&mut self) -> Result<Response> {
         let mut record_cnt = 0;
         let mut chunks = Vec::new();
         loop {
             match self.exec.next() {
                 Ok(Some(row)) => {
                     self.req_ctx.check_if_outdated()?;
-                    if chunks.is_empty() || record_cnt >= batch_row_limit {
+                    if chunks.is_empty() || record_cnt >= self.batch_row_limit {
                         let chunk = Chunk::new();
                         chunks.push(chunk);
                         record_cnt = 0;
@@ -119,14 +147,11 @@ impl DAGContext {
         }
     }
 
-    pub fn handle_streaming_request(
-        &mut self,
-        batch_row_limit: usize,
-    ) -> Result<(Option<Response>, bool)> {
+    fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
         let (mut record_cnt, mut finished) = (0, false);
         let mut chunk = Chunk::new();
         self.exec.start_scan();
-        while record_cnt < batch_row_limit {
+        while record_cnt < self.batch_row_limit {
             match self.exec.next() {
                 Ok(Some(row)) => {
                     record_cnt += 1;
@@ -160,25 +185,7 @@ impl DAGContext {
         Ok((None, true))
     }
 
-    fn make_stream_response(&mut self, chunk: Chunk, range: Option<KeyRange>) -> Result<Response> {
-        let mut s_resp = StreamResponse::new();
-        s_resp.set_encode_type(EncodeType::TypeDefault);
-        s_resp.set_data(box_try!(chunk.write_to_bytes()));
-        if let Some(eval_warnings) = self.exec.take_eval_warnings() {
-            s_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
-            s_resp.set_warning_count(eval_warnings.warning_cnt as i64);
-        }
-        self.exec.collect_output_counts(s_resp.mut_output_counts());
-
-        let mut resp = Response::new();
-        resp.set_data(box_try!(s_resp.write_to_bytes()));
-        if let Some(range) = range {
-            resp.set_range(range);
-        }
-        Ok(resp)
-    }
-
-    pub fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         self.exec.collect_metrics_into(metrics);
     }
 }

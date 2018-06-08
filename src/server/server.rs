@@ -17,7 +17,7 @@ use std::sync::{Arc, RwLock};
 
 use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
 use kvproto::debugpb_grpc::create_debug;
-use kvproto::importpb_grpc::create_import_sst;
+use kvproto::import_sstpb_grpc::create_import_sst;
 use kvproto::tikvpb_grpc::*;
 
 use coprocessor::{self, EndPointHost, EndPointTask};
@@ -164,6 +164,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             self.snap_mgr.clone(),
             self.raft_router.clone(),
             security_mgr,
+            Arc::clone(&cfg),
         );
         box_try!(self.snap_worker.start(snap_runner));
         self.grpc_server.start();

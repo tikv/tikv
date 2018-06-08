@@ -17,8 +17,8 @@ use futures::sync::mpsc;
 use futures::{Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
-use kvproto::importpb::*;
-use kvproto::importpb_grpc::*;
+use kvproto::import_kvpb::*;
+use kvproto::import_kvpb_grpc::*;
 use uuid::Uuid;
 
 use util::time::Instant;
@@ -82,6 +82,9 @@ impl ImportKv for ImportKVService {
                     .into_future()
                     .map_err(|(e, _)| Error::from(e))
                     .and_then(move |(chunk, stream)| {
+                        // The first message of the stream specifies the uuid of
+                        // the corresponding engine.
+                        // The engine should be opened before any write.
                         let head = match chunk {
                             Some(ref chunk) if chunk.has_head() => chunk.get_head(),
                             _ => return Err(Error::InvalidChunk),

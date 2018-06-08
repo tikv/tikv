@@ -16,7 +16,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use grpc::{ChannelBuilder, EnvBuilder, Server as GrpcServer, ServerBuilder};
-use kvproto::importpb_grpc::create_import_kv;
+use kvproto::import_kvpb_grpc::create_import_kv;
 
 use config::TiKvConfig;
 
@@ -24,6 +24,8 @@ use super::{ImportKVService, KVImporter};
 
 const MAX_GRPC_MSG_LEN: usize = 32 * 1024 * 1024;
 
+/// ImportKVServer is a gRPC server that provides service to write key-value
+/// pairs into RocksDB engines for later ingesting into tikv-server.
 pub struct ImportKVServer {
     grpc_server: GrpcServer,
 }

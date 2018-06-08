@@ -19,12 +19,12 @@ use tipb::executor::Aggregation;
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
 
-use coprocessor::Result;
+use util::collections::{OrderMap, OrderMapEntry};
+
 use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
 use coprocessor::codec::table::RowColsDict;
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
-use coprocessor::endpoint::SINGLE_GROUP;
-use util::collections::{OrderMap, OrderMapEntry};
+use coprocessor::*;
 
 use super::ExecutorMetrics;
 use super::aggregate::{self, AggrFunc};
@@ -403,7 +403,7 @@ mod test {
     use tipb::executor::TableScan;
     use tipb::expression::{Expr, ExprType};
 
-    use coprocessor::codec::datum::{Datum, DatumDecoder};
+    use coprocessor::codec::datum::{self, Datum};
     use coprocessor::codec::mysql::decimal::Decimal;
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::table;
@@ -577,7 +577,7 @@ mod test {
         ];
         let expect_col_cnt = 6;
         for (row, expect_cols) in row_data.into_iter().zip(expect_row_data) {
-            let ds = row.value.as_slice().decode().unwrap();
+            let ds = datum::decode(&mut row.value.as_slice()).unwrap();
             assert_eq!(ds.len(), expect_col_cnt);
             assert_eq!(ds[0], Datum::from(expect_cols.0));
         }
@@ -652,7 +652,7 @@ mod test {
         ];
         let expect_col_cnt = 6;
         for (row, expect_cols) in row_data.into_iter().zip(expect_row_data) {
-            let ds = row.value.as_slice().decode().unwrap();
+            let ds = datum::decode(&mut row.value.as_slice()).unwrap();
             assert_eq!(ds.len(), expect_col_cnt);
             assert_eq!(ds[0], Datum::from(expect_cols.0));
             assert_eq!(ds[1], Datum::from(expect_cols.1));
@@ -809,7 +809,7 @@ mod test {
         ];
         let expect_col_cnt = 8;
         for (row, expect_cols) in row_data.into_iter().zip(expect_row_data) {
-            let ds = row.value.as_slice().decode().unwrap();
+            let ds = datum::decode(&mut row.value.as_slice()).unwrap();
             assert_eq!(ds.len(), expect_col_cnt);
             assert_eq!(ds[0], Datum::from(expect_cols.0));
             assert_eq!(ds[1], Datum::from(expect_cols.1));

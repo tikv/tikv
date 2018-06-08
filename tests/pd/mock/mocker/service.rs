@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use tikv::util::collections::HashMap;
 
 use kvproto::metapb::{Peer, Region, Store};
 use kvproto::pdpb::*;
@@ -38,9 +38,9 @@ impl Service {
             members_resp: Mutex::new(None),
             id_allocator: AtomicUsize::new(1), // start from 1.
             is_bootstrapped: AtomicBool::new(false),
-            stores: Mutex::new(HashMap::new()),
-            regions: Mutex::new(HashMap::new()),
-            leaders: Mutex::new(HashMap::new()),
+            stores: Mutex::new(HashMap::default()),
+            regions: Mutex::new(HashMap::default()),
+            leaders: Mutex::new(HashMap::default()),
         }
     }
 

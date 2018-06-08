@@ -468,8 +468,8 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for _ in 0..100 {
         // write many logs to force log GC for region 1 and region 2.
-        cluster.get(b"k1").unwrap();
-        cluster.get(b"k2").unwrap();
+        cluster.must_put(b"k1", b"v1");
+        cluster.must_put(b"k2", b"v2");
     }
 
     cluster.clear_send_filters();
@@ -716,7 +716,11 @@ fn test_quick_election_after_split<T: Simulator>(cluster: &mut Cluster<T>) {
     let new_region = cluster.get_region(b"k3");
     // Ensure the new leader is established for the newly split region, and it shares the
     // same store with the leader of old region.
-    let new_leader = cluster.query_leader(old_leader.get_store_id(), new_region.get_id());
+    let new_leader = cluster.query_leader(
+        old_leader.get_store_id(),
+        new_region.get_id(),
+        Duration::from_secs(5),
+    );
     assert!(new_leader.is_some());
 }
 

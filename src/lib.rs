@@ -17,7 +17,7 @@
 #![feature(alloc)]
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
-#![feature(iterator_for_each)]
+#![feature(integer_atomics)]
 #![feature(entry_or_default)]
 #![cfg_attr(feature = "dev", feature(plugin))]
 #![cfg_attr(feature = "dev", plugin(clippy))]
@@ -46,11 +46,11 @@ extern crate crc;
 extern crate crossbeam_channel;
 #[macro_use]
 extern crate fail;
-extern crate flat_map;
 extern crate fnv;
 extern crate fs2;
 extern crate futures;
 extern crate futures_cpupool;
+extern crate fxhash;
 extern crate grpcio as grpc;
 extern crate indexmap;
 extern crate kvproto;
@@ -74,6 +74,12 @@ extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
+#[macro_use(slog_o, slog_kv)]
+extern crate slog;
+extern crate slog_async;
+extern crate slog_scope;
+extern crate slog_stdlog;
+extern crate slog_term;
 extern crate sys_info;
 extern crate tempdir;
 #[cfg(test)]
