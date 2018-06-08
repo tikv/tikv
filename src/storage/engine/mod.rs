@@ -523,6 +523,12 @@ impl Cursor {
     }
 
     #[inline]
+    pub fn internal_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        statistics.seek += 1;
+        self.iter.seek(key)
+    }
+
+    #[inline]
     pub fn next(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.next += 1;
         self.iter.next()

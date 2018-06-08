@@ -65,7 +65,9 @@ pub struct Host {
     last_req_id: u64,
     pool: ReadPool<ReadPoolContext>,
     basic_local_metrics: BasicLocalMetrics,
+    // TODO: Deprecate after totally switching to read pool
     max_running_task_count: usize,
+    // TODO: Deprecate after totally switching to read pool
     running_task_count: Arc<AtomicUsize>,
     batch_row_limit: usize,
     stream_batch_row_limit: usize,
@@ -79,6 +81,8 @@ impl Host {
         cfg: &Config,
         pool: ReadPool<ReadPoolContext>,
     ) -> Host {
+        // Use read pool's max task config
+        let max_running_task_count = pool.get_max_tasks();
         Host {
             engine,
             sched,
@@ -86,15 +90,18 @@ impl Host {
             last_req_id: 0,
             pool,
             basic_local_metrics: BasicLocalMetrics::default(),
-            max_running_task_count: cfg.end_point_max_tasks,
+            // TODO: Deprecate after totally switching to read pool
+            max_running_task_count,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             request_max_handle_duration: cfg.end_point_request_max_handle_duration.0,
+            // TODO: Deprecate after totally switching to read pool
             running_task_count: Arc::new(AtomicUsize::new(0)),
         }
     }
 
     #[inline]
+    // TODO: Deprecate after totally switching to read pool
     fn running_task_count(&self) -> usize {
         self.running_task_count.load(Ordering::Acquire)
     }
