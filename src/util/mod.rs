@@ -457,12 +457,18 @@ impl<T> Drop for MustConsumeVec<T> {
 /// to check the unknown fields contain the enum or not.
 ///
 /// `pb_unknown_enum` returns true if the message's unknown fields contain
-/// an enum with id `field_id`. `field_id` for a given enum can be checked
-/// from proto files.
+/// an enum in `field_name`. `field_name` can be checked from proto files.
 ///
 /// This should be removed after `ProtobufEnumOrUnknown`
 /// [implemented]https://github.com/stepancheg/rust-protobuf/issues/233).
-pub fn pb_unknown_enum<M: Message>(m: &M, field_id: u32) -> bool {
+pub fn pb_unknown_enum<M: Message>(m: &M, field_name: &str) -> bool {
+    let field_id = {
+        let descriptor = m.descriptor();
+        let e = descriptor.field_by_name(field_name);
+        assert!(e.proto().has_number());
+        e.proto().get_number() as u32
+    };
+
     m.get_unknown_fields()
         .fields
         .as_ref()

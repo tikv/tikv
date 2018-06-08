@@ -1373,7 +1373,7 @@ impl ApplyDelegate {
             ),
         };
         match state.get_state() {
-            PeerState::Normal if pb_unknown_enum(&state, 1) => {
+            PeerState::Normal if pb_unknown_enum(&state, "state") => {
                 panic!("{} meets unknown PeerState", self.tag);
             }
             PeerState::Normal | PeerState::Merging => {}
