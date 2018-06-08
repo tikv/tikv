@@ -23,6 +23,14 @@ use util::properties::MvccProperties;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
+// When there are many versions for the user key, after several tries,
+// we will use seek to locate the right position. But this will turn around
+// the write cf's iterator's direction inside RocksDB, and the next user key
+// need to turn back the direction to backward. As we have tested, turn around
+// iterator's direction from forward to backward is as expensive as seek in
+// RocksDB, so don't set REVERSE_SEEK_BOUND too small.
+const REVERSE_SEEK_BOUND: u64 = 32;
+
 pub struct MvccReader {
     snapshot: Box<Snapshot>,
     statistics: Statistics,
@@ -196,26 +204,31 @@ impl MvccReader {
 
     fn check_lock(&mut self, key: &Key, ts: u64) -> Result<u64> {
         if let Some(lock) = self.load_lock(key)? {
-            if lock.ts > ts || lock.lock_type == LockType::Lock {
-                // ignore lock when lock.ts > ts or lock's type is Lock
-                return Ok(ts);
-            }
-
-            if ts == u64::MAX && key.raw()? == lock.primary {
-                // when ts==u64::MAX(which means to get latest committed version for
-                // primary key),and current key is the primary key, returns the latest
-                // commit version's value
-                return Ok(lock.ts - 1);
-            }
-            // There is a pending lock. Client should wait or clean it.
-            return Err(Error::KeyIsLocked {
-                key: key.raw()?,
-                primary: lock.primary,
-                ts: lock.ts,
-                ttl: lock.ttl,
-            });
+            return self.check_lock_impl(key, ts, lock);
         }
         Ok(ts)
+    }
+
+    fn check_lock_impl(&self, key: &Key, ts: u64, lock: Lock) -> Result<u64> {
+        if lock.ts > ts || lock.lock_type == LockType::Lock {
+            // ignore lock when lock.ts > ts or lock's type is Lock
+            return Ok(ts);
+        }
+
+        if ts == u64::MAX && key.raw()? == lock.primary {
+            // when ts==u64::MAX(which means to get latest committed version for
+            // primary key),and current key is the primary key, returns the latest
+            // commit version's value
+            return Ok(lock.ts - 1);
+        }
+
+        // There is a pending lock. Client should wait or clean it.
+        Err(Error::KeyIsLocked {
+            key: key.raw()?,
+            primary: lock.primary,
+            ts: lock.ts,
+            ttl: lock.ttl,
+        })
     }
 
     pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
@@ -279,7 +292,7 @@ impl MvccReader {
                 self.fill_cache,
             );
             let iter = self.snapshot
-                .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false))?;
+                .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))?;
             self.write_cursor = Some(iter);
         }
         Ok(())
@@ -317,7 +330,7 @@ impl MvccReader {
     }
 
     pub fn seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
-        assert!(self.scan_mode.is_some());
+        assert!(*self.scan_mode.as_ref().unwrap() == ScanMode::Forward);
         self.create_write_cursor()?;
         self.create_lock_cursor()?;
 
@@ -363,12 +376,11 @@ impl MvccReader {
     }
 
     pub fn reverse_seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
-        assert!(self.scan_mode.is_some());
+        assert!(*self.scan_mode.as_ref().unwrap() == ScanMode::Backward);
         self.create_write_cursor()?;
         self.create_lock_cursor()?;
 
         let (mut write_valid, mut lock_valid) = (true, true);
-
         loop {
             key = {
                 let w_cur = self.write_cursor.as_mut().unwrap();
@@ -401,9 +413,140 @@ impl MvccReader {
                     },
                 }
             };
-            if let Some(v) = self.get(&key, ts)? {
+
+            if let Some(v) = self.reverse_get_impl(&key, ts)? {
                 return Ok(Some((key, v)));
             }
+
+            // reverse_get_impl may call write_cursor's prev.
+            if !self.write_cursor.as_ref().unwrap().valid() {
+                write_valid = false;
+            }
+        }
+    }
+
+    fn reverse_get_impl(&mut self, user_key: &Key, ts: u64) -> Result<Option<Value>> {
+        assert!(self.lock_cursor.is_some());
+        assert!(self.write_cursor.is_some());
+
+        // Check lock.
+        match self.isolation_level {
+            IsolationLevel::SI => {
+                let l_cur = self.lock_cursor.as_ref().unwrap();
+                if l_cur.valid() && l_cur.key() == user_key.encoded().as_slice() {
+                    self.statistics.lock.processed += 1;
+                    self.check_lock_impl(user_key, ts, Lock::parse(l_cur.value())?)?;
+                }
+            }
+            IsolationLevel::RC => {}
+        }
+
+        // Get value for this user key.
+        // At first, we use several prev to try to get the latest version.
+        let mut lastest_version = (None /* start_ts */, None /* short value */);
+        let mut last_handled_key: Option<Vec<u8>> = None;
+        for _ in 0..REVERSE_SEEK_BOUND {
+            if !self.write_cursor.as_mut().unwrap().valid() {
+                return self.get_value(user_key, lastest_version.0, lastest_version.1);
+            }
+
+            let mut write = {
+                let (commit_ts, key) = {
+                    let w_cur = self.write_cursor.as_ref().unwrap();
+                    last_handled_key = Some(w_cur.key().to_vec());
+                    let w_key = Key::from_encoded(w_cur.key().to_vec());
+                    (w_key.decode_ts()?, w_key.truncate_ts()?)
+                };
+
+                // reach neighbour user key or can't see this version.
+                if ts < commit_ts || &key != user_key {
+                    assert!(&key <= user_key);
+                    return self.get_value(user_key, lastest_version.0, lastest_version.1);
+                }
+                self.statistics.write.processed += 1;
+                Write::parse(self.write_cursor.as_ref().unwrap().value())?
+            };
+
+            match write.write_type {
+                WriteType::Put => {
+                    if write.short_value.is_some() {
+                        if self.key_only {
+                            lastest_version = (None, Some(vec![]));
+                        } else {
+                            lastest_version = (None, write.short_value.take());
+                        }
+                    } else {
+                        lastest_version = (Some(write.start_ts), None);
+                    }
+                }
+                WriteType::Delete => lastest_version = (None, None),
+                WriteType::Lock | WriteType::Rollback => {}
+            }
+            self.write_cursor
+                .as_mut()
+                .unwrap()
+                .prev(&mut self.statistics.write);
+        }
+
+        // After several prev, we still not get the latest version for the specified ts,
+        // use seek to locate the latest version.
+        let key = user_key.append_ts(ts);
+        let valid = self.write_cursor
+            .as_mut()
+            .unwrap()
+            .internal_seek(&key, &mut self.statistics.write)?;
+        assert!(valid);
+        loop {
+            let mut write = {
+                // If we reach the last handled key, it means we have checked all versions
+                // for this user key.
+                if self.write_cursor.as_ref().unwrap().key()
+                    >= last_handled_key.as_ref().unwrap().as_slice()
+                {
+                    return self.get_value(user_key, lastest_version.0, lastest_version.1);
+                }
+
+                let w_cur = self.write_cursor.as_ref().unwrap();
+                let w_key = Key::from_encoded(w_cur.key().to_vec());
+                let commit_ts = w_key.decode_ts()?;
+                assert!(commit_ts <= ts);
+                let key = w_key.truncate_ts()?;
+                assert_eq!(&key, user_key);
+                self.statistics.write.processed += 1;
+                Write::parse(w_cur.value())?
+            };
+
+            match write.write_type {
+                WriteType::Put => {
+                    if write.short_value.is_some() {
+                        if self.key_only {
+                            return Ok(Some(vec![]));
+                        } else {
+                            return Ok(write.short_value.take());
+                        }
+                    } else {
+                        return Ok(Some(self.load_data(user_key, write.start_ts)?));
+                    }
+                }
+                WriteType::Delete => return Ok(None),
+                WriteType::Lock | WriteType::Rollback => {
+                    let w_cur = self.write_cursor.as_mut().unwrap();
+                    assert!(w_cur.next(&mut self.statistics.write));
+                }
+            }
+        }
+    }
+
+    fn get_value(
+        &mut self,
+        user_key: &Key,
+        start_ts: Option<u64>,
+        short_value: Option<Vec<u8>>,
+    ) -> Result<Option<Value>> {
+        if let Some(ts) = start_ts {
+            Ok(Some(self.load_data(user_key, ts)?))
+        } else {
+            Ok(short_value)
         }
     }
 
@@ -560,12 +703,14 @@ mod tests {
     use rocksdb::{self, Writable, WriteBatch, DB};
     use std::sync::Arc;
     use std::u64;
-    use storage::engine::Modify;
+    use storage::engine::{Modify, ScanMode};
     use storage::mvcc::{MvccReader, MvccTxn};
     use storage::{make_key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempdir::TempDir;
     use util::properties::{MvccProperties, MvccPropertiesCollectorFactory};
     use util::rocksdb::{self as rocksdb_util, CFOptions};
+
+    use super::REVERSE_SEEK_BOUND;
 
     struct RegionEngine {
         db: Arc<DB>,
@@ -613,12 +758,27 @@ mod tests {
             self.write(txn.into_modifies());
         }
 
-        fn gc(&mut self, pk: &[u8], safe_point: u64) {
+        fn rollback(&mut self, pk: &[u8], start_ts: u64) {
             let k = make_key(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(Box::new(snap), safe_point, None, IsolationLevel::SI, true);
-            txn.gc(&k, safe_point).unwrap();
+            let mut txn = MvccTxn::new(Box::new(snap), start_ts, None, IsolationLevel::SI, true);
+            txn.rollback(&k).unwrap();
             self.write(txn.into_modifies());
+        }
+
+        fn gc(&mut self, pk: &[u8], safe_point: u64) {
+            let k = make_key(pk);
+            loop {
+                let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
+                let mut txn =
+                    MvccTxn::new(Box::new(snap), safe_point, None, IsolationLevel::SI, true);
+                txn.gc(&k, safe_point).unwrap();
+                let modifies = txn.into_modifies();
+                if modifies.is_empty() {
+                    return;
+                }
+                self.write(modifies);
+            }
         }
 
         fn write(&mut self, modifies: Vec<Modify>) {
@@ -665,6 +825,7 @@ mod tests {
     fn open_db(path: &str, with_properties: bool) -> Arc<DB> {
         let db_opts = rocksdb::DBOptions::new();
         let mut cf_opts = rocksdb::ColumnFamilyOptions::new();
+        cf_opts.set_write_buffer_size(32 * 1024 * 1024);
         if with_properties {
             let f = Box::new(MvccPropertiesCollectorFactory::default());
             cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
@@ -798,5 +959,245 @@ mod tests {
         assert_eq!(props.num_puts, 4);
         assert_eq!(props.num_versions, 5);
         assert_eq!(props.max_row_versions, 1);
+    }
+
+    #[test]
+    fn test_mvcc_reader_reverse_seek_many_tombstones() {
+        let path =
+            TempDir::new("_test_storage_mvcc_reader_reverse_seek_many_tombstones").expect("");
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+
+        // Generate RocksDB tombstones in write cf.
+        let start_ts = 1;
+        let safe_point = 2;
+        for i in 0..256 {
+            for y in 0..256 {
+                let pk = &[i as u8, y as u8];
+                let m = Mutation::Put((make_key(pk), vec![]));
+                engine.prewrite(m, pk, start_ts);
+                engine.rollback(pk, start_ts);
+                // Generate 65534 RocksDB tombstones between [0,0] and [255,255].
+                if !((i == 0 && y == 0) || (i == 255 && y == 255)) {
+                    engine.gc(pk, safe_point);
+                }
+            }
+        }
+
+        // Generate 256 locks in lock cf.
+        let start_ts = 3;
+        for i in 0..256 {
+            let pk = &[i as u8];
+            let m = Mutation::Put((make_key(pk), vec![]));
+            engine.prewrite(m, pk, start_ts);
+        }
+
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let mut reader = MvccReader::new(
+            Box::new(snap),
+            Some(ScanMode::Backward),
+            false,
+            None,
+            None,
+            IsolationLevel::SI,
+        );
+        let row = &[255 as u8];
+        let k = make_key(row);
+
+        // Call reverse seek
+        let ts = 2;
+        assert_eq!(reader.reverse_seek(k, ts).unwrap(), None);
+        let statistics = reader.get_statistics();
+        assert_eq!(statistics.lock.prev, 256);
+        assert_eq!(statistics.write.prev, 1);
+    }
+
+    #[test]
+    fn test_mvcc_reader_reverse_seek_basic() {
+        let path = TempDir::new("_test_storage_mvcc_reader_reverse_seek_basic").expect("");
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+
+        // Generate REVERSE_SEEK_BOUND / 2 Put for key [10].
+        let k = &[10 as u8];
+        for ts in 0..REVERSE_SEEK_BOUND / 2 {
+            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            engine.prewrite(m, k, ts);
+            engine.commit(k, ts, ts);
+        }
+
+        // Generate REVERSE_SEEK_BOUND + 1 Put for key [9].
+        let k = &[9 as u8];
+        for ts in 0..REVERSE_SEEK_BOUND + 1 {
+            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            engine.prewrite(m, k, ts);
+            engine.commit(k, ts, ts);
+        }
+
+        // Generate REVERSE_SEEK_BOUND / 2 Put and REVERSE_SEEK_BOUND / 2 + 1 Rollback for key [8].
+        let k = &[8 as u8];
+        for ts in 0..REVERSE_SEEK_BOUND + 1 {
+            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            engine.prewrite(m, k, ts);
+            if ts < REVERSE_SEEK_BOUND / 2 {
+                engine.commit(k, ts, ts);
+            } else {
+                engine.rollback(k, ts);
+            }
+        }
+
+        // Generate REVERSE_SEEK_BOUND / 2 Put 1 delete and REVERSE_SEEK_BOUND/2 Rollback for key [7].
+        let k = &[7 as u8];
+        for ts in 0..REVERSE_SEEK_BOUND / 2 {
+            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            engine.prewrite(m, k, ts);
+            engine.commit(k, ts, ts);
+        }
+        {
+            let ts = REVERSE_SEEK_BOUND / 2;
+            let m = Mutation::Delete(make_key(k));
+            engine.prewrite(m, k, ts);
+            engine.commit(k, ts, ts);
+        }
+        for ts in REVERSE_SEEK_BOUND / 2 + 1..REVERSE_SEEK_BOUND + 1 {
+            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            engine.prewrite(m, k, ts);
+            engine.rollback(k, ts);
+        }
+
+        // Generate 1 PUT for key [6].
+        let k = &[6 as u8];
+        for ts in 0..1 {
+            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            engine.prewrite(m, k, ts);
+            engine.commit(k, ts, ts);
+        }
+
+        // Generate REVERSE_SEEK_BOUND + 1 Rollback for key [5].
+        let k = &[5 as u8];
+        for ts in 0..REVERSE_SEEK_BOUND + 1 {
+            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            engine.prewrite(m, k, ts);
+            engine.rollback(k, ts);
+        }
+
+        // Generate 1 PUT with ts = REVERSE_SEEK_BOUND and 1 PUT
+        // with ts = REVERSE_SEEK_BOUND + 1 for key [4].
+        let k = &[4 as u8];
+        for ts in REVERSE_SEEK_BOUND..REVERSE_SEEK_BOUND + 2 {
+            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            engine.prewrite(m, k, ts);
+            engine.commit(k, ts, ts);
+        }
+
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let mut reader = MvccReader::new(
+            Box::new(snap),
+            Some(ScanMode::Backward),
+            false,
+            None,
+            None,
+            IsolationLevel::SI,
+        );
+
+        let ts = REVERSE_SEEK_BOUND;
+        // Use REVERSE_SEEK_BOUND / 2 prev to get key [10].
+        assert_eq!(
+            reader.reverse_seek(make_key(&[11 as u8]), ts).unwrap(),
+            Some((
+                make_key(&[10 as u8]),
+                vec![(REVERSE_SEEK_BOUND / 2 - 1) as u8]
+            ))
+        );
+        let mut total_prev = REVERSE_SEEK_BOUND as usize / 2;
+        let mut total_seek = 0;
+        let mut total_next = 0;
+        assert_eq!(reader.get_statistics().write.prev, total_prev);
+        assert_eq!(reader.get_statistics().write.seek, total_seek);
+        assert_eq!(reader.get_statistics().write.next, total_next);
+        assert_eq!(reader.get_statistics().write.seek_for_prev, 1);
+        assert_eq!(reader.get_statistics().write.get, 0);
+
+        // Use REVERSE_SEEK_BOUND prev and 1 seek to get key [9].
+        // So the total prev += REVERSE_SEEK_BOUND, total seek = 1.
+        assert_eq!(
+            reader.reverse_seek(make_key(&[10 as u8]), ts).unwrap(),
+            Some((make_key(&[9 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
+        );
+        total_prev += REVERSE_SEEK_BOUND as usize;
+        total_seek += 1;
+        assert_eq!(reader.get_statistics().write.prev, total_prev);
+        assert_eq!(reader.get_statistics().write.seek, total_seek);
+        assert_eq!(reader.get_statistics().write.next, total_next);
+        assert_eq!(reader.get_statistics().write.seek_for_prev, 1);
+        assert_eq!(reader.get_statistics().write.get, 0);
+
+        // Use REVERSE_SEEK_BOUND + 1 prev (1 in near_reverse_seek and REVERSE_SEEK_BOUND
+        // in reverse_get_impl), 1 seek and 1 next to get key [8].
+        // So the total prev += REVERSE_SEEK_BOUND + 1, total next += 1, total seek += 1.
+        assert_eq!(
+            reader.reverse_seek(make_key(&[9 as u8]), ts).unwrap(),
+            Some((
+                make_key(&[8 as u8]),
+                vec![(REVERSE_SEEK_BOUND / 2 - 1) as u8]
+            ))
+        );
+        total_prev += REVERSE_SEEK_BOUND as usize + 1;
+        total_seek += 1;
+        total_next += 1;
+        assert_eq!(reader.get_statistics().write.prev, total_prev);
+        assert_eq!(reader.get_statistics().write.seek, total_seek);
+        assert_eq!(reader.get_statistics().write.next, total_next);
+        assert_eq!(reader.get_statistics().write.seek_for_prev, 1);
+        assert_eq!(reader.get_statistics().write.get, 0);
+
+        // key [7] will cause REVERSE_SEEK_BOUND + 2 prev (2 in near_reverse_seek and
+        // REVERSE_SEEK_BOUND in reverse_get_impl), 1 seek and 1 next and get DEL.
+        // key [6] will cause 3 prev (2 in near_reverse_seek and 1 in reverse_get_impl).
+        // So the total prev += REVERSE_SEEK_BOUND + 6, total next += 1, total seek += 1.
+        assert_eq!(
+            reader.reverse_seek(make_key(&[8 as u8]), ts).unwrap(),
+            Some((make_key(&[6 as u8]), vec![0 as u8]))
+        );
+        total_prev += REVERSE_SEEK_BOUND as usize + 5;
+        total_seek += 1;
+        total_next += 1;
+        assert_eq!(reader.get_statistics().write.prev, total_prev);
+        assert_eq!(reader.get_statistics().write.seek, total_seek);
+        assert_eq!(reader.get_statistics().write.next, total_next);
+        assert_eq!(reader.get_statistics().write.seek_for_prev, 1);
+        assert_eq!(reader.get_statistics().write.get, 0);
+
+        // key [5] will cause REVERSE_SEEK_BOUND prev (REVERSE_SEEK_BOUND in reverse_get_impl)
+        // and 1 seek but get none.
+        // And then will call near_reverse_seek(key[5]) to fetch the previous key, this will cause
+        // 2 prev in near_reverse_seek.
+        // key [4] will cause 1 prev.
+        // So the total prev += REVERSE_SEEK_BOUND + 3, total next += 1, total seek += 1.
+        assert_eq!(
+            reader.reverse_seek(make_key(&[6 as u8]), ts).unwrap(),
+            Some((make_key(&[4 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
+        );
+        total_prev += REVERSE_SEEK_BOUND as usize + 3;
+        total_seek += 1;
+        total_next += 1;
+        assert_eq!(reader.get_statistics().write.prev, total_prev);
+        assert_eq!(reader.get_statistics().write.seek, total_seek);
+        assert_eq!(reader.get_statistics().write.next, total_next);
+        assert_eq!(reader.get_statistics().write.seek_for_prev, 1);
+        assert_eq!(reader.get_statistics().write.get, 0);
+
+        // Use a prev and reach the very beginning.
+        assert_eq!(reader.reverse_seek(make_key(&[4 as u8]), ts).unwrap(), None);
+        total_prev += 1;
+        assert_eq!(reader.get_statistics().write.prev, total_prev);
+        assert_eq!(reader.get_statistics().write.seek, total_seek);
+        assert_eq!(reader.get_statistics().write.next, total_next);
+        assert_eq!(reader.get_statistics().write.seek_for_prev, 1);
+        assert_eq!(reader.get_statistics().write.get, 0);
     }
 }
