@@ -270,7 +270,7 @@ impl MvccTxn {
         Ok(())
     }
 
-    pub fn gc(&mut self, key: &Key, safe_point: u64) -> Result<()> {
+    pub fn gc(&mut self, key: &Key, safe_point: u64) -> Result<(usize, usize)> {
         let mut remove_older = false;
         let mut ts: u64 = u64::max_value();
         let mut versions = 0;
@@ -324,11 +324,11 @@ impl MvccTxn {
             self.delete_write(key, commit);
             delete_versions += 1;
         }
-        MVCC_VERSIONS_HISTOGRAM.observe(f64::from(versions));
+        MVCC_VERSIONS_HISTOGRAM.observe(versions as f64);
         if delete_versions > 0 {
-            GC_DELETE_VERSIONS_HISTOGRAM.observe(f64::from(delete_versions));
+            GC_DELETE_VERSIONS_HISTOGRAM.observe(delete_versions as f64);
         }
-        Ok(())
+        Ok((versions, delete_versions))
     }
 }
 

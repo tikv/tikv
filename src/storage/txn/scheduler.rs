@@ -67,6 +67,12 @@ pub const GC_BATCH_SIZE: usize = 512;
 // The write batch will be around 32KB if we scan 256 keys each time.
 pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;
 
+/// After scanned how many versions for a key we should output a log for it.
+const GC_LOG_FOUND_VERSION_THRESHOLD: usize = 300;
+
+/// After deleted how many versions for a key we should output a log for it.
+const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 300;
+
 /// Process result of a command.
 pub enum ProcessResult {
     Res,
@@ -862,7 +868,27 @@ fn process_write_impl(
             );
             let rows = keys.len();
             for k in keys {
-                txn.gc(k, safe_point)?;
+                let (versions, deleted_versions) = txn.gc(k, safe_point)?;
+                if versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
+                    info!(
+                        "[region {}] GC found at least {} versions for key {}",
+                        ctx.get_region_id(),
+                        versions,
+                        k
+                    );
+                }
+                // We may delete only part of the versions a time, which may not beyond the logging
+                // threshold `GC_LOG_DELETED_VERSION_THRESHOLD`.
+                if deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD
+                    || txn.write_size() >= MAX_TXN_WRITE_SIZE
+                {
+                    info!(
+                        "[region {}] GC deleted {} versions for key {}",
+                        ctx.get_region_id(),
+                        deleted_versions,
+                        k
+                    );
+                }
                 if txn.write_size() >= MAX_TXN_WRITE_SIZE {
                     scan_key = Some(k.to_owned());
                     break;
