@@ -12,6 +12,9 @@
 # file to store log, write to stderr if it's empty.
 # log-file = ""
 
+# size to allow log files to grow to before rotating.
+# log-rotation-size = "4GB"
+
 [readpool.storage]
 # size of thread pool for high-priority operations
 # high-concurrency = 4

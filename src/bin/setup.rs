@@ -51,15 +51,16 @@ pub fn init_log(config: &TiKvConfig) {
             fatal!("failed to initialize log: {:?}", e);
         });
     } else {
-        let logger = BufWriter::new(RotatingFileLogger::new(&config.log_file).unwrap_or_else(
-            |e| {
-                fatal!(
-                    "failed to initialize log with file {:?}: {:?}",
-                    config.log_file,
-                    e
-                );
-            },
-        ));
+        let logger = BufWriter::new(
+            RotatingFileLogger::new(&config.log_file, config.log_rotation_size.0 as u64)
+                .unwrap_or_else(|e| {
+                    fatal!(
+                        "failed to initialize log with file {:?}: {:?}",
+                        config.log_file,
+                        e
+                    );
+                }),
+        );
         let decorator = PlainDecorator::new(logger);
         let drain = FullFormat::new(decorator).build().fuse();
         let drain = Async::new(drain).build().fuse();
