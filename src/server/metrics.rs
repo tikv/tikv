@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use prometheus::*;
-use prometheus_static_metric::make_static_metric;
+use prometheus_static_metric::*;
 
 make_static_metric! {
     label_enum GrpcTypes {
@@ -21,7 +21,7 @@ make_static_metric! {
         kv_prewrite,
         kv_commit,
         kv_cleanup,
-        kv_batchget,
+        kv_batch_get,
         kv_batch_rollback,
         kv_scan_lock,
         kv_resolve_lock,
@@ -61,13 +61,15 @@ lazy_static! {
         "Total number of snapshot task",
         &["type"]
     ).unwrap();
-    pub static ref GRPC_MSG_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+    pub static ref GRPC_MSG_HISTOGRAM_VEC: GrpcMsgHistogramVec = register_static_histogram_vec!(
+        GrpcMsgHistogramVec,
         "tikv_grpc_msg_duration_seconds",
         "Bucketed histogram of grpc server messages",
         &["type"],
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     ).unwrap();
-    pub static ref GRPC_MSG_FAIL_COUNTER: IntCounterVec = register_int_counter_vec!(
+    pub static ref GRPC_MSG_FAIL_COUNTER: GrpcMsgFailCounterVec = register_static_int_counter_vec!(
+        GrpcMsgFailCounterVec,
         "tikv_grpc_msg_fail_total",
         "Total number of handle grpc message failure",
         &["type"]

@@ -838,7 +838,7 @@ dependencies = [
 [[package]]
 name = "prometheus-static-metric"
 version = "0.1.1"
-source = "git+https://github.com/pingcap/rust-prometheus.git?branch=wenxuan/static-metric-v3#2005b3aaf1398efea38f0be2c2959bf5a4f8896a"
+source = "git+https://github.com/pingcap/rust-prometheus.git?branch=wenxuan/static-metric-v3#774e726eb1d1a8cbd14c3feaa2b52c6dd3521388"
 dependencies = [
  "lazy_static 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "proc-macro2 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
