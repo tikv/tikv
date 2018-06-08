@@ -24,9 +24,9 @@ use util::codec::Error as CError;
 pub const ERR_UNKNOWN: i32 = 1105;
 pub const ERR_TRUNCATED: i32 = 1265;
 pub const ERR_DIVISION_BY_ZERO: i32 = 1365;
+pub const ERR_TRUNCATE_WRONG_VALUE: i32 = 1292;
 pub const ERR_UNKNOWN_TIMEZONE: i32 = 1298;
 pub const ERR_DATA_OUT_OF_RANGE: i32 = 1690;
-pub const ERR_TRUNCATE_WRONG_VALUE: i32 = 1292;
 
 quick_error! {
     #[derive(Debug)]
