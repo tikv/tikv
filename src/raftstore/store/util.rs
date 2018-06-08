@@ -284,14 +284,15 @@ pub fn check_term(req: &RaftCmdRequest, term: u64) -> Result<()> {
 #[inline]
 pub fn check_peer_id(req: &RaftCmdRequest, peer_id: u64) -> Result<()> {
     let header = req.get_header();
-    if header.get_peer().get_id() != peer_id {
-        return Err(box_err!(
+    if header.get_peer().get_id() == peer_id {
+        Ok(())
+    } else {
+        Err(box_err!(
             "mismatch peer id {} != {}",
             header.get_peer().get_id(),
             peer_id
-        ));
+        ))
     }
-    Ok(())
 }
 
 pub fn get_region_properties_cf(
