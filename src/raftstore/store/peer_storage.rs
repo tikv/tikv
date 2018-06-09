@@ -255,7 +255,7 @@ pub struct PeerStorage {
     pub kv_engine: Arc<DB>,
     pub raft_engine: Arc<DB>,
 
-    pub region: metapb::Region,
+    region: metapb::Region,
     pub raft_state: RaftLocalState,
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
@@ -496,7 +496,7 @@ impl PeerStorage {
     }
 
     pub fn is_initialized(&self) -> bool {
-        !self.region.get_peers().is_empty()
+        !self.region().get_peers().is_empty()
     }
 
     pub fn initial_state(&self) -> raft::Result<RaftState> {
@@ -517,7 +517,7 @@ impl PeerStorage {
         }
         Ok(RaftState {
             hard_state,
-            conf_state: conf_state_from_region(&self.region),
+            conf_state: conf_state_from_region(self.region()),
         })
     }
 
@@ -621,8 +621,12 @@ impl PeerStorage {
         self.apply_state.get_truncated_state().get_term()
     }
 
-    pub fn get_region(&self) -> &metapb::Region {
+    pub fn region(&self) -> &metapb::Region {
         &self.region
+    }
+
+    pub fn set_region(&mut self, region: metapb::Region) {
+        self.region = region;
     }
 
     pub fn raw_snapshot(&self) -> DbSnapshot {
@@ -657,7 +661,7 @@ impl PeerStorage {
             return false;
         }
         let snap_epoch = snap_data.get_region().get_region_epoch();
-        let latest_epoch = self.get_region().get_region_epoch();
+        let latest_epoch = self.region().get_region_epoch();
         if snap_epoch.get_conf_ver() < latest_epoch.get_conf_ver() {
             info!(
                 "{} snapshot epoch {:?} < {:?}, generate again.",
@@ -880,10 +884,7 @@ impl PeerStorage {
     /// Delete all data belong to the region.
     /// If return Err, data may get partial deleted.
     pub fn clear_data(&self) -> Result<()> {
-        let (start_key, end_key) = (
-            enc_start_key(self.get_region()),
-            enc_end_key(self.get_region()),
-        );
+        let (start_key, end_key) = (enc_start_key(self.region()), enc_end_key(self.region()));
         let region_id = self.get_region_id();
         box_try!(
             self.region_sched
@@ -894,10 +895,8 @@ impl PeerStorage {
 
     /// Delete all data that is not covered by `new_region`.
     fn clear_extra_data(&self, new_region: &metapb::Region) -> Result<()> {
-        let (old_start_key, old_end_key) = (
-            enc_start_key(self.get_region()),
-            enc_end_key(self.get_region()),
-        );
+        let (old_start_key, old_end_key) =
+            (enc_start_key(self.region()), enc_end_key(self.region()));
         let (new_start_key, new_end_key) = (enc_start_key(new_region), enc_end_key(new_region));
         let region_id = new_region.get_id();
         if old_start_key < new_start_key {
@@ -1005,7 +1004,7 @@ impl PeerStorage {
     }
 
     pub fn get_region_id(&self) -> u64 {
-        self.region.get_id()
+        self.region().get_id()
     }
 
     pub fn schedule_applying_snapshot(&mut self) {
@@ -1100,7 +1099,7 @@ impl PeerStorage {
         };
         // cleanup data before scheduling apply task
         if self.is_initialized() {
-            if let Err(e) = self.clear_extra_data(&self.region) {
+            if let Err(e) = self.clear_extra_data(self.region()) {
                 // No need panic here, when applying snapshot, the deletion will be tried
                 // again. But if the region range changes, like [a, c) -> [a, b) and [b, c),
                 // [b, c) will be kept in rocksdb until a covered snapshot is applied or
@@ -1113,12 +1112,12 @@ impl PeerStorage {
         }
 
         self.schedule_applying_snapshot();
-        let prev_region = self.region.clone();
+        let prev_region = self.region().clone();
         self.region = snap_region;
 
         Some(ApplySnapResult {
             prev_region,
-            region: self.region.clone(),
+            region: self.region().clone(),
         })
     }
 }
