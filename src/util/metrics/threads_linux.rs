@@ -23,20 +23,20 @@ use libc::{self, pid_t};
 /// monitor current process's threads.
 pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
     let pid = unsafe { libc::getpid() };
-    let tc = ThreadsColletcor::new(pid, namespace);
+    let tc = ThreadsCollector::new(pid, namespace);
     prometheus::register(Box::new(tc)).map_err(|e| to_err(format!("{:?}", e)))?;
 
     Ok(())
 }
 
-struct ThreadsColletcor {
+struct ThreadsCollector {
     pid: pid_t,
     descs: Vec<Desc>,
     cpu_totals: Mutex<CounterVec>,
 }
 
-impl ThreadsColletcor {
-    fn new<S: Into<String>>(pid: pid_t, namespace: S) -> ThreadsColletcor {
+impl ThreadsCollector {
+    fn new<S: Into<String>>(pid: pid_t, namespace: S) -> ThreadsCollector {
         let cpu_totals = CounterVec::new(
             Opts::new(
                 "thread_cpu_seconds_total",
@@ -47,7 +47,7 @@ impl ThreadsColletcor {
         ).unwrap();
         let descs = cpu_totals.desc().into_iter().cloned().collect();
 
-        ThreadsColletcor {
+        ThreadsCollector {
             pid,
             descs,
             cpu_totals: Mutex::new(cpu_totals),
@@ -55,7 +55,7 @@ impl ThreadsColletcor {
     }
 }
 
-impl Collector for ThreadsColletcor {
+impl Collector for ThreadsCollector {
     fn desc(&self) -> Vec<&Desc> {
         self.descs.iter().collect()
     }
