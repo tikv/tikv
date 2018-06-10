@@ -20,7 +20,7 @@ use tikv::util::codec::number::NumberEncoder;
 #[inline]
 pub fn next_ts() -> u64 {
     static CURRENT: AtomicU64 = ATOMIC_U64_INIT;
-    CURRENT.fetch_add(1, Ordering::SeqCst)
+    CURRENT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Generate `count` row keys that all with the specified `table_id`.

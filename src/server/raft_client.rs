@@ -65,7 +65,7 @@ impl Conn {
             // hack: so it's different args, grpc will always create a new connection.
             .raw_cfg_int(
                 CString::new("random id").unwrap(),
-                CONN_ID.fetch_add(1, Ordering::SeqCst),
+                CONN_ID.fetch_add(1, Ordering::Relaxed),
             );
         let channel = security_mgr.connect(cb, addr);
         let client = TikvClient::new(channel);
