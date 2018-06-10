@@ -13,9 +13,12 @@
 
 use std::borrow::Cow;
 use std::cmp::{max, min, Ordering};
+use std::str;
 use std::{f64, i64};
 
 use super::{Error, EvalContext, Result, ScalarFunc};
+use chrono::TimeZone;
+
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
 use coprocessor::codec::{datum, mysql, Datum};
 use coprocessor::dag::expr::Expression;
@@ -178,8 +181,27 @@ impl ScalarFunc {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Time>>> {
-        do_get_extremum(self, |e| e.eval_time(ctx, row), max)
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let mut greatest = Time::new(
+            ctx.cfg.tz.timestamp(mysql::time::ZERO_TIMESTAMP, 0),
+            mysql::types::DATETIME,
+            mysql::DEFAULT_FSP,
+        )?;
+
+        for exp in &self.children {
+            let val = try_opt!(exp.eval_string(ctx, row));
+            let s = str::from_utf8(&val)?;
+            match Time::parse_datetime(s, self.tp.get_decimal() as i8, &ctx.cfg.tz) {
+                Ok(t) => greatest = max(greatest, t),
+                Err(_) => {
+                    if let Err(e) = ctx.handle_invalid_time_error(Error::invalid_time_format(s)) {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        Ok(Some(Cow::Owned(greatest.to_string().into_bytes())))
     }
 
     pub fn greatest_string<'a, 'b: 'a>(
@@ -210,8 +232,34 @@ impl ScalarFunc {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Time>>> {
-        do_get_extremum(self, |e| e.eval_time(ctx, row), min)
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let mut res = Cow::from(vec![]);
+        let mut least = Time::new(
+            ctx.cfg.tz.timestamp(mysql::time::MAX_TIMESTAMP, 0),
+            mysql::types::DATETIME,
+            mysql::DEFAULT_FSP,
+        )?;
+        let mut find_invalid_time = false;
+
+        for exp in &self.children {
+            let val = try_opt!(exp.eval_string(ctx, row));
+            let s = str::from_utf8(&val)?;
+            match Time::parse_datetime(s, self.tp.get_decimal() as i8, &ctx.cfg.tz) {
+                Ok(t) => least = min(least, t),
+                Err(_) => match ctx.handle_invalid_time_error(Error::invalid_time_format(s)) {
+                    Err(e) => return Err(e),
+                    _ => if !find_invalid_time {
+                        res = val.clone();
+                        find_invalid_time = true;
+                    },
+                },
+            }
+        }
+
+        if !find_invalid_time {
+            res = Cow::Owned(least.to_string().into_bytes());
+        }
+        Ok(Some(res))
     }
 
     pub fn least_string<'a, 'b: 'a>(
@@ -430,12 +478,14 @@ where
 
 #[cfg(test)]
 mod test {
+    use super::super::{EvalConfig, FLAG_IN_INSERT_STMT};
     use super::*;
     use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
     use coprocessor::codec::Datum;
     use coprocessor::dag::expr::test::{col_expr, str2dec};
     use coprocessor::dag::expr::{EvalContext, Expression};
     use protobuf::RepeatedField;
+    use std::sync::Arc;
     use std::{i64, u64};
     use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
@@ -681,9 +731,11 @@ mod test {
         let s1 = "你好".as_bytes().to_owned();
         let s2 = "你好啊".as_bytes().to_owned();
         let s3 = b"nihaoa".to_owned().to_vec();
-        let t1 = Time::parse_utc_datetime("2012-12-12 12:00:39", 0).unwrap();
-        let t2 = Time::parse_utc_datetime("2012-12-24 12:00:39", 0).unwrap();
-        let t3 = Time::parse_utc_datetime("2012-12-31 12:00:39", 0).unwrap();
+        let t1 = b"2012-12-12 12:00:39".to_owned().to_vec();
+        let t2 = b"2012-12-24 12:00:39".to_owned().to_vec();
+        let t3 = b"2012-12-31 12:00:39".to_owned().to_vec();
+        let t4 = b"invalid_time".to_owned().to_vec();
+
         let int_cases = vec![
             (vec![Datum::Null, Datum::Null], Datum::Null, Datum::Null),
             (
@@ -797,8 +849,8 @@ mod test {
             (vec![Datum::Null, Datum::Null], Datum::Null, Datum::Null),
             (
                 vec![
-                    Datum::Time(t1.clone()),
-                    Datum::Time(t2.clone()),
+                    Datum::Bytes(t1.clone()),
+                    Datum::Bytes(t2.clone()),
                     Datum::Null,
                 ],
                 Datum::Null,
@@ -806,12 +858,22 @@ mod test {
             ),
             (
                 vec![
-                    Datum::Time(t1.clone()),
-                    Datum::Time(t2.clone()),
-                    Datum::Time(t3.clone()),
+                    Datum::Bytes(t1.clone()),
+                    Datum::Bytes(t2.clone()),
+                    Datum::Bytes(t3.clone()),
                 ],
-                Datum::Time(t3),
-                Datum::Time(t1),
+                Datum::Bytes(t3.clone()),
+                Datum::Bytes(t1.clone()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(t1.clone()),
+                    Datum::Bytes(t2.clone()),
+                    Datum::Bytes(t3.clone()),
+                    Datum::Bytes(t4.clone()),
+                ],
+                Datum::Bytes(t3.clone()),
+                Datum::Bytes(t4.clone()),
             ),
         ];
 
@@ -876,5 +938,26 @@ mod test {
             ScalarFuncSig::LeastTime,
             time_cases,
         );
+
+        {
+            let mut eval_config = EvalConfig::new(0, FLAG_IN_INSERT_STMT).unwrap();
+            eval_config.set_strict_sql_mode(true);
+            let mut ctx = EvalContext::new(Arc::new(eval_config));
+            let row = vec![
+                Datum::Bytes(t1.clone()),
+                Datum::Bytes(t2.clone()),
+                Datum::Bytes(t3.clone()),
+                Datum::Bytes(t4.clone()),
+            ];
+            let children: Vec<Expr> = (0..row.len()).map(|id| col_expr(id as i64)).collect();
+            let mut expr = Expr::new();
+            expr.set_tp(ExprType::ScalarFunc);
+            expr.set_sig(ScalarFuncSig::GreatestTime);
+
+            expr.set_children(RepeatedField::from_vec(children));
+            let e = Expression::build(&mut ctx, expr).unwrap();
+            let err = e.eval(&mut ctx, &row).unwrap_err();
+            assert_eq!(err.code(), super::super::ERR_TRUNCATE_WRONG_VALUE);
+        }
     }
 }

@@ -864,7 +864,6 @@ dispatch_call! {
 
         CoalesceDecimal => coalesce_decimal,
         CaseWhenDecimal => case_when_decimal,
-        DivideDecimal => divide_decimal,
         GreatestDecimal => greatest_decimal,
         LeastDecimal => least_decimal,
     }
@@ -884,6 +883,8 @@ dispatch_call! {
         CaseWhenString => case_when_string,
         GreatestString => greatest_string,
         LeastString => least_string,
+        GreatestTime => greatest_time,
+        LeastTime => least_time,
         JsonTypeSig => json_type,
         JsonUnquoteSig => json_unquote,
 
@@ -921,8 +922,6 @@ dispatch_call! {
 
         CoalesceTime => coalesce_time,
         CaseWhenTime => case_when_time,
-        GreatestTime => greatest_time,
-        LeastTime => least_time,
     }
     DUR_CALLS {
         CastIntAsDuration => cast_int_as_duration,

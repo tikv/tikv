@@ -111,6 +111,11 @@ impl Error {
         Error::Eval(msg, ERR_UNKNOWN_TIMEZONE)
     }
 
+    pub fn invalid_time_format(val: &str) -> Error {
+        let msg = format!("invalid time format: {}", val);
+        Error::Eval(msg, ERR_TRUNCATE_WRONG_VALUE)
+    }
+
     pub fn division_by_zero() -> Error {
         let msg = "Division by 0";
         Error::Eval(msg.into(), ERR_DIVISION_BY_ZERO)

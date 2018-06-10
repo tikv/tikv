@@ -39,7 +39,11 @@ const ZERO_DATETIME_STR: &str = "0000-00-00 00:00:00";
 const ZERO_DATE_STR: &str = "0000-00-00";
 /// In go, `time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC)` will be adjusted to
 /// `-0001-11-30 00:00:00 +0000 UTC`, whose timestamp is -62169984000.
-const ZERO_TIMESTAMP: i64 = -62169984000;
+pub const ZERO_TIMESTAMP: i64 = -62169984000;
+
+/// In go, `time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)` will be adjusted to
+/// `9999-12-31 23:59:59 +0000 UTC`, whose timestamp is 253402300799.
+pub const MAX_TIMESTAMP: i64 = 253402300799;
 
 const MONTH_NAMES: &[&str] = &[
     "January",
