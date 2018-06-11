@@ -5,6 +5,7 @@ Fuzz testing for TiKV.
 Currently, it targets in following components:
 
  - tikv::util::codec::bytes
+ - tikv::coprocessor::codec::mysql::decimal::Decimal
 
 To run fuzz testing, you need to install `cargo-fuzz`:
 

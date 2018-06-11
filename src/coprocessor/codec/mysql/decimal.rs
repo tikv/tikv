@@ -843,7 +843,7 @@ pub struct Decimal {
     word_buf: Box<[u32]>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RoundMode {
     // HalfEven rounds normally.
     HalfEven,
