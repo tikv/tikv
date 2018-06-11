@@ -14,6 +14,7 @@
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
 #![feature(fnbox)]
+#![feature(asm)]
 #![feature(alloc)]
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
