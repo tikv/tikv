@@ -11,16 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::Ordering;
+use std::sync::{mpsc, Arc};
 use std::time::*;
 use std::*;
 
 use fail;
-use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
-use tikv::raftstore::Result;
 use tikv::util::config::*;
 
 use raftstore::cluster::Simulator;
@@ -75,45 +72,6 @@ fn test_overlap_cleanup() {
     fail::remove(gen_snapshot_fp);
 }
 
-pub struct SnapshotNotifier {
-    notifier: Mutex<Sender<()>>,
-    pending_notify: AtomicUsize,
-    ready_notify: Arc<AtomicBool>,
-}
-
-impl SnapshotNotifier {
-    pub fn new(notifier: Sender<()>, ready_notify: Arc<AtomicBool>) -> SnapshotNotifier {
-        SnapshotNotifier {
-            notifier: Mutex::new(notifier),
-            ready_notify,
-            pending_notify: AtomicUsize::new(0),
-        }
-    }
-}
-
-impl Filter<RaftMessage> for SnapshotNotifier {
-    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
-        for msg in msgs.iter() {
-            if msg.get_message().get_msg_type() == MessageType::MsgSnapshot
-                && self.ready_notify.load(Ordering::SeqCst)
-            {
-                self.pending_notify.fetch_add(1, Ordering::SeqCst);
-            }
-        }
-
-        Ok(())
-    }
-
-    fn after(&self, _: Result<()>) -> Result<()> {
-        while self.pending_notify.load(Ordering::SeqCst) > 0 {
-            debug!("notify snapshot");
-            self.pending_notify.fetch_sub(1, Ordering::SeqCst);
-            let _ = self.notifier.lock().unwrap().send(());
-        }
-        Ok(())
-    }
-}
-
 // When resolving remote address, all messages will be dropped and
 // report unreachable. However unreachable won't reset follower's
 // progress if it's in Snapshot state. So trying to send a snapshot
@@ -141,7 +99,11 @@ fn test_server_snapshot_on_resolve_failure() {
     let (notify_tx, notify_rx) = mpsc::channel();
     cluster.sim.write().unwrap().add_send_filter(
         1,
-        box SnapshotNotifier::new(notify_tx, Arc::clone(&ready_notify)),
+        box MessageTypeNotifier::new(
+            MessageType::MsgSnapshot,
+            notify_tx,
+            Arc::clone(&ready_notify),
+        ),
     );
 
     let (drop_snapshot_tx, drop_snapshot_rx) = mpsc::channel();
