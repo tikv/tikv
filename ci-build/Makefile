@@ -28,7 +28,7 @@ ${LOCAL_DIR}/bin/kcov:
 	fi
 
 prepare-rustfmt:
-	 rustup component add rustfmt-preview --toolchain `tail -n 1 ${CI_BUILD_DIR}/../toolchain`
+	 rustup component add rustfmt-preview --toolchain `tail -n 1 ${CI_BUILD_DIR}/../rust-toolchain`
 
 prepare_linux: ${LOCAL_DIR}/bin/kcov  prepare-rustfmt
 
