@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::engine::{Engine, ScanMode, StatisticsSummary};
+use super::engine::{Engine, Error as EngineError, ScanMode, Snapshot, StatisticsSummary};
 use super::metrics::*;
 use super::mvcc::{MvccReader, MvccTxn, MAX_TXN_WRITE_SIZE};
 use super::txn::GC_BATCH_SIZE;
@@ -20,9 +20,11 @@ use kvproto::kvrpcpb::Context;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use util::worker::{self, Builder, Runnable, ScheduleError, Worker};
 
 pub const GC_MAX_PENDING_TASKS: usize = 2;
+const GC_SNAPSHOT_TIMEOUT_SECS: u64 = 10;
 
 struct GCTask {
     pub ctx: Context,
@@ -59,15 +61,29 @@ impl GCRunner {
         }
     }
 
+    fn get_snapshot(&self, ctx: &mut Context) -> Result<Box<Snapshot>> {
+        let timeout = Duration::from_secs(GC_SNAPSHOT_TIMEOUT_SECS);
+        match wait_op!(|cb| self.engine.async_snapshot(ctx, cb), timeout) {
+            Some((cb_ctx, Ok(snapshot))) => {
+                if let Some(term) = cb_ctx.term {
+                    ctx.set_term(term);
+                }
+                Ok(snapshot)
+            }
+            Some((_, Err(e))) => Err(e),
+            None => Err(EngineError::Timeout(timeout)),
+        }.map_err(Error::from)
+    }
+
     /// Scan keys in the region. Returns scanned keys if any, and a key indicating scan progress
     fn scan_keys(
         &mut self,
-        ctx: &Context,
+        ctx: &mut Context,
         safe_point: u64,
         from: Option<Key>,
         limit: usize,
     ) -> Result<(Vec<Key>, Option<Key>)> {
-        let snapshot = self.engine.snapshot(ctx)?;
+        let snapshot = self.get_snapshot(ctx)?;
         let mut reader = MvccReader::new(
             snapshot,
             Some(ScanMode::Forward),
@@ -104,12 +120,12 @@ impl GCRunner {
     /// Clean up outdated data.
     fn gc_keys(
         &mut self,
-        ctx: &Context,
+        ctx: &mut Context,
         safe_point: u64,
         keys: Vec<Key>,
         mut next_scan_key: Option<Key>,
     ) -> Result<Option<Key>> {
-        let snapshot = self.engine.snapshot(ctx)?;
+        let snapshot = self.get_snapshot(ctx)?;
         let mut txn = MvccTxn::new(
             snapshot,
             0,
@@ -133,7 +149,7 @@ impl GCRunner {
         Ok(next_scan_key)
     }
 
-    pub fn gc(&mut self, ctx: Context, safe_point: u64) -> Result<()> {
+    pub fn gc(&mut self, mut ctx: Context, safe_point: u64) -> Result<()> {
         let _gc_timer = GC_DURATION_HISTOGRAM.start_coarse_timer();
 
         debug!(
@@ -144,7 +160,7 @@ impl GCRunner {
 
         let mut next_key = None;
         loop {
-            let (keys, next) = self.scan_keys(&ctx, safe_point, next_key, GC_BATCH_SIZE)
+            let (keys, next) = self.scan_keys(&mut ctx, safe_point, next_key, GC_BATCH_SIZE)
                 .map_err(|e| {
                     warn!("scan_keys failed on region {}: {:?}", safe_point, &e);
                     e
@@ -153,10 +169,11 @@ impl GCRunner {
                 break;
             }
 
-            next_key = self.gc_keys(&ctx, safe_point, keys, next).map_err(|e| {
-                warn!("gc_keys failed on region {}: {:?}", safe_point, &e);
-                e
-            })?;
+            next_key = self.gc_keys(&mut ctx, safe_point, keys, next)
+                .map_err(|e| {
+                    warn!("gc_keys failed on region {}: {:?}", safe_point, &e);
+                    e
+                })?;
             if next_key.is_none() {
                 break;
             }
