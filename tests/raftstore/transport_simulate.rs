@@ -83,6 +83,54 @@ pub trait Filter<M>: Send + Sync {
 pub type SendFilter = Box<Filter<RaftMessage>>;
 pub type RecvFilter = Box<Filter<StoreMsg>>;
 
+/// Emits a notification for each given message type that it sees.
+#[allow(dead_code)]
+pub struct MessageTypeNotifier {
+    message_type: MessageType,
+    notifier: Mutex<Sender<()>>,
+    pending_notify: AtomicUsize,
+    ready_notify: Arc<AtomicBool>,
+}
+
+impl MessageTypeNotifier {
+    #[allow(dead_code)]
+    pub fn new(
+        message_type: MessageType,
+        notifier: Sender<()>,
+        ready_notify: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            message_type,
+            notifier: Mutex::new(notifier),
+            ready_notify,
+            pending_notify: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl Filter<RaftMessage> for MessageTypeNotifier {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        for msg in msgs.iter() {
+            if msg.get_message().get_msg_type() == self.message_type
+                && self.ready_notify.load(Ordering::SeqCst)
+            {
+                self.pending_notify.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn after(&self, _: Result<()>) -> Result<()> {
+        while self.pending_notify.load(Ordering::SeqCst) > 0 {
+            debug!("notify {:?}", self.message_type);
+            self.pending_notify.fetch_sub(1, Ordering::SeqCst);
+            let _ = self.notifier.lock().unwrap().send(());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 pub struct DropPacketFilter {
     rate: u32,

@@ -94,6 +94,11 @@ impl FnCall {
             | ScalarFuncSig::LogicalXor
             | ScalarFuncSig::DivideDecimal
             | ScalarFuncSig::DivideReal
+            | ScalarFuncSig::IntDivideInt
+            | ScalarFuncSig::IntDivideDecimal
+            | ScalarFuncSig::ModReal
+            | ScalarFuncSig::ModDecimal
+            | ScalarFuncSig::ModInt
             | ScalarFuncSig::BitAndSig
             | ScalarFuncSig::BitOrSig
             | ScalarFuncSig::BitXorSig
@@ -446,6 +451,9 @@ dispatch_call! {
         PlusInt => plus_int,
         MinusInt => minus_int,
         MultiplyInt => multiply_int,
+        IntDivideInt => int_divide_int,
+        IntDivideDecimal => int_divide_decimal,
+        ModInt => mod_int,
 
         LogicalAnd => logical_and,
         LogicalOr => logical_or,
@@ -500,6 +508,8 @@ dispatch_call! {
         PlusReal => plus_real,
         MinusReal => minus_real,
         MultiplyReal => multiply_real,
+        DivideReal => divide_real,
+        ModReal => mod_real,
 
         AbsReal => abs_real,
         CeilReal => ceil_real,
@@ -510,7 +520,6 @@ dispatch_call! {
 
         CoalesceReal => coalesce_real,
         CaseWhenReal => case_when_real,
-        DivideReal => divide_real,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -525,6 +534,8 @@ dispatch_call! {
         PlusDecimal => plus_decimal,
         MinusDecimal => minus_decimal,
         MultiplyDecimal => multiply_decimal,
+        DivideDecimal => divide_decimal,
+        ModDecimal => mod_decimal,
 
         AbsDecimal => abs_decimal,
         CeilDecToDec => ceil_dec_to_dec,
@@ -537,7 +548,6 @@ dispatch_call! {
 
         CoalesceDecimal => coalesce_decimal,
         CaseWhenDecimal => case_when_decimal,
-        DivideDecimal => divide_decimal,
     }
     BYTES_CALLS {
         CastIntAsString => cast_int_as_str,

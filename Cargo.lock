@@ -478,12 +478,12 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git?branch=upgrade-protobuf#79f1bd53d897d8ebe45ebacf15b0f16df7882627"
+source = "git+https://github.com/pingcap/kvproto.git?branch=upgrade-protobuf#35d4e5b644be039ca04aa3433c75ee875849764f"
 dependencies = [
  "futures 0.1.17 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "raft 0.2.0 (git+https://github.com/pingcap/raft-rs?rev=f271cd0dae4c868b2d92e19fe6c14e000598ea76)",
+ "raft 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -868,8 +868,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "raft"
-version = "0.2.0"
-source = "git+https://github.com/pingcap/raft-rs?rev=f271cd0dae4c868b2d92e19fe6c14e000598ea76#f271cd0dae4c868b2d92e19fe6c14e000598ea76"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "fxhash 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -877,12 +877,6 @@ dependencies = [
  "quick-error 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
-
-[[package]]
-name = "raft"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-replace = "raft 0.2.0 (git+https://github.com/pingcap/raft-rs?rev=f271cd0dae4c868b2d92e19fe6c14e000598ea76)"
 
 [[package]]
 name = "rand"
@@ -1262,7 +1256,7 @@ dependencies = [
  "prometheus 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "raft 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "raft 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex 0.1.70 (registry+https://github.com/rust-lang/crates.io-index)",
  "rocksdb 0.3.0 (git+https://github.com/pingcap/rust-rocksdb.git)",
@@ -1311,7 +1305,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git?branch=upgrade-protobuf#ef59298f8705d5b1924cf339f8b23e69d4c4f0a9"
+source = "git+https://github.com/pingcap/tipb.git?branch=upgrade-protobuf#e15bd24c43d649a0556b4cbe2123d8283ce23e35"
 dependencies = [
  "protobuf 2.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -1636,8 +1630,7 @@ dependencies = [
 "checksum quick-error 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "eda5fe9b71976e62bc81b781206aaa076401769b2143379d3eb2118388babac4"
 "checksum quine-mc_cluskey 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "a6683b0e23d80813b1a535841f0048c1537d3f86d63c999e8373b39a9b0eb74a"
 "checksum quote 0.3.12 (registry+https://github.com/rust-lang/crates.io-index)" = "e7b44fd83db28b83c1c58187159934906e5e955c812e211df413b76b03c909a5"
-"checksum raft 0.2.0 (git+https://github.com/pingcap/raft-rs?rev=f271cd0dae4c868b2d92e19fe6c14e000598ea76)" = "<none>"
-"checksum raft 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "833b9bacf973f6b77ff1be6bd5024a25eae15504bec8cb7efe4caa784adc859b"
+"checksum raft 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "c7339281aa635113db31b06305e6b4ddd9fbe15b75eb1b084bc0caa1639bbbf2"
 "checksum rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)" = "2791d88c6defac799c3f20d74f094ca33b9332612d9aef9078519c82e4fe04a5"
 "checksum rand 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)" = "eba5f8cb59cc50ed56be8880a5c7b496bfd9bd26394e176bc67884094145c2c5"
 "checksum redox_syscall 0.1.27 (registry+https://github.com/rust-lang/crates.io-index)" = "80dcf663dc552529b9bfc7bdb30ea12e5fa5d3545137d850a91ad410053f68e9"

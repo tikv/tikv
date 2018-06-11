@@ -157,4 +157,12 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }
+
+    fn switch(&self, _: RpcContext, _: SwitchRequest, _: UnarySink<SwitchResponse>) {
+        unimplemented!();
+    }
+
+    fn compact(&self, _: RpcContext, _: CompactRequest, _: UnarySink<CompactResponse>) {
+        unimplemented!();
+    }
 }
