@@ -67,10 +67,12 @@ pub const GC_BATCH_SIZE: usize = 512;
 // The write batch will be around 32KB if we scan 256 keys each time.
 pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;
 
-/// After scanned how many versions for a key we should output a log for it.
+/// After the GC scan of a key, output a message to the log if there are at least this many
+/// versions of the key.
 const GC_LOG_FOUND_VERSION_THRESHOLD: usize = 300;
 
-/// After deleted how many versions for a key we should output a log for it.
+/// After the GC delete versions of a key, output a message to the log if at least this many
+/// versions are deleted.
 const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 300;
 
 /// Process result of a command.
