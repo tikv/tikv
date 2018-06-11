@@ -59,7 +59,6 @@ impl FnCall {
     pub fn ceil_dec_to_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let d = try_opt!(self.children[0].eval_decimal(ctx, row));
         let d: Result<Decimal> = d.ceil().into();
-
         d.and_then(|dec| dec.as_i64_with_ctx(ctx)).map(Some)
     }
 

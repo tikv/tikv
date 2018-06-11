@@ -11,15 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use protobuf;
-use std::{error, str};
-use tipb::expression::ScalarFuncSig;
-use tipb::select;
-// use std::error;
 use coprocessor::codec::mysql::Res;
+use protobuf;
 use std::io::{self, ErrorKind};
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
+use std::{error, str};
+use tipb::expression::ScalarFuncSig;
+use tipb::select;
 
 pub const ERR_UNKNOWN: i32 = 1105;
 pub const WARN_DATA_TRUNCATED: i32 = 1265;

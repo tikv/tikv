@@ -19,14 +19,12 @@ mod column;
 mod compare;
 mod constant;
 mod ctx;
-//mod err;
 mod fncall;
 mod json;
 mod math;
 mod time;
 pub use self::ctx::*;
 pub use util::codec::{Error, Result};
-//pub use self::err::*;
 
 use std::borrow::Cow;
 use std::str;
