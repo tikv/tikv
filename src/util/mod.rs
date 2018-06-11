@@ -40,6 +40,7 @@ pub mod metrics;
 pub mod panic_hook;
 pub mod rocksdb;
 pub mod security;
+pub mod spmcqueue;
 pub mod sys;
 pub mod threadpool;
 pub mod time;
@@ -164,7 +165,7 @@ pub fn to_socket_addr<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
 /// assert_eq!(r"a\\023", escape(b"a\\023"));
 /// assert_eq!(r"a\000", escape(b"a\0"));
 /// assert_eq!("a\\r\\n\\t '\\\"\\\\", escape(b"a\r\n\t '\"\\"));
-/// assert_eq!(r"\342\235\244\360\237\220\267", escape("❤🐷".as_bytes()));
+/// assert_eq!(r"\342\235\244\360\237\220\267", escape("鉂ゐ煇?.as_bytes()));
 /// ```
 pub fn escape(data: &[u8]) -> String {
     let mut escaped = Vec::with_capacity(data.len() * 4);
@@ -207,7 +208,7 @@ pub fn escape(data: &[u8]) -> String {
 /// assert_eq!(unescape(r"a\\023"), b"a\\023");
 /// assert_eq!(unescape(r"a\000"), b"a\0");
 /// assert_eq!(unescape("a\\r\\n\\t '\\\"\\\\"), b"a\r\n\t '\"\\");
-/// assert_eq!(unescape(r"\342\235\244\360\237\220\267"), "❤🐷".as_bytes());
+/// assert_eq!(unescape(r"\342\235\244\360\237\220\267"), "鉂ゐ煇?.as_bytes());
 /// ```
 ///
 pub fn unescape(s: &str) -> Vec<u8> {
