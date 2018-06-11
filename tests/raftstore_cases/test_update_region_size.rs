@@ -63,14 +63,20 @@ fn test_update_regoin_size<T: Simulator>(cluster: &mut Cluster<T>) {
 
     thread::sleep(time::Duration::from_millis(300));
     let region_id = cluster.get_region_id(b"");
-    let old_region_size = cluster.pd_client.get_region_size(region_id).unwrap();
+    let old_region_stat = cluster
+        .pd_client
+        .get_region_approximate_stat(region_id)
+        .unwrap();
 
     cluster.compact_data();
 
     thread::sleep(time::Duration::from_millis(300));
-    let new_region_size = cluster.pd_client.get_region_size(region_id).unwrap();
+    let new_region_stat = cluster
+        .pd_client
+        .get_region_approximate_stat(region_id)
+        .unwrap();
 
-    assert_ne!(old_region_size, new_region_size);
+    assert_ne!(old_region_stat.size, new_region_stat.size);
 }
 
 #[test]
