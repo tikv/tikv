@@ -39,7 +39,7 @@ pub enum Task {
         cf_names: Vec<String>,         // Column families need to compact
         ranges: Vec<Key>,              // Ranges need to check
         tombstones_num_threshold: u64, // The minimum RocksDB tombstones a range that need compacting has
-        tombstones_ratio_threshold: u64,
+        tombstones_percent_threshold: u64,
     },
 }
 
@@ -59,12 +59,15 @@ impl Display for Task {
                 ref cf_names,
                 ref ranges,
                 tombstones_num_threshold,
-                tombstones_ratio_threshold,
+                tombstones_percent_threshold,
             } => f.debug_struct("CheckAndCompact")
                 .field("cf_names", cf_names)
                 .field("ranges", ranges)
                 .field("tombstones_num_threshold", &tombstones_num_threshold)
-                .field("tombstones_ratio_threshold", &tombstones_ratio_threshold)
+                .field(
+                    "tombstones_percent_threshold",
+                    &tombstones_percent_threshold,
+                )
                 .finish(),
         }
     }
@@ -135,12 +138,12 @@ impl Runnable<Task> for Runner {
                 cf_names,
                 ranges,
                 tombstones_num_threshold,
-                tombstones_ratio_threshold,
+                tombstones_percent_threshold,
             } => match collect_ranges_need_compact(
                 &self.engine,
                 ranges,
                 tombstones_num_threshold,
-                tombstones_ratio_threshold,
+                tombstones_percent_threshold,
             ) {
                 Ok(mut ranges) => for (start, end) in ranges.drain(..) {
                     for cf in &cf_names {
@@ -166,7 +169,7 @@ fn need_compact(
     num_entires: u64,
     num_versions: u64,
     tombstones_num_threshold: u64,
-    tombstones_ratio_threshold: u64,
+    tombstones_percent_threshold: u64,
 ) -> bool {
     if num_entires <= num_versions {
         return false;
@@ -175,7 +178,7 @@ fn need_compact(
     // When the number of tombstones exceed threshold and ratio, this range need compacting.
     let estimate_num_del = num_entires - num_versions;
     estimate_num_del >= tombstones_num_threshold
-        && estimate_num_del * 100 >= tombstones_ratio_threshold * num_versions
+        && estimate_num_del * 100 >= tombstones_percent_threshold * num_versions
 }
 
 fn get_range_entries_and_versions(
@@ -213,7 +216,7 @@ fn collect_ranges_need_compact(
     engine: &DB,
     ranges: Vec<Key>,
     tombstones_num_threshold: u64,
-    tombstones_ratio_threshold: u64,
+    tombstones_percent_threshold: u64,
 ) -> Result<VecDeque<(Key, Key)>, Error> {
     // Check the SST properties for each range, and we will compact a range if the range
     // contains too much RocksDB tombstones. we will merge multiple neighbouring ranges
@@ -231,7 +234,7 @@ fn collect_ranges_need_compact(
                 num_ent,
                 num_ver,
                 tombstones_num_threshold,
-                tombstones_ratio_threshold,
+                tombstones_percent_threshold,
             ) {
                 if compact_start.is_none() {
                     // The previous range doesn't need compacting.

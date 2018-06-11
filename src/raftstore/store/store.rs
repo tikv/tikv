@@ -2420,7 +2420,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 cf_names,
                 ranges: ranges_need_check,
                 tombstones_num_threshold: self.cfg.region_compact_min_tombstones,
-                tombstones_ratio_threshold: self.cfg.region_compact_tombstones_ratio,
+                tombstones_percent_threshold: self.cfg.region_compact_tombstones_percent,
             }) {
                 error!("{} failed to schedule space check task: {}", self.tag, e);
             }
