@@ -868,27 +868,29 @@ fn process_write_impl(
             );
             let rows = keys.len();
             for k in keys {
-                let (versions, deleted_versions) = txn.gc(k, safe_point)?;
-                if versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
+                let gc_info = txn.gc(k, safe_point)?;
+
+                if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
                     info!(
                         "[region {}] GC found at least {} versions for key {}",
                         ctx.get_region_id(),
-                        versions,
+                        gc_info.found_versions,
                         k
                     );
                 }
                 // We may delete only part of the versions a time, which may not beyond the logging
                 // threshold `GC_LOG_DELETED_VERSION_THRESHOLD`.
-                if deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD
+                if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD
                     || txn.write_size() >= MAX_TXN_WRITE_SIZE
                 {
                     info!(
                         "[region {}] GC deleted {} versions for key {}",
                         ctx.get_region_id(),
-                        deleted_versions,
+                        gc_info.deleted_versions,
                         k
                     );
                 }
+
                 if txn.write_size() >= MAX_TXN_WRITE_SIZE {
                     scan_key = Some(k.to_owned());
                     break;
