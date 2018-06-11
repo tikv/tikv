@@ -19,13 +19,14 @@ mod column;
 mod compare;
 mod constant;
 mod ctx;
-mod err;
+//mod err;
 mod fncall;
 mod json;
 mod math;
 mod time;
 pub use self::ctx::*;
-pub use self::err::*;
+pub use util::codec::{Error, Result};
+//pub use self::err::*;
 
 use std::borrow::Cow;
 use std::str;
@@ -299,8 +300,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::{Error, EvalConfig, EvalContext, Expression, ERR_DATA_OUT_OF_RANGE,
-                ERR_DIVISION_BY_ZERO, FLAG_IGNORE_TRUNCATE};
+    use super::{Error, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
     use coprocessor::codec::mysql::json::JsonEncoder;
     use coprocessor::codec::mysql::{charset, types, Decimal, DecimalEncoder, Duration, Json, Time};
     use coprocessor::codec::{convert, mysql, Datum};
@@ -308,6 +308,7 @@ mod test {
     use std::{i64, u64};
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
     use util::codec::number::{self, NumberEncoder};
+    use util::codec::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {

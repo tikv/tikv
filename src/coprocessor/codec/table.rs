@@ -392,7 +392,7 @@ pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option
         if tmp_data.is_empty() {
             None
         } else {
-            Some(box_try!(datum::decode_datum(&mut tmp_data)).i64())
+            Some(datum::decode_datum(&mut tmp_data)?.i64())
         }
     };
     Ok((RowColsDict::new(meta_map, key), handle))

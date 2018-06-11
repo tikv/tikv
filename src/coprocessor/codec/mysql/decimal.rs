@@ -23,7 +23,7 @@ use coprocessor::codec::{convert, Error, Result, TEN_POW};
 use coprocessor::dag::expr::EvalContext;
 
 // TODO: We should use same Error in mod `coprocessor`.
-use coprocessor::dag::expr::Error as ExprError;
+use util::codec::Error as ExprError;
 
 use util::codec::BytesSlice;
 use util::codec::number::{self, NumberEncoder};
@@ -1098,7 +1098,7 @@ impl Decimal {
         // TODO: process over_flow
         if !ret.is_zero() && frac > decimal && ret != tmp {
             // TODO handle InInsertStmt in ctx
-            box_try!(ctx.handle_truncate(true));
+            ctx.handle_truncate(true)?;
         }
         Ok(ret)
     }
@@ -1474,7 +1474,7 @@ impl Decimal {
     /// `as_i64_with_ctx` returns int part of the decimal.
     pub fn as_i64_with_ctx(&self, ctx: &mut EvalContext) -> ::std::result::Result<i64, ExprError> {
         let res = self.as_i64();
-        box_try!(ctx.handle_truncate(res.is_truncated()));
+        ctx.handle_truncate(res.is_truncated())?;
         res.into()
     }
 

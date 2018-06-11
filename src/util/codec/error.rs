@@ -11,15 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::str::Utf8Error;
-use std::string::FromUtf8Error;
-use std::{error, io, str};
+use protobuf;
+use std::{error, str};
 use tipb::expression::ScalarFuncSig;
 use tipb::select;
-
+// use std::error;
 use coprocessor::codec::mysql::Res;
-use util;
-use util::codec::Error as CError;
+use std::io::{self, ErrorKind};
+use std::str::Utf8Error;
+use std::string::FromUtf8Error;
 
 pub const ERR_UNKNOWN: i32 = 1105;
 pub const WARN_DATA_TRUNCATED: i32 = 1265;
@@ -32,17 +32,28 @@ pub const ERR_DATA_OUT_OF_RANGE: i32 = 1690;
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Io(err: io::Error) {
+                Io(err: io::Error) {
             from()
-            description("io error")
-            display("I/O error: {}", err)
             cause(err)
+            description(err.description())
         }
-        Codec(err: util::codec::Error) {
+        Protobuf(err: protobuf::ProtobufError) {
             from()
-            description("codec error")
-            display("codec error: {}", err)
             cause(err)
+            description(err.description())
+            display("protobuf error {:?}", err)
+        }
+        KeyLength {description("bad format key(length)")}
+        KeyPadding {description("bad format key(padding)")}
+        KeyNotFound {description("key not found")}
+        InvalidDataType(reason: String) {
+            description("invalid data type")
+            display("{}", reason)
+        }
+        Encoding(err: Utf8Error) {
+            from()
+            cause(err)
+            description("enconding failed")
         }
         ColumnOffset(offset: usize) {
             description("column offset not found")
@@ -115,6 +126,27 @@ impl Error {
             _ => ERR_UNKNOWN,
         }
     }
+
+    pub fn is_overflow(&self) -> bool {
+        self.code() == ERR_DATA_OUT_OF_RANGE
+    }
+
+    pub fn maybe_clone(&self) -> Option<Error> {
+        match *self {
+            Error::KeyLength => Some(Error::KeyLength),
+            Error::KeyPadding => Some(Error::KeyPadding),
+            Error::KeyNotFound => Some(Error::KeyNotFound),
+            Error::InvalidDataType(ref r) => Some(Error::InvalidDataType(r.clone())),
+            Error::Encoding(e) => Some(Error::Encoding(e)),
+            Error::ColumnOffset(offset) => Some(Error::ColumnOffset(offset)),
+            Error::UnknownSignature(sig) => Some(Error::UnknownSignature(sig)),
+            Error::Eval(ref msg, code) => Some(Error::Eval(msg.clone(), code)),
+            Error::Protobuf(_) | Error::Io(_) | Error::Other(_) => None,
+        }
+    }
+    pub fn unexpected_eof() -> Error {
+        Error::Io(io::Error::new(ErrorKind::UnexpectedEof, "eof"))
+    }
 }
 
 impl Into<select::Error> for Error {
@@ -128,13 +160,7 @@ impl Into<select::Error> for Error {
 
 impl From<FromUtf8Error> for Error {
     fn from(err: FromUtf8Error) -> Error {
-        Error::Codec(CError::Encoding(err.utf8_error()))
-    }
-}
-
-impl From<Utf8Error> for Error {
-    fn from(err: Utf8Error) -> Error {
-        Error::Codec(CError::Encoding(err))
+        Error::Encoding(err.utf8_error())
     }
 }
 

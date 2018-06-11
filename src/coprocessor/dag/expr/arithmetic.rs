@@ -282,13 +282,13 @@ impl FnCall {
 mod test {
     use coprocessor::codec::mysql::{types, Decimal};
     use coprocessor::codec::{mysql, Datum};
-    use coprocessor::dag::expr::err;
     use coprocessor::dag::expr::test::{check_divide_by_zero, check_overflow, datum_expr,
                                        fncall_expr, str2dec};
     use coprocessor::dag::expr::*;
     use std::sync::Arc;
     use std::{f64, i64, u64};
     use tipb::expression::ScalarFuncSig;
+    use util::codec::ERR_DIVISION_BY_ZERO;
 
     #[test]
     fn test_arithmetic_int() {
@@ -1034,7 +1034,7 @@ mod test {
                 if *has_warning {
                     assert_eq!(
                         ctx.take_warnings().warnings[0].get_code(),
-                        err::ERR_DIVISION_BY_ZERO
+                        ERR_DIVISION_BY_ZERO
                     );
                 } else {
                     assert!(ctx.take_warnings().warnings.is_empty());
