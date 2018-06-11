@@ -244,6 +244,7 @@ pub fn get_region_approximate_rows(db: &DB, region: &metapb::Region) -> Result<u
     Ok(rows)
 }
 
+#[derive(Debug, Default, Clone)]
 pub struct RegionApproximateStat {
     /// the approximate number of records in the region.
     pub rows: u64,
