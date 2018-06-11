@@ -1,3 +1,16 @@
+// Copyright 2018 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::boxed::Box;
 use std::mem;
 use std::ptr;
@@ -18,7 +31,7 @@ enum Payload<T> {
 
 const CELLS_NUM: usize = 1 << 9;
 const CELLS_BIT: usize = CELLS_NUM - 1;
-const SPINS: usize = 1 << 11;
+const SPINS: usize = 1 << 5;
 const DEFAULT_THRESHOLD: usize = 1 << 3;
 const PUT_FLAG: u32 = 1;
 const POP_FLAG: u32 = 1 << 1;
@@ -181,7 +194,7 @@ impl<T> Queue_<T> {
                 i += 1;
             }
             if i == self.num_threads_put {
-                panic!("put is too much");
+                panic!("producers is too much ");
             }
         }
 
@@ -206,7 +219,7 @@ impl<T> Queue_<T> {
                 i += 1;
             }
             if i == self.num_threads_pop {
-                panic!("pop is too much");
+                panic!("consumers is too much");
             }
         }
         self.barrier.wait();
@@ -356,6 +369,22 @@ impl<T> Queue_<T> {
     }
     */
 
+    /// Called while spinning (name borrowed from Linux). Can be implemented to call
+    /// a platform-specific method of lightening CPU load in spinlocks.
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[inline(always)]
+    pub fn cpu_relax() {
+        // This instruction is meant for usage in spinlock loops
+        // (see Intel x86 manual, III, 4.2)
+        unsafe {
+            asm!("pause" :::: "volatile");
+        }
+    }
+
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    #[inline(always)]
+    pub fn cpu_relax() {}
+
     fn pop(&self, private_pop_handle: &mut Handle<T>) -> Result<T, usize> {
         let mut v;
         let mut pop_index = self.pop_index.fetch_add(1, Ordering::Relaxed);
@@ -388,6 +417,7 @@ impl<T> Queue_<T> {
             if times == 0 {
                 break;
             }
+            Self::cpu_relax();
         }
 
         // now We've tried many times. should wait for data
@@ -595,7 +625,7 @@ mod test {
             let queue_pop = Arc::clone(&queue);
             let array_arc = Arc::clone(&array_arc);
             guards.push(thread::spawn(move || {
-                let handle = queue_pop.register(2);
+                let handle = queue_pop.register_as_consumer();
                 let handle = unsafe { &mut *handle };
                 for _ in 0..per_thread_count + 10000 {
                     match handle.pop() {
@@ -630,7 +660,7 @@ mod test {
             }));
         }
 
-        let handle = queue.register(1);
+        let handle = queue.register_as_producer();
         let handle = unsafe { &mut *handle };
         for i in 0..COUNT {
             handle.push(i);
