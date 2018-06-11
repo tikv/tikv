@@ -41,7 +41,7 @@ use util::future::paired_future_callback;
 use util::worker::Scheduler;
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
-const GC_WORKER_IS_BUSY: &str = "tikv's gc worker is busy";
+const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter + 'static> {
