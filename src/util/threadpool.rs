@@ -1,31 +1,16 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 use std::boxed::FnBox;
-use std::collections::VecDeque;
 use std::fmt::Write;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering as AtomicOrdering};
 use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
 use std::usize;
+use util::spmcqueue::{Handle, Queue_};
 
 pub const DEFAULT_TASKS_PER_TICK: usize = 10000;
-const DEFAULT_QUEUE_CAPACITY: usize = 1000;
 const DEFAULT_THREAD_COUNT: usize = 1;
 const NAP_SECS: u64 = 1;
-const QUEUE_MAX_CAPACITY: usize = 8 * DEFAULT_QUEUE_CAPACITY;
 
 pub trait Context: Send {
     fn on_task_started(&mut self) {}
@@ -67,28 +52,14 @@ impl<C: Context> Task<C> {
 
 // First in first out queue.
 pub struct FifoQueue<C> {
-    queue: VecDeque<Task<C>>,
+    queue: Queue_<Task<C>>,
 }
 
 impl<C: Context> FifoQueue<C> {
-    fn new() -> FifoQueue<C> {
+    fn new(num_producers: usize, num_consumers: usize) -> FifoQueue<C> {
         FifoQueue {
-            queue: VecDeque::with_capacity(DEFAULT_QUEUE_CAPACITY),
+            queue: Queue_::new(num_producers, num_consumers),
         }
-    }
-
-    fn push(&mut self, task: Task<C>) {
-        self.queue.push_back(task);
-    }
-
-    fn pop(&mut self) -> Option<Task<C>> {
-        let task = self.queue.pop_front();
-
-        if self.queue.is_empty() && self.queue.capacity() > QUEUE_MAX_CAPACITY {
-            self.queue = VecDeque::with_capacity(DEFAULT_QUEUE_CAPACITY);
-        }
-
-        task
     }
 }
 
@@ -146,8 +117,9 @@ impl<C: Context + 'static, F: ContextFactory<C>> ThreadPoolBuilder<C, F> {
 }
 
 struct ScheduleState<Ctx> {
+    handle: AtomicPtr<Handle<Task<Ctx>>>,
     queue: FifoQueue<Ctx>,
-    stopped: bool,
+    stopped: AtomicBool,
 }
 
 /// `ThreadPool` is used to execute tasks in parallel.
@@ -155,7 +127,7 @@ struct ScheduleState<Ctx> {
 /// is ready to process a task, it will get a task from the pool
 /// according to the `ScheduleQueue` provided in initialization.
 pub struct ThreadPool<Ctx> {
-    state: Arc<(Mutex<ScheduleState<Ctx>>, Condvar)>,
+    state: Arc<ScheduleState<Ctx>>,
     threads: Vec<JoinHandle<()>>,
     task_count: Arc<AtomicUsize>,
 }
@@ -173,10 +145,11 @@ where
     ) -> ThreadPool<Ctx> {
         assert!(num_threads >= 1);
         let state = ScheduleState {
-            queue: FifoQueue::new(),
-            stopped: false,
+            handle: AtomicPtr::default(),
+            queue: FifoQueue::new(1, num_threads),
+            stopped: AtomicBool::new(false),
         };
-        let state = Arc::new((Mutex::new(state), Condvar::new()));
+        let state = Arc::new(state);
         let mut threads = Vec::with_capacity(num_threads);
         let task_count = Arc::new(AtomicUsize::new(0));
         // Threadpool threads
@@ -194,7 +167,8 @@ where
             }).unwrap();
             threads.push(thread);
         }
-
+        let handle = state.queue.queue.register_as_producer();
+        state.handle.store(handle, AtomicOrdering::Release);
         ThreadPool {
             state,
             threads,
@@ -207,16 +181,13 @@ where
         F: FnOnce(&mut Ctx) + Send + 'static,
         Ctx: Context,
     {
-        let task = Task::new(job);
-        let &(ref lock, ref cvar) = &*self.state;
-        {
-            let mut state = lock.lock().unwrap();
-            if state.stopped {
-                return;
-            }
-            state.queue.push(task);
-            cvar.notify_one();
+        let state = &*self.state;
+        if state.stopped.load(AtomicOrdering::Acquire) {
+            return;
         }
+        let task = Task::new(job);
+        let handle = unsafe { &mut *state.handle.load(AtomicOrdering::Acquire) };
+        handle.push(task);
         self.task_count.fetch_add(1, AtomicOrdering::SeqCst);
     }
 
@@ -226,12 +197,10 @@ where
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
-        let &(ref lock, ref cvar) = &*self.state;
-        {
-            let mut state = lock.lock().unwrap();
-            state.stopped = true;
-            cvar.notify_all();
-        }
+        let state = &*self.state;
+        let handle = unsafe { &mut *state.handle.load(AtomicOrdering::Acquire) };
+        state.stopped.store(true, AtomicOrdering::Release);
+        handle.stop();
         let mut err_msg = String::new();
         for t in self.threads.drain(..) {
             if let Err(e) = t.join() {
@@ -247,7 +216,8 @@ where
 
 // Each thread has a worker.
 struct Worker<C> {
-    state: Arc<(Mutex<ScheduleState<C>>, Condvar)>,
+    handle: *mut Handle<Task<C>>,
+    state: Arc<ScheduleState<C>>,
     task_count: Arc<AtomicUsize>,
     tasks_per_tick: usize,
     task_counter: usize,
@@ -259,12 +229,14 @@ where
     C: Context,
 {
     fn new(
-        state: Arc<(Mutex<ScheduleState<C>>, Condvar)>,
+        state: Arc<ScheduleState<C>>,
         task_count: Arc<AtomicUsize>,
         tasks_per_tick: usize,
         ctx: C,
     ) -> Worker<C> {
+        let handle = state.queue.queue.register_as_consumer();
         Worker {
+            handle,
             state,
             task_count,
             tasks_per_tick,
@@ -274,28 +246,46 @@ where
     }
 
     fn next_task(&mut self) -> Option<Task<C>> {
-        let &(ref lock, ref cvar) = &*self.state;
-        let mut state = lock.lock().unwrap();
-        let mut timeout = Some(Duration::from_secs(NAP_SECS));
-        loop {
-            if state.stopped {
-                return None;
+        let state = &*self.state;
+        let handle = unsafe { &mut *self.handle };
+        if state.stopped.load(AtomicOrdering::Acquire) {
+            return None;
+        }
+        //no loop, one data one cell
+        match handle.pop() {
+            Ok(data) => {
+                self.task_counter += 1;
+                Some(data)
             }
-            match state.queue.pop() {
-                Some(t) => {
-                    self.task_counter += 1;
-                    return Some(t);
+            Err(index) => {
+                if index == usize::MAX {
+                    return None;
                 }
-                None => {
-                    state = match timeout {
-                        Some(t) => cvar.wait_timeout(state, t).unwrap().0,
-                        None => {
-                            self.task_counter = 0;
-                            self.ctx.on_tick();
-                            cvar.wait(state).unwrap()
+                //wait for timeout
+                match handle.wait_timeout(index, Duration::from_secs(NAP_SECS)) {
+                    Ok(data) => {
+                        self.task_counter += 1;
+                        Some(data)
+                    }
+                    Err(index) => {
+                        if index == usize::MAX {
+                            return None;
                         }
-                    };
-                    timeout = None;
+                        // on_tick while wait.
+                        self.task_counter = 0;
+                        self.ctx.on_tick();
+                        // wait for execute
+                        match handle.wait(index) {
+                            Ok(data) => {
+                                self.task_counter += 1;
+                                Some(data)
+                            }
+                            Err(index) => {
+                                assert_eq!(index, usize::MAX);
+                                None
+                            }
+                        }
+                    }
                 }
             }
         }
