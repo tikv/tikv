@@ -28,11 +28,10 @@ use config::DbConfig;
 use storage::CF_DEFAULT;
 use storage::types::Key;
 use util::config::MB;
-use util::pb_unknown_enum;
 use util::rocksdb::properties::SizePropertiesCollectorFactory;
 use util::rocksdb::{new_engine_opt, CFOptions};
 
-use super::{Error as ImportError, Result};
+use super::Result;
 
 /// Engine wraps rocksdb::DB with customized options to support efficient bulk
 /// write.
@@ -63,9 +62,6 @@ impl Engine {
         let wb = RawBatch::with_capacity(wb_cap);
         let commit_ts = batch.get_commit_ts();
         for m in batch.take_mutations().iter_mut() {
-            if pb_unknown_enum(m, "op") {
-                return Err(ImportError::InvalidProtoMessage("unknown enum".into()));
-            }
             match m.get_op() {
                 Mutation_OP::Put => {
                     let k = Key::from_raw(m.get_key()).append_ts(commit_ts);

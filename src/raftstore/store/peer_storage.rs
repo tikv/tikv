@@ -1291,7 +1291,7 @@ pub fn do_snapshot(
             Some(state) => Ok(state),
         })?;
 
-    if state.get_state() != PeerState::Normal || util::pb_unknown_enum(&state, "state") {
+    if state.get_state() != PeerState::Normal {
         return Err(storage_error(format!(
             "snap job for {} seems stale, skip.",
             region_id
