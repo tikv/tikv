@@ -49,7 +49,7 @@ use kvproto::debugpb::DB as DBType;
 use kvproto::debugpb::*;
 use kvproto::debugpb_grpc::DebugClient;
 use kvproto::kvrpcpb::MvccInfo;
-use kvproto::metapb::Region;
+use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use raft::eraftpb::{ConfChange, Entry, EntryType};
@@ -457,6 +457,9 @@ trait DebugExecutor {
     /// Recover the cluster when given `store_ids` are failed.
     fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>);
 
+    /// Recreate the region with metadata from pd, but alloc new id for it.
+    fn recreate_region(&self, sec_mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64);
+
     fn check_region_consistency(&self, _: u64);
 
     fn check_local_mode(&self);
@@ -514,6 +517,8 @@ trait DebugExecutor {
     fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str);
 
     fn dump_metrics(&self, tags: Vec<&str>);
+
+    fn dump_region_properties(&self, region_id: u64);
 }
 
 impl DebugExecutor for DebugClient {
@@ -645,6 +650,10 @@ impl DebugExecutor for DebugClient {
         self.check_local_mode();
     }
 
+    fn recreate_region(&self, _: Arc<SecurityManager>, _: &PdConfig, _: u64) {
+        self.check_local_mode();
+    }
+
     fn check_region_consistency(&self, region_id: u64) {
         let mut req = RegionConsistencyCheckRequest::new();
         req.set_region_id(region_id);
@@ -661,6 +670,16 @@ impl DebugExecutor for DebugClient {
         self.modify_tikv_config(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::modify_tikv_config", e));
         println!("success");
+    }
+
+    fn dump_region_properties(&self, region_id: u64) {
+        let mut req = GetRegionPropertiesRequest::new();
+        req.set_region_id(region_id);
+        let resp = self.get_region_properties(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_region_properties", e));
+        for prop in resp.get_props() {
+            println!("{}: {}", prop.get_name(), prop.get_value());
+        }
     }
 }
 
@@ -756,6 +775,48 @@ impl DebugExecutor for Debugger {
         println!("success");
     }
 
+    fn recreate_region(&self, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64) {
+        let rpc_client =
+            RpcClient::new(pd_cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+
+        let mut region = match rpc_client.get_region_by_id(region_id).wait() {
+            Ok(Some(region)) => region,
+            Ok(None) => {
+                eprintln!("no such region {} on PD", region_id);
+                process::exit(-1)
+            }
+            Err(e) => perror_and_exit("RpcClient::get_region_by_id", e),
+        };
+
+        let new_region_id = rpc_client
+            .alloc_id()
+            .unwrap_or_else(|e| perror_and_exit("RpcClient::alloc_id", e));
+        let new_peer_id = rpc_client
+            .alloc_id()
+            .unwrap_or_else(|e| perror_and_exit("RpcClient::alloc_id", e));
+
+        let store_id = self.get_store_id().expect("get store id");
+
+        region.set_id(new_region_id);
+        let old_version = region.get_region_epoch().get_version();
+        region.mut_region_epoch().set_version(old_version + 1);
+        region.mut_region_epoch().set_conf_ver(1);
+
+        region.peers.clear();
+        let mut peer = Peer::new();
+        peer.set_id(new_peer_id);
+        peer.set_store_id(store_id);
+        region.mut_peers().push(peer);
+
+        println!(
+            "initing empty region {} with peer_id {}...",
+            new_region_id, new_peer_id
+        );
+        self.recreate_region(region)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::recreate_region", e));
+        println!("success");
+    }
+
     fn dump_metrics(&self, _tags: Vec<&str>) {
         unimplemented!("only avaliable for online mode");
     }
@@ -768,6 +829,14 @@ impl DebugExecutor for Debugger {
     fn modify_tikv_config(&self, _: MODULE, _: &str, _: &str) {
         eprintln!("only support remote mode");
         process::exit(-1);
+    }
+
+    fn dump_region_properties(&self, region_id: u64) {
+        let props = self.get_region_properties(region_id)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get_region_properties", e));
+        for (name, value) in props {
+            println!("{}: {}", name, value);
+        }
     }
 }
 
@@ -1176,6 +1245,28 @@ fn main() {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("recreate-region")
+                .about("recreate a region with given metadata, but alloc new id for it")
+                .arg(
+                    Arg::with_name("pd")
+                        .required(true)
+                        .short("p")
+                        .takes_value(true)
+                        .multiple(true)
+                        .use_delimiter(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
+                        .help("PD endpoints"),
+                )
+                .arg(
+                    Arg::with_name("region")
+                        .required(true)
+                        .short("r")
+                        .takes_value(true)
+                        .help("the origin region id"),
+                        ),
+        )
+        .subcommand(
             SubCommand::with_name("metrics")
                 .about("print the metrics")
                 .arg(
@@ -1192,8 +1283,8 @@ fn main() {
                             "set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not specified, print prometheus",
                         ),
                 ),
-            )
-            .subcommand(
+        )
+        .subcommand(
             SubCommand::with_name("consistency-check")
                 .about("force consistency-check for a specified region")
                 .arg(
@@ -1290,7 +1381,18 @@ fn main() {
                         .default_value("8")
                         .help("number of threads in one compaction")
                 ),
-    );
+        )
+        .subcommand(
+            SubCommand::with_name("region-properties")
+                .about("show region properties")
+                .arg(
+                    Arg::with_name("region")
+                        .short("r")
+                        .required(true)
+                        .takes_value(true)
+                        .help("the target region id"),
+                ),
+        );
 
     let matches = app.clone().get_matches();
 
@@ -1446,6 +1548,11 @@ fn main() {
         } else {
             eprintln!("{}", matches.usage());
         }
+    } else if let Some(matches) = matches.subcommand_matches("recreate-region") {
+        let mut pd_cfg = PdConfig::default();
+        pd_cfg.endpoints = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
+        let region_id = matches.value_of("region").unwrap().parse().unwrap();
+        debug_executor.recreate_region(mgr, &pd_cfg, region_id);
     } else if let Some(matches) = matches.subcommand_matches("consistency-check") {
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
         debug_executor.check_region_consistency(region_id);
@@ -1459,6 +1566,9 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("metrics") {
         let tags = Vec::from_iter(matches.values_of("tag").unwrap());
         debug_executor.dump_metrics(tags)
+    } else if let Some(matches) = matches.subcommand_matches("region-properties") {
+        let region_id = value_t_or_exit!(matches.value_of("region"), u64);
+        debug_executor.dump_region_properties(region_id)
     } else {
         let _ = app.print_help();
     }
