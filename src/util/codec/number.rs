@@ -11,11 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// FIXME(shirly): remove following later
-#![allow(dead_code)]
-
-use byteorder::{BigEndian, ByteOrder, LittleEndian, ReadBytesExt, WriteBytesExt};
-use std::io::{self, ErrorKind, Read, Write};
+use byteorder::{BigEndian, ByteOrder, LittleEndian, WriteBytesExt};
+use std::io::{self, ErrorKind, Write};
 use std::mem;
 
 use super::{BytesSlice, Error, Result};
@@ -148,91 +145,6 @@ pub trait NumberEncoder: Write {
 }
 
 impl<T: Write> NumberEncoder for T {}
-
-pub trait NumberDecoder: Read {
-    /// `decode_i64` decodes value encoded by `encode_i64` before.
-    fn decode_i64(&mut self) -> Result<i64> {
-        self.decode_u64().map(order_decode_i64)
-    }
-
-    /// `decode_i64_desc` decodes value encoded by `encode_i64_desc` before.
-    fn decode_i64_desc(&mut self) -> Result<i64> {
-        self.decode_u64_desc().map(order_decode_i64)
-    }
-
-    /// `decode_u64` decodes value encoded by `encode_u64` before.
-    fn decode_u64(&mut self) -> Result<u64> {
-        self.read_u64::<BigEndian>().map_err(From::from)
-    }
-
-    /// `decode_u64_desc` decodes value encoded by `encode_u64_desc` before.
-    fn decode_u64_desc(&mut self) -> Result<u64> {
-        let v = self.read_u64::<BigEndian>()?;
-        Ok(!v)
-    }
-
-    /// `decode_var_i64` decodes value encoded by `encode_var_i64` before.
-    fn decode_var_i64(&mut self) -> Result<i64> {
-        let v = self.decode_var_u64()?;
-        let mut vx = v >> 1;
-        if v & 1 != 0 {
-            vx = !vx;
-        }
-        Ok(vx as i64)
-    }
-
-    /// `decode_var_u64` decodes value encoded by `encode_var_u64` before.
-    fn decode_var_u64(&mut self) -> Result<u64> {
-        let (mut x, mut s, mut i) = (0, 0, 0);
-        loop {
-            let b = self.read_u8()?;
-            if b < 0x80 {
-                if i > 9 || i == 9 && b > 1 {
-                    return Err(Error::Io(io::Error::new(
-                        ErrorKind::InvalidData,
-                        "overflow",
-                    )));
-                }
-                return Ok(x | (u64::from(b) << s));
-            }
-            x |= u64::from(b & 0x7f) << s;
-            s += 7;
-            i += 1;
-        }
-    }
-
-    /// `decode_f64` decodes value encoded by `encode_f64` before.
-    fn decode_f64(&mut self) -> Result<f64> {
-        self.decode_u64().map(order_decode_f64)
-    }
-
-    /// `decode_f64_desc` decodes value encoded by `encode_f64_desc` before.
-    fn decode_f64_desc(&mut self) -> Result<f64> {
-        self.decode_u64_desc().map(order_decode_f64)
-    }
-
-    fn decode_u16_le(&mut self) -> Result<u16> {
-        self.read_u16::<LittleEndian>().map_err(From::from)
-    }
-
-    fn decode_u32_le(&mut self) -> Result<u32> {
-        self.read_u32::<LittleEndian>().map_err(From::from)
-    }
-
-    fn decode_f64_le(&mut self) -> Result<f64> {
-        self.read_f64::<LittleEndian>().map_err(From::from)
-    }
-
-    fn decode_i64_le(&mut self) -> Result<i64> {
-        self.read_i64::<LittleEndian>().map_err(From::from)
-    }
-
-    fn decode_u64_le(&mut self) -> Result<u64> {
-        self.read_u64::<LittleEndian>().map_err(From::from)
-    }
-}
-
-impl<T: Read> NumberDecoder for T {}
 
 #[inline]
 fn read_num_bytes<T, F>(size: usize, data: &mut &[u8], f: F) -> Result<T>
@@ -643,7 +555,7 @@ mod test {
         for &v in F64_TESTS {
             let mut buf = vec![];
             buf.encode_f64_le(v).unwrap();
-            let value = buf.as_slice().decode_f64_le().unwrap();
+            let value = decode_f64_le(&mut buf.as_slice()).unwrap();
             assert_eq!(v, value);
         }
     }
@@ -661,7 +573,7 @@ mod test {
             buf.encode_var_u64(v).unwrap();
             assert!(buf.len() <= MAX_VAR_I64_LEN);
             assert_eq!(buf, p_buf);
-            let decoded = buf.as_slice().decode_var_u64().unwrap();
+            let decoded = decode_var_u64(&mut buf.as_slice()).unwrap();
             assert_eq!(v, decoded);
         }
     }
@@ -699,13 +611,16 @@ mod test {
     fn test_var_eof() {
         let mut buf = vec![0x80; 9];
         buf.push(0x2);
-        check_error!(buf.as_slice().decode_var_u64(), ErrorKind::InvalidData);
-        check_error!(buf.as_slice().decode_var_i64(), ErrorKind::InvalidData);
+        check_error!(decode_var_u64(&mut buf.as_slice()), ErrorKind::InvalidData);
+        check_error!(decode_var_i64(&mut buf.as_slice()), ErrorKind::InvalidData);
 
         buf = vec![0x80; 3];
-        check_error!(buf.as_slice().decode_var_u64(), ErrorKind::UnexpectedEof);
+        check_error!(
+            decode_var_u64(&mut buf.as_slice()),
+            ErrorKind::UnexpectedEof
+        );
 
         buf.push(0);
-        assert_eq!(0, buf.as_slice().decode_var_u64().unwrap());
+        assert_eq!(0, decode_var_u64(&mut buf.as_slice()).unwrap());
     }
 }

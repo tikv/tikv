@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
 use std::time::Duration;
+use tikv::util::collections::{HashMap, HashSet};
 
 use grpc::{EnvBuilder, Error as GrpcError};
 use tempdir::TempDir;
@@ -77,11 +77,11 @@ impl ServerCluster {
         );
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
         ServerCluster {
-            metas: HashMap::new(),
-            addrs: HashMap::new(),
+            metas: HashMap::default(),
+            addrs: HashMap::default(),
             pd_client,
-            storages: HashMap::new(),
-            snap_paths: HashMap::new(),
+            storages: HashMap::default(),
+            snap_paths: HashMap::default(),
             raft_client: RaftClient::new(env, Arc::new(Config::default()), security_mgr),
         }
     }

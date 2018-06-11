@@ -28,16 +28,23 @@ pub const FLAG_IGNORE_TRUNCATE: u64 = 1;
 /// This flag only matters if `FLAG_IGNORE_TRUNCATE` is not set, in strict sql mode, truncate error
 /// should be returned as error, in non-strict sql mode, truncate error should be saved as warning.
 pub const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
-
 // `FLAG_PAD_CHAR_TO_FULL_LENGTH` indicates if sql_mode 'PAD_CHAR_TO_FULL_LENGTH' is set.
 pub const FLAG_PAD_CHAR_TO_FULL_LENGTH: u64 = 1 << 2;
-
-// `FLAG_IN_SELECT_STMT` indicates if this is a SELECT statement.
+/// `FLAG_IN_INSERT_STMT` indicates if this is a INSERT statement.
+pub const FLAG_IN_INSERT_STMT: u64 = 1 << 3;
+/// `FLAG_IN_UPDATE_OR_DELETE_STMT` indicates if this is a UPDATE statement or a DELETE statement.
+pub const FLAG_IN_UPDATE_OR_DELETE_STMT: u64 = 1 << 4;
+/// `FLAG_IN_SELECT_STMT` indicates if this is a SELECT statement.
 pub const FLAG_IN_SELECT_STMT: u64 = 1 << 5;
 /// `FLAG_OVERFLOW_AS_WARNING` indicates if overflow error should be returned as warning.
 /// In strict sql mode, overflow error should be returned as error,
 /// in non-strict sql mode, overflow error should be saved as warning.
 pub const FLAG_OVERFLOW_AS_WARNING: u64 = 1 << 6;
+
+// FLAG_DIVIDED_BY_ZERO_AS_WARNING indicates if DividedByZero should be returned as warning.
+pub const FLAG_DIVIDED_BY_ZERO_AS_WARNING: u64 = 1 << 8;
+
+pub const MODE_ERROR_FOR_DIVISION_BY_ZERO: u64 = 27;
 
 const DEFAULT_MAX_WARNING_CNT: usize = 64;
 #[derive(Debug)]
@@ -47,22 +54,20 @@ pub struct EvalConfig {
     pub ignore_truncate: bool,
     pub truncate_as_warning: bool,
     pub overflow_as_warning: bool,
+    pub in_insert_stmt: bool,
+    pub in_update_or_delete_stmt: bool,
     pub in_select_stmt: bool,
     pub pad_char_to_full_length: bool,
+    pub divided_by_zero_as_warning: bool,
     pub max_warning_cnt: usize,
+    pub sql_mode: u64,
+    /// if the session is in strict mode.
+    pub strict_sql_mode: bool,
 }
 
 impl Default for EvalConfig {
     fn default() -> EvalConfig {
-        EvalConfig {
-            tz: FixedOffset::east(0),
-            ignore_truncate: false,
-            truncate_as_warning: false,
-            overflow_as_warning: false,
-            in_select_stmt: false,
-            pad_char_to_full_length: false,
-            max_warning_cnt: DEFAULT_MAX_WARNING_CNT,
-        }
+        EvalConfig::new(0, 0).unwrap()
     }
 }
 
@@ -81,9 +86,14 @@ impl EvalConfig {
             ignore_truncate: (flags & FLAG_IGNORE_TRUNCATE) > 0,
             truncate_as_warning: (flags & FLAG_TRUNCATE_AS_WARNING) > 0,
             overflow_as_warning: (flags & FLAG_OVERFLOW_AS_WARNING) > 0,
+            in_insert_stmt: (flags & FLAG_IN_INSERT_STMT) > 0,
+            in_update_or_delete_stmt: (flags & FLAG_IN_UPDATE_OR_DELETE_STMT) > 0,
             in_select_stmt: (flags & FLAG_IN_SELECT_STMT) > 0,
             pad_char_to_full_length: (flags & FLAG_PAD_CHAR_TO_FULL_LENGTH) > 0,
+            divided_by_zero_as_warning: (flags & FLAG_DIVIDED_BY_ZERO_AS_WARNING) > 0,
             max_warning_cnt: DEFAULT_MAX_WARNING_CNT,
+            sql_mode: 0,
+            strict_sql_mode: false,
         };
 
         Ok(e)
@@ -91,6 +101,19 @@ impl EvalConfig {
 
     pub fn set_max_warning_cnt(&mut self, max_warning_cnt: usize) {
         self.max_warning_cnt = max_warning_cnt;
+    }
+
+    pub fn set_sql_mode(&mut self, sql_mode: u64) {
+        self.sql_mode = sql_mode
+    }
+
+    pub fn set_strict_sql_mode(&mut self, strict_sql_mode: bool) {
+        self.strict_sql_mode = strict_sql_mode
+    }
+
+    /// detects if 'ERROR_FOR_DIVISION_BY_ZERO' mode is set in sql_mode
+    pub fn mode_error_for_division_by_zero(&self) -> bool {
+        self.sql_mode & MODE_ERROR_FOR_DIVISION_BY_ZERO == MODE_ERROR_FOR_DIVISION_BY_ZERO
     }
 
     pub fn new_eval_warnings(&self) -> EvalWarnings {
@@ -188,6 +211,19 @@ impl EvalContext {
         }
     }
 
+    pub fn handle_division_by_zero(&mut self) -> Result<()> {
+        if self.cfg.in_insert_stmt || self.cfg.in_update_or_delete_stmt {
+            if !self.cfg.mode_error_for_division_by_zero() {
+                return Ok(());
+            }
+            if self.cfg.strict_sql_mode && !self.cfg.divided_by_zero_as_warning {
+                return Err(Error::division_by_zero());
+            }
+        }
+        self.warnings.append_warning(Error::division_by_zero());
+        Ok(())
+    }
+
     pub fn overflow_from_cast_str_as_int(
         &mut self,
         bytes: &[u8],
@@ -255,5 +291,50 @@ mod test {
         let warnings = ctx.take_warnings();
         assert_eq!(warnings.warning_cnt, 2 * DEFAULT_MAX_WARNING_CNT);
         assert_eq!(warnings.warnings.len(), eval_cfg.max_warning_cnt);
+    }
+
+    #[test]
+    fn test_handle_division_by_zero() {
+        let cases = vec![
+            //(flag,sql_mode,strict_sql_mode=>is_ok,is_empty)
+            (0, 0, false, true, false), //warning
+            (
+                FLAG_IN_INSERT_STMT,
+                MODE_ERROR_FOR_DIVISION_BY_ZERO,
+                false,
+                true,
+                false,
+            ), //warning
+            (
+                FLAG_IN_UPDATE_OR_DELETE_STMT,
+                MODE_ERROR_FOR_DIVISION_BY_ZERO,
+                false,
+                true,
+                false,
+            ), //warning
+            (
+                FLAG_IN_UPDATE_OR_DELETE_STMT,
+                MODE_ERROR_FOR_DIVISION_BY_ZERO,
+                true,
+                false,
+                true,
+            ), //error
+            (FLAG_IN_UPDATE_OR_DELETE_STMT, 0, true, true, true), //ok
+            (
+                FLAG_IN_UPDATE_OR_DELETE_STMT | FLAG_DIVIDED_BY_ZERO_AS_WARNING,
+                MODE_ERROR_FOR_DIVISION_BY_ZERO,
+                true,
+                true,
+                false,
+            ), //warning
+        ];
+        for (flag, sql_mode, strict_sql_mode, is_ok, is_empty) in cases {
+            let mut cfg = EvalConfig::new(0, flag).unwrap();
+            cfg.set_sql_mode(sql_mode);
+            cfg.set_strict_sql_mode(strict_sql_mode);
+            let mut ctx = EvalContext::new(Arc::new(cfg));
+            assert_eq!(ctx.handle_division_by_zero().is_ok(), is_ok);
+            assert_eq!(ctx.take_warnings().warnings.is_empty(), is_empty);
+        }
     }
 }

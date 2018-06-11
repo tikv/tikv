@@ -24,7 +24,7 @@ use util::escape;
 use super::mysql::{types, Duration, Time};
 use super::{datum, Datum, Result};
 use util::codec::BytesSlice;
-use util::codec::number::{NumberDecoder, NumberEncoder};
+use util::codec::number::{self, NumberEncoder};
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -90,7 +90,7 @@ pub fn decode_table_id(key: &[u8]) -> Result<i64> {
     }
 
     let mut remaining = &key[TABLE_PREFIX.len()..];
-    remaining.decode_i64()
+    number::decode_i64(&mut remaining)
 }
 
 pub fn flatten(data: Datum) -> Result<Datum> {
@@ -151,7 +151,7 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
     }
 
     let mut remaining = &encoded[TABLE_PREFIX.len()..];
-    remaining.decode_i64()?;
+    number::decode_i64(&mut remaining)?;
 
     if !remaining.starts_with(RECORD_PREFIX_SEP) {
         return Err(invalid_type!(
@@ -161,7 +161,7 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
     }
 
     remaining = &remaining[RECORD_PREFIX_SEP.len()..];
-    remaining.decode_i64()
+    number::decode_i64(&mut remaining)
 }
 
 /// `truncate_as_row_key` truncate extra part of a tidb key and just keep the row key part.

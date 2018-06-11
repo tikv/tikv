@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{self, Arc, RwLock};
 use std::time::*;
 use std::{result, thread};
+use tikv::util::collections::{HashMap, HashSet};
 
 use futures::Future;
 use rocksdb::DB;
@@ -112,11 +112,11 @@ impl<T: Simulator> Cluster<T> {
         // TODO: In the future, maybe it's better to test both case where `use_delete_range` is true and false
         Cluster {
             cfg: new_tikv_config(id),
-            leaders: HashMap::new(),
+            leaders: HashMap::default(),
             paths: vec![],
             dbs: vec![],
             count,
-            engines: HashMap::new(),
+            engines: HashMap::default(),
             sim,
             pd_client,
         }

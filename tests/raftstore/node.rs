@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::path::Path;
 use std::sync::{mpsc, Arc, RwLock};
+use tikv::util::collections::{HashMap, HashSet};
 
 use tempdir::TempDir;
 
@@ -52,8 +52,8 @@ impl ChannelTransport {
     pub fn new() -> ChannelTransport {
         ChannelTransport {
             core: Arc::new(RwLock::new(ChannelTransportCore {
-                snap_paths: HashMap::new(),
-                routers: HashMap::new(),
+                snap_paths: HashMap::default(),
+                routers: HashMap::default(),
             })),
         }
     }
@@ -138,8 +138,8 @@ impl NodeCluster {
         NodeCluster {
             trans: ChannelTransport::new(),
             pd_client,
-            nodes: HashMap::new(),
-            simulate_trans: HashMap::new(),
+            nodes: HashMap::default(),
+            simulate_trans: HashMap::default(),
         }
     }
 }
