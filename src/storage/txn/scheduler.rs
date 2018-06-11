@@ -69,11 +69,11 @@ pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.
-const GC_LOG_FOUND_VERSION_THRESHOLD: usize = 300;
+const GC_LOG_FOUND_VERSION_THRESHOLD: usize = 30;
 
 /// After the GC delete versions of a key, output a message to the log if at least this many
 /// versions are deleted.
-const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 300;
+const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
 
 /// Process result of a command.
 pub enum ProcessResult {
