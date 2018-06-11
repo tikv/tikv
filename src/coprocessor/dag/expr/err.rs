@@ -22,11 +22,12 @@ use util;
 use util::codec::Error as CError;
 
 pub const ERR_UNKNOWN: i32 = 1105;
-pub const ERR_TRUNCATED: i32 = 1265;
-pub const ERR_DIVISION_BY_ZERO: i32 = 1365;
-pub const ERR_UNKNOWN_TIMEZONE: i32 = 1298;
-pub const ERR_DATA_OUT_OF_RANGE: i32 = 1690;
+pub const WARN_DATA_TRUNCATED: i32 = 1265;
 pub const ERR_TRUNCATE_WRONG_VALUE: i32 = 1292;
+pub const ERR_UNKNOWN_TIMEZONE: i32 = 1298;
+pub const ERR_DIVISION_BY_ZERO: i32 = 1365;
+pub const ERR_DATA_TOO_LONG: i32 = 1406;
+pub const ERR_DATA_OUT_OF_RANGE: i32 = 1690;
 
 quick_error! {
     #[derive(Debug)]
@@ -36,10 +37,6 @@ quick_error! {
             description("io error")
             display("I/O error: {}", err)
             cause(err)
-        }
-        Type { has: &'static str, expected: &'static str } {
-            description("type error")
-            display("type error: cannot get {:?} result from {:?} expression", expected, has)
         }
         Codec(err: util::codec::Error) {
             from()
@@ -54,10 +51,6 @@ quick_error! {
         UnknownSignature(sig: ScalarFuncSig) {
             description("Unknown signature")
             display("Unknown signature: {:?}", sig)
-        }
-        Truncated(s:String) {
-            description("Truncated")
-            display("{}",s)
         }
         Eval(s: String,code:i32) {
             description("evaluation failed")
@@ -83,6 +76,10 @@ impl Error {
         Error::Eval(msg, ERR_TRUNCATE_WRONG_VALUE)
     }
 
+    pub fn truncated() -> Error {
+        Error::Eval("Data Truncated".into(), WARN_DATA_TRUNCATED)
+    }
+
     pub fn cast_neg_int_as_unsigned() -> Error {
         let msg = "Cast to unsigned converted negative integer to it's positive complement";
         Error::Eval(msg.into(), ERR_UNKNOWN)
@@ -104,9 +101,16 @@ impl Error {
         Error::Eval(msg.into(), ERR_DIVISION_BY_ZERO)
     }
 
+    pub fn data_too_long(msg: String) -> Error {
+        if msg.is_empty() {
+            Error::Eval("Data Too Long".into(), ERR_DATA_TOO_LONG)
+        } else {
+            Error::Eval(msg, ERR_DATA_TOO_LONG)
+        }
+    }
+
     pub fn code(&self) -> i32 {
         match *self {
-            Error::Truncated(_) => ERR_TRUNCATED,
             Error::Eval(_, code) => code,
             _ => ERR_UNKNOWN,
         }
@@ -140,7 +144,7 @@ impl<T> Into<Result<T>> for Res<T> {
     fn into(self) -> Result<T> {
         match self {
             Res::Ok(t) => Ok(t),
-            Res::Truncated(_) => Err(Error::Truncated("Data Truncated".into())),
+            Res::Truncated(_) => Err(Error::truncated()),
             Res::Overflow(_) => Err(Error::overflow("", "")),
         }
     }

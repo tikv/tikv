@@ -186,7 +186,7 @@ impl EvalContext {
         if !is_truncated {
             return Ok(());
         }
-        self.handle_truncate_err(Error::Truncated("[1265] Data Truncated".into()))
+        self.handle_truncate_err(Error::truncated())
     }
 
     pub fn handle_truncate_err(&mut self, err: Error) -> Result<()> {

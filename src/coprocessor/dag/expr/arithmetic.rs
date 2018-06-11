@@ -13,7 +13,7 @@
 
 use super::{Error, EvalContext, FnCall, Result};
 use coprocessor::codec::mysql::{Decimal, Res};
-use coprocessor::codec::{mysql, Datum};
+use coprocessor::codec::{mysql, Datum, div_i64, div_i64_with_u64, div_u64_with_i64};
 use std::borrow::Cow;
 use std::ops::{Add, Mul, Sub};
 use std::{f64, i64, u64};
@@ -191,17 +191,96 @@ impl FnCall {
         match lhs.into_owned() / rhs.into_owned() {
             Some(v) => match v {
                 Res::Ok(v) => Ok(Some(Cow::Owned(v))),
-                Res::Truncated(v) => Err(Error::Truncated(format!("{} truncated", v))),
+                Res::Truncated(_) => Err(Error::truncated()),
                 Res::Overflow(_) => Err(overflow),
             },
             None => ctx.handle_division_by_zero().map(|()| None),
         }
     }
+
+    pub fn int_divide_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+        if rhs == 0 {
+            return Ok(None);
+        }
+        let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
+
+        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+        let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
+
+        let res = match (lus, rus) {
+            (true, true) => Ok(((lhs as u64) / (rhs as u64)) as i64),
+            (false, false) => div_i64(lhs, rhs),
+            (false, true) => div_i64_with_u64(lhs, rhs as u64).map(|r| r as i64),
+            (true, false) => div_u64_with_i64(lhs as u64, rhs).map(|r| r as i64),
+        };
+        res.map(Some)
+    }
+
+    pub fn int_divide_decimal(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        match self.divide_decimal(ctx, row) {
+            Ok(Some(v)) => match v.as_i64() {
+                Res::Ok(v_i64) => Ok(Some(v_i64)),
+                Res::Truncated(v_i64) => Ok(Some(v_i64)),
+                Res::Overflow(_) => Err(Error::overflow("BIGINT", &v.to_string())),
+            },
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn mod_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let rhs = try_opt!(self.children[1].eval_real(ctx, row));
+        if rhs == 0f64 {
+            return Ok(None);
+        }
+        let lhs = try_opt!(self.children[0].eval_real(ctx, row));
+
+        let res = lhs % rhs;
+        Ok(Some(res))
+    }
+
+    pub fn mod_decimal<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
+        let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
+        let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let overflow = Error::overflow("DECIMAL", &format!("({} % {})", lhs, rhs));
+        match lhs.into_owned() % rhs.into_owned() {
+            Some(v) => match v {
+                Res::Ok(v) => Ok(Some(Cow::Owned(v))),
+                Res::Truncated(_) => Err(Error::truncated()),
+                Res::Overflow(_) => Err(overflow),
+            },
+            None => Ok(None),
+        }
+    }
+
+    pub fn mod_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+        if rhs == 0 {
+            return Ok(None);
+        }
+        let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
+
+        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+        let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
+
+        let res = match (lus, rus) {
+            (true, true) => ((lhs as u64) % (rhs as u64)) as i64,
+            (false, false) => lhs % rhs,
+            (true, false) => ((lhs as u64) % (rhs.overflowing_abs().0 as u64)) as i64,
+            (false, true) => ((lhs.overflowing_abs().0 as u64) % (rhs as u64)) as i64,
+        };
+        Ok(Some(res))
+    }
 }
 
 #[cfg(test)]
 mod test {
-    use coprocessor::codec::mysql::types;
+    use coprocessor::codec::mysql::{types, Decimal};
     use coprocessor::codec::{mysql, Datum};
     use coprocessor::dag::expr::err;
     use coprocessor::dag::expr::test::{check_divide_by_zero, check_overflow, datum_expr,
@@ -261,6 +340,180 @@ mod test {
                 Datum::I64(i64::MIN),
                 Datum::I64(1),
                 Datum::I64(i64::MIN),
+            ),
+            (
+                ScalarFuncSig::IntDivideInt,
+                Datum::I64(13),
+                Datum::I64(11),
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::IntDivideInt,
+                Datum::I64(-13),
+                Datum::I64(11),
+                Datum::I64(-1),
+            ),
+            (
+                ScalarFuncSig::IntDivideInt,
+                Datum::I64(13),
+                Datum::I64(-11),
+                Datum::I64(-1),
+            ),
+            (
+                ScalarFuncSig::IntDivideInt,
+                Datum::I64(-13),
+                Datum::I64(-11),
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::IntDivideInt,
+                Datum::I64(33),
+                Datum::I64(11),
+                Datum::I64(3),
+            ),
+            (
+                ScalarFuncSig::IntDivideInt,
+                Datum::I64(-33),
+                Datum::I64(11),
+                Datum::I64(-3),
+            ),
+            (
+                ScalarFuncSig::IntDivideInt,
+                Datum::I64(33),
+                Datum::I64(-11),
+                Datum::I64(-3),
+            ),
+            (
+                ScalarFuncSig::IntDivideInt,
+                Datum::I64(-33),
+                Datum::I64(-11),
+                Datum::I64(3),
+            ),
+            (
+                ScalarFuncSig::IntDivideInt,
+                Datum::I64(11),
+                Datum::I64(0),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::IntDivideInt,
+                Datum::I64(-11),
+                Datum::I64(0),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::IntDivideInt,
+                Datum::U64(3),
+                Datum::I64(-5),
+                Datum::U64(0),
+            ),
+            (
+                ScalarFuncSig::IntDivideInt,
+                Datum::I64(-3),
+                Datum::U64(5),
+                Datum::U64(0),
+            ),
+            (
+                ScalarFuncSig::IntDivideInt,
+                Datum::I64(i64::MIN + 1),
+                Datum::I64(-1),
+                Datum::I64(i64::MAX),
+            ),
+            (
+                ScalarFuncSig::IntDivideInt,
+                Datum::I64(i64::MIN),
+                Datum::I64(1),
+                Datum::I64(i64::MIN),
+            ),
+            (
+                ScalarFuncSig::IntDivideInt,
+                Datum::I64(i64::MAX),
+                Datum::I64(1),
+                Datum::I64(i64::MAX),
+            ),
+            (
+                ScalarFuncSig::IntDivideInt,
+                Datum::U64(u64::MAX),
+                Datum::I64(1),
+                Datum::U64(u64::MAX),
+            ),
+            (
+                ScalarFuncSig::ModInt,
+                Datum::I64(13),
+                Datum::I64(11),
+                Datum::I64(2),
+            ),
+            (
+                ScalarFuncSig::ModInt,
+                Datum::I64(-13),
+                Datum::I64(11),
+                Datum::I64(-2),
+            ),
+            (
+                ScalarFuncSig::ModInt,
+                Datum::I64(13),
+                Datum::I64(-11),
+                Datum::I64(2),
+            ),
+            (
+                ScalarFuncSig::ModInt,
+                Datum::I64(-13),
+                Datum::I64(-11),
+                Datum::I64(-2),
+            ),
+            (
+                ScalarFuncSig::ModInt,
+                Datum::I64(33),
+                Datum::I64(11),
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::ModInt,
+                Datum::I64(33),
+                Datum::I64(-11),
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::ModInt,
+                Datum::I64(-33),
+                Datum::I64(-11),
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::ModInt,
+                Datum::I64(11),
+                Datum::I64(0),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::ModInt,
+                Datum::I64(-11),
+                Datum::I64(0),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::ModInt,
+                Datum::I64(i64::MAX),
+                Datum::I64(i64::MIN),
+                Datum::I64(i64::MAX),
+            ),
+            (
+                ScalarFuncSig::ModInt,
+                Datum::I64(i64::MIN),
+                Datum::I64(i64::MAX),
+                Datum::I64(-1),
+            ),
+            (
+                ScalarFuncSig::ModInt,
+                Datum::U64(u64::MAX),
+                Datum::I64(i64::MIN),
+                Datum::U64(i64::MAX as u64),
+            ),
+            (
+                ScalarFuncSig::ModInt,
+                Datum::I64(i64::MIN),
+                Datum::U64(u64::MAX),
+                Datum::U64(i64::MIN as u64),
             ),
         ];
         let mut ctx = EvalContext::default();
@@ -328,18 +581,48 @@ mod test {
                 Datum::Null,
                 Datum::Null,
             ), // TODO: support precision in divide.
-               // (
-               //     ScalarFuncSig::DivideReal,
-               //     Datum::F64(-12.3),
-               //     Datum::F64(41f64),
-               //     Datum::F64(-0.3),
-               // ),
-               // (
-               //     ScalarFuncSig::DivideReal,
-               //     Datum::F64(12.3),
-               //     Datum::F64(0.3),
-               //     Datum::F64(41f64)
-               // )
+            // (
+            //     ScalarFuncSig::DivideReal,
+            //     Datum::F64(-12.3),
+            //     Datum::F64(41f64),
+            //     Datum::F64(-0.3),
+            // ),
+            // (
+            //     ScalarFuncSig::DivideReal,
+            //     Datum::F64(12.3),
+            //     Datum::F64(0.3),
+            //     Datum::F64(41f64)
+            // )
+            (
+                ScalarFuncSig::ModReal,
+                Datum::F64(1.0),
+                Datum::F64(1.1),
+                Datum::F64(1.0),
+            ),
+            (
+                ScalarFuncSig::ModReal,
+                Datum::F64(-1.0),
+                Datum::F64(1.1),
+                Datum::F64(-1.0),
+            ),
+            (
+                ScalarFuncSig::ModReal,
+                Datum::F64(1.0),
+                Datum::F64(-1.1),
+                Datum::F64(1.0),
+            ),
+            (
+                ScalarFuncSig::ModReal,
+                Datum::F64(-1.0),
+                Datum::F64(-1.1),
+                Datum::F64(-1.0),
+            ),
+            (
+                ScalarFuncSig::ModReal,
+                Datum::F64(1.0),
+                Datum::F64(0.0),
+                Datum::Null,
+            ),
         ];
         let mut ctx = EvalContext::default();
         for tt in tests {
@@ -403,6 +686,162 @@ mod test {
                 Datum::Null,
                 Datum::Null,
             ),
+            (
+                ScalarFuncSig::IntDivideDecimal,
+                str2dec("11.01"),
+                str2dec("1.1"),
+                Datum::I64(10),
+            ),
+            (
+                ScalarFuncSig::IntDivideDecimal,
+                str2dec("-11.01"),
+                str2dec("1.1"),
+                Datum::I64(-10),
+            ),
+            (
+                ScalarFuncSig::IntDivideDecimal,
+                str2dec("11.01"),
+                str2dec("-1.1"),
+                Datum::I64(-10),
+            ),
+            (
+                ScalarFuncSig::IntDivideDecimal,
+                str2dec("-11.01"),
+                str2dec("-1.1"),
+                Datum::I64(10),
+            ),
+            (
+                ScalarFuncSig::IntDivideDecimal,
+                str2dec("123"),
+                Datum::Null,
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::IntDivideDecimal,
+                Datum::Null,
+                str2dec("123"),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::IntDivideDecimal,
+                str2dec("0.0"),
+                str2dec("0"),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::IntDivideDecimal,
+                Datum::Null,
+                Datum::Null,
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
+                str2dec("13"),
+                str2dec("11"),
+                str2dec("2"),
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
+                str2dec("-13"),
+                str2dec("11"),
+                str2dec("-2"),
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
+                str2dec("13"),
+                str2dec("-11"),
+                str2dec("2"),
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
+                str2dec("-13"),
+                str2dec("-11"),
+                str2dec("-2"),
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
+                str2dec("33"),
+                str2dec("11"),
+                str2dec("0"),
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
+                str2dec("-33"),
+                str2dec("11"),
+                str2dec("0"),
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
+                str2dec("33"),
+                str2dec("-11"),
+                str2dec("0"),
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
+                str2dec("-33"),
+                str2dec("-11"),
+                str2dec("0"),
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
+                str2dec("1"),
+                str2dec("1.1"),
+                str2dec("1"),
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
+                str2dec("-1"),
+                str2dec("1.1"),
+                str2dec("-1"),
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
+                str2dec("1"),
+                str2dec("-1.1"),
+                str2dec("1"),
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
+                str2dec("-1"),
+                str2dec("-1.1"),
+                str2dec("-1"),
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
+                str2dec("3"),
+                str2dec("0"),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
+                str2dec("-3"),
+                str2dec("0"),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
+                str2dec("0"),
+                str2dec("0"),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
+                str2dec("-3"),
+                Datum::Null,
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
+                Datum::Null,
+                str2dec("-3"),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
+                Datum::Null,
+                Datum::Null,
+                Datum::Null,
+            ),
         ];
         let mut ctx = EvalContext::default();
         for tt in tests {
@@ -456,6 +895,25 @@ mod test {
                 ScalarFuncSig::MultiplyInt,
                 Datum::I64(i64::MIN),
                 Datum::U64(1),
+            ),
+            (
+                ScalarFuncSig::IntDivideInt,
+                Datum::I64(i64::MIN),
+                Datum::I64(-1),
+            ),
+            (ScalarFuncSig::IntDivideInt, Datum::I64(-1), Datum::U64(1)),
+            (ScalarFuncSig::IntDivideInt, Datum::I64(-2), Datum::U64(1)),
+            (ScalarFuncSig::IntDivideInt, Datum::U64(1), Datum::I64(-1)),
+            (ScalarFuncSig::IntDivideInt, Datum::U64(2), Datum::I64(-1)),
+            (
+                ScalarFuncSig::IntDivideDecimal,
+                Datum::Dec(Decimal::from(i64::MIN)),
+                Datum::Dec(Decimal::from(-1)),
+            ),
+            (
+                ScalarFuncSig::IntDivideDecimal,
+                Datum::Dec(Decimal::from(i64::MAX)),
+                str2dec("0.1"),
             ),
         ];
         let mut ctx = EvalContext::default();
