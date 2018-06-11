@@ -33,7 +33,8 @@ use raft::{self, quorum, RawNode};
 use raftstore::store::engine::{IterOption, Mutable};
 use raftstore::store::util as raftstore_util;
 use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
-use raftstore::store::{init_apply_state, init_raft_state, write_peer_state};
+use raftstore::store::{init_apply_state, init_raft_state, write_initial_apply_state,
+                       write_initial_raft_state, write_peer_state};
 use storage::mvcc::{Lock, LockType, Write, WriteType};
 use storage::types::{truncate_ts, Key};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -463,6 +464,84 @@ impl Debugger {
         Ok(())
     }
 
+    pub fn recreate_region(&self, region: Region) -> Result<()> {
+        let region_id = region.get_id();
+        let kv = self.engines.kv_engine.as_ref();
+        let raft = self.engines.raft_engine.as_ref();
+
+        let kv_wb = WriteBatch::new();
+        let raft_wb = WriteBatch::new();
+        let kv_handle = box_try!(get_cf_handle(kv, CF_RAFT));
+
+        if region.get_start_key() >= region.get_end_key() && !region.get_end_key().is_empty() {
+            return Err(box_err!("Bad region: {:?}", region));
+        }
+
+        box_try!(self.engines.kv_engine.scan_cf(
+            CF_RAFT,
+            keys::REGION_META_MIN_KEY,
+            keys::REGION_META_MAX_KEY,
+            false,
+            |key, value| {
+                let (_, suffix_type) = box_try!(keys::decode_region_meta_key(key));
+                if suffix_type != keys::REGION_STATE_SUFFIX {
+                    return Ok(true);
+                }
+
+                let mut region_state = RegionLocalState::new();
+                box_try!(region_state.merge_from_bytes(value));
+                if region_state.get_state() == PeerState::Tombstone {
+                    return Ok(true);
+                }
+                let exists_region = region_state.get_region();
+
+                if !region_overlap(exists_region, &region) {
+                    return Ok(true);
+                }
+
+                if exists_region.get_start_key() == region.get_start_key()
+                    && exists_region.get_end_key() == region.get_end_key()
+                {
+                    Err(box_err!("region still exists {:?}", region))
+                } else {
+                    Err(box_err!("region overlap with {:?}", exists_region))
+                }
+            },
+        ));
+
+        // RegionLocalState.
+        let mut region_state = RegionLocalState::new();
+        region_state.set_state(PeerState::Normal);
+        region_state.set_region(region);
+        let key = keys::region_state_key(region_id);
+        if box_try!(kv.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)).is_some() {
+            return Err(Error::Other(
+                "Store already has the RegionLocalState".into(),
+            ));
+        }
+        box_try!(kv_wb.put_msg_cf(kv_handle, &key, &region_state));
+
+        // RaftApplyState.
+        let key = keys::apply_state_key(region_id);
+        if box_try!(kv.get_msg_cf::<RaftApplyState>(CF_RAFT, &key)).is_some() {
+            return Err(Error::Other("Store already has the RaftApplyState".into()));
+        }
+        box_try!(write_initial_apply_state(kv, &kv_wb, region_id));
+
+        // RaftLocalState.
+        let key = keys::raft_state_key(region_id);
+        if box_try!(raft.get_msg::<RaftLocalState>(&key)).is_some() {
+            return Err(Error::Other("Store already has the RaftLocalState".into()));
+        }
+        box_try!(write_initial_raft_state(&raft_wb, region_id));
+
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        box_try!(kv.write_opt(kv_wb, &write_opts));
+        box_try!(raft.write_opt(raft_wb, &write_opts));
+        Ok(())
+    }
+
     pub fn get_store_id(&self) -> Result<u64> {
         let db = &self.engines.kv_engine;
         db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
@@ -784,6 +863,13 @@ impl MvccChecker {
     }
 }
 
+fn region_overlap(r1: &Region, r2: &Region) -> bool {
+    let (start_key_1, start_key_2) = (r1.get_start_key(), r2.get_start_key());
+    let (end_key_1, end_key_2) = (r1.get_end_key(), r2.get_end_key());
+    (start_key_1 < end_key_2 || end_key_2.is_empty())
+        && (start_key_2 < end_key_1 || end_key_1.is_empty())
+}
+
 pub struct MvccInfoIterator {
     limit: u64,
     count: u64,
@@ -1053,6 +1139,48 @@ mod tests {
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
             .unwrap()
             .unwrap()
+    }
+
+    #[test]
+    fn test_region_overlap() {
+        let new_region = |start: &[u8], end: &[u8]| -> Region {
+            let mut region = Region::default();
+            region.set_start_key(start.to_owned());
+            region.set_end_key(end.to_owned());
+            region
+        };
+
+        // For normal case.
+        assert!(region_overlap(
+            &new_region(b"a", b"z"),
+            &new_region(b"b", b"y")
+        ));
+        assert!(region_overlap(
+            &new_region(b"a", b"n"),
+            &new_region(b"m", b"z")
+        ));
+        assert!(!region_overlap(
+            &new_region(b"a", b"m"),
+            &new_region(b"n", b"z")
+        ));
+
+        // For the first or last region.
+        assert!(region_overlap(
+            &new_region(b"m", b""),
+            &new_region(b"a", b"n")
+        ));
+        assert!(region_overlap(
+            &new_region(b"a", b"n"),
+            &new_region(b"m", b"")
+        ));
+        assert!(region_overlap(
+            &new_region(b"", b""),
+            &new_region(b"m", b"")
+        ));
+        assert!(!region_overlap(
+            &new_region(b"a", b"m"),
+            &new_region(b"n", b"")
+        ));
     }
 
     #[test]
@@ -1478,6 +1606,51 @@ mod tests {
             .unwrap();
         let cf_opts = engine.get_options_cf(cf);
         assert_eq!(cf_opts.get_disable_auto_compactions(), true);
+    }
+
+    #[test]
+    fn test_recreate_region() {
+        let debugger = new_debugger();
+        let engine = debugger.engines.kv_engine.as_ref();
+
+        let metadata = vec![("", "g"), ("g", "m"), ("m", "")];
+
+        for (region_id, (start, end)) in metadata.into_iter().enumerate() {
+            let region_id = region_id as u64;
+            let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
+            let mut region = Region::new();
+            region.set_id(region_id);
+            region.set_start_key(start.to_owned().into_bytes());
+            region.set_end_key(end.to_owned().into_bytes());
+
+            let mut region_state = RegionLocalState::new();
+            region_state.set_state(PeerState::Normal);
+            region_state.set_region(region);
+            let key = keys::region_state_key(region_id);
+            engine.put_msg_cf(cf_raft, &key, &region_state).unwrap();
+        }
+
+        let remove_region_state = |region_id: u64| {
+            let key = keys::region_state_key(region_id);
+            let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
+            engine.delete_cf(cf_raft, &key).unwrap();
+        };
+
+        let mut region = Region::new();
+        region.set_id(100);
+
+        region.set_start_key(b"k".to_vec());
+        region.set_end_key(b"z".to_vec());
+        assert!(debugger.recreate_region(region.clone()).is_err());
+
+        remove_region_state(1);
+        remove_region_state(2);
+        assert!(debugger.recreate_region(region.clone()).is_ok());
+        assert_eq!(get_region_state(engine, 100).get_region(), &region);
+
+        region.set_start_key(b"z".to_vec());
+        region.set_end_key(b"".to_vec());
+        assert!(debugger.recreate_region(region).is_err());
     }
 
     #[test]

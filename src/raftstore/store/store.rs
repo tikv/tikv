@@ -39,6 +39,7 @@ use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use pd::{PdClient, PdRunner, PdTask};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
+use raftstore::store::util::RegionApproximateStat;
 use raftstore::{Error, Result};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::RingQueue;
@@ -1133,7 +1134,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut job = None;
         if let Some(peer) = self.region_peers.get_mut(&region_id) {
             let from_epoch = msg.get_region_epoch();
-            if util::is_epoch_stale(peer.get_store().region.get_region_epoch(), from_epoch) {
+            if util::is_epoch_stale(peer.region().get_region_epoch(), from_epoch) {
                 if peer.peer != *msg.get_to_peer() {
                     info!("[region {}] receive stale gc message, ignore.", region_id);
                     self.raft_metrics.message_dropped.stale_msg += 1;
@@ -1458,7 +1459,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // Apply failed, skip.
                 return;
             }
-            p.mut_store().region = cp.region;
+            p.set_region(cp.region);
             if p.is_leader() {
                 // Notify pd immediately.
                 info!(
@@ -1553,7 +1554,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         {
             let peer = self.region_peers.get_mut(&region_id).unwrap();
-            peer.mut_store().region = origin_region;
+            peer.set_region(origin_region);
             peer.post_split();
         }
         let new_region_id = new_region.get_id();
@@ -1803,7 +1804,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         {
             let peer = self.region_peers.get_mut(&region.get_id()).unwrap();
             peer.pending_merge = Some(state);
-            peer.mut_store().region = region.clone();
+            peer.set_region(region.clone());
         }
 
         if merged {
@@ -1839,7 +1840,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
         let region_id = region.get_id();
         let peer = self.region_peers.get_mut(&region_id).unwrap();
-        peer.mut_store().region = region;
+        peer.set_region(region);
         if peer.is_leader() {
             info!("notify pd with merge {:?} into {:?}", source, peer.region());
             peer.heartbeat_pd(&self.pd_worker);
@@ -1873,7 +1874,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         });
         peer.pending_merge = None;
         if let Some(r) = region {
-            peer.mut_store().region = r;
+            peer.set_region(r);
         }
         if peer.is_leader() {
             info!("{} notify pd with rollback merge {}", peer.tag, commit);
@@ -2351,7 +2352,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // work even if we change the region max size.
             // If peer says should update approximate size, update region
             // size and check whether the region should split.
-            if peer.approximate_size.is_some()
+            if peer.approximate_stat.is_some()
                 && peer.compaction_declined_bytes < self.cfg.region_split_check_diff.0
                 && peer.size_diff_hint < self.cfg.region_split_check_diff.0
             {
@@ -2519,18 +2520,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
-    fn on_approximate_region_size(&mut self, region_id: u64, region_size: u64) {
+    fn on_approximate_region_stat(&mut self, region_id: u64, stat: RegionApproximateStat) {
         let peer = match self.region_peers.get_mut(&region_id) {
             Some(peer) => peer,
             None => {
                 warn!(
-                    "[region {}] receive stale approximate size {}",
-                    region_id, region_size,
+                    "[region {}] receive stale approximate stat {:?}",
+                    region_id, stat,
                 );
                 return;
             }
         };
-        peer.approximate_size = Some(region_size);
+        peer.approximate_stat = Some(stat);
     }
 
     fn on_schedule_half_split_region(
@@ -3262,10 +3263,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 );
                 self.on_prepare_split_region(region_id, region_epoch, split_key, callback);
             }
-            Msg::ApproximateRegionSize {
-                region_id,
-                region_size,
-            } => self.on_approximate_region_size(region_id, region_size),
+            Msg::RegionApproximateStat { region_id, stat } => {
+                self.on_approximate_region_stat(region_id, stat)
+            }
             Msg::CompactedEvent(event) => self.on_compaction_finished(event),
             Msg::HalfSplitRegion {
                 region_id,

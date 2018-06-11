@@ -45,11 +45,10 @@ extern crate tikv;
 extern crate toml;
 
 #[cfg(unix)]
-mod profiling;
 #[macro_use]
-mod setup;
-use setup::*;
-mod signal_handler;
+mod util;
+use util::setup::*;
+use util::signal_handler;
 
 use std::process;
 use std::sync::atomic::Ordering;
@@ -58,11 +57,11 @@ use clap::{App, Arg, ArgMatches};
 
 use tikv::config::TiKvConfig;
 use tikv::import::ImportKVServer;
-use tikv::util::{self, panic_hook};
+use tikv::util::{self as tikv_util, panic_hook};
 
 fn main() {
     let long_version: String = {
-        let (hash, branch, time, rust_ver) = util::build_info();
+        let (hash, branch, time, rust_ver) = tikv_util::build_info();
         format!(
             "\nRelease Version:   {}\
              \nGit Commit Hash:   {}\
@@ -125,7 +124,7 @@ fn main() {
     init_log(&config);
     initial_metric(&config.metric, None);
 
-    util::print_tikv_info();
+    tikv_util::print_tikv_info();
     panic_hook::set_exit_hook(false);
     configure_grpc_poll_strategy();
 
