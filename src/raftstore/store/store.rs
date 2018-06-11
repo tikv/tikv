@@ -1133,7 +1133,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut job = None;
         if let Some(peer) = self.region_peers.get_mut(&region_id) {
             let from_epoch = msg.get_region_epoch();
-            if util::is_epoch_stale(peer.get_store().region.get_region_epoch(), from_epoch) {
+            if util::is_epoch_stale(peer.region().get_region_epoch(), from_epoch) {
                 if peer.peer != *msg.get_to_peer() {
                     info!("[region {}] receive stale gc message, ignore.", region_id);
                     self.raft_metrics.message_dropped.stale_msg += 1;
@@ -1458,7 +1458,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // Apply failed, skip.
                 return;
             }
-            p.mut_store().region = cp.region;
+            p.set_region(cp.region);
             if p.is_leader() {
                 // Notify pd immediately.
                 info!(
@@ -1553,7 +1553,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         {
             let peer = self.region_peers.get_mut(&region_id).unwrap();
-            peer.mut_store().region = origin_region;
+            peer.set_region(origin_region);
             peer.post_split();
         }
         let new_region_id = new_region.get_id();
@@ -1803,7 +1803,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         {
             let peer = self.region_peers.get_mut(&region.get_id()).unwrap();
             peer.pending_merge = Some(state);
-            peer.mut_store().region = region.clone();
+            peer.set_region(region.clone());
         }
 
         if merged {
@@ -1839,7 +1839,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
         let region_id = region.get_id();
         let peer = self.region_peers.get_mut(&region_id).unwrap();
-        peer.mut_store().region = region;
+        peer.set_region(region);
         if peer.is_leader() {
             info!("notify pd with merge {:?} into {:?}", source, peer.region());
             peer.heartbeat_pd(&self.pd_worker);
@@ -1873,7 +1873,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         });
         peer.pending_merge = None;
         if let Some(r) = region {
-            peer.mut_store().region = r;
+            peer.set_region(r);
         }
         if peer.is_leader() {
             info!("{} notify pd with rollback merge {}", peer.tag, commit);

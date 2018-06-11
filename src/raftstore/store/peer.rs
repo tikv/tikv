@@ -20,8 +20,10 @@ use std::{cmp, mem, slice};
 
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
-use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
-                          RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse};
+use kvproto::raft_cmdpb::{
+    self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse, Request, Response,
+    TransferLeaderRequest, TransferLeaderResponse,
+};
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftMessage};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
@@ -29,24 +31,24 @@ use rocksdb::rocksdb_options::WriteOptions;
 use rocksdb::{WriteBatch, DB};
 use time::Timespec;
 
-use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
-           INVALID_INDEX, NO_LIMIT};
+use pd::{PdTask, INVALID_ID};
+use raft::{
+    self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
+    NO_LIMIT,
+};
 use raftstore::coprocessor::CoprocessorHost;
+use raftstore::store::engine::{Peekable, Snapshot};
 use raftstore::store::worker::apply::ApplyMetrics;
-use raftstore::store::worker::{Apply, ApplyTask};
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
-use raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
+use raftstore::store::worker::{Apply, ApplyTask};
+use raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
-
-use util::MustConsumeVec;
 use util::collections::{HashMap, HashSet};
 use util::time::{duration_to_sec, monotonic_raw_now};
 use util::worker::{FutureWorker, Scheduler};
-
-use pd::{PdTask, INVALID_ID};
+use util::{escape, MustConsumeVec};
 
 use super::cmd_resp;
-use super::engine::Snapshot;
 use super::local_metrics::{RaftMessageMetrics, RaftMetrics, RaftProposeMetrics, RaftReadyMetrics};
 use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
@@ -462,7 +464,7 @@ impl Peer {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = Instant::now();
 
-        let region = self.get_store().get_region().clone();
+        let region = self.region().clone();
         info!("{} begin to destroy", self.tag);
 
         // Set Tombstone state explicitly
@@ -517,8 +519,17 @@ impl Peer {
         Arc::clone(&self.raft_engine)
     }
 
+    #[inline]
     pub fn region(&self) -> &metapb::Region {
-        self.get_store().get_region()
+        self.get_store().region()
+    }
+
+    /// Set the region of a peer.
+    ///
+    /// This will update the region of the peer, caller must ensure the region
+    /// has been preserved in a durable device.
+    pub fn set_region(&mut self, region: metapb::Region) {
+        self.mut_store().set_region(region)
     }
 
     pub fn peer_id(&self) -> u64 {
@@ -629,7 +640,7 @@ impl Peer {
         }
 
         // Insert heartbeats in case that some peers never response heartbeats.
-        let region = self.raft_group.get_store().get_region();
+        let region = self.raft_group.get_store().region();
         for peer in region.get_peers() {
             self.peer_heartbeats
                 .entry(peer.get_id())
@@ -668,7 +679,8 @@ impl Peer {
             if progress.matched < truncated_idx {
                 if let Some(p) = self.get_peer_from_cache(id) {
                     pending_peers.push(p);
-                    if !self.peers_start_pending_time
+                    if !self
+                        .peers_start_pending_time
                         .iter()
                         .any(|&(pid, _)| pid == id)
                     {
@@ -849,7 +861,8 @@ impl Peer {
             return;
         }
 
-        if !self.raft_group
+        if !self
+            .raft_group
             .has_ready_since(Some(self.last_applying_idx))
         {
             return;
@@ -902,7 +915,8 @@ impl Peer {
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
         if apply_snap_result.is_some() && self.peer.get_is_learner() {
             // The peer may change from learner to voter after snapshot applied.
-            let peer = self.region()
+            let peer = self
+                .region()
                 .get_peers()
                 .iter()
                 .find(|p| p.get_id() == self.peer.get_id())
@@ -1339,7 +1353,8 @@ impl Peer {
             _ => {}
         }
 
-        if change_type == ConfChangeType::RemoveNode && !self.cfg.allow_remove_leader
+        if change_type == ConfChangeType::RemoveNode
+            && !self.cfg.allow_remove_leader
             && peer.get_id() == self.peer_id()
         {
             warn!(
@@ -1726,16 +1741,18 @@ impl Peer {
     }
 
     fn handle_read(&mut self, req: RaftCmdRequest) -> ReadResponse {
-        let mut resp = self.exec_read(&req).unwrap_or_else(|e| {
-            match e {
-                Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
-                _ => error!("{} execute raft command err: {:?}", self.tag, e),
-            }
-            ReadResponse {
-                response: cmd_resp::new_error(e),
-                snapshot: None,
-            }
-        });
+        let mut resp = ReadExecutor::new(self.region(), &self.kv_engine, &self.tag)
+            .execute(&req)
+            .unwrap_or_else(|e| {
+                match e {
+                    Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
+                    _ => error!("{} execute raft command err: {:?}", self.tag, e),
+                }
+                ReadResponse {
+                    response: cmd_resp::new_error(e),
+                    snapshot: None,
+                }
+            });
 
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
@@ -1768,7 +1785,7 @@ impl Peer {
         }
 
         // Try to find in region, if found, set in cache.
-        for peer in self.get_store().get_region().get_peers() {
+        for peer in self.region().get_peers() {
             if peer.get_id() == peer_id {
                 self.peer_cache.borrow_mut().insert(peer_id, peer.clone());
                 return Some(peer.clone());
@@ -1862,18 +1879,66 @@ impl Peer {
 
         Ok(())
     }
+}
 
-    fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<ReadResponse> {
-        check_region_epoch(req, self.region(), true)?;
+#[derive(Debug)]
+struct ReadExecutor<'r, 'e, 't> {
+    region: &'r metapb::Region,
+    engine: &'e Arc<DB>,
+    tag: &'t str,
+}
+
+impl<'r, 'e, 't> ReadExecutor<'r, 'e, 't> {
+    fn new(region: &'r metapb::Region, engine: &'e Arc<DB>, tag: &'t str) -> Self {
+        ReadExecutor {
+            region,
+            engine,
+            tag,
+        }
+    }
+
+    fn do_get(&self, req: &Request, snap: &Snapshot) -> Result<Response> {
+        // TODO: the get_get looks weird, maybe we should figure out a better name later.
+        let key = req.get_get().get_key();
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(key, self.region)?;
+
+        let mut resp = Response::new();
+        let res = if !req.get_get().get_cf().is_empty() {
+            let cf = req.get_get().get_cf();
+            // TODO: check whether cf exists or not.
+            snap.get_value_cf(cf, &keys::data_key(key))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to get {} with cf {}: {:?}",
+                        self.tag,
+                        escape(key),
+                        cf,
+                        e
+                    )
+                })
+        } else {
+            snap.get_value(&keys::data_key(key))
+                .unwrap_or_else(|e| panic!("{} failed to get {}: {:?}", self.tag, escape(key), e))
+        };
+        if let Some(res) = res {
+            resp.mut_get().set_value(res.to_vec());
+        }
+
+        Ok(resp)
+    }
+
+    fn execute(&self, msg: &RaftCmdRequest) -> Result<ReadResponse> {
+        check_region_epoch(msg, self.region, true)?;
         let mut need_snapshot = false;
-        let snapshot = Snapshot::new(Arc::clone(&self.kv_engine));
-        let requests = req.get_requests();
+        let snapshot = Snapshot::new(Arc::clone(self.engine));
+        let requests = msg.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
 
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Get => apply::do_get(&self.tag, self.region(), &snapshot, req)?,
+                CmdType::Get => self.do_get(req, &snapshot)?,
                 CmdType::Snap => {
                     need_snapshot = true;
                     raft_cmdpb::Response::new()
@@ -1894,7 +1959,7 @@ impl Peer {
         let snapshot = if need_snapshot {
             Some(RegionSnapshot::from_snapshot(
                 snapshot.into_sync(),
-                self.region().to_owned(),
+                self.region.to_owned(),
             ))
         } else {
             None
