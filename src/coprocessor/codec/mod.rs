@@ -42,6 +42,8 @@ pub mod chunk;
 pub mod convert;
 pub mod datum;
 pub mod mysql;
+mod overflow;
 pub mod table;
 
 pub use self::datum::Datum;
+pub use self::overflow::{div_i64, div_i64_with_u64, div_u64_with_i64};
