@@ -34,6 +34,7 @@ mod errors;
 mod metrics;
 #[macro_use]
 mod service;
+mod import_mode;
 mod kv_importer;
 mod kv_server;
 mod kv_service;

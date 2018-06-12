@@ -143,10 +143,6 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
     if let Some(import_dir) = matches.value_of("import-dir") {
         config.import.import_dir = import_dir.to_owned();
     }
-
-    if matches.is_present("import-mode") {
-        config.tune_for_import_mode();
-    }
 }
 
 // Set gRPC event engine to epollsig.
