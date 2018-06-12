@@ -47,6 +47,7 @@ pub use self::snap::{check_abort, copy_snapshot, ApplyOptions, Error as SnapErro
 pub use self::store::{create_event_loop, new_compaction_listener, Engines, Store, StoreChannel,
                       StoreStat};
 pub use self::transport::Transport;
+pub use self::worker::RowEntry;
 
 // Only used in tests
 #[cfg(test)]

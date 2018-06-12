@@ -112,6 +112,8 @@ cleanup-import-sst-interval = "12m"
 split-region-on-table = true
 region-max-size = "12MB"
 region-split-size = "12MB"
+region-max-rows = 100000
+region-split-rows = 100000
 
 [rocksdb]
 wal-recovery-mode = 1

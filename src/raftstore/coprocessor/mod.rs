@@ -30,6 +30,8 @@ pub use self::error::{Error, Result};
 pub use self::split_check::{HalfCheckObserver, Host as SplitCheckerHost, SizeCheckObserver,
                             TableCheckObserver};
 
+pub use raftstore::store::RowEntry;
+
 /// Coprocessor is used to provide a convient way to inject code to
 /// KV processing.
 pub trait Coprocessor {
@@ -95,7 +97,7 @@ pub trait SplitChecker {
     /// Hook to call for every kv scanned during split.
     ///
     /// Return true to abort scan early.
-    fn on_kv(&mut self, _: &mut ObserverContext, _: &[u8], _: u64) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext, &RowEntry) -> bool {
         false
     }
 

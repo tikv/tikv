@@ -23,7 +23,8 @@ use storage::CF_WRITE;
 use storage::types::Key;
 use util::escape;
 
-use super::super::{Coprocessor, ObserverContext, Result, SplitCheckObserver, SplitChecker};
+use super::super::{Coprocessor, ObserverContext, Result, RowEntry, SplitCheckObserver,
+                   SplitChecker};
 use super::Host;
 
 #[derive(Default)]
@@ -36,12 +37,12 @@ impl SplitChecker for Checker {
     /// Feed keys in order to find the split key.
     /// If `current_data_key` does not belong to `status.first_encoded_table_prefix`.
     /// it returns the encoded table prefix of `current_data_key`.
-    fn on_kv(&mut self, _: &mut ObserverContext, key: &[u8], _: u64) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext, row: &RowEntry) -> bool {
         if self.split_key.is_some() {
             return true;
         }
 
-        let current_encoded_key = keys::origin_key(key);
+        let current_encoded_key = keys::origin_key(row.key());
 
         let split_key = if self.first_encoded_table_prefix.is_some() {
             if !is_same_table(
@@ -309,6 +310,8 @@ mod test {
         // Try to "disable" size split.
         cfg.region_max_size = ReadableSize::gb(2);
         cfg.region_split_size = ReadableSize::gb(1);
+        cfg.region_max_rows = 2000000000;
+        cfg.region_split_rows = 1000000000;
 
         // Try to ignore the ApproximateRegionSize
         let coprocessor = CoprocessorHost::new(cfg, sch);

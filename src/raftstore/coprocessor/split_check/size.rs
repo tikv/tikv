@@ -16,38 +16,53 @@ use rocksdb::DB;
 use util::transport::{RetryableSendCh, Sender};
 
 use super::super::metrics::*;
-use super::super::{Coprocessor, ObserverContext, SplitCheckObserver, SplitChecker};
+use super::super::{Coprocessor, ObserverContext, RowEntry, SplitCheckObserver, SplitChecker};
 use super::Host;
 
 pub struct Checker {
     max_size: u64,
     split_size: u64,
+    max_rows: u64,
+    split_rows: u64,
     current_size: u64,
+    current_rows: u64,
     split_key: Option<Vec<u8>>,
 }
 
 impl Checker {
-    pub fn new(max_size: u64, split_size: u64) -> Checker {
+    pub fn new(max_size: u64, split_size: u64, max_rows: u64, split_rows: u64) -> Checker {
         Checker {
             max_size,
             split_size,
+            max_rows,
+            split_rows,
             current_size: 0,
+            current_rows: 0,
             split_key: None,
         }
+    }
+
+    fn should_split(&self) -> bool {
+        self.current_size >= self.max_size || self.current_rows >= self.max_rows
     }
 }
 
 impl SplitChecker for Checker {
-    fn on_kv(&mut self, _: &mut ObserverContext, key: &[u8], value_size: u64) -> bool {
-        self.current_size += key.len() as u64 + value_size;
-        if self.current_size > self.split_size && self.split_key.is_none() {
-            self.split_key = Some(key.to_vec());
+    fn on_kv(&mut self, _: &mut ObserverContext, row: &RowEntry) -> bool {
+        self.current_size += row.key().len() as u64 + row.value_size() as u64;
+        if row.is_from_write_cf() {
+            self.current_rows += 1;
         }
-        self.current_size >= self.max_size
+        if (self.current_size > self.split_size || self.current_rows > self.split_rows)
+            && self.split_key.is_none()
+        {
+            self.split_key = Some(row.key().to_vec());
+        }
+        self.should_split()
     }
 
     fn split_key(&mut self) -> Option<Vec<u8>> {
-        if self.current_size >= self.max_size {
+        if self.should_split() {
             self.split_key.take()
         } else {
             None
@@ -58,6 +73,8 @@ impl SplitChecker for Checker {
 pub struct SizeCheckObserver<C> {
     region_max_size: u64,
     split_size: u64,
+    region_max_rows: u64,
+    split_rows: u64,
     ch: RetryableSendCh<Msg, C>,
 }
 
@@ -65,11 +82,15 @@ impl<C: Sender<Msg>> SizeCheckObserver<C> {
     pub fn new(
         region_max_size: u64,
         split_size: u64,
+        region_max_rows: u64,
+        split_rows: u64,
         ch: RetryableSendCh<Msg, C>,
     ) -> SizeCheckObserver<C> {
         SizeCheckObserver {
             region_max_size,
             split_size,
+            region_max_rows,
+            split_rows,
             ch,
         }
     }
@@ -92,12 +113,15 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
                 host.add_checker(Box::new(Checker::new(
                     self.region_max_size,
                     self.split_size,
+                    self.region_max_rows,
+                    self.split_rows,
                 )));
                 return;
             }
         };
 
         let region_size = region_stat.size;
+        let region_rows = region_stat.rows;
 
         let res = Msg::RegionApproximateStat {
             region_id,
@@ -109,27 +133,33 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
                 region_id, e
             );
         }
-
         REGION_SIZE_HISTOGRAM.observe(region_size as f64);
-        if region_size >= self.region_max_size {
+        REGION_ROWS_HISTOGRAM.observe(region_rows as f64);
+        if region_size >= self.region_max_size || region_rows >= self.region_max_rows {
             info!(
-                "[region {}] approximate size {} >= {}, need to do split check",
+                "[region {}] approximate size {} >= {} or approximate rows {} >= {}, need to do split check",
                 region.get_id(),
                 region_size,
-                self.region_max_size
+                self.region_max_size,
+                region_rows,
+                self.region_max_rows,
             );
             // Need to check size.
             host.add_checker(Box::new(Checker::new(
                 self.region_max_size,
                 self.split_size,
+                self.region_max_rows,
+                self.split_rows,
             )));
         } else {
             // Does not need to check size.
             debug!(
-                "[region {}] approximate size {} < {}, does not need to do split check",
+                "[region {}] approximate size {} < {} and approximate rows {} < {}, does not need to do split check",
                 region.get_id(),
                 region_size,
-                self.region_max_size
+                self.region_max_size,
+                region_rows,
+                self.region_max_rows,
             );
         }
     }
@@ -147,7 +177,8 @@ mod tests {
     use tempdir::TempDir;
 
     use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
-    use storage::ALL_CFS;
+    use storage::mvcc::{Write, WriteType};
+    use storage::{Key, ALL_CFS, CF_DEFAULT, CF_WRITE};
     use util::config::ReadableSize;
     use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
     use util::rocksdb::{new_engine_opt, CFOptions};
@@ -268,6 +299,115 @@ mod tests {
                 assert_eq!(region_id, region.get_id());
                 assert_eq!(&region_epoch, region.get_region_epoch());
                 assert_eq!(split_key, b"0003");
+            }
+            others => panic!("expect split check result, but got {:?}", others),
+        }
+
+        drop(rx);
+        // It should be safe even the result can't be sent back.
+        runnable.run(SplitCheckTask::new(region, true));
+    }
+
+    #[test]
+    fn test_split_check_by_rows() {
+        let path = TempDir::new("test-raftstore").unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        let f = Box::new(SizePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
+        let f = Box::new(MvccPropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+
+        let cfs_opts = ALL_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .collect();
+        let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+
+        let mut region = Region::new();
+        region.set_id(1);
+        region.set_start_key(vec![]);
+        region.set_end_key(vec![]);
+        region.mut_peers().push(Peer::new());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let ch = RetryableSendCh::new(tx, "test-split");
+        let mut cfg = Config::default();
+        // disable split by size
+        cfg.region_max_size = ReadableSize::gb(100);
+        cfg.region_split_size = ReadableSize::gb(60);
+        cfg.region_max_rows = 10;
+        cfg.region_split_rows = 6;
+
+        let mut runnable = SplitCheckRunner::new(
+            Arc::clone(&engine),
+            ch.clone(),
+            Arc::new(CoprocessorHost::new(cfg, ch.clone())),
+        );
+
+        // so split key will be z0006
+        for i in 0..7 {
+            let key = keys::data_key(
+                Key::from_raw(format!("{:04}", i).as_bytes())
+                    .append_ts(2)
+                    .encoded(),
+            );
+            let write_value = Write::new(WriteType::Put, 0, None).to_bytes();
+            let write_cf = engine.cf_handle(CF_WRITE).unwrap();
+            engine.put_cf(write_cf, &key, &write_value).unwrap();
+            let default_cf = engine.cf_handle(CF_DEFAULT).unwrap();
+            engine.put_cf(default_cf, &key, &[0; 1024]).unwrap();
+        }
+
+        runnable.run(SplitCheckTask::new(region.clone(), true));
+        // size has not reached the max_size 100 yet.
+        match rx.try_recv() {
+            Ok(Msg::RegionApproximateStat { region_id, .. }) => {
+                assert_eq!(region_id, region.get_id());
+            }
+            others => panic!("expect recv empty, but got {:?}", others),
+        }
+
+        for i in 7..11 {
+            let key = keys::data_key(
+                Key::from_raw(format!("{:04}", i).as_bytes())
+                    .append_ts(2)
+                    .encoded(),
+            );
+
+            let write_value =
+                Write::new(WriteType::Put, 0, Some(b"shortvalue".to_vec())).to_bytes();
+            let write_cf = engine.cf_handle(CF_WRITE).unwrap();
+            engine.put_cf(write_cf, &key, &write_value).unwrap();
+            let default_cf = engine.cf_handle(CF_DEFAULT).unwrap();
+            engine.put_cf(default_cf, &key, &[0; 1024]).unwrap();
+        }
+
+        // Approximate stat of memtable is inaccurate for small data,
+        // we flush it to SST so we can use the size properties instead.
+        engine.flush(true).unwrap();
+
+        runnable.run(SplitCheckTask::new(region.clone(), true));
+        match rx.try_recv() {
+            Ok(Msg::RegionApproximateStat { region_id, stat }) => {
+                assert_eq!(region_id, region.get_id());
+                assert_eq!(11, stat.rows);
+            }
+            others => panic!("expect approximate region stat, but got {:?}", others),
+        }
+        match rx.try_recv() {
+            Ok(Msg::SplitRegion {
+                region_id,
+                region_epoch,
+                split_key,
+                ..
+            }) => {
+                assert_eq!(region_id, region.get_id());
+                assert_eq!(&region_epoch, region.get_region_epoch());
+                assert_eq!(&split_key, Key::from_raw(b"0006").append_ts(2).encoded());
             }
             others => panic!("expect split check result, but got {:?}", others),
         }

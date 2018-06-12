@@ -24,7 +24,7 @@ use raftstore::Result;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::engine::{IterOption, Iterable};
 use raftstore::store::{keys, Callback, Msg};
-use storage::{CfName, LARGE_CFS};
+use storage::{CfName, CF_WRITE, LARGE_CFS};
 use util::escape;
 use util::transport::{RetryableSendCh, Sender};
 use util::worker::Runnable;
@@ -32,23 +32,42 @@ use util::worker::Runnable;
 use super::metrics::*;
 
 #[derive(PartialEq, Eq)]
-struct KeyEntry {
+pub struct KeyEntry {
     key: Option<Vec<u8>>,
     pos: usize,
     value_size: usize,
+    from_write_cf: bool,
 }
 
 impl KeyEntry {
-    fn new(key: Vec<u8>, pos: usize, value_size: usize) -> KeyEntry {
+    fn new(key: Vec<u8>, pos: usize, value_size: usize, from_write_cf: bool) -> KeyEntry {
         KeyEntry {
             key: Some(key),
             pos,
             value_size,
+            from_write_cf,
         }
     }
 
     fn take(&mut self) -> KeyEntry {
-        KeyEntry::new(self.key.take().unwrap(), self.pos, self.value_size)
+        KeyEntry::new(
+            self.key.take().unwrap(),
+            self.pos,
+            self.value_size,
+            self.from_write_cf,
+        )
+    }
+
+    pub fn key(&self) -> &[u8] {
+        self.key.as_ref().unwrap()
+    }
+
+    pub fn is_from_write_cf(&self) -> bool {
+        self.from_write_cf
+    }
+
+    pub fn value_size(&self) -> usize {
+        self.value_size
     }
 }
 
@@ -74,6 +93,7 @@ impl Ord for KeyEntry {
 struct MergedIterator<'a> {
     iters: Vec<DBIterator<&'a DB>>,
     heap: BinaryHeap<KeyEntry>,
+    write_cf_pos: usize,
 }
 
 impl<'a> MergedIterator<'a> {
@@ -86,16 +106,30 @@ impl<'a> MergedIterator<'a> {
     ) -> Result<MergedIterator<'a>> {
         let mut iters = Vec::with_capacity(cfs.len());
         let mut heap = BinaryHeap::with_capacity(cfs.len());
+        let mut write_cf_pos = 0;
         for (pos, cf) in cfs.into_iter().enumerate() {
+            let write_cf = cf == &CF_WRITE;
             let iter_opt =
                 IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
             let mut iter = db.new_iterator_cf(cf, iter_opt)?;
             if iter.seek(start_key.into()) {
-                heap.push(KeyEntry::new(iter.key().to_vec(), pos, iter.value().len()));
+                heap.push(KeyEntry::new(
+                    iter.key().to_vec(),
+                    pos,
+                    iter.value().len(),
+                    write_cf,
+                ));
             }
             iters.push(iter);
+            if write_cf {
+                write_cf_pos = pos;
+            }
         }
-        Ok(MergedIterator { iters, heap })
+        Ok(MergedIterator {
+            iters,
+            heap,
+            write_cf_pos,
+        })
     }
 
     fn next(&mut self) -> Option<KeyEntry> {
@@ -106,7 +140,12 @@ impl<'a> MergedIterator<'a> {
         let iter = &mut self.iters[pos];
         if iter.next() {
             // TODO: avoid copy key.
-            let e = KeyEntry::new(iter.key().to_vec(), pos, iter.value().len());
+            let e = KeyEntry::new(
+                iter.key().to_vec(),
+                pos,
+                iter.value().len(),
+                self.write_cf_pos == pos,
+            );
             let mut front = self.heap.peek_mut().unwrap();
             let res = front.take();
             *front = e;
@@ -184,7 +223,7 @@ impl<C: Sender<Msg>> Runner<C> {
         let res = MergedIterator::new(self.engine.as_ref(), LARGE_CFS, &start_key, &end_key, false)
             .map(|mut iter| {
                 while let Some(e) = iter.next() {
-                    if host.on_kv(region, e.key.as_ref().unwrap(), e.value_size as u64) {
+                    if host.on_kv(region, &e) {
                         break;
                     }
                 }
