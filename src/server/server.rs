@@ -14,6 +14,7 @@
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
+use std::{cmp, i32};
 
 use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
 use kvproto::debugpb_grpc::create_debug;
@@ -36,7 +37,7 @@ use super::transport::{RaftStoreRouter, ServerTransport};
 use super::{Config, Result};
 
 const DEFAULT_COPROCESSOR_BATCH: usize = 256;
-const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
+const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
@@ -99,10 +100,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         info!("listening on {}", addr);
         let ip = format!("{}", addr.ip());
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
-            .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
+            .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
-            .max_send_message_len(region_split_size as usize * 4)
+            .max_send_message_len(cmp::max(region_split_size * 4, i32::MAX as usize) as i32)
             .build_args();
         let grpc_server = {
             let mut sb = ServerBuilder::new(Arc::clone(&env))
