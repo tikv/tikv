@@ -31,7 +31,7 @@ pub const ERR_DATA_OUT_OF_RANGE: i32 = 1690;
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-                Io(err: io::Error) {
+            Io(err: io::Error) {
             from()
             cause(err)
             description(err.description())
