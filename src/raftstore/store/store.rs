@@ -2384,6 +2384,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             debug!("compact worker is busy, check space redundancy next time");
         } else if self.region_ranges.is_empty() {
             debug!("there is no range need to check");
+        } else if rocksdb::auto_compactions_is_disabled(&self.kv_engine) {
+            debug!("skip compact check when disabled auto compactions.");
         } else {
             // Start from last checked key.
             let mut ranges_need_check =
