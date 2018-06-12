@@ -24,10 +24,7 @@ use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::util::*;
 
-fn get_msg_cf_or_default<M>(engine: &DB, cf: &str, key: &[u8]) -> M
-where
-    M: protobuf::Message + protobuf::MessageStatic,
-{
+fn get_msg_cf_or_default<M: protobuf::Message + Default>(engine: &DB, cf: &str, key: &[u8]) -> M {
     engine.get_msg_cf(cf, key).unwrap().unwrap_or_default()
 }
 
