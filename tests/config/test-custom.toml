@@ -4,18 +4,18 @@ log-file = "foo"
 high-concurrency = 1
 normal-concurrency = 3
 low-concurrency = 7
-max-tasks-high = 10000
-max-tasks-normal = 20000
-max-tasks-low = 30000
+max-tasks-per-worker-high = 1000
+max-tasks-per-worker-normal = 1500
+max-tasks-per-worker-low = 2500
 stack-size = "20MB"
 
 [readpool.coprocessor]
 high-concurrency = 2
 normal-concurrency = 4
 low-concurrency = 6
-max-tasks-high = 20000
-max-tasks-normal = 30000
-max-tasks-low = 40000
+max-tasks-per-worker-high = 2000
+max-tasks-per-worker-normal = 1000
+max-tasks-per-worker-low = 3000
 stack-size = "12MB"
 
 [server]
@@ -32,7 +32,6 @@ grpc-keepalive-time = "3s"
 grpc-keepalive-timeout = "1m"
 concurrent-send-snap-limit = 4
 concurrent-recv-snap-limit = 4
-end-point-max-tasks = 12
 end-point-recursion-limit = 100
 end-point-stream-channel-size = 16
 end-point-batch-row-limit = 64
