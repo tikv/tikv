@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -29,7 +29,8 @@ use kvproto::pdpb;
 use raft::eraftpb;
 use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
-use tikv::raftstore::store::util::check_key_in_region;
+use tikv::raftstore::store::util::{check_key_in_region, RegionApproximateStat};
+use tikv::util::collections::{HashMap, HashSet};
 use tikv::util::{escape, Either, HandyRwLock};
 
 struct Store {
@@ -210,7 +211,7 @@ struct Cluster {
     stores: HashMap<u64, Store>,
     regions: BTreeMap<Key, metapb::Region>,
     region_id_keys: HashMap<u64, Key>,
-    region_sizes: HashMap<u64, u64>,
+    region_approximate_stat: HashMap<u64, RegionApproximateStat>,
     base_id: AtomicUsize,
 
     store_stats: HashMap<u64, pdpb::StoreStats>,
@@ -235,18 +236,18 @@ impl Cluster {
 
         Cluster {
             meta,
-            stores: HashMap::new(),
+            stores: HashMap::default(),
             regions: BTreeMap::new(),
-            region_id_keys: HashMap::new(),
-            region_sizes: HashMap::new(),
+            region_id_keys: HashMap::default(),
+            region_approximate_stat: HashMap::default(),
             base_id: AtomicUsize::new(1000),
-            store_stats: HashMap::new(),
+            store_stats: HashMap::default(),
             split_count: 0,
-            operators: HashMap::new(),
+            operators: HashMap::default(),
             enable_peer_count_check: true,
-            leaders: HashMap::new(),
-            down_peers: HashMap::new(),
-            pending_peers: HashMap::new(),
+            leaders: HashMap::default(),
+            down_peers: HashMap::default(),
+            pending_peers: HashMap::default(),
             is_bootstraped: false,
         }
     }
@@ -306,8 +307,8 @@ impl Cluster {
             .and_then(|k| self.regions.get(k).cloned()))
     }
 
-    fn get_region_size(&self, region_id: u64) -> Option<u64> {
-        self.region_sizes.get(&region_id).cloned()
+    fn get_region_approximate_stat(&self, region_id: u64) -> Option<RegionApproximateStat> {
+        self.region_approximate_stat.get(&region_id).cloned()
     }
 
     fn get_stores(&self) -> Vec<metapb::Store> {
@@ -567,8 +568,8 @@ impl Cluster {
         }
         self.leaders.insert(region.get_id(), leader.clone());
 
-        self.region_sizes
-            .insert(region.get_id(), region_stat.approximate_size);
+        self.region_approximate_stat
+            .insert(region.get_id(), region_stat.approximate_stat);
 
         self.handle_heartbeat_version(region.clone())?;
         self.handle_heartbeat_conf_ver(region, leader)
@@ -874,8 +875,8 @@ impl TestPdClient {
         self.cluster.wl().set_bootstrap(is_bootstraped);
     }
 
-    pub fn get_region_size(&self, region_id: u64) -> Option<u64> {
-        self.cluster.rl().get_region_size(region_id)
+    pub fn get_region_approximate_stat(&self, region_id: u64) -> Option<RegionApproximateStat> {
+        self.cluster.rl().get_region_approximate_stat(region_id)
     }
 }
 

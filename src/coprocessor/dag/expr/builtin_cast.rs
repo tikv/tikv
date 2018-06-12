@@ -643,7 +643,7 @@ impl FnCall {
                 return Ok(s);
             }
             let (char_count, truncate_pos) = truncate_info.unwrap();
-            ctx.handle_truncate_err(Error::Truncated(format!(
+            ctx.handle_truncate_err(Error::data_too_long(format!(
                 "Data Too Long, field len {}, data len {}",
                 flen, char_count
             )))?;
@@ -654,7 +654,7 @@ impl FnCall {
         }
 
         if s.len() > flen {
-            ctx.handle_truncate_err(Error::Truncated(format!(
+            ctx.handle_truncate_err(Error::data_too_long(format!(
                 "Data Too Long, field len {}, data len {}",
                 flen,
                 s.len()
