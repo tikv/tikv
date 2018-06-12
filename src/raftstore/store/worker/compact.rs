@@ -178,7 +178,7 @@ fn need_compact(
     // When the number of tombstones exceed threshold and ratio, this range need compacting.
     let estimate_num_del = num_entires - num_versions;
     estimate_num_del >= tombstones_num_threshold
-        && estimate_num_del * 100 >= tombstones_percent_threshold * num_versions
+        && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires
 }
 
 fn get_range_entries_and_versions(
