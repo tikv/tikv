@@ -62,8 +62,12 @@ impl Engine {
         let wb = RawBatch::with_capacity(wb_cap);
         let commit_ts = batch.get_commit_ts();
         for m in batch.take_mutations().iter_mut() {
-            let k = Key::from_raw(m.get_key()).append_ts(commit_ts);
-            wb.put(k.encoded(), m.get_value()).unwrap();
+            match m.get_op() {
+                Mutation_OP::Put => {
+                    let k = Key::from_raw(m.get_key()).append_ts(commit_ts);
+                    wb.put(k.encoded(), m.get_value()).unwrap();
+                }
+            }
         }
 
         let size = wb.data_size();
