@@ -214,7 +214,7 @@ impl ApplyCallback {
     fn invoke_all(self, host: &CoprocessorHost) {
         for (cb, mut resp) in self.cbs {
             host.post_apply(&self.region, &mut resp);
-            cb.map(|cb| cb.invoke_with_response(resp));
+            if let Some(cb) = cb { cb.invoke_with_response(resp) };
         }
     }
 
@@ -2249,7 +2249,7 @@ mod tests {
         let mut e = Entry::new();
         e.set_index(index);
         e.set_term(term);
-        req.map(|r| e.set_data(r.write_to_bytes().unwrap()));
+        if let Some(r) = req { e.set_data(r.write_to_bytes().unwrap()) };
         e
     }
 
