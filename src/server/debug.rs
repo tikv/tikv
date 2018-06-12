@@ -407,14 +407,6 @@ impl Debugger {
             peers.into_iter().filter(|p| !p.get_is_learner()).count()
         }
 
-        fn new_quorum_is_safe(old_voters_len: usize, new_voters_len: usize) -> bool {
-            match (old_voters_len & 1, new_voters_len & 1) {
-                (1, 1) => new_voters_len > old_voters_len - 2,
-                (0, 0) => new_voters_len > old_voters_len - 4,
-                _ => new_voters_len > old_voters_len - 3,
-            }
-        }
-
         {
             let remove_stores = |key: &[u8], value: &[u8]| {
                 let (_, suffix_type) = box_try!(keys::decode_region_meta_key(key));
@@ -427,6 +419,7 @@ impl Debugger {
                 if region_state.get_state() == PeerState::Tombstone {
                     return Ok(());
                 }
+                let region_id = region_state.get_region().get_id();
 
                 let old_peers = region_state.mut_region().take_peers().into_vec();
                 let old_voters_len = count_voters(&old_peers);
@@ -436,21 +429,25 @@ impl Debugger {
                 let survivor_voters_len = count_voters(&survivor_peers);
 
                 if survivor_voters_len >= quorum(old_voters_len) {
+                    info!("region {} can still elect a quorum, skip it", region_id);
                     return Ok(());
                 }
 
-                if !force && !new_quorum_is_safe(old_voters_len, survivor_voters_len) {
-                    error!("quorum of survivor voters can't hold at least 1 peer in old quorum");
-                    return Err(box_err!(
-                        "quorum of survivor voters can't hold at least 1 peer in old quorum"
-                    ));
+                let should_remove = old_voters_len - 2 * survivor_voters_len + 1;
+                let want_remove = old_voters_len - survivor_voters_len;
+                if !force && should_remove < want_remove
+                    && survivor_voters_len + quorum(old_voters_len) > old_voters_len
+                {
+                    info!(
+                        "region {} want to remove {} voters, but {} is enough",
+                        region_id, want_remove, should_remove
+                    );
+                    return Err(box_err!("could be more safe"));
                 }
 
                 info!(
                     "region {} change peers from {:?}, to {:?}",
-                    region_state.get_region().get_id(),
-                    old_peers,
-                    survivor_peers,
+                    region_id, old_peers, survivor_peers,
                 );
 
                 // We need to leave epoch untouched to avoid inconsistency.
@@ -1551,8 +1548,8 @@ mod tests {
             (vec![11], Some(vec![11, 12, 13, 14, 15, 16])),
             (vec![11, 12], Some(vec![11, 12, 13, 14, 15, 16])),
             (vec![11, 12, 13], None),
-            (vec![11, 12, 13, 14], None),
-            (vec![11, 12, 13, 14, 15], None),
+            (vec![11, 12, 13, 14], Some(vec![15, 16])),
+            (vec![11, 12, 13, 14, 15], Some(vec![16])),
         ] {
             let result = debugger.remove_failed_stores(failed, Some(vec![4]), false);
             if let Some(expected) = rest {
