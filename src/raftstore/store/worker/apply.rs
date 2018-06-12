@@ -774,7 +774,7 @@ impl ApplyDelegate {
 
                 // TODO: if we have exec_result, maybe we should return this callback too. Outer
                 // store will call it after handing exec result.
-                cmd_resp::bind_term(&mut resp, term);
+                cmd_resp::bind_term(&mut resp, delegate.term);
                 ctx.cbs.last_mut().unwrap().push(cmd_cb, resp);
 
                 future::ok((delegate, ctx, exec_result))
