@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
@@ -20,28 +20,38 @@ use grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::import_sstpb::*;
 use kvproto::import_sstpb_grpc::*;
 use kvproto::raft_cmdpb::*;
+use rocksdb::DB;
 
 use raftstore::store::Callback;
 use server::transport::RaftStoreRouter;
 use util::future::paired_future_callback;
+use util::rocksdb::compact_files_in_range;
 use util::time::Instant;
 
+use super::import_mode::*;
 use super::metrics::*;
 use super::service::*;
 use super::{Config, Error, SSTImporter};
 
+/// ImportSSTService provides tikv-server with the ability to ingest SST files.
+///
+/// It saves the SST sent from client to a file and then sends a command to
+/// raftstore to trigger the ingest process.
 #[derive(Clone)]
 pub struct ImportSSTService<Router> {
     cfg: Config,
     router: Router,
+    engine: Arc<DB>,
     threads: CpuPool,
     importer: Arc<SSTImporter>,
+    switcher: Arc<Mutex<ImportModeSwitcher>>,
 }
 
 impl<Router: RaftStoreRouter> ImportSSTService<Router> {
     pub fn new(
         cfg: Config,
         router: Router,
+        engine: Arc<DB>,
         importer: Arc<SSTImporter>,
     ) -> ImportSSTService<Router> {
         let threads = Builder::new()
@@ -51,13 +61,39 @@ impl<Router: RaftStoreRouter> ImportSSTService<Router> {
         ImportSSTService {
             cfg,
             router,
+            engine,
             threads,
             importer,
+            switcher: Arc::new(Mutex::new(ImportModeSwitcher::new())),
         }
     }
 }
 
 impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
+    fn switch(&self, ctx: RpcContext, req: SwitchRequest, sink: UnarySink<SwitchResponse>) {
+        let label = "switch";
+        let timer = Instant::now_coarse();
+
+        let res = {
+            let mut switcher = self.switcher.lock().unwrap();
+            match req.get_mode() {
+                SwitchMode::Normal => switcher.enter_normal_mode(&self.engine),
+                SwitchMode::Import => switcher.enter_import_mode(&self.engine),
+            }
+        };
+        match res {
+            Ok(_) => info!("switch mode {:?}", req.get_mode()),
+            Err(ref e) => error!("switch mode {:?}: {:?}", req.get_mode(), e),
+        }
+
+        ctx.spawn(
+            future::result(res)
+                .map(|_| SwitchResponse::new())
+                .then(move |res| send_rpc_response!(res, sink, label, timer)),
+        )
+    }
+
+    /// Receive SST from client and save the file for later ingesting.
     fn upload(
         &self,
         ctx: RpcContext,
@@ -75,6 +111,8 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                     .into_future()
                     .map_err(|(e, _)| Error::from(e))
                     .and_then(move |(chunk, stream)| {
+                        // The first message of the stream contains metadata
+                        // of the file.
                         let meta = match chunk {
                             Some(ref chunk) if chunk.has_meta() => chunk.get_meta(),
                             _ => return Err(Error::InvalidChunk),
@@ -106,6 +144,11 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         )
     }
 
+    /// Ingest the file by sending a raft command to raftstore.
+    ///
+    /// If the ingestion fails because the region is not found or the epoch does
+    /// not match, the remaining files will eventually be cleaned up by
+    /// CleanupSSTWorker.
     fn ingest(&self, ctx: RpcContext, mut req: IngestRequest, sink: UnarySink<IngestResponse>) {
         let label = "ingest";
         let timer = Instant::now_coarse();
@@ -144,5 +187,47 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                 })
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
+    }
+
+    fn compact(&self, ctx: RpcContext, req: CompactRequest, sink: UnarySink<CompactResponse>) {
+        let label = "compact";
+        let timer = Instant::now_coarse();
+        let engine = Arc::clone(&self.engine);
+
+        ctx.spawn(self.threads.spawn_fn(move || {
+            let (start, end) = if !req.has_range() {
+                (None, None)
+            } else {
+                (
+                    Some(req.get_range().get_start()),
+                    Some(req.get_range().get_end()),
+                )
+            };
+            let output_level = if req.get_output_level() == -1 {
+                None
+            } else {
+                Some(req.get_output_level())
+            };
+
+            let res = compact_files_in_range(&engine, start, end, output_level);
+            match res {
+                Ok(_) => info!(
+                    "compact files in range [{:?}, {:?}) to level {:?} takes {:?}",
+                    start,
+                    end,
+                    output_level,
+                    timer.elapsed()
+                ),
+                Err(ref e) => error!(
+                    "compact files in range [{:?}, {:?}) to level {:?}: {:?}",
+                    start, end, output_level, e
+                ),
+            }
+
+            future::result(res)
+                .map_err(Error::from)
+                .map(|_| CompactResponse::new())
+                .then(move |res| send_rpc_response!(res, sink, label, timer))
+        }))
     }
 }
