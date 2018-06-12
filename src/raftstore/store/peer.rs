@@ -207,16 +207,6 @@ pub struct ConsistencyState {
     pub hash: Vec<u8>,
 }
 
-enum RequestPolicy {
-    // Handle the read request directly without dispatch.
-    ReadLocal,
-    // Handle the read request via raft's SafeReadIndex mechanism.
-    ReadIndex,
-    ProposeNormal,
-    ProposeTransferLeader,
-    ProposeConfChange,
-}
-
 #[derive(Default, Clone)]
 pub struct PeerStat {
     pub written_bytes: u64,
@@ -273,7 +263,7 @@ pub struct Peer {
 
     leader_missing_time: Option<Instant>,
 
-    leader_lease: Lease,
+    leader_lease: RefCell<Lease>,
 
     // If a snapshot is being applied asynchronously, messages should not be sent.
     pending_messages: Vec<eraftpb::Message>,
@@ -402,7 +392,7 @@ impl Peer {
             },
             raft_log_size_hint: 0,
             raft_entry_max_size: cfg.raft_entry_max_size.0,
-            leader_lease: Lease::new(cfg.raft_store_max_leader_lease()),
+            leader_lease: RefCell::new(Lease::new(cfg.raft_store_max_leader_lease())),
             cfg,
             pending_messages: vec![],
             peer_stat: PeerStat::default(),
@@ -604,7 +594,7 @@ impl Peer {
                     // network partition from the new leader.
                     // For lease safety during leader transfer, transit `leader_lease`
                     // to suspect.
-                    self.leader_lease.suspect(monotonic_raw_now());
+                    self.leader_lease.borrow_mut().suspect(monotonic_raw_now());
 
                     metrics.timeout_now += 1;
                 }
@@ -775,7 +765,7 @@ impl Peer {
                     self.heartbeat_pd(worker)
                 }
                 StateRole::Follower => {
-                    self.leader_lease.expire();
+                    self.leader_lease.borrow_mut().expire();
                 }
                 _ => {}
             }
@@ -1037,7 +1027,7 @@ impl Peer {
         if let Some(propose_time) = propose_time {
             // `propose_time` is a placeholder, here cares about `Suspect` only,
             // and if it is in `Suspect` phase, the actual timestamp is useless.
-            if self.leader_lease.inspect(Some(propose_time)) == LeaseState::Suspect {
+            if self.leader_lease.borrow().inspect(Some(propose_time)) == LeaseState::Suspect {
                 return;
             }
             self.maybe_renew_leader_lease(propose_time);
@@ -1103,7 +1093,7 @@ impl Peer {
             debug!("{} prevents renew lease while splitting", self.tag);
             return;
         }
-        self.leader_lease.renew(ts);
+        self.leader_lease.borrow_mut().renew(ts);
     }
 
     pub fn maybe_campaign(
@@ -1155,17 +1145,18 @@ impl Peer {
 
         let mut is_conf_change = false;
 
-        let res = match self.get_handle_policy(&req) {
-            Ok(RequestPolicy::ReadLocal) => {
+        let doctrine = RequestJudge::with_jury(self).judge(&req);
+        let res = match doctrine {
+            Ok(RequestDoctrine::ReadLocal) => {
                 self.read_local(req, cb, metrics);
                 return false;
             }
-            Ok(RequestPolicy::ReadIndex) => return self.read_index(req, err_resp, cb, metrics),
-            Ok(RequestPolicy::ProposeNormal) => self.propose_normal(req, metrics),
-            Ok(RequestPolicy::ProposeTransferLeader) => {
+            Ok(RequestDoctrine::ReadIndex) => return self.read_index(req, err_resp, cb, metrics),
+            Ok(RequestDoctrine::ProposeNormal) => self.propose_normal(req, metrics),
+            Ok(RequestDoctrine::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(req, cb, metrics)
             }
-            Ok(RequestPolicy::ProposeConfChange) => {
+            Ok(RequestDoctrine::ProposeConfChange) => {
                 is_conf_change = true;
                 self.propose_conf_change(&req, metrics)
             }
@@ -1208,13 +1199,14 @@ impl Peer {
 
         // TODO: deny non-snapshot request.
 
-        match self.get_handle_policy(&req) {
-            Ok(RequestPolicy::ReadLocal) => {
+        let doctrine = RequestJudge::with_jury(self).judge(&req);
+        match doctrine {
+            Ok(RequestDoctrine::ReadLocal) => {
                 metrics.local_read += 1;
                 Some(self.handle_read(req))
             }
             // require to propose again, and use the `propose` above.
-            Ok(RequestPolicy::ReadIndex) => None,
+            Ok(RequestDoctrine::ReadIndex) => None,
             Ok(_) => unreachable!(),
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
@@ -1231,73 +1223,6 @@ impl Peer {
         self.apply_proposals.push(p);
 
         self.proposals.push(meta);
-    }
-
-    fn get_handle_policy(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
-        if req.has_admin_request() {
-            if apply::get_change_peer_cmd(req).is_some() {
-                return Ok(RequestPolicy::ProposeConfChange);
-            }
-            if get_transfer_leader_cmd(req).is_some() {
-                return Ok(RequestPolicy::ProposeTransferLeader);
-            }
-            return Ok(RequestPolicy::ProposeNormal);
-        }
-
-        let mut is_read = false;
-        let mut is_write = false;
-        for r in req.get_requests() {
-            match r.get_cmd_type() {
-                CmdType::Get | CmdType::Snap => is_read = true,
-                CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSST => {
-                    is_write = true
-                }
-                CmdType::Prewrite | CmdType::Invalid => {
-                    return Err(box_err!(
-                        "invalid cmd type {:?}, message maybe currupted",
-                        r.get_cmd_type()
-                    ));
-                }
-            }
-
-            if is_read && is_write {
-                return Err(box_err!("read and write can't be mixed in one batch."));
-            }
-        }
-
-        if is_write {
-            return Ok(RequestPolicy::ProposeNormal);
-        }
-
-        if (req.has_header() && req.get_header().get_read_quorum())
-            || !self.raft_group.raft.in_lease()
-        {
-            return Ok(RequestPolicy::ReadIndex);
-        }
-
-        // If applied index's term is differ from current raft's term, leader transfer
-        // must happened, if read locally, we may read old value.
-        if self.get_store().applied_index_term != self.raft_group.raft.term {
-            // TODO: add it in queue directly.
-            return Ok(RequestPolicy::ReadIndex);
-        }
-
-        // Local read should be performed, if and only if leader is in lease.
-        // None for now.
-        match self.leader_lease.inspect(None) {
-            LeaseState::Valid => return Ok(RequestPolicy::ReadLocal),
-            LeaseState::Expired => {
-                debug!(
-                    "{} leader lease is expired: {:?}",
-                    self.tag, self.leader_lease
-                );
-                self.leader_lease.expire();
-            }
-            LeaseState::Suspect => (),
-        }
-
-        // Perform a consistent read to Raft quorum and try to renew the leader lease.
-        Ok(RequestPolicy::ReadIndex)
     }
 
     /// Count the number of the healthy nodes.
@@ -1514,7 +1439,7 @@ impl Peer {
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
-        if self.leader_lease.inspect(Some(renew_lease_time)) == LeaseState::Suspect {
+        if self.leader_lease.borrow().inspect(Some(renew_lease_time)) == LeaseState::Suspect {
             let req = RaftCmdRequest::new();
             if let Ok(index) = self.propose_normal(req, metrics) {
                 let meta = ProposalMeta {
@@ -1872,6 +1797,123 @@ impl Peer {
         }
 
         Ok(())
+    }
+}
+
+/// Doctrine decides how we handle a request.
+enum RequestDoctrine {
+    // Handle the read request directly without dispatch.
+    ReadLocal,
+    // Handle the read request via raft's SafeReadIndex mechanism.
+    ReadIndex,
+    ProposeNormal,
+    ProposeTransferLeader,
+    ProposeConfChange,
+}
+
+/// A jury helps `RequestJudge` make a `RequestDoctrine`.
+trait RequestJury {
+    /// Has the jury applied the current term?
+    fn has_applied_current_term(&self) -> bool;
+    /// Inspects the jury's lease.
+    fn inspect_lease(&self) -> LeaseState;
+}
+
+/// Judge makes `RequestDoctrine` for requests.
+struct RequestJudge<'a, T: 'a + RequestJury> {
+    jury: &'a T,
+}
+
+impl<'a, T: RequestJury> RequestJudge<'a, T> {
+    /// Create a `RequestJudge`.
+    fn with_jury(jury: &'a T) -> RequestJudge<T> {
+        RequestJudge { jury }
+    }
+
+    /// Judges a request, return a doctrine that tells us how to
+    /// handle the request.
+    fn judge(&self, req: &RaftCmdRequest) -> Result<RequestDoctrine> {
+        if req.has_admin_request() {
+            if apply::get_change_peer_cmd(req).is_some() {
+                return Ok(RequestDoctrine::ProposeConfChange);
+            }
+            if get_transfer_leader_cmd(req).is_some() {
+                return Ok(RequestDoctrine::ProposeTransferLeader);
+            }
+            return Ok(RequestDoctrine::ProposeNormal);
+        }
+
+        let mut is_read = false;
+        let mut is_write = false;
+        for r in req.get_requests() {
+            match r.get_cmd_type() {
+                CmdType::Get | CmdType::Snap => is_read = true,
+                CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSST => {
+                    is_write = true
+                }
+                CmdType::Prewrite | CmdType::Invalid => {
+                    return Err(box_err!(
+                        "invalid cmd type {:?}, message maybe currupted",
+                        r.get_cmd_type()
+                    ));
+                }
+            }
+
+            if is_read && is_write {
+                return Err(box_err!("read and write can't be mixed in one batch."));
+            }
+        }
+
+        if is_write {
+            return Ok(RequestDoctrine::ProposeNormal);
+        }
+
+        if req.get_header().get_read_quorum() {
+            return Ok(RequestDoctrine::ReadIndex);
+        }
+
+        // If applied index's term is differ from current raft's term, leader transfer
+        // must happened, if read locally, we may read old value.
+        if !self.jury.has_applied_current_term() {
+            return Ok(RequestDoctrine::ReadIndex);
+        }
+
+        // Local read should be performed, if and only if leader is in lease.
+        // None for now.
+        match self.jury.inspect_lease() {
+            LeaseState::Valid => Ok(RequestDoctrine::ReadLocal),
+            LeaseState::Expired | LeaseState::Suspect => {
+                // Perform a consistent read to Raft quorum and try to renew the leader lease.
+                Ok(RequestDoctrine::ReadIndex)
+            }
+        }
+    }
+}
+
+impl RequestJury for Peer {
+    fn has_applied_current_term(&self) -> bool {
+        // TODO: add it in queue directly if it is false.
+        self.get_store().applied_index_term == self.term()
+    }
+
+    fn inspect_lease(&self) -> LeaseState {
+        if !self.raft_group.raft.in_lease() {
+            return LeaseState::Suspect;
+        }
+        // None means now.
+        let state = self.leader_lease.borrow().inspect(None);
+        match state {
+            LeaseState::Expired => {
+                debug!(
+                    "{} leader lease is expired: {:?}",
+                    self.tag, self.leader_lease
+                );
+                // The lease is expired, call `expire` explicitly.
+                self.leader_lease.borrow_mut().expire();
+                LeaseState::Expired
+            }
+            other => other,
+        }
     }
 }
 
