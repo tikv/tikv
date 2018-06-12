@@ -51,7 +51,7 @@ libc = "0.2"
 crc = "1.2"
 fs2 = "0.4"
 clippy = {version = "*", optional = true}
-protobuf = "1.4"
+protobuf = "~2.0"
 nix = "0.9.0"
 utime = "0.2"
 chrono = "0.4"
@@ -76,8 +76,8 @@ zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
-grpcio = { version = "0.2", features = [ "secure" ] }
-raft = "0.2"
+grpcio = { version = "0.3", features = [ "secure" ] }
+raft = "0.3"
 crossbeam-channel = { version = "0.1", features = [ "nightly" ] }
 fxhash = "0.2"
 
@@ -106,11 +106,6 @@ git = "https://github.com/busyjay/jemallocator.git"
 branch = "dev"
 features = ["profiling"]
 optional = true
-
-[replace]
-"protobuf:1.4.1" = { git = "https://github.com/stepancheg/rust-protobuf.git" }
-# TODO: use release version instead once tikv is protobuf 1.6 compatible.
-"raft:0.2.0" = { git = "https://github.com/pingcap/raft-rs.git", branch = "timeout-range" }
 
 [workspace]
 members = ["fuzz"]
