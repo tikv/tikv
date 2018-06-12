@@ -29,6 +29,7 @@ pub use self::lame_client::LamePdClient;
 pub use self::pd::{Runner as PdRunner, Task as PdTask};
 pub use self::util::RECONNECT_INTERVAL_SEC;
 pub use self::util::validate_endpoints;
+use raftstore::store::util::RegionApproximateStat;
 
 use std::ops::Deref;
 
@@ -47,7 +48,7 @@ pub struct RegionStat {
     pub written_keys: u64,
     pub read_bytes: u64,
     pub read_keys: u64,
-    pub approximate_size: u64,
+    pub approximate_stat: RegionApproximateStat,
     pub last_report_ts: u64,
 }
 

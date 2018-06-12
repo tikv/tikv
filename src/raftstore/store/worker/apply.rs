@@ -40,9 +40,10 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::engine::{Mutable, Peekable, Snapshot};
 use raftstore::store::metrics::*;
 use raftstore::store::msg::Callback;
-use raftstore::store::peer::{check_epoch, Peer};
+use raftstore::store::peer::Peer;
 use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply_state,
                                      write_peer_state};
+use raftstore::store::util::check_region_epoch;
 use raftstore::store::{cmd_resp, keys, util, Store};
 use raftstore::{Error, Result};
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -885,7 +886,7 @@ impl ApplyDelegate {
         // Include region for stale epoch after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
-        check_epoch(&self.region, &req, include_region)?;
+        check_region_epoch(&req, &self.region, include_region)?;
         if req.has_admin_request() {
             self.exec_admin_cmd(ctx, req.get_admin_request())
         } else {
@@ -1599,7 +1600,8 @@ impl ApplyDelegate {
 
     fn handle_put(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
-        check_data_key(key, &self.region)?;
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(key, &self.region)?;
 
         let resp = Response::new();
         let key = keys::data_key(key);
@@ -1641,7 +1643,8 @@ impl ApplyDelegate {
 
     fn handle_delete(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
         let key = req.get_delete().get_key();
-        check_data_key(key, &self.region)?;
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(key, &self.region)?;
 
         let key = keys::data_key(key);
         // since size_diff_hint is not accurate, so we just skip calculate the value size.
@@ -1687,7 +1690,8 @@ impl ApplyDelegate {
                 e_key
             ));
         }
-        check_data_key(s_key, &self.region)?;
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(s_key, &self.region)?;
         let end_key = keys::data_end_key(e_key);
         let region_end_key = keys::data_end_key(self.region.get_end_key());
         if end_key > region_end_key {
@@ -1779,13 +1783,6 @@ pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
     Some(req.get_change_peer())
 }
 
-fn check_data_key(key: &[u8], region: &Region) -> Result<()> {
-    // region key range has no data prefix, so we must use origin key to check.
-    util::check_key_in_region(key, region)?;
-
-    Ok(())
-}
-
 fn check_sst_for_ingestion(sst: &SSTMeta, region: &Region) -> Result<()> {
     let uuid = sst.get_uuid();
     if let Err(e) = Uuid::from_bytes(uuid) {
@@ -1816,36 +1813,6 @@ fn check_sst_for_ingestion(sst: &SSTMeta, region: &Region) -> Result<()> {
     util::check_key_in_region(range.get_end(), region)?;
 
     Ok(())
-}
-
-pub fn do_get(tag: &str, region: &Region, snap: &Snapshot, req: &Request) -> Result<Response> {
-    // TODO: the get_get looks wried, maybe we should figure out a better name later.
-    let key = req.get_get().get_key();
-    check_data_key(key, region)?;
-
-    let mut resp = Response::new();
-    let res = if !req.get_get().get_cf().is_empty() {
-        let cf = req.get_get().get_cf();
-        // TODO: check whether cf exists or not.
-        snap.get_value_cf(cf, &keys::data_key(key))
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to get {} with cf {}: {:?}",
-                    tag,
-                    escape(key),
-                    cf,
-                    e
-                )
-            })
-    } else {
-        snap.get_value(&keys::data_key(key))
-            .unwrap_or_else(|e| panic!("{} failed to get {}: {:?}", tag, escape(key), e))
-    };
-    if let Some(res) = res {
-        resp.mut_get().set_value(res.to_vec());
-    }
-
-    Ok(resp)
 }
 
 // Consistency Check

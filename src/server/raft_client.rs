@@ -17,7 +17,7 @@ use std::ffi::CString;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
+use std::sync::atomic::{AtomicI32, Ordering};
 
 use futures::future::{self, Shared, SharedError};
 use futures::sync::mpsc::{self, UnboundedSender};
@@ -34,14 +34,14 @@ use super::{Config, Error, Result};
 use util::collections::HashMap;
 use util::security::SecurityManager;
 
-const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
-const MAX_GRPC_SEND_MSG_LEN: usize = 10 * 1024 * 1024;
+const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
+const MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
 // `VecDeque` adds another slot for giving capacity.
 const PRESERVED_MSG_BUFFER_COUNT: usize = 1024 - 1;
 // TODO: make it configurable and become a limit on size instead of count.
 const MSG_BUFFER_LIMIT: usize = 102400 - 1;
 
-static CONN_ID: AtomicUsize = ATOMIC_USIZE_INIT;
+static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
 struct ConnectionBuilder {
     store_id: u64,
@@ -71,7 +71,7 @@ impl ConnectionBuilder {
         pool: &CpuPool,
     ) -> Conn {
         let cb = ChannelBuilder::new(env)
-            .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
+            .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
             .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
             .keepalive_time(cfg.grpc_keepalive_time.0)

@@ -39,6 +39,7 @@ use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use pd::{PdClient, PdRunner, PdTask};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
+use raftstore::store::util::RegionApproximateStat;
 use raftstore::{Error, Result};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::RingQueue;
@@ -58,7 +59,7 @@ use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use super::local_metrics::RaftMetrics;
 use super::metrics::*;
 use super::msg::{Callback, ReadResponse};
-use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
+use super::peer::{ConsistencyState, Peer, ReadyContext, StaleState};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
 use super::transport::Transport;
 use super::worker::apply::{ApplyMetrics, ApplyRes, ChangePeer, ExecResult};
@@ -1133,7 +1134,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut job = None;
         if let Some(peer) = self.region_peers.get_mut(&region_id) {
             let from_epoch = msg.get_region_epoch();
-            if util::is_epoch_stale(peer.get_store().region.get_region_epoch(), from_epoch) {
+            if util::is_epoch_stale(peer.region().get_region_epoch(), from_epoch) {
                 if peer.peer != *msg.get_to_peer() {
                     info!("[region {}] receive stale gc message, ignore.", region_id);
                     self.raft_metrics.message_dropped.stale_msg += 1;
@@ -1458,7 +1459,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // Apply failed, skip.
                 return;
             }
-            p.mut_store().region = cp.region;
+            p.set_region(cp.region);
             if p.is_leader() {
                 // Notify pd immediately.
                 info!(
@@ -1553,7 +1554,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         {
             let peer = self.region_peers.get_mut(&region_id).unwrap();
-            peer.mut_store().region = origin_region;
+            peer.set_region(origin_region);
             peer.post_split();
         }
         let new_region_id = new_region.get_id();
@@ -1803,7 +1804,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         {
             let peer = self.region_peers.get_mut(&region.get_id()).unwrap();
             peer.pending_merge = Some(state);
-            peer.mut_store().region = region.clone();
+            peer.set_region(region.clone());
         }
 
         if merged {
@@ -1839,7 +1840,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
         let region_id = region.get_id();
         let peer = self.region_peers.get_mut(&region_id).unwrap();
-        peer.mut_store().region = region;
+        peer.set_region(region);
         if peer.is_leader() {
             info!("notify pd with merge {:?} into {:?}", source, peer.region());
             peer.heartbeat_pd(&self.pd_worker);
@@ -1873,7 +1874,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         });
         peer.pending_merge = None;
         if let Some(r) = region {
-            peer.mut_store().region = r;
+            peer.set_region(r);
         }
         if peer.is_leader() {
             info!("{} notify pd with rollback merge {}", peer.tag, commit);
@@ -2029,18 +2030,56 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
+    fn check_propose_peer(&self, msg: &RaftCmdRequest) -> Result<&Peer> {
+        let region_id = msg.get_header().get_region_id();
+        let peer = match self.region_peers.get(&region_id) {
+            Some(peer) => peer,
+            None => return Err(Error::RegionNotFound(region_id)),
+        };
+        if !peer.is_leader() {
+            return Err(Error::NotLeader(
+                region_id,
+                peer.get_peer_from_cache(peer.leader_id()),
+            ));
+        }
+        Ok(peer)
+    }
+
     fn pre_propose_raft_command(
         &mut self,
         msg: &RaftCmdRequest,
     ) -> Result<Option<RaftCmdResponse>> {
-        self.validate_store_id(msg)?;
+        // Check store_id, make sure that the msg is dispatched to the right place.
+        util::check_store_id(msg, self.store_id())?;
         if msg.has_status_request() {
             // For status commands, we handle it here directly.
             let resp = self.execute_status_command(msg)?;
             return Ok(Some(resp));
         }
-        self.validate_region(msg)?;
-        Ok(None)
+
+        // Check whether the store has the right peer to handle the request.
+        let peer = self.check_propose_peer(msg)?;
+        // peer_id must be the same as peer's.
+        util::check_peer_id(msg, peer.peer_id())?;
+        // Check whether the term is stale.
+        util::check_term(msg, peer.term())?;
+
+        match util::check_region_epoch(msg, peer.region(), true) {
+            Err(Error::StaleEpoch(msg, mut new_regions)) => {
+                // Attach the region which might be split from the current region. But it doesn't
+                // matter if the region is not split from the current region. If the region meta
+                // received by the TiKV driver is newer than the meta cached in the driver, the meta is
+                // updated.
+                let sibling_region_id = self.find_sibling_region(peer.region());
+                if let Some(sibling_region_id) = sibling_region_id {
+                    let sibling_region = self.region_peers[&sibling_region_id].region();
+                    new_regions.push(sibling_region.to_owned());
+                }
+                Err(Error::StaleEpoch(msg, new_regions))
+            }
+            Err(e) => Err(e),
+            Ok(()) => Ok(None),
+        }
     }
 
     fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback) {
@@ -2116,58 +2155,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Callback::BatchRead(on_finished) => on_finished(ret),
             _ => unreachable!(),
         }
-    }
-
-    fn validate_store_id(&self, msg: &RaftCmdRequest) -> Result<()> {
-        let store_id = msg.get_header().get_peer().get_store_id();
-        if store_id != self.store.get_id() {
-            return Err(Error::StoreNotMatch(store_id, self.store.get_id()));
-        }
-        Ok(())
-    }
-
-    fn validate_region(&self, msg: &RaftCmdRequest) -> Result<()> {
-        let region_id = msg.get_header().get_region_id();
-        let peer_id = msg.get_header().get_peer().get_id();
-
-        let peer = match self.region_peers.get(&region_id) {
-            Some(peer) => peer,
-            None => return Err(Error::RegionNotFound(region_id)),
-        };
-        if !peer.is_leader() {
-            return Err(Error::NotLeader(
-                region_id,
-                peer.get_peer_from_cache(peer.leader_id()),
-            ));
-        }
-        if peer.peer_id() != peer_id {
-            return Err(box_err!(
-                "mismatch peer id {} != {}",
-                peer.peer_id(),
-                peer_id
-            ));
-        }
-
-        let header = msg.get_header();
-        // If header's term is 2 verions behind current term, leadership may have been changed away.
-        if header.get_term() > 0 && peer.term() > header.get_term() + 1 {
-            return Err(Error::StaleCommand);
-        }
-
-        let res = peer::check_epoch(peer.region(), msg, true);
-        if let Err(Error::StaleEpoch(msg, mut new_regions)) = res {
-            // Attach the region which might be split from the current region. But it doesn't
-            // matter if the region is not split from the current region. If the region meta
-            // received by the TiKV driver is newer than the meta cached in the driver, the meta is
-            // updated.
-            let sibling_region_id = self.find_sibling_region(peer.region());
-            if let Some(sibling_region_id) = sibling_region_id {
-                let sibling_region = self.region_peers[&sibling_region_id].region();
-                new_regions.push(sibling_region.to_owned());
-            }
-            return Err(Error::StaleEpoch(msg, new_regions));
-        }
-        res
     }
 
     pub fn find_sibling_region(&self, region: &metapb::Region) -> Option<u64> {
@@ -2351,7 +2338,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // work even if we change the region max size.
             // If peer says should update approximate size, update region
             // size and check whether the region should split.
-            if peer.approximate_size.is_some()
+            if peer.approximate_stat.is_some()
                 && peer.compaction_declined_bytes < self.cfg.region_split_check_diff.0
                 && peer.size_diff_hint < self.cfg.region_split_check_diff.0
             {
@@ -2383,6 +2370,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             debug!("compact worker is busy, check space redundancy next time");
         } else if self.region_ranges.is_empty() {
             debug!("there is no range need to check");
+        } else if rocksdb::auto_compactions_is_disabled(&self.kv_engine) {
+            debug!("skip compact check when disabled auto compactions.");
         } else {
             // Start from last checked key.
             let mut ranges_need_check =
@@ -2519,18 +2508,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
-    fn on_approximate_region_size(&mut self, region_id: u64, region_size: u64) {
+    fn on_approximate_region_stat(&mut self, region_id: u64, stat: RegionApproximateStat) {
         let peer = match self.region_peers.get_mut(&region_id) {
             Some(peer) => peer,
             None => {
                 warn!(
-                    "[region {}] receive stale approximate size {}",
-                    region_id, region_size,
+                    "[region {}] receive stale approximate stat {:?}",
+                    region_id, stat,
                 );
                 return;
             }
         };
-        peer.approximate_size = Some(region_size);
+        peer.approximate_stat = Some(stat);
     }
 
     fn on_schedule_half_split_region(
@@ -3262,10 +3251,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 );
                 self.on_prepare_split_region(region_id, region_epoch, split_key, callback);
             }
-            Msg::ApproximateRegionSize {
-                region_id,
-                region_size,
-            } => self.on_approximate_region_size(region_id, region_size),
+            Msg::RegionApproximateStat { region_id, stat } => {
+                self.on_approximate_region_stat(region_id, stat)
+            }
             Msg::CompactedEvent(event) => self.on_compaction_finished(event),
             Msg::HalfSplitRegion {
                 region_id,

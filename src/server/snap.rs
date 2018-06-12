@@ -160,12 +160,12 @@ fn send_snap(
     )));
 
     let cb = ChannelBuilder::new(env)
-        .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
+        .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
         .keepalive_time(cfg.grpc_keepalive_time.0)
         .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
         .default_compression_algorithm(cfg.grpc_compression_algorithm());
 
-    Ok(addr.map_err(|e| Error::Other(box_err!(e)))
+    Ok(addr.map_err(|e| Error::Other(box_err!("{}", e.as_str())))
         .and_then(move |addr| {
             let channel = security_mgr.connect(cb, &addr);
             let client = TikvClient::new(channel);
