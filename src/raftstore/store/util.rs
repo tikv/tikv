@@ -16,7 +16,7 @@ use std::{fmt, u64};
 
 use kvproto::metapb;
 use kvproto::raft_serverpb::RaftMessage;
-use protobuf::{self, Message, MessageStatic};
+use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raftstore::store::keys;
 use raftstore::{Error, Result};
@@ -244,6 +244,7 @@ pub fn get_region_approximate_rows(db: &DB, region: &metapb::Region) -> Result<u
     Ok(rows)
 }
 
+#[derive(Debug, Default, Clone)]
 pub struct RegionApproximateStat {
     /// the approximate number of records in the region.
     pub rows: u64,
@@ -401,7 +402,7 @@ impl fmt::Debug for Lease {
 /// If `data` is corrupted, this function will panic.
 // TODO: make sure received entries are not corrupted
 #[inline]
-pub fn parse_data_at<T: Message + MessageStatic>(data: &[u8], index: u64, tag: &str) -> T {
+pub fn parse_data_at<T: Message>(data: &[u8], index: u64, tag: &str) -> T {
     protobuf::parse_from_bytes::<T>(data).unwrap_or_else(|e| {
         panic!("{} data is corrupted at {}: {:?}", tag, index, e);
     })
