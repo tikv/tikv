@@ -31,7 +31,7 @@ use tikv::util::logger;
 pub static LOG_INITIALIZED: AtomicBool = ATOMIC_BOOL_INIT;
 // Default is 128.
 // Extended since blocking is set, and we don't want to block very often.
-const SLOG_CHANNEL_SIZE: usize = 2048;
+const SLOG_CHANNEL_SIZE: usize = 10240;
 // Default is DropAndReport.
 // It is not desirable to have dropped logs in our use case.
 const SLOG_CHANNEL_OVERFLOW_STRATEGY: OverflowStrategy = OverflowStrategy::Block;
