@@ -36,9 +36,10 @@ pub enum Task {
     },
 
     CheckAndCompact {
-        cf_names: Vec<String>,     // Column families need to compact
-        ranges: Vec<Key>,          // Ranges need to check
-        tombstones_threshold: u64, // The minimum RocksDB tombstones a range that need compacting has
+        cf_names: Vec<String>,         // Column families need to compact
+        ranges: Vec<Key>,              // Ranges need to check
+        tombstones_num_threshold: u64, // The minimum RocksDB tombstones a range that need compacting has
+        tombstones_percent_threshold: u64,
     },
 }
 
@@ -57,11 +58,16 @@ impl Display for Task {
             Task::CheckAndCompact {
                 ref cf_names,
                 ref ranges,
-                tombstones_threshold,
+                tombstones_num_threshold,
+                tombstones_percent_threshold,
             } => f.debug_struct("CheckAndCompact")
                 .field("cf_names", cf_names)
                 .field("ranges", ranges)
-                .field("tombstones_threshold", &tombstones_threshold)
+                .field("tombstones_num_threshold", &tombstones_num_threshold)
+                .field(
+                    "tombstones_percent_threshold",
+                    &tombstones_percent_threshold,
+                )
                 .finish(),
         }
     }
@@ -131,8 +137,14 @@ impl Runnable<Task> for Runner {
             Task::CheckAndCompact {
                 cf_names,
                 ranges,
-                tombstones_threshold,
-            } => match collect_ranges_need_compact(&self.engine, ranges, tombstones_threshold) {
+                tombstones_num_threshold,
+                tombstones_percent_threshold,
+            } => match collect_ranges_need_compact(
+                &self.engine,
+                ranges,
+                tombstones_num_threshold,
+                tombstones_percent_threshold,
+            ) {
                 Ok(mut ranges) => for (start, end) in ranges.drain(..) {
                     for cf in &cf_names {
                         if let Err(e) = self.compact_range_cf(
@@ -153,15 +165,20 @@ impl Runnable<Task> for Runner {
     }
 }
 
-fn need_compact(num_entires: u64, num_versions: u64, tombstones_threshold: u64) -> bool {
+fn need_compact(
+    num_entires: u64,
+    num_versions: u64,
+    tombstones_num_threshold: u64,
+    tombstones_percent_threshold: u64,
+) -> bool {
     if num_entires <= num_versions {
         return false;
     }
 
-    // When the number of tombstones exceed threshold and at least 50% entries
-    // are tombstones, this range need compacting.
+    // When the number of tombstones exceed threshold and ratio, this range need compacting.
     let estimate_num_del = num_entires - num_versions;
-    estimate_num_del >= tombstones_threshold && estimate_num_del * 2 >= num_versions
+    estimate_num_del >= tombstones_num_threshold
+        && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires
 }
 
 fn get_range_entries_and_versions(
@@ -198,7 +215,8 @@ fn get_range_entries_and_versions(
 fn collect_ranges_need_compact(
     engine: &DB,
     ranges: Vec<Key>,
-    tombstones_threshold: u64,
+    tombstones_num_threshold: u64,
+    tombstones_percent_threshold: u64,
 ) -> Result<VecDeque<(Key, Key)>, Error> {
     // Check the SST properties for each range, and we will compact a range if the range
     // contains too much RocksDB tombstones. we will merge multiple neighbouring ranges
@@ -212,7 +230,12 @@ fn collect_ranges_need_compact(
         if let Some((num_ent, num_ver)) =
             get_range_entries_and_versions(engine, cf, &range[0], &range[1])
         {
-            if need_compact(num_ent, num_ver, tombstones_threshold) {
+            if need_compact(
+                num_ent,
+                num_ver,
+                tombstones_num_threshold,
+                tombstones_percent_threshold,
+            ) {
                 if compact_start.is_none() {
                     // The previous range doesn't need compacting.
                     compact_start = Some(range[0].clone());
@@ -378,6 +401,7 @@ mod test {
             &engine,
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
+            50,
         ).unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k5"));
         let mut expected_ranges = VecDeque::new();
@@ -400,6 +424,7 @@ mod test {
             &engine,
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
+            50,
         ).unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k9"));
         let mut expected_ranges = VecDeque::new();
