@@ -2408,7 +2408,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if let Err(e) = self.compact_worker.schedule(CompactTask::CheckAndCompact {
                 cf_names,
                 ranges: ranges_need_check,
-                tombstones_threshold: self.cfg.region_compact_min_tombstones,
+                tombstones_num_threshold: self.cfg.region_compact_min_tombstones,
+                tombstones_percent_threshold: self.cfg.region_compact_tombstones_percent,
             }) {
                 error!("{} failed to schedule space check task: {}", self.tag, e);
             }
