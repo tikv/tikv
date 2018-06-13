@@ -28,10 +28,16 @@
 //! thread to notify it of the ingesting operation.  This service is running
 //! inside TiKV because it needs to interact with raftstore.
 
+#[allow(dead_code)]
+mod client;
+#[allow(dead_code)]
+mod common;
 mod config;
 mod engine;
 mod errors;
 mod metrics;
+#[allow(dead_code)]
+mod prepare;
 #[macro_use]
 mod service;
 mod import_mode;

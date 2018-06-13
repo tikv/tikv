@@ -416,6 +416,10 @@ fn test_serde_custom_tikv_config() {
     value.import = ImportConfig {
         import_dir: "/abc".to_owned(),
         num_threads: 123,
+        num_import_jobs: 123,
+        num_import_sst_jobs: 123,
+        max_prepare_duration: ReadableDuration::minutes(12),
+        region_split_size: ReadableSize::mb(123),
         stream_channel_window: 123,
     };
 
