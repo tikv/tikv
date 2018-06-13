@@ -12,6 +12,43 @@
 // limitations under the License.
 
 use prometheus::*;
+use prometheus_static_metric::*;
+
+make_static_metric! {
+    label_enum GrpcTypes {
+        kv_get,
+        kv_scan,
+        kv_prewrite,
+        kv_commit,
+        kv_cleanup,
+        kv_batch_get,
+        kv_batch_rollback,
+        kv_scan_lock,
+        kv_resolve_lock,
+        kv_gc,
+        kv_delete_range,
+        raw_get,
+        raw_batch_get,
+        raw_scan,
+        raw_batch_scan,
+        raw_put,
+        raw_batch_put,
+        raw_delete,
+        raw_delete_range,
+        raw_batch_delete,
+        coprocessor,
+        coprocessor_stream,
+        mvcc_get_by_key,
+        mvcc_get_by_start_ts,
+        split_region,
+    }
+    pub struct GrpcMsgHistogramVec: Histogram {
+        "type" => GrpcTypes,
+    }
+    pub struct GrpcMsgFailCounterVec: IntCounter {
+        "type" => GrpcTypes,
+    }
+}
 
 lazy_static! {
     pub static ref SEND_SNAP_HISTOGRAM: Histogram = register_histogram!(
@@ -24,13 +61,15 @@ lazy_static! {
         "Total number of snapshot task",
         &["type"]
     ).unwrap();
-    pub static ref GRPC_MSG_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+    pub static ref GRPC_MSG_HISTOGRAM_VEC: GrpcMsgHistogramVec = register_static_histogram_vec!(
+        GrpcMsgHistogramVec,
         "tikv_grpc_msg_duration_seconds",
         "Bucketed histogram of grpc server messages",
         &["type"],
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     ).unwrap();
-    pub static ref GRPC_MSG_FAIL_COUNTER: IntCounterVec = register_int_counter_vec!(
+    pub static ref GRPC_MSG_FAIL_COUNTER: GrpcMsgFailCounterVec = register_static_int_counter_vec!(
+        GrpcMsgFailCounterVec,
         "tikv_grpc_msg_fail_total",
         "Total number of handle grpc message failure",
         &["type"]
