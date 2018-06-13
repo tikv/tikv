@@ -838,7 +838,7 @@ dependencies = [
 [[package]]
 name = "prometheus-static-metric"
 version = "0.1.1"
-source = "git+https://github.com/pingcap/rust-prometheus.git?branch=wenxuan/static-metric-v3#774e726eb1d1a8cbd14c3feaa2b52c6dd3521388"
+source = "git+https://github.com/pingcap/rust-prometheus.git#9a4b71acba88c00eb87c7ec699c9387873c9955a"
 dependencies = [
  "lazy_static 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "proc-macro2 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1298,7 +1298,7 @@ dependencies = [
  "murmur3 0.4.0 (git+https://github.com/pingcap/murmur3.git)",
  "nix 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "prometheus 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "prometheus-static-metric 0.1.1 (git+https://github.com/pingcap/rust-prometheus.git?branch=wenxuan/static-metric-v3)",
+ "prometheus-static-metric 0.1.1 (git+https://github.com/pingcap/rust-prometheus.git)",
  "protobuf 1.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "raft 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1674,7 +1674,7 @@ dependencies = [
 "checksum proc-macro2 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)" = "1b06e2f335f48d24442b35a19df506a835fb3547bc3c06ef27340da9acf5cae7"
 "checksum procinfo 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)" = "f42e8578852a3306838981aedad8c5642ba794929aa12af0c9eb6c072b77af6c"
 "checksum prometheus 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)" = "f295b3b36c4469d22b445dd5a83479d9b73e87c619c45f68066b3b36d9b8903d"
-"checksum prometheus-static-metric 0.1.1 (git+https://github.com/pingcap/rust-prometheus.git?branch=wenxuan/static-metric-v3)" = "<none>"
+"checksum prometheus-static-metric 0.1.1 (git+https://github.com/pingcap/rust-prometheus.git)" = "<none>"
 "checksum protobuf 1.4.1 (git+https://github.com/stepancheg/rust-protobuf.git)" = "<none>"
 "checksum protobuf 1.4.1 (registry+https://github.com/rust-lang/crates.io-index)" = "568a15e4d572d9a5e63ae3a55f84328c984842887db179b40b4cc6a608bac6a4"
 "checksum pulldown-cmark 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "d6fdf85cda6cadfae5428a54661d431330b312bc767ddbc57adbedc24da66e32"
