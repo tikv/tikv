@@ -75,9 +75,7 @@ jobs:
           name: Installing tarpaulin
           command: |
             if [[ ! -e $HOME/.cargo/bin/cargo-tarpaulin ]]; then
-                # Use the latest develop branch, because some syntax support is missing in the current release.
-                # See also tarpaulin#112, should use the stable version once released.
-                RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin --git https://github.com/xd009642/tarpaulin --branch develop;
+                RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin;
             fi
       - restore_cache:
           name: Restoring ./target Cache
