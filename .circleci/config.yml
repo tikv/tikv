@@ -90,11 +90,6 @@ jobs:
           command: env SKIP_TESTS=true make trace_test
           no_output_timeout: 1800s
       - save_cache:
-          name: Saving ./target Cache
-          key: v1-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
-          paths:
-            - target
-      - save_cache:
           name: Saving ~/.cargo Cache
           key: v1-cargo-{{ .Branch }}-{{ checksum "Cargo.lock" }}
           paths:
@@ -109,12 +104,6 @@ jobs:
           name: Testing
           command: make trace_test
           no_output_timeout: 1800s
-      - restore_cache:
-          name: Restoring ./target Cache
-          keys:
-            - v1-cov-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
-            - v1-cov-target-{{ .Branch }}
-            - v1-cov-target
       - run:
           name: Calculating code coverage
           command: |
@@ -123,7 +112,7 @@ jobs:
           no_output_timeout: 1800s
       - save_cache:
           name: Saving ./target Cache
-          key: v1-cov-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
+          key: v1-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
           paths:
             - target
 workflows:
