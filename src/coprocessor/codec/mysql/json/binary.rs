@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::io::Write;
-use std::{str, f64};
+use std::{f64, str};
 
 use super::{Json, ERR_CONVERT_FAILED};
 use byteorder::WriteBytesExt;
@@ -136,8 +136,12 @@ pub trait JsonEncoder: NumberEncoder {
         for value in data.values() {
             value_entries.encode_json_item(value, &mut value_offset, &mut encode_values)?;
         }
-        let size = ELEMENT_COUNT_LEN + SIZE_LEN + key_entries_len + value_entries_len
-            + encode_keys.len() + encode_values.len();
+        let size = ELEMENT_COUNT_LEN
+            + SIZE_LEN
+            + key_entries_len
+            + value_entries_len
+            + encode_keys.len()
+            + encode_values.len();
         self.encode_u32_le(element_count as u32)?;
         self.encode_u32_le(size as u32)?;
         self.write_all(key_entries.as_mut())?;

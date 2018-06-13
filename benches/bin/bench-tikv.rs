@@ -122,10 +122,12 @@ fn main() {
     let available_benches = ["raftstore", "mvcc"];
 
     let matches = App::new("TiKV Benchmark")
-        .args(&available_benches
-            .iter()
-            .map(|name| Arg::with_name(name))
-            .collect::<Vec<_>>())
+        .args(
+            &available_benches
+                .iter()
+                .map(|name| Arg::with_name(name))
+                .collect::<Vec<_>>(),
+        )
         .group(
             ArgGroup::with_name("benches")
                 .args(&available_benches)

@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::hash_map::Entry;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::collections::hash_map::Entry;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -302,7 +302,8 @@ impl Cluster {
     }
 
     fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
-        Ok(self.region_id_keys
+        Ok(self
+            .region_id_keys
             .get(&region_id)
             .and_then(|k| self.regions.get(k).cloned()))
     }
@@ -454,7 +455,8 @@ impl Cluster {
             must_same_peers(&cur_region, &region);
         }
 
-        let resp = self.poll_heartbeat_responses(region.clone(), leader.clone())
+        let resp = self
+            .poll_heartbeat_responses(region.clone(), leader.clone())
             .unwrap_or_else(|| {
                 let mut resp = pdpb::RegionHeartbeatResponse::new();
                 resp.set_region_id(region.get_id());
@@ -949,7 +951,8 @@ impl PdClient for TestPdClient {
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
         }
-        let resp = self.cluster
+        let resp = self
+            .cluster
             .wl()
             .region_heartbeat(region, leader.clone(), region_stat);
         match resp {
@@ -1001,7 +1004,8 @@ impl PdClient for TestPdClient {
         }
 
         // Must ConfVer and Version be same?
-        let cur_region = self.cluster
+        let cur_region = self
+            .cluster
             .rl()
             .get_region_by_id(region.get_id())
             .unwrap()

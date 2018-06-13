@@ -137,8 +137,8 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::sync::mpsc;
+    use std::sync::Arc;
 
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;

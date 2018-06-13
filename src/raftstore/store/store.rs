@@ -16,8 +16,8 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, thread, u64};
 use time::{self, Timespec};
@@ -29,20 +29,21 @@ use rocksdb::{CompactionJobInfo, WriteBatch, DB};
 use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb;
 use kvproto::pdpb::StoreStats;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse,
-                          StatusCmdType, StatusResponse};
-use kvproto::raft_serverpb::{MergeState, PeerState, RaftMessage, RaftSnapshotData,
-                             RaftTruncatedState, RegionLocalState};
+use kvproto::raft_cmdpb::{
+    AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse, StatusCmdType, StatusResponse,
+};
+use kvproto::raft_serverpb::{
+    MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
+};
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
 use pd::{PdClient, PdRunner, PdTask};
-use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
+use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::util::RegionApproximateStat;
 use raftstore::{Error, Result};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use util::RingQueue;
 use util::collections::{HashMap, HashSet};
 use util::rocksdb::{CompactedEvent, CompactionListener};
 use util::sys as util_sys;
@@ -50,6 +51,7 @@ use util::time::{duration_to_sec, SlowTimer};
 use util::timer::Timer;
 use util::transport::SendCh;
 use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
+use util::RingQueue;
 use util::{escape, rocksdb};
 
 use super::cmd_resp::{bind_term, new_error};
@@ -63,10 +65,11 @@ use super::peer::{ConsistencyState, Peer, ReadyContext, StaleState};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
 use super::transport::Transport;
 use super::worker::apply::{ApplyMetrics, ApplyRes, ChangePeer, ExecResult};
-use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, CleanupSSTTask,
-                    CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
-                    RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
-                    SplitCheckTask, STALE_PEER_CHECK_INTERVAL};
+use super::worker::{
+    ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, CleanupSSTTask, CompactRunner,
+    CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
+    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask, STALE_PEER_CHECK_INTERVAL,
+};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use import::SSTImporter;
 
@@ -774,7 +777,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         let start_key = data_key(msg.get_start_key());
-        if let Some((_, &exist_region_id)) = self.region_ranges
+        if let Some((_, &exist_region_id)) = self
+            .region_ranges
             .range((Excluded(start_key), Unbounded::<Key>))
             .next()
         {
@@ -932,7 +936,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // no exist, check with tombstone key.
         let state_key = keys::region_state_key(region_id);
-        if let Some(local_state) = self.kv_engine
+        if let Some(local_state) = self
+            .kv_engine
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)?
         {
             if local_state.get_state() != PeerState::Tombstone {
@@ -1079,7 +1084,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         let state_key = keys::region_state_key(target_region_id);
-        if let Some(state) = self.kv_engine()
+        if let Some(state) = self
+            .kv_engine()
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)?
         {
             debug!(
@@ -1187,7 +1193,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(Some(key));
         }
 
-        let r = self.region_ranges
+        let r = self
+            .region_ranges
             .range((Excluded(enc_start_key(&snap_region)), Unbounded::<Key>))
             .map(|(_, &region_id)| self.region_peers[&region_id].region())
             .take_while(|r| enc_start_key(r) < enc_end_key(&snap_region))
@@ -1433,7 +1440,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         if is_initialized
-            && self.region_ranges
+            && self
+                .region_ranges
                 .remove(&enc_end_key(p.region()))
                 .is_none()
         {
@@ -1603,13 +1611,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
                 // Insert new regions and validation
                 info!("insert new regions left: {:?}, right:{:?}", left, right);
-                if self.region_ranges
+                if self
+                    .region_ranges
                     .insert(enc_end_key(&left), left.get_id())
                     .is_some()
                 {
                     panic!("region should not exist, {:?}", left);
                 }
-                if self.region_ranges
+                if self
+                    .region_ranges
                     .insert(enc_end_key(&right), right.get_id())
                     .is_none()
                 {
@@ -1634,7 +1644,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         if !campaigned {
-            if let Some(msg) = self.pending_votes
+            if let Some(msg) = self
+                .pending_votes
                 .swap_remove_front(|m| m.get_to_peer() == &peer)
             {
                 let _ = self.on_raft_message(msg);
@@ -1884,7 +1895,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_merge_fail(&mut self, region_id: u64) {
         info!("[region {}] merge fail, try gc stale peer.", region_id);
-        if let Some(job) = self.region_peers
+        if let Some(job) = self
+            .region_peers
             .get_mut(&region_id)
             .and_then(|p| p.maybe_destroy())
         {
@@ -1908,7 +1920,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 region_id, prev_region, region
             );
             // we have already initialized the peer, so it must exist in region_ranges.
-            if self.region_ranges
+            if self
+                .region_ranges
                 .remove(&enc_end_key(&prev_region))
                 .is_none()
             {
@@ -2257,7 +2270,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // Create a compact log request and notify directly.
             let request = new_compact_log_request(region_id, peer.peer.clone(), compact_idx, term);
 
-            if let Err(e) = self.sendch
+            if let Err(e) = self
+                .sendch
                 .try_send(Msg::new_raft_cmd(request, Callback::None))
             {
                 error!("{} send compact log {} err {:?}", peer.tag, compact_idx, e);
@@ -3436,8 +3450,8 @@ fn calc_region_declined_bytes(
 mod tests {
     use std::collections::BTreeMap;
 
-    use util::rocksdb::CompactedEvent;
     use util::rocksdb::properties::{IndexHandle, IndexHandles, SizeProperties};
+    use util::rocksdb::CompactedEvent;
 
     use super::*;
 

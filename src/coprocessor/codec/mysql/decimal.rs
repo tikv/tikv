@@ -17,13 +17,13 @@ use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::str::{self, FromStr};
-use std::{cmp, mem, i32, i64, u32, u64};
+use std::{cmp, i32, i64, mem, u32, u64};
 
 use coprocessor::codec::{convert, Error, Result, TEN_POW};
 use coprocessor::dag::expr::EvalContext;
 
-use util::codec::BytesSlice;
 use util::codec::number::{self, NumberEncoder};
+use util::codec::BytesSlice;
 use util::escape;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -111,7 +111,7 @@ const MAX_FRACTION: u8 = 30;
 const DEFAULT_DIV_FRAC_INCR: u8 = 4;
 const DIG_2_BYTES: &[u8] = &[0, 1, 1, 2, 2, 3, 3, 4, 4, 4];
 const FRAC_MAX: &[u32] = &[
-    900000000, 990000000, 999000000, 999900000, 999990000, 999999000, 999999900, 999999990
+    900000000, 990000000, 999000000, 999900000, 999990000, 999999000, 999999900, 999999990,
 ];
 const NOT_FIXED_DEC: u8 = 31;
 
@@ -265,7 +265,8 @@ fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, Sub
         }
         l_frac_word_cnt = (l_end + 1 - l_stop as isize) as u8;
         r_frac_word_cnt = (r_end + 1 - r_stop as isize) as u8;
-        while l_idx as isize <= l_end && r_idx as isize <= r_end
+        while l_idx as isize <= l_end
+            && r_idx as isize <= r_end
             && lhs.word_buf[l_idx] == rhs.word_buf[r_idx]
         {
             l_idx += 1;
@@ -1351,11 +1352,13 @@ impl Decimal {
                 return Res::Truncated(self);
             }
             end = (end as isize - diff) as u8;
-            Res::Truncated(self.round_with_word_buf_len(
-                end as i8 - point as i8,
-                word_buf_len,
-                RoundMode::HalfEven,
-            ).unwrap())
+            Res::Truncated(
+                self.round_with_word_buf_len(
+                    end as i8 - point as i8,
+                    word_buf_len,
+                    RoundMode::HalfEven,
+                ).unwrap(),
+            )
         } else {
             Res::Ok(self)
         };
@@ -1446,7 +1449,8 @@ impl Decimal {
         let int_word_cnt = word_cnt!(self.int_cnt) as usize;
         for word_idx in 0..int_word_cnt {
             let y = x;
-            x = x.wrapping_mul(i64::from(WORD_BASE))
+            x = x
+                .wrapping_mul(i64::from(WORD_BASE))
                 .wrapping_sub(i64::from(self.word_buf[word_idx]));
             if y < i64::MIN / i64::from(WORD_BASE) || x > y {
                 if self.negative {
@@ -1717,7 +1721,8 @@ impl FromStr for Decimal {
 impl Display for Decimal {
     fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
         let mut dec = self.clone();
-        dec = dec.round(self.result_frac_cnt as i8, RoundMode::HalfEven)
+        dec = dec
+            .round(self.result_frac_cnt as i8, RoundMode::HalfEven)
             .unwrap();
         fmt.write_str(&dec.to_string())
     }
@@ -1772,16 +1777,19 @@ macro_rules! read_word {
                 2 => ((i32::from(first as i8) << 8) + i32::from($data[1])) as u32,
                 3 => {
                     if first & 128 > 0 {
-                        (255 << 24) | (u32::from(first) << 16) | (u32::from($data[1]) << 8)
+                        (255 << 24)
+                            | (u32::from(first) << 16)
+                            | (u32::from($data[1]) << 8)
                             | u32::from($data[2])
                     } else {
                         (u32::from(first) << 16) | (u32::from($data[1]) << 8) | u32::from($data[2])
                     }
                 }
                 4 => {
-                    ((i32::from(first as i8) << 24) + (i32::from($data[1]) << 16)
-                        + (i32::from($data[2]) << 8) + i32::from($data[3]))
-                        as u32
+                    ((i32::from(first as i8) << 24)
+                        + (i32::from($data[1]) << 16)
+                        + (i32::from($data[2]) << 8)
+                        + i32::from($data[3])) as u32
                 }
                 _ => unreachable!(),
             };
@@ -2603,11 +2611,13 @@ mod test {
 
         for (dec_str, scale, half_exp, trunc_exp, ceil_exp) in cases {
             let dec = dec_str.parse::<Decimal>().unwrap();
-            let res = dec.clone()
+            let res = dec
+                .clone()
                 .round(scale, RoundMode::HalfEven)
                 .map(|d| d.to_string());
             assert_eq!(res, half_exp.map(|s| s.to_owned()));
-            let res = dec.clone()
+            let res = dec
+                .clone()
                 .round(scale, RoundMode::Truncate)
                 .map(|d| d.to_string());
             assert_eq!(res, trunc_exp.map(|s| s.to_owned()));

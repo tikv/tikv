@@ -32,8 +32,17 @@ default: release
 
 all: format build test
 
-dev: format
-	@env ENABLE_FEATURES=dev FAIL_POINT=1 make test
+pre-clippy:
+	if [ "`cat clippy-version`" != "`cargo clippy --version || echo 0`" ]; then\
+		cargo install clippy --version `cat clippy-version`;\
+	fi
+
+
+clippy: pre-clippy
+	cargo clippy
+
+dev: format clippy
+	@env FAIL_POINT=1 make test
 
 build:
 	cargo build --features "${ENABLE_FEATURES}"
@@ -78,7 +87,10 @@ bench:
 	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --features "${ENABLE_FEATURES}" -- --nocapture && \
 	RUST_BACKTRACE=1 cargo run --release --bin bench-tikv --features "${ENABLE_FEATURES}"
 
-format:
+pre-format:
+	rustup component add rustfmt-preview
+
+format: pre-format
 	@cargo fmt --all -- --write-mode diff >/dev/null || \
 	cargo fmt --all
 

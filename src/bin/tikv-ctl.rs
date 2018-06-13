@@ -557,7 +557,8 @@ impl DebugExecutor for DebugClient {
     fn get_region_info(&self, region: u64) -> RegionInfo {
         let mut req = RegionInfoRequest::new();
         req.set_region_id(region);
-        let mut resp = self.region_info(&req)
+        let mut resp = self
+            .region_info(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::region_info", e));
 
         let mut region_info = RegionInfo::default();
@@ -617,7 +618,8 @@ impl DebugExecutor for DebugClient {
         if tags.len() == 1 && tags[0] == METRICS_PROMETHEUS {
             req.set_all(false);
         }
-        let mut resp = self.get_metrics(&req)
+        let mut resp = self
+            .get_metrics(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::metrics", e));
         for tag in tags {
             println!("tag:{}", tag);
@@ -675,7 +677,8 @@ impl DebugExecutor for DebugClient {
     fn dump_region_properties(&self, region_id: u64) {
         let mut req = GetRegionPropertiesRequest::new();
         req.set_region_id(region_id);
-        let resp = self.get_region_properties(&req)
+        let resp = self
+            .get_region_properties(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_region_properties", e));
         for prop in resp.get_props() {
             println!("{}: {}", prop.get_name(), prop.get_value());
@@ -720,7 +723,8 @@ impl DebugExecutor for Debugger {
         to: Vec<u8>,
         limit: u64,
     ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
-        let iter = self.scan_mvcc(&from, &to, limit)
+        let iter = self
+            .scan_mvcc(&from, &to, limit)
             .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
         #[allow(deprecated)]
         let stream = stream::iter(iter).map_err(|e| e.to_string());
@@ -733,7 +737,8 @@ impl DebugExecutor for Debugger {
     }
 
     fn set_region_tombstone(&self, regions: Vec<Region>) {
-        let ret = self.set_region_tombstone(regions)
+        let ret = self
+            .set_region_tombstone(regions)
             .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e));
         if ret.is_empty() {
             println!("success!");
@@ -745,7 +750,8 @@ impl DebugExecutor for Debugger {
     }
 
     fn recover_regions(&self, regions: Vec<Region>) {
-        let ret = self.recover_regions(regions)
+        let ret = self
+            .recover_regions(regions)
             .unwrap_or_else(|e| perror_and_exit("Debugger::recover regions", e));
         if ret.is_empty() {
             println!("success!");
@@ -757,7 +763,8 @@ impl DebugExecutor for Debugger {
     }
 
     fn print_bad_regions(&self) {
-        let bad_regions = self.bad_regions()
+        let bad_regions = self
+            .bad_regions()
             .unwrap_or_else(|e| perror_and_exit("Debugger::bad_regions", e));
         if !bad_regions.is_empty() {
             for (region_id, error) in bad_regions {
@@ -832,7 +839,8 @@ impl DebugExecutor for Debugger {
     }
 
     fn dump_region_properties(&self, region_id: u64) {
-        let props = self.get_region_properties(region_id)
+        let props = self
+            .get_region_properties(region_id)
             .unwrap_or_else(|e| perror_and_exit("Debugger::get_region_properties", e));
         for (name, value) in props {
             println!("{}: {}", name, value);

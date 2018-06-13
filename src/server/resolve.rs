@@ -22,8 +22,8 @@ use pd::PdClient;
 use util::collections::HashMap;
 use util::worker::{Runnable, Scheduler, Worker};
 
-use super::Result;
 use super::metrics::*;
+use super::Result;
 
 const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 

@@ -18,8 +18,8 @@ use kvproto::import_sstpb::SSTMeta;
 
 use import::SSTImporter;
 use pd::PdClient;
-use raftstore::store::Msg;
 use raftstore::store::util::is_epoch_stale;
+use raftstore::store::Msg;
 use util::transport::SendCh;
 use util::worker::Runnable;
 

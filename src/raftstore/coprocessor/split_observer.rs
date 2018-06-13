@@ -40,7 +40,8 @@ impl SplitObserver {
         // + version or TABLE_PREFIX + table_id + INDEX_PREFIX_SEP + index_id + values + version
         // or meta_key + version
         // The length of TABLE_PREFIX + table_id is TABLE_PREFIX_KEY_LEN.
-        if key.starts_with(table::TABLE_PREFIX) && key.len() > table::TABLE_PREFIX_KEY_LEN
+        if key.starts_with(table::TABLE_PREFIX)
+            && key.len() > table::TABLE_PREFIX_KEY_LEN
             && key[table::TABLE_PREFIX_KEY_LEN..].starts_with(table::RECORD_PREFIX_SEP)
         {
             // row key, truncate to handle

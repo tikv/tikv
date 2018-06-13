@@ -117,7 +117,8 @@ impl MvccReader {
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         if self.scan_mode.is_some() && self.lock_cursor.is_none() {
             let iter_opt = IterOption::new(None, None, true);
-            let iter = self.snapshot
+            let iter = self
+                .snapshot
                 .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
             self.lock_cursor = Some(iter);
         }
@@ -167,7 +168,8 @@ impl MvccReader {
         if self.scan_mode.is_some() {
             if self.write_cursor.is_none() {
                 let iter_opt = IterOption::new(None, None, self.fill_cache);
-                let iter = self.snapshot
+                let iter = self
+                    .snapshot
                     .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false))?;
                 self.write_cursor = Some(iter);
             }
@@ -291,7 +293,8 @@ impl MvccReader {
                 self.upper_bound.as_ref().cloned(),
                 self.fill_cache,
             );
-            let iter = self.snapshot
+            let iter = self
+                .snapshot
                 .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))?;
             self.write_cursor = Some(iter);
         }
@@ -305,7 +308,8 @@ impl MvccReader {
                 self.upper_bound.as_ref().cloned(),
                 true,
             );
-            let iter = self.snapshot
+            let iter = self
+                .snapshot
                 .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
             self.lock_cursor = Some(iter);
         }
@@ -322,7 +326,9 @@ impl MvccReader {
 
         while ok {
             if Write::parse(cursor.value())?.start_ts == ts {
-                return Ok(Some(Key::from_encoded(cursor.key().to_vec()).truncate_ts()?));
+                return Ok(Some(
+                    Key::from_encoded(cursor.key().to_vec()).truncate_ts()?,
+                ));
             }
             ok = cursor.next(&mut self.statistics.write);
         }
@@ -491,7 +497,8 @@ impl MvccReader {
         // After several prev, we still not get the latest version for the specified ts,
         // use seek to locate the latest version.
         let key = user_key.append_ts(ts);
-        let valid = self.write_cursor
+        let valid = self
+            .write_cursor
             .as_mut()
             .unwrap()
             .internal_seek(&key, &mut self.statistics.write)?;
@@ -698,8 +705,8 @@ impl MvccReader {
 mod tests {
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
-    use raftstore::store::RegionSnapshot;
     use raftstore::store::keys;
+    use raftstore::store::RegionSnapshot;
     use rocksdb::{self, Writable, WriteBatch, DB};
     use std::sync::Arc;
     use std::u64;

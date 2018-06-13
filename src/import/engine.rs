@@ -21,12 +21,13 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use kvproto::import_kvpb::*;
-use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, DBOptions, Writable, WriteBatch as RawBatch,
-              DB};
+use rocksdb::{
+    BlockBasedOptions, ColumnFamilyOptions, DBOptions, Writable, WriteBatch as RawBatch, DB,
+};
 
 use config::DbConfig;
-use storage::CF_DEFAULT;
 use storage::types::Key;
+use storage::CF_DEFAULT;
 use util::config::MB;
 use util::rocksdb::properties::SizePropertiesCollectorFactory;
 use util::rocksdb::{new_engine_opt, CFOptions};

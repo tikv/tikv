@@ -28,14 +28,18 @@ use std::sync::Arc;
 
 use rocksdb::rocksdb::supported_compression;
 use rocksdb::set_external_sst_file_global_seq_no;
-use rocksdb::{ColumnFamilyOptions, CompactOptions, CompactionOptions, DBCompressionType,
-              DBOptions, Range, SliceTransform, DB};
+use rocksdb::{
+    ColumnFamilyOptions, CompactOptions, CompactionOptions, DBCompressionType, DBOptions, Range,
+    SliceTransform, DB,
+};
 use storage::{ALL_CFS, CF_DEFAULT};
 use sys_info;
-use util::file::{copy_and_sync, calc_crc32};
+use util::file::{calc_crc32, copy_and_sync};
 use util::rocksdb;
-use util::rocksdb::engine_metrics::{ROCKSDB_COMPRESSION_RATIO_AT_LEVEL,
-                                    ROCKSDB_CUR_SIZE_ALL_MEM_TABLES, ROCKSDB_TOTAL_SST_FILES_SIZE};
+use util::rocksdb::engine_metrics::{
+    ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
+    ROCKSDB_TOTAL_SST_FILES_SIZE,
+};
 
 pub use rocksdb::CFHandle;
 
@@ -475,7 +479,8 @@ pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
     let path = path.as_ref().to_str().unwrap();
     let f = File::open(path).map_err(|e| format!("open {}: {:?}", path, e))?;
 
-    let meta = f.metadata()
+    let meta = f
+        .metadata()
         .map_err(|e| format!("read metadata from {}: {:?}", path, e))?;
     if meta.len() != expected_size {
         return Err(format!(
@@ -510,8 +515,10 @@ pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocksdb::{ColumnFamilyOptions, DBOptions, EnvOptions, IngestExternalFileOptions,
-                  SstFileWriter, Writable, DB};
+    use rocksdb::{
+        ColumnFamilyOptions, DBOptions, EnvOptions, IngestExternalFileOptions, SstFileWriter,
+        Writable, DB,
+    };
     use storage::CF_DEFAULT;
     use tempdir::TempDir;
 
