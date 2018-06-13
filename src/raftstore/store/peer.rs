@@ -999,12 +999,20 @@ impl Peer {
                     }
                     if merge_to_be_update {
                         if ctx.contains(ProposalContext::ROLLBACK_MERGE) {
-                            // We committed rollback merge, now we can unset the pending_merge.
+                            // We committed rollback merge, in order to enable read index,
+                            // we need to unset the pending_merge.
+                            //
+                            // Also local read is safe now, we renew its leader lease
+                            // as soon as possible, in the current implementation `apply_reads`
+                            // may renew the lease if there are any consistent reads.
                             self.pending_merge = false;
                             merge_to_be_update = false;
                         } else if ctx.contains(ProposalContext::PREPARE_MERGE) {
-                            // We committed prepare merge, now we must set the pending_merge.
+                            // We committed prepare merge, to prevent unsafe read index,
+                            // we must set the pending_merge.
                             self.pending_merge = true;
+                            // To prevent unsafe local read, we suspect its leader lease.
+                            self.leader_lease.suspect(monotonic_raw_now());
                             merge_to_be_update = false;
                         }
                     }
@@ -1195,7 +1203,7 @@ impl Peer {
 
         let res = match self.get_handle_policy(&req) {
             Ok(RequestPolicy::ReadLocal) => {
-                self.read_local(req, err_resp, cb, metrics);
+                self.read_local(req, cb, metrics);
                 return false;
             }
             Ok(RequestPolicy::ReadIndex) => return self.read_index(req, err_resp, cb, metrics),
@@ -1476,33 +1484,7 @@ impl Peer {
         last_index <= status.progress[&peer_id].matched + TRANSFER_LEADER_ALLOW_LOG_LAG
     }
 
-    fn pre_read_local(&self) -> Result<()> {
-        // If the region is going to be merged, we can not perform local read
-        // even if it's in lease. But if there is a pending rollback merge,
-        // we can local read, because there is no one can make change to
-        // the range of the region excpet its leader in the current term.
-        // See also in ready_to_handle_read().
-        if self.pending_merge {
-            Err(box_err!("can not read local due to merge"))
-        } else {
-            Ok(())
-        }
-    }
-
-    fn read_local(
-        &mut self,
-        req: RaftCmdRequest,
-        mut err_resp: RaftCmdResponse,
-        cb: Callback,
-        metrics: &mut RaftProposeMetrics,
-    ) {
-        if let Err(e) = self.pre_read_local() {
-            debug!("{} prevents unsafe local read, err: {:?}", self.tag, e);
-            metrics.unsafe_local_read += 1;
-            cmd_resp::bind_error(&mut err_resp, e);
-            cb.invoke_with_response(err_resp);
-            return;
-        }
+    fn read_local(&mut self, req: RaftCmdRequest, cb: Callback, metrics: &mut RaftProposeMetrics) {
         metrics.local_read += 1;
         cb.invoke_read(self.handle_read(req))
     }
