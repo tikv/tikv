@@ -70,8 +70,13 @@ impl<Router: RaftStoreRouter> ImportSSTService<Router> {
 }
 
 impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
-    fn switch(&self, ctx: RpcContext, req: SwitchRequest, sink: UnarySink<SwitchResponse>) {
-        let label = "switch";
+    fn switch_mode(
+        &self,
+        ctx: RpcContext,
+        req: SwitchModeRequest,
+        sink: UnarySink<SwitchModeResponse>,
+    ) {
+        let label = "switch_mode";
         let timer = Instant::now_coarse();
 
         let res = {
@@ -88,7 +93,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
 
         ctx.spawn(
             future::result(res)
-                .map(|_| SwitchResponse::new())
+                .map(|_| SwitchModeResponse::new())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }
