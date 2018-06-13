@@ -367,7 +367,7 @@ macro_rules! dispatch_call {
                     $(ScalarFuncSig::$j_sig => {
                         self.$j_func(ctx, row, $($j_arg)*).map(Datum::from)
                     })*
-                    _=>unimplemented!()
+                    _ => unimplemented!(),
                 }
             }
         }

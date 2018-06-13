@@ -119,10 +119,7 @@ pub trait Peekable {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>>;
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>>;
 
-    fn get_msg<M>(&self, key: &[u8]) -> Result<Option<M>>
-    where
-        M: protobuf::Message + protobuf::MessageStatic,
-    {
+    fn get_msg<M: protobuf::Message>(&self, key: &[u8]) -> Result<Option<M>> {
         let value = self.get_value(key)?;
 
         if value.is_none() {
@@ -134,10 +131,7 @@ pub trait Peekable {
         Ok(Some(m))
     }
 
-    fn get_msg_cf<M>(&self, cf: &str, key: &[u8]) -> Result<Option<M>>
-    where
-        M: protobuf::Message + protobuf::MessageStatic,
-    {
+    fn get_msg_cf<M: protobuf::Message>(&self, cf: &str, key: &[u8]) -> Result<Option<M>> {
         let value = self.get_value_cf(cf, key)?;
 
         if value.is_none() {

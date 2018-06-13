@@ -13,7 +13,6 @@
 
 extern crate toml;
 
-use std::cmp;
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -150,26 +149,6 @@ macro_rules! build_cf_opt {
         cf_opts.set_hard_pending_compaction_bytes_limit($opt.hard_pending_compaction_bytes_limit.0);
 
         cf_opts
-    }};
-}
-
-macro_rules! tune_for_import_mode_cf {
-    ($opt:expr) => {{
-        // Use universal compaction here because it can speed up file
-        // ingestion and range compaction. We may switch back to level
-        // compaction after we have solved these the problems.
-        $opt.compaction_style = DBCompactionStyle::Universal;
-        // Disable compaction and rate limit.
-        $opt.disable_auto_compactions = true;
-        $opt.level0_stop_writes_trigger = i32::MAX;
-        $opt.level0_slowdown_writes_trigger = i32::MAX;
-        $opt.soft_pending_compaction_bytes_limit = ReadableSize::kb(0);
-        $opt.hard_pending_compaction_bytes_limit = ReadableSize::kb(0);
-        // Limit the cache size in case of OOM.
-        $opt.pin_l0_filter_and_index_blocks = false;
-        if $opt.block_cache_size.0 > GB {
-            $opt.block_cache_size.0 = GB;
-        }
     }};
 }
 
@@ -1066,22 +1045,6 @@ impl TiKvConfig {
                 + self.server.end_point_request_max_handle_duration.as_secs();
             self.raft_store.clean_stale_peer_delay = ReadableDuration::secs(delay_secs);
         }
-    }
-
-    pub fn tune_for_import_mode(&mut self) {
-        // Increate concurrency for better performance.
-        let concurrency = sys_info::cpu_num().unwrap() as usize / 2;
-        self.import.num_threads = cmp::max(self.import.num_threads, concurrency);
-        self.server.grpc_concurrency = cmp::max(self.server.grpc_concurrency, concurrency);
-        // Turn off this to avoid unnecessary compaction.
-        self.raft_store.region_compact_check_interval = ReadableDuration::secs(0);
-        // Increase these to speed up RocksDB compaction.
-        self.rocksdb.max_background_jobs =
-            cmp::max(self.rocksdb.max_background_jobs, concurrency as i32);
-        self.rocksdb.max_sub_compactions =
-            cmp::max(self.rocksdb.max_sub_compactions, concurrency as u32);
-        tune_for_import_mode_cf!(self.rocksdb.defaultcf);
-        tune_for_import_mode_cf!(self.rocksdb.writecf);
     }
 
     pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), Box<Error>> {

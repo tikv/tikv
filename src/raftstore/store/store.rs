@@ -59,7 +59,7 @@ use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use super::local_metrics::RaftMetrics;
 use super::metrics::*;
 use super::msg::{Callback, ReadResponse};
-use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
+use super::peer::{ConsistencyState, Peer, ReadyContext, StaleState};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
 use super::transport::Transport;
 use super::worker::apply::{ApplyMetrics, ApplyRes, ChangePeer, ExecResult};
@@ -2030,18 +2030,56 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
+    fn check_propose_peer(&self, msg: &RaftCmdRequest) -> Result<&Peer> {
+        let region_id = msg.get_header().get_region_id();
+        let peer = match self.region_peers.get(&region_id) {
+            Some(peer) => peer,
+            None => return Err(Error::RegionNotFound(region_id)),
+        };
+        if !peer.is_leader() {
+            return Err(Error::NotLeader(
+                region_id,
+                peer.get_peer_from_cache(peer.leader_id()),
+            ));
+        }
+        Ok(peer)
+    }
+
     fn pre_propose_raft_command(
         &mut self,
         msg: &RaftCmdRequest,
     ) -> Result<Option<RaftCmdResponse>> {
-        self.validate_store_id(msg)?;
+        // Check store_id, make sure that the msg is dispatched to the right place.
+        util::check_store_id(msg, self.store_id())?;
         if msg.has_status_request() {
             // For status commands, we handle it here directly.
             let resp = self.execute_status_command(msg)?;
             return Ok(Some(resp));
         }
-        self.validate_region(msg)?;
-        Ok(None)
+
+        // Check whether the store has the right peer to handle the request.
+        let peer = self.check_propose_peer(msg)?;
+        // peer_id must be the same as peer's.
+        util::check_peer_id(msg, peer.peer_id())?;
+        // Check whether the term is stale.
+        util::check_term(msg, peer.term())?;
+
+        match util::check_region_epoch(msg, peer.region(), true) {
+            Err(Error::StaleEpoch(msg, mut new_regions)) => {
+                // Attach the region which might be split from the current region. But it doesn't
+                // matter if the region is not split from the current region. If the region meta
+                // received by the TiKV driver is newer than the meta cached in the driver, the meta is
+                // updated.
+                let sibling_region_id = self.find_sibling_region(peer.region());
+                if let Some(sibling_region_id) = sibling_region_id {
+                    let sibling_region = self.region_peers[&sibling_region_id].region();
+                    new_regions.push(sibling_region.to_owned());
+                }
+                Err(Error::StaleEpoch(msg, new_regions))
+            }
+            Err(e) => Err(e),
+            Ok(()) => Ok(None),
+        }
     }
 
     fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback) {
@@ -2117,58 +2155,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Callback::BatchRead(on_finished) => on_finished(ret),
             _ => unreachable!(),
         }
-    }
-
-    fn validate_store_id(&self, msg: &RaftCmdRequest) -> Result<()> {
-        let store_id = msg.get_header().get_peer().get_store_id();
-        if store_id != self.store.get_id() {
-            return Err(Error::StoreNotMatch(store_id, self.store.get_id()));
-        }
-        Ok(())
-    }
-
-    fn validate_region(&self, msg: &RaftCmdRequest) -> Result<()> {
-        let region_id = msg.get_header().get_region_id();
-        let peer_id = msg.get_header().get_peer().get_id();
-
-        let peer = match self.region_peers.get(&region_id) {
-            Some(peer) => peer,
-            None => return Err(Error::RegionNotFound(region_id)),
-        };
-        if !peer.is_leader() {
-            return Err(Error::NotLeader(
-                region_id,
-                peer.get_peer_from_cache(peer.leader_id()),
-            ));
-        }
-        if peer.peer_id() != peer_id {
-            return Err(box_err!(
-                "mismatch peer id {} != {}",
-                peer.peer_id(),
-                peer_id
-            ));
-        }
-
-        let header = msg.get_header();
-        // If header's term is 2 verions behind current term, leadership may have been changed away.
-        if header.get_term() > 0 && peer.term() > header.get_term() + 1 {
-            return Err(Error::StaleCommand);
-        }
-
-        let res = peer::check_epoch(peer.region(), msg, true);
-        if let Err(Error::StaleEpoch(msg, mut new_regions)) = res {
-            // Attach the region which might be split from the current region. But it doesn't
-            // matter if the region is not split from the current region. If the region meta
-            // received by the TiKV driver is newer than the meta cached in the driver, the meta is
-            // updated.
-            let sibling_region_id = self.find_sibling_region(peer.region());
-            if let Some(sibling_region_id) = sibling_region_id {
-                let sibling_region = self.region_peers[&sibling_region_id].region();
-                new_regions.push(sibling_region.to_owned());
-            }
-            return Err(Error::StaleEpoch(msg, new_regions));
-        }
-        res
     }
 
     pub fn find_sibling_region(&self, region: &metapb::Region) -> Option<u64> {
@@ -2384,6 +2370,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             debug!("compact worker is busy, check space redundancy next time");
         } else if self.region_ranges.is_empty() {
             debug!("there is no range need to check");
+        } else if rocksdb::auto_compactions_is_disabled(&self.kv_engine) {
+            debug!("skip compact check when disabled auto compactions.");
         } else {
             // Start from last checked key.
             let mut ranges_need_check =
@@ -2420,7 +2408,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if let Err(e) = self.compact_worker.schedule(CompactTask::CheckAndCompact {
                 cf_names,
                 ranges: ranges_need_check,
-                tombstones_threshold: self.cfg.region_compact_min_tombstones,
+                tombstones_num_threshold: self.cfg.region_compact_min_tombstones,
+                tombstones_percent_threshold: self.cfg.region_compact_tombstones_percent,
             }) {
                 error!("{} failed to schedule space check task: {}", self.tag, e);
             }
