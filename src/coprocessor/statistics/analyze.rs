@@ -87,10 +87,12 @@ impl AnalyzeContext {
             req.get_cmsketch_width() as usize,
         );
         while let Some(row) = scanner.next()? {
-            let bytes = row.data.get_column_values();
+            let (bytes, offsets) = row.data.get_column_values_and_offsets();
             hist.append(bytes);
             if let Some(c) = cms.as_mut() {
-                c.insert(bytes)
+                for offset in offsets {
+                    c.insert(&bytes[..offset])
+                }
             }
         }
         let mut res = analyze::AnalyzeIndexResp::new();
