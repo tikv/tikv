@@ -45,7 +45,7 @@ jobs:
       - run:
           name: Setting up Rust and the rest of the Build Environment
           command: |
-            RUST_VERSION=`tail -n 1 RUST_VERSION`
+            RUST_VERSION=`tail -n 1 rust-toolchain`
             if [[ ! -e $HOME/.cargo ]]; then
               curl https://sh.rustup.rs -sSf |
                 sh -s -- --no-modify-path --default-toolchain ${RUST_VERSION} -y;
