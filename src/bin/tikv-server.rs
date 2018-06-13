@@ -181,6 +181,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let import_service = ImportSSTService::new(
         cfg.import.clone(),
         raft_router.clone(),
+        Arc::clone(&kv_engine),
         Arc::clone(&importer),
     );
 
@@ -367,11 +368,6 @@ fn main() {
                     "Sets server labels. Uses `,` to separate kv pairs, like \
                      `zone=cn,disk=ssd`",
                 ),
-        )
-        .arg(
-            Arg::with_name("import-mode")
-                .long("import-mode")
-                .help("Run in import mode"),
         )
         .arg(
             Arg::with_name("print-sample-config")

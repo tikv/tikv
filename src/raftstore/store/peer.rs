@@ -35,6 +35,7 @@ use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateR
            INVALID_INDEX, NO_LIMIT};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::engine::{Peekable, Snapshot};
+use raftstore::store::util::RegionApproximateStat;
 use raftstore::store::worker::apply::ApplyMetrics;
 use raftstore::store::worker::{Apply, ApplyTask};
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
@@ -51,7 +52,7 @@ use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::store::{DestroyPeerJob, Store};
 use super::transport::Transport;
-use super::util::{self, Lease, LeaseState};
+use super::util::{self, check_region_epoch, Lease, LeaseState};
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
@@ -247,8 +248,8 @@ pub struct Peer {
     pub size_diff_hint: u64,
     /// delete keys' count since last reset.
     delete_keys_hint: u64,
-    /// approximate region size.
-    pub approximate_size: Option<u64>,
+    /// approximate stat of the region.
+    pub approximate_stat: Option<RegionApproximateStat>,
     pub compaction_declined_bytes: u64,
 
     pub consistency_state: ConsistencyState,
@@ -389,7 +390,7 @@ impl Peer {
             coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
             delete_keys_hint: 0,
-            approximate_size: None,
+            approximate_stat: None,
             compaction_declined_bytes: 0,
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
@@ -1817,74 +1818,6 @@ impl Peer {
     }
 }
 
-pub fn check_epoch(
-    region: &metapb::Region,
-    req: &RaftCmdRequest,
-    include_region: bool,
-) -> Result<()> {
-    let (mut check_ver, mut check_conf_ver) = (false, false);
-    if !req.has_admin_request() {
-        // for get/set/delete, we don't care conf_version.
-        check_ver = true;
-    } else {
-        match req.get_admin_request().get_cmd_type() {
-            AdminCmdType::CompactLog
-            | AdminCmdType::InvalidAdmin
-            | AdminCmdType::ComputeHash
-            | AdminCmdType::VerifyHash => {}
-            AdminCmdType::Split => check_ver = true,
-            AdminCmdType::ChangePeer => check_conf_ver = true,
-            AdminCmdType::PrepareMerge
-            | AdminCmdType::CommitMerge
-            | AdminCmdType::RollbackMerge
-            | AdminCmdType::TransferLeader => {
-                check_ver = true;
-                check_conf_ver = true;
-            }
-        };
-    }
-
-    if !check_ver && !check_conf_ver {
-        return Ok(());
-    }
-
-    if !req.get_header().has_region_epoch() {
-        return Err(box_err!("missing epoch!"));
-    }
-
-    let from_epoch = req.get_header().get_region_epoch();
-    let latest_epoch = region.get_region_epoch();
-
-    // should we use not equal here?
-    if (check_conf_ver && from_epoch.get_conf_ver() < latest_epoch.get_conf_ver())
-        || (check_ver && from_epoch.get_version() < latest_epoch.get_version())
-    {
-        debug!(
-            "[region {}] received stale epoch {:?}, mime: {:?}",
-            region.get_id(),
-            from_epoch,
-            latest_epoch
-        );
-        let regions = if include_region {
-            vec![region.to_owned()]
-        } else {
-            vec![]
-        };
-        return Err(Error::StaleEpoch(
-            format!(
-                "latest_epoch of region {} is {:?}, but you \
-                 sent {:?}",
-                region.get_id(),
-                latest_epoch,
-                from_epoch
-            ),
-            regions,
-        ));
-    }
-
-    Ok(())
-}
-
 impl Peer {
     pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
@@ -1918,7 +1851,7 @@ impl Peer {
             pending_peers: self.collect_pending_peers(),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
-            region_size: self.approximate_size,
+            approximate_stat: self.approximate_stat.clone(),
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
@@ -2044,7 +1977,7 @@ impl<'r, 'e, 't> ReadExecutor<'r, 'e, 't> {
     }
 
     fn execute(&self, msg: &RaftCmdRequest) -> Result<ReadResponse> {
-        check_epoch(self.region, msg, true)?;
+        check_region_epoch(msg, self.region, true)?;
         let mut need_snapshot = false;
         let snapshot = Snapshot::new(Arc::clone(self.engine));
         let requests = msg.get_requests();
