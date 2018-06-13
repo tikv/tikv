@@ -1130,7 +1130,7 @@ impl Storage {
             option.set_upper_bound(end.encoded().clone());
         }
         let mut cursor = snapshot.iter_cf(Storage::rawkv_cf(cf)?, option, ScanMode::Forward)?;
-        if !cursor.seek(start_key, &mut stats.data)? {
+        if !cursor.seek(start_key, &mut stats.data, None)? {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
@@ -1143,7 +1143,7 @@ impl Storage {
                     cursor.value().to_owned()
                 },
             )));
-            cursor.next(&mut stats.data);
+            cursor.next(&mut stats.data, None);
         }
         Ok(pairs)
     }

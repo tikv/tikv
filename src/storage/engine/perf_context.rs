@@ -87,7 +87,6 @@ impl PerfStatistics {
 pub struct PerfContextCollector<'a> {
     collect_target: &'a mut PerfStatistics,
     perf_context: PerfContext,
-
     /// Absolute statistics values retrieved at creation.
     perf: PerfStatistics,
 }
@@ -122,3 +121,23 @@ impl<'a> Drop for PerfContextCollector<'a> {
 impl<'a> !Send for PerfContextCollector<'a> {}
 
 impl<'a> !Sync for PerfContextCollector<'a> {}
+
+/// A wrapper of `PerfContextCollector` to deal with optional targets. If the collecting target
+/// is `None`, there will be no overheads.
+pub enum OptionTargetPerfContextCollector<'a> {
+    SomeTarget(PerfContextCollector<'a>),
+    EmptyTarget,
+}
+
+impl<'a> OptionTargetPerfContextCollector<'a> {
+    pub fn new(
+        collect_target: Option<&'a mut PerfStatistics>,
+    ) -> OptionTargetPerfContextCollector<'a> {
+        match collect_target {
+            Some(collect_target) => OptionTargetPerfContextCollector::SomeTarget(
+                PerfContextCollector::new(collect_target),
+            ),
+            None => OptionTargetPerfContextCollector::EmptyTarget,
+        }
+    }
+}

@@ -17,7 +17,7 @@ use super::{Error, Result};
 use kvproto::kvrpcpb::IsolationLevel;
 use raftstore::store::engine::IterOption;
 use std::u64;
-use storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
+use storage::engine::{Cursor, PerfStatistics, ScanMode, Snapshot, Statistics};
 use storage::{Key, Value, CF_LOCK, CF_WRITE};
 use util::properties::MvccProperties;
 
@@ -34,6 +34,7 @@ const REVERSE_SEEK_BOUND: u64 = 32;
 pub struct MvccReader {
     snapshot: Box<Snapshot>,
     statistics: Statistics,
+    perf_statistics: PerfStatistics,
     // cursors are used for speeding up scans.
     data_cursor: Option<Cursor>,
     lock_cursor: Option<Cursor>,
@@ -60,6 +61,7 @@ impl MvccReader {
         MvccReader {
             snapshot,
             statistics: Statistics::default(),
+            perf_statistics: PerfStatistics::default(),
             data_cursor: None,
             lock_cursor: None,
             write_cursor: None,
@@ -81,6 +83,11 @@ impl MvccReader {
         self.statistics = Statistics::default();
     }
 
+    pub fn collect_perf_statistics_into(&mut self, perf_stats: &mut PerfStatistics) {
+        perf_stats.add(&self.perf_statistics);
+        self.perf_statistics = PerfStatistics::default();
+    }
+
     pub fn set_key_only(&mut self, key_only: bool) {
         self.key_only = key_only;
     }
@@ -96,7 +103,11 @@ impl MvccReader {
 
         let k = key.append_ts(ts);
         let res = if let Some(ref mut cursor) = self.data_cursor {
-            match cursor.get(&k, &mut self.statistics.data)? {
+            match cursor.get(
+                &k,
+                &mut self.statistics.data,
+                Some(&mut self.perf_statistics),
+            )? {
                 None => panic!("key {} not found, ts {}", key, ts),
                 Some(v) => v.to_vec(),
             }
@@ -123,7 +134,11 @@ impl MvccReader {
         }
 
         let res = if let Some(ref mut cursor) = self.lock_cursor {
-            match cursor.get(key, &mut self.statistics.lock)? {
+            match cursor.get(
+                key,
+                &mut self.statistics.lock,
+                Some(&mut self.perf_statistics),
+            )? {
                 Some(v) => Some(Lock::parse(v)?),
                 None => None,
             }
@@ -182,9 +197,17 @@ impl MvccReader {
 
         let cursor = self.write_cursor.as_mut().unwrap();
         let ok = if reverse {
-            cursor.near_seek_for_prev(&key.append_ts(ts), &mut self.statistics.write)?
+            cursor.near_seek_for_prev(
+                &key.append_ts(ts),
+                &mut self.statistics.write,
+                Some(&mut self.perf_statistics),
+            )?
         } else {
-            cursor.near_seek(&key.append_ts(ts), &mut self.statistics.write)?
+            cursor.near_seek(
+                &key.append_ts(ts),
+                &mut self.statistics.write,
+                Some(&mut self.perf_statistics),
+            )?
         };
         if !ok {
             return Ok(None);
@@ -318,13 +341,14 @@ impl MvccReader {
         self.create_write_cursor()?;
 
         let cursor = self.write_cursor.as_mut().unwrap();
-        let mut ok = cursor.seek_to_first(&mut self.statistics.write);
+        let mut ok =
+            cursor.seek_to_first(&mut self.statistics.write, Some(&mut self.perf_statistics));
 
         while ok {
             if Write::parse(cursor.value())?.start_ts == ts {
                 return Ok(Some(Key::from_encoded(cursor.key().to_vec()).truncate_ts()?));
             }
-            ok = cursor.next(&mut self.statistics.write);
+            ok = cursor.next(&mut self.statistics.write, Some(&mut self.perf_statistics));
         }
         Ok(None)
     }
@@ -342,7 +366,11 @@ impl MvccReader {
                 let l_cur = self.lock_cursor.as_mut().unwrap();
                 let (mut w_key, mut l_key) = (None, None);
                 if write_valid {
-                    if w_cur.near_seek(&key, &mut self.statistics.write)? {
+                    if w_cur.near_seek(
+                        &key,
+                        &mut self.statistics.write,
+                        Some(&mut self.perf_statistics),
+                    )? {
                         w_key = Some(w_cur.key());
                     } else {
                         w_key = None;
@@ -350,7 +378,11 @@ impl MvccReader {
                     }
                 }
                 if lock_valid {
-                    if l_cur.near_seek(&key, &mut self.statistics.lock)? {
+                    if l_cur.near_seek(
+                        &key,
+                        &mut self.statistics.lock,
+                        Some(&mut self.perf_statistics),
+                    )? {
                         l_key = Some(l_cur.key());
                     } else {
                         l_key = None;
@@ -387,7 +419,11 @@ impl MvccReader {
                 let l_cur = self.lock_cursor.as_mut().unwrap();
                 let (mut w_key, mut l_key) = (None, None);
                 if write_valid {
-                    if w_cur.near_reverse_seek(&key, &mut self.statistics.write)? {
+                    if w_cur.near_reverse_seek(
+                        &key,
+                        &mut self.statistics.write,
+                        Some(&mut self.perf_statistics),
+                    )? {
                         w_key = Some(w_cur.key());
                     } else {
                         w_key = None;
@@ -395,7 +431,11 @@ impl MvccReader {
                     }
                 }
                 if lock_valid {
-                    if l_cur.near_reverse_seek(&key, &mut self.statistics.lock)? {
+                    if l_cur.near_reverse_seek(
+                        &key,
+                        &mut self.statistics.lock,
+                        Some(&mut self.perf_statistics),
+                    )? {
                         l_key = Some(l_cur.key());
                     } else {
                         l_key = None;
@@ -485,16 +525,17 @@ impl MvccReader {
             self.write_cursor
                 .as_mut()
                 .unwrap()
-                .prev(&mut self.statistics.write);
+                .prev(&mut self.statistics.write, Some(&mut self.perf_statistics));
         }
 
         // After several prev, we still not get the latest version for the specified ts,
         // use seek to locate the latest version.
         let key = user_key.append_ts(ts);
-        let valid = self.write_cursor
-            .as_mut()
-            .unwrap()
-            .internal_seek(&key, &mut self.statistics.write)?;
+        let valid = self.write_cursor.as_mut().unwrap().internal_seek(
+            &key,
+            &mut self.statistics.write,
+            Some(&mut self.perf_statistics),
+        )?;
         assert!(valid);
         loop {
             let mut write = {
@@ -531,7 +572,9 @@ impl MvccReader {
                 WriteType::Delete => return Ok(None),
                 WriteType::Lock | WriteType::Rollback => {
                     let w_cur = self.write_cursor.as_mut().unwrap();
-                    assert!(w_cur.next(&mut self.statistics.write));
+                    assert!(
+                        w_cur.next(&mut self.statistics.write, Some(&mut self.perf_statistics))
+                    );
                 }
             }
         }
@@ -563,8 +606,14 @@ impl MvccReader {
         self.create_lock_cursor()?;
         let cursor = self.lock_cursor.as_mut().unwrap();
         let ok = match start {
-            Some(ref x) => cursor.seek(x, &mut self.statistics.lock)?,
-            None => cursor.seek_to_first(&mut self.statistics.lock),
+            Some(ref x) => cursor.seek(
+                x,
+                &mut self.statistics.lock,
+                Some(&mut self.perf_statistics),
+            )?,
+            None => {
+                cursor.seek_to_first(&mut self.statistics.lock, Some(&mut self.perf_statistics))
+            }
         };
         if !ok {
             return Ok((vec![], None));
@@ -579,7 +628,7 @@ impl MvccReader {
                     return Ok((locks, Some(key)));
                 }
             }
-            cursor.next(&mut self.statistics.lock);
+            cursor.next(&mut self.statistics.lock, Some(&mut self.perf_statistics));
         }
         self.statistics.lock.processed += locks.len();
         Ok((locks, None))
@@ -596,8 +645,13 @@ impl MvccReader {
         let mut keys = vec![];
         loop {
             let ok = match start {
-                Some(ref x) => cursor.near_seek(x, &mut self.statistics.write)?,
-                None => cursor.seek_to_first(&mut self.statistics.write),
+                Some(ref x) => cursor.near_seek(
+                    x,
+                    &mut self.statistics.write,
+                    Some(&mut self.perf_statistics),
+                )?,
+                None => cursor
+                    .seek_to_first(&mut self.statistics.write, Some(&mut self.perf_statistics)),
             };
             if !ok {
                 return Ok((keys, None));
@@ -616,7 +670,11 @@ impl MvccReader {
     pub fn scan_values_in_default(&mut self, key: &Key) -> Result<Vec<(u64, Value)>> {
         self.create_data_cursor()?;
         let cursor = self.data_cursor.as_mut().unwrap();
-        let mut ok = cursor.seek(key, &mut self.statistics.data)?;
+        let mut ok = cursor.seek(
+            key,
+            &mut self.statistics.data,
+            Some(&mut self.perf_statistics),
+        )?;
         if !ok {
             return Ok(vec![]);
         }
@@ -630,7 +688,7 @@ impl MvccReader {
             if cur_key_without_ts.encoded().as_slice() != key.encoded().as_slice() {
                 break;
             }
-            ok = cursor.next(&mut self.statistics.data);
+            ok = cursor.next(&mut self.statistics.data, Some(&mut self.perf_statistics));
         }
         Ok(v)
     }
