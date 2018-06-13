@@ -739,7 +739,14 @@ impl Peer {
     pub fn check_stale_state(&mut self) -> StaleState {
         let naive_peer = !self.is_initialized() || self.raft_group.raft.is_learner;
         // Updates the `leader_missing_time` according to the current state.
-        if self.leader_id() == raft::INVALID_ID {
+        // If we haven't heard from any peer in a heartbeat interval, or there is no peers, we're
+        // probably isolated.
+        if self.peer_heartbeats
+            .values()
+            .max()
+            .map(|x| x.elapsed() >= self.cfg.raft_heartbeat_interval())
+            .unwrap_or(true)
+        {
             if self.leader_missing_time.is_none() {
                 self.leader_missing_time = Some(Instant::now())
             }

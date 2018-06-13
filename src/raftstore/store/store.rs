@@ -78,7 +78,7 @@ type Key = Vec<u8>;
 const MIO_TICK_RATIO: u64 = 10;
 const PENDING_VOTES_CAP: usize = 20;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Engines {
     pub kv_engine: Arc<DB>,
     pub raft_engine: Arc<DB>,
