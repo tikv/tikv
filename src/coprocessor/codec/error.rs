@@ -11,15 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error::Error as StdError;
 use std::io;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use std::{error, str};
 use tipb::expression::ScalarFuncSig;
 use tipb::select;
+
+use regex::Error as RegexpError;
 use util;
 
 pub const ERR_UNKNOWN: i32 = 1105;
+pub const ERR_REGEXP: i32 = 1139;
 pub const WARN_DATA_TRUNCATED: i32 = 1265;
 pub const ERR_TRUNCATE_WRONG_VALUE: i32 = 1292;
 pub const ERR_UNKNOWN_TIMEZONE: i32 = 1298;
@@ -145,6 +149,13 @@ impl From<io::Error> for Error {
     fn from(err: io::Error) -> Error {
         let uerr: util::codec::Error = err.into();
         uerr.into()
+    }
+}
+
+impl From<RegexpError> for Error {
+    fn from(err: RegexpError) -> Error {
+        let msg = format!("Got error '{:.64}' from regexp", err.description());
+        Error::Eval(msg, ERR_REGEXP)
     }
 }
 
