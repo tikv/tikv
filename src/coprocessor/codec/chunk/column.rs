@@ -193,7 +193,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        number::decode_i64_le(&mut data)
+        number::decode_i64_le(&mut data).map_err(From::from)
     }
 
     pub fn append_u64(&mut self, v: u64) -> Result<()> {
@@ -205,7 +205,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        number::decode_u64_le(&mut data)
+        number::decode_u64_le(&mut data).map_err(From::from)
     }
 
     pub fn append_f64(&mut self, v: f64) -> Result<()> {
@@ -217,7 +217,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        number::decode_f64_le(&mut data)
+        number::decode_f64_le(&mut data).map_err(From::from)
     }
 
     fn finished_append_var(&mut self) -> Result<()> {

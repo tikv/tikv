@@ -90,7 +90,7 @@ pub fn decode_table_id(key: &[u8]) -> Result<i64> {
     }
 
     let mut remaining = &key[TABLE_PREFIX.len()..];
-    number::decode_i64(&mut remaining)
+    number::decode_i64(&mut remaining).map_err(From::from)
 }
 
 pub fn flatten(data: Datum) -> Result<Datum> {
@@ -161,7 +161,7 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
     }
 
     remaining = &remaining[RECORD_PREFIX_SEP.len()..];
-    number::decode_i64(&mut remaining)
+    number::decode_i64(&mut remaining).map_err(From::from)
 }
 
 /// `truncate_as_row_key` truncate extra part of a tidb key and just keep the row key part.

@@ -709,11 +709,11 @@ mod test {
 
     use chrono::{FixedOffset, Utc};
 
+    use coprocessor::codec::error::*;
     use coprocessor::codec::mysql::{self, charset, types, Decimal, Duration, Json, Time};
     use coprocessor::codec::{convert, Datum};
     use coprocessor::dag::expr::test::{col_expr as base_col_expr, fncall_expr};
     use coprocessor::dag::expr::{self, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
-    use util::codec;
 
     pub fn col_expr(col_id: i64, tp: i32) -> Expr {
         let mut expr = base_col_expr(col_id);
@@ -1845,7 +1845,7 @@ mod test {
             assert_eq!(ctx.warnings.warning_cnt, 1);
             assert_eq!(
                 ctx.warnings.warnings[0].get_code(),
-                codec::ERR_TRUNCATE_WRONG_VALUE
+                ERR_TRUNCATE_WRONG_VALUE
             );
 
             // test overflow as error
@@ -1885,7 +1885,7 @@ mod test {
             assert_eq!(res, exp);
             assert_eq!(ctx.warnings.warning_cnt, warnings_cnt);
             if warnings_cnt > 0 {
-                assert_eq!(ctx.warnings.warnings[0].get_code(), codec::ERR_UNKNOWN);
+                assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_UNKNOWN);
             }
         }
 
@@ -1916,7 +1916,7 @@ mod test {
             assert_eq!(ctx.warnings.warning_cnt, 1);
             assert_eq!(
                 ctx.warnings.warnings[0].get_code(),
-                codec::ERR_TRUNCATE_WRONG_VALUE
+                ERR_TRUNCATE_WRONG_VALUE
             );
 
             // test overflow as error
@@ -1943,7 +1943,7 @@ mod test {
     //     let res = e.eval_duration(&mut ctx, &cols).unwrap();
     //     assert!(res.is_none());
     //     assert_eq!(ctx.warnings.warning_cnt, 1);
-    //     assert_eq!(ctx.warnings.warnings[0].get_code(), codec::ERR_DATA_OUT_OF_RANGE);
+    //     assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
 
     //     // test overflow as error
     //     ctx = EvalContext::new(Arc::new(EvalConfig::default()));

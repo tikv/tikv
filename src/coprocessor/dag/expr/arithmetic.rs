@@ -280,6 +280,7 @@ impl FnCall {
 
 #[cfg(test)]
 mod test {
+    use coprocessor::codec::error::ERR_DIVISION_BY_ZERO;
     use coprocessor::codec::mysql::{types, Decimal};
     use coprocessor::codec::{mysql, Datum};
     use coprocessor::dag::expr::test::{check_divide_by_zero, check_overflow, datum_expr,
@@ -288,7 +289,6 @@ mod test {
     use std::sync::Arc;
     use std::{f64, i64, u64};
     use tipb::expression::ScalarFuncSig;
-    use util::codec::ERR_DIVISION_BY_ZERO;
 
     #[test]
     fn test_arithmetic_int() {
