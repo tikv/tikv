@@ -19,6 +19,7 @@
 #![feature(box_syntax)]
 #![feature(integer_atomics)]
 #![feature(entry_or_default)]
+#![feature(optin_builtin_traits)]
 #![cfg_attr(feature = "dev", feature(plugin))]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]

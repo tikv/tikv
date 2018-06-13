@@ -28,9 +28,14 @@ use config;
 use util::rocksdb::CFOptions;
 
 mod metrics;
+mod perf_context;
 pub mod raftkv;
 mod rocksdb;
+
 use super::super::raftstore::store::engine::IterOption;
+
+use self::perf_context::PerfContextCollector;
+pub use self::perf_context::PerfStatistics;
 
 // only used for rocksdb without persistent.
 pub const TEMP_DIR: &str = "";
@@ -193,6 +198,7 @@ pub struct CFStatistics {
     pub seek_for_prev: usize,
     pub over_seek_bound: usize,
     pub flow_stats: FlowStatistics,
+    pub perf_stats: PerfStatistics,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -236,6 +242,7 @@ impl CFStatistics {
         self.seek_for_prev = self.seek_for_prev.saturating_add(other.seek_for_prev);
         self.over_seek_bound = self.over_seek_bound.saturating_add(other.over_seek_bound);
         self.flow_stats.add(&other.flow_stats);
+        self.perf_stats.add(&other.perf_stats);
     }
 
     pub fn scan_info(&self) -> ScanInfo {
@@ -317,6 +324,8 @@ impl Cursor {
     }
 
     pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        let _ = PerfContextCollector::new(&mut statistics.perf_stats);
+
         assert_ne!(self.scan_mode, ScanMode::Backward);
         if self.max_key.as_ref().map_or(false, |k| k <= key.encoded()) {
             self.iter.validate_key(key)?;
@@ -343,6 +352,8 @@ impl Cursor {
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `seek` instead.
     pub fn near_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        let _ = PerfContextCollector::new(&mut statistics.perf_stats);
+
         assert_ne!(self.scan_mode, ScanMode::Backward);
         if !self.iter.valid() {
             return self.seek(key, statistics);
@@ -391,6 +402,8 @@ impl Cursor {
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should `seek` first.
     pub fn get(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<Option<&[u8]>> {
+        let _ = PerfContextCollector::new(&mut statistics.perf_stats);
+
         if self.scan_mode != ScanMode::Backward {
             if self.near_seek(key, statistics)? && self.iter.key() == &**key.encoded() {
                 return Ok(Some(self.iter.value()));
@@ -404,6 +417,8 @@ impl Cursor {
     }
 
     fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        let _ = PerfContextCollector::new(&mut statistics.perf_stats);
+
         assert_ne!(self.scan_mode, ScanMode::Forward);
         if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
             self.iter.validate_key(key)?;
@@ -426,6 +441,8 @@ impl Cursor {
 
     /// Find the largest key that is not greater than the specific key.
     pub fn near_seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        let _ = PerfContextCollector::new(&mut statistics.perf_stats);
+
         assert_ne!(self.scan_mode, ScanMode::Forward);
         if !self.iter.valid() {
             return self.seek_for_prev(key, statistics);
@@ -471,6 +488,8 @@ impl Cursor {
     }
 
     pub fn reverse_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        let _ = PerfContextCollector::new(&mut statistics.perf_stats);
+
         if !self.seek_for_prev(key, statistics)? {
             return Ok(false);
         }
@@ -489,6 +508,8 @@ impl Cursor {
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `reverse_seek` instead.
     pub fn near_reverse_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        let _ = PerfContextCollector::new(&mut statistics.perf_stats);
+
         if !self.near_seek_for_prev(key, statistics)? {
             return Ok(false);
         }
@@ -512,30 +533,40 @@ impl Cursor {
 
     #[inline]
     pub fn seek_to_first(&mut self, statistics: &mut CFStatistics) -> bool {
+        let _ = PerfContextCollector::new(&mut statistics.perf_stats);
+
         statistics.seek += 1;
         self.iter.seek_to_first()
     }
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CFStatistics) -> bool {
+        let _ = PerfContextCollector::new(&mut statistics.perf_stats);
+
         statistics.seek += 1;
         self.iter.seek_to_last()
     }
 
     #[inline]
     pub fn internal_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        let _ = PerfContextCollector::new(&mut statistics.perf_stats);
+
         statistics.seek += 1;
         self.iter.seek(key)
     }
 
     #[inline]
     pub fn next(&mut self, statistics: &mut CFStatistics) -> bool {
+        let _ = PerfContextCollector::new(&mut statistics.perf_stats);
+
         statistics.next += 1;
         self.iter.next()
     }
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CFStatistics) -> bool {
+        let _ = PerfContextCollector::new(&mut statistics.perf_stats);
+
         statistics.prev += 1;
         self.iter.prev()
     }
