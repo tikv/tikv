@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::i32;
+
 use super::Result;
 use grpc::CompressionAlgorithms;
 
@@ -25,12 +27,10 @@ pub use storage::Config as StorageConfig;
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
-const DEFAULT_NOTIFY_CAPACITY: usize = 40960;
 const DEFAULT_GRPC_CONCURRENCY: usize = 4;
-const DEFAULT_GRPC_CONCURRENT_STREAM: usize = 1024;
+const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 10;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
-const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
 
 // Number of rows in each chunk.
 pub const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
@@ -59,12 +59,11 @@ pub struct Config {
     // Server advertise listening address for outer communication.
     // If not set, we will use listening address instead.
     pub advertise_addr: String,
-    pub notify_capacity: usize,
-    pub messages_per_tick: usize,
+
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
     pub grpc_compression_type: GrpcCompressionType,
     pub grpc_concurrency: usize,
-    pub grpc_concurrent_stream: usize,
+    pub grpc_concurrent_stream: i32,
     pub grpc_raft_conn_num: usize,
     pub grpc_stream_initial_window_size: ReadableSize,
     pub grpc_keepalive_time: ReadableDuration,
@@ -107,8 +106,6 @@ impl Default for Config {
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
             labels: HashMap::default(),
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
-            notify_capacity: DEFAULT_NOTIFY_CAPACITY,
-            messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
             grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
@@ -175,6 +172,12 @@ impl Config {
         if self.end_point_request_max_handle_duration.as_secs() < DEFAULT_REQUEST_MAX_HANDLE_SECS {
             return Err(box_err!(
                 "server.end-point-request-max-handle-secs is too small."
+            ));
+        }
+
+        if self.grpc_stream_initial_window_size.0 > i32::MAX as u64 {
+            return Err(box_err!(
+                "server.grpc_stream_initial_window_size is too large."
             ));
         }
 
@@ -259,6 +262,10 @@ mod tests {
         assert!(invalid_cfg.validate().is_err());
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
         invalid_cfg.validate().unwrap();
+
+        let mut invalid_cfg = cfg.clone();
+        invalid_cfg.grpc_stream_initial_window_size = ReadableSize(i32::MAX as u64 + 1);
+        assert!(invalid_cfg.validate().is_err());
 
         cfg.labels.insert("k1".to_owned(), "v1".to_owned());
         cfg.validate().unwrap();

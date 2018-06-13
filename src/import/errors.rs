@@ -82,6 +82,9 @@ quick_error! {
         EngineNotFound(uuid: Uuid) {
             display("Engine {} not found", uuid)
         }
+        InvalidProtoMessage(reason: String) {
+            display("Invalid proto message {}", reason)
+        }
         InvalidChunk {}
     }
 }

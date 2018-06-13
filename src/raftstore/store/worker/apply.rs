@@ -40,9 +40,10 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::engine::{Mutable, Peekable, Snapshot};
 use raftstore::store::metrics::*;
 use raftstore::store::msg::Callback;
-use raftstore::store::peer::{check_epoch, Peer};
+use raftstore::store::peer::Peer;
 use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply_state,
                                      write_peer_state};
+use raftstore::store::util::check_region_epoch;
 use raftstore::store::{cmd_resp, keys, util, Store};
 use raftstore::{Error, Result};
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -55,6 +56,7 @@ use super::metrics::*;
 
 const WRITE_BATCH_MAX_KEYS: usize = 128;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
+const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
 pub struct PendingCmd {
     pub index: u64,
@@ -104,6 +106,11 @@ pub struct PendingCmdQueue {
 impl PendingCmdQueue {
     fn pop_normal(&mut self, term: u64) -> Option<PendingCmd> {
         self.normals.pop_front().and_then(|cmd| {
+            if self.normals.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP
+                && self.normals.len() < SHRINK_PENDING_CMD_QUEUE_CAP
+            {
+                self.normals.shrink_to_fit();
+            }
             if cmd.term > term {
                 self.normals.push_front(cmd);
                 return None;
@@ -885,7 +892,7 @@ impl ApplyDelegate {
         // Include region for stale epoch after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
-        check_epoch(&self.region, &req, include_region)?;
+        check_region_epoch(&req, &self.region, include_region)?;
         if req.has_admin_request() {
             self.exec_admin_cmd(ctx, req.get_admin_request())
         } else {
