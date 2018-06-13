@@ -882,8 +882,7 @@ fn process_write_impl(
                 }
                 // TODO: we may delete only part of the versions in a batch, which may not beyond
                 // the logging threshold `GC_LOG_DELETED_VERSION_THRESHOLD`.
-                if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD
-                {
+                if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
                     info!(
                         "[region {}] GC deleted {} versions for key {}",
                         ctx.get_region_id(),
