@@ -191,7 +191,7 @@ impl FnCall {
         match lhs.into_owned() / rhs.into_owned() {
             Some(v) => match v {
                 Res::Ok(v) => Ok(Some(Cow::Owned(v))),
-                Res::Truncated(v) => Err(Error::Truncated(format!("{} truncated", v))),
+                Res::Truncated(_) => Err(Error::truncated()),
                 Res::Overflow(_) => Err(overflow),
             },
             None => ctx.handle_division_by_zero().map(|()| None),
@@ -251,7 +251,7 @@ impl FnCall {
         match lhs.into_owned() % rhs.into_owned() {
             Some(v) => match v {
                 Res::Ok(v) => Ok(Some(Cow::Owned(v))),
-                Res::Truncated(v) => Err(Error::Truncated(format!("{} truncated", v))),
+                Res::Truncated(_) => Err(Error::truncated()),
                 Res::Overflow(_) => Err(overflow),
             },
             None => Ok(None),
