@@ -29,17 +29,17 @@ enum Payload<T> {
     Blocked(*mut thread::Thread),
 }
 
-const CELLS_NUM: usize = 1 << 9;
-const CELLS_BIT: usize = CELLS_NUM - 1;
-const SPINS: usize = 1 << 5;
-const DEFAULT_THRESHOLD: usize = 1 << 3;
-const PUT_FLAG: u32 = 1;
-const POP_FLAG: u32 = 1 << 1;
-const BOTH_FLAG: u32 = PUT_FLAG | POP_FLAG;
+const SPMCQUEUE_CELLS_NUM: usize = 1 << 9;
+const SPMCQUEUE_CELLS_BIT: usize = SPMCQUEUE_CELLS_NUM - 1;
+const SPMCQUEUE_SPINS: usize = 1 << 5;
+const SPMCQUEUE_DEFAULT_THRESHOLD: usize = 1 << 3;
+const SPMCQUEUE_PUT_FLAG: u32 = 1;
+const SPMCQUEUE_POP_FLAG: u32 = 1 << 1;
+const SPMCQUEUE_BOTH_FLAG: u32 = SPMCQUEUE_PUT_FLAG | SPMCQUEUE_POP_FLAG;
 
 struct Node<T> {
     id: usize,
-    cells: [AtomicPtr<Payload<T>>; CELLS_NUM],
+    cells: [AtomicPtr<Payload<T>>; SPMCQUEUE_CELLS_NUM],
     next: AtomicPtr<Node<T>>,
 }
 
@@ -98,13 +98,13 @@ impl<T> Handle<T> {
     }
 
     pub fn update_pop_node(&mut self) {
-        assert_eq!(self.role_flag, POP_FLAG);
+        assert_eq!(self.role_flag, SPMCQUEUE_POP_FLAG);
         let queue = unsafe { &*self.queue };
         queue.update_pop_node(self);
     }
 
     pub fn stop(&mut self) {
-        assert_eq!(self.role_flag, PUT_FLAG);
+        assert_eq!(self.role_flag, SPMCQUEUE_PUT_FLAG);
         let queue = unsafe { &*self.queue };
         queue.stop();
     }
@@ -138,7 +138,7 @@ impl<T> Queue_<T> {
         }
 
         Queue_ {
-            threshold: DEFAULT_THRESHOLD,
+            threshold: SPMCQUEUE_DEFAULT_THRESHOLD,
             next_reclaim_index: AtomicUsize::new(0),
             next_reclaim_node_ptr: AtomicPtr::new(node_ptr),
             put_node: AtomicPtr::new(node_ptr),
@@ -155,15 +155,15 @@ impl<T> Queue_<T> {
     }
 
     pub fn register_as_producer(&self) -> *mut Handle<T> {
-        self.register(PUT_FLAG)
+        self.register(SPMCQUEUE_PUT_FLAG)
     }
 
     pub fn register_as_consumer(&self) -> *mut Handle<T> {
-        self.register(POP_FLAG)
+        self.register(SPMCQUEUE_POP_FLAG)
     }
 
     fn register(&self, flag: u32) -> *mut Handle<T> {
-        if flag & BOTH_FLAG == BOTH_FLAG {
+        if flag & SPMCQUEUE_BOTH_FLAG == SPMCQUEUE_BOTH_FLAG {
             panic!("thread can't both be enqueuer and dequeuer");
         }
 
@@ -177,7 +177,7 @@ impl<T> Queue_<T> {
             role_flag: flag,
         }));
         let handle_obj = unsafe { &mut *handle };
-        if flag & PUT_FLAG == PUT_FLAG {
+        if flag & SPMCQUEUE_PUT_FLAG == SPMCQUEUE_PUT_FLAG {
             let mut i = 0;
             while i < self.num_threads_put {
                 if self.put_handles[i]
@@ -198,7 +198,7 @@ impl<T> Queue_<T> {
             }
         }
 
-        if flag & POP_FLAG == POP_FLAG {
+        if flag & SPMCQUEUE_POP_FLAG == SPMCQUEUE_POP_FLAG {
             handle_obj.thread.store(
                 Box::into_raw(Box::new(thread::current())),
                 Ordering::Release,
@@ -274,9 +274,9 @@ impl<T> Queue_<T> {
         // get the node_id and node_index.
         let mut put_index = self.put_index;
         self.put_index = put_index + 1;
-        let id = put_index / CELLS_NUM;
+        let id = put_index / SPMCQUEUE_CELLS_NUM;
         // put_index in the node
-        put_index &= CELLS_BIT;
+        put_index &= SPMCQUEUE_CELLS_BIT;
 
         // Try to fill in the nodes we need
         let node_ptr = private_put_handle.put_node.load(Ordering::Acquire);
@@ -300,75 +300,6 @@ impl<T> Queue_<T> {
         }
     }
 
-    /*
-    fn pop(&self, private_pop_handle: &mut Handle<T>) -> Option<T> {
-        let mut v;
-        let mut pop_index = self.pop_index.fetch_add(1, Ordering::Relaxed);
-        let id = pop_index / CELLS_NUM;
-        // pop_index in node
-        pop_index &= CELLS_BIT;
-
-        // Try to fill in the nodes we need
-        let node_ptr = private_pop_handle.pop_node.load(Ordering::Acquire);
-        let private_pop_node = self.update_private_node(private_pop_handle, node_ptr, id);
-        private_pop_handle.pop_node.store(
-            private_pop_node as *const Node<T> as *mut Node<T>,
-            Ordering::Release,
-        );
-
-        if self.stopped.load(Ordering::Acquire) {
-            // queue is stopped, and return None,
-            return self.try_clean_none(private_pop_handle, pop_index);
-        }
-
-        // pop_index in private_pop_node is the need'd cell
-        // to test SPINS times to probes the datas
-        let mut times = SPINS;
-        loop {
-            v = private_pop_node.cells[pop_index].load(Ordering::Acquire);
-            if !v.is_null() {
-                return self.get_data(v, private_pop_handle, pop_index);
-            }
-            times -= 1;
-            if times == 0 {
-                break;
-            }
-        }
-
-        // now We've tried many times. should wait for data
-        let ptr_handle = private_pop_handle.thread.load(Ordering::Acquire);
-        let ptr = Box::into_raw(Box::new(Payload::Blocked(ptr_handle)));
-
-        v = private_pop_node.cells[pop_index].swap(ptr, Ordering::Relaxed);
-        if v.is_null() {
-            // we should wait for the data..(woke by producers)
-            thread::park();
-            if self.stopped.load(Ordering::Acquire) {
-                // queue is stopped, and return None,
-                return self.try_clean_none(private_pop_handle, pop_index);
-            }
-            v = private_pop_node.cells[pop_index].load(Ordering::Acquire);
-            while v == ptr {
-                // with spurious wakeup
-                thread::park();
-                if self.stopped.load(Ordering::Acquire) {
-                    // queue is stopped, and return None,
-                    return self.try_clean_none(private_pop_handle, pop_index);
-                }
-                v = private_pop_node.cells[pop_index].load(Ordering::Acquire);
-            }
-            self.get_data(v, private_pop_handle, pop_index)
-        } else {
-            // v is not null, We got the data
-            unsafe {
-                // just reclaim the not needed data
-                Box::from_raw(ptr);
-            }
-            self.get_data(v, private_pop_handle, pop_index)
-        }
-    }
-    */
-
     /// Called while spinning (name borrowed from Linux). Can be implemented to call
     /// a platform-specific method of lightening CPU load in spinlocks.
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -388,9 +319,9 @@ impl<T> Queue_<T> {
     fn pop(&self, private_pop_handle: &mut Handle<T>) -> Result<T, usize> {
         let mut v;
         let mut pop_index = self.pop_index.fetch_add(1, Ordering::Relaxed);
-        let id = pop_index / CELLS_NUM;
+        let id = pop_index / SPMCQUEUE_CELLS_NUM;
         // pop_index in node
-        pop_index &= CELLS_BIT;
+        pop_index &= SPMCQUEUE_CELLS_BIT;
 
         // Try to fill in the nodes we need
         let node_ptr = private_pop_handle.pop_node.load(Ordering::Acquire);
@@ -406,8 +337,8 @@ impl<T> Queue_<T> {
         }
 
         // pop_index in private_pop_node is the need'd cell
-        // to test SPINS times to probes the datas
-        let mut times = SPINS;
+        // to test SPMCQUEUE_SPINS times to probes the datas
+        let mut times = SPMCQUEUE_SPINS;
         loop {
             v = private_pop_node.cells[pop_index].load(Ordering::Acquire);
             if !v.is_null() {
@@ -502,7 +433,7 @@ impl<T> Queue_<T> {
     }
 
     fn update_pop_node(&self, private_pop_handle: &mut Handle<T>) {
-        let id = self.pop_index.load(Ordering::Acquire) / CELLS_NUM;
+        let id = self.pop_index.load(Ordering::Acquire) / SPMCQUEUE_CELLS_NUM;
         let node_ptr = private_pop_handle.pop_node.load(Ordering::Acquire);
         let private_pop_node = self.update_private_node(private_pop_handle, node_ptr, id);
         private_pop_handle.pop_node.store(
@@ -521,11 +452,12 @@ impl<T> Queue_<T> {
     }
 
     fn try_clean(&self, private_pop_handle: &mut Handle<T>, pop_index: usize) {
-        if pop_index & CELLS_BIT == CELLS_BIT {
+        if pop_index & SPMCQUEUE_CELLS_BIT == SPMCQUEUE_CELLS_BIT {
             //fence(Ordering::Acquire);
             let init_index = self.next_reclaim_index.load(Ordering::Acquire);
-            if ((unsafe { &*private_pop_handle.pop_node.load(Ordering::Acquire) }.id) - init_index)
-                >= self.threshold && init_index < usize::MAX
+            if init_index < usize::MAX && ((unsafe {
+                &*private_pop_handle.pop_node.load(Ordering::Acquire)
+            }.id) - init_index) >= self.threshold
                 && self.next_reclaim_index
                     .compare_exchange(init_index, usize::MAX, Ordering::Release, Ordering::Relaxed)
                     .is_ok()
