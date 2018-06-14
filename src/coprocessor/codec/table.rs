@@ -336,7 +336,7 @@ impl RowColsDict {
     }
 
     // get binary of cols, keep the origin order, return one slice and cols' end offsets.
-    pub fn get_column_values_and_offsets(&self) -> (&[u8], Vec<usize>) {
+    pub fn get_column_values_and_end_offsets(&self) -> (&[u8], Vec<usize>) {
         let mut start = self.value.len();
         let mut length = 0;
         for meta in self.cols.values() {
@@ -345,12 +345,12 @@ impl RowColsDict {
             }
             length += meta.length;
         }
-        let offsets = self.cols
+        let end_offsets = self.cols
             .values()
             .into_iter()
             .map(|meta| meta.offset + meta.length - start)
             .collect();
-        (&self.value[start..start + length], offsets)
+        (&self.value[start..start + length], end_offsets)
     }
 }
 
