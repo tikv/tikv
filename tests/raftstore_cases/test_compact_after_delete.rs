@@ -40,6 +40,7 @@ fn gen_delete_k(k: &[u8], commit_ts: u64) -> Vec<u8> {
 fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.region_compact_check_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.region_compact_min_tombstones = 500;
+    cluster.cfg.raft_store.region_compact_tombstones_percent = 50;
     cluster.cfg.raft_store.region_compact_check_step = 1;
     cluster.run();
 

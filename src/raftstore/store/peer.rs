@@ -52,7 +52,7 @@ use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::store::{DestroyPeerJob, Store};
 use super::transport::Transport;
-use super::util::{self, Lease, LeaseState};
+use super::util::{self, check_region_epoch, Lease, LeaseState};
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
@@ -1764,74 +1764,6 @@ impl Peer {
     }
 }
 
-pub fn check_epoch(
-    region: &metapb::Region,
-    req: &RaftCmdRequest,
-    include_region: bool,
-) -> Result<()> {
-    let (mut check_ver, mut check_conf_ver) = (false, false);
-    if !req.has_admin_request() {
-        // for get/set/delete, we don't care conf_version.
-        check_ver = true;
-    } else {
-        match req.get_admin_request().get_cmd_type() {
-            AdminCmdType::CompactLog
-            | AdminCmdType::InvalidAdmin
-            | AdminCmdType::ComputeHash
-            | AdminCmdType::VerifyHash => {}
-            AdminCmdType::Split => check_ver = true,
-            AdminCmdType::ChangePeer => check_conf_ver = true,
-            AdminCmdType::PrepareMerge
-            | AdminCmdType::CommitMerge
-            | AdminCmdType::RollbackMerge
-            | AdminCmdType::TransferLeader => {
-                check_ver = true;
-                check_conf_ver = true;
-            }
-        };
-    }
-
-    if !check_ver && !check_conf_ver {
-        return Ok(());
-    }
-
-    if !req.get_header().has_region_epoch() {
-        return Err(box_err!("missing epoch!"));
-    }
-
-    let from_epoch = req.get_header().get_region_epoch();
-    let latest_epoch = region.get_region_epoch();
-
-    // should we use not equal here?
-    if (check_conf_ver && from_epoch.get_conf_ver() < latest_epoch.get_conf_ver())
-        || (check_ver && from_epoch.get_version() < latest_epoch.get_version())
-    {
-        debug!(
-            "[region {}] received stale epoch {:?}, mime: {:?}",
-            region.get_id(),
-            from_epoch,
-            latest_epoch
-        );
-        let regions = if include_region {
-            vec![region.to_owned()]
-        } else {
-            vec![]
-        };
-        return Err(Error::StaleEpoch(
-            format!(
-                "latest_epoch of region {} is {:?}, but you \
-                 sent {:?}",
-                region.get_id(),
-                latest_epoch,
-                from_epoch
-            ),
-            regions,
-        ));
-    }
-
-    Ok(())
-}
-
 impl Peer {
     pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
@@ -1991,7 +1923,7 @@ impl<'r, 'e, 't> ReadExecutor<'r, 'e, 't> {
     }
 
     fn execute(&self, msg: &RaftCmdRequest) -> Result<ReadResponse> {
-        check_epoch(self.region, msg, true)?;
+        check_region_epoch(msg, self.region, true)?;
         let mut need_snapshot = false;
         let snapshot = Snapshot::new(Arc::clone(self.engine));
         let requests = msg.get_requests();
