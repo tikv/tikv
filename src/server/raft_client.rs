@@ -13,7 +13,7 @@
 
 use std::ffi::CString;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use futures::sync::mpsc::{self, UnboundedSender};
 use futures::sync::oneshot::{self, Sender};
@@ -27,11 +27,11 @@ use super::{Config, Error, Result};
 use util::collections::HashMap;
 use util::security::SecurityManager;
 
-const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
-const MAX_GRPC_SEND_MSG_LEN: usize = 10 * 1024 * 1024;
+const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
+const MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
 const PRESERVED_MSG_BUFFER_COUNT: usize = 1024;
 
-static CONN_ID: AtomicUsize = ATOMIC_USIZE_INIT;
+static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
 struct Conn {
     stream: UnboundedSender<Vec<(RaftMessage, WriteFlags)>>,
@@ -56,7 +56,7 @@ impl Conn {
         let alive = Arc::new(AtomicBool::new(true));
         let alive1 = Arc::clone(&alive);
         let cb = ChannelBuilder::new(env)
-            .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
+            .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
             .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
             .keepalive_time(cfg.grpc_keepalive_time.0)

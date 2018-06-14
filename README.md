@@ -132,6 +132,8 @@ Currently the only interface to TiKV is the [TiDB Go client](https://github.com/
 
 **We would love it if you developed drivers in other languages.**
 
+Also please refer to our [wiki page](https://github.com/pingcap/tikv/wiki/TiKV-Documentation) for the documentation. The documentation for TiKV is very simple for now, but we are continuously improving it! We also appreciate your contributions on it.
+
 
 ### Configuration
 
@@ -140,7 +142,21 @@ Read our configuration guide to learn about the various [configuration options](
 
 ## Contributing
 
+Contributions are welcome! For beginners, we have prepared many suitable tasks for you. Please checkout our [Help Wanted issues](https://github.com/pingcap/tikv/issues?q=is%3Aissue+is%3Aopen+label%3A%22S%3A+HelpWanted%22) for a list, in which we have also marked the difficulty level we thought. If you are planning something big, for example, relates to multiple components or changes current behaviors, make sure to open an issue to discuss with us before going on :)
+
 See [CONTRIBUTING](./CONTRIBUTING.md) for details on submitting patches and the contribution workflow.
+
+In addition, TiKV team actively develops and maintains a bunch of dependencies used in TiKV, which you may be also interested in:
+
+- [rust-prometheus](https://github.com/pingcap/rust-prometheus): The Prometheus client for Rust, our metric collecting and reporting library
+
+- [rust-rocksdb](https://github.com/pingcap/rust-rocksdb): Our RocksDB binding and wrapper for Rust
+
+- [raft-rs](https://github.com/pingcap/raft-rs): The Raft distributed consensus algorithm implemented in Rust
+
+- [grpc-rs](https://github.com/pingcap/grpc-rs): The gRPC library for Rust built on gRPC C Core library and Rust Futures
+
+- [fail-rs](https://github.com/pingcap/fail-rs): Fail points for Rust
 
 
 ## License

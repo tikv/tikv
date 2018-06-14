@@ -15,8 +15,9 @@ use std::option::Option;
 use std::{fmt, u64};
 
 use kvproto::metapb;
+use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use kvproto::raft_serverpb::RaftMessage;
-use protobuf::{self, Message, MessageStatic};
+use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raftstore::store::keys;
 use raftstore::{Error, Result};
@@ -24,7 +25,7 @@ use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
 use storage::{Key, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
-use util::properties::SizeProperties;
+use util::properties::{RowsProperties, SizeProperties};
 use util::time::monotonic_raw_now;
 use util::{rocksdb as rocksdb_util, Either};
 
@@ -190,6 +191,110 @@ pub fn is_epoch_stale(epoch: &metapb::RegionEpoch, check_epoch: &metapb::RegionE
         || epoch.get_conf_ver() < check_epoch.get_conf_ver()
 }
 
+pub fn check_region_epoch(
+    req: &RaftCmdRequest,
+    region: &metapb::Region,
+    include_region: bool,
+) -> Result<()> {
+    let (mut check_ver, mut check_conf_ver) = (false, false);
+    if !req.has_admin_request() {
+        // for get/set/delete, we don't care conf_version.
+        check_ver = true;
+    } else {
+        match req.get_admin_request().get_cmd_type() {
+            AdminCmdType::CompactLog
+            | AdminCmdType::InvalidAdmin
+            | AdminCmdType::ComputeHash
+            | AdminCmdType::VerifyHash => {}
+            AdminCmdType::Split => check_ver = true,
+            AdminCmdType::ChangePeer => check_conf_ver = true,
+            AdminCmdType::PrepareMerge
+            | AdminCmdType::CommitMerge
+            | AdminCmdType::RollbackMerge
+            | AdminCmdType::TransferLeader => {
+                check_ver = true;
+                check_conf_ver = true;
+            }
+        };
+    }
+
+    if !check_ver && !check_conf_ver {
+        return Ok(());
+    }
+
+    if !req.get_header().has_region_epoch() {
+        return Err(box_err!("missing epoch!"));
+    }
+
+    let from_epoch = req.get_header().get_region_epoch();
+    let latest_epoch = region.get_region_epoch();
+
+    // should we use not equal here?
+    if (check_conf_ver && from_epoch.get_conf_ver() < latest_epoch.get_conf_ver())
+        || (check_ver && from_epoch.get_version() < latest_epoch.get_version())
+    {
+        debug!(
+            "[region {}] received stale epoch {:?}, mine: {:?}",
+            region.get_id(),
+            from_epoch,
+            latest_epoch
+        );
+        let regions = if include_region {
+            vec![region.to_owned()]
+        } else {
+            vec![]
+        };
+        return Err(Error::StaleEpoch(
+            format!(
+                "latest_epoch of region {} is {:?}, but you \
+                 sent {:?}",
+                region.get_id(),
+                latest_epoch,
+                from_epoch
+            ),
+            regions,
+        ));
+    }
+
+    Ok(())
+}
+
+#[inline]
+pub fn check_store_id(req: &RaftCmdRequest, store_id: u64) -> Result<()> {
+    let peer = req.get_header().get_peer();
+    if peer.get_store_id() == store_id {
+        Ok(())
+    } else {
+        Err(Error::StoreNotMatch(peer.get_store_id(), store_id))
+    }
+}
+
+#[inline]
+pub fn check_term(req: &RaftCmdRequest, term: u64) -> Result<()> {
+    let header = req.get_header();
+    if header.get_term() == 0 || term <= header.get_term() + 1 {
+        Ok(())
+    } else {
+        // If header's term is 2 verions behind current term,
+        // leadership may have been changed away.
+        Err(Error::StaleCommand)
+    }
+}
+
+#[inline]
+pub fn check_peer_id(req: &RaftCmdRequest, peer_id: u64) -> Result<()> {
+    let header = req.get_header();
+    if header.get_peer().get_id() == peer_id {
+        Ok(())
+    } else {
+        Err(box_err!(
+            "mismatch peer id {} != {}",
+            header.get_peer().get_id(),
+            peer_id
+        ))
+    }
+}
+
 pub fn get_region_properties_cf(
     db: &DB,
     cfname: &str,
@@ -227,6 +332,37 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
         size += get_region_approximate_size_cf(db, cfname, region)?
     }
     Ok(size)
+}
+
+/// Get the approximate number of records in the region.
+pub fn get_region_approximate_rows(db: &DB, region: &metapb::Region) -> Result<u64> {
+    let cf = rocksdb_util::get_cf_handle(db, CF_WRITE)?;
+    let start = keys::enc_start_key(region);
+    let end = keys::enc_end_key(region);
+    let range = Range::new(&start, &end);
+    let (mut rows, _) = db.get_approximate_memtable_stats_cf(cf, &range);
+    let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
+    for (_, v) in &*collection {
+        let props = RowsProperties::decode(v.user_collected_properties())?;
+        rows += props.get_approximate_rows_in_range(&start, &end);
+    }
+    Ok(rows)
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct RegionApproximateStat {
+    /// the approximate number of records in the region.
+    pub rows: u64,
+    /// the approximate size of the region.
+    pub size: u64,
+}
+
+impl RegionApproximateStat {
+    pub fn new(db: &DB, region: &metapb::Region) -> Result<RegionApproximateStat> {
+        let rows = get_region_approximate_rows(db, region)?;
+        let size = get_region_approximate_size(db, region)?;
+        Ok(RegionApproximateStat { rows, size })
+    }
 }
 
 /// Check if replicas of two regions are on the same stores.
@@ -371,7 +507,7 @@ impl fmt::Debug for Lease {
 /// If `data` is corrupted, this function will panic.
 // TODO: make sure received entries are not corrupted
 #[inline]
-pub fn parse_data_at<T: Message + MessageStatic>(data: &[u8], index: u64, tag: &str) -> T {
+pub fn parse_data_at<T: Message>(data: &[u8], index: u64, tag: &str) -> T {
     protobuf::parse_from_bytes::<T>(data).unwrap_or_else(|e| {
         panic!("{} data is corrupted at {}: {:?}", tag, index, e);
     })
@@ -411,19 +547,22 @@ mod tests {
     use std::process;
     use std::thread;
 
-    use kvproto::metapb;
+    use kvproto::metapb::{self, RegionEpoch};
+    use kvproto::raft_cmdpb::AdminRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use raft::eraftpb::{ConfChangeType, Message, MessageType};
     use rocksdb::{ColumnFamilyOptions, DBOptions, SeekKey, Writable, WriteBatch, DB};
     use tempdir::TempDir;
     use time::Duration as TimeDuration;
 
-    use super::*;
     use raftstore::store::peer_storage;
-    use storage::{Key, ALL_CFS};
-    use util::properties::SizePropertiesCollectorFactory;
+    use storage::mvcc::{Write, WriteType};
+    use storage::{Key, ALL_CFS, CF_DEFAULT};
+    use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
     use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
     use util::time::{monotonic_now, monotonic_raw_now};
+
+    use super::*;
 
     #[test]
     fn test_lease() {
@@ -618,6 +757,55 @@ mod tests {
         region.set_end_key(end_key);
         region.mut_peers().push(peer);
         region
+    }
+
+    #[test]
+    fn test_region_approximate_stats() {
+        let path = TempDir::new("_test_raftstore_region_approximate_stats").expect("");
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_level_zero_file_num_compaction_trigger(10);
+        let f = Box::new(SizePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
+        let f = Box::new(MvccPropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+        let cfs_opts = LARGE_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .collect();
+        let db = rocksdb_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+
+        let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
+        let mut write_cf_size = 0;
+        let mut default_cf_size = 0;
+        for &(key, vlen) in &cases {
+            let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(2).encoded());
+            let write_v = Write::new(WriteType::Put, 0, None).to_bytes();
+            let write_cf = db.cf_handle(CF_WRITE).unwrap();
+            db.put_cf(write_cf, &key, &write_v).unwrap();
+            db.flush_cf(write_cf, true).unwrap();
+            write_cf_size += key.len() + write_v.len();
+
+            let default_v = vec![0; vlen as usize];
+            let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
+            db.put_cf(default_cf, &key, &default_v).unwrap();
+            db.flush_cf(default_cf, true).unwrap();
+
+            default_cf_size += key.len() + default_v.len();
+        }
+
+        let region = make_region(1, vec![], vec![]);
+        let region_stat = RegionApproximateStat::new(&db, &region).unwrap();
+        assert_eq!(region_stat.size, (write_cf_size + default_cf_size) as u64);
+        // The number of records in region is the number of records in write cf.
+        assert_eq!(region_stat.rows, cases.len() as u64);
+
+        let size = get_region_approximate_size_cf(&db, CF_DEFAULT, &region).unwrap();
+        assert_eq!(size, default_cf_size as u64);
+
+        let size = get_region_approximate_size_cf(&db, CF_WRITE, &region).unwrap();
+        assert_eq!(size, write_cf_size as u64);
     }
 
     #[test]
@@ -872,5 +1060,118 @@ mod tests {
         check_sibling(&r1, &r3, false);
         check_sibling(&r2, &r4, false);
         check_sibling(&r1, &r4, false);
+    }
+
+    #[test]
+    fn test_check_store_id() {
+        let mut req = RaftCmdRequest::new();
+        req.mut_header().mut_peer().set_store_id(1);
+        check_store_id(&req, 1).unwrap();
+        check_store_id(&req, 2).unwrap_err();
+    }
+
+    #[test]
+    fn test_check_peer_id() {
+        let mut req = RaftCmdRequest::new();
+        req.mut_header().mut_peer().set_id(1);
+        check_peer_id(&req, 1).unwrap();
+        check_peer_id(&req, 2).unwrap_err();
+    }
+
+    #[test]
+    fn test_check_term() {
+        let mut req = RaftCmdRequest::new();
+        req.mut_header().set_term(7);
+        check_term(&req, 7).unwrap();
+        check_term(&req, 8).unwrap();
+        // If header's term is 2 verions behind current term,
+        // leadership may have been changed away.
+        check_term(&req, 9).unwrap_err();
+        check_term(&req, 10).unwrap_err();
+    }
+
+    #[test]
+    fn test_check_region_epoch() {
+        let mut epoch = RegionEpoch::new();
+        epoch.set_conf_ver(2);
+        epoch.set_version(2);
+        let mut region = metapb::Region::new();
+        region.set_region_epoch(epoch.clone());
+
+        // Epoch is required for most requests even if it's empty.
+        check_region_epoch(&RaftCmdRequest::new(), &region, false).unwrap_err();
+
+        // These admin commands do not require epoch.
+        for ty in &[
+            AdminCmdType::CompactLog,
+            AdminCmdType::InvalidAdmin,
+            AdminCmdType::ComputeHash,
+            AdminCmdType::VerifyHash,
+        ] {
+            let mut admin = AdminRequest::new();
+            admin.set_cmd_type(*ty);
+            let mut req = RaftCmdRequest::new();
+            req.set_admin_request(admin);
+
+            // It is Okay if req does not have region epoch.
+            check_region_epoch(&req, &region, false).unwrap();
+
+            req.mut_header().set_region_epoch(epoch.clone());
+            check_region_epoch(&req, &region, true).unwrap();
+            check_region_epoch(&req, &region, false).unwrap();
+        }
+
+        // These admin commands requires epoch.version.
+        for ty in &[
+            AdminCmdType::Split,
+            AdminCmdType::PrepareMerge,
+            AdminCmdType::CommitMerge,
+            AdminCmdType::RollbackMerge,
+            AdminCmdType::TransferLeader,
+        ] {
+            let mut admin = AdminRequest::new();
+            admin.set_cmd_type(*ty);
+            let mut req = RaftCmdRequest::new();
+            req.set_admin_request(admin);
+
+            // Error if req does not have region epoch.
+            check_region_epoch(&req, &region, false).unwrap_err();
+
+            let mut stale_version_epoch = epoch.clone();
+            stale_version_epoch.set_version(1);
+            let mut stale_region = metapb::Region::new();
+            stale_region.set_region_epoch(stale_version_epoch.clone());
+            req.mut_header()
+                .set_region_epoch(stale_version_epoch.clone());
+            check_region_epoch(&req, &stale_region, false).unwrap();
+            check_region_epoch(&req, &region, false).unwrap_err();
+            check_region_epoch(&req, &region, true).unwrap_err();
+        }
+
+        // These admin commands requires epoch.conf_version.
+        for ty in &[
+            AdminCmdType::ChangePeer,
+            AdminCmdType::PrepareMerge,
+            AdminCmdType::CommitMerge,
+            AdminCmdType::RollbackMerge,
+            AdminCmdType::TransferLeader,
+        ] {
+            let mut admin = AdminRequest::new();
+            admin.set_cmd_type(*ty);
+            let mut req = RaftCmdRequest::new();
+            req.set_admin_request(admin);
+
+            // Error if req does not have region epoch.
+            check_region_epoch(&req, &region, false).unwrap_err();
+
+            let mut stale_conf_epoch = epoch.clone();
+            stale_conf_epoch.set_conf_ver(1);
+            let mut stale_region = metapb::Region::new();
+            stale_region.set_region_epoch(stale_conf_epoch.clone());
+            req.mut_header().set_region_epoch(stale_conf_epoch.clone());
+            check_region_epoch(&req, &stale_region, false).unwrap();
+            check_region_epoch(&req, &region, false).unwrap_err();
+            check_region_epoch(&req, &region, true).unwrap_err();
+        }
     }
 }

@@ -60,8 +60,6 @@ fn test_serde_custom_tikv_config() {
         addr: "example.com:443".to_owned(),
         labels: map!{ "a".to_owned() => "b".to_owned() },
         advertise_addr: "example.com:443".to_owned(),
-        notify_capacity: 12_345,
-        messages_per_tick: 123,
         concurrent_send_snap_limit: 4,
         concurrent_recv_snap_limit: 4,
         grpc_compression_type: GrpcCompressionType::Gzip,
@@ -72,7 +70,7 @@ fn test_serde_custom_tikv_config() {
         grpc_keepalive_time: ReadableDuration::secs(3),
         grpc_keepalive_timeout: ReadableDuration::secs(60),
         end_point_concurrency: None,
-        end_point_max_tasks: 12,
+        end_point_max_tasks: None,
         end_point_stack_size: None,
         end_point_recursion_limit: 100,
         end_point_stream_channel_size: 16,
@@ -87,18 +85,18 @@ fn test_serde_custom_tikv_config() {
             high_concurrency: 1,
             normal_concurrency: 3,
             low_concurrency: 7,
-            max_tasks_high: 10000,
-            max_tasks_normal: 20000,
-            max_tasks_low: 30000,
+            max_tasks_per_worker_high: 1000,
+            max_tasks_per_worker_normal: 1500,
+            max_tasks_per_worker_low: 2500,
             stack_size: ReadableSize::mb(20),
         },
         coprocessor: CoprocessorReadPoolConfig {
             high_concurrency: 2,
             normal_concurrency: 4,
             low_concurrency: 6,
-            max_tasks_high: 20000,
-            max_tasks_normal: 30000,
-            max_tasks_low: 40000,
+            max_tasks_per_worker_high: 2000,
+            max_tasks_per_worker_normal: 1000,
+            max_tasks_per_worker_low: 3000,
             stack_size: ReadableSize::mb(12),
         },
     };
@@ -129,6 +127,7 @@ fn test_serde_custom_tikv_config() {
         clean_stale_peer_delay: ReadableDuration::secs(13),
         region_compact_check_step: 1_234,
         region_compact_min_tombstones: 999,
+        region_compact_tombstones_percent: 33,
         pd_heartbeat_tick_interval: ReadableDuration::minutes(12),
         pd_store_heartbeat_tick_interval: ReadableDuration::secs(12),
         notify_capacity: 12_345,
@@ -399,8 +398,6 @@ fn test_serde_custom_tikv_config() {
         gc_ratio_threshold: 1.2,
         max_key_size: 8192,
         scheduler_notify_capacity: 123,
-
-        scheduler_messages_per_tick: 123,
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
@@ -448,6 +445,5 @@ fn test_readpool_default_config() {
     let cfg: TiKvConfig = toml::from_str(content).unwrap();
     let mut expected = TiKvConfig::default();
     expected.readpool.storage.high_concurrency = 1;
-    // Note: max_tasks is unchanged!
     assert_eq!(cfg, expected);
 }
