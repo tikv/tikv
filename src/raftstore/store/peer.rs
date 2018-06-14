@@ -1145,7 +1145,7 @@ impl Peer {
 
         let mut is_conf_change = false;
 
-        let doctrine = RequestJudge::with_jury(self).judge(&req);
+        let doctrine = RequestInspector::with_jury(self).judge(&req);
         let res = match doctrine {
             Ok(RequestDoctrine::ReadLocal) => {
                 self.read_local(req, cb, metrics);
@@ -1199,7 +1199,7 @@ impl Peer {
 
         // TODO: deny non-snapshot request.
 
-        let doctrine = RequestJudge::with_jury(self).judge(&req);
+        let doctrine = RequestInspector::with_jury(self).judge(&req);
         match doctrine {
             Ok(RequestDoctrine::ReadLocal) => {
                 metrics.local_read += 1;
@@ -1811,7 +1811,7 @@ enum RequestDoctrine {
     ProposeConfChange,
 }
 
-/// A jury helps `RequestJudge` make a `RequestDoctrine`.
+/// A jury helps `RequestInspector` make a `RequestDoctrine`.
 trait RequestJury {
     /// Has the jury applied the current term?
     fn has_applied_current_term(&self) -> bool;
@@ -1820,14 +1820,14 @@ trait RequestJury {
 }
 
 /// Judge makes `RequestDoctrine` for requests.
-struct RequestJudge<'a, T: 'a + RequestJury> {
+struct RequestInspector<'a, T: 'a + RequestJury> {
     jury: &'a T,
 }
 
-impl<'a, T: RequestJury> RequestJudge<'a, T> {
-    /// Create a `RequestJudge`.
-    fn with_jury(jury: &'a T) -> RequestJudge<T> {
-        RequestJudge { jury }
+impl<'a, T: RequestJury> RequestInspector<'a, T> {
+    /// Create a `RequestInspector`.
+    fn with_jury(jury: &'a T) -> RequestInspector<T> {
+        RequestInspector { jury }
     }
 
     /// Judges a request, return a doctrine that tells us how to
