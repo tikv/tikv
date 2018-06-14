@@ -43,7 +43,7 @@ struct Node<T> {
     next: AtomicPtr<Node<T>>,
 }
 
-pub struct Queue_<T> {
+pub struct SpmcQueue<T> {
     // if AtomicUsize == usize::MAX, There are other threads that have been reclaiming memory, Just give up
     next_reclaim_index: AtomicUsize,
     next_reclaim_node_ptr: AtomicPtr<Node<T>>,
@@ -70,7 +70,7 @@ pub struct Handle<T> {
     spare: *mut Node<T>,
     put_node: AtomicPtr<Node<T>>,
     pop_node: AtomicPtr<Node<T>>,
-    queue: *mut Queue_<T>,
+    queue: *mut SpmcQueue<T>,
     thread: AtomicPtr<thread::Thread>,
     ptr: *mut Payload<T>,
     role_flag: u32,
@@ -111,15 +111,15 @@ impl<T> Handle<T> {
 }
 
 const DEFAULT_NUM_THREADS: usize = 1 << 3;
-impl<T> Default for Queue_<T> {
+impl<T> Default for SpmcQueue<T> {
     fn default() -> Self {
         Self::new(1, DEFAULT_NUM_THREADS)
     }
 }
 
-impl<T> Queue_<T> {
+impl<T> SpmcQueue<T> {
     /// Create a new, empty queue.
-    pub fn new(num_threads_put: usize, num_threads_pop: usize) -> Queue_<T> {
+    pub fn new(num_threads_put: usize, num_threads_pop: usize) -> SpmcQueue<T> {
         let node_ptr = Box::into_raw(Box::new(Node {
             id: 0,
             cells: unsafe { mem::zeroed() },
@@ -137,7 +137,7 @@ impl<T> Queue_<T> {
             pop_handles_.push(AtomicPtr::default());
         }
 
-        Queue_ {
+        SpmcQueue {
             threshold: SPMCQUEUE_DEFAULT_THRESHOLD,
             next_reclaim_index: AtomicUsize::new(0),
             next_reclaim_node_ptr: AtomicPtr::new(node_ptr),
@@ -171,7 +171,7 @@ impl<T> Queue_<T> {
             thread: AtomicPtr::default(),
             ptr: ptr::null_mut(),
             spare: ptr::null_mut(),
-            queue: self as *const Queue_<T> as *mut Queue_<T>,
+            queue: self as *const SpmcQueue<T> as *mut SpmcQueue<T>,
             put_node: AtomicPtr::new(self.put_node.load(Ordering::Acquire)),
             pop_node: AtomicPtr::new(self.pop_node.load(Ordering::Acquire)),
             role_flag: flag,
@@ -349,6 +349,7 @@ impl<T> Queue_<T> {
                 break;
             }
             Self::cpu_relax();
+            // thread::yield_now();
         }
 
         // now We've tried many times. should wait for data
@@ -547,7 +548,7 @@ mod test {
         let num_threads = 64;
         const COUNT: usize = 1000;
         let per_thread_count = COUNT / num_threads;
-        let queue = Arc::new(Queue_::<usize>::new(1, num_threads));
+        let queue = Arc::new(SpmcQueue::<usize>::new(1, num_threads));
 
         let array: [AtomicUsize; COUNT] = unsafe { mem::zeroed() };
         let array_arc = Arc::new(array);

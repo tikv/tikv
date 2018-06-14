@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering as AtomicOr
 use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
 use std::usize;
-use util::spmcqueue::{Handle, Queue_};
+use util::spmcqueue::{Handle, SpmcQueue};
 
 pub const DEFAULT_TASKS_PER_TICK: usize = 10000;
 const DEFAULT_THREAD_COUNT: usize = 1;
@@ -65,13 +65,13 @@ impl<C: Context> Task<C> {
 
 // First in first out queue.
 pub struct FifoQueue<C> {
-    queue: Queue_<Task<C>>,
+    queue: SpmcQueue<Task<C>>,
 }
 
 impl<C: Context> FifoQueue<C> {
     fn new(num_producers: usize, num_consumers: usize) -> FifoQueue<C> {
         FifoQueue {
-            queue: Queue_::new(num_producers, num_consumers),
+            queue: SpmcQueue::new(num_producers, num_consumers),
         }
     }
 }
