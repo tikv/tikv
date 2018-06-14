@@ -109,8 +109,8 @@ impl Conn {
 
 /// `RaftClient` is used for sending raft messages to other stores.
 pub struct RaftClient {
-    env: Arc<Environment>,
     conns: HashMap<(String, usize), Conn>,
+    env: Arc<Environment>,
     pub addrs: HashMap<u64, String>,
     cfg: Arc<Config>,
     security_mgr: Arc<SecurityManager>,
@@ -193,12 +193,5 @@ impl RaftClient {
         if counter > 0 {
             RAFT_MESSAGE_FLUSH_COUNTER.inc_by(counter as i64);
         }
-    }
-}
-
-impl Drop for RaftClient {
-    fn drop(&mut self) {
-        // Drop conns here to make sure all streams are dropped before Environment.
-        self.conns.clear();
     }
 }
