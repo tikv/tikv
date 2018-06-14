@@ -29,7 +29,7 @@ jobs:
           command: |
             sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y;
             sudo apt-get update -y;
-            sudo apt-get install -y g++-4.8 curl libdw-dev libelf-dev elfutils binutils-dev
+            sudo apt-get install -y g++-4.8 curl libdw-dev libelf-dev elfutils binutils-dev libssl-dev pkg-config zlib1g-dev
       - restore_cache:
           name: Restoring ~/.local Cache
           keys:
@@ -68,9 +68,15 @@ jobs:
             sudo service ntp stop
             sudo ntpd -gq
       # check format first
-      -  run:
+      - run:
           name: Checking Format
           command: make format && git diff-index --quiet HEAD -- || (git diff; echo please make format and run tests before creating a PR!; exit 1)
+      - run:
+          name: Installing tarpaulin
+          command: |
+            if [[ ! -e $HOME/.cargo/bin/cargo-tarpaulin ]]; then
+                RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin;
+            fi
       - restore_cache:
           name: Restoring ./target Cache
           keys:
@@ -81,11 +87,6 @@ jobs:
           name: Building
           command: env SKIP_TESTS=true make trace_test
           no_output_timeout: 1800s
-      - save_cache:
-          name: Saving ./target Cache
-          key: v1-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
-          paths:
-            - target
       - save_cache:
           name: Saving ~/.cargo Cache
           key: v1-cargo-{{ .Branch }}-{{ checksum "Cargo.lock" }}
@@ -101,7 +102,17 @@ jobs:
           name: Testing
           command: make trace_test
           no_output_timeout: 1800s
-
+      - run:
+          name: Calculating code coverage
+          command: |
+            cargo tarpaulin --no-count --skip-clean --out Xml
+            bash <(curl -s https://codecov.io/bash)
+          no_output_timeout: 1800s
+      - save_cache:
+          name: Saving ./target Cache
+          key: v1-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
+          paths:
+            - target
 workflows:
   version: 2
   ci-test:
