@@ -73,8 +73,7 @@ cd tikv
 TiKV uses the version of the Rust toolchain specified in `rust-toolchain`. We also make use of the `rustfmt` component.
 
 ```bash
-rustup override set `tail -n 1 rust-toolchain`
-rustup component add rustfmt-preview --toolchain `tail -n 1 rust-toolchain`
+rustup component add rustfmt-preview
 ```
 
 ### Building & Testing
