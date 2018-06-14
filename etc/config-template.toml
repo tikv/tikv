@@ -191,6 +191,11 @@
 # bit smaller.
 # region-max-size = "144MB"
 # region-split-size = "96MB"
+# When the region's rows exceeds region-max-rows, we will split the region
+# into two which the left region's rows will be region-split-rows or a little
+# bit smaller.
+# region-max-rows = 1440000
+# region-split-rows = 960000
 
 [rocksdb]
 # Maximum number of concurrent background jobs (compactions and flushes)
