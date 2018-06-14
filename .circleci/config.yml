@@ -50,8 +50,6 @@ jobs:
                 sh -s -- --no-modify-path --default-toolchain none -y;
             fi
 
-            make -f ci-build/Makefile prepare-rustfmt
-
             if [[ ! -f $HOME/.local/cmake/bin/cmake ]]; then
               curl https://cmake.org/files/v3.10/cmake-3.10.0-Linux-x86_64.tar.gz -sSf | tar xzf -;
               rm -rf $HOME/.local/cmake

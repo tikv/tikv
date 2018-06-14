@@ -26,9 +26,6 @@ fi
 
 trap 'kill $(jobs -p) &> /dev/null || true' EXIT
 
-if [[ "$ENABLE_FEATURES" = "" ]]; then
-    export ENABLE_FEATURES=dev
-fi
 export LOG_FILE=tests.log
 if [[ "$TRAVIS" = "true" ]]; then
     export RUST_TEST_THREADS=2
