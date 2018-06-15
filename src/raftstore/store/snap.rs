@@ -42,7 +42,7 @@ use raftstore::store::engine::{Iterable, Snapshot as DbSnapshot};
 use raftstore::store::keys::{self, enc_end_key, enc_start_key};
 
 use raftstore::store::metrics::{SNAPSHOT_BUILD_TIME_HISTOGRAM, SNAPSHOT_CF_KV_COUNT,
-                                SNAPSHOT_CF_SIZE, INGEST_SST_ELAPSE};
+                                SNAPSHOT_CF_SIZE, INGEST_SST_DURATION_SECONDS};
 use raftstore::store::peer_storage::JOB_STATUS_CANCELLING;
 
 // Data in CF_RAFT should be excluded for a snapshot.
@@ -972,7 +972,7 @@ impl Snapshot for Snap {
                 let mut file = box_try!(File::open(&cf_file.path));
                 apply_plain_cf_file(&mut BufReader::new(file), &options, cf_handle)?;
             } else {
-                let _timer = INGEST_SST_ELAPSE.start_coarse_timer();
+                let _timer = INGEST_SST_DURATION_SECONDS.start_coarse_timer();
                 let mut ingest_opt = IngestExternalFileOptions::new();
                 ingest_opt.move_files(true);
                 let path = cf_file.clone_path.to_str().unwrap();

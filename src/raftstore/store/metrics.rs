@@ -215,10 +215,10 @@ lazy_static! {
             "Total number of leader missed region"
         ).unwrap();
 
-    pub static ref INGEST_SST_ELAPSE: Histogram =
+    pub static ref INGEST_SST_DURATION_SECONDS: Histogram =
         register_histogram!(
-            "tikv_ingest_sst_elapse",
-            "Bucketed histogram of elapse of rocksdb ingestion",
+            "tikv_ingest_sst_duration_seconds",
+            "Bucketed histogram of duration of rocksdb ingestion",
             exponential_buckets(0.005, 2.0, 20).unwrap()
         ).unwrap();
 }
