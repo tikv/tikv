@@ -253,8 +253,8 @@ pub struct ApplyContext {
 }
 
 impl ApplyContext {
-    pub fn new(host: Arc<CoprocessorHost>, importer: Arc<SSTImporter>) -> ApplyContext {
-        ApplyContext {
+    pub fn new(host: Arc<CoprocessorHost>, importer: Arc<SSTImporter>) -> Self {
+        Self {
             host,
             importer,
             wb: None,
@@ -276,8 +276,8 @@ impl ApplyContext {
         self.exec_results.push(res);
     }
 
-    pub fn enable_sync_log(mut self, eanbled: bool) -> ApplyContext {
-        self.enable_sync_log = eanbled;
+    pub fn enable_sync_log(mut self, enabled: bool) -> ApplyContext {
+        self.enable_sync_log = enabled;
         self
     }
 
@@ -493,7 +493,10 @@ pub struct ApplyDelegate {
 
 impl Debug for ApplyDelegate {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{} peer {} ApplyDelegate", self.tag, self.id)
+        f.debug_struct("ApplyDelegate")
+            .field("tag", &self.tag)
+            .field("id", &self.id)
+            .finish()
     }
 }
 
@@ -1861,25 +1864,22 @@ impl ApplyDelegate {
 
         // Delete all remaining keys.
         // If it's not CF_LOCK and use_delete_range is false, skip this step to speed up (#3034)
-        // TODO: Remove the `if` line after apply pool is implemented
-        if cf == CF_LOCK || self.use_delete_range {
-            util::delete_all_in_range_cf(
-                &self.engine,
+        util::delete_all_in_range_cf(
+            &self.engine,
+            cf,
+            &start_key,
+            &end_key,
+            self.use_delete_range,
+        ).unwrap_or_else(|e| {
+            panic!(
+                "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
+                self.tag,
+                escape(&start_key),
+                escape(&end_key),
                 cf,
-                &start_key,
-                &end_key,
-                self.use_delete_range,
-            ).unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                    self.tag,
-                    escape(&start_key),
-                    escape(&end_key),
-                    cf,
-                    e
-                );
-            });
-        }
+                e
+            );
+        });
 
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
