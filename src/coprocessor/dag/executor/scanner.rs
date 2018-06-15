@@ -174,7 +174,6 @@ pub mod test {
     use storage::engine::{self, Engine, Modify, TEMP_DIR};
     use storage::mvcc::MvccTxn;
     use storage::{make_key, Mutation, Options, Snapshot, SnapshotStore, ALL_CFS};
-    use util::codec::number::NumberEncoder;
     use util::collections::HashMap;
 
     use super::*;
@@ -239,9 +238,7 @@ pub mod test {
                 .collect();
 
             let value = table::encode_row(col_values, &col_ids).unwrap();
-            let mut buf = vec![];
-            buf.encode_i64(handle as i64).unwrap();
-            let key = table::encode_row_key(table_id, &buf);
+            let key = table::encode_row_key(table_id, handle as i64);
             expect_rows.push(expect_row);
             kv_data.push((key, value));
         }
@@ -334,20 +331,14 @@ pub mod test {
 
     #[inline]
     pub fn get_range(table_id: i64, start: i64, end: i64) -> KeyRange {
-        let mut start_buf = Vec::with_capacity(8);
-        start_buf.encode_i64(start).unwrap();
-        let mut end_buf = Vec::with_capacity(8);
-        end_buf.encode_i64(end).unwrap();
         let mut key_range = KeyRange::new();
-        key_range.set_start(table::encode_row_key(table_id, &start_buf));
-        key_range.set_end(table::encode_row_key(table_id, &end_buf));
+        key_range.set_start(table::encode_row_key(table_id, start));
+        key_range.set_end(table::encode_row_key(table_id, end));
         key_range
     }
 
     pub fn get_point_range(table_id: i64, handle: i64) -> KeyRange {
-        let mut start_buf = Vec::with_capacity(8);
-        start_buf.encode_i64(handle).unwrap();
-        let start_key = table::encode_row_key(table_id, &start_buf);
+        let start_key = table::encode_row_key(table_id, handle);
         let end = util::prefix_next(&start_key);
         let mut key_range = KeyRange::new();
         key_range.set_start(start_key);
@@ -358,11 +349,11 @@ pub mod test {
     #[test]
     fn test_scan() {
         let table_id = 1;
-        let pk = table::encode_row_key(table_id, b"key1");
+        let pk = table::encode_row_key(table_id, 1);
         let pv = b"value1";
         let test_data = vec![
             (pk.clone(), pv.to_vec()),
-            (table::encode_row_key(table_id, b"key2"), b"value2".to_vec()),
+            (table::encode_row_key(table_id, 2), b"value2".to_vec()),
         ];
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
@@ -399,11 +390,11 @@ pub mod test {
     #[test]
     fn test_scan_key_only() {
         let table_id = 1;
-        let pk = table::encode_row_key(table_id, b"key1");
+        let pk = table::encode_row_key(table_id, 1);
         let pv = b"value1";
         let test_data = vec![
             (pk.clone(), pv.to_vec()),
-            (table::encode_row_key(table_id, b"key2"), b"value2".to_vec()),
+            (table::encode_row_key(table_id, 2), b"value2".to_vec()),
         ];
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
@@ -417,7 +408,7 @@ pub mod test {
     #[test]
     fn test_seek_key() {
         let table_id = 1;
-        let pk = table::encode_row_key(table_id, b"key1");
+        let pk = table::encode_row_key(table_id, 1);
         let pv = b"value1";
         let test_data = vec![(pk.clone(), pv.to_vec())];
         let mut test_store = TestStore::new(&test_data);
