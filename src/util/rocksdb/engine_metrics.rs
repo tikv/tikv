@@ -960,11 +960,9 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
         // Num files at levels
         let opts = engine.get_options_cf(handle);
         for level in 0..opts.get_num_levels() {
+            let prop = format!("{}{}", ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, level);
             let level_str = level.to_string();
-            let mut param = String::from(ROCKSDB_NUM_FILES_AT_LEVEL);
-            param += &level_str;
-            if let Some(v) = engine.get_property_int_cf(
-                handle, param.as_mut_str()) {
+            if let Some(v) = engine.get_property_int_cf(handle, &prop) {
                 STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC
                     .with_label_values(&[name, cf, &level_str])
                     .set(v as i64);
