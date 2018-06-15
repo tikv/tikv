@@ -343,7 +343,7 @@ impl<T: Simulator> Cluster<T> {
         }
         self.reset_leader_of_region(region_id);
         let mut leader = None;
-        let mut retry_cnt = 30;
+        let mut retry_cnt = 500;
 
         let node_ids = self.sim.rl().get_node_ids();
         let mut count = 0;
