@@ -960,7 +960,7 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
         // Num files at levels
         let opts = engine.get_options_cf(handle);
         for level in 0..opts.get_num_levels() {
-            let prop = format!("{}{}", ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, level);
+            let prop = format!("{}{}", ROCKSDB_NUM_FILES_AT_LEVEL, level);
             let level_str = level.to_string();
             if let Some(v) = engine.get_property_int_cf(handle, &prop) {
                 STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC
@@ -1228,6 +1228,7 @@ lazy_static! {
         "Oldest unreleased snapshot duration in seconds",
         &["db"]
     ).unwrap();
+
     pub static ref STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_engine_num_files_at_level",
         "Number of files at each level",
