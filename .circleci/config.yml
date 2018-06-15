@@ -68,8 +68,8 @@ jobs:
       - run:
           name: Installing tarpaulin
           command: |
-            if [[ ! -e $HOME/.cargo/bin/cargo-tarpaulin ]]; then
-                RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin;
+            if [[ ! `cargo tarpaulin --version 2> /dev/null` ]]; then
+                RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin --force;
             fi
       - restore_cache:
           name: Restoring ./target Cache
