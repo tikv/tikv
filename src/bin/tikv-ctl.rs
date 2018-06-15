@@ -16,6 +16,7 @@
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![allow(needless_pass_by_value)]
 
+#[macro_use]
 extern crate clap;
 extern crate futures;
 extern crate grpcio;
