@@ -35,7 +35,6 @@ use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateR
            INVALID_INDEX, NO_LIMIT};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::engine::{Peekable, Snapshot};
-use raftstore::store::util::RegionApproximateStat;
 use raftstore::store::worker::apply::ApplyMetrics;
 use raftstore::store::worker::{Apply, ApplyTask};
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
@@ -246,8 +245,10 @@ pub struct Peer {
     pub size_diff_hint: u64,
     /// delete keys' count since last reset.
     delete_keys_hint: u64,
-    /// approximate stat of the region.
-    pub approximate_stat: Option<RegionApproximateStat>,
+    /// approximate size of the region.
+    pub approximate_size: Option<u64>,
+    /// approximate rows of the region.
+    pub approximate_rows: Option<u64>,
     pub compaction_declined_bytes: u64,
 
     pub consistency_state: ConsistencyState,
@@ -384,7 +385,8 @@ impl Peer {
             coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
             delete_keys_hint: 0,
-            approximate_stat: None,
+            approximate_size: None,
+            approximate_rows: None,
             compaction_declined_bytes: 0,
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
@@ -1797,7 +1799,8 @@ impl Peer {
             pending_peers: self.collect_pending_peers(),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
-            approximate_stat: self.approximate_stat.clone(),
+            approximate_size: self.approximate_size,
+            approximate_rows: self.approximate_rows,
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);

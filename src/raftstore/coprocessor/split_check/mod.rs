@@ -12,6 +12,7 @@
 // limitations under the License.
 
 mod half;
+mod rows;
 mod size;
 mod table;
 
@@ -20,6 +21,7 @@ use kvproto::metapb::Region;
 use super::{ObserverContext, RowEntry, SplitChecker};
 
 pub use self::half::HalfCheckObserver;
+pub use self::rows::RowsCheckObserver;
 pub use self::size::SizeCheckObserver;
 pub use self::table::TableCheckObserver;
 

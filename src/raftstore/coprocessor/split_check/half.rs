@@ -155,7 +155,8 @@ mod tests {
                     assert_eq!(split_key, b"0006");
                     break;
                 }
-                Ok(Msg::RegionApproximateStat { region_id, .. }) => {
+                Ok(Msg::RegionApproximateSize { region_id, .. })
+                | Ok(Msg::RegionApproximateRows { region_id, .. }) => {
                     assert_eq!(region_id, region.get_id());
                     continue;
                 }
