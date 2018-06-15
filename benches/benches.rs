@@ -38,6 +38,7 @@ extern crate time;
 
 mod channel;
 mod coprocessor;
+mod raftkv;
 mod serialization;
 mod writebatch;
 

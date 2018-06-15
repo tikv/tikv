@@ -117,7 +117,7 @@ pub struct RaftKv<S: RaftStoreRouter + 'static> {
     router: S,
 }
 
-enum CmdRes {
+pub enum CmdRes {
     Resp(Vec<Response>),
     Snap(RegionSnapshot),
 }
