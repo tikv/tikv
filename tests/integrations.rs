@@ -11,18 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(stable_features)]
-#![feature(mpsc_recv_timeout)]
-#![feature(plugin)]
-#![feature(test)]
-#![cfg_attr(feature = "dev", plugin(clippy))]
-#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-#![feature(btree_range, collections_bound)]
-#![feature(box_syntax)]
-#![allow(new_without_default)]
-#![feature(const_fn)]
-#![allow(needless_pass_by_value)]
-#![allow(unreadable_literal)]
+#![feature(mpsc_recv_timeout, plugin, test, btree_range, collections_bound, box_syntax, const_fn)]
+#![cfg_attr(
+    feature = "cargo-clippy",
+    allow(stable_features, new_without_default, needless_pass_by_value, unreadable_literal)
+)]
 
 extern crate crc;
 extern crate futures;

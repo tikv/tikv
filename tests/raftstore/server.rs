@@ -94,7 +94,7 @@ impl ServerCluster {
 }
 
 impl Simulator for ServerCluster {
-    #[allow(useless_format)]
+    #[cfg_attr(feature = "cargo-clippy", allow(useless_format))]
     fn run_node(
         &mut self,
         node_id: u64,

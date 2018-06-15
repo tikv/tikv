@@ -11,11 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(plugin)]
-#![cfg_attr(feature = "dev", plugin(clippy))]
-#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-#![allow(needless_pass_by_value)]
-#![allow(cyclomatic_complexity)]
+#![cfg_attr(feature = "cargo-clippy", allow(needless_pass_by_value, cyclomatic_complexity))]
 
 #[macro_use]
 extern crate clap;
@@ -848,7 +844,6 @@ impl DebugExecutor for Debugger {
     }
 }
 
-#[allow(cyclomatic_complexity)]
 fn main() {
     let raw_key_hint: &'static str = "raw key (generally starts with \"z\") in escaped form";
 

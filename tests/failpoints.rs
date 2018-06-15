@@ -11,21 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(slice_patterns)]
-#![feature(box_syntax)]
-#![feature(test)]
-#![cfg_attr(feature = "dev", feature(plugin))]
-#![cfg_attr(feature = "dev", plugin(clippy))]
-#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-#![cfg_attr(feature = "no-fail", allow(dead_code))]
 #![recursion_limit = "100"]
-#![allow(module_inception)]
-#![allow(should_implement_trait)]
-#![allow(large_enum_variant)]
-#![allow(needless_pass_by_value)]
-#![allow(unreadable_literal)]
-#![allow(new_without_default_derive)]
-#![allow(verbose_bit_mask)]
+#![feature(slice_patterns, box_syntax, test)]
+#![cfg_attr(feature = "no-fail", allow(dead_code))]
+#![cfg_attr(
+    feature = "cargo-clippy",
+    allow(
+        module_inception, should_implement_trait, large_enum_variant, needless_pass_by_value,
+        unreadable_literal, new_without_default_derive, verbose_bit_mask
+    )
+)]
 
 extern crate fail;
 extern crate futures;
