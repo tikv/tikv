@@ -716,7 +716,12 @@ fn test_learner_with_slow_snapshot() {
     impl Filter<RaftMessage> for SnapshotFilter {
         fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
             let count = msgs.iter()
-                .filter(|m| m.get_message().get_msg_type() == MessageType::MsgSnapshot)
+                .filter(|m| {
+                    // A snapshot stream should have 2 chunks at least,
+                    // the first for metadata and subsequences for data.
+                    m.get_message().get_msg_type() == MessageType::MsgSnapshot
+                        && m.get_message().get_snapshot().has_metadata()
+                })
                 .count();
             self.count.fetch_add(count, Ordering::SeqCst);
 
