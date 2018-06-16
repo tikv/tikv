@@ -26,7 +26,7 @@ use mio::{self, EventLoop, EventLoopConfig, Sender};
 use rocksdb::rocksdb_options::WriteOptions;
 use rocksdb::{CompactionJobInfo, WriteBatch, DB};
 
-use kvproto::importpb::SSTMeta;
+use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb;
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse,
@@ -2383,6 +2383,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             debug!("compact worker is busy, check space redundancy next time");
         } else if self.region_ranges.is_empty() {
             debug!("there is no range need to check");
+        } else if rocksdb::auto_compactions_is_disabled(&self.kv_engine) {
+            debug!("skip compact check when disabled auto compactions.");
         } else {
             // Start from last checked key.
             let mut ranges_need_check =
