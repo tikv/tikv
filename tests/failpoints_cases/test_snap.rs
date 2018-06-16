@@ -231,13 +231,20 @@ fn test_generate_snapshot() {
 }
 
 fn must_empty_dir(path: String) {
-    for _ in 0..200 {
-        let snap_dir = fs::read_dir(&path).unwrap();
-        if snap_dir.count() > 0 {
-            thread::sleep(Duration::from_millis(10));
-            continue;
+    for _ in 0..500 {
+        thread::sleep(Duration::from_millis(10));
+        if fs::read_dir(&path).unwrap().count() == 0 {
+            return;
         }
-        return;
     }
-    panic!("the directory {:?} should be empty", path);
+
+    let entries = fs::read_dir(&path)
+        .and_then(|dir| dir.collect::<io::Result<Vec<_>>>())
+        .unwrap();
+    if !entries.is_empty() {
+        panic!(
+            "the directory {:?} should be empty, but has entries: {:?}",
+            path, entries
+        );
+    }
 }
