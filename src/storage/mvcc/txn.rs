@@ -24,6 +24,11 @@ use storage::{is_short_value, Key, Mutation, Options, Statistics, Value, CF_DEFA
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
+pub struct GcInfo {
+    pub found_versions: usize,
+    pub deleted_versions: usize,
+}
+
 pub struct MvccTxn {
     reader: MvccReader,
     start_ts: u64,
@@ -270,15 +275,15 @@ impl MvccTxn {
         Ok(())
     }
 
-    pub fn gc(&mut self, key: &Key, safe_point: u64) -> Result<()> {
+    pub fn gc(&mut self, key: &Key, safe_point: u64) -> Result<GcInfo> {
         let mut remove_older = false;
         let mut ts: u64 = u64::max_value();
-        let mut versions = 0;
-        let mut delete_versions = 0;
+        let mut found_versions = 0;
+        let mut deleted_versions = 0;
         let mut latest_delete = None;
         while let Some((commit, write)) = self.reader.seek_write(key, ts)? {
             ts = commit - 1;
-            versions += 1;
+            found_versions += 1;
 
             if self.write_size >= MAX_TXN_WRITE_SIZE {
                 // Cannot remove latest delete when we haven't iterate all versions.
@@ -291,7 +296,7 @@ impl MvccTxn {
                 if write.write_type == WriteType::Put && write.short_value.is_none() {
                     self.delete_value(key, write.start_ts);
                 }
-                delete_versions += 1;
+                deleted_versions += 1;
                 continue;
             }
 
@@ -315,20 +320,23 @@ impl MvccTxn {
                 }
                 WriteType::Rollback | WriteType::Lock => {
                     self.delete_write(key, commit);
-                    delete_versions += 1;
+                    deleted_versions += 1;
                 }
                 WriteType::Put => {}
             }
         }
         if let Some(commit) = latest_delete {
             self.delete_write(key, commit);
-            delete_versions += 1;
+            deleted_versions += 1;
         }
-        MVCC_VERSIONS_HISTOGRAM.observe(f64::from(versions));
-        if delete_versions > 0 {
-            GC_DELETE_VERSIONS_HISTOGRAM.observe(f64::from(delete_versions));
+        MVCC_VERSIONS_HISTOGRAM.observe(found_versions as f64);
+        if deleted_versions > 0 {
+            GC_DELETE_VERSIONS_HISTOGRAM.observe(deleted_versions as f64);
         }
-        Ok(())
+        Ok(GcInfo {
+            found_versions,
+            deleted_versions,
+        })
     }
 }
 
