@@ -2151,10 +2151,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let peer = self.region_peers.get_mut(&region_id).unwrap();
             ret.push(peer.propose_snapshot(msg, &mut self.raft_metrics.propose));
         }
-        match on_finished {
-            Callback::BatchRead(on_finished) => on_finished(ret),
-            _ => unreachable!(),
-        }
+        on_finished.invoke_batch_read(ret)
     }
 
     pub fn find_sibling_region(&self, region: &metapb::Region) -> Option<u64> {

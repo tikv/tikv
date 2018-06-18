@@ -84,6 +84,13 @@ impl Callback {
             other => panic!("expect Callback::Read(..), got {:?}", other),
         }
     }
+
+    pub fn invoke_batch_read(self, args: Vec<Option<ReadResponse>>) {
+        match self {
+            Callback::BatchRead(batch_read) => batch_read(args),
+            other => panic!("expect Callback::BatchRead(..), got {:?}", other),
+        }
+    }
 }
 
 impl fmt::Debug for Callback {
