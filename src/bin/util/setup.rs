@@ -19,6 +19,7 @@ use std::io::BufWriter;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
 
+use chrono;
 use clap::ArgMatches;
 
 use tikv::config::{MetricConfig, TiKvConfig};
@@ -42,6 +43,9 @@ macro_rules! fatal {
 }
 
 pub fn init_log(config: &TiKvConfig) {
+    let log_rotation_timespan = chrono::Duration::from_std(
+        config.log_rotation_timespan.clone().into(),
+    ).expect("config.log_rotation_timespan is an invalid duration.");
     if config.log_file.is_empty() {
         let decorator = TermDecorator::new().build();
         let drain = FullFormat::new(decorator).build().fuse();
@@ -51,15 +55,15 @@ pub fn init_log(config: &TiKvConfig) {
             fatal!("failed to initialize log: {:?}", e);
         });
     } else {
-        let logger = BufWriter::new(RotatingFileLogger::new(&config.log_file).unwrap_or_else(
-            |e| {
+        let logger = BufWriter::new(
+            RotatingFileLogger::new(&config.log_file, log_rotation_timespan).unwrap_or_else(|e| {
                 fatal!(
                     "failed to initialize log with file {:?}: {:?}",
                     config.log_file,
                     e
                 );
-            },
-        ));
+            }),
+        );
         let decorator = PlainDecorator::new(logger);
         let drain = FullFormat::new(decorator).build().fuse();
         let drain = Async::new(drain).build().fuse();
