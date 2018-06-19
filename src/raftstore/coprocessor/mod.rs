@@ -29,7 +29,6 @@ pub use self::dispatcher::{CoprocessorHost, Registry};
 pub use self::error::{Error, Result};
 pub use self::split_check::{HalfCheckObserver, Host as SplitCheckerHost, RowsCheckObserver,
                             SizeCheckObserver, TableCheckObserver};
-
 pub use raftstore::store::RowEntry;
 
 /// Coprocessor is used to provide a convient way to inject code to
