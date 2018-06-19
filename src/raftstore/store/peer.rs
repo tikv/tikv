@@ -1145,18 +1145,18 @@ impl Peer {
 
         let mut is_conf_change = false;
 
-        let doctrine = RequestInspector::with_jury(self).judge(&req);
-        let res = match doctrine {
-            Ok(RequestDoctrine::ReadLocal) => {
+        let policy = RequestInspector::with_condition(self).inspect(&req);
+        let res = match policy {
+            Ok(RequestPolicy::ReadLocal) => {
                 self.read_local(req, cb, metrics);
                 return false;
             }
-            Ok(RequestDoctrine::ReadIndex) => return self.read_index(req, err_resp, cb, metrics),
-            Ok(RequestDoctrine::ProposeNormal) => self.propose_normal(req, metrics),
-            Ok(RequestDoctrine::ProposeTransferLeader) => {
+            Ok(RequestPolicy::ReadIndex) => return self.read_index(req, err_resp, cb, metrics),
+            Ok(RequestPolicy::ProposeNormal) => self.propose_normal(req, metrics),
+            Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(req, cb, metrics)
             }
-            Ok(RequestDoctrine::ProposeConfChange) => {
+            Ok(RequestPolicy::ProposeConfChange) => {
                 is_conf_change = true;
                 self.propose_conf_change(&req, metrics)
             }
@@ -1199,14 +1199,14 @@ impl Peer {
 
         // TODO: deny non-snapshot request.
 
-        let doctrine = RequestInspector::with_jury(self).judge(&req);
-        match doctrine {
-            Ok(RequestDoctrine::ReadLocal) => {
+        let policy = RequestInspector::with_condition(self).inspect(&req);
+        match policy {
+            Ok(RequestPolicy::ReadLocal) => {
                 metrics.local_read += 1;
                 Some(self.handle_read(req))
             }
             // require to propose again, and use the `propose` above.
-            Ok(RequestDoctrine::ReadIndex) => None,
+            Ok(RequestPolicy::ReadIndex) => None,
             Ok(_) => unreachable!(),
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
@@ -1800,8 +1800,9 @@ impl Peer {
     }
 }
 
-/// Doctrine decides how we handle a request.
-enum RequestDoctrine {
+/// `RequestPolicy` decides how we handle a request.
+#[derive(Clone, PartialEq, Debug)]
+enum RequestPolicy {
     // Handle the read request directly without dispatch.
     ReadLocal,
     // Handle the read request via raft's SafeReadIndex mechanism.
@@ -1811,45 +1812,45 @@ enum RequestDoctrine {
     ProposeConfChange,
 }
 
-/// A jury helps `RequestInspector` make a `RequestDoctrine`.
-trait RequestJury {
-    /// Has the jury applied the current term?
+/// A `RequestCondition` helps `RequestInspector` make a `RequestPolicy`.
+trait RequestCondition {
+    /// Has the current term been applied?
     fn has_applied_current_term(&self) -> bool;
-    /// Inspects the jury's lease.
+    /// Inspects its lease.
     fn inspect_lease(&self) -> LeaseState;
 }
 
-/// Judge makes `RequestDoctrine` for requests.
-struct RequestInspector<'a, T: 'a + RequestJury> {
-    jury: &'a T,
+/// `RequestInspector` makes `RequestPolicy` for requests.
+struct RequestInspector<'a, T: 'a + RequestCondition> {
+    condition: &'a T,
 }
 
-impl<'a, T: RequestJury> RequestInspector<'a, T> {
+impl<'a, T: RequestCondition> RequestInspector<'a, T> {
     /// Create a `RequestInspector`.
-    fn with_jury(jury: &'a T) -> RequestInspector<T> {
-        RequestInspector { jury }
+    fn with_condition(condition: &'a T) -> RequestInspector<T> {
+        RequestInspector { condition }
     }
 
-    /// Judges a request, return a doctrine that tells us how to
+    /// Inspect a request, return a policy that tells us how to
     /// handle the request.
-    fn judge(&self, req: &RaftCmdRequest) -> Result<RequestDoctrine> {
+    fn inspect(&self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
         if req.has_admin_request() {
             if apply::get_change_peer_cmd(req).is_some() {
-                return Ok(RequestDoctrine::ProposeConfChange);
+                return Ok(RequestPolicy::ProposeConfChange);
             }
             if get_transfer_leader_cmd(req).is_some() {
-                return Ok(RequestDoctrine::ProposeTransferLeader);
+                return Ok(RequestPolicy::ProposeTransferLeader);
             }
-            return Ok(RequestDoctrine::ProposeNormal);
+            return Ok(RequestPolicy::ProposeNormal);
         }
 
-        let mut is_read = false;
-        let mut is_write = false;
+        let mut has_read = false;
+        let mut has_write = false;
         for r in req.get_requests() {
             match r.get_cmd_type() {
-                CmdType::Get | CmdType::Snap => is_read = true,
+                CmdType::Get | CmdType::Snap => has_read = true,
                 CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSST => {
-                    is_write = true
+                    has_write = true
                 }
                 CmdType::Prewrite | CmdType::Invalid => {
                     return Err(box_err!(
@@ -1859,38 +1860,38 @@ impl<'a, T: RequestJury> RequestInspector<'a, T> {
                 }
             }
 
-            if is_read && is_write {
+            if has_read && has_write {
                 return Err(box_err!("read and write can't be mixed in one batch."));
             }
         }
 
-        if is_write {
-            return Ok(RequestDoctrine::ProposeNormal);
+        if has_write {
+            return Ok(RequestPolicy::ProposeNormal);
         }
 
         if req.get_header().get_read_quorum() {
-            return Ok(RequestDoctrine::ReadIndex);
+            return Ok(RequestPolicy::ReadIndex);
         }
 
         // If applied index's term is differ from current raft's term, leader transfer
         // must happened, if read locally, we may read old value.
-        if !self.jury.has_applied_current_term() {
-            return Ok(RequestDoctrine::ReadIndex);
+        if !self.condition.has_applied_current_term() {
+            return Ok(RequestPolicy::ReadIndex);
         }
 
         // Local read should be performed, if and only if leader is in lease.
         // None for now.
-        match self.jury.inspect_lease() {
-            LeaseState::Valid => Ok(RequestDoctrine::ReadLocal),
+        match self.condition.inspect_lease() {
+            LeaseState::Valid => Ok(RequestPolicy::ReadLocal),
             LeaseState::Expired | LeaseState::Suspect => {
                 // Perform a consistent read to Raft quorum and try to renew the leader lease.
-                Ok(RequestDoctrine::ReadIndex)
+                Ok(RequestPolicy::ReadIndex)
             }
         }
     }
 }
 
-impl RequestJury for Peer {
+impl RequestCondition for Peer {
     fn has_applied_current_term(&self) -> bool {
         // TODO: add it in queue directly if it is false.
         self.get_store().applied_index_term == self.term()
@@ -2088,6 +2089,141 @@ mod tests {
             for f in flags {
                 assert!(de.contains(*f), "{:?}", de);
             }
+        }
+    }
+
+    #[allow(useless_vec)]
+    #[test]
+    fn test_request_inspector() {
+        struct DummyCondition {
+            applied_index_term: bool,
+            lease_state: LeaseState,
+        }
+        impl RequestCondition for DummyCondition {
+            fn has_applied_current_term(&self) -> bool {
+                self.applied_index_term
+            }
+            fn inspect_lease(&self) -> LeaseState {
+                self.lease_state.clone()
+            }
+        }
+
+        let mut table = vec![];
+
+        // Ok(_)
+        let mut req = RaftCmdRequest::new();
+        let mut admin_req = raft_cmdpb::AdminRequest::new();
+
+        req.set_admin_request(admin_req.clone());
+        table.push((req.clone(), RequestPolicy::ProposeNormal));
+
+        admin_req.set_change_peer(raft_cmdpb::ChangePeerRequest::new());
+        req.set_admin_request(admin_req.clone());
+        table.push((req.clone(), RequestPolicy::ProposeConfChange));
+        admin_req.clear_change_peer();
+
+        admin_req.set_transfer_leader(raft_cmdpb::TransferLeaderRequest::new());
+        req.set_admin_request(admin_req.clone());
+        table.push((req.clone(), RequestPolicy::ProposeTransferLeader));
+        admin_req.clear_transfer_leader();
+        req.clear_admin_request();
+
+        for (op, policy) in vec![
+            (CmdType::Get, RequestPolicy::ReadLocal),
+            (CmdType::Snap, RequestPolicy::ReadLocal),
+            (CmdType::Put, RequestPolicy::ProposeNormal),
+            (CmdType::Delete, RequestPolicy::ProposeNormal),
+            (CmdType::DeleteRange, RequestPolicy::ProposeNormal),
+            (CmdType::IngestSST, RequestPolicy::ProposeNormal),
+        ] {
+            let mut request = raft_cmdpb::Request::new();
+            request.set_cmd_type(op);
+            req.set_requests(vec![request].into());
+            table.push((req.clone(), policy));
+        }
+
+        for b in vec![true, false] {
+            for (req, mut policy) in table.clone() {
+                let condition = DummyCondition {
+                    applied_index_term: b,
+                    lease_state: LeaseState::Valid,
+                };
+                let policy = if !b && policy == RequestPolicy::ReadLocal {
+                    RequestPolicy::ReadIndex
+                } else {
+                    policy
+                };
+                assert_eq!(
+                    RequestInspector::with_condition(&condition)
+                        .inspect(&req)
+                        .unwrap(),
+                    policy
+                );
+            }
+        }
+
+        for s in vec![LeaseState::Expired, LeaseState::Suspect] {
+            for (req, policy) in table.clone() {
+                let condition = DummyCondition {
+                    applied_index_term: true,
+                    lease_state: s.clone(),
+                };
+                let policy = if policy == RequestPolicy::ReadLocal {
+                    RequestPolicy::ReadIndex
+                } else {
+                    policy
+                };
+                assert_eq!(
+                    RequestInspector::with_condition(&condition)
+                        .inspect(&req)
+                        .unwrap(),
+                    policy
+                );
+            }
+        }
+
+        // Read quorum.
+        let mut request = raft_cmdpb::Request::new();
+        request.set_cmd_type(CmdType::Snap);
+        req.set_requests(vec![request].into());
+        req.mut_header().set_read_quorum(true);
+        let condition = DummyCondition {
+            applied_index_term: true,
+            lease_state: LeaseState::Valid,
+        };
+        assert_eq!(
+            RequestInspector::with_condition(&condition)
+                .inspect(&req)
+                .unwrap(),
+            RequestPolicy::ReadIndex
+        );
+        req.clear_header();
+
+        // Err(_)
+        let mut err_table = vec![];
+        for op in vec![CmdType::Prewrite, CmdType::Invalid] {
+            let mut request = raft_cmdpb::Request::new();
+            request.set_cmd_type(op);
+            req.set_requests(vec![request].into());
+            err_table.push(req.clone());
+        }
+        let mut snap = raft_cmdpb::Request::new();
+        snap.set_cmd_type(CmdType::Snap);
+        let mut put = raft_cmdpb::Request::new();
+        put.set_cmd_type(CmdType::Put);
+        req.set_requests(vec![snap, put].into());
+        err_table.push(req.clone());
+
+        for req in err_table {
+            let condition = DummyCondition {
+                applied_index_term: true,
+                lease_state: LeaseState::Valid,
+            };
+            assert!(
+                RequestInspector::with_condition(&condition)
+                    .inspect(&req)
+                    .is_err()
+            );
         }
     }
 }
