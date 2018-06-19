@@ -34,10 +34,6 @@ where
     let frac = iter.next().unwrap() as i8;
     let _ = lhs.clone().round(frac, mode.clone());
 
-    let word_buf_len = iter.next().unwrap();
-    let _ = lhs.clone()
-        .round_with_word_buf_len(frac, word_buf_len, mode);
-
     let shift = make_u64(iter) as isize;
     let _ = lhs.clone().shift(shift);
 
