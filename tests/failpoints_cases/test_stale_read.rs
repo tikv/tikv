@@ -119,7 +119,7 @@ fn must_not_stale_read(
     new_leader: &Peer,
     fp: &str,
 ) {
-    // A new value for key2.
+    // A new value for stale_key.
     let v3 = b"v3";
     let mut request = new_request(
         new_region.get_id(),
@@ -274,7 +274,7 @@ fn test_stale_read_during_merging() {
     let mut region1 = cluster.get_region(key1);
     let mut region1000 = cluster.get_region(key2);
     assert_ne!(region1, region1000);
-    assert_eq!(region1.get_id(), 1); // requires disbale right_derive.
+    assert_eq!(region1.get_id(), 1); // requires disable right_derive.
     let leader1 = region1
         .get_peers()
         .iter()
