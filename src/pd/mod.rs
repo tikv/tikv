@@ -47,7 +47,7 @@ pub struct RegionStat {
     pub last_report_ts: u64,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RegionInfo {
     pub region: metapb::Region,
     pub leader: Option<metapb::Peer>,
