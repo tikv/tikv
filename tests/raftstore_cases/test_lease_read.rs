@@ -187,7 +187,6 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
     // Increase the Raft tick interval to make this test case running reliably.
     let election_timeout = configure_for_lease_read(cluster, Some(50), None);
-    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(election_timeout);
 
     let store_id = 1u64;
     let peer = new_peer(store_id, 1);
