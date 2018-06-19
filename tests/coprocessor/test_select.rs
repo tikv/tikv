@@ -213,12 +213,8 @@ impl Table {
 
     pub fn get_select_range(&self) -> KeyRange {
         let mut range = KeyRange::new();
-        let mut buf = Vec::with_capacity(8);
-        buf.encode_i64(i64::MIN).unwrap();
-        range.set_start(table::encode_row_key(self.id, &buf));
-        buf.clear();
-        buf.encode_i64(i64::MAX).unwrap();
-        range.set_end(table::encode_row_key(self.id, &buf));
+        range.set_start(table::encode_row_key(self.id, i64::MIN));
+        range.set_end(table::encode_row_key(self.id, i64::MAX));
         range
     }
 
@@ -318,7 +314,7 @@ impl<'a> Insert<'a> {
             .get(&self.table.handle_id)
             .cloned()
             .unwrap_or_else(|| Datum::I64(next_id()));
-        let key = build_row_key(self.table.id, handle.i64());
+        let key = table::encode_row_key(self.table.id, handle.i64());
         let ids: Vec<_> = self.values.keys().cloned().collect();
         let values: Vec<_> = self.values.values().cloned().collect();
         let value = table::encode_row(values, &ids).unwrap();
@@ -351,7 +347,7 @@ impl<'a> Delete<'a> {
         for (&id, v) in self.table.cols.keys().zip(row) {
             values.insert(id, v);
         }
-        let key = build_row_key(self.table.id, id);
+        let key = table::encode_row_key(self.table.id, id);
         let mut keys = vec![];
         keys.push(key);
         for (&idx_id, idx_cols) in &self.table.idxs {
@@ -431,12 +427,6 @@ impl Store {
             .commit(ctx, handles, self.current_ts, next_id() as u64)
             .unwrap();
     }
-}
-
-fn build_row_key(table_id: i64, id: i64) -> Vec<u8> {
-    let mut buf = [0; 8];
-    (&mut buf as &mut [u8]).encode_i64(id).unwrap();
-    table::encode_row_key(table_id, &buf)
 }
 
 /// An example table for test purpose.
@@ -571,12 +561,8 @@ impl DAGSelect {
         exec.set_tbl_scan(tbl_scan);
 
         let mut range = KeyRange::new();
-        let mut buf = Vec::with_capacity(8);
-        buf.encode_i64(i64::MIN).unwrap();
-        range.set_start(table::encode_row_key(table.id, &buf));
-        buf.clear();
-        buf.encode_i64(i64::MAX).unwrap();
-        range.set_end(table::encode_row_key(table.id, &buf));
+        range.set_start(table::encode_row_key(table.id, i64::MIN));
+        range.set_end(table::encode_row_key(table.id, i64::MAX));
 
         DAGSelect {
             execs: vec![exec],
