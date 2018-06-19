@@ -170,7 +170,7 @@ lazy_static! {
             "tikv_snapshot_cf_size",
             "Total size of each cf file of snapshot",
             &["type"],
-            exponential_buckets(1024.0, 2.0, 22).unwrap()
+            exponential_buckets(1024.0, 2.0, 31).unwrap()
         ).unwrap();
 
     pub static ref SNAPSHOT_BUILD_TIME_HISTOGRAM: Histogram =
