@@ -2500,7 +2500,7 @@ impl Runner {
         if let Some(tx) = self.region_task_senders.remove(&d.region_id) {
             tx.unbounded_send(RegionTask::destroy(d.region_id))
                 .unwrap_or_else(|e| {
-                    panic!(
+                    warn!(
                         "[region {}] has been removed before destroy message arrived, error {:?}",
                         d.region_id, e
                     );
