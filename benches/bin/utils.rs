@@ -29,9 +29,7 @@ pub fn next_ts() -> u64 {
 pub fn generate_row_keys(table_id: i64, start_id: i64, count: usize) -> Vec<Vec<u8>> {
     let mut result = Vec::with_capacity(count);
     for i in (start_id)..(start_id + count as i64) {
-        let mut handle = Vec::with_capacity(8);
-        handle.encode_i64(i as i64).unwrap();
-        let key = encode_row_key(table_id, &handle);
+        let key = encode_row_key(table_id, i);
         result.push(key);
     }
     result

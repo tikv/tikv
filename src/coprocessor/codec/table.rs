@@ -124,11 +124,11 @@ pub fn encode_row(row: Vec<Datum>, col_ids: &[i64]) -> Result<Vec<u8>> {
 }
 
 /// `encode_row_key` encodes the table id and record handle into a byte array.
-pub fn encode_row_key(table_id: i64, encoded_handle: &[u8]) -> Vec<u8> {
+pub fn encode_row_key(table_id: i64, handle: i64) -> Vec<u8> {
     let mut key = Vec::with_capacity(RECORD_ROW_KEY_LEN);
     // can't panic
     key.append_table_record_prefix(table_id).unwrap();
-    key.write_all(encoded_handle).unwrap();
+    key.encode_i64(handle).unwrap();
     key
 }
 
@@ -335,8 +335,8 @@ impl RowColsDict {
         self.cols.insert(cid, RowColMeta::new(offset, length));
     }
 
-    // get binary of cols, keep the origin order and return one slice.
-    pub fn get_column_values(&self) -> &[u8] {
+    // get binary of cols, keep the origin order, return one slice and cols' end offsets.
+    pub fn get_column_values_and_end_offsets(&self) -> (&[u8], Vec<usize>) {
         let mut start = self.value.len();
         let mut length = 0;
         for meta in self.cols.values() {
@@ -345,7 +345,12 @@ impl RowColsDict {
             }
             length += meta.length;
         }
-        &self.value[start..start + length]
+        let end_offsets = self.cols
+            .values()
+            .into_iter()
+            .map(|meta| meta.offset + meta.length - start)
+            .collect();
+        (&self.value[start..start + length], end_offsets)
     }
 }
 
@@ -406,7 +411,6 @@ mod test {
 
     use coprocessor::codec::datum::{self, Datum};
     use coprocessor::codec::mysql::types;
-    use util::codec::number::NumberEncoder;
     use util::collections::{HashMap, HashSet};
 
     use super::*;
@@ -415,9 +419,7 @@ mod test {
     fn test_row_key_codec() {
         let tests = vec![i64::MIN, i64::MAX, -1, 0, 2, 3, 1024];
         for &t in &tests {
-            let mut buf = vec![];
-            buf.encode_i64(t).unwrap();
-            let k = encode_row_key(1, &buf);
+            let k = encode_row_key(1, t);
             assert_eq!(t, decode_handle(&k).unwrap());
         }
     }
@@ -637,9 +639,7 @@ mod test {
     fn test_decode_table_id() {
         let tests = vec![0, 2, 3, 1024, i64::MAX];
         for &tid in &tests {
-            let mut buf = vec![];
-            buf.encode_i64(1).unwrap();
-            let k = encode_row_key(tid, &buf);
+            let k = encode_row_key(tid, 1);
             assert_eq!(tid, decode_table_id(&k).unwrap());
             let k = encode_index_seek_key(tid, 1, &k);
             assert_eq!(tid, decode_table_id(&k).unwrap());
