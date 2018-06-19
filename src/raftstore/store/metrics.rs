@@ -214,4 +214,11 @@ lazy_static! {
             "tikv_raftstore_leader_missing",
             "Total number of leader missed region"
         ).unwrap();
+
+    pub static ref INGEST_SST_ELAPSE: Histogram =
+        register_histogram!(
+            "tikv_ingest_sst_elapse",
+            "Bucketed histogram of elapse of rocksdb ingestion",
+            exponential_buckets(0.005, 2.0, 20).unwrap()
+        ).unwrap();
 }
