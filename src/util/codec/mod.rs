@@ -14,11 +14,7 @@
 pub mod bytes;
 pub mod number;
 
-use protobuf;
-use std::error;
 use std::io::{self, ErrorKind};
-use std::str::Utf8Error;
-use std::string::FromUtf8Error;
 
 pub type BytesSlice<'a> = &'a [u8];
 
@@ -41,34 +37,9 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        Protobuf(err: protobuf::ProtobufError) {
-            from()
-            cause(err)
-            description(err.description())
-            display("protobuf error {:?}", err)
-        }
         KeyLength {description("bad format key(length)")}
         KeyPadding {description("bad format key(padding)")}
         KeyNotFound {description("key not found")}
-        InvalidDataType(reason: String) {
-            description("invalid data type")
-            display("{}", reason)
-        }
-        Encoding(err: Utf8Error) {
-            from()
-            cause(err)
-            description("enconding failed")
-        }
-        Overflow(data:String,range:String){
-            description("overflow")
-            display("{},{}",data,range)
-        }
-        Other(err: Box<error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            description(err.description())
-            display("unknown error {:?}", err)
-        }
     }
 }
 
@@ -78,22 +49,11 @@ impl Error {
             Error::KeyLength => Some(Error::KeyLength),
             Error::KeyPadding => Some(Error::KeyPadding),
             Error::KeyNotFound => Some(Error::KeyNotFound),
-            Error::InvalidDataType(ref r) => Some(Error::InvalidDataType(r.clone())),
-            Error::Encoding(e) => Some(Error::Encoding(e)),
-            Error::Overflow(ref data, ref range) => {
-                Some(Error::Overflow(data.clone(), range.clone()))
-            }
-            Error::Protobuf(_) | Error::Io(_) | Error::Other(_) => None,
+            Error::Io(_) => None,
         }
     }
     pub fn unexpected_eof() -> Error {
         Error::Io(io::Error::new(ErrorKind::UnexpectedEof, "eof"))
-    }
-}
-
-impl From<FromUtf8Error> for Error {
-    fn from(err: FromUtf8Error) -> Error {
-        err.utf8_error().into()
     }
 }
 
