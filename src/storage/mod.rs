@@ -254,8 +254,6 @@ impl Debug for Command {
     }
 }
 
-pub const CMD_TAG_GC: &str = "gc";
-
 impl Command {
     pub fn readonly(&self) -> bool {
         match *self {
@@ -277,31 +275,27 @@ impl Command {
         self.get_context().get_priority()
     }
 
-    pub fn priority_tag(&self) -> &'static str {
-        match self.get_context().get_priority() {
-            CommandPri::Low => "low",
-            CommandPri::Normal => "normal",
-            CommandPri::High => "high",
-        }
+    pub fn priority_tag(&self) -> CommandPriorityKind {
+        CommandPriorityKind::from(self.get_context().get_priority())
     }
 
     pub fn need_flow_control(&self) -> bool {
         !self.readonly() && self.priority() != CommandPri::High
     }
 
-    pub fn tag(&self) -> &'static str {
+    pub fn tag(&self) -> CommandTypeKind {
         match *self {
-            Command::Prewrite { .. } => "prewrite",
-            Command::Commit { .. } => "commit",
-            Command::Cleanup { .. } => "cleanup",
-            Command::Rollback { .. } => "rollback",
-            Command::ScanLock { .. } => "scan_lock",
-            Command::ResolveLock { .. } => "resolve_lock",
-            Command::Gc { .. } => CMD_TAG_GC,
-            Command::DeleteRange { .. } => "delete_range",
-            Command::Pause { .. } => "pause",
-            Command::MvccByKey { .. } => "key_mvcc",
-            Command::MvccByStartTs { .. } => "start_ts_mvcc",
+            Command::Prewrite { .. } => CommandTypeKind::prewrite,
+            Command::Commit { .. } => CommandTypeKind::commit,
+            Command::Cleanup { .. } => CommandTypeKind::cleanup,
+            Command::Rollback { .. } => CommandTypeKind::rollback,
+            Command::ScanLock { .. } => CommandTypeKind::scan_lock,
+            Command::ResolveLock { .. } => CommandTypeKind::resolve_lock,
+            Command::Gc { .. } => CommandTypeKind::gc,
+            Command::DeleteRange { .. } => CommandTypeKind::delete_range,
+            Command::Pause { .. } => CommandTypeKind::pause,
+            Command::MvccByKey { .. } => CommandTypeKind::key_mvcc,
+            Command::MvccByStartTs { .. } => CommandTypeKind::start_ts_mvcc,
         }
     }
 
@@ -517,7 +511,7 @@ impl Storage {
         key: Key,
         start_ts: u64,
     ) -> impl Future<Item = Option<Value>, Error = Error> {
-        const CMD: &str = "get";
+        const CMD: CommandTypeKind = CommandTypeKind::get;
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
@@ -531,7 +525,9 @@ impl Storage {
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                    let _t_process = SCHED_PROCESSING_READ_HISTOGRAM_VEC
+                        .get(CMD)
+                        .start_coarse_timer();
 
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
@@ -545,7 +541,7 @@ impl Storage {
                         // map storage::txn::Error -> storage::Error
                         .map_err(Error::from)
                         .map(|r| {
-                            thread_ctx.collect_key_reads(CMD, 1);
+                            KV_COMMAND_KEYREAD_HISTOGRAM_VEC.get(CMD).observe(1f64);
                             r
                         });
 
@@ -572,7 +568,7 @@ impl Storage {
         keys: Vec<Key>,
         start_ts: u64,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "batch_get";
+        const CMD: CommandTypeKind = CommandTypeKind::batch_get;
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
@@ -586,7 +582,9 @@ impl Storage {
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                    let _t_process = SCHED_PROCESSING_READ_HISTOGRAM_VEC
+                        .get(CMD)
+                        .start_coarse_timer();
 
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
@@ -613,7 +611,7 @@ impl Storage {
                             .collect()
                         )
                         .map(|r: Vec<Result<KvPair>>| {
-                            thread_ctx.collect_key_reads(CMD, r.len() as u64);
+                            KV_COMMAND_KEYREAD_HISTOGRAM_VEC.get(CMD).observe(r.len() as f64);
                             r
                         });
 
@@ -642,7 +640,7 @@ impl Storage {
         start_ts: u64,
         options: Options,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "scan";
+        const CMD: CommandTypeKind = CommandTypeKind::scan;
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
@@ -656,7 +654,9 @@ impl Storage {
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                    let _t_process = SCHED_PROCESSING_READ_HISTOGRAM_VEC
+                        .get(CMD)
+                        .start_coarse_timer();
 
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -683,7 +683,9 @@ impl Storage {
                     thread_ctx.collect_read_flow(ctx.get_region_id(), statistics);
 
                     res.map_err(Error::from).map(|results| {
-                        thread_ctx.collect_key_reads(CMD, results.len() as u64);
+                        KV_COMMAND_KEYREAD_HISTOGRAM_VEC
+                            .get(CMD)
+                            .observe(results.len() as f64);
                         results
                             .into_iter()
                             .map(|x| x.map_err(Error::from))
@@ -730,9 +732,8 @@ impl Storage {
             start_ts,
             options,
         };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Booleans(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC.prewrite.inc();
         Ok(())
     }
 
@@ -750,9 +751,8 @@ impl Storage {
             lock_ts,
             commit_ts,
         };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC.commit.inc();
         Ok(())
     }
 
@@ -782,9 +782,7 @@ impl Storage {
             .async_write(&ctx, modifies, box |(_, res): (_, engine::Result<_>)| {
                 callback(res.map_err(Error::from))
             })?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["delete_range"])
-            .inc();
+        KV_COMMAND_COUNTER_VEC.delete_range.inc();
         Ok(())
     }
 
@@ -796,9 +794,8 @@ impl Storage {
         callback: Callback<()>,
     ) -> Result<()> {
         let cmd = Command::Cleanup { ctx, key, start_ts };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC.cleanup.inc();
         Ok(())
     }
 
@@ -814,9 +811,8 @@ impl Storage {
             keys,
             start_ts,
         };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC.rollback.inc();
         Ok(())
     }
 
@@ -838,9 +834,8 @@ impl Storage {
             },
             limit,
         };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Locks(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC.scan_lock.inc();
         Ok(())
     }
 
@@ -856,9 +851,8 @@ impl Storage {
             scan_key: None,
             key_locks: vec![],
         };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC.resolve_lock.inc();
         Ok(())
     }
 
@@ -870,9 +864,8 @@ impl Storage {
             scan_key: None,
             keys: vec![],
         };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC.gc.inc();
         Ok(())
     }
 
@@ -882,7 +875,7 @@ impl Storage {
         cf: String,
         key: Vec<u8>,
     ) -> impl Future<Item = Option<Vec<u8>>, Error = Error> {
-        const CMD: &str = "raw_get";
+        const CMD: CommandTypeKind = CommandTypeKind::raw_get;
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
@@ -896,7 +889,9 @@ impl Storage {
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                    let _t_process = SCHED_PROCESSING_READ_HISTOGRAM_VEC
+                        .get(CMD)
+                        .start_coarse_timer();
                     let cf = Storage::rawkv_cf(cf)?;
                     // no scan_count for this kind of op.
 
@@ -910,7 +905,7 @@ impl Storage {
                                 stats.data.flow_stats.read_keys = 1;
                                 stats.data.flow_stats.read_bytes = key_len + value.len();
                                 thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
-                                thread_ctx.collect_key_reads(CMD, 1);
+                                KV_COMMAND_KEYREAD_HISTOGRAM_VEC.get(CMD).observe(1f64);
                             }
                             r
                         })
@@ -932,7 +927,7 @@ impl Storage {
         cf: String,
         keys: Vec<Vec<u8>>,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "raw_batch_get";
+        const CMD: CommandTypeKind = CommandTypeKind::raw_batch_get;
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
@@ -948,7 +943,9 @@ impl Storage {
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                    let _t_process = SCHED_PROCESSING_READ_HISTOGRAM_VEC
+                        .get(CMD)
+                        .start_coarse_timer();
                     let cf = Storage::rawkv_cf(cf)?;
                     // no scan_count for this kind of op.
                     let mut stats = Statistics::default();
@@ -966,7 +963,9 @@ impl Storage {
                             _ => unreachable!(),
                         })
                         .collect();
-                    thread_ctx.collect_key_reads(CMD, stats.data.flow_stats.read_keys as u64);
+                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC
+                        .get(CMD)
+                        .observe(stats.data.flow_stats.read_keys as f64);
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
                     Ok(result)
                 })
@@ -1000,7 +999,7 @@ impl Storage {
             ],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&["raw_put"]).inc();
+        KV_COMMAND_COUNTER_VEC.raw_put.inc();
         Ok(())
     }
 
@@ -1026,9 +1025,7 @@ impl Storage {
             .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
                 callback(res.map_err(Error::from))
             })?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_batch_put"])
-            .inc();
+        KV_COMMAND_COUNTER_VEC.raw_batch_put.inc();
         Ok(())
     }
 
@@ -1050,9 +1047,7 @@ impl Storage {
             ],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_delete"])
-            .inc();
+        KV_COMMAND_COUNTER_VEC.raw_delete.inc();
         Ok(())
     }
 
@@ -1083,9 +1078,7 @@ impl Storage {
             ],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_delete_range"])
-            .inc();
+        KV_COMMAND_COUNTER_VEC.raw_delete_range.inc();
         Ok(())
     }
 
@@ -1110,9 +1103,7 @@ impl Storage {
             .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
                 callback(res.map_err(Error::from))
             })?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_batch_delete"])
-            .inc();
+        KV_COMMAND_COUNTER_VEC.raw_batch_delete.inc();
         Ok(())
     }
 
@@ -1156,7 +1147,7 @@ impl Storage {
         limit: usize,
         key_only: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "raw_scan";
+        const CMD: CommandTypeKind = CommandTypeKind::raw_scan;
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
@@ -1170,7 +1161,9 @@ impl Storage {
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                    let _t_process = SCHED_PROCESSING_READ_HISTOGRAM_VEC
+                        .get(CMD)
+                        .start_coarse_timer();
 
                     let mut statistics = Statistics::default();
                     let result = Storage::raw_scan(
@@ -1195,7 +1188,9 @@ impl Storage {
                             stats.data.flow_stats.read_keys = valid_keys;
                             stats.data.flow_stats.read_bytes = bytes_read;
                             thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
-                            thread_ctx.collect_key_reads(CMD, valid_keys as u64);
+                            KV_COMMAND_KEYREAD_HISTOGRAM_VEC
+                                .get(CMD)
+                                .observe(valid_keys as f64);
                             r
                         });
 
@@ -1249,7 +1244,7 @@ impl Storage {
         each_limit: usize,
         key_only: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "raw_batch_scan";
+        const CMD: CommandTypeKind = CommandTypeKind::raw_batch_scan;
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
@@ -1263,7 +1258,9 @@ impl Storage {
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: Box<Snapshot>| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                    let _t_process = SCHED_PROCESSING_READ_HISTOGRAM_VEC
+                        .get(CMD)
+                        .start_coarse_timer();
 
                     let mut statistics = Statistics::default();
                     if !Self::check_key_ranges(&ranges) {
@@ -1304,7 +1301,9 @@ impl Storage {
                         stats.data.flow_stats.read_keys = valid_keys;
                         stats.data.flow_stats.read_bytes = bytes_read;
                         thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
-                        thread_ctx.collect_key_reads(CMD, valid_keys as u64);
+                        KV_COMMAND_KEYREAD_HISTOGRAM_VEC
+                            .get(CMD)
+                            .observe(valid_keys as f64);
                         result.extend(pairs.into_iter());
                     }
 
@@ -1330,9 +1329,8 @@ impl Storage {
         callback: Callback<MvccInfo>,
     ) -> Result<()> {
         let cmd = Command::MvccByKey { ctx, key };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::MvccInfoByKey(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC.key_mvcc.inc();
         Ok(())
     }
 
@@ -1343,9 +1341,8 @@ impl Storage {
         callback: Callback<Option<(Key, MvccInfo)>>,
     ) -> Result<()> {
         let cmd = Command::MvccByStartTs { ctx, start_ts };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::MvccInfoByStartTs(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC.start_ts_mvcc.inc();
         Ok(())
     }
 }
