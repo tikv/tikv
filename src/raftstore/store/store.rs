@@ -3167,7 +3167,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if limit == 0 {
                 // `origin_key` does not handle `DATA_MAX_KEY`, but we can return `Ended` rather
                 // than `LimitExceeded`.
-                if end_key >= DATA_MAX_KEY {
+                if &end_key >= &DATA_MAX_KEY {
                     break;
                 }
 
