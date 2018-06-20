@@ -43,7 +43,6 @@ When a node starts, the metadata of the Node, Store and Region are recorded into
 
 ## Getting started
 
-## Your First Test Drive
 TiKV is a component of the [TiDB project](https://github.com/pingcap/tidb). To run TiKV you must build and run it with PD, which is used to manage the cluster. You can use TiKV together with TiDB. You can also use TiKV separately.
 
 We provide multiple deployment methods, but it is recommended to use the Ansible deployment for the production environment. The TiKV documentation is available on [TiKV's wiki page](https://github.com/pingcap/tikv/wiki/TiKV-Documentation).
