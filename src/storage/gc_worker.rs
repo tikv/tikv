@@ -20,7 +20,8 @@ use kvproto::kvrpcpb::Context;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use util::time::duration_to_sec;
 use util::worker::{self, Builder, Runnable, ScheduleError, Worker};
 
 pub const GC_MAX_PENDING_TASKS: usize = 2;
@@ -150,8 +151,6 @@ impl GCRunner {
     }
 
     pub fn gc(&mut self, mut ctx: Context, safe_point: u64) -> Result<()> {
-        let _gc_timer = GC_DURATION_HISTOGRAM.start_coarse_timer();
-
         debug!(
             "doing gc on region {}, safe_point {}",
             ctx.get_region_id(),
@@ -191,7 +190,11 @@ impl GCRunner {
 impl Runnable<GCTask> for GCRunner {
     fn run(&mut self, task: GCTask) {
         GC_GCTASK_COUNTER.inc();
+
+        let timer = Instant::now();
         let result = self.gc(task.ctx, task.safe_point);
+        GC_DURATION_HISTOGRAM.observe(duration_to_sec(timer.elapsed()));
+
         if result.is_err() {
             GC_GCTASK_FAIL_COUNTER.inc();
         }

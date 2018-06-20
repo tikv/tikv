@@ -101,8 +101,8 @@ lazy_static! {
         "Total number of gc command skipped owing to optimization"
     ).unwrap();
     pub static ref GC_DURATION_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_gcworker_gc_duration_per_region",
-        "Duration of gc tasks execution per region"
+        "tikv_gcworker_gc_tack_duration",
+        "Duration of gc tasks execution"
     ).unwrap();
     pub static ref GC_GCTASK_COUNTER: IntCounter = register_int_counter!(
         "tikv_gcworker_gc_tasks",
