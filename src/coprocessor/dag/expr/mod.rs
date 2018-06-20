@@ -19,22 +19,20 @@ mod column;
 mod compare;
 mod constant;
 mod ctx;
-mod err;
 mod fncall;
 mod json;
 mod math;
 mod time;
+
 pub use self::ctx::*;
-pub use self::err::*;
-
-use std::borrow::Cow;
-use std::str;
-
-use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
+pub use coprocessor::codec::{Error, Result};
 
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::mysql::{charset, types};
 use coprocessor::codec::{self, Datum};
+use std::borrow::Cow;
+use std::str;
+use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 use util::codec::number;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -237,18 +235,18 @@ impl Expression {
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
             ExprType::MysqlTime => number::decode_u64(&mut expr.get_val())
+                .map_err(Error::from)
                 .and_then(|i| {
                     let fsp = tp.get_decimal() as i8;
                     let t = tp.get_tp() as u8;
                     Time::from_packed_u64(i, t, fsp, &ctx.cfg.tz)
                 })
-                .map(|t| Expression::new_const(Datum::Time(t), tp))
-                .map_err(Error::from),
+                .map(|t| Expression::new_const(Datum::Time(t), tp)),
             ExprType::MysqlDuration => number::decode_i64(&mut expr.get_val())
+                .map_err(Error::from)
                 .and_then(|n| Duration::from_nanos(n, MAX_FSP))
                 .map(Datum::Dur)
-                .map(|e| Expression::new_const(e, tp))
-                .map_err(Error::from),
+                .map(|e| Expression::new_const(e, tp)),
             ExprType::MysqlDecimal => Decimal::decode(&mut expr.get_val())
                 .map(Datum::Dec)
                 .map(|e| Expression::new_const(e, tp))
@@ -299,8 +297,8 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::{Error, EvalConfig, EvalContext, Expression, ERR_DATA_OUT_OF_RANGE,
-                ERR_DIVISION_BY_ZERO, FLAG_IGNORE_TRUNCATE};
+    use super::{Error, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
+    use coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
     use coprocessor::codec::mysql::json::JsonEncoder;
     use coprocessor::codec::mysql::{charset, types, Decimal, DecimalEncoder, Duration, Json, Time};
     use coprocessor::codec::{convert, mysql, Datum};

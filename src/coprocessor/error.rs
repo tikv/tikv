@@ -20,7 +20,6 @@ use tipb;
 
 use coprocessor;
 use storage;
-use util;
 
 quick_error! {
     #[derive(Debug)]
@@ -67,14 +66,6 @@ impl From<storage::engine::Error> for Error {
 impl From<coprocessor::dag::expr::Error> for Error {
     fn from(e: coprocessor::dag::expr::Error) -> Error {
         Error::Eval(e.into())
-    }
-}
-
-impl From<util::codec::Error> for Error {
-    fn from(e: util::codec::Error) -> Error {
-        let mut err = tipb::select::Error::new();
-        err.set_msg(format!("{}", e));
-        Error::Eval(err)
     }
 }
 

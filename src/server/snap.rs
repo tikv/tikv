@@ -151,7 +151,7 @@ fn send_snap(
     };
 
     let cb = ChannelBuilder::new(env)
-        .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
+        .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
         .keepalive_time(cfg.grpc_keepalive_time.0)
         .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
         .default_compression_algorithm(cfg.grpc_compression_algorithm());

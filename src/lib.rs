@@ -13,6 +13,7 @@
 
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
+#![feature(proc_macro)]
 #![feature(fnbox)]
 #![feature(alloc)]
 #![feature(slice_patterns)]
@@ -63,6 +64,7 @@ extern crate mio;
 extern crate murmur3;
 #[macro_use]
 extern crate prometheus;
+extern crate prometheus_static_metric;
 extern crate protobuf;
 #[macro_use]
 extern crate quick_error;
