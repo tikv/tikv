@@ -1397,26 +1397,58 @@ quick_error! {
 
 pub type Result<T> = ::std::result::Result<T, Error>;
 
-pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
-    if header.has_not_leader() {
-        "not_leader"
-    } else if header.has_region_not_found() {
-        "region_not_found"
-    } else if header.has_key_not_in_region() {
-        "key_not_in_region"
-    } else if header.has_stale_epoch() {
-        "stale_epoch"
-    } else if header.has_server_is_busy() {
-        "server_is_busy"
-    } else if header.has_stale_command() {
-        "stale_command"
-    } else if header.has_store_not_match() {
-        "store_not_match"
-    } else if header.has_raft_entry_too_large() {
-        "raft_entry_too_large"
-    } else {
-        "other"
+pub enum ErrorHeaderKind {
+    NotLeader,
+    RegionNotFound,
+    KeyNotInRegion,
+    StaleEpoch,
+    ServerIsBusy,
+    StaleCommand,
+    StoreNotMatch,
+    RaftEntryTooLarge,
+    Other,
+}
+
+impl Display for ErrorHeaderKind {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match *self {
+            ErrorHeaderKind::NotLeader => write!(f, "not_leader"),
+            ErrorHeaderKind::RegionNotFound => write!(f, "region_not_found"),
+            ErrorHeaderKind::KeyNotInRegion => write!(f, "key_not_in_region"),
+            ErrorHeaderKind::StaleEpoch => write!(f, "stale_epoch"),
+            ErrorHeaderKind::ServerIsBusy => write!(f, "server_is_busy"),
+            ErrorHeaderKind::StaleCommand => write!(f, "stale_command"),
+            ErrorHeaderKind::StoreNotMatch => write!(f, "store_not_match"),
+            ErrorHeaderKind::RaftEntryTooLarge => write!(f, "raft_entry_too_large"),
+            ErrorHeaderKind::Other => write!(f, "other"),
+        }
     }
+}
+
+pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
+    if header.has_not_leader() {
+        ErrorHeaderKind::NotLeader
+    } else if header.has_region_not_found() {
+        ErrorHeaderKind::RegionNotFound
+    } else if header.has_key_not_in_region() {
+        ErrorHeaderKind::KeyNotInRegion
+    } else if header.has_stale_epoch() {
+        ErrorHeaderKind::StaleEpoch
+    } else if header.has_server_is_busy() {
+        ErrorHeaderKind::ServerIsBusy
+    } else if header.has_stale_command() {
+        ErrorHeaderKind::StaleCommand
+    } else if header.has_store_not_match() {
+        ErrorHeaderKind::StoreNotMatch
+    } else if header.has_raft_entry_too_large() {
+        ErrorHeaderKind::RaftEntryTooLarge
+    } else {
+        ErrorHeaderKind::Other
+    }
+}
+
+pub fn get_tag_from_header(header: &errorpb::Error) -> String {
+    get_error_kind_from_header(header).to_string()
 }
 
 #[cfg(test)]

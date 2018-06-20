@@ -680,7 +680,7 @@ fn err_multi_resp(e: Error, count: usize, metrics: &mut BasicLocalMetrics) -> Re
         }
         Error::Locked(info) => {
             resp.set_locked(info);
-            "lock"
+            "lock".to_string()
         }
         Error::Outdated(elapsed, scan_tag) => {
             metrics
@@ -688,7 +688,7 @@ fn err_multi_resp(e: Error, count: usize, metrics: &mut BasicLocalMetrics) -> Re
                 .with_label_values(&[scan_tag])
                 .observe(elapsed.as_secs() as f64);
             resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
-            "outdated"
+            "outdated".to_string()
         }
         Error::Full(allow) => {
             let mut errorpb = errorpb::Error::new();
@@ -697,16 +697,16 @@ fn err_multi_resp(e: Error, count: usize, metrics: &mut BasicLocalMetrics) -> Re
             server_is_busy_err.set_reason(ENDPOINT_IS_BUSY.to_owned());
             errorpb.set_server_is_busy(server_is_busy_err);
             resp.set_region_error(errorpb);
-            "full"
+            "full".to_string()
         }
         Error::Other(_) | Error::Eval(_) => {
             resp.set_other_error(format!("{}", e));
-            "other"
+            "other".to_string()
         }
     };
     metrics
         .error_cnt
-        .with_label_values(&[tag])
+        .with_label_values(&[&tag])
         .inc_by(count as i64);
     resp
 }
