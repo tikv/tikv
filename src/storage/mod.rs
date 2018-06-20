@@ -1409,19 +1409,27 @@ pub enum ErrorHeaderKind {
     Other,
 }
 
+impl ErrorHeaderKind {
+    /// TODO: This function is only used for bridging existing & legacy metric tags.
+    /// It should be removed once Coprocessor starts using new static metrics.
+    pub fn get_str(&self) -> &'static str {
+        match *self {
+            ErrorHeaderKind::NotLeader => "not_leader",
+            ErrorHeaderKind::RegionNotFound => "region_not_found",
+            ErrorHeaderKind::KeyNotInRegion => "key_not_in_region",
+            ErrorHeaderKind::StaleEpoch => "stale_epoch",
+            ErrorHeaderKind::ServerIsBusy => "server_is_busy",
+            ErrorHeaderKind::StaleCommand => "stale_command",
+            ErrorHeaderKind::StoreNotMatch => "store_not_match",
+            ErrorHeaderKind::RaftEntryTooLarge => "raft_entry_too_large",
+            ErrorHeaderKind::Other => "other",
+        }
+    }
+}
+
 impl Display for ErrorHeaderKind {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match *self {
-            ErrorHeaderKind::NotLeader => write!(f, "not_leader"),
-            ErrorHeaderKind::RegionNotFound => write!(f, "region_not_found"),
-            ErrorHeaderKind::KeyNotInRegion => write!(f, "key_not_in_region"),
-            ErrorHeaderKind::StaleEpoch => write!(f, "stale_epoch"),
-            ErrorHeaderKind::ServerIsBusy => write!(f, "server_is_busy"),
-            ErrorHeaderKind::StaleCommand => write!(f, "stale_command"),
-            ErrorHeaderKind::StoreNotMatch => write!(f, "store_not_match"),
-            ErrorHeaderKind::RaftEntryTooLarge => write!(f, "raft_entry_too_large"),
-            ErrorHeaderKind::Other => write!(f, "other"),
-        }
+        write!(f, "{}", self.get_str())
     }
 }
 
@@ -1447,8 +1455,8 @@ pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
     }
 }
 
-pub fn get_tag_from_header(header: &errorpb::Error) -> String {
-    get_error_kind_from_header(header).to_string()
+pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
+    get_error_kind_from_header(header).get_str()
 }
 
 #[cfg(test)]
