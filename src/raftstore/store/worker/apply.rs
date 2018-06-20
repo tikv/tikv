@@ -2512,7 +2512,7 @@ impl Runner {
         let target = borrow.target;
         let tx = self.region_task_senders.remove(&target).unwrap_or_else(|| {
             panic!(
-                "Can't borrow region {} 's delegate, no releated message channel",
+                "Can't borrow region {} 's delegate, no related message channel",
                 target
             );
         });
