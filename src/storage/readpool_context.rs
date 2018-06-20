@@ -66,7 +66,7 @@ impl Context {
         for (cf, details) in statistics.details() {
             for (tag, count) in details {
                 self.scan_details
-                    .with_label_values(&[&cmd.to_string(), cf, tag])
+                    .with_label_values(&[cmd.get_str(), cf, tag])
                     .inc_by(count as i64);
             }
         }

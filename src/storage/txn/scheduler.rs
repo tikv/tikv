@@ -919,7 +919,7 @@ fn process_write_impl(
 }
 
 struct SchedContext {
-    stats: HashMap<String, StatisticsSummary>,
+    stats: HashMap<&'static str, StatisticsSummary>,
     command_gc_skipped_counter: LocalIntCounter,
     command_gc_empty_range_counter: LocalIntCounter,
 }
@@ -935,7 +935,7 @@ impl Default for SchedContext {
 }
 
 impl SchedContext {
-    fn add_statistics(&mut self, cmd_tag: String, stat: &Statistics) {
+    fn add_statistics(&mut self, cmd_tag: &'static str, stat: &Statistics) {
         let entry = self.stats.entry(cmd_tag).or_insert_with(Default::default);
         entry.add_statistics(stat);
     }
@@ -947,7 +947,7 @@ impl ThreadContext for SchedContext {
             for (cf, details) in stat.stat.details() {
                 for (tag, count) in details {
                     KV_COMMAND_SCAN_DETAILS
-                        .with_label_values(&[&cmd, cf, tag])
+                        .with_label_values(&[cmd, cf, tag])
                         .inc_by(count as i64);
                 }
             }
@@ -1034,7 +1034,7 @@ impl Scheduler {
                     .start_coarse_timer();
 
                 let s = process_read(ctx, cid, cmd, scheduler, snapshot);
-                ctx.add_statistics(tag.to_string(), &s);
+                ctx.add_statistics(tag.get_str(), &s);
             });
         } else {
             worker_pool.execute(move |ctx: &mut SchedContext| {
@@ -1043,7 +1043,7 @@ impl Scheduler {
                     .start_coarse_timer();
 
                 let s = process_write(cid, cmd, scheduler, snapshot);
-                ctx.add_statistics(tag.to_string(), &s);
+                ctx.add_statistics(tag.get_str(), &s);
             });
         }
     }
