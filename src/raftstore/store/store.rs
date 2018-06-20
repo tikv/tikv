@@ -54,7 +54,8 @@ use util::{escape, rocksdb};
 use super::cmd_resp::{bind_term, new_error};
 use super::config::Config;
 use super::engine::{Iterable, Mutable, Peekable, Snapshot as EngineSnapshot};
-use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key, origin_key};
+use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key, origin_key,
+                  DATA_MAX_KEY};
 use super::local_metrics::RaftMetrics;
 use super::metrics::*;
 use super::msg::{Callback, ReadResponse};
@@ -3144,21 +3145,34 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         mut limit: u32,
         callback: SeekRegionCallback,
     ) {
+        // `limit` should be at least 1
+        if limit == 0 {
+            limit = 1;
+        }
+
+        // `from_key` must not be `DATA_MAX_KEY`
         let from_key = data_key(from_key);
         for (end_key, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
-            if limit == 0 {
-                callback(SeekRegionResult::LimitExceeded {
-                    next_key: origin_key(end_key).to_vec(),
-                });
-                return;
-            }
-            limit -= 1;
-
             let peer = &self.region_peers[region_id];
             if filter(peer) {
                 callback(SeekRegionResult::Some {
                     local_peer: peer.peer.clone(),
                     region: peer.region().clone(),
+                });
+                return;
+            }
+
+            limit -= 1;
+
+            if limit == 0 {
+                // `origin_key` does not handle `DATA_MAX_KEY`, but we can return `Ended` rather
+                // than `LimitExceeded`.
+                if end_key >= DATA_MAX_KEY {
+                    break;
+                }
+
+                callback(SeekRegionResult::LimitExceeded {
+                    next_key: origin_key(end_key).to_vec(),
                 });
                 return;
             }
