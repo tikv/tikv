@@ -17,7 +17,7 @@ use std::{str, i64, u64};
 use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
 use coprocessor::codec::mysql::decimal::RoundMode;
 use coprocessor::codec::mysql::{charset, types, Decimal, Duration, Json, Res, Time};
-use coprocessor::codec::{mysql, Datum, Error as CError};
+use coprocessor::codec::{mysql, Datum};
 
 use super::{Error, EvalContext, FnCall, Result};
 
@@ -87,11 +87,12 @@ impl FnCall {
 
         match res {
             Ok(v) => Ok(Some(v)),
-            Err(CError::Overflow(data, range)) => {
-                ctx.overflow_from_cast_str_as_int(&val, Error::overflow(&data, &range), is_negative)
+            Err(e) => if e.is_overflow() {
+                ctx.overflow_from_cast_str_as_int(&val, e, is_negative)
                     .map(Some)
-            }
-            Err(e) => Err(e.into()),
+            } else {
+                Err(e)
+            },
         }
     }
 
@@ -232,7 +233,7 @@ impl FnCall {
             match Decimal::from_bytes(&val)? {
                 Res::Ok(d) => Cow::Owned(d),
                 Res::Truncated(d) | Res::Overflow(d) => {
-                    box_try!(ctx.handle_truncate(true));
+                    ctx.handle_truncate(true)?;
                     Cow::Owned(d)
                 }
             }
@@ -438,11 +439,12 @@ impl FnCall {
         // TODO: port NumberToDuration from tidb.
         match Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8) {
             Ok(dur) => Ok(Some(Cow::Owned(dur))),
-            Err(CError::Overflow(_, _)) => {
-                ctx.handle_overflow(Error::overflow("Duration", &format!("{}", val)))?;
+            Err(e) => if e.is_overflow() {
+                ctx.handle_overflow(e)?;
                 Ok(None)
-            }
-            Err(e) => Err(e.into()),
+            } else {
+                Err(e)
+            },
         }
     }
 
@@ -707,11 +709,11 @@ mod test {
 
     use chrono::{FixedOffset, Utc};
 
+    use coprocessor::codec::error::*;
     use coprocessor::codec::mysql::{self, charset, types, Decimal, Duration, Json, Time};
     use coprocessor::codec::{convert, Datum};
     use coprocessor::dag::expr::test::{col_expr as base_col_expr, fncall_expr};
-    use coprocessor::dag::expr::{self, err, EvalConfig, EvalContext, Expression,
-                                 FLAG_IGNORE_TRUNCATE};
+    use coprocessor::dag::expr::{self, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
 
     pub fn col_expr(col_id: i64, tp: i32) -> Expr {
         let mut expr = base_col_expr(col_id);
@@ -1843,7 +1845,7 @@ mod test {
             assert_eq!(ctx.warnings.warning_cnt, 1);
             assert_eq!(
                 ctx.warnings.warnings[0].get_code(),
-                err::ERR_TRUNCATE_WRONG_VALUE
+                ERR_TRUNCATE_WRONG_VALUE
             );
 
             // test overflow as error
@@ -1883,7 +1885,7 @@ mod test {
             assert_eq!(res, exp);
             assert_eq!(ctx.warnings.warning_cnt, warnings_cnt);
             if warnings_cnt > 0 {
-                assert_eq!(ctx.warnings.warnings[0].get_code(), err::ERR_UNKNOWN);
+                assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_UNKNOWN);
             }
         }
 
@@ -1914,7 +1916,7 @@ mod test {
             assert_eq!(ctx.warnings.warning_cnt, 1);
             assert_eq!(
                 ctx.warnings.warnings[0].get_code(),
-                err::ERR_TRUNCATE_WRONG_VALUE
+                ERR_TRUNCATE_WRONG_VALUE
             );
 
             // test overflow as error
@@ -1941,7 +1943,7 @@ mod test {
     //     let res = e.eval_duration(&mut ctx, &cols).unwrap();
     //     assert!(res.is_none());
     //     assert_eq!(ctx.warnings.warning_cnt, 1);
-    //     assert_eq!(ctx.warnings.warnings[0].get_code(), err::ERR_DATA_OUT_OF_RANGE);
+    //     assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
 
     //     // test overflow as error
     //     ctx = EvalContext::new(Arc::new(EvalConfig::default()));
