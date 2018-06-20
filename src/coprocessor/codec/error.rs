@@ -37,7 +37,7 @@ quick_error! {
         Encoding(err: Utf8Error) {
             from()
             cause(err)
-            description("enconding failed")
+            description("encoding failed")
         }
         ColumnOffset(offset: usize) {
             description("column offset not found")
