@@ -15,7 +15,7 @@ use prometheus::*;
 use prometheus_static_metric::*;
 
 make_static_metric! {
-    label_enum GrpcTypes {
+    pub label_enum GrpcTypeKind {
         kv_get,
         kv_scan,
         kv_prewrite,
@@ -43,10 +43,10 @@ make_static_metric! {
         split_region,
     }
     pub struct GrpcMsgHistogramVec: Histogram {
-        "type" => GrpcTypes,
+        "type" => GrpcTypeKind,
     }
     pub struct GrpcMsgFailCounterVec: IntCounter {
-        "type" => GrpcTypes,
+        "type" => GrpcTypeKind,
     }
 }
 

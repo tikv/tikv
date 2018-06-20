@@ -22,7 +22,7 @@ use util::escape;
 
 //use super::datum::DatumDecoder;
 use super::mysql::{types, Duration, Time};
-use super::{datum, Datum, Result};
+use super::{datum, Datum, Error, Result};
 use util::codec::BytesSlice;
 use util::codec::number::{self, NumberEncoder};
 
@@ -41,13 +41,13 @@ trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {
         self.write_all(TABLE_PREFIX)?;
         self.encode_i64(table_id)?;
-        self.write_all(RECORD_PREFIX_SEP).map_err(From::from)
+        self.write_all(RECORD_PREFIX_SEP).map_err(Error::from)
     }
 
     fn append_table_index_prefix(&mut self, table_id: i64) -> Result<()> {
         self.write_all(TABLE_PREFIX)?;
         self.encode_i64(table_id)?;
-        self.write_all(INDEX_PREFIX_SEP).map_err(From::from)
+        self.write_all(INDEX_PREFIX_SEP).map_err(Error::from)
     }
 }
 
@@ -90,7 +90,7 @@ pub fn decode_table_id(key: &[u8]) -> Result<i64> {
     }
 
     let mut remaining = &key[TABLE_PREFIX.len()..];
-    number::decode_i64(&mut remaining)
+    number::decode_i64(&mut remaining).map_err(Error::from)
 }
 
 pub fn flatten(data: Datum) -> Result<Datum> {
@@ -161,7 +161,7 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
     }
 
     remaining = &remaining[RECORD_PREFIX_SEP.len()..];
-    number::decode_i64(&mut remaining)
+    number::decode_i64(&mut remaining).map_err(Error::from)
 }
 
 /// `truncate_as_row_key` truncate extra part of a tidb key and just keep the row key part.
@@ -335,8 +335,8 @@ impl RowColsDict {
         self.cols.insert(cid, RowColMeta::new(offset, length));
     }
 
-    // get binary of cols, keep the origin order and return one slice.
-    pub fn get_column_values(&self) -> &[u8] {
+    // get binary of cols, keep the origin order, return one slice and cols' end offsets.
+    pub fn get_column_values_and_end_offsets(&self) -> (&[u8], Vec<usize>) {
         let mut start = self.value.len();
         let mut length = 0;
         for meta in self.cols.values() {
@@ -345,7 +345,12 @@ impl RowColsDict {
             }
             length += meta.length;
         }
-        &self.value[start..start + length]
+        let end_offsets = self.cols
+            .values()
+            .into_iter()
+            .map(|meta| meta.offset + meta.length - start)
+            .collect();
+        (&self.value[start..start + length], end_offsets)
     }
 }
 
@@ -392,7 +397,7 @@ pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option
         if tmp_data.is_empty() {
             None
         } else {
-            Some(box_try!(datum::decode_datum(&mut tmp_data)).i64())
+            Some(datum::decode_datum(&mut tmp_data)?.i64())
         }
     };
     Ok((RowColsDict::new(meta_map, key), handle))

@@ -280,9 +280,9 @@ impl FnCall {
 
 #[cfg(test)]
 mod test {
+    use coprocessor::codec::error::ERR_DIVISION_BY_ZERO;
     use coprocessor::codec::mysql::{types, Decimal};
     use coprocessor::codec::{mysql, Datum};
-    use coprocessor::dag::expr::err;
     use coprocessor::dag::expr::test::{check_divide_by_zero, check_overflow, datum_expr,
                                        fncall_expr, str2dec};
     use coprocessor::dag::expr::*;
@@ -1034,7 +1034,7 @@ mod test {
                 if *has_warning {
                     assert_eq!(
                         ctx.take_warnings().warnings[0].get_code(),
-                        err::ERR_DIVISION_BY_ZERO
+                        ERR_DIVISION_BY_ZERO
                     );
                 } else {
                     assert!(ctx.take_warnings().warnings.is_empty());
