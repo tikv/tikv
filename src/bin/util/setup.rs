@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use slog::{Drain, Logger};
-use slog_async::Async;
+use slog_async::{Async, OverflowStrategy};
 use slog_term::{FullFormat, PlainDecorator, TermDecorator};
 use std::env;
 use std::io::BufWriter;
@@ -29,6 +29,12 @@ use tikv::util::logger;
 
 // A workaround for checking if log is initialized.
 pub static LOG_INITIALIZED: AtomicBool = ATOMIC_BOOL_INIT;
+// Default is 128.
+// Extended since blocking is set, and we don't want to block very often.
+const SLOG_CHANNEL_SIZE: usize = 10240;
+// Default is DropAndReport.
+// It is not desirable to have dropped logs in our use case.
+const SLOG_CHANNEL_OVERFLOW_STRATEGY: OverflowStrategy = OverflowStrategy::Block;
 
 macro_rules! fatal {
     ($lvl:expr, $($arg:tt)+) => ({
@@ -45,7 +51,11 @@ pub fn init_log(config: &TiKvConfig) {
     if config.log_file.is_empty() {
         let decorator = TermDecorator::new().build();
         let drain = FullFormat::new(decorator).build().fuse();
-        let drain = Async::new(drain).build().fuse();
+        let drain = Async::new(drain)
+            .chan_size(SLOG_CHANNEL_SIZE)
+            .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
+            .build()
+            .fuse();
         let logger = Logger::root_typed(drain, slog_o!());
         logger::init_log(logger, config.log_level).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {:?}", e);
