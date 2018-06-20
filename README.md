@@ -54,16 +54,16 @@ We provide multiple deployment methods, but it is recommended to use the Ansible
     You can use [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) to quickly test TiKV and TiDB on a single machine. This is the easiest way. For other ways, see [TiDB documentation](https://www.pingcap.com/docs/).
 
 - Try TiKV separately
-    - [Deploy TiKV Using Docker Compose](https://www.pingcap.com/docs/tikv/deploy-tikv-docker-compose/): To quickly test TiKV separately without TiDB using [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) on a single machine.
-    - [Deploy TiKV Using Docker](https://www.pingcap.com/docs/tikv/deploy-tikv-using-docker/): To deploy a multi-node TiKV testing cluster using Docker.
-    - [Deploy TiKV Using Binary Files](https://www.pingcap.com/docs/tikv/deploy-tikv-using-binary/): To deploy a TiKV cluster using binary files on a single node or on multiple nodes.
+    - [Deploy TiKV Using Docker Compose](https://www.pingcap.com/docs/tikv/deploy-tikv-docker-compose/): To quickly test TiKV separately without TiDB using [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) on a single machine
+    - [Deploy TiKV Using Docker](https://www.pingcap.com/docs/tikv/deploy-tikv-using-docker/): To deploy a multi-node TiKV testing cluster using Docker
+    - [Deploy TiKV Using Binary Files](https://www.pingcap.com/docs/tikv/deploy-tikv-using-binary/): To deploy a TiKV cluster using binary files on a single node or on multiple nodes
 
 ### Production deployment
 
 For the production environment, use [Ansible](https://github.com/pingcap/tidb-ansible) to deploy the cluster.
 
 - [Deploy TiDB Using Ansible](https://www.pingcap.com/docs/op-guide/ansible-deployment/)
-- [Deploy TiKV separately Using Ansible](https://www.pingcap.com/docs/tikv/deploy-tikv-using-ansible/).
+- [Deploy TiKV separately Using Ansible](https://www.pingcap.com/docs/tikv/deploy-tikv-using-ansible/)
 
 ## Client drivers
 
