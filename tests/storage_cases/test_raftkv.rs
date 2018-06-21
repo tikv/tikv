@@ -1,6 +1,5 @@
 use std::sync::mpsc::channel;
 use std::thread;
-use std::time::Duration;
 
 use kvproto::kvrpcpb::Context;
 use raftstore::server::new_server_cluster;
@@ -11,8 +10,6 @@ use tikv::storage::{CFStatistics, CfName, Key, CF_DEFAULT};
 use tikv::util::HandyRwLock;
 use tikv::util::codec::bytes;
 use tikv::util::escape;
-
-use raftstore::util::MAX_LEADER_LEASE;
 
 #[test]
 fn test_raftkv() {
@@ -102,7 +99,7 @@ fn test_batch_snapshot() {
         assert!(s.is_some());
     }
     // sleep util leader lease is expired.
-    thread::sleep(Duration::from_millis(MAX_LEADER_LEASE));
+    thread::sleep(cluster.cfg.raft_store.raft_store_max_leader_lease.0);
     let batch = vec![ctx; size];
     let snapshots = must_batch_snapshot(batch, storage.as_ref());
     assert_eq!(size, snapshots.len());
