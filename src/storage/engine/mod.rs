@@ -28,6 +28,7 @@ use config;
 use util::rocksdb::CFOptions;
 
 mod metrics;
+pub mod perf_context;
 pub mod raftkv;
 mod rocksdb;
 use super::super::raftstore::store::engine::IterOption;

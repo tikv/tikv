@@ -39,6 +39,7 @@ pub mod txn;
 pub mod types;
 
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
+pub use self::engine::perf_context::{PerfCollector, PerfStatistics};
 pub use self::engine::raftkv::RaftKv;
 pub use self::engine::{new_local_engine, CFStatistics, Cursor, Engine, Error as EngineError,
                        FlowStatistics, Iterator, Modify, ScanMode, Snapshot, Statistics,

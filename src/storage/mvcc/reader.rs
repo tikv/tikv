@@ -18,7 +18,7 @@ use kvproto::kvrpcpb::IsolationLevel;
 use raftstore::store::engine::IterOption;
 use std::u64;
 use storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
-use storage::{Key, Value, CF_LOCK, CF_WRITE};
+use storage::{Key, PerfCollector, PerfStatistics, Value, CF_LOCK, CF_WRITE};
 use util::properties::MvccProperties;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
@@ -34,6 +34,7 @@ const REVERSE_SEEK_BOUND: u64 = 32;
 pub struct MvccReader {
     snapshot: Box<Snapshot>,
     statistics: Statistics,
+    perf_statistics: PerfStatistics,
     // cursors are used for speeding up scans.
     data_cursor: Option<Cursor>,
     lock_cursor: Option<Cursor>,
@@ -60,6 +61,7 @@ impl MvccReader {
         MvccReader {
             snapshot,
             statistics: Statistics::default(),
+            perf_statistics: PerfStatistics::default(),
             data_cursor: None,
             lock_cursor: None,
             write_cursor: None,
@@ -86,6 +88,8 @@ impl MvccReader {
     }
 
     pub fn load_data(&mut self, key: &Key, ts: u64) -> Result<Value> {
+        let perf_collector = PerfCollector::new(&mut self.perf_statistics);
+
         if self.key_only {
             return Ok(vec![]);
         }
@@ -111,10 +115,14 @@ impl MvccReader {
         self.statistics.data.processed += 1;
         self.statistics.data.flow_stats.read_bytes += k.raw().unwrap_or_default().len() + res.len();
         self.statistics.data.flow_stats.read_keys += 1;
+        drop(perf_collector);
+
         Ok(res)
     }
 
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
+        let perf_collector = PerfCollector::new(&mut self.perf_statistics);
+
         if self.scan_mode.is_some() && self.lock_cursor.is_none() {
             let iter_opt = IterOption::new(None, None, true);
             let iter = self.snapshot
@@ -139,6 +147,8 @@ impl MvccReader {
             self.statistics.lock.processed += 1;
         }
 
+        drop(perf_collector);
+
         Ok(res)
     }
 
@@ -151,11 +161,17 @@ impl MvccReader {
     }
 
     pub fn seek_write(&mut self, key: &Key, ts: u64) -> Result<Option<(u64, Write)>> {
-        self.seek_write_impl(key, ts, false)
+        let perf_collector = PerfCollector::new(&mut self.perf_statistics);
+        let ret = self.seek_write_impl(key, ts, false);
+        drop(perf_collector);
+        ret
     }
 
     pub fn reverse_seek_write(&mut self, key: &Key, ts: u64) -> Result<Option<(u64, Write)>> {
-        self.seek_write_impl(key, ts, true)
+        let perf_collector = PerfCollector::new(&mut self.perf_statistics);
+        let ret = self.seek_write_impl(key, ts, true);
+        drop(perf_collector);
+        ret
     }
 
     fn seek_write_impl(
@@ -232,31 +248,47 @@ impl MvccReader {
     }
 
     pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
+        let perf_collector = PerfCollector::new(&mut self.perf_statistics);
+
         // Check for locks that signal concurrent writes.
         match self.isolation_level {
             IsolationLevel::SI => ts = self.check_lock(key, ts)?,
             IsolationLevel::RC => {}
         }
+
+        let ret;
         loop {
             match self.seek_write(key, ts)? {
                 Some((commit_ts, mut write)) => match write.write_type {
                     WriteType::Put => {
                         if write.short_value.is_some() {
                             if self.key_only {
-                                return Ok(Some(vec![]));
+                                ret = Ok(Some(vec![]));
+                                break;
                             }
-                            return Ok(write.short_value.take());
+                            ret = Ok(write.short_value.take());
+                            break;
                         }
-                        return self.load_data(key, write.start_ts).map(Some);
+                        ret = self.load_data(key, write.start_ts).map(Some);
+                        break;
                     }
                     WriteType::Delete => {
-                        return Ok(None);
+                        ret = Ok(None);
+                        break;
                     }
-                    WriteType::Lock | WriteType::Rollback => ts = commit_ts - 1,
+                    WriteType::Lock | WriteType::Rollback => {
+                        ts = commit_ts - 1;
+                    }
                 },
-                None => return Ok(None),
+                None => {
+                    ret = Ok(None);
+                    break;
+                }
             }
         }
+
+        drop(perf_collector);
+        ret
     }
 
     pub fn get_txn_commit_info(
@@ -264,6 +296,8 @@ impl MvccReader {
         key: &Key,
         start_ts: u64,
     ) -> Result<Option<(u64, WriteType)>> {
+        let perf_collector = PerfCollector::new(&mut self.perf_statistics);
+
         let mut seek_ts = start_ts;
         while let Some((commit_ts, write)) = self.reverse_seek_write(key, seek_ts)? {
             if write.start_ts == start_ts {
@@ -271,6 +305,9 @@ impl MvccReader {
             }
             seek_ts = commit_ts + 1;
         }
+
+        drop(perf_collector);
+
         Ok(None)
     }
 
@@ -314,6 +351,8 @@ impl MvccReader {
 
     // Return the first committed key which start_ts equals to ts
     pub fn seek_ts(&mut self, ts: u64) -> Result<Option<Key>> {
+        let perf_collector = PerfCollector::new(&mut self.perf_statistics);
+
         assert!(self.scan_mode.is_some());
         self.create_write_cursor()?;
 
@@ -326,16 +365,22 @@ impl MvccReader {
             }
             ok = cursor.next(&mut self.statistics.write);
         }
+
+        drop(perf_collector);
+
         Ok(None)
     }
 
     pub fn seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
+        let perf_collector = PerfCollector::new(&mut self.perf_statistics);
+
         assert!(*self.scan_mode.as_ref().unwrap() == ScanMode::Forward);
         self.create_write_cursor()?;
         self.create_lock_cursor()?;
 
         let (mut write_valid, mut lock_valid) = (true, true);
 
+        let ret;
         loop {
             key = {
                 let w_cur = self.write_cursor.as_mut().unwrap();
@@ -358,7 +403,10 @@ impl MvccReader {
                     }
                 }
                 match (w_key, l_key) {
-                    (None, None) => return Ok(None),
+                    (None, None) => {
+                        ret = Ok(None);
+                        break;
+                    }
                     (None, Some(k)) => Key::from_encoded(k.to_vec()),
                     (Some(k), None) => Key::from_encoded(k.to_vec()).truncate_ts()?,
                     (Some(wk), Some(lk)) => if wk < lk {
@@ -369,18 +417,25 @@ impl MvccReader {
                 }
             };
             if let Some(v) = self.get(&key, ts)? {
-                return Ok(Some((key, v)));
+                ret = Ok(Some((key, v)));
+                break;
             }
             key = key.append_ts(0);
         }
+
+        drop(perf_collector);
+        ret
     }
 
     pub fn reverse_seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
+        let perf_collector = PerfCollector::new(&mut self.perf_statistics);
+
         assert!(*self.scan_mode.as_ref().unwrap() == ScanMode::Backward);
         self.create_write_cursor()?;
         self.create_lock_cursor()?;
 
         let (mut write_valid, mut lock_valid) = (true, true);
+        let ret;
         loop {
             key = {
                 let w_cur = self.write_cursor.as_mut().unwrap();
@@ -403,7 +458,10 @@ impl MvccReader {
                     }
                 }
                 match (w_key, l_key) {
-                    (None, None) => return Ok(None),
+                    (None, None) => {
+                        ret = Ok(None);
+                        break;
+                    }
                     (None, Some(k)) => Key::from_encoded(k.to_vec()),
                     (Some(k), None) => Key::from_encoded(k.to_vec()).truncate_ts()?,
                     (Some(wk), Some(lk)) => if wk < lk {
@@ -415,7 +473,8 @@ impl MvccReader {
             };
 
             if let Some(v) = self.reverse_get_impl(&key, ts)? {
-                return Ok(Some((key, v)));
+                ret = Ok(Some((key, v)));
+                break;
             }
 
             // reverse_get_impl may call write_cursor's prev.
@@ -423,6 +482,9 @@ impl MvccReader {
                 write_valid = false;
             }
         }
+
+        drop(perf_collector);
+        ret
     }
 
     fn reverse_get_impl(&mut self, user_key: &Key, ts: u64) -> Result<Option<Value>> {
@@ -560,6 +622,8 @@ impl MvccReader {
     where
         F: Fn(&Lock) -> bool,
     {
+        let perf_collector = PerfCollector::new(&mut self.perf_statistics);
+
         self.create_lock_cursor()?;
         let cursor = self.lock_cursor.as_mut().unwrap();
         let ok = match start {
@@ -582,6 +646,8 @@ impl MvccReader {
             cursor.next(&mut self.statistics.lock);
         }
         self.statistics.lock.processed += locks.len();
+        drop(perf_collector);
+
         Ok((locks, None))
     }
 
@@ -590,30 +656,41 @@ impl MvccReader {
         mut start: Option<Key>,
         limit: usize,
     ) -> Result<(Vec<Key>, Option<Key>)> {
+        let perf_collector = PerfCollector::new(&mut self.perf_statistics);
+
         let iter_opt = IterOption::new(None, None, self.fill_cache);
         let scan_mode = self.get_scan_mode(false);
         let mut cursor = self.snapshot.iter_cf(CF_WRITE, iter_opt, scan_mode)?;
         let mut keys = vec![];
+        let ret;
         loop {
             let ok = match start {
                 Some(ref x) => cursor.near_seek(x, &mut self.statistics.write)?,
                 None => cursor.seek_to_first(&mut self.statistics.write),
             };
             if !ok {
-                return Ok((keys, None));
+                ret = Ok((keys, None));
+                break;
             }
             if keys.len() >= limit {
                 self.statistics.write.processed += keys.len();
-                return Ok((keys, start));
+                ret = Ok((keys, start));
+                break;
             }
             let key = Key::from_encoded(cursor.key().to_vec()).truncate_ts()?;
             start = Some(key.append_ts(0));
             keys.push(key);
         }
+
+        drop(perf_collector);
+
+        ret
     }
 
     // Get all Value of the given key in CF_DEFAULT
     pub fn scan_values_in_default(&mut self, key: &Key) -> Result<Vec<(u64, Value)>> {
+        let perf_collector = PerfCollector::new(&mut self.perf_statistics);
+
         self.create_data_cursor()?;
         let cursor = self.data_cursor.as_mut().unwrap();
         let mut ok = cursor.seek(key, &mut self.statistics.data)?;
@@ -632,6 +709,9 @@ impl MvccReader {
             }
             ok = cursor.next(&mut self.statistics.data);
         }
+
+        drop(perf_collector);
+
         Ok(v)
     }
 
