@@ -357,7 +357,7 @@ impl<T: Simulator> Cluster<T> {
                     count += 1;
                     continue;
                 }
-                let l = self.query_leader(*store_id, region_id, Duration::from_millis(10));
+                let l = self.query_leader(*store_id, region_id, Duration::from_secs(1));
                 if l.is_none() {
                     continue;
                 }

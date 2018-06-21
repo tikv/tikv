@@ -21,7 +21,8 @@ use std::{cmp, mem, slice};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
-                          RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse};
+                          RaftCmdResponse, Request, Response, TransferLeaderRequest,
+                          TransferLeaderResponse};
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftMessage};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
@@ -29,30 +30,29 @@ use rocksdb::rocksdb_options::WriteOptions;
 use rocksdb::{WriteBatch, DB};
 use time::Timespec;
 
+use pd::{PdTask, INVALID_ID};
 use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
            INVALID_INDEX, NO_LIMIT};
 use raftstore::coprocessor::CoprocessorHost;
+use raftstore::store::engine::{Peekable, Snapshot};
+use raftstore::store::util::RegionApproximateStat;
 use raftstore::store::worker::apply::ApplyMetrics;
 use raftstore::store::worker::{Apply, ApplyTask};
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
-use raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
+use raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
-
-use util::MustConsumeVec;
 use util::collections::{HashMap, HashSet};
 use util::time::{duration_to_sec, monotonic_raw_now};
 use util::worker::{FutureWorker, Scheduler};
-
-use pd::{PdTask, INVALID_ID};
+use util::{escape, MustConsumeVec};
 
 use super::cmd_resp;
-use super::engine::Snapshot;
 use super::local_metrics::{RaftMessageMetrics, RaftMetrics, RaftProposeMetrics, RaftReadyMetrics};
 use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::store::{DestroyPeerJob, Store};
 use super::transport::Transport;
-use super::util::{self, Lease, LeaseState};
+use super::util::{self, check_region_epoch, Lease, LeaseState};
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
@@ -246,8 +246,8 @@ pub struct Peer {
     pub size_diff_hint: u64,
     /// delete keys' count since last reset.
     delete_keys_hint: u64,
-    /// approximate region size.
-    pub approximate_size: Option<u64>,
+    /// approximate stat of the region.
+    pub approximate_stat: Option<RegionApproximateStat>,
     pub compaction_declined_bytes: u64,
 
     pub consistency_state: ConsistencyState,
@@ -384,7 +384,7 @@ impl Peer {
             coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
             delete_keys_hint: 0,
-            approximate_size: None,
+            approximate_stat: None,
             compaction_declined_bytes: 0,
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
@@ -462,7 +462,7 @@ impl Peer {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = Instant::now();
 
-        let region = self.get_store().get_region().clone();
+        let region = self.region().clone();
         info!("{} begin to destroy", self.tag);
 
         // Set Tombstone state explicitly
@@ -517,8 +517,17 @@ impl Peer {
         Arc::clone(&self.raft_engine)
     }
 
+    #[inline]
     pub fn region(&self) -> &metapb::Region {
-        self.get_store().get_region()
+        self.get_store().region()
+    }
+
+    /// Set the region of a peer.
+    ///
+    /// This will update the region of the peer, caller must ensure the region
+    /// has been preserved in a durable device.
+    pub fn set_region(&mut self, region: metapb::Region) {
+        self.mut_store().set_region(region)
     }
 
     pub fn peer_id(&self) -> u64 {
@@ -629,7 +638,7 @@ impl Peer {
         }
 
         // Insert heartbeats in case that some peers never response heartbeats.
-        let region = self.raft_group.get_store().get_region();
+        let region = self.raft_group.get_store().region();
         for peer in region.get_peers() {
             self.peer_heartbeats
                 .entry(peer.get_id())
@@ -1726,16 +1735,18 @@ impl Peer {
     }
 
     fn handle_read(&mut self, req: RaftCmdRequest) -> ReadResponse {
-        let mut resp = self.exec_read(&req).unwrap_or_else(|e| {
-            match e {
-                Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
-                _ => error!("{} execute raft command err: {:?}", self.tag, e),
-            }
-            ReadResponse {
-                response: cmd_resp::new_error(e),
-                snapshot: None,
-            }
-        });
+        let mut resp = ReadExecutor::new(self.region(), &self.kv_engine, &self.tag)
+            .execute(&req)
+            .unwrap_or_else(|e| {
+                match e {
+                    Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
+                    _ => error!("{} execute raft command err: {:?}", self.tag, e),
+                }
+                ReadResponse {
+                    response: cmd_resp::new_error(e),
+                    snapshot: None,
+                }
+            });
 
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
@@ -1753,74 +1764,6 @@ impl Peer {
     }
 }
 
-pub fn check_epoch(
-    region: &metapb::Region,
-    req: &RaftCmdRequest,
-    include_region: bool,
-) -> Result<()> {
-    let (mut check_ver, mut check_conf_ver) = (false, false);
-    if !req.has_admin_request() {
-        // for get/set/delete, we don't care conf_version.
-        check_ver = true;
-    } else {
-        match req.get_admin_request().get_cmd_type() {
-            AdminCmdType::CompactLog
-            | AdminCmdType::InvalidAdmin
-            | AdminCmdType::ComputeHash
-            | AdminCmdType::VerifyHash => {}
-            AdminCmdType::Split => check_ver = true,
-            AdminCmdType::ChangePeer => check_conf_ver = true,
-            AdminCmdType::PrepareMerge
-            | AdminCmdType::CommitMerge
-            | AdminCmdType::RollbackMerge
-            | AdminCmdType::TransferLeader => {
-                check_ver = true;
-                check_conf_ver = true;
-            }
-        };
-    }
-
-    if !check_ver && !check_conf_ver {
-        return Ok(());
-    }
-
-    if !req.get_header().has_region_epoch() {
-        return Err(box_err!("missing epoch!"));
-    }
-
-    let from_epoch = req.get_header().get_region_epoch();
-    let latest_epoch = region.get_region_epoch();
-
-    // should we use not equal here?
-    if (check_conf_ver && from_epoch.get_conf_ver() < latest_epoch.get_conf_ver())
-        || (check_ver && from_epoch.get_version() < latest_epoch.get_version())
-    {
-        debug!(
-            "[region {}] received stale epoch {:?}, mime: {:?}",
-            region.get_id(),
-            from_epoch,
-            latest_epoch
-        );
-        let regions = if include_region {
-            vec![region.to_owned()]
-        } else {
-            vec![]
-        };
-        return Err(Error::StaleEpoch(
-            format!(
-                "latest_epoch of region {} is {:?}, but you \
-                 sent {:?}",
-                region.get_id(),
-                latest_epoch,
-                from_epoch
-            ),
-            regions,
-        ));
-    }
-
-    Ok(())
-}
-
 impl Peer {
     pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
@@ -1836,7 +1779,7 @@ impl Peer {
         }
 
         // Try to find in region, if found, set in cache.
-        for peer in self.get_store().get_region().get_peers() {
+        for peer in self.region().get_peers() {
             if peer.get_id() == peer_id {
                 self.peer_cache.borrow_mut().insert(peer_id, peer.clone());
                 return Some(peer.clone());
@@ -1854,7 +1797,7 @@ impl Peer {
             pending_peers: self.collect_pending_peers(),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
-            region_size: self.approximate_size,
+            approximate_stat: self.approximate_stat.clone(),
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
@@ -1930,18 +1873,66 @@ impl Peer {
 
         Ok(())
     }
+}
 
-    fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<ReadResponse> {
-        check_epoch(self.region(), req, true)?;
+#[derive(Debug)]
+struct ReadExecutor<'r, 'e, 't> {
+    region: &'r metapb::Region,
+    engine: &'e Arc<DB>,
+    tag: &'t str,
+}
+
+impl<'r, 'e, 't> ReadExecutor<'r, 'e, 't> {
+    fn new(region: &'r metapb::Region, engine: &'e Arc<DB>, tag: &'t str) -> Self {
+        ReadExecutor {
+            region,
+            engine,
+            tag,
+        }
+    }
+
+    fn do_get(&self, req: &Request, snap: &Snapshot) -> Result<Response> {
+        // TODO: the get_get looks weird, maybe we should figure out a better name later.
+        let key = req.get_get().get_key();
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(key, self.region)?;
+
+        let mut resp = Response::new();
+        let res = if !req.get_get().get_cf().is_empty() {
+            let cf = req.get_get().get_cf();
+            // TODO: check whether cf exists or not.
+            snap.get_value_cf(cf, &keys::data_key(key))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to get {} with cf {}: {:?}",
+                        self.tag,
+                        escape(key),
+                        cf,
+                        e
+                    )
+                })
+        } else {
+            snap.get_value(&keys::data_key(key))
+                .unwrap_or_else(|e| panic!("{} failed to get {}: {:?}", self.tag, escape(key), e))
+        };
+        if let Some(res) = res {
+            resp.mut_get().set_value(res.to_vec());
+        }
+
+        Ok(resp)
+    }
+
+    fn execute(&self, msg: &RaftCmdRequest) -> Result<ReadResponse> {
+        check_region_epoch(msg, self.region, true)?;
         let mut need_snapshot = false;
-        let snapshot = Snapshot::new(Arc::clone(&self.kv_engine));
-        let requests = req.get_requests();
+        let snapshot = Snapshot::new(Arc::clone(self.engine));
+        let requests = msg.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
 
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Get => apply::do_get(&self.tag, self.region(), &snapshot, req)?,
+                CmdType::Get => self.do_get(req, &snapshot)?,
                 CmdType::Snap => {
                     need_snapshot = true;
                     raft_cmdpb::Response::new()
@@ -1962,7 +1953,7 @@ impl Peer {
         let snapshot = if need_snapshot {
             Some(RegionSnapshot::from_snapshot(
                 snapshot.into_sync(),
-                self.region().to_owned(),
+                self.region.to_owned(),
             ))
         } else {
             None
