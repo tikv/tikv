@@ -102,7 +102,8 @@ lazy_static! {
     ).unwrap();
     pub static ref GC_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "tikv_gcworker_gc_task_duration",
-        "Duration of gc tasks execution"
+        "Duration of gc tasks execution",
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
     ).unwrap();
     pub static ref GC_GCTASK_COUNTER: IntCounter = register_int_counter!(
         "tikv_gcworker_gc_tasks",
