@@ -14,7 +14,7 @@
 mod chunk;
 mod column;
 
-pub use util::codec::{Error, Result};
+pub use coprocessor::codec::{Error, Result};
 
 #[cfg(test)]
 mod test {
