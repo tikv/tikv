@@ -1,6 +1,6 @@
 ## TiKV is a distributed Key-Value database powered by Rust and Raft
 
-[![Build Status](https://circleci.com/gh/pingcap/tikv.svg?style=shield&circle-token=36bab0a8e43edb0941b31c38557d2d9d0d58f708)](https://circleci.com/gh/pingcap/tikv) [![Coverage Status](https://coveralls.io/repos/github/pingcap/tikv/badge.svg?branch=master)](https://coveralls.io/github/pingcap/tikv) ![GitHub release](https://img.shields.io/github/release/pingcap/tikv.svg)
+[![Build Status](https://circleci.com/gh/pingcap/tikv.svg?style=shield&circle-token=36bab0a8e43edb0941b31c38557d2d9d0d58f708)](https://circleci.com/gh/pingcap/tikv) [![Coverage Status](https://codecov.io/gh/pingcap/tikv/branch/master/graph/badge.svg)](https://codecov.io/gh/pingcap/tikv) ![GitHub release](https://img.shields.io/github/release/pingcap/tikv.svg)
 
 TiKV (The pronunciation is: /'taɪkeɪvi:/ tai-K-V, etymology: titanium) is a distributed Key-Value database which is based on the design of Google Spanner and HBase, but it is much simpler without dependency on any distributed file system. With the implementation of the Raft consensus algorithm in Rust and consensus state stored in RocksDB, it guarantees data consistency. Placement Driver which is introduced to implement sharding enables automatic data migration. The transaction model is similar to Google's Percolator with some performance improvements. TiKV also provides snapshot isolation (SI), snapshot isolation with lock (SQL: `SELECT ... FOR UPDATE`), and externally consistent reads and writes in distributed transactions.
 
@@ -14,7 +14,7 @@ TiKV has the following primary features:
 
 - **Coprocessor support:** Similar to Hbase, TiKV implements a coprocessor framework to support distributed computing.
 
-- **Cooperates with [TiDB](https://github.com/pingcap/tidb):** Thanks to the internal optimization, TiKV and TiDB can work together to be a compelling database solution with high horizontal scalability, externally-consistent transations, and support for RDMBS and NoSQL design patterns.
+- **Cooperates with [TiDB](https://github.com/pingcap/tidb):** Thanks to the internal optimization, TiKV and TiDB can work together to be a compelling database solution with high horizontal scalability, externally-consistent transations, and support for RDBMS and NoSQL design patterns.
 
 
 ## The TiKV Software Stack
@@ -132,6 +132,8 @@ Currently the only interface to TiKV is the [TiDB Go client](https://github.com/
 
 **We would love it if you developed drivers in other languages.**
 
+Also please refer to our [wiki page](https://github.com/pingcap/tikv/wiki/TiKV-Documentation) for the documentation. The documentation for TiKV is very simple for now, but we are continuously improving it! We also appreciate your contributions on it.
+
 
 ### Configuration
 
@@ -140,7 +142,21 @@ Read our configuration guide to learn about the various [configuration options](
 
 ## Contributing
 
+Contributions are welcome! For beginners, we have prepared many suitable tasks for you. Please checkout our [Help Wanted issues](https://github.com/pingcap/tikv/issues?q=is%3Aissue+is%3Aopen+label%3A%22S%3A+HelpWanted%22) for a list, in which we have also marked the difficulty level we thought. If you are planning something big, for example, relates to multiple components or changes current behaviors, make sure to open an issue to discuss with us before going on :)
+
 See [CONTRIBUTING](./CONTRIBUTING.md) for details on submitting patches and the contribution workflow.
+
+In addition, TiKV team actively develops and maintains a bunch of dependencies used in TiKV, which you may be also interested in:
+
+- [rust-prometheus](https://github.com/pingcap/rust-prometheus): The Prometheus client for Rust, our metric collecting and reporting library
+
+- [rust-rocksdb](https://github.com/pingcap/rust-rocksdb): Our RocksDB binding and wrapper for Rust
+
+- [raft-rs](https://github.com/pingcap/raft-rs): The Raft distributed consensus algorithm implemented in Rust
+
+- [grpc-rs](https://github.com/pingcap/grpc-rs): The gRPC library for Rust built on gRPC C Core library and Rust Futures
+
+- [fail-rs](https://github.com/pingcap/fail-rs): Fail points for Rust
 
 
 ## License

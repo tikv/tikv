@@ -69,25 +69,29 @@ quick_error! {
     }
 }
 
-fn get_tag_from_error(e: &Error) -> &'static str {
+fn get_status_kind_from_error(e: &Error) -> RequestStatusKind {
     match *e {
-        Error::RequestFailed(ref header) => storage::get_tag_from_header(header),
-        Error::Io(_) => "io",
-        Error::RocksDb(_) => "rocksdb",
-        Error::Server(_) => "server",
-        Error::InvalidResponse(_) => "invalid_resp",
-        Error::InvalidRequest(_) => "invalid_req",
-        Error::Timeout(_) => "timeout",
+        Error::RequestFailed(ref header) => {
+            RequestStatusKind::from(storage::get_error_kind_from_header(header))
+        }
+        Error::Io(_) => RequestStatusKind::err_io,
+        Error::RocksDb(_) => RequestStatusKind::err_rocksdb,
+        Error::Server(_) => RequestStatusKind::err_server,
+        Error::InvalidResponse(_) => RequestStatusKind::err_invalid_resp,
+        Error::InvalidRequest(_) => RequestStatusKind::err_invalid_req,
+        Error::Timeout(_) => RequestStatusKind::err_timeout,
     }
 }
 
-fn get_tag_from_engine_error(e: &engine::Error) -> &'static str {
+fn get_status_kind_from_engine_error(e: &engine::Error) -> RequestStatusKind {
     match *e {
-        engine::Error::Request(ref header) => storage::get_tag_from_header(header),
-        engine::Error::RocksDb(_) => "rocksdb",
-        engine::Error::Timeout(_) => "timeout",
-        engine::Error::EmptyRequest => "empty request",
-        engine::Error::Other(_) => "other",
+        engine::Error::Request(ref header) => {
+            RequestStatusKind::from(storage::get_error_kind_from_header(header))
+        }
+        engine::Error::RocksDb(_) => RequestStatusKind::err_rocksdb,
+        engine::Error::Timeout(_) => RequestStatusKind::err_timeout,
+        engine::Error::EmptyRequest => RequestStatusKind::err_empty_request,
+        engine::Error::Other(_) => RequestStatusKind::err_other,
     }
 }
 
@@ -336,19 +340,13 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             reqs.push(req);
         }
 
-        ASYNC_REQUESTS_COUNTER_VEC
-            .with_label_values(&["write", "all"])
-            .inc();
-        let req_timer = ASYNC_REQUESTS_DURATIONS_VEC
-            .with_label_values(&["write"])
-            .start_coarse_timer();
+        ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
+        let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.write.start_coarse_timer();
 
         self.exec_write_requests(ctx, reqs, box move |(cb_ctx, res)| match res {
             Ok(CmdRes::Resp(_)) => {
                 req_timer.observe_duration();
-                ASYNC_REQUESTS_COUNTER_VEC
-                    .with_label_values(&["write", "success"])
-                    .inc();
+                ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
                 fail_point!("raftkv_async_write_finish");
                 cb((cb_ctx, Ok(())))
             }
@@ -357,17 +355,13 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 Err(box_err!("unexpect snapshot, should mutate instead.")),
             )),
             Err(e) => {
-                let tag = get_tag_from_engine_error(&e);
-                ASYNC_REQUESTS_COUNTER_VEC
-                    .with_label_values(&["write", tag])
-                    .inc();
+                let status_kind = get_status_kind_from_engine_error(&e);
+                ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
                 cb((cb_ctx, Err(e)))
             }
         }).map_err(|e| {
-            let tag = get_tag_from_error(&e);
-            ASYNC_REQUESTS_COUNTER_VEC
-                .with_label_values(&["write", tag])
-                .inc();
+            let status_kind = get_status_kind_from_error(&e);
+            ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
             e.into()
         })
     }
@@ -377,12 +371,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         let mut req = Request::new();
         req.set_cmd_type(CmdType::Snap);
 
-        ASYNC_REQUESTS_COUNTER_VEC
-            .with_label_values(&["snapshot", "all"])
-            .inc();
-        let req_timer = ASYNC_REQUESTS_DURATIONS_VEC
-            .with_label_values(&["snapshot"])
-            .start_coarse_timer();
+        ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
+        let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.snapshot.start_coarse_timer();
 
         self.exec_read_requests(ctx, vec![req], box move |(cb_ctx, res)| match res {
             Ok(CmdRes::Resp(r)) => cb((
@@ -391,23 +381,17 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             )),
             Ok(CmdRes::Snap(s)) => {
                 req_timer.observe_duration();
-                ASYNC_REQUESTS_COUNTER_VEC
-                    .with_label_values(&["snapshot", "success"])
-                    .inc();
+                ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
                 cb((cb_ctx, Ok(box s)))
             }
             Err(e) => {
-                let tag = get_tag_from_engine_error(&e);
-                ASYNC_REQUESTS_COUNTER_VEC
-                    .with_label_values(&["snapshot", tag])
-                    .inc();
+                let status_kind = get_status_kind_from_engine_error(&e);
+                ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
                 cb((cb_ctx, Err(e)))
             }
         }).map_err(|e| {
-            let tag = get_tag_from_error(&e);
-            ASYNC_REQUESTS_COUNTER_VEC
-                .with_label_values(&["snapshot", tag])
-                .inc();
+            let status_kind = get_status_kind_from_error(&e);
+            ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
             e.into()
         })
     }
@@ -424,11 +408,10 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
 
         let batch_size = batch.len();
         ASYNC_REQUESTS_COUNTER_VEC
-            .with_label_values(&["snapshot", "all"])
+            .snapshot
+            .all
             .inc_by(batch_size as i64);
-        let req_timer = ASYNC_REQUESTS_DURATIONS_VEC
-            .with_label_values(&["snapshot"])
-            .start_coarse_timer();
+        let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.snapshot.start_coarse_timer();
 
         let on_finished: BatchCallback<CmdRes> = box move |cmd_resps: super::BatchResults<_>| {
             req_timer.observe_duration();
@@ -443,16 +426,12 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                         )));
                     }
                     Some((cb_ctx, Ok(CmdRes::Snap(s)))) => {
-                        ASYNC_REQUESTS_COUNTER_VEC
-                            .with_label_values(&["snapshot", "success"])
-                            .inc();
+                        ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
                         snapshots.push(Some((cb_ctx, Ok(box s as Box<Snapshot>))));
                     }
                     Some((cb_ctx, Err(e))) => {
-                        let tag = get_tag_from_engine_error(&e);
-                        ASYNC_REQUESTS_COUNTER_VEC
-                            .with_label_values(&["snapshot", tag])
-                            .inc();
+                        let status_kind = get_status_kind_from_engine_error(&e);
+                        ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
                         snapshots.push(Some((cb_ctx, Err(e))));
                     }
                     None => snapshots.push(None),
@@ -471,9 +450,10 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
 
         self.batch_exec_snap_requests(batch.collect(), on_finished)
             .map_err(|e| {
-                let tag = get_tag_from_error(&e);
+                let status_kind = get_status_kind_from_error(&e);
                 ASYNC_REQUESTS_COUNTER_VEC
-                    .with_label_values(&["snapshot", tag])
+                    .snapshot
+                    .get(status_kind)
                     .inc_by(batch_size as i64);
                 e.into()
             })

@@ -203,7 +203,7 @@ fn test_analyze_index() {
     let rows = analyze_resp.get_cms().get_rows();
     assert_eq!(rows.len(), 4);
     let sum: u32 = rows.first().unwrap().get_counters().iter().sum();
-    assert_eq!(sum, 4);
+    assert_eq!(sum, 8);
     end_point.stop().unwrap().join().unwrap();
 }
 
