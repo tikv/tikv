@@ -804,7 +804,7 @@ impl Peer {
 
     #[inline]
     fn ready_to_handle_read(&self) -> bool {
-        // TODO: It may cause read index waits a long time.
+        // TODO: It may cause read index to wait a long time.
 
         // There may be some values that are not applied by this leader yet but the old leader,
         // if applied_index_term isn't equal to current term.
