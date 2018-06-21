@@ -69,7 +69,7 @@ fn test_raft_storage() {
 
 #[test]
 fn test_raft_storage_get_after_lease() {
-    let (_cluster, storage, ctx) = new_raft_storage();
+    let (cluster, storage, ctx) = new_raft_storage();
     let key = b"key";
     let value = b"value";
     assert_eq!(
@@ -90,7 +90,7 @@ fn test_raft_storage_get_after_lease() {
     );
 
     // Sleep until the leader lease is expired.
-    thread::sleep(Duration::from_millis(MAX_LEADER_LEASE));
+    thread::sleep(cluster.cfg.raft_store.raft_store_max_leader_lease.0);
     assert_eq!(
         storage
             .raw_get(ctx.clone(), "".to_string(), key.to_vec())

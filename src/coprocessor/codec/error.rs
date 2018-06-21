@@ -11,15 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::io;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
-use std::{error, io, str};
+use std::{error, str};
 use tipb::expression::ScalarFuncSig;
 use tipb::select;
-
-use coprocessor::codec::mysql::Res;
 use util;
-use util::codec::Error as CError;
 
 pub const ERR_UNKNOWN: i32 = 1105;
 pub const WARN_DATA_TRUNCATED: i32 = 1265;
@@ -32,17 +30,14 @@ pub const ERR_DATA_OUT_OF_RANGE: i32 = 1690;
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Io(err: io::Error) {
-            from()
-            description("io error")
-            display("I/O error: {}", err)
-            cause(err)
+        InvalidDataType(reason: String) {
+            description("invalid data type")
+            display("{}", reason)
         }
-        Codec(err: util::codec::Error) {
+        Encoding(err: Utf8Error) {
             from()
-            description("codec error")
-            display("codec error: {}", err)
             cause(err)
+            description("encoding failed")
         }
         ColumnOffset(offset: usize) {
             description("column offset not found")
@@ -115,6 +110,14 @@ impl Error {
             _ => ERR_UNKNOWN,
         }
     }
+
+    pub fn is_overflow(&self) -> bool {
+        self.code() == ERR_DATA_OUT_OF_RANGE
+    }
+
+    pub fn unexpected_eof() -> Error {
+        util::codec::Error::unexpected_eof().into()
+    }
 }
 
 impl Into<select::Error> for Error {
@@ -128,24 +131,21 @@ impl Into<select::Error> for Error {
 
 impl From<FromUtf8Error> for Error {
     fn from(err: FromUtf8Error) -> Error {
-        Error::Codec(CError::Encoding(err.utf8_error()))
+        Error::Encoding(err.utf8_error())
     }
 }
 
-impl From<Utf8Error> for Error {
-    fn from(err: Utf8Error) -> Error {
-        Error::Codec(CError::Encoding(err))
+impl From<util::codec::Error> for Error {
+    fn from(err: util::codec::Error) -> Error {
+        box_err!("codec:{:?}", err)
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(err: io::Error) -> Error {
+        let uerr: util::codec::Error = err.into();
+        uerr.into()
     }
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
-
-impl<T> Into<Result<T>> for Res<T> {
-    fn into(self) -> Result<T> {
-        match self {
-            Res::Ok(t) => Ok(t),
-            Res::Truncated(_) => Err(Error::truncated()),
-            Res::Overflow(_) => Err(Error::overflow("", "")),
-        }
-    }
-}
