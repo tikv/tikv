@@ -281,7 +281,7 @@ impl<T: Write> DurationEncoder for T {}
 pub trait DurationEncoder: NumberEncoder {
     fn encode_duration(&mut self, v: &Duration) -> Result<()> {
         self.encode_i64(v.to_nanos())?;
-        self.encode_i64(i64::from(v.fsp))
+        self.encode_i64(i64::from(v.fsp)).map_err(From::from)
     }
 }
 

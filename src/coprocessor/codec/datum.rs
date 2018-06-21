@@ -514,8 +514,8 @@ impl Datum {
                 match a / b {
                     None => Ok(Datum::Null),
                     Some(res) => {
-                        let d = res.into_result()?;
-                        Ok(Datum::Dec(d))
+                        let d: Result<Decimal> = res.into();
+                        d.map(Datum::Dec)
                     }
                 }
             }
@@ -539,8 +539,8 @@ impl Datum {
                 }
             }
             (&Datum::Dec(ref l), &Datum::Dec(ref r)) => {
-                let dec = (l + r).into_result()?;
-                return Ok(Datum::Dec(dec));
+                let dec: Result<Decimal> = (l + r).into();
+                return dec.map(Datum::Dec);
             }
             (l, r) => return Err(invalid_type!("{:?} and {:?} can't be add together.", l, r)),
         };
@@ -567,8 +567,8 @@ impl Datum {
             (&Datum::U64(l), &Datum::U64(r)) => l.checked_sub(r).into(),
             (&Datum::F64(l), &Datum::F64(r)) => return Ok(Datum::F64(l - r)),
             (&Datum::Dec(ref l), &Datum::Dec(ref r)) => {
-                let dec = (l - r).into_result()?;
-                return Ok(Datum::Dec(dec));
+                let dec: Result<Decimal> = (l - r).into();
+                return dec.map(Datum::Dec);
             }
             (l, r) => return Err(invalid_type!("{:?} can't minus {:?}", l, r)),
         };
@@ -620,8 +620,8 @@ impl Datum {
             (Datum::Dec(l), Datum::Dec(r)) => match l % r {
                 None => Ok(Datum::Null),
                 Some(res) => {
-                    let d = res.into_result()?;
-                    Ok(Datum::Dec(d))
+                    let d: Result<Decimal> = res.into();
+                    d.map(Datum::Dec)
                 }
             },
             (l, r) => Err(invalid_type!("{:?} can't mod {:?}", l, r)),
@@ -763,24 +763,25 @@ pub fn decode_datum(data: &mut BytesSlice) -> Result<Datum> {
     if !data.is_empty() {
         let flag = data[0];
         *data = &data[1..];
-        match flag {
-            INT_FLAG => number::decode_i64(data).map(Datum::I64),
-            UINT_FLAG => number::decode_u64(data).map(Datum::U64),
-            BYTES_FLAG => bytes::decode_bytes(data, false).map(Datum::Bytes),
-            COMPACT_BYTES_FLAG => bytes::decode_compact_bytes(data).map(Datum::Bytes),
-            NIL_FLAG => Ok(Datum::Null),
-            FLOAT_FLAG => number::decode_f64(data).map(Datum::F64),
+        let datum = match flag {
+            INT_FLAG => number::decode_i64(data).map(Datum::I64)?,
+            UINT_FLAG => number::decode_u64(data).map(Datum::U64)?,
+            BYTES_FLAG => bytes::decode_bytes(data, false).map(Datum::Bytes)?,
+            COMPACT_BYTES_FLAG => bytes::decode_compact_bytes(data).map(Datum::Bytes)?,
+            NIL_FLAG => Datum::Null,
+            FLOAT_FLAG => number::decode_f64(data).map(Datum::F64)?,
             DURATION_FLAG => {
                 let nanos = number::decode_i64(data)?;
                 let dur = Duration::from_nanos(nanos, MAX_FSP)?;
-                Ok(Datum::Dur(dur))
+                Datum::Dur(dur)
             }
-            DECIMAL_FLAG => Decimal::decode(data).map(Datum::Dec),
-            VAR_INT_FLAG => number::decode_var_i64(data).map(Datum::I64),
-            VAR_UINT_FLAG => number::decode_var_u64(data).map(Datum::U64),
-            JSON_FLAG => Json::decode(data).map(Datum::Json),
-            f => Err(invalid_type!("unsupported data type `{}`", f)),
-        }
+            DECIMAL_FLAG => Decimal::decode(data).map(Datum::Dec)?,
+            VAR_INT_FLAG => number::decode_var_i64(data).map(Datum::I64)?,
+            VAR_UINT_FLAG => number::decode_var_u64(data).map(Datum::U64)?,
+            JSON_FLAG => Json::decode(data).map(Datum::Json)?,
+            f => Err(invalid_type!("unsupported data type `{}`", f))?,
+        };
+        Ok(datum)
     } else {
         Err(Error::unexpected_eof())
     }

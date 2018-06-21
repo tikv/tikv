@@ -56,6 +56,7 @@ use super::metrics::*;
 
 const WRITE_BATCH_MAX_KEYS: usize = 128;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
+const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
 pub struct PendingCmd {
     pub index: u64,
@@ -105,6 +106,11 @@ pub struct PendingCmdQueue {
 impl PendingCmdQueue {
     fn pop_normal(&mut self, term: u64) -> Option<PendingCmd> {
         self.normals.pop_front().and_then(|cmd| {
+            if self.normals.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP
+                && self.normals.len() < SHRINK_PENDING_CMD_QUEUE_CAP
+            {
+                self.normals.shrink_to_fit();
+            }
             if cmd.term > term {
                 self.normals.push_front(cmd);
                 return None;

@@ -363,9 +363,7 @@ pub mod test {
         for cols in rows.iter() {
             let col_values: Vec<_> = cols.to_vec();
             let value = table::encode_row(col_values, &col_ids).unwrap();
-            let mut buf = vec![];
-            buf.encode_i64(cols[0].i64()).unwrap();
-            let key = table::encode_row_key(tid, &buf);
+            let key = table::encode_row_key(tid, cols[0].i64());
             kv_data.push((key, value));
         }
         kv_data

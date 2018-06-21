@@ -22,9 +22,6 @@ use std::{cmp, mem, i32, i64, u32, u64};
 use coprocessor::codec::{convert, Error, Result, TEN_POW};
 use coprocessor::dag::expr::EvalContext;
 
-// TODO: We should use same Error in mod `coprocessor`.
-use coprocessor::dag::expr::Error as ExprError;
-
 use util::codec::BytesSlice;
 use util::codec::number::{self, NumberEncoder};
 use util::escape;
@@ -73,12 +70,12 @@ impl<T> Res<T> {
     }
 }
 
-impl<T: Display> Res<T> {
-    pub fn into_result(self) -> Result<T> {
+impl<T> Into<Result<T>> for Res<T> {
+    fn into(self) -> Result<T> {
         match self {
             Res::Ok(t) => Ok(t),
-            Res::Overflow(t) => Err(box_err!("overflow: {}", t)),
-            Res::Truncated(t) => Err(box_err!("truncated: {}", t)),
+            Res::Truncated(_) => Err(Error::truncated()),
+            Res::Overflow(_) => Err(Error::overflow("", "")),
         }
     }
 }
@@ -1098,7 +1095,7 @@ impl Decimal {
         // TODO: process over_flow
         if !ret.is_zero() && frac > decimal && ret != tmp {
             // TODO handle InInsertStmt in ctx
-            box_try!(ctx.handle_truncate(true));
+            ctx.handle_truncate(true)?;
         }
         Ok(ret)
     }
@@ -1472,9 +1469,9 @@ impl Decimal {
     }
 
     /// `as_i64_with_ctx` returns int part of the decimal.
-    pub fn as_i64_with_ctx(&self, ctx: &mut EvalContext) -> ::std::result::Result<i64, ExprError> {
+    pub fn as_i64_with_ctx(&self, ctx: &mut EvalContext) -> Result<i64> {
         let res = self.as_i64();
-        box_try!(ctx.handle_truncate(res.is_truncated()));
+        ctx.handle_truncate(res.is_truncated())?;
         res.into()
     }
 
