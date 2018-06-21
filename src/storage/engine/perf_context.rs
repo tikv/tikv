@@ -13,29 +13,6 @@
 
 use rocksdb::PerfContext;
 
-pub struct PerfStatisticsGuard<'a> {
-    stats: &'a mut PerfStatistics,
-}
-
-impl<'a> PerfStatisticsGuard<'a> {
-    pub fn new(stats: &'a mut PerfStatistics) -> PerfStatisticsGuard<'a> {
-        assert!(!stats.collecting);
-        stats.collecting = true;
-        PerfStatisticsGuard { stats }
-    }
-
-    pub fn get(&'a self) -> &'a mut PerfStatistics {
-        self.stats
-    }
-}
-
-impl<'a> Drop for PerfStatisticsGuard<'a> {
-    fn drop(&mut self) {
-        assert!(self.stats.collecting);
-        self.stats.collecting = false;
-    }
-}
-
 /// Store statistics we need. Data comes from RocksDB's `PerfContext` via `PerfCollector`.
 /// Depends on different contexts, it may either store absolute values (i.e. statistics since
 /// thread creation), or relative values (i.e. statistics delta).
@@ -46,8 +23,6 @@ pub struct PerfStatistics {
     /// TODO: Use const generics (RFC #2000) once it is available to make it safe in compile time
     /// instead of runtime.
     absolute: bool,
-
-    pub(super) collecting: bool,
 
     pub internal_key_skipped_count: usize,
     pub internal_delete_skipped_count: usize,
@@ -79,7 +54,6 @@ impl PerfStatistics {
         assert!(other.absolute);
         PerfStatistics {
             absolute: false,
-            collecting: false,
             internal_key_skipped_count: other.internal_key_skipped_count
                 - self.internal_key_skipped_count,
             internal_delete_skipped_count: other.internal_delete_skipped_count
@@ -94,7 +68,6 @@ impl PerfStatistics {
     fn new(perf_context: &PerfContext) -> PerfStatistics {
         PerfStatistics {
             absolute: true,
-            collecting: false,
             internal_key_skipped_count: perf_context.internal_key_skipped_count() as usize,
             internal_delete_skipped_count: perf_context.internal_delete_skipped_count() as usize,
             block_cache_hit_count: perf_context.block_cache_hit_count() as usize,
@@ -106,30 +79,25 @@ impl PerfStatistics {
     pub fn is_absolute(&self) -> bool {
         self.absolute
     }
-
-    pub fn attach_collector<'a>(&'a mut self) -> Option<PerfStatisticsGuard<'a>> {
-        if self.collecting {
-            None
-        } else {
-            Some(PerfStatisticsGuard::new(self))
-        }
-    }
 }
 
-#[must_use]
-pub struct PerfCollectorCore<'a> {
-    guard: PerfStatisticsGuard<'a>,
+/// Helper to collect RocksDB's `PerfContext`. This struct records the statistics at creation,
+/// and updates delta to the target statistics when it is dropped. You should not nest multiple
+/// collectors.
+#[must_use = "You must keep the collector live in the scope, otherwise it won't collect anything!"]
+pub struct PerfCollector<'a> {
+    target: &'a mut PerfStatistics,
     perf_context: PerfContext,
     /// Absolute statistics values retrieved at creation.
     perf: PerfStatistics,
 }
 
-impl<'a> PerfCollectorCore<'a> {
-    pub fn new(guard: PerfStatisticsGuard<'a>) -> PerfCollectorCore<'a> {
+impl<'a> PerfCollector<'a> {
+    pub fn new(target: &'a mut PerfStatistics) -> PerfCollector<'a> {
         let perf_context = PerfContext::get();
         let perf = PerfStatistics::new(&perf_context);
-        PerfCollectorCore {
-            guard,
+        PerfCollector{
+            target,
             perf_context,
             perf,
         }
@@ -142,35 +110,15 @@ impl<'a> PerfCollectorCore<'a> {
     }
 }
 
-impl<'a> Drop for PerfCollectorCore<'a> {
+impl<'a> Drop for PerfCollector<'a> {
     fn drop(&mut self) {
         let statistics = self.collect();
         self.guard.get().add(&statistics);
     }
 }
 
-/// RocksDB's `PerfContext` is thread local. If we send `PerfCollectorCore` to another thread,
+/// RocksDB's `PerfContext` is thread local. If we send `PerfCollector` to another thread,
 /// we will get incorrect delta values, so it is `!Send` and `!Sync`.
-impl<'a> !Send for PerfCollectorCore<'a> {}
+impl<'a> !Send for PerfCollector<'a> {}
 
-impl<'a> !Sync for PerfCollectorCore<'a> {}
-
-/// Helper to collect RocksDB's `PerfContext`. This struct records the statistics at creation,
-/// and updates delta to the target statistics when it is dropped. If there are nested collectors
-/// targeting at the same statistics, only out-most collector will work, so that statistics are
-/// not collected multiple times.
-#[must_use = "You must keep the collector live in the scope, otherwise it won't collect anything!"]
-pub enum PerfCollector<'a> {
-    Active(PerfCollectorCore<'a>),
-    Inactive,
-}
-
-impl<'a> PerfCollector<'a> {
-    pub fn new(collect_target: &'a mut PerfStatistics) -> PerfCollector<'a> {
-        let guard = collect_target.attach_collector();
-        match guard {
-            None => PerfCollector::Inactive,
-            Some(guard) => PerfCollector::Active(PerfCollectorCore::new(guard)),
-        }
-    }
-}
+impl<'a> !Sync for PerfCollector<'a> {}
