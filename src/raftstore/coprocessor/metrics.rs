@@ -22,6 +22,6 @@ lazy_static! {
     pub static ref REGION_ROWS_HISTOGRAM: Histogram = register_histogram!(
         "tikv_raftstore_region_rows",
         "Bucketed histogram of approximate region rows.",
-        exponential_buckets(20.0, 2.0, 20).unwrap()
+        exponential_buckets(1.0, 2.0, 30).unwrap()
     ).unwrap();
 }

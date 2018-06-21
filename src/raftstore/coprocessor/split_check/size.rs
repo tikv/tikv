@@ -16,7 +16,7 @@ use rocksdb::DB;
 use util::transport::{RetryableSendCh, Sender};
 
 use super::super::metrics::*;
-use super::super::{Coprocessor, ObserverContext, RowEntry, SplitCheckObserver, SplitChecker};
+use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
 
 pub struct Checker {
@@ -38,8 +38,8 @@ impl Checker {
 }
 
 impl SplitChecker for Checker {
-    fn on_kv(&mut self, _: &mut ObserverContext, row: &RowEntry) -> bool {
-        self.current_size += row.key().len() as u64 + row.value_size() as u64;
+    fn on_kv(&mut self, _: &mut ObserverContext, row: &KeyEntry) -> bool {
+        self.current_size += row.entry_size() as u64;
         if self.current_size > self.split_size && self.split_key.is_none() {
             self.split_key = Some(row.key().to_vec());
         }

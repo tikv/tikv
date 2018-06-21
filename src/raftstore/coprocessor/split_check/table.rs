@@ -23,7 +23,7 @@ use storage::CF_WRITE;
 use storage::types::Key;
 use util::escape;
 
-use super::super::{Coprocessor, ObserverContext, Result, RowEntry, SplitCheckObserver,
+use super::super::{Coprocessor, KeyEntry, ObserverContext, Result, SplitCheckObserver,
                    SplitChecker};
 use super::Host;
 
@@ -37,7 +37,7 @@ impl SplitChecker for Checker {
     /// Feed keys in order to find the split key.
     /// If `current_data_key` does not belong to `status.first_encoded_table_prefix`.
     /// it returns the encoded table prefix of `current_data_key`.
-    fn on_kv(&mut self, _: &mut ObserverContext, row: &RowEntry) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext, row: &KeyEntry) -> bool {
         if self.split_key.is_some() {
             return true;
         }

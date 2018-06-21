@@ -16,7 +16,7 @@ use rocksdb::DB;
 use util::transport::{RetryableSendCh, Sender};
 
 use super::super::metrics::*;
-use super::super::{Coprocessor, ObserverContext, RowEntry, SplitCheckObserver, SplitChecker};
+use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
 
 pub struct Checker {
@@ -38,7 +38,7 @@ impl Checker {
 }
 
 impl SplitChecker for Checker {
-    fn on_kv(&mut self, _: &mut ObserverContext, row: &RowEntry) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext, row: &KeyEntry) -> bool {
         if row.is_from_write_cf() {
             self.current_rows += 1;
         }

@@ -36,7 +36,7 @@ pub struct Config {
 
 /// Default region split size.
 pub const SPLIT_SIZE_MB: u64 = 96;
-pub const SPLIT_ROWS: u64 = 1000000;
+pub const SPLIT_ROWS: u64 = 1440000;
 
 impl Default for Config {
     fn default() -> Config {
