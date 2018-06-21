@@ -532,39 +532,39 @@ mod tests {
         let mut statistics = CFStatistics::default();
         let mut iter = Cursor::new(Box::new(snap.iter(IterOption::default())), ScanMode::Mixed);
         assert!(
-            !iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics)
+            !iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics, None)
                 .unwrap()
         );
         assert!(
-            iter.reverse_seek(&Key::from_encoded(b"a7".to_vec()), &mut statistics)
+            iter.reverse_seek(&Key::from_encoded(b"a7".to_vec()), &mut statistics, None)
                 .unwrap()
         );
         let mut pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a5".to_vec(), b"v5".to_vec()));
         assert!(
-            iter.reverse_seek(&Key::from_encoded(b"a5".to_vec()), &mut statistics)
+            iter.reverse_seek(&Key::from_encoded(b"a5".to_vec()), &mut statistics, None)
                 .unwrap()
         );
         pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
         assert!(
-            !iter.reverse_seek(&Key::from_encoded(b"a3".to_vec()), &mut statistics)
+            !iter.reverse_seek(&Key::from_encoded(b"a3".to_vec()), &mut statistics, None)
                 .unwrap()
         );
         assert!(
-            iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics)
+            iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics, None)
                 .is_err()
         );
         assert!(
-            iter.reverse_seek(&Key::from_encoded(b"a8".to_vec()), &mut statistics)
+            iter.reverse_seek(&Key::from_encoded(b"a8".to_vec()), &mut statistics, None)
                 .is_err()
         );
 
-        assert!(iter.seek_to_last(&mut statistics));
+        assert!(iter.seek_to_last(&mut statistics, None));
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.prev(&mut statistics) {
+            if !iter.prev(&mut statistics, None) {
                 break;
             }
         }
@@ -579,11 +579,11 @@ mod tests {
         let snap = RegionSnapshot::new(&store);
         let mut iter = Cursor::new(Box::new(snap.iter(IterOption::default())), ScanMode::Mixed);
         assert!(
-            !iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics)
+            !iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics, None)
                 .unwrap()
         );
         assert!(
-            iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics)
+            iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics, None)
                 .unwrap()
         );
         let pair = (iter.key().to_vec(), iter.value().to_vec());
@@ -591,7 +591,7 @@ mod tests {
         for kv_pairs in test_data.windows(2) {
             let seek_key = Key::from_encoded(kv_pairs[1].0.clone());
             assert!(
-                iter.reverse_seek(&seek_key, &mut statistics).unwrap(),
+                iter.reverse_seek(&seek_key, &mut statistics, None).unwrap(),
                 "{}",
                 seek_key
             );
@@ -599,11 +599,11 @@ mod tests {
             assert_eq!(pair, kv_pairs[0]);
         }
 
-        assert!(iter.seek_to_last(&mut statistics));
+        assert!(iter.seek_to_last(&mut statistics, None));
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.prev(&mut statistics) {
+            if !iter.prev(&mut statistics, None) {
                 break;
             }
         }
