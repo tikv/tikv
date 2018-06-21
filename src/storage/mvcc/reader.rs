@@ -502,9 +502,9 @@ impl MvccReader {
                 // for this user key.
                 if self.write_cursor.as_ref().unwrap().key()
                     >= last_handled_key.as_ref().unwrap().as_slice()
-                    {
-                        return self.get_value(user_key, lastest_version.0, lastest_version.1);
-                    }
+                {
+                    return self.get_value(user_key, lastest_version.0, lastest_version.1);
+                }
 
                 let w_cur = self.write_cursor.as_ref().unwrap();
                 let w_key = Key::from_encoded(w_cur.key().to_vec());
@@ -557,8 +557,8 @@ impl MvccReader {
         filter: F,
         limit: usize,
     ) -> Result<(Vec<(Key, Lock)>, Option<Key>)>
-        where
-            F: Fn(&Lock) -> bool,
+    where
+        F: Fn(&Lock) -> bool,
     {
         self.create_lock_cursor()?;
         let cursor = self.lock_cursor.as_mut().unwrap();

@@ -13,7 +13,8 @@
 
 use rocksdb::PerfContext;
 
-/// Store statistics we need. Data comes from RocksDB's `PerfContext` via `PerfCollector`.
+/// Store statistics we need. Data comes from RocksDB's `PerfContext`.
+///
 /// Depends on different contexts, it may either store absolute values (i.e. statistics since
 /// thread creation), or relative values (i.e. statistics delta).
 #[derive(Default, Clone, Debug, Copy)]
@@ -47,12 +48,12 @@ impl PerfStatistics {
         self.block_read_byte = self.block_read_byte.saturating_add(other.block_read_byte);
     }
 
-    /// Calculates delta statistics from two instances storing absolute values. `other`
-    /// must contain statistics later then `self`, otherwise the behavior is undefined.
-    fn get_delta(&self, other: &Self) -> PerfStatistics {
+    /// Calculates delta statistics.
+    pub fn delta(&self) -> Self {
         assert!(self.absolute);
+        let other = Self::new();
         assert!(other.absolute);
-        PerfStatistics {
+        Self {
             absolute: false,
             internal_key_skipped_count: other.internal_key_skipped_count
                 - self.internal_key_skipped_count,
@@ -65,8 +66,9 @@ impl PerfStatistics {
     }
 
     /// Create an instance which stores absolute statistics values, retrieved at creation.
-    fn new(perf_context: &PerfContext) -> PerfStatistics {
-        PerfStatistics {
+    pub fn new() -> Self {
+        let perf_context = PerfContext::get();
+        Self {
             absolute: true,
             internal_key_skipped_count: perf_context.internal_key_skipped_count() as usize,
             internal_delete_skipped_count: perf_context.internal_delete_skipped_count() as usize,
@@ -80,45 +82,3 @@ impl PerfStatistics {
         self.absolute
     }
 }
-
-/// Helper to collect RocksDB's `PerfContext`. This struct records the statistics at creation,
-/// and updates delta to the target statistics when it is dropped. You should not nest multiple
-/// collectors.
-#[must_use = "You must keep the collector live in the scope, otherwise it won't collect anything!"]
-pub struct PerfCollector<'a> {
-    target: &'a mut PerfStatistics,
-    perf_context: PerfContext,
-    /// Absolute statistics values retrieved at creation.
-    perf: PerfStatistics,
-}
-
-impl<'a> PerfCollector<'a> {
-    pub fn new(target: &'a mut PerfStatistics) -> PerfCollector<'a> {
-        let perf_context = PerfContext::get();
-        let perf = PerfStatistics::new(&perf_context);
-        PerfCollector{
-            target,
-            perf_context,
-            perf,
-        }
-    }
-
-    /// Get delta statistics since instance creation.
-    pub fn collect(&self) -> PerfStatistics {
-        let current_perf = PerfStatistics::new(&self.perf_context);
-        self.perf.get_delta(&current_perf)
-    }
-}
-
-impl<'a> Drop for PerfCollector<'a> {
-    fn drop(&mut self) {
-        let statistics = self.collect();
-        self.guard.get().add(&statistics);
-    }
-}
-
-/// RocksDB's `PerfContext` is thread local. If we send `PerfCollector` to another thread,
-/// we will get incorrect delta values, so it is `!Send` and `!Sync`.
-impl<'a> !Send for PerfCollector<'a> {}
-
-impl<'a> !Sync for PerfCollector<'a> {}

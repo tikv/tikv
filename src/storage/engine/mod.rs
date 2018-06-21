@@ -28,10 +28,12 @@ use config;
 use util::rocksdb::CFOptions;
 
 mod metrics;
-pub mod perf_context;
+mod perf_context;
 pub mod raftkv;
 mod rocksdb;
 use super::super::raftstore::store::engine::IterOption;
+
+pub use self::perf_context::PerfStatistics;
 
 // only used for rocksdb without persistent.
 pub const TEMP_DIR: &str = "";
