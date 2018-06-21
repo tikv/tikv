@@ -170,7 +170,7 @@ lazy_static! {
             "tikv_snapshot_cf_size",
             "Total size of each cf file of snapshot",
             &["type"],
-            exponential_buckets(1024.0, 2.0, 22).unwrap()
+            exponential_buckets(1024.0, 2.0, 31).unwrap()
         ).unwrap();
 
     pub static ref SNAPSHOT_BUILD_TIME_HISTOGRAM: Histogram =
@@ -213,5 +213,12 @@ lazy_static! {
         register_int_gauge!(
             "tikv_raftstore_leader_missing",
             "Total number of leader missed region"
+        ).unwrap();
+
+    pub static ref INGEST_SST_DURATION_SECONDS: Histogram =
+        register_histogram!(
+            "tikv_snapshot_ingest_sst_duration_seconds",
+            "Bucketed histogram of rocksdb ingestion durations",
+            exponential_buckets(0.005, 2.0, 20).unwrap()
         ).unwrap();
 }

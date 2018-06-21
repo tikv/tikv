@@ -17,9 +17,9 @@ use std::{str, f64};
 
 use super::{Json, ERR_CONVERT_FAILED};
 use byteorder::WriteBytesExt;
+use coprocessor::codec::{Error, Result};
 use util::codec::number::{self, NumberEncoder};
-use util::codec::*;
-
+use util::codec::{read_slice, BytesSlice};
 const TYPE_CODE_OBJECT: u8 = 0x01;
 const TYPE_CODE_ARRAY: u8 = 0x03;
 const TYPE_CODE_LITERAL: u8 = 0x04;
@@ -171,15 +171,15 @@ pub trait JsonEncoder: NumberEncoder {
     }
 
     fn encode_json_i64(&mut self, data: i64) -> Result<()> {
-        self.encode_i64_le(data)
+        self.encode_i64_le(data).map_err(Error::from)
     }
 
     fn encode_json_u64(&mut self, data: u64) -> Result<()> {
-        self.encode_u64_le(data)
+        self.encode_u64_le(data).map_err(Error::from)
     }
 
     fn encode_json_f64(&mut self, data: f64) -> Result<()> {
-        self.encode_f64_le(data)
+        self.encode_f64_le(data).map_err(Error::from)
     }
 
     fn encode_str(&mut self, data: &str) -> Result<()> {
