@@ -45,14 +45,15 @@ use grpcio::{ChannelBuilder, Environment};
 use protobuf::Message;
 use protobuf::RepeatedField;
 
-use kvproto::debugpb::DB as DBType;
-use kvproto::debugpb::*;
+use kvproto::debugpb::{*, DB as DBType};
 use kvproto::debugpb_grpc::DebugClient;
-use kvproto::kvrpcpb::MvccInfo;
+use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
+use kvproto::tikvpb_grpc::TikvClient;
 use raft::eraftpb::{ConfChange, Entry, EntryType};
+
 use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::raftstore::store::{keys, Engines};
@@ -1392,6 +1393,24 @@ fn main() {
                         .takes_value(true)
                         .help("the target region id"),
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("split-region")
+                .about("split the region")
+                .arg(
+                    Arg::with_name("region")
+                        .short("r")
+                        .required(true)
+                        .takes_value(true)
+                        .help("the target region id")
+                )
+                .arg(
+                    Arg::with_name("key")
+                        .short("k")
+                        .required(true)
+                        .takes_value(true)
+                        .help("the key to split it, in unecoded escaped format")
+                ),
         );
 
     let matches = app.clone().get_matches();
@@ -1416,15 +1435,23 @@ fn main() {
     if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
         let path = matches.value_of("file").unwrap();
         return dump_snap_meta_file(path);
-    } else if let Some(sub_cmd) = matches.subcommand_matches("compact-cluster") {
-        let pd = matches.value_of("pd").unwrap();
-        let db = sub_cmd.value_of("db").unwrap();
-        let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
-        let cfs = Vec::from_iter(sub_cmd.values_of("cf").unwrap());
-        let from_key = sub_cmd.value_of("from").map(|k| unescape(k));
-        let to_key = sub_cmd.value_of("to").map(|k| unescape(k));
-        let threads = value_t_or_exit!(sub_cmd.value_of("threads"), u32);
-        return compact_whole_cluster(pd, db_type, cfs, from_key, to_key, threads, mgr);
+    }
+
+    if let Some(pd) = matches.value_of("pd") {
+        if let Some(matches) = matches.subcommand_matches("compact-cluster") {
+            let db = matches.value_of("db").unwrap();
+            let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
+            let cfs = Vec::from_iter(matches.values_of("cf").unwrap());
+            let from_key = matches.value_of("from").map(|k| unescape(k));
+            let to_key = matches.value_of("to").map(|k| unescape(k));
+            let threads = value_t_or_exit!(matches.value_of("threads"), u32);
+            return compact_whole_cluster(pd, db_type, cfs, from_key, to_key, threads, mgr);
+        }
+        if let Some(matches) = matches.subcommand_matches("split-region") {
+            let region_id = value_t_or_exit!(matches.value_of("region"), u64);
+            let key = unescape(matches.value_of("key").unwrap());
+            return split_region(pd, region_id, key, mgr);
+        }
     }
 
     let db = matches.value_of("db");
@@ -1653,6 +1680,50 @@ fn dump_snap_meta_file(path: &str) {
             cf_file.cf, cf_file.size, cf_file.checksum
         );
     }
+}
+
+fn get_pd_rpc_client(pd: &str, mgr: Arc<SecurityManager>) -> RpcClient {
+    let mut cfg = PdConfig::default();
+    cfg.endpoints.push(pd.to_owned());
+    cfg.validate().unwrap();
+    RpcClient::new(&cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
+}
+
+fn split_region(pd: &str, region_id: u64, key: Vec<u8>, mgr: Arc<SecurityManager>) {
+    let pd_client = get_pd_rpc_client(pd, Arc::clone(&mgr));
+
+    let region = pd_client
+        .get_region_by_id(region_id)
+        .wait()
+        .expect("get_region_by_id should success")
+        .expect("must have the region");
+
+    let leader = pd_client
+        .get_region_info(region.get_end_key())
+        .expect("get_region_info should success")
+        .leader
+        .expect("region must have leader");
+
+    let store = pd_client
+        .get_store(leader.get_store_id())
+        .expect("get_store should success");
+
+    let tikv_client = {
+        let cb = ChannelBuilder::new(Arc::new(Environment::new(1)));
+        let channel = mgr.connect(cb, store.get_address());
+        TikvClient::new(channel)
+    };
+
+    let mut req = SplitRegionRequest::new();
+    req.mut_context().set_region_id(region_id);
+    req.mut_context()
+        .set_region_epoch(region.get_region_epoch().clone());
+    // TODO: set peer, term?
+    req.set_split_key(key);
+
+    tikv_client
+        .split_region(&req)
+        .expect("split_region should success");
 }
 
 fn compact_whole_cluster(
