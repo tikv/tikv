@@ -4,15 +4,13 @@
 
 TiKV (The pronunciation is: /'taɪkeɪvi:/ tai-K-V, etymology: titanium) is a distributed Key-Value database powered by Rust and Raft. TiKV is based on the design of Google Spanner and HBase, but is much simpler without dependency on any distributed file system.
 
-With the implementation of the Raft consensus algorithm in Rust and consensus state stored in RocksDB, TiKV guarantees data consistency. Placement Driver (PD), which is introduced to implement sharding, enables automatic data migration. The transaction model is similar to Google's Percolator with some performance improvements. TiKV also provides snapshot isolation (SI), snapshot isolation with lock (SQL: `SELECT ... FOR UPDATE`), and externally consistent reads and writes in distributed transactions.
-
-## Key features
+With the implementation of the Raft consensus algorithm in Rust and consensus state stored in RocksDB, TiKV guarantees data consistency. [Placement Driver (PD)](https://github.com/pingcap/pd/), which is introduced to implement sharding, enables automatic data migration. The transaction model is similar to Google's Percolator with some performance improvements. TiKV also provides snapshot isolation (SI), snapshot isolation with lock (SQL: `SELECT ... FOR UPDATE`), and externally consistent reads and writes in distributed transactions.
 
 TiKV has the following key features:
 
 - **Geo-Replication**
 
-    TiKV uses [Raft](http://raft.github.io/) and the [Placement Driver](https://github.com/pingcap/pd/) to support Geo-Replication.
+    TiKV uses [Raft](http://raft.github.io/) and the Placement Driver to support Geo-Replication.
 
 - **Horizontal scalability**
 
@@ -41,7 +39,7 @@ TiKV has the following key features:
 
 When a node starts, the metadata of the Node, Store and Region are recorded into PD. The status of each Region and Store is reported to PD regularly.
 
-## Getting started
+## Try TiKV
 
 TiKV is a component of the [TiDB project](https://github.com/pingcap/tidb). To run TiKV you must build and run it with PD, which is used to manage the cluster. You can use TiKV together with TiDB. You can also use TiKV separately.
 
@@ -71,13 +69,13 @@ Currently, the only interface to TiKV is the [TiDB Go client](https://github.com
 
 If you want to try the Go client, see [Try Two Types of APIs](https://www.pingcap.com/docs/tikv/go-client-api/).
 
-## Setting Up a Development Workspace
+## Setting up a development workspace
 
 The TiKV codebase is primarily written in Rust, but has components written in C++ (RocksDB) and Go (gRPC). To provide consistency and avoid opinion-based arguments, we make extensive use of linters and automated formatting tools. Additionally, due to Rust's youth we are currently utilizing nightly builds which provide access to many useful features.
 
-### Checking Your Prerequisites
+### Checking your prerequisites
 
-To build TiKV, you need the following packages at least:
+To build TiKV you'll need to at least have the following installed:
 
 * `git` - Version control
 * `rustup` - Rust toolchain manager
@@ -87,7 +85,7 @@ To build TiKV, you need the following packages at least:
 * `make` - Build tool (run common workflows)
 * `clang` or `gcc` - C compiler toolchain
 
-### Getting the Repository
+### Getting the repository
 
 ```
 git clone https://github.com/pingcap/tikv.git
@@ -95,7 +93,7 @@ cd tikv
 # Future instructions assume you are in this repository
 ```
 
-### Configuring Your Rust Toolchain
+### Configuring your Rust toolchain
 
 `rustup` is an official toolchain manager for Rust, similar to `rvm` or `rbenv` from the Ruby world.
 
@@ -106,9 +104,9 @@ rustup override set `tail -n 1 RUST_VERSION`
 rustup component add rustfmt-preview --toolchain `tail -n 1 RUST_VERSION`
 ```
 
-### Building & Testing
+### Building & testing
 
-TiKV includes a `Makefile` with common workflows, but you can also use `cargo` as you would in an ordinary Rust project.
+While TiKV includes a `Makefile` with common workflows, you are also able to use `cargo` as you would in a normal Rust project.
 
 At this point, you can build TiKV:
 
@@ -140,7 +138,7 @@ cargo test $TESTNAME
 
 Our CI systems automatically test all the pull requests, so making sure the full suite passes the test before creating your PR is not strictly required. **All merged PRs must have passed CI test.**
 
-### Getting the Rest of the System Working
+### Getting the rest of the system working
 
 To get other components ([TiDB](https://github.com/pingcap/tidb) and [PD](https://github.com/pingcap/pd) working, we suggest you follow the [development guide](https://github.com/pingcap/docs/blob/master/dev-guide/development.md), because you need the `pd-server` at least to work alongside `tikv-server` for integration level testing.
 
