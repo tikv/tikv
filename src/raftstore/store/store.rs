@@ -3246,7 +3246,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 info!(
                     "[region {}] on split region at key {}.",
                     region_id,
-                    escape(split_key)
+                    escape(&split_key)
                 );
                 self.on_prepare_split_region(region_id, region_epoch, split_key, callback);
             }
