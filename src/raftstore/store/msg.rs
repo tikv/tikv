@@ -39,6 +39,7 @@ pub struct WriteResponse {
     pub response: RaftCmdResponse,
 }
 
+#[derive(Debug)]
 pub enum SeekRegionResult {
     Some {
         local_peer: metapb::Peer,

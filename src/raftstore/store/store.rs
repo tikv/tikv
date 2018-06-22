@@ -3137,8 +3137,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             limit = 1;
         }
 
-        // `from_key` must not be `DATA_MAX_KEY`
-        let from_key = data_key(from_key);
+        let from_key = data_end_key(from_key);
         for (end_key, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
             let peer = &self.region_peers[region_id];
             if filter(peer) {
