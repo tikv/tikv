@@ -14,7 +14,7 @@
 use super::engine::{Engine, Error as EngineError, ScanMode, Snapshot, StatisticsSummary};
 use super::metrics::*;
 use super::mvcc::{MvccReader, MvccTxn, MAX_TXN_WRITE_SIZE};
-use super::txn::GC_BATCH_SIZE;
+use super::txn::{GC_BATCH_SIZE, GC_LOG_DELETED_VERSION_THRESHOLD, GC_LOG_FOUND_VERSION_THRESHOLD};
 use super::{Callback, Error, Key, Result};
 use kvproto::kvrpcpb::Context;
 use std::fmt::{self, Display, Formatter};
@@ -135,7 +135,28 @@ impl GCRunner {
             !ctx.get_not_fill_cache(),
         );
         for k in keys {
-            txn.gc(&k, safe_point)?;
+            // TODO: Duplicated code in scheduler.rs
+            let gc_info = txn.gc(&k, safe_point)?;
+
+            if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
+                info!(
+                    "[region {}] GC found at least {} versions for key {}",
+                    ctx.get_region_id(),
+                    gc_info.found_versions,
+                    k
+                );
+            }
+            // TODO: we may delete only part of the versions in a batch, which may not beyond
+            // the logging threshold `GC_LOG_DELETED_VERSION_THRESHOLD`.
+            if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
+                info!(
+                    "[region {}] GC deleted {} versions for key {}",
+                    ctx.get_region_id(),
+                    gc_info.deleted_versions,
+                    k
+                );
+            }
+
             if txn.write_size() >= MAX_TXN_WRITE_SIZE {
                 next_scan_key = Some(k);
                 break;
