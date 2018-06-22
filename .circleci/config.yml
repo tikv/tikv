@@ -75,11 +75,12 @@ jobs:
       - run:
           name: Installing tarpaulin
           command: |
-            CURRENT_TARPAULIN_VERSION=`cargo tarpaulin --version | awk '{ print $3 }'`
-            echo "Tarpaulin is now: ${CURRENT_TARPAULIN_VERSION}"
-            echo "Tarpaulin should be: ${TARPAULIN_VERSION}"
+            RUST_TOOLCHAIN=`tail -n 1 RUST_VERSION`
+            CURRENT_TARPAULIN_VERSION=`cargo +${RUST_TOOLCHAIN} tarpaulin --version | awk '{ print $3 }'`
+            echo "Tarpaulin version is now: ${CURRENT_TARPAULIN_VERSION}"
+            echo "Tarpaulin version should be: ${TARPAULIN_VERSION}"
             if [[ "${CURRENT_TARPAULIN_VERSION}" != "${TARPAULIN_VERSION}" ]]; then
-                cargo install cargo-tarpaulin --force --version ${TARPAULIN_VERSION};
+                cargo +${RUST_TOOLCHAIN} install cargo-tarpaulin --force --version ${TARPAULIN_VERSION};
             fi
       - restore_cache:
           name: Restoring ./target Cache
@@ -109,7 +110,8 @@ jobs:
       - run:
           name: Calculating code coverage
           command: |
-            cargo tarpaulin --no-count --skip-clean --out Xml
+            RUST_TOOLCHAIN=`tail -n 1 RUST_VERSION`
+            cargo +${RUST_TOOLCHAIN} tarpaulin --no-count --skip-clean --out Xml
             bash <(curl -s https://codecov.io/bash)
           no_output_timeout: 1800s
       - save_cache:
