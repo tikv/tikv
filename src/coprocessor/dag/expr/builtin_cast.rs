@@ -19,9 +19,9 @@ use coprocessor::codec::mysql::decimal::RoundMode;
 use coprocessor::codec::mysql::{charset, types, Decimal, Duration, Json, Res, Time};
 use coprocessor::codec::{mysql, Datum};
 
-use super::{Error, EvalContext, FnCall, Result};
+use super::{Error, EvalContext, Result, ScalarFunc};
 
-impl FnCall {
+impl ScalarFunc {
     pub fn cast_int_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
     }
@@ -712,7 +712,7 @@ mod test {
     use coprocessor::codec::error::*;
     use coprocessor::codec::mysql::{self, charset, types, Decimal, Duration, Json, Time};
     use coprocessor::codec::{convert, Datum};
-    use coprocessor::dag::expr::test::{col_expr as base_col_expr, fncall_expr};
+    use coprocessor::dag::expr::test::{col_expr as base_col_expr, scalar_func_expr};
     use coprocessor::dag::expr::{self, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
 
     pub fn col_expr(col_id: i64, tp: i32) -> Expr {
@@ -806,7 +806,7 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, flag, col, expect) in cases {
             let col_expr = col_expr(0, i32::from(tp));
-            let mut exp = fncall_expr(sig, &[col_expr]);
+            let mut exp = scalar_func_expr(sig, &[col_expr]);
             if flag.is_some() {
                 exp.mut_field_type().set_flag(flag.unwrap() as u32);
             }
@@ -944,7 +944,7 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, flen, decimal, expect) in cases {
             let col_expr = col_expr(0, i32::from(tp));
-            let mut exp = fncall_expr(sig, &[col_expr]);
+            let mut exp = scalar_func_expr(sig, &[col_expr]);
             exp.mut_field_type().set_flen(flen as i32);
             exp.mut_field_type().set_decimal(decimal as i32);
             let e = Expression::build(&mut ctx, exp).unwrap();
@@ -1080,7 +1080,7 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, flen, decimal, expect) in cases {
             let col_expr = col_expr(0, i32::from(tp));
-            let mut exp = fncall_expr(sig, &[col_expr]);
+            let mut exp = scalar_func_expr(sig, &[col_expr]);
             exp.mut_field_type().set_flen(flen as i32);
             exp.mut_field_type().set_decimal(decimal as i32);
             let e = Expression::build(&mut ctx, exp).unwrap();
@@ -1233,7 +1233,7 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, charset, to_tp, col, flen, exp) in cases {
             let col_expr = col_expr(0, i32::from(tp));
-            let mut ex = fncall_expr(sig, &[col_expr]);
+            let mut ex = scalar_func_expr(sig, &[col_expr]);
             ex.mut_field_type().set_flen(flen as i32);
             ex.mut_field_type().set_decimal(convert::UNSPECIFIED_LENGTH);
             if to_tp.is_some() {
@@ -1411,7 +1411,7 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, to_fsp, to_tp, exp) in cases {
             let col_expr = col_expr(0, i32::from(tp));
-            let mut ex = fncall_expr(sig, &[col_expr]);
+            let mut ex = scalar_func_expr(sig, &[col_expr]);
             ex.mut_field_type().set_decimal(i32::from(to_fsp));
             ex.mut_field_type().set_tp(i32::from(to_tp));
             let e = Expression::build(&mut ctx, ex).unwrap();
@@ -1574,7 +1574,7 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, to_fsp, exp) in cases {
             let col_expr = col_expr(0, i32::from(tp));
-            let mut ex = fncall_expr(sig, &[col_expr]);
+            let mut ex = scalar_func_expr(sig, &[col_expr]);
             ex.mut_field_type().set_decimal(i32::from(to_fsp));
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval_duration(&mut ctx, col).unwrap();
@@ -1623,7 +1623,7 @@ mod test {
             if flag.is_some() {
                 col_expr.mut_field_type().set_flag(flag.unwrap() as u32);
             }
-            let ex = fncall_expr(ScalarFuncSig::CastIntAsJson, &[col_expr]);
+            let ex = scalar_func_expr(ScalarFuncSig::CastIntAsJson, &[col_expr]);
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
@@ -1643,7 +1643,7 @@ mod test {
         ];
         for (cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(types::DOUBLE));
-            let ex = fncall_expr(ScalarFuncSig::CastRealAsJson, &[col_expr]);
+            let ex = scalar_func_expr(ScalarFuncSig::CastRealAsJson, &[col_expr]);
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
@@ -1666,7 +1666,7 @@ mod test {
         ];
         for (cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(types::NEW_DECIMAL));
-            let ex = fncall_expr(ScalarFuncSig::CastDecimalAsJson, &[col_expr]);
+            let ex = scalar_func_expr(ScalarFuncSig::CastDecimalAsJson, &[col_expr]);
 
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
@@ -1697,7 +1697,7 @@ mod test {
         ];
         for (by_parse, cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(types::STRING));
-            let mut ex = fncall_expr(ScalarFuncSig::CastStringAsJson, &[col_expr]);
+            let mut ex = scalar_func_expr(ScalarFuncSig::CastStringAsJson, &[col_expr]);
             if by_parse {
                 let mut flag = ex.get_field_type().get_flag();
                 flag |= types::PARSE_TO_JSON_FLAG as u32;
@@ -1752,7 +1752,7 @@ mod test {
         ];
         for (tp, cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(tp));
-            let ex = fncall_expr(ScalarFuncSig::CastTimeAsJson, &[col_expr]);
+            let ex = scalar_func_expr(ScalarFuncSig::CastTimeAsJson, &[col_expr]);
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
@@ -1778,7 +1778,7 @@ mod test {
         ];
         for (cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(types::STRING));
-            let ex = fncall_expr(ScalarFuncSig::CastDurationAsJson, &[col_expr]);
+            let ex = scalar_func_expr(ScalarFuncSig::CastDurationAsJson, &[col_expr]);
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
@@ -1801,7 +1801,7 @@ mod test {
         ];
         for (cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(types::STRING));
-            let ex = fncall_expr(ScalarFuncSig::CastJsonAsJson, &[col_expr]);
+            let ex = scalar_func_expr(ScalarFuncSig::CastJsonAsJson, &[col_expr]);
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
@@ -1832,7 +1832,7 @@ mod test {
         ];
         for (flag, cols, exp) in cases {
             let mut col_expr = col_expr(0, i32::from(types::NEW_DECIMAL));
-            let mut ex = fncall_expr(ScalarFuncSig::CastDecimalAsInt, &[col_expr]);
+            let mut ex = scalar_func_expr(ScalarFuncSig::CastDecimalAsInt, &[col_expr]);
             ex.mut_field_type().set_flag(flag as u32);
 
             // test with overflow as warning
@@ -1876,7 +1876,7 @@ mod test {
 
         for (flag, cols, exp, warnings_cnt) in cases {
             let mut col_expr = col_expr(0, i32::from(types::STRING));
-            let mut ex = fncall_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
+            let mut ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
             ex.mut_field_type().set_flag(flag as u32);
 
             let mut ctx = EvalContext::new(Arc::new(EvalConfig::default()));
@@ -1902,7 +1902,7 @@ mod test {
 
         for (cols, exp) in cases {
             let mut col_expr = col_expr(0, i32::from(types::STRING));
-            let ex = fncall_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
+            let ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
             // test with overflow as warning && in select stmt
             let mut ctx = EvalContext::new(Arc::new(
                 EvalConfig::new(
@@ -1933,7 +1933,7 @@ mod test {
     //     let cols = vec![Datum::I64(3020400)];
 
     //     let col_expr = col_expr(0, i32::from(types::LONG_LONG));
-    //     let ex = fncall_expr(ScalarFuncSig::CastIntAsDuration, &[col_expr]);
+    //     let ex = scalar_func_expr(ScalarFuncSig::CastIntAsDuration, &[col_expr]);
 
     //     // test with overflow as warning
     //     let mut ctx = EvalContext::new(Arc::new(
