@@ -120,7 +120,13 @@ macro_rules! word_cnt {
         word_cnt!($len, u8)
     };
     ($len:expr, $t:ty) => {{
-        (($len) + DIGITS_PER_WORD as $t - 1) / DIGITS_PER_WORD as $t
+        let len = ($len) as $t;
+        if len > (DIGITS_PER_WORD * WORD_BUF_LEN) as $t {
+            // process overflow
+            (WORD_BUF_LEN + 1) as $t
+        } else {
+            (len + DIGITS_PER_WORD as $t - 1) / (DIGITS_PER_WORD as $t)
+        }
     }};
 }
 
@@ -1528,7 +1534,9 @@ impl Decimal {
     }
 
     fn from_bytes_with_word_buf(s: &[u8], word_buf_len: u8) -> Result<Res<Decimal>> {
+        // trim whitespace
         let mut bs = match s.iter().position(|c| !c.is_ascii_whitespace()) {
+            //TODO:return badnumber
             None => return Err(box_err!("\"{}\" is empty", escape(s))),
             Some(pos) => &s[pos..],
         };
@@ -1542,15 +1550,16 @@ impl Decimal {
             _ => {}
         }
         let int_idx = first_non_digit(bs, 0);
-        let mut int_cnt = int_idx as u8;
+        let mut int_cnt = int_idx;
         let mut end_idx = int_idx;
         let mut frac_cnt = if int_idx < bs.len() && bs[int_idx] == b'.' {
             end_idx = first_non_digit(bs, int_idx + 1);
-            (end_idx - int_idx - 1) as u8
+            (end_idx - int_idx - 1)
         } else {
             0
         };
         if int_cnt + frac_cnt == 0 {
+            // TODO:bad number
             return Err(box_err!("\"{}\" is invalid number", escape(s)));
         }
         let int_word_cnt = word_cnt!(int_cnt);
@@ -1558,12 +1567,12 @@ impl Decimal {
         let res = fix_word_cnt_err(int_word_cnt, frac_word_cnt, word_buf_len);
         let (int_word_cnt, frac_word_cnt) = (res.0, res.1);
         if !res.is_ok() {
-            frac_cnt = frac_word_cnt * DIGITS_PER_WORD;
+            frac_cnt = (frac_word_cnt * DIGITS_PER_WORD) as usize;
             if res.is_overflow() {
-                int_cnt = int_word_cnt * DIGITS_PER_WORD;
+                int_cnt = (int_word_cnt * DIGITS_PER_WORD) as usize;
             }
         }
-        let mut d = res.map(|_| Decimal::new(int_cnt, frac_cnt, negative));
+        let mut d = res.map(|_| Decimal::new(int_cnt as u8, frac_cnt as u8, negative));
         let mut inner_idx = 0;
         let mut word_idx = int_word_cnt as usize;
         let mut word = 0;
@@ -1571,6 +1580,7 @@ impl Decimal {
             word += u32::from(c - b'0') * TEN_POW[inner_idx];
             inner_idx += 1;
             if inner_idx == DIGITS_PER_WORD as usize {
+                //TODO overflow
                 word_idx -= 1;
                 d.word_buf[word_idx] = word;
                 word = 0;
@@ -1598,19 +1608,34 @@ impl Decimal {
         if inner_idx != 0 {
             d.word_buf[word_idx] = word * TEN_POW[DIGITS_PER_WORD as usize - inner_idx];
         }
-
-        if end_idx + 1 < bs.len() && (bs[end_idx] == b'e' || bs[end_idx] == b'E') {
+        if end_idx < bs.len() && (bs[end_idx] == b'e' || bs[end_idx] == b'E') {
             let exp = convert::bytes_to_int_without_context(&bs[end_idx + 1..])?;
             if exp > i64::from(i32::MAX) / 2 {
-                d.reset_to_zero();
-                return Ok(Res::Overflow(d.unwrap()));
+                return Ok(Res::Overflow(max_or_min_dec(
+                    d.negative,
+                    WORD_BUF_LEN * DIGITS_PER_WORD,
+                    0,
+                )));
             }
             if exp < i64::from(i32::MIN) / 2 && !d.is_overflow() {
                 d.reset_to_zero();
                 return Ok(Res::Truncated(d.unwrap()));
             }
             if !d.is_overflow() {
-                d = d.unwrap().shift(exp as isize);
+                let is_truncated = d.is_truncated();
+                d = match d.unwrap().shift(exp as isize) {
+                    Res::Overflow(v) => Res::Overflow(max_or_min_dec(
+                        v.negative,
+                        WORD_BUF_LEN * DIGITS_PER_WORD,
+                        0,
+                    )),
+                    Res::Truncated(v) => Res::Truncated(v),
+                    Res::Ok(v) => if is_truncated {
+                        Res::Truncated(v)
+                    } else {
+                        Res::Ok(v)
+                    },
+                };
             }
         }
         if d.word_buf.iter().all(|c| *c == 0) {
@@ -2672,12 +2697,37 @@ mod test {
             (WORD_BUF_LEN, b"2.23E2abc", Res::Ok("223")),
             (WORD_BUF_LEN, b"2.23a2", Res::Ok("2.23")),
             (WORD_BUF_LEN, b"223\xE0\x80\x80", Res::Ok("223")),
+            (WORD_BUF_LEN, b"1e -1",Res::Ok("0.1")),
+            (WORD_BUF_LEN, b"1e001",Res::Ok("10")),
+            (WORD_BUF_LEN, b"1e00", Res::Ok("1")),
+            (WORD_BUF_LEN, b"1e1073741823",
+            Res::Overflow("999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
+            (WORD_BUF_LEN, b"-1e1073741823",
+            Res::Overflow("-999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
+            (WORD_BUF_LEN,b"135999696916777530000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+             Res::Overflow("0")),
+            (WORD_BUF_LEN,b"-0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002932935661422768",
+            Res::Truncated("0.000000000000000000000000000000000000000000000000000000000000000000000000")),
+            // The following case return truncated in tidb, need to fix it in bytes_to_int_without_context
+            (WORD_BUF_LEN,b"1eabc",Res::Ok("1")),
+            (WORD_BUF_LEN,b"1e",Res::Ok("1")),
+            (WORD_BUF_LEN,b"1e 1ddd",Res::Ok("10")),
+            (WORD_BUF_LEN,b"1e - 1",Res::Ok("1")),
+            // with word_buf_len 1
+            (1,b"123450000098765",Res::Overflow("98765")),
+            (1,b"123450.000098765", Res::Truncated("123450")),
         ];
 
         for (word_buf_len, dec, exp) in cases {
             let d = Decimal::from_bytes_with_word_buf(dec, word_buf_len).unwrap();
             let res = d.map(|d| d.to_string());
             assert_eq!(res, exp.map(|s| s.to_owned()));
+        }
+
+        // error cases
+        let cases = vec![b"1e18446744073709551620"];
+        for case in cases {
+            assert!(Decimal::from_bytes(case).is_err());
         }
     }
 
