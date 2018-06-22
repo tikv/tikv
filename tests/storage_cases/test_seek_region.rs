@@ -12,6 +12,8 @@
 // limitations under the License.
 
 use raftstore::server::new_server_cluster;
+use std::thread;
+use std::time::Duration;
 use tikv::raftstore::store::SeekRegionResult;
 use tikv::util::HandyRwLock;
 
@@ -48,6 +50,9 @@ fn test_seek_region() {
         regions.push(region);
     }
     regions.push(cluster.get_region(b"k9"));
+
+    // Wait for raftstore to update regions
+    thread::sleep(Duration::from_secs(2));
 
     for node_id in cluster.get_node_ids() {
         let engine = cluster.sim.rl().storages[&node_id].clone();
