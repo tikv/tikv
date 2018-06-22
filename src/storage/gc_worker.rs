@@ -222,6 +222,13 @@ impl Runnable<GCTask> for GCRunner {
         (task.callback)(result);
     }
 
+    fn run_batch(&mut self, tasks: &mut Vec<GCTask>) {
+        for task in tasks.drain(..) {
+            // Do not print slow log
+            self.run(task);
+        }
+    }
+
     fn on_tick(&mut self) {
         let stats = mem::replace(&mut self.stats, StatisticsSummary::default());
         for (cf, details) in stats.stat.details() {
