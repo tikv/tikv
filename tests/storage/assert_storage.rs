@@ -15,24 +15,24 @@ use super::sync_storage::SyncStorage;
 use super::util::new_raft_storage_with_store_count;
 use kvproto::kvrpcpb::{Context, LockInfo};
 use raftstore::cluster::Cluster;
-use raftstore::server::ServerCluster;
+use raftstore::server::{ServerCluster, SimulateEngine};
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::config::Config;
-use tikv::storage::engine;
+use tikv::storage::engine::{self, EngineRocksdb};
 use tikv::storage::mvcc::{self, MAX_TXN_WRITE_SIZE};
 use tikv::storage::txn;
-use tikv::storage::{self, make_key, Key, KvPair, Mutation, Value};
+use tikv::storage::{self, make_key, Engine, Key, KvPair, Mutation, Value};
 use tikv::util::HandyRwLock;
 use tikv::util::worker::FutureWorker;
 
 #[derive(Clone)]
-pub struct AssertionStorage {
-    pub store: SyncStorage,
+pub struct AssertionStorage<E: Engine> {
+    pub store: SyncStorage<E>,
     pub ctx: Context,
 }
 
-impl Default for AssertionStorage {
-    fn default() -> AssertionStorage {
+impl Default for AssertionStorage<EngineRocksdb> {
+    fn default() -> Self {
         let pd_worker = FutureWorker::new("test future worker");
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || storage::ReadPoolContext::new(pd_worker.scheduler())
@@ -44,13 +44,13 @@ impl Default for AssertionStorage {
     }
 }
 
-impl AssertionStorage {
+impl AssertionStorage<SimulateEngine> {
     pub fn new_raft_storage_with_store_count(
         count: usize,
         key: &str,
-    ) -> (Cluster<ServerCluster>, AssertionStorage) {
+    ) -> (Cluster<ServerCluster>, Self) {
         let (cluster, store, ctx) = new_raft_storage_with_store_count(count, key);
-        let storage = AssertionStorage { ctx, store };
+        let storage = Self { ctx, store };
         (cluster, storage)
     }
 
@@ -73,6 +73,134 @@ impl AssertionStorage {
         self.store = SyncStorage::from_engine(engine, &Config::default(), read_pool);
     }
 
+    pub fn delete_ok_for_cluster(
+        &mut self,
+        cluster: &mut Cluster<ServerCluster>,
+        key: &[u8],
+        start_ts: u64,
+        commit_ts: u64,
+    ) {
+        let mutations = vec![Mutation::Delete(make_key(key))];
+        let commit_keys = vec![make_key(key)];
+        self.two_pc_ok_for_cluster(cluster, mutations, key, commit_keys, start_ts, commit_ts);
+    }
+
+    fn get_from_custer(
+        &mut self,
+        cluster: &mut Cluster<ServerCluster>,
+        key: &[u8],
+        ts: u64,
+    ) -> Option<Value> {
+        for _ in 0..3 {
+            let res = self.store.get(self.ctx.clone(), &make_key(key), ts);
+            if let Ok(data) = res {
+                return data;
+            }
+            self.expect_not_leader_or_stale_command(res.unwrap_err());
+            self.update_with_key_byte(cluster, key);
+        }
+        panic!("failed with 3 try");
+    }
+
+    pub fn get_none_from_cluster(
+        &mut self,
+        cluster: &mut Cluster<ServerCluster>,
+        key: &[u8],
+        ts: u64,
+    ) {
+        assert_eq!(self.get_from_custer(cluster, key, ts), None);
+    }
+
+    pub fn put_ok_for_cluster(
+        &mut self,
+        cluster: &mut Cluster<ServerCluster>,
+        key: &[u8],
+        value: &[u8],
+        start_ts: u64,
+        commit_ts: u64,
+    ) {
+        let mutations = vec![Mutation::Put((make_key(key), value.to_vec()))];
+        let commit_keys = vec![make_key(key)];
+        self.two_pc_ok_for_cluster(cluster, mutations, key, commit_keys, start_ts, commit_ts);
+    }
+
+    fn two_pc_ok_for_cluster(
+        &mut self,
+        cluster: &mut Cluster<ServerCluster>,
+        prewrite_mutations: Vec<Mutation>,
+        key: &[u8],
+        commit_keys: Vec<Key>,
+        start_ts: u64,
+        commit_ts: u64,
+    ) {
+        let retry_time = 3;
+        let mut success = false;
+        for _ in 0..retry_time {
+            let res = self.store.prewrite(
+                self.ctx.clone(),
+                prewrite_mutations.clone(),
+                key.to_vec(),
+                start_ts,
+            );
+            if res.is_ok() {
+                success = true;
+                break;
+            }
+            self.expect_not_leader_or_stale_command(res.unwrap_err());
+            self.update_with_key_byte(cluster, key)
+        }
+        assert!(success);
+
+        success = false;
+        for _ in 0..retry_time {
+            let res = self.store
+                .commit(self.ctx.clone(), commit_keys.clone(), start_ts, commit_ts);
+            if res.is_ok() {
+                success = true;
+                break;
+            }
+            self.expect_not_leader_or_stale_command(res.unwrap_err());
+            self.update_with_key_byte(cluster, key)
+        }
+        assert!(success);
+    }
+
+    pub fn gc_ok_for_cluster(
+        &mut self,
+        cluster: &mut Cluster<ServerCluster>,
+        region_key: &[u8],
+        safe_point: u64,
+    ) {
+        for _ in 0..3 {
+            let ret = self.store.gc(self.ctx.clone(), safe_point);
+            if ret.is_ok() {
+                return;
+            }
+            self.expect_not_leader_or_stale_command(ret.unwrap_err());
+            self.update_with_key_byte(cluster, region_key);
+        }
+        panic!("failed with 3 retry!");
+    }
+
+    pub fn test_txn_store_gc3_for_cluster(
+        &mut self,
+        cluster: &mut Cluster<ServerCluster>,
+        key_prefix: u8,
+    ) {
+        let key_len = 10_000;
+        let key = vec![key_prefix; 1024];
+        for k in 1u64..(MAX_TXN_WRITE_SIZE / key_len * 2) as u64 {
+            self.put_ok_for_cluster(cluster, &key, b"", k * 10, k * 10 + 5);
+        }
+
+        self.delete_ok_for_cluster(cluster, &key, 1000, 1050);
+        self.get_none_from_cluster(cluster, &key, 2000);
+        self.gc_ok_for_cluster(cluster, &key, 2000);
+        self.get_none_from_cluster(cluster, &key, 3000);
+    }
+}
+
+impl<E: Engine> AssertionStorage<E> {
     pub fn get_none(&self, key: &[u8], ts: u64) {
         let key = make_key(key);
         assert_eq!(self.store.get(self.ctx.clone(), &key, ts).unwrap(), None);
@@ -142,28 +270,6 @@ impl AssertionStorage {
         }
     }
 
-    pub fn get_none_from_cluster(
-        &mut self,
-        cluster: &mut Cluster<ServerCluster>,
-        key: &[u8],
-        ts: u64,
-    ) {
-        assert_eq!(self.get_from_custer(cluster, key, ts), None);
-    }
-
-    pub fn put_ok_for_cluster(
-        &mut self,
-        cluster: &mut Cluster<ServerCluster>,
-        key: &[u8],
-        value: &[u8],
-        start_ts: u64,
-        commit_ts: u64,
-    ) {
-        let mutations = vec![Mutation::Put((make_key(key), value.to_vec()))];
-        let commit_keys = vec![make_key(key)];
-        self.two_pc_ok_for_cluster(cluster, mutations, key, commit_keys, start_ts, commit_ts);
-    }
-
     pub fn put_ok(&self, key: &[u8], value: &[u8], start_ts: u64, commit_ts: u64) {
         self.store
             .prewrite(
@@ -190,76 +296,6 @@ impl AssertionStorage {
         self.store
             .commit(self.ctx.clone(), vec![make_key(key)], start_ts, commit_ts)
             .unwrap();
-    }
-
-    pub fn delete_ok_for_cluster(
-        &mut self,
-        cluster: &mut Cluster<ServerCluster>,
-        key: &[u8],
-        start_ts: u64,
-        commit_ts: u64,
-    ) {
-        let mutations = vec![Mutation::Delete(make_key(key))];
-        let commit_keys = vec![make_key(key)];
-        self.two_pc_ok_for_cluster(cluster, mutations, key, commit_keys, start_ts, commit_ts);
-    }
-
-    fn get_from_custer(
-        &mut self,
-        cluster: &mut Cluster<ServerCluster>,
-        key: &[u8],
-        ts: u64,
-    ) -> Option<Value> {
-        for _ in 0..3 {
-            let res = self.store.get(self.ctx.clone(), &make_key(key), ts);
-            if let Ok(data) = res {
-                return data;
-            }
-            self.expect_not_leader_or_stale_command(res.unwrap_err());
-            self.update_with_key_byte(cluster, key);
-        }
-        panic!("failed with 3 try");
-    }
-
-    fn two_pc_ok_for_cluster(
-        &mut self,
-        cluster: &mut Cluster<ServerCluster>,
-        prewrite_mutations: Vec<Mutation>,
-        key: &[u8],
-        commit_keys: Vec<Key>,
-        start_ts: u64,
-        commit_ts: u64,
-    ) {
-        let retry_time = 3;
-        let mut success = false;
-        for _ in 0..retry_time {
-            let res = self.store.prewrite(
-                self.ctx.clone(),
-                prewrite_mutations.clone(),
-                key.to_vec(),
-                start_ts,
-            );
-            if res.is_ok() {
-                success = true;
-                break;
-            }
-            self.expect_not_leader_or_stale_command(res.unwrap_err());
-            self.update_with_key_byte(cluster, key)
-        }
-        assert!(success);
-
-        success = false;
-        for _ in 0..retry_time {
-            let res = self.store
-                .commit(self.ctx.clone(), commit_keys.clone(), start_ts, commit_ts);
-            if res.is_ok() {
-                success = true;
-                break;
-            }
-            self.expect_not_leader_or_stale_command(res.unwrap_err());
-            self.update_with_key_byte(cluster, key)
-        }
-        assert!(success);
     }
 
     pub fn scan_ok(
@@ -484,23 +520,6 @@ impl AssertionStorage {
         self.store.gc(self.ctx.clone(), safe_point).unwrap();
     }
 
-    pub fn gc_ok_for_cluster(
-        &mut self,
-        cluster: &mut Cluster<ServerCluster>,
-        region_key: &[u8],
-        safe_point: u64,
-    ) {
-        for _ in 0..3 {
-            let ret = self.store.gc(self.ctx.clone(), safe_point);
-            if ret.is_ok() {
-                return;
-            }
-            self.expect_not_leader_or_stale_command(ret.unwrap_err());
-            self.update_with_key_byte(cluster, region_key);
-        }
-        panic!("failed with 3 retry!");
-    }
-
     pub fn raw_get_ok(&self, cf: String, key: Vec<u8>, value: Option<Vec<u8>>) {
         assert_eq!(
             self.store.raw_get(self.ctx.clone(), cf, key).unwrap(),
@@ -569,22 +588,5 @@ impl AssertionStorage {
         self.get_none(&key, 2000);
         self.gc_ok(2000);
         self.get_none(&key, 3000);
-    }
-
-    pub fn test_txn_store_gc3_for_cluster(
-        &mut self,
-        cluster: &mut Cluster<ServerCluster>,
-        key_prefix: u8,
-    ) {
-        let key_len = 10_000;
-        let key = vec![key_prefix; 1024];
-        for k in 1u64..(MAX_TXN_WRITE_SIZE / key_len * 2) as u64 {
-            self.put_ok_for_cluster(cluster, &key, b"", k * 10, k * 10 + 5);
-        }
-
-        self.delete_ok_for_cluster(cluster, &key, 1000, 1050);
-        self.get_none_from_cluster(cluster, &key, 2000);
-        self.gc_ok_for_cluster(cluster, &key, 2000);
-        self.get_none_from_cluster(cluster, &key, 3000);
     }
 }

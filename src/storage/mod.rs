@@ -413,8 +413,8 @@ pub struct Storage<E: Engine> {
     engine: E,
 
     // to schedule the execution of storage commands
-    worker: Arc<Mutex<Worker<Msg<E::SnapshotType>>>>,
-    worker_scheduler: worker::Scheduler<Msg<E::SnapshotType>>,
+    worker: Arc<Mutex<Worker<Msg<E>>>>,
+    worker_scheduler: worker::Scheduler<Msg<E>>,
 
     read_pool: ReadPool<ReadPoolContext>,
 

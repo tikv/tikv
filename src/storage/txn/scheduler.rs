@@ -88,10 +88,10 @@ pub enum ProcessResult {
     Failed { err: StorageError },
 }
 
-type SnapshotResult<S> = (Vec<u64>, CbContext, EngineResult<S>);
+type SnapshotResult<T> = (Vec<u64>, CbContext, EngineResult<T>);
 
 /// Message types for the scheduler event loop.
-pub enum Msg<S: Snapshot> {
+pub enum Msg<E: Engine> {
     Quit,
     RawCmd {
         cmd: Command,
@@ -101,10 +101,10 @@ pub enum Msg<S: Snapshot> {
     SnapshotFinished {
         cids: Vec<u64>,
         cb_ctx: CbContext,
-        snapshot: EngineResult<S>,
+        snapshot: EngineResult<E::SnapshotType>,
     },
     BatchSnapshotFinished {
-        batch: Vec<SnapshotResult<S>>,
+        batch: Vec<SnapshotResult<E::SnapshotType>>,
     },
     ReadFinished {
         cid: u64,
@@ -130,7 +130,7 @@ pub enum Msg<S: Snapshot> {
 }
 
 /// Debug for messages.
-impl<S: Snapshot> Debug for Msg<S> {
+impl<E: Engine> Debug for Msg<E> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
             Msg::Quit => write!(f, "Quit"),
@@ -156,7 +156,7 @@ impl<S: Snapshot> Debug for Msg<S> {
 }
 
 /// Display for messages.
-impl<S: Snapshot> Display for Msg<S> {
+impl<E: Engine> Display for Msg<E> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
             Msg::Quit => write!(f, "Quit"),
@@ -281,11 +281,11 @@ impl Drop for RunningCtx {
 }
 
 /// Creates a callback to receive async results of write prepare from the storage engine.
-fn make_engine_cb<S: Snapshot + 'static>(
+fn make_engine_cb<E: Engine>(
     cmd: &'static str,
     cid: u64,
     pr: ProcessResult,
-    scheduler: worker::Scheduler<Msg<S>>,
+    scheduler: worker::Scheduler<Msg<E>>,
     rows: usize,
 ) -> EngineCallback<()> {
     Box::new(move |(cb_ctx, result)| {
@@ -349,7 +349,7 @@ pub struct Scheduler<E: Engine> {
     grouped_cmds: Option<HashMap<HashableContext, Vec<u64>>>,
 
     // actual scheduler to schedule the execution of commands
-    scheduler: worker::Scheduler<Msg<E::SnapshotType>>,
+    scheduler: worker::Scheduler<Msg<E>>,
 
     // cmd id generator
     id_alloc: u64,
@@ -404,7 +404,7 @@ impl<E: Engine> Scheduler<E> {
     /// Creates a scheduler.
     pub fn new(
         engine: E,
-        scheduler: worker::Scheduler<Msg<E::SnapshotType>>,
+        scheduler: worker::Scheduler<Msg<E>>,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
@@ -434,12 +434,12 @@ impl<E: Engine> Scheduler<E> {
 
 /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
 /// event loop.
-fn process_read<S: Snapshot>(
+fn process_read<E: Engine>(
     sched_ctx: &mut SchedContext,
     cid: u64,
     mut cmd: Command,
-    scheduler: worker::Scheduler<Msg<S>>,
-    snapshot: S,
+    scheduler: worker::Scheduler<Msg<E>>,
+    snapshot: E::SnapshotType,
 ) -> Statistics {
     fail_point!("txn_before_process_read");
     debug!("process read cmd(cid={}) in worker pool.", cid);
@@ -662,11 +662,11 @@ fn process_read<S: Snapshot>(
 
 /// Processes a write command within a worker thread, then posts either a `WritePrepareFinished`
 /// message if successful or a `WritePrepareFailed` message back to the event loop.
-fn process_write<S: Snapshot>(
+fn process_write<E: Engine>(
     cid: u64,
     cmd: Command,
-    scheduler: worker::Scheduler<Msg<S>>,
-    snapshot: S,
+    scheduler: worker::Scheduler<Msg<E>>,
+    snapshot: E::SnapshotType,
 ) -> Statistics {
     fail_point!("txn_before_process_write");
     let mut statistics = Statistics::default();
@@ -682,11 +682,11 @@ fn process_write<S: Snapshot>(
     statistics
 }
 
-fn process_write_impl<S: Snapshot>(
+fn process_write_impl<E: Engine>(
     cid: u64,
     mut cmd: Command,
-    scheduler: worker::Scheduler<Msg<S>>,
-    snapshot: S,
+    scheduler: worker::Scheduler<Msg<E>>,
+    snapshot: E::SnapshotType,
     statistics: &mut Statistics,
 ) -> Result<()> {
     let (pr, modifies, rows) = match cmd {
@@ -1430,8 +1430,8 @@ impl<E: Engine> Scheduler<E> {
     }
 }
 
-impl<E: Engine> Runnable<Msg<E::SnapshotType>> for Scheduler<E> {
-    fn run(&mut self, msg: Msg<E::SnapshotType>) {
+impl<E: Engine> Runnable<Msg<E>> for Scheduler<E> {
+    fn run(&mut self, msg: Msg<E>) {
         match msg {
             Msg::Quit => {
                 self.shutdown();
@@ -1462,7 +1462,7 @@ impl<E: Engine> Runnable<Msg<E::SnapshotType>> for Scheduler<E> {
         }
     }
 
-    fn run_batch(&mut self, msgs: &mut Vec<Msg<E::SnapshotType>>) {
+    fn run_batch(&mut self, msgs: &mut Vec<Msg<E>>) {
         for msg in msgs.drain(..) {
             self.run(msg);
         }

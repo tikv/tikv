@@ -14,15 +14,18 @@
 use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::Context;
 use raftstore::cluster::Cluster;
-use raftstore::server::ServerCluster;
 use raftstore::server::new_server_cluster;
+use raftstore::server::{ServerCluster, SimulateEngine};
 use tikv::server::readpool::{self, ReadPool};
+use tikv::storage;
 use tikv::storage::config::Config;
-use tikv::storage::{self, Engine};
 use tikv::util::HandyRwLock;
 use tikv::util::worker::FutureWorker;
 
-pub fn new_raft_engine(count: usize, key: &str) -> (Cluster<ServerCluster>, Box<Engine>, Context) {
+pub fn new_raft_engine(
+    count: usize,
+    key: &str,
+) -> (Cluster<ServerCluster>, SimulateEngine, Context) {
     let mut cluster = new_server_cluster(0, count);
     cluster.run();
     // make sure leader has been elected.
@@ -40,7 +43,7 @@ pub fn new_raft_engine(count: usize, key: &str) -> (Cluster<ServerCluster>, Box<
 pub fn new_raft_storage_with_store_count(
     count: usize,
     key: &str,
-) -> (Cluster<ServerCluster>, SyncStorage, Context) {
+) -> (Cluster<ServerCluster>, SyncStorage<SimulateEngine>, Context) {
     let pd_worker = FutureWorker::new("test future worker");
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
         || storage::ReadPoolContext::new(pd_worker.scheduler())

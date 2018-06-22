@@ -18,17 +18,18 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::server::readpool::ReadPool;
 use tikv::storage::config::Config;
+use tikv::storage::engine::EngineRocksdb;
 use tikv::storage::{self, Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
 use tikv::util::collections::HashMap;
 
 /// `SyncStorage` wraps `Storage` with sync API, usually used for testing.
-pub struct SyncStorage {
-    store: Storage,
+pub struct SyncStorage<E: Engine> {
+    store: Storage<E>,
     cnt: Arc<AtomicUsize>,
 }
 
-impl SyncStorage {
-    pub fn new(config: &Config, read_pool: ReadPool<storage::ReadPoolContext>) -> SyncStorage {
+impl SyncStorage<EngineRocksdb> {
+    pub fn new(config: &Config, read_pool: ReadPool<storage::ReadPoolContext>) -> Self {
         let storage = Storage::new(config, read_pool).unwrap();
         let mut s = SyncStorage {
             store: storage,
@@ -37,24 +38,26 @@ impl SyncStorage {
         s.start(config);
         s
     }
+}
 
+impl<E: Engine> SyncStorage<E> {
     pub fn from_engine(
-        engine: Box<Engine>,
+        engine: E,
         config: &Config,
         read_pool: ReadPool<storage::ReadPoolContext>,
-    ) -> SyncStorage {
+    ) -> Self {
         let mut s = SyncStorage::prepare(engine, config, read_pool);
         s.start(config);
         s
     }
 
     pub fn prepare(
-        engine: Box<Engine>,
+        engine: E,
         config: &Config,
         read_pool: ReadPool<storage::ReadPoolContext>,
-    ) -> SyncStorage {
+    ) -> Self {
         let storage = Storage::from_engine(engine, config, read_pool).unwrap();
-        SyncStorage {
+        Self {
             store: storage,
             cnt: Arc::new(AtomicUsize::new(0)),
         }
@@ -64,11 +67,11 @@ impl SyncStorage {
         self.store.start(config).unwrap();
     }
 
-    pub fn get_storage(&self) -> Storage {
+    pub fn get_storage(&self) -> Storage<E> {
         self.store.clone()
     }
 
-    pub fn get_engine(&self) -> Box<Engine> {
+    pub fn get_engine(&self) -> E {
         self.store.get_engine()
     }
 
@@ -207,17 +210,17 @@ impl SyncStorage {
     }
 }
 
-impl Clone for SyncStorage {
-    fn clone(&self) -> SyncStorage {
+impl<E: Engine> Clone for SyncStorage<E> {
+    fn clone(&self) -> Self {
         self.cnt.fetch_add(1, Ordering::SeqCst);
-        SyncStorage {
+        Self {
             store: self.store.clone(),
             cnt: Arc::clone(&self.cnt),
         }
     }
 }
 
-impl Drop for SyncStorage {
+impl<E: Engine> Drop for SyncStorage<E> {
     fn drop(&mut self) {
         if self.cnt.fetch_sub(1, Ordering::SeqCst) == 0 {
             self.store.stop().unwrap()

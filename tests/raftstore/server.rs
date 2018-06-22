@@ -35,7 +35,7 @@ use tikv::server::transport::RaftStoreRouter;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient,
                    Server, ServerTransport};
-use tikv::storage::{self, Engine, RaftKv};
+use tikv::storage::{self, RaftKv};
 use tikv::util::security::SecurityManager;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::{FutureWorker, Worker};
@@ -48,10 +48,11 @@ use super::util::create_test_engine;
 type SimulateStoreTransport = SimulateTransport<StoreMsg, ServerRaftStoreRouter>;
 type SimulateServerTransport =
     SimulateTransport<RaftMessage, ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
+pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
 
 struct ServerMeta {
     node: Node<TestPdClient>,
-    server: Server<SimulateStoreTransport, PdStoreAddrResolver, RaftKv<ServerRaftStoreRouter>>,
+    server: Server<SimulateStoreTransport, PdStoreAddrResolver, SimulateEngine>,
     router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     store_ch: SendCh<StoreMsg>,
@@ -61,7 +62,7 @@ struct ServerMeta {
 pub struct ServerCluster {
     metas: HashMap<u64, ServerMeta>,
     addrs: HashMap<u64, String>,
-    pub storages: HashMap<u64, Box<Engine>>,
+    pub storages: HashMap<u64, SimulateEngine>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient,
