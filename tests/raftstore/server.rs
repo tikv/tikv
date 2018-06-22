@@ -35,7 +35,7 @@ use tikv::server::transport::RaftStoreRouter;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient,
                    Server, ServerTransport};
-use tikv::storage::{self, Engine};
+use tikv::storage::{self, Engine, RaftKv};
 use tikv::util::security::SecurityManager;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::{FutureWorker, Worker};
@@ -51,7 +51,7 @@ type SimulateServerTransport =
 
 struct ServerMeta {
     node: Node<TestPdClient>,
-    server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
+    server: Server<SimulateStoreTransport, PdStoreAddrResolver, RaftKv<ServerRaftStoreRouter>>,
     router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     store_ch: SendCh<StoreMsg>,

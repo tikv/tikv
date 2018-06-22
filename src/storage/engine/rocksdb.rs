@@ -28,8 +28,8 @@ use util::worker::{Runnable, Scheduler, Worker};
 
 enum Task {
     Write(Vec<Modify>, Callback<()>),
-    Snapshot(Callback<Box<Snapshot>>),
-    SnapshotBatch(usize, BatchCallback<Box<Snapshot>>),
+    Snapshot(Callback<RocksSnapshot>),
+    SnapshotBatch(usize, BatchCallback<RocksSnapshot>),
 }
 
 impl Display for Task {
@@ -50,14 +50,14 @@ impl Runnable<Task> for Runner {
             Task::Write(modifies, cb) => cb((CbContext::new(), write_modifies(&self.0, modifies))),
             Task::Snapshot(cb) => cb((
                 CbContext::new(),
-                Ok(box RocksSnapshot::new(Arc::clone(&self.0))),
+                Ok(RocksSnapshot::new(Arc::clone(&self.0))),
             )),
             Task::SnapshotBatch(size, on_finished) => {
                 let mut results = Vec::with_capacity(size);
                 for _ in 0..size {
                     let res = Some((
                         CbContext::new(),
-                        Ok(box RocksSnapshot::new(Arc::clone(&self.0)) as Box<Snapshot>),
+                        Ok(RocksSnapshot::new(Arc::clone(&self.0))),
                     ));
                     results.push(res);
                 }
@@ -127,6 +127,15 @@ impl Debug for EngineRocksdb {
     }
 }
 
+impl Clone for EngineRocksdb {
+    fn clone(&self) -> Self {
+        Self {
+            core: Arc::clone(&self.core),
+            sched: self.sched.clone(),
+        }
+    }
+}
+
 fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
     let wb = WriteBatch::new();
     for rev in modifies {
@@ -169,6 +178,9 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
 }
 
 impl Engine for EngineRocksdb {
+    type IteratorType = DBIterator<Arc<DB>>;
+    type SnapshotType = RocksSnapshot;
+
     fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {
         if modifies.is_empty() {
             return Err(Error::EmptyRequest);
@@ -177,7 +189,7 @@ impl Engine for EngineRocksdb {
         Ok(())
     }
 
-    fn async_snapshot(&self, _: &Context, cb: Callback<Box<Snapshot>>) -> Result<()> {
+    fn async_snapshot(&self, _: &Context, cb: Callback<Self::SnapshotType>) -> Result<()> {
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())
     }
@@ -185,7 +197,7 @@ impl Engine for EngineRocksdb {
     fn async_batch_snapshot(
         &self,
         batch: Vec<Context>,
-        on_finished: BatchCallback<Box<Snapshot>>,
+        on_finished: BatchCallback<Self::SnapshotType>,
     ) -> Result<()> {
         if batch.is_empty() {
             return Err(Error::EmptyRequest);
@@ -196,16 +208,11 @@ impl Engine for EngineRocksdb {
         );
         Ok(())
     }
-
-    fn clone_box(&self) -> Box<Engine> {
-        box EngineRocksdb {
-            core: Arc::clone(&self.core),
-            sched: self.sched.clone(),
-        }
-    }
 }
 
 impl Snapshot for RocksSnapshot {
+    type IteratorType = DBIterator<Arc<DB>>;
+
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get {}", key);
         let v = box_try!(self.get_value(key.encoded()));
@@ -218,21 +225,22 @@ impl Snapshot for RocksSnapshot {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor> {
+    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::IteratorType>> {
         trace!("RocksSnapshot: create iterator");
         let iter = self.db_iterator(iter_opt);
-        Ok(Cursor::new(Box::new(iter), mode))
+        Ok(Cursor::new(iter, mode))
     }
 
     #[allow(needless_lifetimes)]
-    fn iter_cf(&self, cf: CfName, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor> {
+    fn iter_cf(
+        &self,
+        cf: CfName,
+        iter_opt: IterOption,
+        mode: ScanMode,
+    ) -> Result<Cursor<Self::IteratorType>> {
         trace!("RocksSnapshot: create cf iterator");
         let iter = self.db_iterator_cf(cf, iter_opt)?;
-        Ok(Cursor::new(Box::new(iter), mode))
-    }
-
-    fn clone(&self) -> Box<Snapshot> {
-        Box::new(RocksSnapshot::clone(self))
+        Ok(Cursor::new(iter, mode))
     }
 }
 

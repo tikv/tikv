@@ -21,7 +21,6 @@ use grpc::Error as GrpcError;
 use protobuf::ProtobufError;
 
 use super::snap::Task as SnapTask;
-use coprocessor::EndPointTask;
 use pd::Error as PdError;
 use raftstore::Error as RaftServerError;
 use storage::Error as StorageError;
@@ -96,9 +95,8 @@ quick_error!{
             from()
             display("{:?}", err)
         }
-        EndPointStopped(err: ScheduleError<EndPointTask>) {
-            from()
-            display("{:?}", err)
+        EndPointStopped { // TODO
+            description("endpoint is stopped")
         }
         Sink {
             description("failed to poll from mpsc receiver")

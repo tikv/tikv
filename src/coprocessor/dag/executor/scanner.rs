@@ -16,7 +16,7 @@ use kvproto::coprocessor::KeyRange;
 use coprocessor::codec::table::truncate_as_row_key;
 use coprocessor::util;
 use storage::txn::Result;
-use storage::{Key, ScanMode, SnapshotStore, Statistics, StoreScanner, Value};
+use storage::{Key, ScanMode, Snapshot, SnapshotStore, Statistics, StoreScanner, Value};
 use util::escape;
 
 #[derive(Copy, Clone)]
@@ -27,12 +27,12 @@ pub enum ScanOn {
 
 // `Scanner` is a helper struct to wrap all common scan operations
 // for `TableScanExecutor` and `IndexScanExecutor`
-pub struct Scanner {
+pub struct Scanner<S: Snapshot> {
     scan_mode: ScanMode,
     scan_on: ScanOn,
     key_only: bool,
     seek_key: Vec<u8>,
-    scanner: StoreScanner,
+    scanner: StoreScanner<S>,
     range: KeyRange,
     no_more: bool,
     // statistics_cache caches Statistics because
@@ -40,14 +40,14 @@ pub struct Scanner {
     statistics_cache: Statistics,
 }
 
-impl Scanner {
+impl<S: Snapshot> Scanner<S> {
     pub fn new(
-        store: &SnapshotStore,
+        store: &SnapshotStore<S>,
         scan_on: ScanOn,
         desc: bool,
         key_only: bool,
         range: KeyRange,
-    ) -> Result<Scanner> {
+    ) -> Result<Self> {
         let (scan_mode, seek_key) = if desc {
             (ScanMode::Backward, range.get_end().to_vec())
         } else {
@@ -55,7 +55,7 @@ impl Scanner {
         };
         let scanner = Self::range_scanner(store, scan_mode, key_only, &range)?;
 
-        Ok(Scanner {
+        Ok(Self {
             scan_mode,
             scan_on,
             key_only,
@@ -68,17 +68,17 @@ impl Scanner {
     }
 
     fn range_scanner(
-        store: &SnapshotStore,
+        store: &SnapshotStore<S>,
         scan_mode: ScanMode,
         key_only: bool,
         range: &KeyRange,
-    ) -> Result<StoreScanner> {
+    ) -> Result<StoreScanner<S>> {
         let lower_bound = Some(Key::from_raw(range.get_start()).encoded().to_vec());
         let upper_bound = Some(Key::from_raw(range.get_end()).encoded().to_vec());
         store.scanner(scan_mode, key_only, lower_bound, upper_bound)
     }
 
-    pub fn reset_range(&mut self, range: KeyRange, store: &SnapshotStore) -> Result<()> {
+    pub fn reset_range(&mut self, range: KeyRange, store: &SnapshotStore<S>) -> Result<()> {
         self.range = range;
         self.no_more = false;
         match self.scan_mode {
@@ -171,9 +171,9 @@ pub mod test {
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::table;
     use coprocessor::util;
-    use storage::engine::{self, Engine, Modify, TEMP_DIR};
+    use storage::engine::{self, Engine, EngineRocksdb, Modify, TEMP_DIR};
     use storage::mvcc::MvccTxn;
-    use storage::{make_key, Mutation, Options, Snapshot, SnapshotStore, ALL_CFS};
+    use storage::{make_key, Mutation, Options, SnapshotStore, ALL_CFS};
     use util::collections::HashMap;
 
     use super::*;
@@ -253,9 +253,9 @@ pub mod test {
     const COMMIT_TS: u64 = 20;
 
     pub struct TestStore {
-        snapshot: Box<Snapshot>,
+        snapshot: <EngineRocksdb as Engine>::SnapshotType,
         ctx: Context,
-        engine: Box<Engine>,
+        engine: EngineRocksdb,
     }
 
     impl TestStore {
@@ -324,7 +324,7 @@ pub mod test {
             self.snapshot = self.engine.snapshot(&self.ctx).unwrap()
         }
 
-        pub fn get_snapshot(&mut self) -> (Box<Snapshot>, u64) {
+        pub fn get_snapshot(&mut self) -> (<EngineRocksdb as Engine>::SnapshotType, u64) {
             (self.snapshot.clone(), COMMIT_TS + 1)
         }
     }

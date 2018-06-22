@@ -24,14 +24,14 @@ use coprocessor::codec::{datum, mysql, table};
 use coprocessor::util;
 use coprocessor::*;
 
-use storage::{Key, SnapshotStore};
+use storage::{Key, Snapshot, SnapshotStore};
 
 use super::ExecutorMetrics;
 use super::scanner::{ScanOn, Scanner};
 use super::{Executor, Row};
 
-pub struct IndexScanExecutor {
-    store: SnapshotStore,
+pub struct IndexScanExecutor<S: Snapshot> {
+    store: SnapshotStore<S>,
     desc: bool,
     col_ids: Vec<i64>,
     pk_col: Option<ColumnInfo>,
@@ -40,7 +40,7 @@ pub struct IndexScanExecutor {
     current_range: Option<KeyRange>,
     // The `KeyRange` scaned between `start_scan` and `stop_scan`.
     scan_range: KeyRange,
-    scanner: Option<Scanner>,
+    scanner: Option<Scanner<S>>,
     unique: bool,
     // The number of scan keys for each range.
     counts: Option<Vec<i64>>,
@@ -48,14 +48,14 @@ pub struct IndexScanExecutor {
     first_collect: bool,
 }
 
-impl IndexScanExecutor {
+impl<S: Snapshot> IndexScanExecutor<S> {
     pub fn new(
         mut meta: IndexScan,
         mut key_ranges: Vec<KeyRange>,
-        store: SnapshotStore,
+        store: SnapshotStore<S>,
         unique: bool,
         collect: bool,
-    ) -> Result<IndexScanExecutor> {
+    ) -> Result<Self> {
         box_try!(table::check_table_ranges(&key_ranges));
         let mut pk_col = None;
         let desc = meta.get_desc();
@@ -68,7 +68,7 @@ impl IndexScanExecutor {
         }
         let col_ids = cols.iter().map(|c| c.get_column_id()).collect();
         let counts = if collect { Some(Vec::default()) } else { None };
-        Ok(IndexScanExecutor {
+        Ok(Self {
             store,
             desc,
             col_ids,
@@ -87,8 +87,8 @@ impl IndexScanExecutor {
     pub fn new_with_cols_len(
         cols: i64,
         key_ranges: Vec<KeyRange>,
-        store: SnapshotStore,
-    ) -> Result<IndexScanExecutor> {
+        store: SnapshotStore<S>,
+    ) -> Result<Self> {
         box_try!(table::check_table_ranges(&key_ranges));
         let col_ids: Vec<i64> = (0..cols).collect();
         Ok(IndexScanExecutor {
@@ -154,7 +154,7 @@ impl IndexScanExecutor {
         Ok(None)
     }
 
-    fn new_scanner(&self, range: KeyRange) -> Result<Scanner> {
+    fn new_scanner(&self, range: KeyRange) -> Result<Scanner<S>> {
         // Since the unique index wouldn't always come with
         // self.unique = true. so the key-only would always be false.
         Scanner::new(&self.store, ScanOn::Index, self.desc, false, range).map_err(Error::from)
@@ -165,7 +165,7 @@ impl IndexScanExecutor {
     }
 }
 
-impl Executor for IndexScanExecutor {
+impl<S: Snapshot> Executor for IndexScanExecutor<S> {
     fn next(&mut self) -> Result<Option<Row>> {
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
