@@ -810,7 +810,7 @@ impl Peer {
         // if applied_index_term isn't equal to current term.
         self.get_store().applied_index_term == self.term()
             // There may be stale read if the old leader splits really slow,
-            // the new region may already elecetd a new leader while
+            // the new region may already elected a new leader while
             // the old leader still think it owns the splitted range.
             && self.last_committed_split_idx <= self.get_store().applied_index()
             // There may be stale read if a target leader is in another store and
