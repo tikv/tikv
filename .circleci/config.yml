@@ -80,7 +80,7 @@ jobs:
             echo "Tarpaulin version is now: ${CURRENT_TARPAULIN_VERSION}"
             echo "Tarpaulin version should be: ${TARPAULIN_VERSION}"
             if [[ "${CURRENT_TARPAULIN_VERSION}" != "${TARPAULIN_VERSION}" ]]; then
-                cargo +${RUST_TOOLCHAIN} install cargo-tarpaulin --force --version ${TARPAULIN_VERSION};
+                RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo +${RUST_TOOLCHAIN} install cargo-tarpaulin --force --version ${TARPAULIN_VERSION};
             fi
       - restore_cache:
           name: Restoring ./target Cache
