@@ -37,7 +37,7 @@ use std::io::Read;
 use std::iter::FromIterator;
 use std::sync::Arc;
 use std::thread;
-use std::{process, str, u64};
+use std::{process, str, u16, u64};
 
 use clap::{App, Arg, ArgMatches, SubCommand};
 use futures::{future, stream, Future, Stream};
@@ -851,21 +851,21 @@ fn main() {
         .arg(
             Arg::with_name("db")
                 .required(true)
-                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex"])
+                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex", "keys-logical-middle"])
                 .long("db")
                 .takes_value(true)
                 .help("set rocksdb path"),
         )
         .arg(
             Arg::with_name("raftdb")
-                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex"])
+                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex", "keys-logical-middle"])
                 .long("raftdb")
                 .takes_value(true)
                 .help("set raft rocksdb path"),
         )
         .arg(
             Arg::with_name("config")
-                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex"])
+                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex", "keys-logical-middle"])
                 .long("config")
                 .takes_value(true)
                 .help("set config for rocksdb"),
@@ -873,7 +873,7 @@ fn main() {
         .arg(
             Arg::with_name("host")
                 .required(true)
-                .conflicts_with_all(&["db", "pd", "raftdb", "hex-to-escaped", "escaped-to-hex", "config"])
+                .conflicts_with_all(&["db", "pd", "raftdb", "hex-to-escaped", "escaped-to-hex", "config", "keys-logical-middle"])
                 .long("host")
                 .takes_value(true)
                 .help("set remote host"),
@@ -914,10 +914,21 @@ fn main() {
                 .help("convert escaped key to hex key"),
         )
         .arg(
+            Arg::with_name("keys-logical-middle")
+                .conflicts_with_all(&["hex-to-escaped", "escaped-to-hex"])
+                .long("keys-logical-middle")
+                .takes_value(true)
+                .multiple(true)
+                .use_delimiter(true)
+                .require_delimiter(true)
+                .value_delimiter(",")
+                .help("get the logical middle position of 2 keys"),
+            )
+        .arg(
             Arg::with_name("pd")
                 .required(true)
                 .long("pd")
-                .conflicts_with_all(&["db", "raftdb", "host", "hex-to-escaped", "escaped-to-hex", "config"])
+                .conflicts_with_all(&["db", "raftdb", "host", "hex-to-escaped", "escaped-to-hex", "config", "keys-logical-middle"])
                 .takes_value(true)
                 .help("pd address"),
         )
@@ -1415,20 +1426,18 @@ fn main() {
 
     let matches = app.clone().get_matches();
 
-    let hex_key = matches.value_of("hex-to-escaped");
-    let escaped_key = matches.value_of("escaped-to-hex");
-    match (hex_key, escaped_key) {
-        (Some(hex), None) => {
-            println!("{}", escape(&from_hex(hex).unwrap()));
-            return;
-        }
-        (None, Some(escaped)) => {
-            println!("{}", &unescape(escaped).to_hex().to_uppercase());
-            return;
-        }
-        (None, None) => {}
-        _ => unreachable!(),
-    };
+    if let Some(hex) = matches.value_of("hex-to-escaped") {
+        println!("{}", escape(&from_hex(hex).unwrap()));
+        return;
+    } else if let Some(escaped) = matches.value_of("escaped-to-hex") {
+        println!("{}", &unescape(escaped).to_hex().to_uppercase());
+        return;
+    } else if let Some(mut keys) = matches.values_of("keys-logical-middle") {
+        let start = unescape(keys.next().unwrap());
+        let end = unescape(keys.next().unwrap());
+        println!("{}", escape(&keys_logical_middle(start, end)));
+        return;
+    }
 
     let mgr = new_security_mgr(&matches);
 
@@ -1776,4 +1785,43 @@ fn compact_whole_cluster(
     for h in handles {
         h.join().unwrap();
     }
+}
+
+fn keys_logical_middle(mut start: Vec<u8>, mut end: Vec<u8>) -> Vec<u8> {
+    if end.is_empty() {
+        end = vec![255; start.len()];
+    } else if start.len() < end.len() {
+        let pad = vec![0; end.len() - start.len()];
+        start.extend_from_slice(pad.as_slice())
+    } else if end.len() < start.len() {
+        let pad = vec![0; start.len() - end.len()];
+        end.extend_from_slice(pad.as_slice())
+    }
+
+    let mut i = 0;
+    let mut end_fill_255 = false;
+    let mut target = Vec::new();
+    while i < start.len() {
+        let start_number = u16::from(start[i]);
+        let mut end_number = u16::from(end[i]);
+        if end_fill_255 {
+            end_number += 255;
+        }
+
+        let digit = (start_number + end_number) / 2;
+
+        if digit == start_number && digit != end_number {
+            end_fill_255 = true;
+            target.push(start[i]);
+        } else if digit > 255 {
+            target[i - 1] += 1; // target[i - 1] must be less than 255.
+            target.push((digit - 255) as u8);
+        } else {
+            end_fill_255 = false;
+            target.push(digit as u8);
+        }
+        i += 1;
+    }
+
+    target
 }
