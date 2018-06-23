@@ -295,7 +295,7 @@ impl EvalContext {
     }
 
     pub fn handle_invalid_time_error(&mut self, err: Error) -> Result<()> {
-        if err.code() != super::err::ERR_TRUNCATE_WRONG_VALUE {
+        if err.code() != super::super::ERR_TRUNCATE_WRONG_VALUE {
             return Err(err);
         }
         let cfg = &self.cfg;

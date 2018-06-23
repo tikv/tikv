@@ -182,11 +182,7 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let mut greatest = Time::new(
-            ctx.cfg.tz.timestamp(mysql::time::ZERO_TIMESTAMP, 0),
-            mysql::types::DATETIME,
-            mysql::DEFAULT_FSP,
-        )?;
+        let mut greatest = mysql::time::zero_datetime(ctx.cfg.tz);
 
         for exp in &self.children {
             let val = try_opt!(exp.eval_string(ctx, row));
@@ -235,9 +231,9 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let mut res = Cow::from(vec![]);
         let mut least = Time::new(
-            ctx.cfg.tz.timestamp(mysql::time::MAX_TIMESTAMP, 0),
+            ctx.cfg.tz.timestamp(mysql::time::MAX_TIMESTAMP, mysql::time::MAX_TIME_NANOSECONDS),
             mysql::types::DATETIME,
-            mysql::DEFAULT_FSP,
+            mysql::MAX_FSP,
         )?;
         let mut find_invalid_time = false;
 
