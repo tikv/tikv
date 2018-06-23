@@ -1452,6 +1452,9 @@ fn main() {
             let key = unescape(matches.value_of("key").unwrap());
             return split_region(pd, region_id, key, mgr);
         }
+
+        let _ = app.print_help();
+        return;
     }
 
     let db = matches.value_of("db");
@@ -1718,12 +1721,12 @@ fn split_region(pd: &str, region_id: u64, key: Vec<u8>, mgr: Arc<SecurityManager
     req.mut_context().set_region_id(region_id);
     req.mut_context()
         .set_region_epoch(region.get_region_epoch().clone());
-    // TODO: set peer, term?
-    req.set_split_key(key);
+    req.set_split_key(key.clone());
 
     tikv_client
         .split_region(&req)
         .expect("split_region should success");
+    println!("split region {} success", region_id);
 }
 
 fn compact_whole_cluster(
