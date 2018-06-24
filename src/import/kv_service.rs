@@ -65,13 +65,13 @@ impl ImportKv for ImportKVService {
             self.threads
                 .spawn_fn(move || {
                     let client = Client::new(req.get_pd_addr(), 1)?;
-                    match client.switch_stores(req.get_request()) {
+                    match client.switch_cluster(req.get_request()) {
                         Ok(_) => {
-                            info!("switch stores {:?}", req.get_request());
+                            info!("switch cluster {:?}", req.get_request());
                             Ok(())
                         }
                         Err(e) => {
-                            error!("switch stores {:?}: {:?}", req.get_request(), e);
+                            error!("switch cluster {:?}: {:?}", req.get_request(), e);
                             Err(e)
                         }
                     }
@@ -81,8 +81,13 @@ impl ImportKv for ImportKVService {
         )
     }
 
-    fn open(&self, ctx: RpcContext, req: OpenRequest, sink: UnarySink<OpenResponse>) {
-        let label = "open";
+    fn open_engine(
+        &self,
+        ctx: RpcContext,
+        req: OpenEngineRequest,
+        sink: UnarySink<OpenEngineResponse>,
+    ) {
+        let label = "open_engine";
         let timer = Instant::now_coarse();
         let import = Arc::clone(&self.importer);
 
@@ -92,18 +97,18 @@ impl ImportKv for ImportKVService {
                     let uuid = Uuid::from_bytes(req.get_uuid())?;
                     import.open_engine(uuid)
                 })
-                .map(|_| OpenResponse::new())
+                .map(|_| OpenEngineResponse::new())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }
 
-    fn write(
+    fn write_engine(
         &self,
         ctx: RpcContext,
-        stream: RequestStream<WriteRequest>,
-        sink: ClientStreamingSink<WriteResponse>,
+        stream: RequestStream<WriteEngineRequest>,
+        sink: ClientStreamingSink<WriteEngineResponse>,
     ) {
-        let label = "write";
+        let label = "write_engine";
         let timer = Instant::now_coarse();
         let import = Arc::clone(&self.importer);
         let bounded_stream = mpsc::spawn(stream, &self.threads, self.cfg.stream_channel_window);
@@ -139,9 +144,9 @@ impl ImportKv for ImportKVService {
                         })
                     })
                     .then(move |res| match res {
-                        Ok(_) => Ok(WriteResponse::new()),
+                        Ok(_) => Ok(WriteEngineResponse::new()),
                         Err(Error::EngineNotFound(v)) => {
-                            let mut resp = WriteResponse::new();
+                            let mut resp = WriteEngineResponse::new();
                             resp.mut_error()
                                 .mut_engine_not_found()
                                 .set_uuid(v.as_bytes().to_vec());
@@ -154,8 +159,13 @@ impl ImportKv for ImportKVService {
         )
     }
 
-    fn close(&self, ctx: RpcContext, req: CloseRequest, sink: UnarySink<CloseResponse>) {
-        let label = "close";
+    fn close_engine(
+        &self,
+        ctx: RpcContext,
+        req: CloseEngineRequest,
+        sink: UnarySink<CloseEngineResponse>,
+    ) {
+        let label = "close_engine";
         let timer = Instant::now_coarse();
         let import = Arc::clone(&self.importer);
 
@@ -166,9 +176,9 @@ impl ImportKv for ImportKVService {
                     import.close_engine(uuid)
                 })
                 .then(move |res| match res {
-                    Ok(_) => Ok(CloseResponse::new()),
+                    Ok(_) => Ok(CloseEngineResponse::new()),
                     Err(Error::EngineNotFound(v)) => {
-                        let mut resp = CloseResponse::new();
+                        let mut resp = CloseEngineResponse::new();
                         resp.mut_error()
                             .mut_engine_not_found()
                             .set_uuid(v.as_bytes().to_vec());
@@ -180,8 +190,13 @@ impl ImportKv for ImportKVService {
         )
     }
 
-    fn import(&self, ctx: RpcContext, req: ImportRequest, sink: UnarySink<ImportResponse>) {
-        let label = "import";
+    fn import_engine(
+        &self,
+        ctx: RpcContext,
+        req: ImportEngineRequest,
+        sink: UnarySink<ImportEngineResponse>,
+    ) {
+        let label = "import_engine";
         let timer = Instant::now_coarse();
         let import = Arc::clone(&self.importer);
 
@@ -191,13 +206,18 @@ impl ImportKv for ImportKVService {
                     let uuid = Uuid::from_bytes(req.get_uuid())?;
                     import.import_engine(uuid, req.get_pd_addr())
                 })
-                .map(|_| ImportResponse::new())
+                .map(|_| ImportEngineResponse::new())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }
 
-    fn cleanup(&self, ctx: RpcContext, req: CleanupRequest, sink: UnarySink<CleanupResponse>) {
-        let label = "cleanup";
+    fn cleanup_engine(
+        &self,
+        ctx: RpcContext,
+        req: CleanupEngineRequest,
+        sink: UnarySink<CleanupEngineResponse>,
+    ) {
+        let label = "cleanup_engine";
         let timer = Instant::now_coarse();
         let import = Arc::clone(&self.importer);
 
@@ -207,13 +227,18 @@ impl ImportKv for ImportKVService {
                     let uuid = Uuid::from_bytes(req.get_uuid())?;
                     import.cleanup_engine(uuid)
                 })
-                .map(|_| CleanupResponse::new())
+                .map(|_| CleanupEngineResponse::new())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }
 
-    fn compact(&self, ctx: RpcContext, req: CompactRequest, sink: UnarySink<CompactResponse>) {
-        let label = "compact";
+    fn compact_cluster(
+        &self,
+        ctx: RpcContext,
+        req: CompactClusterRequest,
+        sink: UnarySink<CompactClusterResponse>,
+    ) {
+        let label = "compact_cluster";
         let timer = Instant::now_coarse();
 
         let mut compact = req.get_request().clone();
@@ -233,18 +258,18 @@ impl ImportKv for ImportKVService {
             self.threads
                 .spawn_fn(move || {
                     let client = Client::new(req.get_pd_addr(), 1)?;
-                    match client.compact_stores(&compact) {
+                    match client.compact_cluster(&compact) {
                         Ok(_) => {
-                            info!("compact stores {:?}", compact);
+                            info!("compact cluster {:?}", compact);
                             Ok(())
                         }
                         Err(e) => {
-                            error!("compact stores {:?}: {:?}", compact, e);
+                            error!("compact cluster {:?}: {:?}", compact, e);
                             Err(e)
                         }
                     }
                 })
-                .map(|_| CompactResponse::new())
+                .map(|_| CompactClusterResponse::new())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }

@@ -105,7 +105,7 @@ impl Client {
         })
     }
 
-    pub fn switch_stores(&self, req: &SwitchModeRequest) -> Result<()> {
+    pub fn switch_cluster(&self, req: &SwitchModeRequest) -> Result<()> {
         let mut futures = Vec::new();
         for store in self.pd.get_all_stores()? {
             let ch = match self.resolve(store.get_id()) {
@@ -132,7 +132,7 @@ impl Client {
             .map_err(Error::from)
     }
 
-    pub fn compact_stores(&self, req: &CompactRequest) -> Result<()> {
+    pub fn compact_cluster(&self, req: &CompactRequest) -> Result<()> {
         let mut futures = Vec::new();
         for store in self.pd.get_all_stores()? {
             let ch = match self.resolve(store.get_id()) {
