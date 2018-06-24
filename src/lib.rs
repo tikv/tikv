@@ -13,7 +13,6 @@
 
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
-
 #![feature(proc_macro)]
 #![feature(fnbox)]
 #![feature(alloc)]
@@ -23,7 +22,6 @@
 #![feature(entry_or_default)]
 #![feature(proc_macro_non_items)]
 #![feature(proc_macro_gen, ascii_ctype)]
-
 #![recursion_limit = "200"]
 #![cfg_attr(not(feature = "cargo-clippy"), allow(unknown_lints))]
 #![allow(
