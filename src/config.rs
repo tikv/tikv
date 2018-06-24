@@ -902,6 +902,7 @@ pub struct TiKvConfig {
     #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
     pub log_file: String,
+    pub log_rotation_timespan: ReadableDuration,
     pub readpool: ReadPoolConfig,
     pub server: ServerConfig,
     pub storage: StorageConfig,
@@ -921,6 +922,7 @@ impl Default for TiKvConfig {
         TiKvConfig {
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
+            log_rotation_timespan: ReadableDuration::hours(24),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
