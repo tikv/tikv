@@ -13,10 +13,17 @@
 
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
-#![feature(
-    proc_macro, fnbox, alloc, slice_patterns, box_syntax, integer_atomics, entry_or_default,
-    proc_macro_non_items, proc_macro_gen, ascii_ctype
-)]
+
+#![feature(proc_macro)]
+#![feature(fnbox)]
+#![feature(alloc)]
+#![feature(slice_patterns)]
+#![feature(box_syntax)]
+#![feature(integer_atomics)]
+#![feature(entry_or_default)]
+#![feature(proc_macro_non_items)]
+#![feature(proc_macro_gen, ascii_ctype)]
+
 #![recursion_limit = "200"]
 #![cfg_attr(not(feature = "cargo-clippy"), allow(unknown_lints))]
 #![allow(
