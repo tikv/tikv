@@ -228,7 +228,8 @@ pub mod test {
             ];
             let mut expect_row = HashMap::default();
             let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
-            let col_values: Vec<_> = row.iter()
+            let col_values: Vec<_> = row
+                .iter()
                 .map(|(cid, v)| {
                     let f = table::flatten(v.clone()).unwrap();
                     let value = datum::encode_value(&[f]).unwrap();

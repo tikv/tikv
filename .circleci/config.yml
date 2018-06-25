@@ -46,16 +46,10 @@ jobs:
       - run:
           name: Setting up Rust and the rest of the Build Environment
           command: |
-            RUST_VERSION=`tail -n 1 RUST_VERSION`
             if [[ ! -e $HOME/.cargo ]]; then
               curl https://sh.rustup.rs -sSf |
-                sh -s -- --no-modify-path --default-toolchain ${RUST_VERSION} -y;
-              rustup default ${RUST_VERSION};
-            else
-              rustup default ${RUST_VERSION};
+                sh -s -- --no-modify-path --default-toolchain none -y;
             fi
-
-            make -f ci-build/Makefile prepare-rustfmt
 
             if [[ ! -f $HOME/.local/cmake/bin/cmake ]]; then
               curl https://cmake.org/files/v3.10/cmake-3.10.0-Linux-x86_64.tar.gz -sSf | tar xzf -;
@@ -75,13 +69,12 @@ jobs:
       - run:
           name: Installing tarpaulin
           command: |
-            RUST_TOOLCHAIN=`tail -n 1 RUST_VERSION`
-            CURRENT_TARPAULIN_VERSION=`cargo +${RUST_TOOLCHAIN} tarpaulin --version | awk '{ print $3 }'`
+            CURRENT_TARPAULIN_VERSION=`cargo tarpaulin --version | awk '{ print $3 }'`
             echo "Tarpaulin version is now: ${CURRENT_TARPAULIN_VERSION}"
             echo "Tarpaulin version should be: ${TARPAULIN_VERSION}"
             if [[ "${CURRENT_TARPAULIN_VERSION}" != "${TARPAULIN_VERSION}" ]]; then
                 # To understand why this Git is used please see https://github.com/pingcap/tikv/pull/3241#issuecomment-399768547
-                RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo +${RUST_TOOLCHAIN} install cargo-tarpaulin --git https://github.com/xd009642/tarpaulin --tag ${TARPAULIN_VERSION} --force
+                RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin --git https://github.com/xd009642/tarpaulin --tag ${TARPAULIN_VERSION} --force
             fi
       - restore_cache:
           name: Restoring ./target Cache
@@ -111,8 +104,7 @@ jobs:
       - run:
           name: Calculating code coverage
           command: |
-            RUST_TOOLCHAIN=`tail -n 1 RUST_VERSION`
-            cargo +${RUST_TOOLCHAIN} tarpaulin --no-count --skip-clean --out Xml
+            cargo tarpaulin --no-count --skip-clean --out Xml
             bash <(curl -s https://codecov.io/bash)
           no_output_timeout: 1800s
       - save_cache:

@@ -23,8 +23,8 @@ use protobuf::ProtobufError;
 use super::snap::Task as SnapTask;
 use pd::Error as PdError;
 use raftstore::Error as RaftServerError;
-use storage::Error as StorageError;
 use storage::engine::Error as EngineError;
+use storage::Error as StorageError;
 use util::codec::Error as CodecError;
 use util::worker::ScheduleError;
 

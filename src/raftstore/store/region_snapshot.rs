@@ -16,9 +16,9 @@ use rocksdb::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use std::cmp;
 use std::sync::Arc;
 
-use raftstore::Result;
 use raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
 use raftstore::store::{keys, util, PeerStorage};
+use raftstore::Result;
 
 /// Snapshot of a region.
 ///
@@ -321,10 +321,10 @@ mod tests {
     use rocksdb::{Writable, DB};
     use tempdir::TempDir;
 
-    use raftstore::Result;
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
     use raftstore::store::{CacheQueryStats, PeerStorage};
+    use raftstore::Result;
     use storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS, CF_DEFAULT};
     use util::{escape, rocksdb, worker};
 
@@ -534,7 +534,8 @@ mod tests {
         let mut statistics = CFStatistics::default();
         let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
         assert!(
-            !iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics)
+            !iter
+                .reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics)
                 .unwrap()
         );
         assert!(
@@ -550,7 +551,8 @@ mod tests {
         pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
         assert!(
-            !iter.reverse_seek(&Key::from_encoded(b"a3".to_vec()), &mut statistics)
+            !iter
+                .reverse_seek(&Key::from_encoded(b"a3".to_vec()), &mut statistics)
                 .unwrap()
         );
         assert!(
@@ -581,7 +583,8 @@ mod tests {
         let snap = RegionSnapshot::new(&store);
         let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
         assert!(
-            !iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics)
+            !iter
+                .reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics)
                 .unwrap()
         );
         assert!(

@@ -40,9 +40,10 @@ pub mod types;
 
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::engine::raftkv::RaftKv;
-pub use self::engine::{new_local_engine, CFStatistics, Cursor, Engine, EngineRocksdb,
-                       Error as EngineError, FlowStatistics, Iterator, Modify, ScanMode, Snapshot,
-                       Statistics, StatisticsSummary, TEMP_DIR};
+pub use self::engine::{
+    new_local_engine, CFStatistics, Cursor, Engine, EngineRocksdb, Error as EngineError,
+    FlowStatistics, Iterator, Modify, ScanMode, Snapshot, Statistics, StatisticsSummary, TEMP_DIR,
+};
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
 pub use self::types::{make_key, Key, KvPair, MvccInfo, Value};
@@ -954,7 +955,8 @@ impl<E: Engine> Storage<E> {
                     let cf = Self::rawkv_cf(cf)?;
                     // no scan_count for this kind of op.
                     let mut stats = Statistics::default();
-                    let result: Vec<Result<KvPair>> = keys.iter()
+                    let result: Vec<Result<KvPair>> = keys
+                        .iter()
                         .map(|k| (k, snapshot.get_cf(cf, k)))
                         .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
                         .into_iter()
@@ -997,9 +999,11 @@ impl<E: Engine> Storage<E> {
         }
         self.engine.async_write(
             &ctx,
-            vec![
-                Modify::Put(Self::rawkv_cf(cf)?, Key::from_encoded(key), value),
-            ],
+            vec![Modify::Put(
+                Self::rawkv_cf(cf)?,
+                Key::from_encoded(key),
+                value,
+            )],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&["raw_put"]).inc();
@@ -1074,13 +1078,11 @@ impl<E: Engine> Storage<E> {
 
         self.engine.async_write(
             &ctx,
-            vec![
-                Modify::DeleteRange(
-                    Self::rawkv_cf(cf)?,
-                    Key::from_encoded(start_key),
-                    Key::from_encoded(end_key),
-                ),
-            ],
+            vec![Modify::DeleteRange(
+                Self::rawkv_cf(cf)?,
+                Key::from_encoded(start_key),
+                Key::from_encoded(end_key),
+            )],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
         KV_COMMAND_COUNTER_VEC
@@ -1103,7 +1105,8 @@ impl<E: Engine> Storage<E> {
                 return Ok(());
             }
         }
-        let requests = keys.into_iter()
+        let requests = keys
+            .into_iter()
             .map(|k| Modify::Delete(cf, Key::from_encoded(k)))
             .collect();
         self.engine

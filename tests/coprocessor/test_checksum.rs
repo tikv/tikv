@@ -91,11 +91,8 @@ fn reversed_checksum_crc64_xor<E: Engine>(
         ChecksumScanOn::Index => ScanOn::Index,
     };
     let mut scanner = Scanner::new(
-        &snap,
-        scan_on,
-        true, // Scan in reversed order.
-        false,
-        range,
+        &snap, scan_on, true, // Scan in reversed order.
+        false, range,
     ).unwrap();
 
     let mut checksum = 0;

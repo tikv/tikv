@@ -13,22 +13,24 @@
 
 use std::boxed::FnBox;
 use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::{future, Async, Future, Poll, Stream};
 use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
-use grpc::{ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus,
-           RpcStatusCode, WriteFlags};
+use grpc::{
+    ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus, RpcStatusCode,
+    WriteFlags,
+};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb_grpc::TikvClient;
 
 use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
-use util::DeferContext;
 use util::security::SecurityManager;
 use util::worker::Runnable;
+use util::DeferContext;
 
 use super::metrics::*;
 use super::transport::RaftStoreRouter;
@@ -161,7 +163,8 @@ fn send_snap(
     let (sink, receiver) = client.snapshot()?;
 
     let send = chunks.forward(sink).map_err(Error::from);
-    let send = send.and_then(|(s, _)| receiver.map_err(Error::from).map(|_| s))
+    let send = send
+        .and_then(|(s, _)| receiver.map_err(Error::from).map(|_| s))
         .then(move |result| {
             send_timer.observe_duration();
             drop(deregister);

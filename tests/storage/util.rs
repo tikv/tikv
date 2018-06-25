@@ -19,8 +19,8 @@ use raftstore::server::{ServerCluster, SimulateEngine};
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage;
 use tikv::storage::config::Config;
-use tikv::util::HandyRwLock;
 use tikv::util::worker::FutureWorker;
+use tikv::util::HandyRwLock;
 
 pub fn new_raft_engine(
     count: usize,

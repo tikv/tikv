@@ -30,7 +30,9 @@ use tikv::storage::engine::{self, Engine, EngineRocksdb, TEMP_DIR};
 use tikv::storage::{self, Key, Mutation, ALL_CFS};
 use tikv::util::codec::number::*;
 use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
-use tipb::executor::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
+use tipb::executor::{
+    Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN,
+};
 use tipb::expression::{ByItem, Expr, ExprType, ScalarFuncSig};
 use tipb::schema::{self, ColumnInfo};
 use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
@@ -308,7 +310,8 @@ impl<'a, E: Engine> Insert<'a, E> {
     }
 
     fn execute_with_ctx(self, ctx: Context) -> i64 {
-        let handle = self.values
+        let handle = self
+            .values
             .get(&self.table.handle_id)
             .cloned()
             .unwrap_or_else(|| Datum::I64(next_id()));
@@ -394,7 +397,8 @@ impl<E: Engine> Store<E> {
     fn put(&mut self, ctx: Context, mut kv: Vec<(Vec<u8>, Vec<u8>)>) {
         self.handles.extend(kv.iter().map(|&(ref k, _)| k.clone()));
         let pk = kv[0].0.clone();
-        let kv = kv.drain(..)
+        let kv = kv
+            .drain(..)
             .map(|(k, v)| Mutation::Put((Key::from_raw(&k), v)))
             .collect();
         self.store.prewrite(ctx, kv, pk, self.current_ts).unwrap();
@@ -407,7 +411,8 @@ impl<E: Engine> Store<E> {
     fn delete(&mut self, mut keys: Vec<Vec<u8>>) {
         self.handles.extend(keys.clone());
         let pk = keys[0].clone();
-        let mutations = keys.drain(..)
+        let mutations = keys
+            .drain(..)
             .map(|k| Mutation::Delete(Key::from_raw(&k)))
             .collect();
         self.store

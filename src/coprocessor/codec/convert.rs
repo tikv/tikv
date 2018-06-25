@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::borrow::Cow;
-use std::{self, str, i64, u64};
+use std::{self, i64, str, u64};
 
 use super::mysql::Res;
 use super::{Error, Result};
@@ -142,7 +142,8 @@ pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
         }
 
         for c in trimed.take_while(|&&c| c >= b'0' && c <= b'9') {
-            r = r.and_then(|r| r.checked_mul(10))
+            r = r
+                .and_then(|r| r.checked_mul(10))
                 .and_then(|r| r.checked_add(u64::from(*c - b'0')));
             if r.is_none() {
                 break;
@@ -318,7 +319,7 @@ const MAX_ZERO_COUNT: i64 = 20;
 mod test {
     use std::f64::EPSILON;
     use std::sync::Arc;
-    use std::{isize, f64, i64, u64};
+    use std::{f64, i64, isize, u64};
 
     use coprocessor::codec::mysql::types;
     use coprocessor::dag::expr::{EvalConfig, EvalContext, FLAG_IGNORE_TRUNCATE};

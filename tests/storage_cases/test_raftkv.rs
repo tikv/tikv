@@ -7,9 +7,9 @@ use raftstore::transport_simulate::IsolationFilterFactory;
 use tikv::raftstore::store::engine::IterOption;
 use tikv::storage::engine::*;
 use tikv::storage::{CFStatistics, CfName, Key, CF_DEFAULT};
-use tikv::util::HandyRwLock;
 use tikv::util::codec::bytes;
 use tikv::util::escape;
+use tikv::util::HandyRwLock;
 
 #[test]
 fn test_raftkv() {
@@ -293,9 +293,11 @@ fn near_seek<E: Engine>(ctx: &Context, engine: &E) {
     assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
     assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
     let mut statistics = CFStatistics::default();
-    assert!(!cursor
-        .near_seek(&make_key(b"z\x00"), &mut statistics)
-        .unwrap());
+    assert!(
+        !cursor
+            .near_seek(&make_key(b"z\x00"), &mut statistics)
+            .unwrap()
+    );
     must_delete(ctx, engine, b"x");
     must_delete(ctx, engine, b"z");
 }

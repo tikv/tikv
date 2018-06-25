@@ -876,9 +876,10 @@ fn inc<E: Engine>(store: &SyncStorage<E>, oracle: &Oracle, key: &[u8]) -> Result
         if store
             .prewrite(
                 Context::new(),
-                vec![
-                    Mutation::Put((make_key(key), next.to_string().into_bytes())),
-                ],
+                vec![Mutation::Put((
+                    make_key(key),
+                    next.to_string().into_bytes(),
+                ))],
                 key.to_vec(),
                 start_ts,
             )

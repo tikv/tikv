@@ -183,7 +183,8 @@ impl<S: Snapshot> RequestHandler for DAGContext<S> {
         }
         if record_cnt > 0 {
             let range = self.exec.stop_scan();
-            return self.make_stream_response(chunk, range)
+            return self
+                .make_stream_response(chunk, range)
                 .map(|r| (Some(r), finished));
         }
         Ok((None, true))
