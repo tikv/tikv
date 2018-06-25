@@ -20,11 +20,11 @@ use std::{mem, str};
 use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Timelike, Utc, Weekday};
 
 use super::super::{Error, Result, TEN_POW};
-use coprocessor::codec::mysql::Decimal;
 use coprocessor::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
+use coprocessor::codec::mysql::Decimal;
 use coprocessor::codec::mysql::{self, check_fsp, parse_frac, types};
-use util::codec::BytesSlice;
 use util::codec::number::{self, NumberEncoder};
+use util::codec::BytesSlice;
 const ZERO_DATETIME_STR: &str = "0000-00-00 00:00:00";
 const ZERO_DATE_STR: &str = "0000-00-00";
 /// In go, `time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC)` will be adjusted to
@@ -47,7 +47,7 @@ const MONTH_NAMES: &[&str] = &[
 ];
 
 const MONTH_NAMES_ABBR: &[&str] = &[
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
 bitflags! {
@@ -856,7 +856,12 @@ impl Time {
         };
         *data = &data[2..];
         let tz = FixedOffset::east(0); // TODO
-        if year == 0 && month == 0 && day == 0 && hour == 0 && minute == 0 && second == 0
+        if year == 0
+            && month == 0
+            && day == 0
+            && hour == 0
+            && minute == 0
+            && second == 0
             && nanoseconds == 0
         {
             return Ok(zero_datetime(&tz));
@@ -1243,7 +1248,8 @@ mod test {
         for s in cases {
             let d = MyDuration::parse(s.as_bytes(), MAX_FSP).unwrap();
             let get = Time::from_duration(&tz, types::DATETIME, &d).unwrap();
-            let get_today = get.time
+            let get_today = get
+                .time
                 .checked_sub_signed(Duration::nanoseconds(d.to_nanos()))
                 .unwrap();
             let now = Utc::now();

@@ -27,8 +27,8 @@ mod scalar_function;
 pub use self::ctx::*;
 pub use coprocessor::codec::{Error, Result};
 
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::mysql::{charset, types};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::{self, Datum};
 use std::borrow::Cow;
 use std::str;
@@ -300,7 +300,9 @@ mod test {
     use super::{Error, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
     use coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
     use coprocessor::codec::mysql::json::JsonEncoder;
-    use coprocessor::codec::mysql::{charset, types, Decimal, DecimalEncoder, Duration, Json, Time};
+    use coprocessor::codec::mysql::{
+        charset, types, Decimal, DecimalEncoder, Duration, Json, Time,
+    };
     use coprocessor::codec::{convert, mysql, Datum};
     use std::sync::Arc;
     use std::{i64, u64};

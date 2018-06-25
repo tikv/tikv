@@ -25,18 +25,18 @@ use super::util::create_test_engine;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftMessage};
-use raft::SnapshotStatus;
 use raft::eraftpb::MessageType;
+use raft::SnapshotStatus;
 use tikv::config::TiKvConfig;
 use tikv::import::SSTImporter;
-use tikv::raftstore::Result;
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::*;
-use tikv::server::Node;
+use tikv::raftstore::Result;
 use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
-use tikv::util::HandyRwLock;
+use tikv::server::Node;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::FutureWorker;
+use tikv::util::HandyRwLock;
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
