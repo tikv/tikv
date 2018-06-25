@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::cluster::{Cluster, Simulator};
