@@ -31,20 +31,11 @@ jobs:
             sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y;
             sudo apt-get update -y;
             sudo apt-get install -y g++-4.8 curl libdw-dev libelf-dev elfutils binutils-dev libssl-dev pkg-config zlib1g-dev
-      - run:
-          name: Preparing Cache Download Source
-          command: |
-            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
-              echo "Current branch is $CIRCLE_BRANCH, cache will not be downloaded"
-              echo 'export CACHE_DOWNLOAD_BRANCH=__a_branch_not_exist__' >> $BASH_ENV
-            else
-              echo "Current branch is $CIRCLE_BRANCH, cache will be downloaded from master"
-              echo 'export CACHE_DOWNLOAD_BRANCH=master' >> $BASH_ENV
-            fi
       - restore_cache:
-          name: Downloading ~/.cargo and ~/.local Cache (non-master branch only)
+          # Actually master does not need to download the cache. However we cannot make conditions here.
+          name: Downloading ~/.cargo and ~/.local Cache from master
           keys:
-            - v3-cargo-{{ .Environment.CACHE_DOWNLOAD_BRANCH }}
+            - v3-cargo-master
       - run:
           name: Restoring ~/.cargo and ~/.local Cache (non-master branch only)
           command: |
@@ -52,7 +43,7 @@ jobs:
               echo "Current branch is $CIRCLE_BRANCH, skip"
             else
               echo "Current branch is $CIRCLE_BRANCH, restoring tar..."
-              tar xf ~/tikv_cache_cargo/cargo.tar -C ~/
+              tar xf ~/tikv_cache_cargo/cargo.tar -C ~/ || true
             fi
       - run:
           name: Setting up Rust and the rest of the Build Environment
@@ -95,9 +86,10 @@ jobs:
                 RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo +${RUST_TOOLCHAIN} install cargo-tarpaulin --git https://github.com/xd009642/tarpaulin --tag ${TARPAULIN_VERSION} --force
             fi
       - restore_cache:
-          name: Downloading ./target Cache (non-master branch only)
+          # Actually master does not need to download the cache. However we cannot make conditions here.
+          name: Downloading ./target Cache from master
           keys:
-            - v3-target-{{ .Environment.CACHE_DOWNLOAD_BRANCH }}
+            - v3-target-master
       - run:
           name: Restoring ./target Cache (non-master branch only)
           command: |
@@ -105,7 +97,7 @@ jobs:
               echo "Current branch is $CIRCLE_BRANCH, skip"
             else
               echo "Current branch is $CIRCLE_BRANCH, restoring tar..."
-              tar xf ~/tikv_cache_build/target.tar
+              tar xf ~/tikv_cache_build/target.tar || true
             fi
       - run:
           name: Building
