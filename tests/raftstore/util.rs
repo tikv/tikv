@@ -28,9 +28,9 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use raft::eraftpb::ConfChangeType;
 
 use tikv::config::*;
-use tikv::raftstore::Result;
 use tikv::raftstore::store::Msg as StoreMsg;
 use tikv::raftstore::store::*;
+use tikv::raftstore::Result;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
 use tikv::util::config::*;

@@ -48,7 +48,8 @@ impl<T> Timer<T> {
     /// The normal use case is keeping `pop_task_before` until get `None` in order
     /// to retreive all avaliable events.
     pub fn pop_task_before(&mut self, instant: Instant) -> Option<T> {
-        if self.pending
+        if self
+            .pending
             .peek()
             .map_or(false, |t| t.0.next_tick <= instant)
         {

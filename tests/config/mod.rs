@@ -22,8 +22,8 @@ use tikv::import::Config as ImportConfig;
 use tikv::pd::Config as PdConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
-use tikv::server::Config as ServerConfig;
 use tikv::server::config::GrpcCompressionType;
+use tikv::server::Config as ServerConfig;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
 use tikv::util::security::SecurityConfig;
@@ -416,6 +416,10 @@ fn test_serde_custom_tikv_config() {
     value.import = ImportConfig {
         import_dir: "/abc".to_owned(),
         num_threads: 123,
+        num_import_jobs: 123,
+        num_import_sst_jobs: 123,
+        max_prepare_duration: ReadableDuration::minutes(12),
+        region_split_size: ReadableSize::mb(123),
         stream_channel_window: 123,
     };
 

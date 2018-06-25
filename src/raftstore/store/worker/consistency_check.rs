@@ -22,8 +22,8 @@ use raftstore::store::{keys, Msg};
 use storage::CF_RAFT;
 use util::worker::Runnable;
 
-use super::MsgSender;
 use super::metrics::*;
+use super::MsgSender;
 use raftstore::store::metrics::*;
 
 /// Consistency checking task.
