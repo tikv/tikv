@@ -893,7 +893,6 @@ mod tests {
         assert!(check_need_gc(Arc::clone(&db), region.clone(), 10, true).is_none());
     }
 
-    #[allow(cyclomatic_complexity)]
     fn test_with_properties(path: &str, region: &Region) {
         let db = open_db(path, true);
         let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());

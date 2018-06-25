@@ -888,7 +888,6 @@ mod tests {
         ForPrev,
     }
 
-    #[allow(cyclomatic_complexity)]
     // use step to control the distance between target key and current key in cursor.
     fn test_linear_seek(
         snapshot: &Snapshot,

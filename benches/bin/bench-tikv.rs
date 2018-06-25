@@ -17,9 +17,6 @@
 #![feature(integer_atomics)]
 #![feature(btree_range, collections_bound)]
 #![cfg_attr(not(feature = "cargo-clippy"), allow(unknown_lints))]
-#![allow(new_without_default)]
-#![allow(needless_pass_by_value)]
-#![allow(unreadable_literal)]
 
 extern crate clap;
 extern crate futures;

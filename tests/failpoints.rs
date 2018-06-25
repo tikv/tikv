@@ -14,13 +14,6 @@
 #![recursion_limit = "100"]
 #![feature(slice_patterns, box_syntax, test)]
 #![cfg_attr(feature = "no-fail", allow(dead_code))]
-#![cfg_attr(
-    feature = "cargo-clippy",
-    allow(
-        module_inception, should_implement_trait, large_enum_variant, needless_pass_by_value,
-        unreadable_literal, new_without_default_derive, verbose_bit_mask
-    )
-)]
 
 extern crate fail;
 extern crate futures;

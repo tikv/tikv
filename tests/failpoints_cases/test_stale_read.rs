@@ -156,7 +156,6 @@ fn stale_read_during_splitting(right_derive: bool) {
     fail::remove(propose_readindex);
 }
 
-#[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
 fn must_not_eq_on_key(
     cluster: &mut Cluster<NodeCluster>,
     key: &[u8],

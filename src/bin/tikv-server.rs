@@ -12,7 +12,6 @@
 // limitations under the License.
 
 #![feature(slice_patterns)]
-#![cfg_attr(feature = "cargo-clippy", allow(needless_pass_by_value, unreadable_literal))]
 
 #[macro_use]
 extern crate clap;

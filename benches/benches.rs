@@ -12,7 +12,6 @@
 // limitations under the License.
 
 #![feature(test)]
-#![cfg_attr(feature = "cargo-clippy", allow(needless_pass_by_value, unreadable_literal))]
 
 extern crate kvproto;
 extern crate log;

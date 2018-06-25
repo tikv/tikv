@@ -17,10 +17,6 @@
 #![feature(collections_bound)]
 #![feature(box_syntax)]
 #![feature(const_fn)]
-#![cfg_attr(
-    feature = "cargo-clippy",
-    allow(stable_features, new_without_default, needless_pass_by_value, unreadable_literal)
-)]
 
 extern crate crc;
 extern crate futures;

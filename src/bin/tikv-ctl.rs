@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![cfg_attr(feature = "cargo-clippy", allow(needless_pass_by_value, cyclomatic_complexity))]
-
 #[macro_use]
 extern crate clap;
 extern crate chrono;
