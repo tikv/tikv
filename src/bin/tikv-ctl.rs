@@ -1733,10 +1733,20 @@ fn split_region(pd: &str, region_id: u64, key: Vec<u8>, mgr: Arc<SecurityManager
         .set_region_epoch(region.get_region_epoch().clone());
     req.set_split_key(key.clone());
 
-    tikv_client
+    let resp = tikv_client
         .split_region(&req)
         .expect("split_region should success");
-    println!("split region {} success", region_id);
+    if resp.has_region_error() {
+        eprintln!("split_region internal error: {:?}", resp.get_region_error());
+        return;
+    }
+
+    println!(
+        "split region {} success, left: {}, right: {}",
+        region_id,
+        resp.get_left().get_id(),
+        resp.get_right().get_id(),
+    );
 }
 
 fn compact_whole_cluster(
