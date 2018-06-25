@@ -34,7 +34,7 @@ all: format build test
 
 pre-clippy:
 	if [ "`cat clippy-version`" != "`cargo clippy --version || echo 0`" ]; then\
-		cargo install clippy --version `cat clippy-version`;\
+		cargo install clippy --version `cat clippy-version` --force;\
 	fi
 
 
@@ -88,6 +88,8 @@ bench:
 	RUST_BACKTRACE=1 cargo run --release --bin bench-tikv --features "${ENABLE_FEATURES}"
 
 pre-format:
+	# unset first in case of any previous overrides
+	rustup override unset && \
 	rustup component add rustfmt-preview
 
 format: pre-format
