@@ -18,13 +18,17 @@ use std::time::Duration;
 
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
-use kvproto::raft_cmdpb::{CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest,
-                          RaftCmdResponse, RaftRequestHeader, Request, Response};
+use kvproto::raft_cmdpb::{
+    CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
+    RaftRequestHeader, Request, Response,
+};
 use protobuf::RepeatedField;
 
 use super::metrics::*;
-use super::{BatchCallback, Callback, CbContext, Cursor, Engine, Iterator as EngineIterator,
-            Modify, ScanMode, Snapshot};
+use super::{
+    BatchCallback, Callback, CbContext, Cursor, Engine, Iterator as EngineIterator, Modify,
+    ScanMode, Snapshot,
+};
 use raftstore::errors::Error as RaftServerError;
 use raftstore::store::engine::IterOption;
 use raftstore::store::engine::Peekable;

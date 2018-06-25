@@ -204,10 +204,10 @@ mod tests {
     use super::super::transport::RaftStoreRouter;
     use super::super::{Config, Result};
     use kvproto::raft_serverpb::RaftMessage;
-    use raftstore::Result as RaftStoreResult;
-    use raftstore::store::Msg as StoreMsg;
     use raftstore::store::transport::Transport;
+    use raftstore::store::Msg as StoreMsg;
     use raftstore::store::*;
+    use raftstore::Result as RaftStoreResult;
     use server::readpool::{self, ReadPool};
     use storage::{self, Config as StorageConfig, Storage};
     use util::security::SecurityConfig;
@@ -225,7 +225,8 @@ mod tests {
                 return Err(box_err!("quick fail"));
             }
             let addr = self.addr.lock().unwrap();
-            cb(addr.as_ref()
+            cb(addr
+                .as_ref()
                 .map(|s| s.to_owned())
                 .ok_or(box_err!("not set")));
             Ok(())

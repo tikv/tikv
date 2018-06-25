@@ -20,10 +20,10 @@ use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use rocksdb::{DBIterator, DB};
 
-use raftstore::Result;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::engine::{IterOption, Iterable};
 use raftstore::store::{keys, Callback, Msg};
+use raftstore::Result;
 use storage::{CfName, LARGE_CFS};
 use util::escape;
 use util::transport::{RetryableSendCh, Sender};
@@ -200,7 +200,8 @@ impl<C: Sender<Msg>> Runner<C> {
 
         if let Some(key) = split_key {
             let region_epoch = region.get_region_epoch().clone();
-            let res = self.ch
+            let res = self
+                .ch
                 .try_send(new_split_region(region_id, region_epoch, key));
             if let Err(e) = res {
                 warn!("[region {}] failed to send check result: {}", region_id, e);

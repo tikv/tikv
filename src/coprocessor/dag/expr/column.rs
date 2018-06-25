@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use super::{Column, EvalContext, Result};
-use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::{types, Decimal, Duration, Json, Time};
+use coprocessor::codec::Datum;
 use std::borrow::Cow;
 use std::str;
 
@@ -90,8 +90,8 @@ mod test {
 
     use tipb::expression::FieldType;
 
-    use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::{types, Decimal, Duration, Json, Time};
+    use coprocessor::codec::Datum;
     use coprocessor::dag::expr::test::col_expr;
     use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 
@@ -139,19 +139,24 @@ mod test {
 
             let i = e.eval_int(&mut ctx, &row).unwrap_or(None);
             let r = e.eval_real(&mut ctx, &row).unwrap_or(None);
-            let dec = e.eval_decimal(&mut ctx, &row)
+            let dec = e
+                .eval_decimal(&mut ctx, &row)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let s = e.eval_string(&mut ctx, &row)
+            let s = e
+                .eval_string(&mut ctx, &row)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let t = e.eval_time(&mut ctx, &row)
+            let t = e
+                .eval_time(&mut ctx, &row)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let dur = e.eval_duration(&mut ctx, &row)
+            let dur = e
+                .eval_duration(&mut ctx, &row)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let j = e.eval_json(&mut ctx, &row)
+            let j = e
+                .eval_json(&mut ctx, &row)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
 

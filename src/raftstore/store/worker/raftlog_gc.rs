@@ -18,8 +18,8 @@ use util::worker::Runnable;
 use rocksdb::{Writable, WriteBatch, DB};
 use std::error;
 use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 
 pub struct Task {
     pub raft_engine: Arc<DB>,

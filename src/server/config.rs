@@ -282,7 +282,7 @@ mod tests {
         }
 
         let valid_cases = vec![
-            "a", "0", "a.1-2", "Cab", "abC", "b_1.2", "cab-012", "3ac.8b2"
+            "a", "0", "a.1-2", "Cab", "abC", "b_1.2", "cab-012", "3ac.8b2",
         ];
 
         for case in valid_cases {

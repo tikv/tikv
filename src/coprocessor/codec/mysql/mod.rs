@@ -44,7 +44,8 @@ fn parse_frac(s: &[u8], fsp: u8) -> Result<u32> {
     if s.iter().any(|&c| c < b'0' || c > b'9') {
         return Err(invalid_type!("{} contains invalid char", escape(s)));
     }
-    let res = s.iter()
+    let res = s
+        .iter()
         .take(fsp as usize + 1)
         .fold(0, |l, r| l * 10 + u32::from(r - b'0'));
     if s.len() > fsp as usize {
@@ -69,8 +70,9 @@ pub use self::decimal::{dec_encoded_len, Decimal, DecimalEncoder, Res};
 pub use self::duration::{Duration, DurationEncoder};
 pub use self::json::{parse_json_path_expr, Json, JsonEncoder, ModifyType, PathExpression};
 pub use self::time::{Time, TimeEncoder};
-pub use self::types::{has_is_boolean_flag, has_not_null_flag, has_parse_to_json_flag,
-                      has_unsigned_flag};
+pub use self::types::{
+    has_is_boolean_flag, has_not_null_flag, has_parse_to_json_flag, has_unsigned_flag,
+};
 
 #[cfg(test)]
 mod test {

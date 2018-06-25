@@ -415,8 +415,7 @@ mod tests {
         let mut client = MockClient::new();
         let keys = vec![
             // [0, 3], [4, 6]
-            7,
-            // [7, 9]
+            7, // [7, 9]
             10,
             // [10, 13], [14, 15]
         ];
