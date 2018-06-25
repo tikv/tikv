@@ -50,8 +50,8 @@ struct ConnectionBuilder {
 }
 
 impl ConnectionBuilder {
-    pub fn new(store_id: u64, addr: Address) -> ConnectionBuilder {
-        ConnectionBuilder {
+    pub fn new(store_id: u64, addr: Address) -> Self {
+        Self {
             store_id,
             addr,
             buffer: None,
@@ -160,9 +160,9 @@ impl Display for Address {
     #[inline]
     fn fmt(&self, formatter: &mut Formatter) -> fmt::Result {
         match self.f.peek() {
-            Some(Ok(addr)) => write!(formatter, "({}){:?}", self.version, addr),
-            None => write!(formatter, "({})resolving...", self.version),
-            Some(Err(_)) => write!(formatter, "({})resolve failed", self.version),
+            Some(Ok(addr)) => write!(formatter, "(v{}){:?}", self.version, addr),
+            None => write!(formatter, "(v{})resolving...", self.version),
+            Some(Err(_)) => write!(formatter, "(v{})resolve failed", self.version),
         }
     }
 }
@@ -182,7 +182,6 @@ struct ClientContext<S> {
     env: Arc<Environment>,
     cfg: Arc<Config>,
     security_mgr: Arc<SecurityManager>,
-    // TODO: remove arc.
     resolver: Arc<S>,
     addrs: HashMap<u64, Address>,
     addr_version: usize,
