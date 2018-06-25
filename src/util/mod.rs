@@ -197,27 +197,10 @@ pub fn escape(data: &[u8]) -> String {
 /// # Panic
 ///
 /// If s is not a properly encoded string.
-///
-/// # Examples
-///
-/// ```
-/// use tikv::util::unescape;
-///
-/// assert_eq!(unescape(r"ab"), b"ab");
-/// assert_eq!(unescape(r"a\\023"), b"a\\023");
-/// assert_eq!(unescape(r"a\000"), b"a\0");
-/// assert_eq!(unescape("a\\r\\n\\t '\\\"\\\\"), b"a\r\n\t '\"\\");
-/// assert_eq!(unescape(r"\342\235\244\360\237\220\267"), "❤🐷".as_bytes());
-/// ```
-///
 pub fn unescape(s: &str) -> Vec<u8> {
     let mut buf = Vec::with_capacity(s.len());
     let mut bytes = s.bytes();
-    loop {
-        let b = match bytes.next() {
-            None => break,
-            Some(t) => t,
-        };
+    while let Some(b) = bytes.next() {
         if b != b'\\' {
             buf.push(b);
             continue;
@@ -229,6 +212,16 @@ pub fn unescape(s: &str) -> Vec<u8> {
             b'n' => buf.push(b'\n'),
             b't' => buf.push(b'\t'),
             b'r' => buf.push(b'\r'),
+            b'x' => {
+                macro_rules! next_hex {
+                    () => {
+                        bytes.next().map(char::from).unwrap().to_digit(16).unwrap()
+                    };
+                }
+                // Can coerce as u8 since the range of possible values is constrained to
+                // between 00 and FF.
+                buf.push(((next_hex!() << 4) + next_hex!()) as u8);
+            }
             b => {
                 let b1 = b - b'0';
                 let b2 = bytes.next().unwrap() - b'0';
@@ -629,5 +622,24 @@ mod tests {
             v.push(2);
         });
         res.unwrap_err();
+    }
+
+    #[test]
+    fn test_unescape() {
+        // No escapes
+        assert_eq!(unescape(r"ab"), b"ab");
+        // Escaped backslash
+        assert_eq!(unescape(r"a\\023"), b"a\\023");
+        // Escaped three digit octal
+        assert_eq!(unescape(r"a\000"), b"a\0");
+        assert_eq!(
+            unescape(r"\342\235\244\360\237\220\267"),
+            "❤🐷".as_bytes()
+        );
+        // Whitespace
+        assert_eq!(unescape("a\\r\\n\\t '\\\"\\\\"), b"a\r\n\t '\"\\");
+        // Hex Octals
+        assert_eq!(unescape(r"abc\x64\x65\x66ghi"), b"abcdefghi");
+        assert_eq!(unescape(r"JKL\x4d\x4E\x4fPQR"), b"JKLMNOPQR");
     }
 }

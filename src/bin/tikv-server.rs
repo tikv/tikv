@@ -22,6 +22,7 @@
 
 #[macro_use]
 extern crate clap;
+extern crate chrono;
 extern crate fs2;
 #[cfg(feature = "mem-profiling")]
 extern crate jemallocator;

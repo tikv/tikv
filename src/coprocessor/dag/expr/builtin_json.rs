@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{Error, EvalContext, Expression, FnCall, Result};
+use super::{Error, EvalContext, Expression, Result, ScalarFunc};
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::Json;
 use coprocessor::codec::mysql::json::{parse_json_path_expr, ModifyType, PathExpression};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-impl FnCall {
+impl ScalarFunc {
     #[inline]
     pub fn json_type<'a, 'b: 'a>(
         &'b self,
@@ -201,7 +201,7 @@ impl<'a> JsonFuncArgsParser<'a> {
 mod test {
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::Json;
-    use coprocessor::dag::expr::test::{datum_expr, fncall_expr, make_null_datums};
+    use coprocessor::dag::expr::test::{datum_expr, make_null_datums, scalar_func_expr};
     use coprocessor::dag::expr::{EvalContext, Expression};
     use tipb::expression::ScalarFuncSig;
 
@@ -229,7 +229,7 @@ mod test {
             };
 
             let arg = datum_expr(input);
-            let op = fncall_expr(ScalarFuncSig::JsonTypeSig, &[arg]);
+            let op = scalar_func_expr(ScalarFuncSig::JsonTypeSig, &[arg]);
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
@@ -267,7 +267,7 @@ mod test {
             };
 
             let arg = datum_expr(input);
-            let op = fncall_expr(ScalarFuncSig::JsonUnquoteSig, &[arg]);
+            let op = scalar_func_expr(ScalarFuncSig::JsonUnquoteSig, &[arg]);
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
@@ -297,7 +297,7 @@ mod test {
         let mut ctx = EvalContext::default();
         for (inputs, exp) in cases {
             let args = inputs.into_iter().map(datum_expr).collect::<Vec<_>>();
-            let op = fncall_expr(ScalarFuncSig::JsonObjectSig, &args);
+            let op = scalar_func_expr(ScalarFuncSig::JsonObjectSig, &args);
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
@@ -327,7 +327,7 @@ mod test {
         let mut ctx = EvalContext::default();
         for (inputs, exp) in cases {
             let args = inputs.into_iter().map(datum_expr).collect::<Vec<_>>();
-            let op = fncall_expr(ScalarFuncSig::JsonArraySig, &args);
+            let op = scalar_func_expr(ScalarFuncSig::JsonArraySig, &args);
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
@@ -382,7 +382,7 @@ mod test {
         let mut ctx = EvalContext::default();
         for (sig, inputs, exp) in cases {
             let args: Vec<_> = inputs.into_iter().map(datum_expr).collect();
-            let op = fncall_expr(sig, &args);
+            let op = scalar_func_expr(sig, &args);
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
@@ -413,7 +413,7 @@ mod test {
         let mut ctx = EvalContext::default();
         for (inputs, exp) in cases {
             let args: Vec<_> = inputs.into_iter().map(datum_expr).collect();
-            let op = fncall_expr(ScalarFuncSig::JsonMergeSig, &args);
+            let op = scalar_func_expr(ScalarFuncSig::JsonMergeSig, &args);
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
@@ -431,7 +431,7 @@ mod test {
         let mut ctx = EvalContext::default();
         for (sig, args) in cases {
             let args: Vec<_> = args.into_iter().map(datum_expr).collect();
-            let op = Expression::build(&mut ctx, fncall_expr(sig, &args));
+            let op = Expression::build(&mut ctx, scalar_func_expr(sig, &args));
             assert!(op.is_err());
         }
     }
