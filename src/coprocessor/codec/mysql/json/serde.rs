@@ -17,7 +17,7 @@ use serde_json;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
-use std::{str, f64};
+use std::{f64, str};
 
 use super::Json;
 use coprocessor::codec::Error;

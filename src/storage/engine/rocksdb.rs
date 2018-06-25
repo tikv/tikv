@@ -11,8 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{BatchCallback, Callback, CbContext, Cursor, Engine, Error, Iterator as EngineIterator,
-            Modify, Result, ScanMode, Snapshot, TEMP_DIR};
+use super::{
+    BatchCallback, Callback, CbContext, Cursor, Engine, Error, Iterator as EngineIterator, Modify,
+    Result, ScanMode, Snapshot, TEMP_DIR,
+};
 use kvproto::kvrpcpb::Context;
 use raftstore::store::engine::{IterOption, Peekable, SyncSnapshot as RocksSnapshot};
 use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};

@@ -68,9 +68,9 @@ impl FMSketch {
 #[cfg(test)]
 mod test {
     use super::*;
-    use coprocessor::codec::Result;
     use coprocessor::codec::datum;
     use coprocessor::codec::datum::Datum;
+    use coprocessor::codec::Result;
     use std::iter::repeat;
     use util::as_slice;
 

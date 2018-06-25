@@ -452,7 +452,8 @@ mod test {
     // use macro to generate order tests for number codecs.
     macro_rules! test_order {
         ($arr:expr, $sorted:expr, $enc:ident, $dec:ident) => {
-            let mut encoded: Vec<_> = $arr.iter()
+            let mut encoded: Vec<_> = $arr
+                .iter()
                 .map(|e| {
                     let mut buf = vec![];
                     buf.$enc(*e).unwrap();

@@ -13,7 +13,7 @@
 
 use super::{Error, EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::{Decimal, Res};
-use coprocessor::codec::{mysql, Datum, div_i64, div_i64_with_u64, div_u64_with_i64};
+use coprocessor::codec::{div_i64, div_i64_with_u64, div_u64_with_i64, mysql, Datum};
 use std::borrow::Cow;
 use std::ops::{Add, Mul, Sub};
 use std::{f64, i64, u64};
@@ -283,8 +283,9 @@ mod test {
     use coprocessor::codec::error::ERR_DIVISION_BY_ZERO;
     use coprocessor::codec::mysql::{types, Decimal};
     use coprocessor::codec::{mysql, Datum};
-    use coprocessor::dag::expr::test::{check_divide_by_zero, check_overflow, datum_expr,
-                                       scalar_func_expr, str2dec};
+    use coprocessor::dag::expr::test::{
+        check_divide_by_zero, check_overflow, datum_expr, scalar_func_expr, str2dec,
+    };
     use coprocessor::dag::expr::*;
     use std::sync::Arc;
     use std::{f64, i64, u64};

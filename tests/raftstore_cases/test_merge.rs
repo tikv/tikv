@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use tikv::pd::PdClient;
-use tikv::raftstore::store::Peekable;
 use tikv::raftstore::store::keys;
+use tikv::raftstore::store::Peekable;
 use tikv::storage::CF_RAFT;
 
 use super::node::new_node_cluster;
@@ -284,7 +284,8 @@ fn test_node_merge_dist_isolation() {
     let right = pd_client.get_region(b"k3").unwrap();
 
     cluster.must_transfer_leader(right.get_id(), new_peer(1, 1));
-    let target_leader = left.get_peers()
+    let target_leader = left
+        .get_peers()
         .iter()
         .find(|p| p.get_store_id() == 3)
         .unwrap()
@@ -324,7 +325,8 @@ fn test_node_merge_dist_isolation() {
     // Leader can't find replica 3 of right region, so it fails.
     assert!(res.get_header().has_error(), "{:?}", res);
 
-    let target_leader = left.get_peers()
+    let target_leader = left
+        .get_peers()
         .iter()
         .find(|p| p.get_store_id() == 2)
         .unwrap()
