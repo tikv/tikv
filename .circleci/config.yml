@@ -31,18 +31,29 @@ jobs:
             sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y;
             sudo apt-get update -y;
             sudo apt-get install -y g++-4.8 curl libdw-dev libelf-dev elfutils binutils-dev libssl-dev pkg-config zlib1g-dev
+      - run:
+          name: Preparing Cache Download Source
+          command: |
+            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
+              echo "Current branch is $CIRCLE_BRANCH, cache will not be downloaded"
+              echo 'export CACHE_DOWNLOAD_BRANCH=__a_branch_not_exist__' >> $BASH_ENV
+            else
+              echo "Current branch is $CIRCLE_BRANCH, cache will be downloaded from master"
+              echo 'export CACHE_DOWNLOAD_BRANCH=master' >> $BASH_ENV
+            fi
       - restore_cache:
-          name: Restoring ~/.local Cache
+          name: Downloading ~/.cargo and ~/.local Cache (non-master branch only)
           keys:
-            - v1-local-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
-            - v1-local-{{ .Branch }}
-            - v1-local
-      - restore_cache:
-          name: Restoring ~/.cargo Cache
-          keys:
-            - v1-cargo-{{ .Branch }}-{{ checksum "Cargo.lock" }}
-            - v1-cargo-{{ .Branch }}
-            - v1-cargo
+            - v3-cargo-{{ .Environment.CACHE_DOWNLOAD_BRANCH }}
+      - run:
+          name: Restoring ~/.cargo and ~/.local Cache (non-master branch only)
+          command: |
+            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
+              echo "Current branch is $CIRCLE_BRANCH, skip"
+            else
+              echo "Current branch is $CIRCLE_BRANCH, restoring tar..."
+              tar xf ~/tikv_cache_cargo/cargo.tar -C ~/
+            fi
       - run:
           name: Setting up Rust and the rest of the Build Environment
           command: |
@@ -84,25 +95,39 @@ jobs:
                 RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo +${RUST_TOOLCHAIN} install cargo-tarpaulin --git https://github.com/xd009642/tarpaulin --tag ${TARPAULIN_VERSION} --force
             fi
       - restore_cache:
-          name: Restoring ./target Cache
+          name: Downloading ./target Cache (non-master branch only)
           keys:
-            - v1-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
-            - v1-target-{{ .Branch }}
+            - v3-target-{{ .Environment.CACHE_DOWNLOAD_BRANCH }}
+      - run:
+          name: Restoring ./target Cache (non-master branch only)
+          command: |
+            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
+              echo "Current branch is $CIRCLE_BRANCH, skip"
+            else
+              echo "Current branch is $CIRCLE_BRANCH, restoring tar..."
+              tar xf ~/tikv_cache_build/target.tar
+            fi
       - run:
           name: Building
           command: env SKIP_TESTS=true make trace_test
           no_output_timeout: 1800s
+      - run:
+          name: Caching ~/.cargo and ~/.local (master branch only)
+          command: |
+            rm -rf ~/tikv_cache_cargo
+            mkdir ~/tikv_cache_cargo
+            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
+              echo "Current branch is $CIRCLE_BRANCH, creating tar for ~/.cargo and ~/.local"
+              cd ~ && tar cf ~/tikv_cache_cargo/cargo.tar .cargo .local && cd -
+            else
+              echo "Current branch is $CIRCLE_BRANCH, skip"
+            fi
       - save_cache:
-          name: Saving ~/.cargo Cache
-          key: v1-cargo-{{ .Branch }}-{{ checksum "Cargo.lock" }}
+          # This will be triggered for non-master as well. However the cache content is empty so it doesn't matter.
+          name: Uploading ~/.cargo and ~/.local Cache (master branch only)
+          key: v3-cargo-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
           paths:
-            - ~/.cargo
-      - save_cache:
-          name: Saving ~/.local Cache
-          key: v1-local-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
-          paths:
-            - ~/.local
-            - ~/.rustup
+            - ~/tikv_cache_cargo
       - run:
           name: Testing
           command: make trace_test
@@ -114,14 +139,23 @@ jobs:
             cargo +${RUST_TOOLCHAIN} tarpaulin --no-count --skip-clean --out Xml
             bash <(curl -s https://codecov.io/bash)
           no_output_timeout: 1800s
+      - run:
+          name: Caching ./target (master branch only)
+          command: |
+            rm -rf ~/tikv_cache_build
+            mkdir ~/tikv_cache_build
+            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
+              echo "Current branch is $CIRCLE_BRANCH, creating tar for ./target"
+              tar cf ~/tikv_cache_build/target.tar target/debug/.fingerprint target/debug/build target/debug/deps target/debug/incremental
+            else
+              echo "Current branch is $CIRCLE_BRANCH, skip"
+            fi
       - save_cache:
-          name: Saving ./target Cache
-          key: v1-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
+          # This will be triggered for non-master as well. However the cache content is empty so it doesn't matter.
+          name: Uploading ./target Cache (master branch only)
+          key: v3-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
           paths:
-            - target/debug/.fingerprint
-            - target/debug/build
-            - target/debug/deps
-            - target/debug/incremental
+            - ~/tikv_cache_build
 workflows:
   version: 2
   ci-test:
