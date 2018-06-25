@@ -102,7 +102,7 @@ default-features = false
 features = ["nightly", "push", "process"]
 
 [dependencies.prometheus-static-metric]
-version = "0.1.2"
+version = "0.1.4"
 
 [dependencies.jemallocator]
 git = "https://github.com/busyjay/jemallocator.git"

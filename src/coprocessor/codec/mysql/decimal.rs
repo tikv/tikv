@@ -22,9 +22,6 @@ use std::{cmp, mem, i32, i64, u32, u64};
 use coprocessor::codec::{convert, Error, Result, TEN_POW};
 use coprocessor::dag::expr::EvalContext;
 
-// TODO: We should use same Error in mod `coprocessor`.
-use coprocessor::dag::expr::Error as ExprError;
-
 use util::codec::BytesSlice;
 use util::codec::number::{self, NumberEncoder};
 use util::escape;
@@ -73,12 +70,12 @@ impl<T> Res<T> {
     }
 }
 
-impl<T: Display> Res<T> {
-    pub fn into_result(self) -> Result<T> {
+impl<T> Into<Result<T>> for Res<T> {
+    fn into(self) -> Result<T> {
         match self {
             Res::Ok(t) => Ok(t),
-            Res::Overflow(t) => Err(box_err!("overflow: {}", t)),
-            Res::Truncated(t) => Err(box_err!("truncated: {}", t)),
+            Res::Truncated(_) => Err(Error::truncated()),
+            Res::Overflow(_) => Err(Error::overflow("", "")),
         }
     }
 }
@@ -714,18 +711,18 @@ fn do_div_mod(
 /// `do_mul` multiplies two decimals.
 fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
     let (l_int_word_cnt, mut l_frac_word_cnt) = (
-        word_cnt!(lhs.int_cnt) as usize,
-        word_cnt!(lhs.frac_cnt) as usize,
+        i32::from(word_cnt!(lhs.int_cnt)),
+        i32::from(word_cnt!(lhs.frac_cnt)),
     );
     let (mut r_int_word_cnt, mut r_frac_word_cnt) = (
-        word_cnt!(rhs.int_cnt) as usize,
-        word_cnt!(rhs.frac_cnt) as usize,
+        i32::from(word_cnt!(rhs.int_cnt)),
+        i32::from(word_cnt!(rhs.frac_cnt)),
     );
     let (int_word_to, frac_word_to) = (
         word_cnt!(lhs.int_cnt + rhs.int_cnt) as usize,
         l_frac_word_cnt + r_frac_word_cnt,
     );
-    let (mut old_int_word_to, mut old_frac_word_to) = (int_word_to, frac_word_to);
+    let (mut old_int_word_to, mut old_frac_word_to) = (int_word_to as i32, frac_word_to as i32);
     let res = fix_word_cnt_err(int_word_to as u8, frac_word_to as u8, WORD_BUF_LEN);
     let (int_word_to, frac_word_to) = (res.0 as usize, res.1 as usize);
     let negative = lhs.negative != rhs.negative;
@@ -739,14 +736,14 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
 
     if !res.is_ok() {
         dec.frac_cnt = cmp::min(dec.frac_cnt, frac_word_to as u8 * DIGITS_PER_WORD);
-        if old_int_word_to > int_word_to {
-            old_int_word_to -= int_word_to;
+        if old_int_word_to > int_word_to as i32 {
+            old_int_word_to -= int_word_to as i32;
             old_frac_word_to = old_int_word_to / 2;
             r_int_word_cnt = old_int_word_to - old_frac_word_to;
             l_frac_word_cnt = 0;
             r_frac_word_cnt = 0;
         } else {
-            old_frac_word_to -= int_word_to;
+            old_frac_word_to -= int_word_to as i32;
             old_int_word_to = old_frac_word_to / 2;
             if l_frac_word_cnt <= r_frac_word_cnt {
                 l_frac_word_cnt -= old_int_word_to;
@@ -759,8 +756,9 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
     }
 
     let mut start_to = int_word_to + frac_word_to;
-    let r_start = r_int_word_cnt + r_frac_word_cnt;
-    for l_idx in (0..l_int_word_cnt + l_frac_word_cnt).rev() {
+    let r_start = cmp::max(r_int_word_cnt + r_frac_word_cnt, 0) as usize;
+    let left_stop = cmp::max(l_int_word_cnt + l_frac_word_cnt, 0) as usize;
+    for l_idx in (0..left_stop).rev() {
         assert!(start_to >= r_start);
         let (mut carry, mut idx_to) = (0, start_to);
         start_to -= 1;
@@ -1098,7 +1096,7 @@ impl Decimal {
         // TODO: process over_flow
         if !ret.is_zero() && frac > decimal && ret != tmp {
             // TODO handle InInsertStmt in ctx
-            box_try!(ctx.handle_truncate(true));
+            ctx.handle_truncate(true)?;
         }
         Ok(ret)
     }
@@ -1472,9 +1470,9 @@ impl Decimal {
     }
 
     /// `as_i64_with_ctx` returns int part of the decimal.
-    pub fn as_i64_with_ctx(&self, ctx: &mut EvalContext) -> ::std::result::Result<i64, ExprError> {
+    pub fn as_i64_with_ctx(&self, ctx: &mut EvalContext) -> Result<i64> {
         let res = self.as_i64();
-        box_try!(ctx.handle_truncate(res.is_truncated()));
+        ctx.handle_truncate(res.is_truncated())?;
         res.into()
     }
 
@@ -2927,6 +2925,11 @@ mod test {
             ("123", "0.01", Res::Ok("1.23")),
             ("123", "0", Res::Ok("0")),
             (&a, &b, Res::Overflow("0")),
+            (
+                "0.00000000000000",
+                "0.000000000000000000000000000000000000000000000000000000000000000",
+                Res::Truncated("0.0000000000000000000000000000000"),
+            ),
         ];
 
         for (lhs_str, rhs_str, exp_str) in cases {
