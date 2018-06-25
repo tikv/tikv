@@ -59,10 +59,10 @@ fn test_kv_service() {
     batch.set_commit_ts(123);
     batch.mut_mutations().push(m);
 
-    let mut open = OpenRequest::new();
+    let mut open = OpenEngineRequest::new();
     open.set_uuid(uuid.clone());
 
-    let mut close = CloseRequest::new();
+    let mut close = CloseEngineRequest::new();
     close.set_uuid(uuid.clone());
 
     // Write an engine before it is opened.
@@ -71,15 +71,15 @@ fn test_kv_service() {
     assert!(resp.get_error().has_engine_not_found());
 
     // Close an engine before it it opened.
-    let resp = client.close(&close).unwrap();
+    let resp = client.close_engine(&close).unwrap();
     assert!(resp.get_error().has_engine_not_found());
 
-    client.open(&open).unwrap();
+    client.open_engine(&open).unwrap();
     let resp = send_write(&client, &head, &batch).unwrap();
     assert!(!resp.has_error());
     let resp = send_write(&client, &head, &batch).unwrap();
     assert!(!resp.has_error());
-    let resp = client.close(&close).unwrap();
+    let resp = client.close_engine(&close).unwrap();
     assert!(!resp.has_error());
 
     server.shutdown();
@@ -89,26 +89,26 @@ fn send_write(
     client: &ImportKvClient,
     head: &WriteHead,
     batch: &WriteBatch,
-) -> Result<WriteResponse> {
-    let mut r1 = WriteRequest::new();
+) -> Result<WriteEngineResponse> {
+    let mut r1 = WriteEngineRequest::new();
     r1.set_head(head.clone());
-    let mut r2 = WriteRequest::new();
+    let mut r2 = WriteEngineRequest::new();
     r2.set_batch(batch.clone());
-    let mut r3 = WriteRequest::new();
+    let mut r3 = WriteEngineRequest::new();
     r3.set_batch(batch.clone());
     let reqs: Vec<_> = vec![r1, r2, r3]
         .into_iter()
         .map(|r| (r, WriteFlags::default()))
         .collect();
-    let (tx, rx) = client.write().unwrap();
+    let (tx, rx) = client.write_engine().unwrap();
     let stream = stream::iter_ok(reqs);
     stream.forward(tx).and_then(|_| rx).wait()
 }
 
-fn send_write_head(client: &ImportKvClient, head: &WriteHead) -> Result<WriteResponse> {
-    let mut req = WriteRequest::new();
+fn send_write_head(client: &ImportKvClient, head: &WriteHead) -> Result<WriteEngineResponse> {
+    let mut req = WriteEngineRequest::new();
     req.set_head(head.clone());
-    let (tx, rx) = client.write().unwrap();
+    let (tx, rx) = client.write_engine().unwrap();
     let stream = stream::once(Ok((req, WriteFlags::default())));
     stream.forward(tx).and_then(|_| rx).wait()
 }
