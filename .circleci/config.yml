@@ -10,7 +10,7 @@ jobs:
       RUST_BACKTRACE: "1"
       RUSTFLAGS: "-Dwarnings"
       FAIL_POINT: "1"
-      TARPAULIN_VERSION: "0.6.0"
+      TARPAULIN_VERSION: "0.6.1"
     steps:
       - run:
           name: Updating PATH and Define Environment Variable at Runtime
