@@ -3125,6 +3125,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
+    /// Find the first region `r` that satisfies `r.end_key` > `from_key` and the peer on this TiKV
+    /// satisfies `filter(peer)` returns true.
     fn seek_region(
         &self,
         from_key: &[u8],
