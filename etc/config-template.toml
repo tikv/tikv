@@ -12,6 +12,11 @@
 # file to store log, write to stderr if it's empty.
 # log-file = ""
 
+# timespan between rotating the log files.
+# Once this timespan passes the existing log file will have a timestamp appended to its name,
+# and a new file will be created.
+# log-rotation-timespan = "24h"
+
 [readpool.storage]
 # size of thread pool for high-priority operations
 # high-concurrency = 4
