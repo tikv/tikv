@@ -10,7 +10,7 @@ jobs:
       RUST_BACKTRACE: "1"
       RUSTFLAGS: "-Dwarnings"
       FAIL_POINT: "1"
-      TARPAULIN_VERSION: "0.6.0"
+      TARPAULIN_VERSION: "0.6.1"
     steps:
       - run:
           name: Updating PATH and Define Environment Variable at Runtime
@@ -71,12 +71,11 @@ jobs:
       - run:
           name: Installing tarpaulin
           command: |
-            CURRENT_TARPAULIN_VERSION=`cargo tarpaulin --version | awk '{ print $3 }'`
+            CURRENT_TARPAULIN_VERSION=`(cargo tarpaulin --version || echo "0") | awk '{ print $3 }'`
             echo "Tarpaulin version is now: ${CURRENT_TARPAULIN_VERSION}"
             echo "Tarpaulin version should be: ${TARPAULIN_VERSION}"
             if [[ "${CURRENT_TARPAULIN_VERSION}" != "${TARPAULIN_VERSION}" ]]; then
-                # To understand why this Git is used please see https://github.com/pingcap/tikv/pull/3241#issuecomment-399768547
-                RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin --git https://github.com/xd009642/tarpaulin --tag ${TARPAULIN_VERSION} --force
+                RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin  --version ${TARPAULIN_VERSION} --force
             fi
       - restore_cache:
           # Actually master does not need to download the cache. However we cannot make conditions here.
