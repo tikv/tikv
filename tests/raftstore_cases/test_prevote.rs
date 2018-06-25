@@ -4,7 +4,6 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use super::cluster::{Cluster, Simulator};
-use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::transport_simulate::*;
 use super::util::*;
@@ -88,21 +87,9 @@ fn test_prevote<T: Simulator>(cluster: &mut Cluster<T>, prevote_enabled: bool) {
 }
 
 #[test]
-fn test_node_prevote() {
-    let mut cluster = new_node_cluster(0, 3);
-    test_prevote(&mut cluster, true);
-}
-
-#[test]
 fn test_server_prevote() {
     let mut cluster = new_server_cluster(0, 3);
     test_prevote(&mut cluster, true);
-}
-
-#[test]
-fn test_node_no_prevote() {
-    let mut cluster = new_node_cluster(0, 3);
-    test_prevote(&mut cluster, false);
 }
 
 #[test]
