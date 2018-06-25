@@ -2,6 +2,17 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [2.0.4]
+### Features
+* Add the RocksDB `PerfContext` interface for debugging
+* Add the `region-properties` command for `tikv-ctl`
+### Improvements
+* Make GC record the log when GC encounters many versions of data
+* Remove the `import-mode` parameter
+### Bug Fixes
+* Fix the issue that `reverse-seek` is slow when many RocksDB tombstones exist
+* Fix the crash issue caused by `do_sub`
+
 ## [2.0.3]
 ### Bug Fixes
 * Correct wrong peer meta for learners
