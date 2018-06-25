@@ -9,7 +9,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 ### Improvements
 * Make GC record the log when GC encounters many versions of data
 * Remove the `import-mode` parameter
-### Bug fixes
+### Bug ixes
 * Fix the issue that `reverse-seek` is slow when many RocksDB tombstones exist
 * Fix the crash issue caused by `do_sub`
 
