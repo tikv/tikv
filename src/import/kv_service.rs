@@ -21,8 +21,11 @@ use kvproto::import_kvpb::*;
 use kvproto::import_kvpb_grpc::*;
 use uuid::Uuid;
 
+use raftstore::store::keys;
+use storage::types::Key;
 use util::time::Instant;
 
+use super::client::*;
 use super::metrics::*;
 use super::service::*;
 use super::{Config, Error, KVImporter};
@@ -49,8 +52,42 @@ impl ImportKVService {
 }
 
 impl ImportKv for ImportKVService {
-    fn open(&self, ctx: RpcContext, req: OpenRequest, sink: UnarySink<OpenResponse>) {
-        let label = "open";
+    fn switch_mode(
+        &self,
+        ctx: RpcContext,
+        req: SwitchModeRequest,
+        sink: UnarySink<SwitchModeResponse>,
+    ) {
+        let label = "switch_mode";
+        let timer = Instant::now_coarse();
+
+        ctx.spawn(
+            self.threads
+                .spawn_fn(move || {
+                    let client = Client::new(req.get_pd_addr(), 1)?;
+                    match client.switch_cluster(req.get_request()) {
+                        Ok(_) => {
+                            info!("switch cluster {:?}", req.get_request());
+                            Ok(())
+                        }
+                        Err(e) => {
+                            error!("switch cluster {:?}: {:?}", req.get_request(), e);
+                            Err(e)
+                        }
+                    }
+                })
+                .map(|_| SwitchModeResponse::new())
+                .then(move |res| send_rpc_response!(res, sink, label, timer)),
+        )
+    }
+
+    fn open_engine(
+        &self,
+        ctx: RpcContext,
+        req: OpenEngineRequest,
+        sink: UnarySink<OpenEngineResponse>,
+    ) {
+        let label = "open_engine";
         let timer = Instant::now_coarse();
         let import = Arc::clone(&self.importer);
 
@@ -60,18 +97,18 @@ impl ImportKv for ImportKVService {
                     let uuid = Uuid::from_bytes(req.get_uuid())?;
                     import.open_engine(uuid)
                 })
-                .map(|_| OpenResponse::new())
+                .map(|_| OpenEngineResponse::new())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }
 
-    fn write(
+    fn write_engine(
         &self,
         ctx: RpcContext,
-        stream: RequestStream<WriteRequest>,
-        sink: ClientStreamingSink<WriteResponse>,
+        stream: RequestStream<WriteEngineRequest>,
+        sink: ClientStreamingSink<WriteEngineResponse>,
     ) {
-        let label = "write";
+        let label = "write_engine";
         let timer = Instant::now_coarse();
         let import = Arc::clone(&self.importer);
         let bounded_stream = mpsc::spawn(stream, &self.threads, self.cfg.stream_channel_window);
@@ -107,9 +144,9 @@ impl ImportKv for ImportKVService {
                         })
                     })
                     .then(move |res| match res {
-                        Ok(_) => Ok(WriteResponse::new()),
+                        Ok(_) => Ok(WriteEngineResponse::new()),
                         Err(Error::EngineNotFound(v)) => {
-                            let mut resp = WriteResponse::new();
+                            let mut resp = WriteEngineResponse::new();
                             resp.mut_error()
                                 .mut_engine_not_found()
                                 .set_uuid(v.as_bytes().to_vec());
@@ -122,8 +159,13 @@ impl ImportKv for ImportKVService {
         )
     }
 
-    fn close(&self, ctx: RpcContext, req: CloseRequest, sink: UnarySink<CloseResponse>) {
-        let label = "close";
+    fn close_engine(
+        &self,
+        ctx: RpcContext,
+        req: CloseEngineRequest,
+        sink: UnarySink<CloseEngineResponse>,
+    ) {
+        let label = "close_engine";
         let timer = Instant::now_coarse();
         let import = Arc::clone(&self.importer);
 
@@ -134,9 +176,9 @@ impl ImportKv for ImportKVService {
                     import.close_engine(uuid)
                 })
                 .then(move |res| match res {
-                    Ok(_) => Ok(CloseResponse::new()),
+                    Ok(_) => Ok(CloseEngineResponse::new()),
                     Err(Error::EngineNotFound(v)) => {
-                        let mut resp = CloseResponse::new();
+                        let mut resp = CloseEngineResponse::new();
                         resp.mut_error()
                             .mut_engine_not_found()
                             .set_uuid(v.as_bytes().to_vec());
@@ -144,6 +186,90 @@ impl ImportKv for ImportKVService {
                     }
                     Err(e) => Err(e),
                 })
+                .then(move |res| send_rpc_response!(res, sink, label, timer)),
+        )
+    }
+
+    fn import_engine(
+        &self,
+        ctx: RpcContext,
+        req: ImportEngineRequest,
+        sink: UnarySink<ImportEngineResponse>,
+    ) {
+        let label = "import_engine";
+        let timer = Instant::now_coarse();
+        let import = Arc::clone(&self.importer);
+
+        ctx.spawn(
+            self.threads
+                .spawn_fn(move || {
+                    let uuid = Uuid::from_bytes(req.get_uuid())?;
+                    import.import_engine(uuid, req.get_pd_addr())
+                })
+                .map(|_| ImportEngineResponse::new())
+                .then(move |res| send_rpc_response!(res, sink, label, timer)),
+        )
+    }
+
+    fn cleanup_engine(
+        &self,
+        ctx: RpcContext,
+        req: CleanupEngineRequest,
+        sink: UnarySink<CleanupEngineResponse>,
+    ) {
+        let label = "cleanup_engine";
+        let timer = Instant::now_coarse();
+        let import = Arc::clone(&self.importer);
+
+        ctx.spawn(
+            self.threads
+                .spawn_fn(move || {
+                    let uuid = Uuid::from_bytes(req.get_uuid())?;
+                    import.cleanup_engine(uuid)
+                })
+                .map(|_| CleanupEngineResponse::new())
+                .then(move |res| send_rpc_response!(res, sink, label, timer)),
+        )
+    }
+
+    fn compact_cluster(
+        &self,
+        ctx: RpcContext,
+        req: CompactClusterRequest,
+        sink: UnarySink<CompactClusterResponse>,
+    ) {
+        let label = "compact_cluster";
+        let timer = Instant::now_coarse();
+
+        let mut compact = req.get_request().clone();
+        if compact.has_range() {
+            // Convert the range to a TiKV encoded data range.
+            let start = Key::from_raw(compact.get_range().get_start());
+            compact
+                .mut_range()
+                .set_start(keys::data_key(start.encoded()));
+            let end = Key::from_raw(compact.get_range().get_end());
+            compact
+                .mut_range()
+                .set_end(keys::data_end_key(end.encoded()));
+        }
+
+        ctx.spawn(
+            self.threads
+                .spawn_fn(move || {
+                    let client = Client::new(req.get_pd_addr(), 1)?;
+                    match client.compact_cluster(&compact) {
+                        Ok(_) => {
+                            info!("compact cluster {:?}", compact);
+                            Ok(())
+                        }
+                        Err(e) => {
+                            error!("compact cluster {:?}: {:?}", compact, e);
+                            Err(e)
+                        }
+                    }
+                })
+                .map(|_| CompactClusterResponse::new())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }
