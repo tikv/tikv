@@ -83,12 +83,6 @@ jobs:
                 # To understand why this Git is used please see https://github.com/pingcap/tikv/pull/3241#issuecomment-399768547
                 RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo +${RUST_TOOLCHAIN} install cargo-tarpaulin --git https://github.com/xd009642/tarpaulin --tag ${TARPAULIN_VERSION} --force
             fi
-      - restore_cache:
-          name: Restoring ./target Cache
-          keys:
-            - v1-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
-            - v1-target-{{ .Branch }}
-            - v1-target
       - run:
           name: Building
           command: env SKIP_TESTS=true make trace_test
@@ -119,7 +113,10 @@ jobs:
           name: Saving ./target Cache
           key: v1-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
           paths:
-            - target
+            - target/debug/.fingerprint
+            - target/debug/build
+            - target/debug/deps
+            - target/debug/incremental
 workflows:
   version: 2
   ci-test:
