@@ -70,11 +70,10 @@ cd tikv
 
 `rustup` is an official toolchain manager for Rust, akin to `rvm` or `rbenv` from the Ruby world.
 
-TiKV uses the version of the Rust toolchain specified in `RUST_VERSION`. We also make use of the `rustfmt` component.
+TiKV uses the version of the Rust toolchain specified in `rust-toolchain`. We also make use of the `rustfmt` component.
 
 ```bash
-rustup override set `tail -n 1 RUST_VERSION`
-rustup component add rustfmt-preview --toolchain `tail -n 1 RUST_VERSION`
+rustup component add rustfmt-preview
 ```
 
 ### Building & Testing
