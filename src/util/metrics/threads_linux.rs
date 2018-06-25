@@ -29,9 +29,10 @@ pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
 /// A collector to collect threads metrics, including CPU usage
 /// and threads state.
 struct ThreadsCollector {
-    pid: Mutex<pid_t>,
+    pid: pid_t,
     descs: Vec<Desc>,
-    cpu_totals: CounterVec,
+    // There are several step to collect CPU time, we need to synchronous them.
+    cpu_totals: Mutex<CounterVec>,
     threads_state: IntGaugeVec,
 }
 
@@ -55,9 +56,9 @@ impl ThreadsCollector {
         descs.extend(threads_state.desc().into_iter().cloned());
 
         ThreadsCollector {
-            pid: Mutex::new(pid),
+            pid,
             descs,
-            cpu_totals,
+            cpu_totals: Mutex::new(cpu_totals),
             threads_state,
         }
     }
@@ -69,22 +70,22 @@ impl Collector for ThreadsCollector {
     }
 
     fn collect(&self) -> Vec<proto::MetricFamily> {
-        // Synchronous collecting.
-        let pid = self.pid.lock().unwrap();
+        // Synchronous collecting CPU time.
+        let cpu_totals = self.cpu_totals.lock().unwrap();
         // Clean previous threads state.
         self.threads_state.reset();
-        let tids = get_thread_ids(*pid).unwrap();
+        let tids = get_thread_ids(self.pid).unwrap();
         for tid in tids {
             if let Ok(Stat {
                 name,
                 state,
                 utime,
                 stime,
-            }) = Stat::collect(*pid, tid)
+            }) = Stat::collect(self.pid, tid)
             {
                 // Threads CPU time.
                 let total = (utime + stime) / *CLK_TCK;
-                let cpu_total = self.cpu_totals
+                let cpu_total = cpu_totals
                     .get_metric_with_label_values(&[&name, &format!("{}", tid)])
                     .unwrap();
                 let past = cpu_total.get();
@@ -101,7 +102,7 @@ impl Collector for ThreadsCollector {
             }
         }
 
-        let mut mfs = self.cpu_totals.collect();
+        let mut mfs = cpu_totals.collect();
         mfs.extend(self.threads_state.collect());
         mfs
     }
