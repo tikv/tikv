@@ -21,14 +21,18 @@
 #![feature(integer_atomics)]
 #![feature(entry_or_default)]
 #![feature(proc_macro_non_items)]
-#![feature(proc_macro_gen, ascii_ctype)]
+#![feature(proc_macro_gen)]
+#![feature(ascii_ctype)]
 #![recursion_limit = "200"]
 #![cfg_attr(not(feature = "cargo-clippy"), allow(unknown_lints))]
-#![allow(
-    unknown_lints, module_inception, should_implement_trait, large_enum_variant,
-    needless_pass_by_value, unreadable_literal, new_without_default_derive, verbose_bit_mask,
-    implicit_hasher, neg_cmp_op_on_partial_ord
-)]
+#![allow(should_implement_trait)]
+#![allow(large_enum_variant)]
+#![allow(needless_pass_by_value)]
+#![allow(unreadable_literal)]
+#![allow(new_without_default_derive)]
+#![allow(verbose_bit_mask)]
+#![allow(implicit_hasher)]
+#![allow(neg_cmp_op_on_partial_ord)]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
 #![allow(nonminimal_bool)]

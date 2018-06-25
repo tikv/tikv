@@ -11,7 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(mpsc_recv_timeout, plugin, test, btree_range, collections_bound, box_syntax, const_fn)]
+#![feature(mpsc_recv_timeout)]
+#![feature(test)]
+#![feature(btree_range)]
+#![feature(collections_bound)]
+#![feature(box_syntax)]
+#![feature(const_fn)]
 #![cfg_attr(
     feature = "cargo-clippy",
     allow(stable_features, new_without_default, needless_pass_by_value, unreadable_literal)
