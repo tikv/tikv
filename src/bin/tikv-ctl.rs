@@ -19,6 +19,7 @@
 
 #[macro_use]
 extern crate clap;
+extern crate chrono;
 extern crate futures;
 extern crate grpcio;
 extern crate kvproto;
