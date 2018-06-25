@@ -81,6 +81,7 @@ impl SecurityConfig {
     }
 }
 
+#[derive(Default)]
 pub struct SecurityManager {
     ca: Vec<u8>,
     cert: Vec<u8>,
