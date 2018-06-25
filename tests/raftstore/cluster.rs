@@ -224,7 +224,8 @@ impl<T: Simulator> Cluster<T> {
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
-        match self.sim
+        match self
+            .sim
             .rl()
             .call_command_on_node(node_id, request.clone(), timeout)
         {
@@ -567,7 +568,8 @@ impl<T: Simulator> Cluster<T> {
                 sleep_ms(100);
                 continue;
             }
-            if resp.get_header()
+            if resp
+                .get_header()
                 .get_error()
                 .get_message()
                 .contains("merging mode")
@@ -755,7 +757,8 @@ impl<T: Simulator> Cluster<T> {
     pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
         let epoch = self.get_region_epoch(region_id);
         let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
-        let resp = self.call_command_on_leader(transfer_leader, Duration::from_secs(5))
+        let resp = self
+            .call_command_on_leader(transfer_leader, Duration::from_secs(5))
             .unwrap();
         assert_eq!(
             resp.get_admin_response().get_cmd_type(),
@@ -798,7 +801,8 @@ impl<T: Simulator> Cluster<T> {
     // Caller must ensure that the `split_key` is in the `region`.
     pub fn split_region(&mut self, region: &metapb::Region, split_key: &[u8], cb: Callback) {
         let leader = self.leader_of_region(region.get_id()).unwrap();
-        let ch = self.sim
+        let ch = self
+            .sim
             .rl()
             .get_store_sendch(leader.get_store_id())
             .unwrap();
@@ -823,7 +827,8 @@ impl<T: Simulator> Cluster<T> {
                     let mut resp = write_resp.response;
                     if resp.get_header().has_error() {
                         let error = resp.get_header().get_error();
-                        if error.has_stale_epoch() || error.has_not_leader()
+                        if error.has_stale_epoch()
+                            || error.has_not_leader()
                             || error.has_stale_command()
                         {
                             warn!("fail to split: {:?}, ignore.", error);
@@ -860,13 +865,15 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn try_merge(&mut self, source: u64, target: u64) -> RaftCmdResponse {
-        let region = self.pd_client
+        let region = self
+            .pd_client
             .get_region_by_id(target)
             .wait()
             .unwrap()
             .unwrap();
         let prepare_merge = new_prepare_merge(region);
-        let source = self.pd_client
+        let source = self
+            .pd_client
             .get_region_by_id(source)
             .wait()
             .unwrap()
@@ -882,7 +889,8 @@ impl<T: Simulator> Cluster<T> {
         loop {
             let find_leader =
                 new_status_request(region_id, new_peer(store_id, 0), new_region_leader_cmd());
-            let resp = self.call_command(find_leader, Duration::from_secs(5))
+            let resp = self
+                .call_command(find_leader, Duration::from_secs(5))
                 .unwrap();
 
             if !is_error_response(&resp) {
@@ -905,7 +913,8 @@ impl<T: Simulator> Cluster<T> {
         loop {
             let peer = new_peer(store_id, 0);
             let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
-            let resp = self.call_command(find_leader, Duration::from_secs(5))
+            let resp = self
+                .call_command(find_leader, Duration::from_secs(5))
                 .unwrap();
 
             if is_error_response(&resp) {

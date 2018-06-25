@@ -109,7 +109,8 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
     let mut last_end = 0;
     for (start, end) in RE.find_iter(expr) {
         // Check all characters between two legs are blank.
-        if expr.index(last_end..start)
+        if expr
+            .index(last_end..start)
             .char_indices()
             .any(|(_, c)| !c.is_ascii_whitespace())
         {
