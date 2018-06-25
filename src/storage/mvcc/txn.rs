@@ -128,9 +128,7 @@ impl MvccTxn {
             if let Some((commit, _)) = self.reader.seek_write(key, u64::max_value())? {
                 // Abort on writes after our start timestamp ...
                 if commit >= self.start_ts {
-                    MVCC_CONFLICT_COUNTER
-                        .with_label_values(&["prewrite_write_conflict"])
-                        .inc();
+                    MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
                     return Err(Error::WriteConflict {
                         start_ts: self.start_ts,
                         conflict_ts: commit,
@@ -152,9 +150,7 @@ impl MvccTxn {
             }
             // No need to overwrite the lock and data.
             // If we use single delete, we can't put a key multiple times.
-            MVCC_DUPLICATE_CMD_COUNTER_VEC
-                .with_label_values(&["prewrite"])
-                .inc();
+            MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
             return Ok(());
         }
 
@@ -193,9 +189,7 @@ impl MvccTxn {
             _ => {
                 return match self.reader.get_txn_commit_info(key, self.start_ts)? {
                     Some((_, WriteType::Rollback)) | None => {
-                        MVCC_CONFLICT_COUNTER
-                            .with_label_values(&["commit_lock_not_found"])
-                            .inc();
+                        MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
                         // TODO:None should not appear
                         // Rollbacked by concurrent transaction.
                         info!(
@@ -212,9 +206,7 @@ impl MvccTxn {
                     Some((_, WriteType::Put))
                     | Some((_, WriteType::Delete))
                     | Some((_, WriteType::Lock)) => {
-                        MVCC_DUPLICATE_CMD_COUNTER_VEC
-                            .with_label_values(&["commit"])
-                            .inc();
+                        MVCC_DUPLICATE_CMD_COUNTER_VEC.commit.inc();
                         Ok(())
                     }
                 };
@@ -243,14 +235,10 @@ impl MvccTxn {
                     Some((ts, write_type)) => {
                         if write_type == WriteType::Rollback {
                             // return Ok on Rollback already exist
-                            MVCC_DUPLICATE_CMD_COUNTER_VEC
-                                .with_label_values(&["rollback"])
-                                .inc();
+                            MVCC_DUPLICATE_CMD_COUNTER_VEC.rollback.inc();
                             Ok(())
                         } else {
-                            MVCC_CONFLICT_COUNTER
-                                .with_label_values(&["rollback_committed"])
-                                .inc();
+                            MVCC_CONFLICT_COUNTER.rollback_committed.inc();
                             info!(
                                 "txn conflict (committed), key:{}, start_ts:{}, commit_ts:{}",
                                 key, self.start_ts, ts
