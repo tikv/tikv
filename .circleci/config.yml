@@ -92,6 +92,7 @@ jobs:
               echo "Current branch is $CIRCLE_BRANCH, restoring tar..."
               tar xf ~/tikv_cache_build/target.tar || true
             fi
+          no_output_timeout: 1800s
       - run:
           name: Building
           command: env SKIP_TESTS=true make trace_test
@@ -107,6 +108,7 @@ jobs:
             else
               echo "Current branch is $CIRCLE_BRANCH, skip"
             fi
+          no_output_timeout: 1800s
       - save_cache:
           # This will be triggered for non-master as well. However the cache content is empty so it doesn't matter.
           name: Uploading ~/.cargo and ~/.local Cache (master branch only)
@@ -118,10 +120,12 @@ jobs:
           command: make trace_test
           no_output_timeout: 1800s
       - run:
-          name: Calculating code coverage
+          name: Calculating code coverage (master branch only)
           command: |
-            cargo tarpaulin --no-count --skip-clean --out Xml
-            bash <(curl -s https://codecov.io/bash)
+            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
+              cargo tarpaulin --no-count --skip-clean --out Xml
+              bash <(curl -s https://codecov.io/bash)
+            fi
           no_output_timeout: 1800s
       - run:
           name: Caching ./target (master branch only)
@@ -134,6 +138,7 @@ jobs:
             else
               echo "Current branch is $CIRCLE_BRANCH, skip"
             fi
+          no_output_timeout: 1800s
       - save_cache:
           # This will be triggered for non-master as well. However the cache content is empty so it doesn't matter.
           name: Uploading ./target Cache (master branch only)
