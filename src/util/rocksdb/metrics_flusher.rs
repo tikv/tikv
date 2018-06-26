@@ -14,8 +14,8 @@
 use raftstore::store::Engines;
 use rocksdb::DB;
 use std::io;
-use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
+use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 use util::rocksdb::engine_metrics::*;

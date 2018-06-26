@@ -11,18 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(stable_features)]
 #![feature(mpsc_recv_timeout)]
-#![feature(plugin)]
 #![feature(test)]
 #![feature(box_syntax)]
 #![feature(integer_atomics)]
-#![cfg_attr(feature = "dev", plugin(clippy))]
-#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![feature(btree_range, collections_bound)]
-#![allow(new_without_default)]
-#![allow(needless_pass_by_value)]
-#![allow(unreadable_literal)]
+#![cfg_attr(not(feature = "cargo-clippy"), allow(unknown_lints))]
 
 extern crate clap;
 extern crate futures;
@@ -122,10 +116,12 @@ fn main() {
     let available_benches = ["raftstore", "mvcc"];
 
     let matches = App::new("TiKV Benchmark")
-        .args(&available_benches
-            .iter()
-            .map(|name| Arg::with_name(name))
-            .collect::<Vec<_>>())
+        .args(
+            &available_benches
+                .iter()
+                .map(|name| Arg::with_name(name))
+                .collect::<Vec<_>>(),
+        )
         .group(
             ArgGroup::with_name("benches")
                 .args(&available_benches)
