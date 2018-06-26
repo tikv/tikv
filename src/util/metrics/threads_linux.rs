@@ -95,7 +95,8 @@ impl Collector for ThreadsCollector {
                 }
 
                 // Threads states.
-                let state = self.threads_state
+                let state = self
+                    .threads_state
                     .get_metric_with_label_values(&[&state])
                     .unwrap();
                 state.inc();
