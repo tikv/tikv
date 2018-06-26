@@ -101,17 +101,17 @@ jobs:
           command: |
             rm -rf ~/tikv_cache_cargo
             mkdir ~/tikv_cache_cargo
-            #if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
+            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
               echo "Current branch is $CIRCLE_BRANCH, creating tar for ~/.cargo and ~/.local"
               cd ~ && tar cf ~/tikv_cache_cargo/cargo.tar .cargo .local && cd -
-            #else
-            #  echo "Current branch is $CIRCLE_BRANCH, skip"
-            #fi
+            else
+              echo "Current branch is $CIRCLE_BRANCH, skip"
+            fi
           no_output_timeout: 1800s
       - save_cache:
           # This will be triggered for non-master as well. However the cache content is empty so it doesn't matter.
           name: Uploading ~/.cargo and ~/.local Cache (master branch only)
-          key: v3-cargo-master-{{ .Environment.CIRCLE_SHA1 }}
+          key: v3-cargo-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
           paths:
             - ~/tikv_cache_cargo
       - run:
@@ -131,17 +131,17 @@ jobs:
           command: |
             rm -rf ~/tikv_cache_build
             mkdir ~/tikv_cache_build
-            #if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
+            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
               echo "Current branch is $CIRCLE_BRANCH, creating tar for ./target"
               tar cf ~/tikv_cache_build/target.tar target/debug/.fingerprint target/debug/build target/debug/deps target/debug/incremental
-            #else
-            #  echo "Current branch is $CIRCLE_BRANCH, skip"
-            #fi
+            else
+              echo "Current branch is $CIRCLE_BRANCH, skip"
+            fi
           no_output_timeout: 1800s
       - save_cache:
           # This will be triggered for non-master as well. However the cache content is empty so it doesn't matter.
           name: Uploading ./target Cache (master branch only)
-          key: v3-target-master-{{ .Environment.CIRCLE_SHA1 }}
+          key: v3-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
           paths:
             - ~/tikv_cache_build
 workflows:
