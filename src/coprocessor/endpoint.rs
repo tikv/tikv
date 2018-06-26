@@ -33,7 +33,7 @@ use tipb::select::DAGRequest;
 use server::readpool::{self, ReadPool};
 use server::{Config, OnResponse};
 use storage::engine::Error as EngineError;
-use storage::engine::PerfStatistics;
+use storage::engine::{PerfStatisticsDelta, PerfStatisticsInstant};
 use storage::{self, engine, Engine, Snapshot};
 use util::collections::HashMap;
 use util::futurepool;
@@ -272,8 +272,8 @@ struct RequestTracker {
     record_scan_detail: bool,
 
     exec_metrics: ExecutorMetrics,
-    perf_statistics_start: Option<PerfStatistics>, // The perf statistics when handle begins
-    start: Instant,                                // The request start time.
+    perf_statistics_start: Option<PerfStatisticsInstant>, // The perf statistics when handle begins
+    start: Instant,                                       // The request start time.
     total_handle_time: f64,
 
     // These 4 fields are for ExecDetails.
@@ -281,7 +281,7 @@ struct RequestTracker {
     handle_start: Option<Instant>,
     wait_time: Option<f64>,
     handle_time: Option<f64>,
-    perf_statistics: Option<PerfStatistics>,
+    perf_statistics: Option<PerfStatisticsDelta>,
 
     region_id: u64,
     txn_start_ts: u64,
@@ -334,14 +334,16 @@ impl RequestTracker {
                 .observe(self.wait_time.unwrap());
         }
 
-        self.perf_statistics_start = Some(PerfStatistics::new());
+        self.perf_statistics_start = Some(PerfStatisticsInstant::new());
     }
 
     /// Must pair with `on_handle_start` previously.
     #[allow(useless_let_if_seq)]
     fn on_handle_finish(&mut self, resp: Option<&mut Response>, mut exec_metrics: ExecutorMetrics) {
         // Record delta perf statistics
-        self.perf_statistics = Some(self.perf_statistics_start.unwrap().delta());
+        if let Some(perf_stats) = self.perf_statistics_start {
+            self.perf_statistics = Some(perf_stats.delta());
+        }
 
         let handle_start = self.handle_start.take().unwrap();
         let now = Instant::now_coarse();
