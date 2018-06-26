@@ -175,7 +175,7 @@ impl<S: Snapshot> StoreScanner<S> {
 mod test {
     use super::SnapshotStore;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
-    use storage::engine::{self, Engine, EngineRocksdb, RocksSnapshot, TEMP_DIR};
+    use storage::engine::{self, Engine, RocksEngine, RocksSnapshot, TEMP_DIR};
     use storage::mvcc::MvccTxn;
     use storage::{make_key, KvPair, Mutation, Options, ScanMode, Statistics, Value, ALL_CFS};
 
@@ -188,7 +188,7 @@ mod test {
         keys: Vec<String>,
         snapshot: RocksSnapshot,
         ctx: Context,
-        engine: EngineRocksdb,
+        engine: RocksEngine,
     }
 
     impl TestStore {

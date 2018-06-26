@@ -17,7 +17,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 use std::{error, result};
 
-pub use self::rocksdb::{EngineRocksdb, RocksSnapshot};
+pub use self::rocksdb::{RocksEngine, RocksSnapshot};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
 use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
@@ -549,7 +549,7 @@ impl<I: Iterator> Cursor<I> {
 }
 
 /// Create a local Rocskdb engine. (Without raft, mainly for tests).
-pub fn new_local_engine(path: &str, cfs: &[CfName]) -> Result<EngineRocksdb> {
+pub fn new_local_engine(path: &str, cfs: &[CfName]) -> Result<RocksEngine> {
     let mut cfs_opts = Vec::with_capacity(cfs.len());
     let cfg_rocksdb = config::DbConfig::default();
     for cf in cfs {
@@ -562,7 +562,7 @@ pub fn new_local_engine(path: &str, cfs: &[CfName]) -> Result<EngineRocksdb> {
         };
         cfs_opts.push(cf_opt);
     }
-    EngineRocksdb::new(path, cfs, Some(cfs_opts))
+    RocksEngine::new(path, cfs, Some(cfs_opts))
 }
 
 quick_error! {

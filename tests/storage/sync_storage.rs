@@ -18,7 +18,7 @@ use std::sync::Arc;
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::server::readpool::ReadPool;
 use tikv::storage::config::Config;
-use tikv::storage::engine::EngineRocksdb;
+use tikv::storage::engine::RocksEngine;
 use tikv::storage::{self, Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
 use tikv::util::collections::HashMap;
 
@@ -28,7 +28,7 @@ pub struct SyncStorage<E: Engine> {
     cnt: Arc<AtomicUsize>,
 }
 
-impl SyncStorage<EngineRocksdb> {
+impl SyncStorage<RocksEngine> {
     pub fn new(config: &Config, read_pool: ReadPool<storage::ReadPoolContext>) -> Self {
         let storage = Storage::new(config, read_pool).unwrap();
         let mut s = SyncStorage {

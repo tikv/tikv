@@ -18,7 +18,7 @@ use raftstore::cluster::Cluster;
 use raftstore::server::{ServerCluster, SimulateEngine};
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::config::Config;
-use tikv::storage::engine::{self, EngineRocksdb};
+use tikv::storage::engine::{self, RocksEngine};
 use tikv::storage::mvcc::{self, MAX_TXN_WRITE_SIZE};
 use tikv::storage::txn;
 use tikv::storage::{self, make_key, Engine, Key, KvPair, Mutation, Value};
@@ -31,7 +31,7 @@ pub struct AssertionStorage<E: Engine> {
     pub ctx: Context,
 }
 
-impl Default for AssertionStorage<EngineRocksdb> {
+impl Default for AssertionStorage<RocksEngine> {
     fn default() -> Self {
         let pd_worker = FutureWorker::new("test future worker");
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {

@@ -26,7 +26,7 @@ use tikv::coprocessor::codec::{datum, table, Datum};
 use tikv::coprocessor::*;
 use tikv::server::readpool::{self, ReadPool};
 use tikv::server::{Config, OnResponse};
-use tikv::storage::engine::{self, Engine, EngineRocksdb, TEMP_DIR};
+use tikv::storage::engine::{self, Engine, RocksEngine, TEMP_DIR};
 use tikv::storage::{self, Key, Mutation, ALL_CFS};
 use tikv::util::codec::number::*;
 use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
@@ -519,7 +519,7 @@ pub fn init_data_with_commit(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
-) -> (Store<EngineRocksdb>, Worker<EndPointTask<EngineRocksdb>>) {
+) -> (Store<RocksEngine>, Worker<EndPointTask<RocksEngine>>) {
     let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
     init_data_with_engine_and_commit(Context::new(), engine, tbl, vals, commit)
 }
@@ -528,7 +528,7 @@ pub fn init_data_with_commit(
 fn init_with_data(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
-) -> (Store<EngineRocksdb>, Worker<EndPointTask<EngineRocksdb>>) {
+) -> (Store<RocksEngine>, Worker<EndPointTask<RocksEngine>>) {
     init_data_with_commit(tbl, vals, true)
 }
 

@@ -171,7 +171,7 @@ pub mod test {
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::table;
     use coprocessor::util;
-    use storage::engine::{self, Engine, EngineRocksdb, Modify, RocksSnapshot, TEMP_DIR};
+    use storage::engine::{self, Engine, Modify, RocksEngine, RocksSnapshot, TEMP_DIR};
     use storage::mvcc::MvccTxn;
     use storage::{make_key, Mutation, Options, SnapshotStore, ALL_CFS};
     use util::collections::HashMap;
@@ -256,7 +256,7 @@ pub mod test {
     pub struct TestStore {
         snapshot: RocksSnapshot,
         ctx: Context,
-        engine: EngineRocksdb,
+        engine: RocksEngine,
     }
 
     impl TestStore {

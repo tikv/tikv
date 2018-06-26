@@ -71,13 +71,13 @@ impl Runnable<Task> for Runner {
     }
 }
 
-struct EngineRocksdbCore {
+struct RocksEngineCore {
     // only use for memory mode
     temp_dir: Option<TempDir>,
     worker: Worker<Task>,
 }
 
-impl Drop for EngineRocksdbCore {
+impl Drop for RocksEngineCore {
     fn drop(&mut self) {
         if let Some(h) = self.worker.stop() {
             h.join().unwrap();
@@ -85,18 +85,18 @@ impl Drop for EngineRocksdbCore {
     }
 }
 
-pub struct EngineRocksdb {
-    core: Arc<Mutex<EngineRocksdbCore>>,
+pub struct RocksEngine {
+    core: Arc<Mutex<RocksEngineCore>>,
     sched: Scheduler<Task>,
 }
 
-impl EngineRocksdb {
+impl RocksEngine {
     pub fn new(
         path: &str,
         cfs: &[CfName],
         cfs_opts: Option<Vec<CFOptions>>,
-    ) -> Result<EngineRocksdb> {
-        info!("EngineRocksdb: creating for path {}", path);
+    ) -> Result<RocksEngine> {
+        info!("RocksEngine: creating for path {}", path);
         let (path, temp_dir) = match path {
             TEMP_DIR => {
                 let td = TempDir::new("temp-rocksdb").unwrap();
@@ -107,9 +107,9 @@ impl EngineRocksdb {
         let mut worker = Worker::new("engine-rocksdb");
         let db = rocksdb::new_engine(&path, cfs, cfs_opts)?;
         box_try!(worker.start(Runner(Arc::new(db))));
-        Ok(EngineRocksdb {
+        Ok(RocksEngine {
             sched: worker.scheduler(),
-            core: Arc::new(Mutex::new(EngineRocksdbCore { temp_dir, worker })),
+            core: Arc::new(Mutex::new(RocksEngineCore { temp_dir, worker })),
         })
     }
 
@@ -121,7 +121,7 @@ impl EngineRocksdb {
     }
 }
 
-impl Debug for EngineRocksdb {
+impl Debug for RocksEngine {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
@@ -131,7 +131,7 @@ impl Debug for EngineRocksdb {
     }
 }
 
-impl Clone for EngineRocksdb {
+impl Clone for RocksEngine {
     fn clone(&self) -> Self {
         Self {
             core: Arc::clone(&self.core),
@@ -145,24 +145,24 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
     for rev in modifies {
         let res = match rev {
             Modify::Delete(cf, k) => if cf == CF_DEFAULT {
-                trace!("EngineRocksdb: delete {}", k);
+                trace!("RocksEngine: delete {}", k);
                 wb.delete(k.encoded())
             } else {
-                trace!("EngineRocksdb: delete_cf {} {}", cf, k);
+                trace!("RocksEngine: delete_cf {} {}", cf, k);
                 let handle = rocksdb::get_cf_handle(db, cf)?;
                 wb.delete_cf(handle, k.encoded())
             },
             Modify::Put(cf, k, v) => if cf == CF_DEFAULT {
-                trace!("EngineRocksdb: put {},{}", k, escape(&v));
+                trace!("RocksEngine: put {},{}", k, escape(&v));
                 wb.put(k.encoded(), &v)
             } else {
-                trace!("EngineRocksdb: put_cf {}, {}, {}", cf, k, escape(&v));
+                trace!("RocksEngine: put_cf {}, {}, {}", cf, k, escape(&v));
                 let handle = rocksdb::get_cf_handle(db, cf)?;
                 wb.put_cf(handle, k.encoded(), &v)
             },
             Modify::DeleteRange(cf, start_key, end_key) => {
                 trace!(
-                    "EngineRocksdb: delete_range_cf {}, {}, {}",
+                    "RocksEngine: delete_range_cf {}, {}, {}",
                     cf,
                     escape(start_key.encoded()),
                     escape(end_key.encoded())
@@ -181,7 +181,7 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
     Ok(())
 }
 
-impl Engine for EngineRocksdb {
+impl Engine for RocksEngine {
     type Iter = DBIterator<Arc<DB>>;
     type Snap = RocksSnapshot;
 

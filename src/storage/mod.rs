@@ -41,8 +41,8 @@ pub mod types;
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::engine::raftkv::RaftKv;
 pub use self::engine::{
-    new_local_engine, CFStatistics, Cursor, Engine, EngineRocksdb, Error as EngineError,
-    FlowStatistics, Iterator, Modify, ScanMode, Snapshot, Statistics, StatisticsSummary, TEMP_DIR,
+    new_local_engine, CFStatistics, Cursor, Engine, Error as EngineError, FlowStatistics, Iterator,
+    Modify, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary, TEMP_DIR,
 };
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
@@ -424,7 +424,7 @@ pub struct Storage<E: Engine> {
     max_key_size: usize,
 }
 
-impl Storage<EngineRocksdb> {
+impl Storage<RocksEngine> {
     pub fn new(config: &Config, read_pool: ReadPool<ReadPoolContext>) -> Result<Self> {
         let engine = engine::new_local_engine(&config.data_dir, ALL_CFS)?;
         Storage::from_engine(engine, config, read_pool)
