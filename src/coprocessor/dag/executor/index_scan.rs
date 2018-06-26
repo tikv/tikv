@@ -26,8 +26,8 @@ use coprocessor::*;
 
 use storage::{Key, SnapshotStore};
 
-use super::ExecutorMetrics;
 use super::scanner::{ScanOn, Scanner};
+use super::ExecutorMetrics;
 use super::{Executor, Row};
 
 pub struct IndexScanExecutor {
@@ -146,7 +146,8 @@ impl IndexScanExecutor {
     fn get_row_from_point(&mut self, mut range: KeyRange) -> Result<Option<Row>> {
         self.metrics.scan_counter.inc_point();
         let key = range.take_start();
-        let value = self.store
+        let value = self
+            .store
             .get(&Key::from_raw(&key), &mut self.metrics.cf_stats)?;
         if let Some(value) = value {
             return self.decode_index_key_value(key, value);

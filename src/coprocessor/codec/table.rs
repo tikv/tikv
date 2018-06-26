@@ -23,8 +23,8 @@ use util::escape;
 //use super::datum::DatumDecoder;
 use super::mysql::{types, Duration, Time};
 use super::{datum, Datum, Error, Result};
-use util::codec::BytesSlice;
 use util::codec::number::{self, NumberEncoder};
+use util::codec::BytesSlice;
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -345,7 +345,8 @@ impl RowColsDict {
             }
             length += meta.length;
         }
-        let end_offsets = self.cols
+        let end_offsets = self
+            .cols
             .values()
             .into_iter()
             .map(|meta| meta.offset + meta.length - start)
@@ -486,7 +487,8 @@ mod test {
 
         let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
         let col_values: Vec<_> = row.iter().map(|(_, v)| v.clone()).collect();
-        let mut col_encoded: HashMap<_, _> = row.iter()
+        let mut col_encoded: HashMap<_, _> = row
+            .iter()
             .map(|(k, v)| {
                 let f = super::flatten(v.clone()).unwrap();
                 (*k, datum::encode_value(&[f]).unwrap())
