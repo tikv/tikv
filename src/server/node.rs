@@ -19,18 +19,20 @@ use std::time::Duration;
 
 use mio::EventLoop;
 
-use super::Result;
 use super::transport::RaftStoreRouter;
+use super::Result;
 use import::SSTImporter;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use protobuf::RepeatedField;
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
-use raftstore::store::{self, keys, Config as StoreConfig, Engines, Msg, Peekable, SignificantMsg,
-                       SnapManager, Store, StoreChannel, Transport};
-use server::Config as ServerConfig;
+use raftstore::store::{
+    self, keys, Config as StoreConfig, Engines, Msg, Peekable, SignificantMsg, SnapManager, Store,
+    StoreChannel, Transport,
+};
 use server::readpool::ReadPool;
+use server::Config as ServerConfig;
 use storage::{self, Config as StorageConfig, RaftKv, Storage};
 use util::transport::SendCh;
 use util::worker::FutureWorker;

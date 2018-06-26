@@ -22,8 +22,8 @@ use tikv::storage::engine;
 use tikv::storage::mvcc::{self, MAX_TXN_WRITE_SIZE};
 use tikv::storage::txn;
 use tikv::storage::{self, make_key, Key, KvPair, Mutation, Value};
-use tikv::util::HandyRwLock;
 use tikv::util::worker::FutureWorker;
+use tikv::util::HandyRwLock;
 
 #[derive(Clone)]
 pub struct AssertionStorage {
@@ -93,7 +93,8 @@ impl AssertionStorage {
 
     pub fn batch_get_ok(&self, keys: &[&[u8]], ts: u64, expect: Vec<&[u8]>) {
         let keys: Vec<Key> = keys.into_iter().map(|x| make_key(x)).collect();
-        let result: Vec<Vec<u8>> = self.store
+        let result: Vec<Vec<u8>> = self
+            .store
             .batch_get(self.ctx.clone(), &keys, ts)
             .unwrap()
             .into_iter()
@@ -250,7 +251,8 @@ impl AssertionStorage {
 
         success = false;
         for _ in 0..retry_time {
-            let res = self.store
+            let res = self
+                .store
                 .commit(self.ctx.clone(), commit_keys.clone(), start_ts, commit_ts);
             if res.is_ok() {
                 success = true;
@@ -270,7 +272,8 @@ impl AssertionStorage {
         expect: Vec<Option<(&[u8], &[u8])>>,
     ) {
         let key_address = make_key(start_key);
-        let result = self.store
+        let result = self
+            .store
             .scan(self.ctx.clone(), key_address, limit, false, ts)
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
@@ -289,7 +292,8 @@ impl AssertionStorage {
         expect: Vec<Option<(&[u8], &[u8])>>,
     ) {
         let key_address = make_key(start_key);
-        let result = self.store
+        let result = self
+            .store
             .reverse_scan(self.ctx.clone(), key_address, limit, false, ts)
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
@@ -308,7 +312,8 @@ impl AssertionStorage {
         expect: Vec<Option<&[u8]>>,
     ) {
         let key_address = make_key(start_key);
-        let result = self.store
+        let result = self
+            .store
             .scan(self.ctx.clone(), key_address, limit, true, ts)
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
@@ -338,10 +343,12 @@ impl AssertionStorage {
         start_ts: u64,
         expect_locks: Vec<(&[u8], &[u8], u64)>,
     ) {
-        let res = self.store
+        let res = self
+            .store
             .prewrite(self.ctx.clone(), mutations, primary.to_vec(), start_ts)
             .unwrap();
-        let locks: Vec<(&[u8], &[u8], u64)> = res.iter()
+        let locks: Vec<(&[u8], &[u8], u64)> = res
+            .iter()
             .filter_map(|x| {
                 if let Err(storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked {
                     ref key,
@@ -367,7 +374,8 @@ impl AssertionStorage {
         confl_key: &[u8],
         confl_ts: u64,
     ) {
-        let err = self.store
+        let err = self
+            .store
             .prewrite(
                 self.ctx.clone(),
                 mutations,
@@ -403,7 +411,8 @@ impl AssertionStorage {
 
     pub fn commit_with_illegal_tso(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
         let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
-        let resp = self.store
+        let resp = self
+            .store
             .commit(self.ctx.clone(), keys, start_ts, commit_ts);
         self.expect_invalid_tso_err(resp, start_ts, commit_ts);
     }
@@ -475,7 +484,8 @@ impl AssertionStorage {
     }
 
     pub fn resolve_lock_with_illegal_tso(&self, start_ts: u64, commit_ts: Option<u64>) {
-        let resp = self.store
+        let resp = self
+            .store
             .resolve_lock(self.ctx.clone(), start_ts, commit_ts);
         self.expect_invalid_tso_err(resp, start_ts, commit_ts.unwrap())
     }
@@ -537,7 +547,8 @@ impl AssertionStorage {
         limit: usize,
         expect: Vec<(&[u8], &[u8])>,
     ) {
-        let result: Vec<KvPair> = self.store
+        let result: Vec<KvPair> = self
+            .store
             .raw_scan(self.ctx.clone(), cf, start_key, limit)
             .unwrap()
             .into_iter()

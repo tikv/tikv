@@ -39,25 +39,30 @@ use std::time::Duration;
 use std::u64;
 
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
-use prometheus::HistogramTimer;
 use prometheus::local::{LocalHistogramVec, LocalIntCounter};
+use prometheus::HistogramTimer;
 
-use storage::engine::{self, Callback as EngineCallback, CbContext, Error as EngineError, Modify,
-                      Result as EngineResult};
-use storage::mvcc::{Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write,
-                    MAX_TXN_WRITE_SIZE};
+use storage::engine::{
+    self, Callback as EngineCallback, CbContext, Error as EngineError, Modify,
+    Result as EngineResult,
+};
+use storage::mvcc::{
+    Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, MAX_TXN_WRITE_SIZE,
+};
+use storage::{
+    Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
+    Statistics, StatisticsSummary, StorageCb,
+};
 use storage::{Key, KvPair, MvccInfo, Value, CMD_TAG_GC};
-use storage::{Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
-              Statistics, StatisticsSummary, StorageCb};
 use util::collections::HashMap;
 use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
 use util::time::SlowTimer;
 use util::worker::{self, Runnable, ScheduleError};
 
 use super::super::metrics::*;
+use super::latch::{Latches, Lock};
 use super::Error;
 use super::Result;
-use super::latch::{Latches, Lock};
 
 pub const CMD_BATCH_SIZE: usize = 256;
 // TODO: make it configurable.
@@ -1046,7 +1051,8 @@ impl Scheduler {
         let scheduler = self.scheduler.clone();
         if readcmd {
             worker_pool.execute(move |ctx: &mut SchedContext| {
-                let _processing_read_timer = ctx.processing_read_duration
+                let _processing_read_timer = ctx
+                    .processing_read_duration
                     .with_label_values(&[tag])
                     .start_coarse_timer();
 
@@ -1055,7 +1061,8 @@ impl Scheduler {
             });
         } else {
             worker_pool.execute(move |ctx: &mut SchedContext| {
-                let _processing_write_timer = ctx.processing_write_duration
+                let _processing_write_timer = ctx
+                    .processing_write_duration
                     .with_label_values(&[tag])
                     .start_coarse_timer();
 
@@ -1308,7 +1315,8 @@ impl Scheduler {
                     SCHED_STAGE_COUNTER_VEC
                         .with_label_values(&[self.get_ctx_tag(cid), "snapshot_err"])
                         .inc();
-                    let e = e.maybe_clone()
+                    let e = e
+                        .maybe_clone()
                         .unwrap_or_else(|| EngineError::Other(box_err!("{:?}", e)));
 
                     self.finish_with_err(cid, Error::from(e));
@@ -1371,7 +1379,8 @@ impl Scheduler {
             return self.on_write_finished(cid, pr, Ok(()));
         }
         let engine_cb = make_engine_cb(cmd.tag(), cid, pr, self.scheduler.clone(), rows);
-        if let Err(e) = self.engine
+        if let Err(e) = self
+            .engine
             .async_write(cmd.get_context(), to_be_write, engine_cb)
         {
             SCHED_STAGE_COUNTER_VEC
@@ -1420,7 +1429,8 @@ impl Scheduler {
     fn lock_and_register_get_snapshot(&mut self, cid: u64) {
         if self.acquire_lock(cid) {
             let ctx = self.extract_context(cid).clone();
-            let group = self.grouped_cmds
+            let group = self
+                .grouped_cmds
                 .as_mut()
                 .unwrap()
                 .entry(HashableContext(ctx))
@@ -1591,12 +1601,10 @@ mod tests {
                 ctx: Context::new(),
                 txn_status: temp_map.clone(),
                 scan_key: None,
-                key_locks: vec![
-                    (
-                        make_key(b"k"),
-                        mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None),
-                    ),
-                ],
+                key_locks: vec![(
+                    make_key(b"k"),
+                    mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None),
+                )],
             },
         ];
 

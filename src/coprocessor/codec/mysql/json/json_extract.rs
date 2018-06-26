@@ -14,8 +14,10 @@
 // FIXME: remove following later
 #![allow(dead_code)]
 
+use super::path_expr::{
+    PathExpression, PathLeg, PATH_EXPR_ARRAY_INDEX_ASTERISK, PATH_EXPR_ASTERISK,
+};
 use super::Json;
-use super::path_expr::{PathExpression, PathLeg, PATH_EXPR_ARRAY_INDEX_ASTERISK, PATH_EXPR_ASTERISK};
 
 impl Json {
     // extract receives several path expressions as arguments, matches them in j, and returns
@@ -85,9 +87,10 @@ pub fn extract_json(j: &Json, path_legs: &[PathLeg]) -> Vec<Json> {
 
 #[cfg(test)]
 mod test {
-    use super::super::path_expr::{PathExpressionFlag, PATH_EXPRESSION_CONTAINS_ASTERISK,
-                                  PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
-                                  PATH_EXPR_ARRAY_INDEX_ASTERISK};
+    use super::super::path_expr::{
+        PathExpressionFlag, PATH_EXPRESSION_CONTAINS_ASTERISK,
+        PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK, PATH_EXPR_ARRAY_INDEX_ASTERISK,
+    };
     use super::*;
     use std::str::FromStr;
 
@@ -99,104 +102,84 @@ mod test {
             // Index
             (
                 "[true, 2017]",
-                vec![
-                    PathExpression {
-                        legs: vec![PathLeg::Index(0)],
-                        flags: PathExpressionFlag::default(),
-                    },
-                ],
+                vec![PathExpression {
+                    legs: vec![PathLeg::Index(0)],
+                    flags: PathExpressionFlag::default(),
+                }],
                 Some("true"),
             ),
             (
                 "[true, 2017]",
-                vec![
-                    PathExpression {
-                        legs: vec![PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK)],
-                        flags: PATH_EXPRESSION_CONTAINS_ASTERISK,
-                    },
-                ],
+                vec![PathExpression {
+                    legs: vec![PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK)],
+                    flags: PATH_EXPRESSION_CONTAINS_ASTERISK,
+                }],
                 Some("[true, 2017]"),
             ),
             (
                 "[true, 2107]",
-                vec![
-                    PathExpression {
-                        legs: vec![PathLeg::Index(2)],
-                        flags: PathExpressionFlag::default(),
-                    },
-                ],
+                vec![PathExpression {
+                    legs: vec![PathLeg::Index(2)],
+                    flags: PathExpressionFlag::default(),
+                }],
                 None,
             ),
             (
                 "6.18",
-                vec![
-                    PathExpression {
-                        legs: vec![PathLeg::Index(0)],
-                        flags: PathExpressionFlag::default(),
-                    },
-                ],
+                vec![PathExpression {
+                    legs: vec![PathLeg::Index(0)],
+                    flags: PathExpressionFlag::default(),
+                }],
                 Some("6.18"),
             ),
             // Key
             (
                 r#"{"a": "a1", "b": 20.08, "c": false}"#,
-                vec![
-                    PathExpression {
-                        legs: vec![PathLeg::Key(String::from("c"))],
-                        flags: PathExpressionFlag::default(),
-                    },
-                ],
+                vec![PathExpression {
+                    legs: vec![PathLeg::Key(String::from("c"))],
+                    flags: PathExpressionFlag::default(),
+                }],
                 Some("false"),
             ),
             (
                 r#"{"a": "a1", "b": 20.08, "c": false}"#,
-                vec![
-                    PathExpression {
-                        legs: vec![PathLeg::Key(String::from(PATH_EXPR_ASTERISK))],
-                        flags: PATH_EXPRESSION_CONTAINS_ASTERISK,
-                    },
-                ],
+                vec![PathExpression {
+                    legs: vec![PathLeg::Key(String::from(PATH_EXPR_ASTERISK))],
+                    flags: PATH_EXPRESSION_CONTAINS_ASTERISK,
+                }],
                 Some(r#"["a1", 20.08, false]"#),
             ),
             (
                 r#"{"a": "a1", "b": 20.08, "c": false}"#,
-                vec![
-                    PathExpression {
-                        legs: vec![PathLeg::Key(String::from("d"))],
-                        flags: PathExpressionFlag::default(),
-                    },
-                ],
+                vec![PathExpression {
+                    legs: vec![PathLeg::Key(String::from("d"))],
+                    flags: PathExpressionFlag::default(),
+                }],
                 None,
             ),
             // Double asterisks
             (
                 "21",
-                vec![
-                    PathExpression {
-                        legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
-                        flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
-                    },
-                ],
+                vec![PathExpression {
+                    legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
+                    flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+                }],
                 None,
             ),
             (
                 r#"{"g": {"a": "a1", "b": 20.08, "c": false}}"#,
-                vec![
-                    PathExpression {
-                        legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
-                        flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
-                    },
-                ],
+                vec![PathExpression {
+                    legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
+                    flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+                }],
                 Some("false"),
             ),
             (
                 r#"[{"a": "a1", "b": 20.08, "c": false}, true]"#,
-                vec![
-                    PathExpression {
-                        legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
-                        flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
-                    },
-                ],
+                vec![PathExpression {
+                    legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
+                    flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+                }],
                 Some("false"),
             ),
         ];

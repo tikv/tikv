@@ -20,9 +20,10 @@ use std::{cmp, mem, slice};
 
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
-use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
-                          RaftCmdResponse, Request, Response, TransferLeaderRequest,
-                          TransferLeaderResponse};
+use kvproto::raft_cmdpb::{
+    self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse, Request, Response,
+    TransferLeaderRequest, TransferLeaderResponse,
+};
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftMessage};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
@@ -31,14 +32,16 @@ use rocksdb::{WriteBatch, DB};
 use time::Timespec;
 
 use pd::{PdTask, INVALID_ID};
-use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
-           INVALID_INDEX, NO_LIMIT};
+use raft::{
+    self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
+    NO_LIMIT,
+};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::engine::{Peekable, Snapshot};
 use raftstore::store::util::RegionApproximateStat;
 use raftstore::store::worker::apply::ApplyMetrics;
-use raftstore::store::worker::{Apply, ApplyTask};
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
+use raftstore::store::worker::{Apply, ApplyTask};
 use raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
 use util::collections::{HashMap, HashSet};
@@ -677,7 +680,8 @@ impl Peer {
             if progress.matched < truncated_idx {
                 if let Some(p) = self.get_peer_from_cache(id) {
                     pending_peers.push(p);
-                    if !self.peers_start_pending_time
+                    if !self
+                        .peers_start_pending_time
                         .iter()
                         .any(|&(pid, _)| pid == id)
                     {
@@ -858,7 +862,8 @@ impl Peer {
             return;
         }
 
-        if !self.raft_group
+        if !self
+            .raft_group
             .has_ready_since(Some(self.last_applying_idx))
         {
             return;
@@ -911,7 +916,8 @@ impl Peer {
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
         if apply_snap_result.is_some() && self.peer.get_is_learner() {
             // The peer may change from learner to voter after snapshot applied.
-            let peer = self.region()
+            let peer = self
+                .region()
                 .get_peers()
                 .iter()
                 .find(|p| p.get_id() == self.peer.get_id())
@@ -1348,7 +1354,8 @@ impl Peer {
             _ => {}
         }
 
-        if change_type == ConfChangeType::RemoveNode && !self.cfg.allow_remove_leader
+        if change_type == ConfChangeType::RemoveNode
+            && !self.cfg.allow_remove_leader
             && peer.get_id() == self.peer_id()
         {
             warn!(

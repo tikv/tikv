@@ -50,7 +50,8 @@ impl Display for Task {
                 ref cf_name,
                 ref start_key,
                 ref end_key,
-            } => f.debug_struct("Compact")
+            } => f
+                .debug_struct("Compact")
                 .field("cf_name", cf_name)
                 .field("start_key", &start_key.as_ref().map(|k| escape(k)))
                 .field("end_key", &end_key.as_ref().map(|k| escape(k)))
@@ -60,7 +61,8 @@ impl Display for Task {
                 ref ranges,
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
-            } => f.debug_struct("CheckAndCompact")
+            } => f
+                .debug_struct("CheckAndCompact")
                 .field("cf_names", cf_names)
                 .field("ranges", ranges)
                 .field("tombstones_num_threshold", &tombstones_num_threshold)
@@ -313,7 +315,8 @@ mod test {
         db.flush_cf(handle, true).unwrap();
 
         // get total sst files size.
-        let old_sst_files_size = db.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
+        let old_sst_files_size = db
+            .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
             .unwrap();
 
         // schedule compact range task
@@ -325,7 +328,8 @@ mod test {
         sleep(Duration::from_secs(5));
 
         // get total sst files size after compact range.
-        let new_sst_files_size = db.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
+        let new_sst_files_size = db
+            .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
             .unwrap();
         assert!(old_sst_files_size > new_sst_files_size);
     }

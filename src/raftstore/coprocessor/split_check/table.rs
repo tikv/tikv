@@ -19,8 +19,8 @@ use rocksdb::{SeekKey, DB};
 use coprocessor::codec::table as table_codec;
 use raftstore::store::engine::{IterOption, Iterable};
 use raftstore::store::keys;
-use storage::CF_WRITE;
 use storage::types::Key;
+use storage::CF_WRITE;
 use util::escape;
 
 use super::super::{Coprocessor, ObserverContext, Result, SplitCheckObserver, SplitChecker};
@@ -198,15 +198,16 @@ fn is_table_key(encoded_key: &[u8]) -> bool {
 }
 
 fn is_same_table(left_key: &[u8], right_key: &[u8]) -> bool {
-    is_table_key(left_key) && is_table_key(right_key)
+    is_table_key(left_key)
+        && is_table_key(right_key)
         && left_key[..ENCODED_TABLE_TABLE_PREFIX] == right_key[..ENCODED_TABLE_TABLE_PREFIX]
 }
 
 #[cfg(test)]
 mod test {
     use std::io::Write;
-    use std::sync::Arc;
     use std::sync::mpsc;
+    use std::sync::Arc;
 
     use kvproto::metapb::Peer;
     use rocksdb::Writable;
@@ -214,8 +215,8 @@ mod test {
 
     use coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use raftstore::store::{Msg, SplitCheckRunner, SplitCheckTask};
-    use storage::ALL_CFS;
     use storage::types::Key;
+    use storage::ALL_CFS;
     use util::codec::number::NumberEncoder;
     use util::config::ReadableSize;
     use util::rocksdb::new_engine;
