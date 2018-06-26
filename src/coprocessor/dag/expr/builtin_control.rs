@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use super::{EvalContext, Result, ScalarFunc};
-use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use coprocessor::codec::Datum;
 use coprocessor::dag::expr::Expression;
 use std::borrow::Cow;
 
@@ -232,8 +232,8 @@ mod test {
     use protobuf::RepeatedField;
     use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
-    use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::{Duration, Json, Time};
+    use coprocessor::codec::Datum;
     use coprocessor::dag::expr::test::{col_expr, datum_expr, scalar_func_expr, str2dec};
     use coprocessor::dag::expr::{EvalContext, Expression};
 

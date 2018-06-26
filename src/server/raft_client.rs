@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use std::ffi::CString;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::Arc;
 
 use futures::sync::mpsc::{self, UnboundedSender};
 use futures::sync::oneshot::{self, Sender};

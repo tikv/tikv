@@ -22,8 +22,8 @@ use tikv::server::readpool::{self, ReadPool};
 use tikv::storage;
 use tikv::storage::config::Config;
 use tikv::storage::*;
-use tikv::util::HandyRwLock;
 use tikv::util::worker::FutureWorker;
+use tikv::util::HandyRwLock;
 
 #[test]
 fn test_storage_1gc() {

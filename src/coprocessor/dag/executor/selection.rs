@@ -16,8 +16,8 @@ use std::sync::Arc;
 use tipb::executor::Selection;
 use tipb::schema::ColumnInfo;
 
-use coprocessor::Result;
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use coprocessor::Result;
 
 use super::{inflate_with_col_for_dag, Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
 

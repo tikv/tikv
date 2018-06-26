@@ -97,11 +97,10 @@ cd tikv
 
 `rustup` is an official toolchain manager for Rust, similar to `rvm` or `rbenv` from the Ruby world.
 
-TiKV uses the version of the Rust toolchain specified in `RUST_VERSION`. We also use the `rustfmt` component.
+TiKV uses the version of the Rust toolchain specified in `rust-toolchain`. `rustup` and `cargo` will automatically utilize this file. We also make use of the `rustfmt` and `clippy` components.
 
 ```bash
-rustup override set `tail -n 1 RUST_VERSION`
-rustup component add rustfmt-preview --toolchain `tail -n 1 RUST_VERSION`
+rustup component add rustfmt-preview
 ```
 
 ### Building & testing
@@ -118,7 +117,7 @@ During interactive development, you may prefer using `cargo check`, which will d
 
 ```bash
 cargo install cargo-watch
-cargo watch -s "cargo check --features dev"
+cargo watch -s "cargo check"
 ```
 
 When you're ready to test out your changes, use the `dev` task. It will format your codebase, build with `clippy` enabled, and run tests. This should run without failure before you create a PR.
