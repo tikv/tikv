@@ -15,7 +15,7 @@ use prometheus::*;
 
 lazy_static! {
     pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
-        "tikv_coprocessor_request_duration_seconds2",
+        "tikv_coprocessor_request_duration_seconds",
         "Bucketed histogram of coprocessor request duration",
         &["req"],
         exponential_buckets(0.0005, 2.0, 20).unwrap()
