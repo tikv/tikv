@@ -14,3 +14,7 @@ git = "https://github.com/rust-fuzz/libfuzzer-sys.git"
 [[bin]]
 name = "codec_bytes"
 path = "fuzz_targets/codec_bytes.rs"
+
+[[bin]]
+name = "coprocessor_codec_mysql_decimal"
+path = "fuzz_targets/coprocessor/codec/mysql/decimal.rs"
