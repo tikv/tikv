@@ -17,7 +17,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 use std::{error, result};
 
-pub use self::rocksdb::EngineRocksdb;
+pub use self::rocksdb::{EngineRocksdb, RocksSnapshot};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
 use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
@@ -70,11 +70,11 @@ pub enum Modify {
 }
 
 pub trait Engine: Send + Debug + Clone + Sized + 'static {
-    type IteratorType: Iterator;
-    type SnapshotType: Snapshot<IteratorType = Self::IteratorType>;
+    type Iter: Iterator;
+    type Snap: Snapshot<Iter = Self::Iter>;
 
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
-    fn async_snapshot(&self, ctx: &Context, callback: Callback<Self::SnapshotType>) -> Result<()>;
+    fn async_snapshot(&self, ctx: &Context, callback: Callback<Self::Snap>) -> Result<()>;
     /// Snapshots are token by `Context`s, the results are send to the `on_finished` callback,
     /// with the same order. If a read-index is occurred, a `None` is placed in the corresponding
     /// slot, and the caller is responsible for reissuing it again, in `async_snapshot`.
@@ -85,7 +85,7 @@ pub trait Engine: Send + Debug + Clone + Sized + 'static {
     fn async_batch_snapshot(
         &self,
         batch: Vec<Context>,
-        on_finished: BatchCallback<Self::SnapshotType>,
+        on_finished: BatchCallback<Self::Snap>,
     ) -> Result<()>;
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
@@ -96,7 +96,7 @@ pub trait Engine: Send + Debug + Clone + Sized + 'static {
         }
     }
 
-    fn snapshot(&self, ctx: &Context) -> Result<Self::SnapshotType> {
+    fn snapshot(&self, ctx: &Context) -> Result<Self::Snap> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         match wait_op!(|cb| self.async_snapshot(ctx, cb), timeout) {
             Some((_, res)) => res,
@@ -122,19 +122,19 @@ pub trait Engine: Send + Debug + Clone + Sized + 'static {
 }
 
 pub trait Snapshot: Send + Debug + Clone + Sized {
-    type IteratorType: Iterator;
+    type Iter: Iterator;
 
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
     #[allow(needless_lifetimes)]
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::IteratorType>>;
+    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
     #[allow(needless_lifetimes)]
     fn iter_cf(
         &self,
         cf: CfName,
         iter_opt: IterOption,
         mode: ScanMode,
-    ) -> Result<Cursor<Self::IteratorType>>;
+    ) -> Result<Cursor<Self::Iter>>;
     fn get_properties(&self) -> Result<TablePropertiesCollection> {
         self.get_properties_cf(CF_DEFAULT)
     }

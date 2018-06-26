@@ -498,10 +498,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    fn async_snapshot(
-        engine: E,
-        ctx: &Context,
-    ) -> impl Future<Item = E::SnapshotType, Error = Error> {
+    fn async_snapshot(engine: E, ctx: &Context) -> impl Future<Item = E::Snap, Error = Error> {
         let (callback, future) = util::future::paired_future_callback();
         let val = engine.async_snapshot(ctx, callback);
 
@@ -532,7 +529,7 @@ impl<E: Engine> Storage<E> {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: E::SnapshotType| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
@@ -587,7 +584,7 @@ impl<E: Engine> Storage<E> {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: E::SnapshotType| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
@@ -657,7 +654,7 @@ impl<E: Engine> Storage<E> {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: E::SnapshotType| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
@@ -897,7 +894,7 @@ impl<E: Engine> Storage<E> {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: E::SnapshotType| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
                     let cf = Self::rawkv_cf(cf)?;
@@ -949,7 +946,7 @@ impl<E: Engine> Storage<E> {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: E::SnapshotType| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
                     let cf = Self::rawkv_cf(cf)?;
@@ -1120,7 +1117,7 @@ impl<E: Engine> Storage<E> {
     }
 
     fn raw_scan(
-        snapshot: &E::SnapshotType,
+        snapshot: &E::Snap,
         cf: String,
         start_key: &Key,
         end_key: Option<Key>,
@@ -1171,7 +1168,7 @@ impl<E: Engine> Storage<E> {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: E::SnapshotType| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
@@ -1264,7 +1261,7 @@ impl<E: Engine> Storage<E> {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: E::SnapshotType| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 

@@ -35,9 +35,9 @@ pub struct MvccReader<S: Snapshot> {
     snapshot: S,
     statistics: Statistics,
     // cursors are used for speeding up scans.
-    data_cursor: Option<Cursor<S::IteratorType>>,
-    lock_cursor: Option<Cursor<S::IteratorType>>,
-    write_cursor: Option<Cursor<S::IteratorType>>,
+    data_cursor: Option<Cursor<S::Iter>>,
+    lock_cursor: Option<Cursor<S::Iter>>,
+    write_cursor: Option<Cursor<S::Iter>>,
 
     scan_mode: Option<ScanMode>,
     key_only: bool,

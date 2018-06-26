@@ -171,7 +171,7 @@ pub mod test {
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::table;
     use coprocessor::util;
-    use storage::engine::{self, Engine, EngineRocksdb, Modify, TEMP_DIR};
+    use storage::engine::{self, Engine, EngineRocksdb, Modify, RocksSnapshot, TEMP_DIR};
     use storage::mvcc::MvccTxn;
     use storage::{make_key, Mutation, Options, SnapshotStore, ALL_CFS};
     use util::collections::HashMap;
@@ -254,7 +254,7 @@ pub mod test {
     const COMMIT_TS: u64 = 20;
 
     pub struct TestStore {
-        snapshot: <EngineRocksdb as Engine>::SnapshotType,
+        snapshot: RocksSnapshot,
         ctx: Context,
         engine: EngineRocksdb,
     }
@@ -325,7 +325,7 @@ pub mod test {
             self.snapshot = self.engine.snapshot(&self.ctx).unwrap()
         }
 
-        pub fn get_snapshot(&mut self) -> (<EngineRocksdb as Engine>::SnapshotType, u64) {
+        pub fn get_snapshot(&mut self) -> (RocksSnapshot, u64) {
             (self.snapshot.clone(), COMMIT_TS + 1)
         }
     }

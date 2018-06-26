@@ -120,7 +120,7 @@ impl<E: Engine> Host<E> {
         self.notify_failed(e, reqs);
     }
 
-    fn handle_request(&mut self, snap: E::SnapshotType, t: RequestTask) {
+    fn handle_request(&mut self, snap: E::Snap, t: RequestTask) {
         // Collect metrics into it before requests enter into execute pool.
         // Otherwize collect into thread local contexts.
         let metrics = &mut self.basic_local_metrics;
@@ -227,7 +227,7 @@ impl<E: Engine> Host<E> {
         }
     }
 
-    fn handle_snapshot_result(&mut self, id: u64, snapshot: engine::Result<E::SnapshotType>) {
+    fn handle_snapshot_result(&mut self, id: u64, snapshot: engine::Result<E::Snap>) {
         let snap = match snapshot {
             Ok(s) => s,
             Err(e) => return self.notify_batch_failed(e, id),
@@ -240,8 +240,8 @@ impl<E: Engine> Host<E> {
 
 pub enum Task<E: Engine> {
     Request(RequestTask),
-    SnapRes(u64, engine::Result<E::SnapshotType>),
-    BatchSnapRes(Vec<(u64, engine::Result<E::SnapshotType>)>),
+    SnapRes(u64, engine::Result<E::Snap>),
+    BatchSnapRes(Vec<(u64, engine::Result<E::Snap>)>),
     RetryRequests(Vec<u64>),
 }
 
@@ -631,7 +631,7 @@ impl<E: Engine> Runnable<Task<E>> for Host<E> {
         let end_id = self.last_req_id;
 
         let sched = self.sched.clone();
-        let on_finished: engine::BatchCallback<E::SnapshotType> = box move |results: Vec<_>| {
+        let on_finished: engine::BatchCallback<E::Snap> = box move |results: Vec<_>| {
             let mut ready = Vec::with_capacity(results.len());
             let mut retry = Vec::new();
             for (id, res) in (start_id..end_id + 1).zip(results) {

@@ -112,10 +112,7 @@ pub fn make_key(k: &[u8]) -> Key {
     Key::from_raw(k)
 }
 
-fn must_batch_snapshot<E: Engine>(
-    batch: Vec<Context>,
-    engine: &E,
-) -> BatchResults<E::SnapshotType> {
+fn must_batch_snapshot<E: Engine>(batch: Vec<Context>, engine: &E) -> BatchResults<E::Snap> {
     let (tx, rx) = channel();
     let on_finished = box move |snapshots| {
         tx.send(snapshots).unwrap();

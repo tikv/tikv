@@ -16,7 +16,7 @@ use super::{
     Result, ScanMode, Snapshot, TEMP_DIR,
 };
 use kvproto::kvrpcpb::Context;
-use raftstore::store::engine::{IterOption, Peekable, SyncSnapshot as RocksSnapshot};
+use raftstore::store::engine::{IterOption, Peekable};
 use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::Deref;
@@ -27,6 +27,8 @@ use util::escape;
 use util::rocksdb;
 use util::rocksdb::CFOptions;
 use util::worker::{Runnable, Scheduler, Worker};
+
+pub use raftstore::store::engine::SyncSnapshot as RocksSnapshot;
 
 enum Task {
     Write(Vec<Modify>, Callback<()>),
@@ -180,8 +182,8 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
 }
 
 impl Engine for EngineRocksdb {
-    type IteratorType = DBIterator<Arc<DB>>;
-    type SnapshotType = RocksSnapshot;
+    type Iter = DBIterator<Arc<DB>>;
+    type Snap = RocksSnapshot;
 
     fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {
         if modifies.is_empty() {
@@ -191,7 +193,7 @@ impl Engine for EngineRocksdb {
         Ok(())
     }
 
-    fn async_snapshot(&self, _: &Context, cb: Callback<Self::SnapshotType>) -> Result<()> {
+    fn async_snapshot(&self, _: &Context, cb: Callback<Self::Snap>) -> Result<()> {
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())
     }
@@ -199,7 +201,7 @@ impl Engine for EngineRocksdb {
     fn async_batch_snapshot(
         &self,
         batch: Vec<Context>,
-        on_finished: BatchCallback<Self::SnapshotType>,
+        on_finished: BatchCallback<Self::Snap>,
     ) -> Result<()> {
         if batch.is_empty() {
             return Err(Error::EmptyRequest);
@@ -213,7 +215,7 @@ impl Engine for EngineRocksdb {
 }
 
 impl Snapshot for RocksSnapshot {
-    type IteratorType = DBIterator<Arc<DB>>;
+    type Iter = DBIterator<Arc<DB>>;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get {}", key);
@@ -227,7 +229,7 @@ impl Snapshot for RocksSnapshot {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::IteratorType>> {
+    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create iterator");
         let iter = self.db_iterator(iter_opt);
         Ok(Cursor::new(iter, mode))
@@ -239,7 +241,7 @@ impl Snapshot for RocksSnapshot {
         cf: CfName,
         iter_opt: IterOption,
         mode: ScanMode,
-    ) -> Result<Cursor<Self::IteratorType>> {
+    ) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create cf iterator");
         let iter = self.db_iterator_cf(cf, iter_opt)?;
         Ok(Cursor::new(iter, mode))

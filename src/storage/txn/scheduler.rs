@@ -106,10 +106,10 @@ pub enum Msg<E: Engine> {
     SnapshotFinished {
         cids: Vec<u64>,
         cb_ctx: CbContext,
-        snapshot: EngineResult<E::SnapshotType>,
+        snapshot: EngineResult<E::Snap>,
     },
     BatchSnapshotFinished {
-        batch: Vec<SnapshotResult<E::SnapshotType>>,
+        batch: Vec<SnapshotResult<E::Snap>>,
     },
     ReadFinished {
         cid: u64,
@@ -444,7 +444,7 @@ fn process_read<E: Engine>(
     cid: u64,
     mut cmd: Command,
     scheduler: worker::Scheduler<Msg<E>>,
-    snapshot: E::SnapshotType,
+    snapshot: E::Snap,
 ) -> Statistics {
     fail_point!("txn_before_process_read");
     debug!("process read cmd(cid={}) in worker pool.", cid);
@@ -671,7 +671,7 @@ fn process_write<E: Engine>(
     cid: u64,
     cmd: Command,
     scheduler: worker::Scheduler<Msg<E>>,
-    snapshot: E::SnapshotType,
+    snapshot: E::Snap,
 ) -> Statistics {
     fail_point!("txn_before_process_write");
     let mut statistics = Statistics::default();
@@ -691,7 +691,7 @@ fn process_write_impl<E: Engine>(
     cid: u64,
     mut cmd: Command,
     scheduler: worker::Scheduler<Msg<E>>,
-    snapshot: E::SnapshotType,
+    snapshot: E::Snap,
     statistics: &mut Statistics,
 ) -> Result<()> {
     let (pr, modifies, rows) = match cmd {
@@ -1029,7 +1029,7 @@ impl<E: Engine> Scheduler<E> {
     }
 
     /// Delivers a command to a worker thread for processing.
-    fn process_by_worker(&mut self, cid: u64, cb_ctx: CbContext, snapshot: E::SnapshotType) {
+    fn process_by_worker(&mut self, cid: u64, cb_ctx: CbContext, snapshot: E::Snap) {
         SCHED_STAGE_COUNTER_VEC
             .with_label_values(&[self.get_ctx_tag(cid), "process"])
             .inc();
@@ -1221,7 +1221,7 @@ impl<E: Engine> Scheduler<E> {
 
         let scheduler = self.scheduler.clone();
         let batch1 = batch.iter().map(|&(ref ctx, _)| ctx.clone()).collect();
-        let on_finished: engine::BatchCallback<E::SnapshotType> = box move |results: Vec<_>| {
+        let on_finished: engine::BatchCallback<E::Snap> = box move |results: Vec<_>| {
             let mut ready = Vec::with_capacity(results.len());
             let mut retry = Vec::new();
             for ((ctx, cids), snapshot) in batch.into_iter().zip(results) {
@@ -1294,7 +1294,7 @@ impl<E: Engine> Scheduler<E> {
         &mut self,
         cids: Vec<u64>,
         cb_ctx: CbContext,
-        snapshot: EngineResult<E::SnapshotType>,
+        snapshot: EngineResult<E::Snap>,
     ) {
         fail_point!("scheduler_async_snapshot_finish");
         debug!(

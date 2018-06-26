@@ -296,8 +296,8 @@ impl<S: RaftStoreRouter> Debug for RaftKv<S> {
 }
 
 impl<S: RaftStoreRouter> Engine for RaftKv<S> {
-    type IteratorType = RegionIterator;
-    type SnapshotType = RegionSnapshot;
+    type Iter = RegionIterator;
+    type Snap = RegionSnapshot;
 
     fn async_write(
         &self,
@@ -371,11 +371,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         })
     }
 
-    fn async_snapshot(
-        &self,
-        ctx: &Context,
-        cb: Callback<Self::SnapshotType>,
-    ) -> engine::Result<()> {
+    fn async_snapshot(&self, ctx: &Context, cb: Callback<Self::Snap>) -> engine::Result<()> {
         fail_point!("raftkv_async_snapshot");
         let mut req = Request::new();
         req.set_cmd_type(CmdType::Snap);
@@ -408,7 +404,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
     fn async_batch_snapshot(
         &self,
         batch: Vec<Context>,
-        on_finished: BatchCallback<Self::SnapshotType>,
+        on_finished: BatchCallback<Self::Snap>,
     ) -> engine::Result<()> {
         fail_point!("raftkv_async_batch_snapshot");
         if batch.is_empty() {
@@ -470,7 +466,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
 }
 
 impl Snapshot for RegionSnapshot {
-    type IteratorType = RegionIterator;
+    type Iter = RegionIterator;
 
     fn get(&self, key: &Key) -> engine::Result<Option<Value>> {
         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
@@ -488,11 +484,7 @@ impl Snapshot for RegionSnapshot {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter(
-        &self,
-        iter_opt: IterOption,
-        mode: ScanMode,
-    ) -> engine::Result<Cursor<Self::IteratorType>> {
+    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> engine::Result<Cursor<Self::Iter>> {
         fail_point!("raftkv_snapshot_iter", |_| Err(box_err!(
             "injected error for iter"
         )));
@@ -504,7 +496,7 @@ impl Snapshot for RegionSnapshot {
         cf: CfName,
         iter_opt: IterOption,
         mode: ScanMode,
-    ) -> engine::Result<Cursor<Self::IteratorType>> {
+    ) -> engine::Result<Cursor<Self::Iter>> {
         fail_point!("raftkv_snapshot_iter_cf", |_| Err(box_err!(
             "injected error for iter_cf"
         )));
