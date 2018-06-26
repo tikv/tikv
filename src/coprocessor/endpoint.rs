@@ -13,8 +13,8 @@
 
 use std::cell::RefMut;
 use std::fmt::{self, Debug, Display, Formatter};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use std::{mem, usize};
 
@@ -41,8 +41,8 @@ use util::worker::{Runnable, Scheduler};
 
 use super::checksum::ChecksumContext;
 use super::codec::table;
-use super::dag::DAGContext;
 use super::dag::executor::ExecutorMetrics;
+use super::dag::DAGContext;
 use super::local_metrics::BasicLocalMetrics;
 use super::metrics::*;
 use super::statistics::analyze::AnalyzeContext;
@@ -731,8 +731,8 @@ pub fn get_req_pri_str(pri: CommandPri) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::Future;
     use futures::sync::oneshot;
+    use futures::Future;
     use storage::engine::{self, TEMP_DIR};
 
     use kvproto::coprocessor::Request;

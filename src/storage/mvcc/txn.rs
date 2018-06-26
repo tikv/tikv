@@ -19,8 +19,9 @@ use super::{Error, Result};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
 use storage::engine::{Modify, ScanMode, Snapshot};
-use storage::{is_short_value, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK,
-              CF_WRITE};
+use storage::{
+    is_short_value, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
+};
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -330,8 +331,8 @@ impl MvccTxn {
 
 #[cfg(test)]
 mod tests {
-    use super::super::MvccReader;
     use super::super::write::{Write, WriteType};
+    use super::super::MvccReader;
     use super::MvccTxn;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use storage::engine::{self, Engine, Modify, TEMP_DIR};
@@ -786,11 +787,13 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 5, None, IsolationLevel::SI, true);
-        assert!(txn.prewrite(
-            Mutation::Put((make_key(key), value.to_vec())),
-            key,
-            &Options::default()
-        ).is_err());
+        assert!(
+            txn.prewrite(
+                Mutation::Put((make_key(key), value.to_vec())),
+                key,
+                &Options::default()
+            ).is_err()
+        );
 
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();

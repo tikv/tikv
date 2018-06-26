@@ -35,8 +35,8 @@ impl ScalarFunc {
 
 #[cfg(test)]
 mod test {
-    use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::Time;
+    use coprocessor::codec::Datum;
     use coprocessor::dag::expr::test::{datum_expr, scalar_func_expr};
     use coprocessor::dag::expr::{EvalContext, Expression};
     use tipb::expression::ScalarFuncSig;

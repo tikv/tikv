@@ -23,9 +23,10 @@ use uuid::Uuid;
 
 use kvproto::import_kvpb::*;
 use kvproto::import_sstpb::*;
-use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
-              ExternalSstFileInfo, ReadOptions, SstFileWriter, Writable, WriteBatch as RawBatch,
-              DB};
+use rocksdb::{
+    BlockBasedOptions, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
+    ExternalSstFileInfo, ReadOptions, SstFileWriter, Writable, WriteBatch as RawBatch, DB,
+};
 
 use config::DbConfig;
 use raftstore::store::keys;
@@ -36,8 +37,8 @@ use util::config::MB;
 use util::rocksdb::properties::{SizeProperties, SizePropertiesCollectorFactory};
 use util::rocksdb::{new_engine_opt, CFOptions};
 
-use super::Result;
 use super::common::*;
+use super::Result;
 
 /// Engine wraps rocksdb::DB with customized options to support efficient bulk
 /// write.

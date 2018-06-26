@@ -248,8 +248,9 @@ mod test {
     use std::sync::*;
 
     use kvproto::metapb::Region;
-    use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse,
-                              Request, Response};
+    use kvproto::raft_cmdpb::{
+        AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request, Response,
+    };
 
     #[derive(Clone, Default)]
     struct TestCoprocessor {

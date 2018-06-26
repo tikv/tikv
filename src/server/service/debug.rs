@@ -19,12 +19,14 @@ use grpc::{Error as GrpcError, WriteFlags};
 use grpc::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
 use kvproto::debugpb::*;
 use kvproto::debugpb_grpc;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader,
-                          RegionDetailResponse, StatusCmdType, StatusRequest};
+use kvproto::raft_cmdpb::{
+    AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader, RegionDetailResponse,
+    StatusCmdType, StatusRequest,
+};
 use protobuf::text_format::print_to_string;
 
-use raftstore::store::Engines;
 use raftstore::store::msg::Callback;
+use raftstore::store::Engines;
 use server::debug::{Debugger, Error};
 use server::transport::RaftStoreRouter;
 use util::{jemalloc, metrics, rocksdb_stats};
@@ -91,7 +93,8 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
         let cf = req.take_cf();
         let key = req.take_key();
 
-        let f = self.pool
+        let f = self
+            .pool
             .spawn(
                 future::ok(self.debugger.clone())
                     .and_then(move |debugger| debugger.get(db, &cf, key.as_slice())),
@@ -111,7 +114,8 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
         let region_id = req.get_region_id();
         let log_index = req.get_log_index();
 
-        let f = self.pool
+        let f = self
+            .pool
             .spawn(
                 future::ok(self.debugger.clone())
                     .and_then(move |debugger| debugger.raft_log(region_id, log_index)),
@@ -135,7 +139,8 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
 
         let region_id = req.get_region_id();
 
-        let f = self.pool
+        let f = self
+            .pool
             .spawn(
                 future::ok(self.debugger.clone())
                     .and_then(move |debugger| debugger.region_info(region_id)),
@@ -168,7 +173,8 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
         let region_id = req.get_region_id();
         let cfs = req.take_cfs().into_vec();
 
-        let f = self.pool
+        let f = self
+            .pool
             .spawn(
                 future::ok(self.debugger.clone())
                     .and_then(move |debugger| debugger.region_size(region_id, cfs)),
@@ -340,7 +346,8 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
         let consistency_check = future::result(debugger.get_store_id())
             .and_then(move |store_id| region_detail(router2, region_id, store_id))
             .and_then(|detail| consistency_check(router1, detail));
-        let f = self.pool
+        let f = self
+            .pool
             .spawn(consistency_check)
             .map(|_| RegionConsistencyCheckResponse::new());
         self.handle_response(ctx, sink, f, "check_region_consistency");
@@ -358,7 +365,8 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
         let config_name = req.take_config_name();
         let config_value = req.take_config_value();
 
-        let f = self.pool
+        let f = self
+            .pool
             .spawn(future::ok(self.debugger.clone()).and_then(move |debugger| {
                 debugger.modify_tikv_config(module, &config_name, &config_value)
             }))
@@ -375,7 +383,8 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
     ) {
         const TAG: &str = "get_region_properties";
 
-        let f = self.pool
+        let f = self
+            .pool
             .spawn(
                 future::ok(self.debugger.clone())
                     .and_then(move |debugger| debugger.get_region_properties(req.get_region_id())),
