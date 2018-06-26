@@ -39,7 +39,7 @@ use super::{Config, Result};
 const DEFAULT_COPROCESSOR_BATCH: usize = 256;
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 
-pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static, E: Engine + 'static>
+pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static, E: Engine>
 {
     env: Arc<Environment>,
     // Grpc server.
@@ -58,7 +58,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static, 
     cop_readpool: ReadPool<coprocessor::ReadPoolContext>,
 }
 
-impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine + 'static> Server<T, S, E> {
+impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S, E> {
     #[allow(too_many_arguments)]
     pub fn new(
         cfg: &Arc<Config>,
