@@ -219,7 +219,7 @@ pub fn build_exec<S: Snapshot + 'static>(
 
 type FirstExecutor = (Box<Executor + Send>, Arc<Vec<ColumnInfo>>);
 
-// TODO: Remove `'static` bound.
+// We have trait objects which requires 'static.
 fn build_first_executor<S: Snapshot + 'static>(
     mut first: executor::Executor,
     store: SnapshotStore<S>,
