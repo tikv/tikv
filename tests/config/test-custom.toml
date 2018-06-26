@@ -1,5 +1,6 @@
 log-level = "debug"
 log-file = "foo"
+log-rotation-timespan = "24h"
 [readpool.storage]
 high-concurrency = 1
 normal-concurrency = 3
@@ -358,4 +359,8 @@ key-path = "invalid path"
 [import]
 import-dir = "/abc"
 num-threads = 123
+num-import-jobs = 123
+num-import-sst-jobs = 123
+max-prepare-duration = "12m"
+region-split-size = "123MB"
 stream-channel-window = 123

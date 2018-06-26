@@ -92,7 +92,6 @@ impl ServerCluster {
 }
 
 impl Simulator for ServerCluster {
-    #[allow(useless_format)]
     fn run_node(
         &mut self,
         node_id: u64,
