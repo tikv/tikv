@@ -917,6 +917,13 @@ fn main() {
                 .help("decode a key in escaped format"),
         )
         .arg(
+            Arg::with_name("encode")
+                .conflicts_with_all(&["hex-to-escaped", "escaped-to-hex"])
+                .long("encode")
+                .takes_value(true)
+                .help("encode a key in escaped format"),
+            )
+        .arg(
             Arg::with_name("keys-logical-middle")
                 .conflicts_with_all(&["hex-to-escaped", "escaped-to-hex"])
                 .long("keys-logical-middle")
@@ -1440,6 +1447,9 @@ fn main() {
             Err(e) => eprintln!("decode meets error: {}", e),
         };
         return;
+    } else if let Some(decoded) = matches.value_of("encode") {
+        println!("{}", Key::from_raw(&unescape(decoded)));
+        return;
     } else if let Some(mut keys) = matches.values_of("keys-logical-middle") {
         let start = unescape(keys.next().unwrap());
         let end = unescape(keys.next().unwrap());
@@ -1818,6 +1828,7 @@ fn keys_logical_middle(mut start: Vec<u8>, mut end: Vec<u8>) -> Vec<u8> {
         let pad = vec![0; start.len() - end.len()];
         end.extend_from_slice(pad.as_slice())
     }
+    assert!(start < end);
 
     let mut i = 0;
     let mut end_fill_255 = false;
@@ -1830,12 +1841,19 @@ fn keys_logical_middle(mut start: Vec<u8>, mut end: Vec<u8>) -> Vec<u8> {
         }
 
         let digit = (start_number + end_number) / 2;
-
         if digit == start_number && digit != end_number {
             end_fill_255 = true;
             target.push(start[i]);
         } else if digit > 255 {
-            target[i - 1] += 1; // target[i - 1] must be less than 255.
+            for j in (0..i).rev() {
+                if target[j] < 255 {
+                    target[j] += 1;
+                    break;
+                }
+                assert!(j != 0);
+                target[j] = 0;
+            }
+            end_fill_255 = false;
             target.push((digit - 255) as u8);
         } else {
             end_fill_255 = false;
@@ -1843,6 +1861,5 @@ fn keys_logical_middle(mut start: Vec<u8>, mut end: Vec<u8>) -> Vec<u8> {
         }
         i += 1;
     }
-
     target
 }
