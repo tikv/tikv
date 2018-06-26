@@ -53,8 +53,10 @@ mod raftlog_gc;
 mod region;
 mod split_check;
 
-pub use self::apply::{Apply, ApplyMetrics, ApplyRes, Proposal, RegionProposal, Registration,
-                      Runner as ApplyRunner, Task as ApplyTask, TaskRes as ApplyTaskRes};
+pub use self::apply::{
+    Apply, ApplyMetrics, ApplyRes, Proposal, RegionProposal, Registration, Runner as ApplyRunner,
+    Task as ApplyTask, TaskRes as ApplyTaskRes,
+};
 pub use self::cleanup_sst::{Runner as CleanupSSTRunner, Task as CleanupSSTTask};
 pub use self::compact::{Runner as CompactRunner, Task as CompactTask};
 pub use self::consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask};

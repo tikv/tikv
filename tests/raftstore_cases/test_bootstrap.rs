@@ -18,8 +18,9 @@ use std::sync::{mpsc, Arc};
 use tempdir::TempDir;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::{bootstrap_store, create_event_loop, keys, Engines, Peekable,
-                             SnapManager};
+use tikv::raftstore::store::{
+    bootstrap_store, create_event_loop, keys, Engines, Peekable, SnapManager,
+};
 use tikv::server::Node;
 use tikv::storage::{ALL_CFS, CF_RAFT};
 use tikv::util::rocksdb;

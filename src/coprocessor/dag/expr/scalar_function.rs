@@ -18,8 +18,8 @@ use tipb::expression::ScalarFuncSig;
 
 use super::builtin_compare::CmpOp;
 use super::{Error, EvalContext, Result, ScalarFunc};
-use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::{self, Decimal, Duration, Json, Time};
+use coprocessor::codec::Datum;
 
 impl ScalarFunc {
     pub fn check_args(sig: ScalarFuncSig, args: usize) -> Result<()> {

@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use std::cmp;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 

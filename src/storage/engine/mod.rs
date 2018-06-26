@@ -323,7 +323,8 @@ impl Cursor {
             return Ok(false);
         }
 
-        if self.scan_mode == ScanMode::Forward && self.valid()
+        if self.scan_mode == ScanMode::Forward
+            && self.valid()
             && self.iter.key() >= key.encoded().as_slice()
         {
             return Ok(true);
@@ -410,7 +411,8 @@ impl Cursor {
             return Ok(false);
         }
 
-        if self.scan_mode == ScanMode::Backward && self.valid()
+        if self.scan_mode == ScanMode::Backward
+            && self.valid()
             && self.iter.key() <= key.encoded().as_slice()
         {
             return Ok(true);
@@ -811,9 +813,11 @@ mod tests {
         assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
         assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
         let mut statistics = CFStatistics::default();
-        assert!(!cursor
-            .near_seek(&make_key(b"z\x00"), &mut statistics)
-            .unwrap());
+        assert!(
+            !cursor
+                .near_seek(&make_key(b"z\x00"), &mut statistics)
+                .unwrap()
+        );
         // Insert many key-values between 'x' and 'z' then near_seek will fallback to seek.
         for i in 0..super::SEEK_BOUND {
             let key = format!("y{}", i);
@@ -840,15 +844,21 @@ mod tests {
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CFStatistics::default();
-        assert!(!cursor
-            .near_reverse_seek(&make_key(b"x"), &mut statistics)
-            .unwrap());
-        assert!(!cursor
-            .near_reverse_seek(&make_key(b"z"), &mut statistics)
-            .unwrap());
-        assert!(!cursor
-            .near_reverse_seek(&make_key(b"w"), &mut statistics)
-            .unwrap());
+        assert!(
+            !cursor
+                .near_reverse_seek(&make_key(b"x"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            !cursor
+                .near_reverse_seek(&make_key(b"z"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            !cursor
+                .near_reverse_seek(&make_key(b"w"), &mut statistics)
+                .unwrap()
+        );
         assert!(!cursor.near_seek(&make_key(b"x"), &mut statistics).unwrap());
         assert!(!cursor.near_seek(&make_key(b"z"), &mut statistics).unwrap());
         assert!(!cursor.near_seek(&make_key(b"w"), &mut statistics).unwrap());
