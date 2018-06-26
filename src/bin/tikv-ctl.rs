@@ -1712,7 +1712,7 @@ fn split_region(pd: &str, region_id: u64, key: Vec<u8>, mgr: Arc<SecurityManager
         .expect("must have the region");
 
     let leader = pd_client
-        .get_region_info(region.get_end_key())
+        .get_region_info(region.get_start_key())
         .expect("get_region_info should success")
         .leader
         .expect("region must have leader");
