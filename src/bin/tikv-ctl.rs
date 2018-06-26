@@ -40,7 +40,7 @@ use grpcio::{ChannelBuilder, Environment};
 use protobuf::Message;
 use protobuf::RepeatedField;
 
-use kvproto::debugpb::{*, DB as DBType};
+use kvproto::debugpb::{DB as DBType, *};
 use kvproto::debugpb_grpc::DebugClient;
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
 use kvproto::metapb::{Peer, Region};
@@ -53,7 +53,7 @@ use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::raftstore::store::{keys, Engines};
 use tikv::server::debug::{Debugger, RegionInfo};
-use tikv::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::util::rocksdb as rocksdb_util;
 use tikv::util::security::{SecurityConfig, SecurityManager};
 use tikv::util::{escape, unescape};
@@ -852,30 +852,24 @@ fn main() {
         .about("Distributed transactional key value database powered by Rust and Raft")
         .arg(
             Arg::with_name("db")
-                .required(true)
-                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex", "keys-logical-middle"])
                 .long("db")
                 .takes_value(true)
                 .help("set rocksdb path"),
         )
         .arg(
             Arg::with_name("raftdb")
-                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex", "keys-logical-middle"])
                 .long("raftdb")
                 .takes_value(true)
                 .help("set raft rocksdb path"),
         )
         .arg(
             Arg::with_name("config")
-                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex", "keys-logical-middle"])
                 .long("config")
                 .takes_value(true)
                 .help("set config for rocksdb"),
         )
         .arg(
             Arg::with_name("host")
-                .required(true)
-                .conflicts_with_all(&["db", "pd", "raftdb", "hex-to-escaped", "escaped-to-hex", "config", "keys-logical-middle"])
                 .long("host")
                 .takes_value(true)
                 .help("set remote host"),
@@ -916,6 +910,13 @@ fn main() {
                 .help("convert escaped key to hex key"),
         )
         .arg(
+            Arg::with_name("decode")
+                .conflicts_with_all(&["hex-to-escaped", "escaped-to-hex"])
+                .long("decode")
+                .takes_value(true)
+                .help("decode a key in escaped format"),
+        )
+        .arg(
             Arg::with_name("keys-logical-middle")
                 .conflicts_with_all(&["hex-to-escaped", "escaped-to-hex"])
                 .long("keys-logical-middle")
@@ -928,9 +929,7 @@ fn main() {
             )
         .arg(
             Arg::with_name("pd")
-                .required(true)
                 .long("pd")
-                .conflicts_with_all(&["db", "raftdb", "host", "hex-to-escaped", "escaped-to-hex", "config", "keys-logical-middle"])
                 .takes_value(true)
                 .help("pd address"),
         )
@@ -1428,11 +1427,18 @@ fn main() {
 
     let matches = app.clone().get_matches();
 
+    // Deal with arguments about key utils.
     if let Some(hex) = matches.value_of("hex-to-escaped") {
         println!("{}", escape(&from_hex(hex).unwrap()));
         return;
     } else if let Some(escaped) = matches.value_of("escaped-to-hex") {
         println!("{}", &unescape(escaped).to_hex().to_uppercase());
+        return;
+    } else if let Some(encoded) = matches.value_of("decode") {
+        match Key::from_encoded(unescape(encoded)).raw() {
+            Ok(k) => println!("{}", escape(&k)),
+            Err(e) => eprintln!("decode meets error: {}", e),
+        };
         return;
     } else if let Some(mut keys) = matches.values_of("keys-logical-middle") {
         let start = unescape(keys.next().unwrap());
@@ -1443,11 +1449,13 @@ fn main() {
 
     let mgr = new_security_mgr(&matches);
 
+    // Deal with subcommand dump-snap-meta.
     if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
         let path = matches.value_of("file").unwrap();
         return dump_snap_meta_file(path);
     }
 
+    // Deal with all subcommands needs PD.
     if let Some(pd) = matches.value_of("pd") {
         if let Some(matches) = matches.subcommand_matches("compact-cluster") {
             let db = matches.value_of("db").unwrap();
@@ -1468,6 +1476,7 @@ fn main() {
         return;
     }
 
+    // Deal with all subcommands about db or host.
     let db = matches.value_of("db");
     let raft_db = matches.value_of("raftdb");
     let host = matches.value_of("host");
