@@ -20,9 +20,9 @@ use tipb::executor::TopN;
 use tipb::expression::ByItem;
 use tipb::schema::ColumnInfo;
 
-use coprocessor::Result;
 use coprocessor::codec::datum::Datum;
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use coprocessor::Result;
 
 use super::topn_heap::TopNHeap;
 use super::{inflate_with_col_for_dag, Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
@@ -182,9 +182,9 @@ pub mod test {
     use tipb::executor::TableScan;
     use tipb::expression::{Expr, ExprType};
 
-    use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::table::{self, RowColsDict};
+    use coprocessor::codec::Datum;
     use util::codec::number::NumberEncoder;
     use util::collections::HashMap;
 
@@ -469,13 +469,11 @@ pub mod test {
             new_col_info(2, types::VARCHAR),
             new_col_info(3, types::NEW_DECIMAL),
         ];
-        let raw_data = vec![
-            vec![
-                Datum::I64(1),
-                Datum::Bytes(b"a".to_vec()),
-                Datum::Dec(7.into()),
-            ],
-        ];
+        let raw_data = vec![vec![
+            Datum::I64(1),
+            Datum::Bytes(b"a".to_vec()),
+            Datum::Dec(7.into()),
+        ]];
         let table_data = gen_table_data(tid, &cis, &raw_data);
         let mut test_store = TestStore::new(&table_data);
         // init table scan meta

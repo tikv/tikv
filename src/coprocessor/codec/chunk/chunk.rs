@@ -13,8 +13,8 @@
 
 // FIXME(shirly): remove following later
 #![allow(dead_code)]
-use super::Result;
 use super::column::Column;
+use super::Result;
 use coprocessor::codec::Datum;
 use tipb::expression::FieldType;
 

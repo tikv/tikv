@@ -18,10 +18,12 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Write;
 use std::mem;
 use std::str::FromStr;
-use std::{str, i64};
+use std::{i64, str};
 
-use super::mysql::{self, parse_json_path_expr, Decimal, DecimalEncoder, Duration, Json,
-                   JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP};
+use super::mysql::{
+    self, parse_json_path_expr, Decimal, DecimalEncoder, Duration, Json, JsonEncoder,
+    PathExpression, Time, DEFAULT_FSP, MAX_FSP,
+};
 use super::{convert, Error, Result};
 use coprocessor::dag::expr::EvalContext;
 use util::codec::bytes::{self, BytesEncoder};

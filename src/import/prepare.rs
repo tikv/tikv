@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use std::cmp;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -347,10 +347,8 @@ mod tests {
             let mut client = MockClient::new();
             let keys = vec![
                 // [0, 3), [3, 5)
-                5,
-                // [5, 7)
-                7,
-                // [7, 10), [10, 13), [13, 15)
+                5, // [5, 7)
+                7, // [7, 10), [10, 13), [13, 15)
                 15,
             ];
             let mut last = Vec::new();

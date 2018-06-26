@@ -51,7 +51,8 @@ impl TableScanExecutor {
         collect: bool,
     ) -> Result<TableScanExecutor> {
         box_try!(table::check_table_ranges(&key_ranges));
-        let col_ids = meta.get_columns()
+        let col_ids = meta
+            .get_columns()
             .iter()
             .filter(|c| !c.get_pk_handle())
             .map(|c| c.get_column_id())
@@ -94,7 +95,8 @@ impl TableScanExecutor {
 
     fn get_row_from_point(&mut self, mut range: KeyRange) -> Result<Option<Row>> {
         let key = range.take_start();
-        let value = self.store
+        let value = self
+            .store
             .get(&Key::from_raw(&key), &mut self.metrics.cf_stats)?;
         if let Some(value) = value {
             let values = box_try!(table::cut_row(value, &self.col_ids));
@@ -222,8 +224,9 @@ mod test {
 
     use storage::SnapshotStore;
 
-    use super::super::scanner::test::{get_point_range, get_range, prepare_table_data, Data,
-                                      TestStore};
+    use super::super::scanner::test::{
+        get_point_range, get_range, prepare_table_data, Data, TestStore,
+    };
     use super::*;
 
     const TABLE_ID: i64 = 1;

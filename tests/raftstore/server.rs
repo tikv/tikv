@@ -33,8 +33,10 @@ use tikv::server::readpool::ReadPool;
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::transport::ServerRaftStoreRouter;
-use tikv::server::{create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient,
-                   Server, ServerTransport};
+use tikv::server::{
+    create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, Server,
+    ServerTransport,
+};
 use tikv::storage::{self, Engine};
 use tikv::util::security::SecurityManager;
 use tikv::util::transport::SendCh;
@@ -92,7 +94,6 @@ impl ServerCluster {
 }
 
 impl Simulator for ServerCluster {
-    #[allow(useless_format)]
     fn run_node(
         &mut self,
         node_id: u64,
