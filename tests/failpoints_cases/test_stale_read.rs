@@ -156,7 +156,6 @@ fn stale_read_during_splitting(right_derive: bool) {
     fail::remove(propose_readindex);
 }
 
-#[allow(too_many_arguments)]
 fn must_not_eq_on_key(
     cluster: &mut Cluster<NodeCluster>,
     key: &[u8],

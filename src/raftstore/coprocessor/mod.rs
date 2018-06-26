@@ -27,8 +27,9 @@ pub mod split_observer;
 pub use self::config::Config;
 pub use self::dispatcher::{CoprocessorHost, Registry};
 pub use self::error::{Error, Result};
-pub use self::split_check::{HalfCheckObserver, Host as SplitCheckerHost, SizeCheckObserver,
-                            TableCheckObserver};
+pub use self::split_check::{
+    HalfCheckObserver, Host as SplitCheckerHost, SizeCheckObserver, TableCheckObserver,
+};
 
 /// Coprocessor is used to provide a convient way to inject code to
 /// KV processing.

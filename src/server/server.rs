@@ -200,9 +200,9 @@ mod tests {
     use kvproto::metapb;
     use kvproto::raft_serverpb::RaftMessage;
     use pd::{LamePdClient, PdFuture};
-    use raftstore::Result as RaftStoreResult;
     use raftstore::store::transport::Transport;
     use raftstore::store::{Msg as StoreMsg, SignificantMsg};
+    use raftstore::Result as RaftStoreResult;
     use server::readpool::{self, ReadPool};
     use storage::{self, Config as StorageConfig, Storage};
     use util::security::SecurityConfig;

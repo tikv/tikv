@@ -20,14 +20,14 @@ use std::sync::{Arc, RwLock};
 use super::metrics::*;
 use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
+use super::Result;
 use raft::SnapshotStatus;
-use raftstore::Result as RaftStoreResult;
 use raftstore::store::{BatchReadCallback, Callback, Msg as StoreMsg, SignificantMsg, Transport};
-use server::Result;
+use raftstore::Result as RaftStoreResult;
 use server::raft_client::RaftClient;
-use util::HandyRwLock;
 use util::transport::SendCh;
 use util::worker::Scheduler;
+use util::HandyRwLock;
 
 pub trait RaftStoreRouter: Send + Clone {
     /// Send StoreMsg, retry if failed. Try times may vary from implementation.

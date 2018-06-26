@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::VecDeque;
 use std::collections::hash_map::Entry;
+use std::collections::VecDeque;
 use std::ffi::CString;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::Arc;
 
 use futures::future::{self, Shared, SharedError};
 use futures::sync::mpsc::{self, UnboundedSender};
@@ -85,7 +85,8 @@ impl ConnectionBuilder {
         let (tx, rx) = mpsc::unbounded();
         let (tx_close, rx_close) = oneshot::channel();
         let addr = self.addr;
-        let buffer = self.buffer
+        let buffer = self
+            .buffer
             .unwrap_or_else(|| VecDeque::with_capacity(PRESERVED_MSG_BUFFER_COUNT));
         let version = addr.version;
         let store_id = self.store_id;
@@ -208,7 +209,8 @@ impl<S: StoreAddrResolver> ClientContext<S> {
 
     #[inline]
     fn connect(&mut self, pool: &CpuPool, store_id: u64) -> Conn {
-        let addr = self.addrs
+        let addr = self
+            .addrs
             .get(&store_id)
             .cloned()
             .unwrap_or_else(|| self.refresh_address(store_id));
@@ -228,7 +230,8 @@ impl<S: StoreAddrResolver> ClientContext<S> {
 
         debug!("reconnecting to store {}", conn.store_id);
 
-        let addr = self.addrs
+        let addr = self
+            .addrs
             .get(&conn.store_id)
             .filter(|addr| addr.version != conn.version)
             .cloned()

@@ -25,13 +25,14 @@ use kvproto::pdpb;
 use tikv::pd::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
 use tikv::util::security::{SecurityConfig, SecurityManager};
 
-use super::mock::Server as MockServer;
 use super::mock::mocker::*;
+use super::mock::Server as MockServer;
 use util;
 
 fn new_config(eps: Vec<(String, u16)>) -> Config {
     let mut cfg = Config::default();
-    cfg.endpoints = eps.into_iter()
+    cfg.endpoints = eps
+        .into_iter()
         .map(|addr| format!("{}:{}", addr.0, addr.1))
         .collect();
     cfg

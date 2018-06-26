@@ -13,23 +13,25 @@
 
 use std::boxed::FnBox;
 use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::{future, Async, Future, Poll, Stream};
 use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
-use grpc::{ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus,
-           RpcStatusCode, WriteFlags};
+use grpc::{
+    ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus, RpcStatusCode,
+    WriteFlags,
+};
 use kvproto::metapb::Peer;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb_grpc::TikvClient;
 
 use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
-use util::DeferContext;
 use util::security::SecurityManager;
 use util::worker::Runnable;
+use util::DeferContext;
 
 use super::metrics::*;
 use super::raft_client::Address;
@@ -165,7 +167,8 @@ fn send_snap(
         .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
         .default_compression_algorithm(cfg.grpc_compression_algorithm());
 
-    Ok(addr.map_err(|e| Error::Other(box_err!("{}", e.as_str())))
+    Ok(addr
+        .map_err(|e| Error::Other(box_err!("{}", e.as_str())))
         .and_then(move |addr| {
             let channel = security_mgr.connect(cb, &addr);
             let client = TikvClient::new(channel);

@@ -12,9 +12,9 @@
 // limitations under the License.
 
 use tikv::raftstore::store::keys::{data_key, DATA_MAX_KEY};
-use tikv::storage::CF_WRITE;
 use tikv::storage::mvcc::{Write, WriteType};
 use tikv::storage::types::Key as MvccKey;
+use tikv::storage::CF_WRITE;
 use tikv::util::config::*;
 use tikv::util::rocksdb::get_cf_handle;
 

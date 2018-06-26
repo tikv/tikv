@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use futures::Future;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::server::readpool::ReadPool;
@@ -162,7 +162,8 @@ impl SyncStorage {
         start_key: Vec<u8>,
         limit: usize,
     ) -> Result<Vec<LockInfo>> {
-        wait_op!(|cb| self.store
+        wait_op!(|cb| self
+            .store
             .async_scan_lock(ctx, max_ts, start_key, limit, cb))
             .unwrap()
     }

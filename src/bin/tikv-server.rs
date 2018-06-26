@@ -11,14 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(plugin)]
 #![feature(slice_patterns)]
-#![cfg_attr(feature = "dev", plugin(clippy))]
-#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-#![allow(needless_pass_by_value)]
-#![allow(unreadable_literal)]
-// TODO: remove this once rust-lang/rust#43268 is resolved.
-#![allow(logic_bug)]
 
 #[macro_use]
 extern crate clap;
@@ -305,7 +298,7 @@ fn main() {
                 .takes_value(true)
                 .value_name("LEVEL")
                 .possible_values(&[
-                    "trace", "debug", "info", "warn", "warning", "error", "critical"
+                    "trace", "debug", "info", "warn", "warning", "error", "critical",
                 ])
                 .help("Sets log level"),
         )

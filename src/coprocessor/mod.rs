@@ -106,5 +106,6 @@ impl ReqContext {
 }
 
 pub use self::dag::{ScanOn, Scanner};
-pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask,
-                         DEFAULT_REQUEST_MAX_HANDLE_SECS};
+pub use self::endpoint::{
+    Host as EndPointHost, RequestTask, Task as EndPointTask, DEFAULT_REQUEST_MAX_HANDLE_SECS,
+};
