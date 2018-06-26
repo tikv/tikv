@@ -22,10 +22,14 @@ use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
 use futures::task::Task;
 use futures::{task, Async, Future, Poll, Stream};
-use grpc::{CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
-           Result as GrpcResult};
-use kvproto::pdpb::{ErrorType, GetMembersRequest, GetMembersResponse, Member,
-                    RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader};
+use grpc::{
+    CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
+    Result as GrpcResult,
+};
+use kvproto::pdpb::{
+    ErrorType, GetMembersRequest, GetMembersResponse, Member, RegionHeartbeatRequest,
+    RegionHeartbeatResponse, ResponseHeader,
+};
 use kvproto::pdpb_grpc::PdClient;
 use tokio_timer::Timer;
 
@@ -124,10 +128,12 @@ impl LeaderClient {
             receiver: None,
             inner: Arc::clone(&self.inner),
         };
-        Box::new(recv.for_each(move |resp| {
-            f(resp);
-            Ok(())
-        }).map_err(|e| panic!("unexpected error: {:?}", e)))
+        Box::new(
+            recv.for_each(move |resp| {
+                f(resp);
+                Ok(())
+            }).map_err(|e| panic!("unexpected error: {:?}", e)),
+        )
     }
 
     pub fn on_reconnect(&self, f: Box<Fn() + Sync + Send + 'static>) {
@@ -383,7 +389,8 @@ fn connect(
     addr: &str,
 ) -> Result<(PdClient, GetMembersResponse)> {
     info!("connect to PD endpoint: {:?}", addr);
-    let addr = addr.trim_left_matches("http://")
+    let addr = addr
+        .trim_left_matches("http://")
         .trim_left_matches("https://");
     let cb = ChannelBuilder::new(env)
         .keepalive_time(Duration::from_secs(10))

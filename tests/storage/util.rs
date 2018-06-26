@@ -14,13 +14,13 @@
 use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::Context;
 use raftstore::cluster::Cluster;
-use raftstore::server::ServerCluster;
 use raftstore::server::new_server_cluster;
+use raftstore::server::ServerCluster;
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::config::Config;
 use tikv::storage::{self, Engine};
-use tikv::util::HandyRwLock;
 use tikv::util::worker::FutureWorker;
+use tikv::util::HandyRwLock;
 
 pub fn new_raft_engine(count: usize, key: &str) -> (Cluster<ServerCluster>, Box<Engine>, Context) {
     let mut cluster = new_server_cluster(0, count);

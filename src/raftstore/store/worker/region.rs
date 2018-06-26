@@ -13,9 +13,9 @@
 
 use std::collections::BTreeMap;
 use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
@@ -23,12 +23,14 @@ use raft::eraftpb::Snapshot as RaftSnapshot;
 use rocksdb::{Writable, WriteBatch, DB};
 
 use raftstore::store::engine::{Mutable, Snapshot};
-use raftstore::store::peer_storage::{JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING,
-                                     JOB_STATUS_FAILED, JOB_STATUS_FINISHED, JOB_STATUS_PENDING,
-                                     JOB_STATUS_RUNNING};
+use raftstore::store::peer_storage::{
+    JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
+    JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
+};
 use raftstore::store::snap::{Error, Result};
-use raftstore::store::{self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey,
-                       SnapManager};
+use raftstore::store::{
+    self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey, SnapManager,
+};
 use storage::CF_RAFT;
 use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use util::time;
@@ -132,7 +134,8 @@ impl PendingDeleteRanges {
         }
 
         // find the rest ranges that overlap with [start_key, end_key)
-        for (s_key, peer_info) in self.ranges
+        for (s_key, peer_info) in self
+            .ranges
             .range((Included(start_key.to_vec()), Excluded(end_key.to_vec())))
         {
             ranges.push((
@@ -183,7 +186,8 @@ impl PendingDeleteRanges {
     }
 
     pub fn drain_timeout_ranges(&mut self, now: time::Instant) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
-        let ranges = self.ranges
+        let ranges = self
+            .ranges
             .iter()
             .filter(|&(_, info)| info.timeout <= now)
             .map(|(start_key, info)| (info.region_id, start_key.clone(), info.end_key.clone()))
@@ -404,7 +408,8 @@ impl SnapContext {
     }
 
     fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) {
-        let overlap_ranges = self.pending_delete_ranges
+        let overlap_ranges = self
+            .pending_delete_ranges
             .drain_overlap_ranges(start_key, end_key);
         for (region_id, s_key, e_key) in overlap_ranges {
             self.cleanup_range(region_id, s_key, e_key, false /* use_delete_files */);
@@ -442,10 +447,7 @@ impl SnapContext {
         let mut timeout_ranges = self.pending_delete_ranges.drain_timeout_ranges(now);
         for (region_id, start_key, end_key) in timeout_ranges.drain(..) {
             self.cleanup_range(
-                region_id,
-                start_key,
-                end_key,
-                true, /* use_delete_files */
+                region_id, start_key, end_key, true, /* use_delete_files */
             );
         }
     }
@@ -509,10 +511,7 @@ impl Runnable<Task> for Runner {
                     end_key.clone(),
                 ) {
                     self.ctx.cleanup_range(
-                        region_id,
-                        start_key,
-                        end_key,
-                        false, /* use_delete_files */
+                        region_id, start_key, end_key, false, /* use_delete_files */
                     );
                 }
             }

@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use rand::{self, Rng};
-use std::sync::Arc;
 use std::sync::mpsc::channel;
+use std::sync::Arc;
 use std::time::Duration;
 use std::{fs, thread};
 

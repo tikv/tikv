@@ -16,8 +16,10 @@ use std::thread;
 use std::time::Duration;
 
 use futures::{Future, Sink, Stream};
-use grpc::{DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
-           Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags};
+use grpc::{
+    DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
+    Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
+};
 use tikv::pd::Error as PdError;
 use tikv::util::security::*;
 
@@ -112,7 +114,8 @@ where
     R: Send + 'static,
     F: Fn(&PdMocker) -> Option<Result<R>>,
 {
-    let resp = mock.case
+    let resp = mock
+        .case
         .as_ref()
         .and_then(|case| f(case.as_ref()))
         .or_else(|| f(mock.default_handler.as_ref()));
@@ -226,12 +229,14 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         sink: DuplexSink<RegionHeartbeatResponse>,
     ) {
         let mock = self.clone();
-        let f = sink.sink_map_err(PdError::from)
+        let f = sink
+            .sink_map_err(PdError::from)
             .send_all(
                 stream
                     .map_err(PdError::from)
                     .and_then(move |req| {
-                        let resp = mock.case
+                        let resp = mock
+                            .case
                             .as_ref()
                             .and_then(|case| case.region_heartbeat(&req))
                             .or_else(|| mock.default_handler.region_heartbeat(&req));

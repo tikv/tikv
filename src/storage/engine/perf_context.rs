@@ -38,11 +38,14 @@ impl PerfStatistics {
     pub fn add(&mut self, other: &Self) {
         assert!(!self.absolute);
         assert!(!other.absolute);
-        self.internal_key_skipped_count = self.internal_key_skipped_count
+        self.internal_key_skipped_count = self
+            .internal_key_skipped_count
             .saturating_add(other.internal_key_skipped_count);
-        self.internal_delete_skipped_count = self.internal_delete_skipped_count
+        self.internal_delete_skipped_count = self
+            .internal_delete_skipped_count
             .saturating_add(other.internal_delete_skipped_count);
-        self.block_cache_hit_count = self.block_cache_hit_count
+        self.block_cache_hit_count = self
+            .block_cache_hit_count
             .saturating_add(other.block_cache_hit_count);
         self.block_read_count = self.block_read_count.saturating_add(other.block_read_count);
         self.block_read_byte = self.block_read_byte.saturating_add(other.block_read_byte);

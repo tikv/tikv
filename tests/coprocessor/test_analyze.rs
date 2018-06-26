@@ -15,8 +15,10 @@ use super::test_select::*;
 use kvproto::coprocessor::{KeyRange, Request};
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::{Message, RepeatedField};
-use tipb::analyze::{AnalyzeColumnsReq, AnalyzeColumnsResp, AnalyzeIndexReq, AnalyzeIndexResp,
-                    AnalyzeReq, AnalyzeType};
+use tipb::analyze::{
+    AnalyzeColumnsReq, AnalyzeColumnsResp, AnalyzeIndexReq, AnalyzeIndexResp, AnalyzeReq,
+    AnalyzeType,
+};
 
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 
