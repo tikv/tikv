@@ -6,11 +6,11 @@ about: Usage question that isn't answered in docs or discussion
 
 ## Question
 
-Before asking a question, make sure you:
+Before asking a question, make sure you have:
 
 - Searched existing Stack Overflow questions.
 - Googled your question.
-- Searched opened and closed [GitHub issues](https://github.com/pingcap/tikv/issues?utf8=%E2%9C%93&q=is%3Aissue)
+- Searched open and closed [GitHub issues](https://github.com/pingcap/tikv/issues?utf8=%E2%9C%93&q=is%3Aissue)
 - Read the documentation:
   - [TiKV Readme](https://github.com/pingcap/tikv)
   - [TiKV Doc](https://github.com/pingcap/tikv/wiki/TiKV-Documentation)
