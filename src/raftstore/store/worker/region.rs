@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use rocksdb::{Writable, WriteBatch, DB};
+use rocksdb::{Writable, WriteBatch, WriteOptions, DB};
 
 use raftstore::store::engine::{Mutable, Snapshot};
 use raftstore::store::peer_storage::{
@@ -324,7 +324,9 @@ impl SnapContext {
         let handle = box_try!(rocksdb::get_cf_handle(&self.kv_db, CF_RAFT));
         box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
         box_try!(wb.delete_cf(handle, &keys::snapshot_raft_state_key(region_id)));
-        self.kv_db.write(wb).unwrap_or_else(|e| {
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        self.kv_db.write_opt(wb, &write_opts).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
