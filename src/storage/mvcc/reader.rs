@@ -31,13 +31,13 @@ const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 // RocksDB, so don't set REVERSE_SEEK_BOUND too small.
 const REVERSE_SEEK_BOUND: u64 = 32;
 
-pub struct MvccReader {
-    snapshot: Box<Snapshot>,
+pub struct MvccReader<S: Snapshot> {
+    snapshot: S,
     statistics: Statistics,
     // cursors are used for speeding up scans.
-    data_cursor: Option<Cursor>,
-    lock_cursor: Option<Cursor>,
-    write_cursor: Option<Cursor>,
+    data_cursor: Option<Cursor<S::Iter>>,
+    lock_cursor: Option<Cursor<S::Iter>>,
+    write_cursor: Option<Cursor<S::Iter>>,
 
     scan_mode: Option<ScanMode>,
     key_only: bool,
@@ -48,16 +48,16 @@ pub struct MvccReader {
     isolation_level: IsolationLevel,
 }
 
-impl MvccReader {
+impl<S: Snapshot> MvccReader<S> {
     pub fn new(
-        snapshot: Box<Snapshot>,
+        snapshot: S,
         scan_mode: Option<ScanMode>,
         fill_cache: bool,
         lower_bound: Option<Vec<u8>>,
         upper_bound: Option<Vec<u8>>,
         isolation_level: IsolationLevel,
-    ) -> MvccReader {
-        MvccReader {
+    ) -> Self {
+        Self {
             snapshot,
             statistics: Statistics::default(),
             data_cursor: None,
@@ -752,7 +752,7 @@ mod tests {
 
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: u64) {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(Box::new(snap), start_ts, None, IsolationLevel::SI, true);
+            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true);
             txn.prewrite(m, pk, &Options::default()).unwrap();
             self.write(txn.into_modifies());
         }
@@ -760,7 +760,7 @@ mod tests {
         fn commit(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
             let k = make_key(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(Box::new(snap), start_ts, None, IsolationLevel::SI, true);
+            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true);
             txn.commit(&k, commit_ts).unwrap();
             self.write(txn.into_modifies());
         }
@@ -768,7 +768,7 @@ mod tests {
         fn rollback(&mut self, pk: &[u8], start_ts: u64) {
             let k = make_key(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(Box::new(snap), start_ts, None, IsolationLevel::SI, true);
+            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true);
             txn.rollback(&k).unwrap();
             self.write(txn.into_modifies());
         }
@@ -777,8 +777,7 @@ mod tests {
             let k = make_key(pk);
             loop {
                 let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-                let mut txn =
-                    MvccTxn::new(Box::new(snap), safe_point, None, IsolationLevel::SI, true);
+                let mut txn = MvccTxn::new(snap, safe_point, None, IsolationLevel::SI, true);
                 txn.gc(&k, safe_point).unwrap();
                 let modifies = txn.into_modifies();
                 if modifies.is_empty() {
@@ -865,7 +864,7 @@ mod tests {
         need_gc: bool,
     ) -> Option<MvccProperties> {
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let reader = MvccReader::new(Box::new(snap), None, false, None, None, IsolationLevel::SI);
+        let reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
         assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
         reader.get_mvcc_properties(safe_point)
     }
@@ -1002,7 +1001,7 @@ mod tests {
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let mut reader = MvccReader::new(
-            Box::new(snap),
+            snap,
             Some(ScanMode::Backward),
             false,
             None,
@@ -1102,7 +1101,7 @@ mod tests {
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let mut reader = MvccReader::new(
-            Box::new(snap),
+            snap,
             Some(ScanMode::Backward),
             false,
             None,

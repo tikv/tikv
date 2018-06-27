@@ -44,11 +44,11 @@ pub fn create_raft_storage<S>(
     router: S,
     cfg: &StorageConfig,
     read_pool: ReadPool<storage::ReadPoolContext>,
-) -> Result<Storage>
+) -> Result<Storage<RaftKv<S>>>
 where
     S: RaftStoreRouter + 'static,
 {
-    let engine = Box::new(RaftKv::new(router));
+    let engine = RaftKv::new(router);
     let store = Storage::from_engine(engine, cfg, read_pool)?;
     Ok(store)
 }
