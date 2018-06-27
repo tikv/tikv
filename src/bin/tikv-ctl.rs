@@ -515,6 +515,8 @@ trait DebugExecutor {
     fn dump_metrics(&self, tags: Vec<&str>);
 
     fn dump_region_properties(&self, region_id: u64);
+
+    fn dump_region_approximate_middle_key(&self, region_id: u64, cf: &str);
 }
 
 impl DebugExecutor for DebugClient {
@@ -680,6 +682,10 @@ impl DebugExecutor for DebugClient {
             println!("{}: {}", prop.get_name(), prop.get_value());
         }
     }
+
+    fn dump_region_approximate_middle_key(&self, _: u64, _: &str) {
+        unimplemented!();
+    }
 }
 
 impl DebugExecutor for Debugger {
@@ -840,6 +846,17 @@ impl DebugExecutor for Debugger {
             .unwrap_or_else(|e| perror_and_exit("Debugger::get_region_properties", e));
         for (name, value) in props {
             println!("{}: {}", name, value);
+        }
+    }
+
+    fn dump_region_approximate_middle_key(&self, region_id: u64, cf: &str) {
+        let key = self
+            .get_region_approximate_middle_key(region_id, cf)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get_region_approximate_middle_key", e));
+        if let Some(key) = key {
+            let encoded = Key::from_encoded(keys::origin_key(&key).to_owned());
+            let decoded = encoded.raw().unwrap();
+            println!("{}", escape(&decoded));
         }
     }
 }
@@ -1430,6 +1447,24 @@ fn main() {
                         .takes_value(true)
                         .help("the key to split it, in unecoded escaped format")
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("region-approx-middle")
+                .about("get the region approximate middle key in decoded escaped format")
+                .arg(
+                    Arg::with_name("region")
+                        .short("r")
+                        .required(true)
+                        .takes_value(true)
+                        .help("the target region id")
+                )
+                .arg(
+                    Arg::with_name("cf")
+                        .short("c")
+                        .takes_value(true)
+                        .default_value("default")
+                        .help("if no cf name is specified, default will be used."),
+                ),
         );
 
     let matches = app.clone().get_matches();
@@ -1629,6 +1664,10 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("region-properties") {
         let region_id = value_t_or_exit!(matches.value_of("region"), u64);
         debug_executor.dump_region_properties(region_id)
+    } else if let Some(matches) = matches.subcommand_matches("region-approx-middle") {
+        let region_id = value_t_or_exit!(matches.value_of("region"), u64);
+        let cf = matches.value_of("cf").unwrap();
+        debug_executor.dump_region_approximate_middle_key(region_id, cf);
     } else {
         let _ = app.print_help();
     }
