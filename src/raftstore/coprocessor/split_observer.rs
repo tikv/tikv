@@ -48,11 +48,19 @@ impl SplitObserver {
             key.truncate(table::PREFIX_LEN + table::ID_LEN);
         }
 
-        let region_start_key = ctx.region().get_start_key();
+        let mut region_start_key = ctx.region().get_start_key();
 
-        let key = encode_bytes(&key);
+        let mut key = encode_bytes(&key);
         if *key <= *region_start_key {
-            return Err("no need to split".to_owned());
+            // Try next key
+            let mut next_key = bytes::decode_bytes(&mut region_start_key, false).unwrap();
+            next_key.push(0 as u8);
+            key = encode_bytes(&next_key);
+
+            let region_end_key = ctx.region().get_end_key();
+            if !region_end_key.is_empty() && *key >= *region_end_key {
+                return Err("no need to split".to_owned());
+            }
         }
 
         split.set_split_key(key);
@@ -205,6 +213,16 @@ mod test {
         expect_key = encode_bytes(b"t\x80\x00\x00\x00\x00\x00\x00\xea");
         req = new_split_request(&expect_key);
         observer.pre_propose_admin(&mut ctx, &mut req).unwrap();
+        assert_eq!(req.get_split().get_split_key(), &*expect_key);
+
+        // Split at next key
+        let mut region = Region::new();
+        let start_key = encode_bytes(b"start");
+        region.set_start_key(start_key.clone());
+        let mut ctx = ObserverContext::new(&region);
+        req = new_split_request(&start_key);
+        observer.pre_propose_admin(&mut ctx, &mut req).unwrap();
+        let expect_key = encode_bytes(b"start\x00");
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
     }
 }
