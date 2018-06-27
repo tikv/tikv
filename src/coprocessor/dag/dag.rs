@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use kvproto::coprocessor::{KeyRange, Response};
@@ -30,7 +31,9 @@ use coprocessor::*;
 
 use super::executor::{build_exec, Executor, ExecutorMetrics, Row};
 
-pub struct DAGContext {
+pub struct DAGContext<S: Snapshot + 'static> {
+    _phantom: PhantomData<S>,
+
     columns: Arc<Vec<ColumnInfo>>,
     has_aggr: bool,
     has_topn: bool,
@@ -44,16 +47,16 @@ pub struct DAGContext {
     batch_row_limit: usize,
 }
 
-impl DAGContext {
+impl<S: Snapshot + 'static> DAGContext<S> {
     pub fn new(
         mut req: DAGRequest,
         ranges: Vec<KeyRange>,
-        snap: Box<Snapshot>,
+        snap: S,
         req_ctx: ReqContext,
         batch_row_limit: usize,
         distsql_cache: Option<Arc<SQLCache>>,
         distsql_cache_entry_max_size: usize,
-    ) -> Result<DAGContext> {
+    ) -> Result<Self> {
         let mut eval_cfg = box_try!(EvalConfig::new(req.get_time_zone_offset(), req.get_flags(),));
         if req.has_max_warning_count() {
             eval_cfg.set_max_warning_cnt(req.get_max_warning_count() as usize);
@@ -85,7 +88,8 @@ impl DAGContext {
             Arc::new(eval_cfg),
             req.get_collect_range_counts(),
         )?;
-        Ok(DAGContext {
+        Ok(Self {
+            _phantom: Default::default(),
             columns: dag_executor.columns,
             has_aggr: dag_executor.has_aggr,
             has_topn: dag_executor.has_topn,
@@ -131,7 +135,7 @@ impl DAGContext {
     }
 }
 
-impl RequestHandler for DAGContext {
+impl<S: Snapshot> RequestHandler for DAGContext<S> {
     fn handle_request(&mut self, region_id: u64) -> Result<Response> {
         let mut record_cnt = 0;
         let mut chunks = Vec::new();

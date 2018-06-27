@@ -24,28 +24,28 @@ use coprocessor::dag::executor::{ExecutorMetrics, ScanOn, Scanner};
 use coprocessor::*;
 
 // `ChecksumContext` is used to handle `ChecksumRequest`
-pub struct ChecksumContext {
+pub struct ChecksumContext<S: Snapshot> {
     req: ChecksumRequest,
-    store: SnapshotStore,
+    store: SnapshotStore<S>,
     ranges: IntoIter<KeyRange>,
-    scanner: Option<Scanner>,
+    scanner: Option<Scanner<S>>,
     metrics: ExecutorMetrics,
 }
 
-impl ChecksumContext {
+impl<S: Snapshot> ChecksumContext<S> {
     pub fn new(
         req: ChecksumRequest,
         ranges: Vec<KeyRange>,
-        snap: Box<Snapshot>,
+        snap: S,
         req_ctx: &ReqContext,
-    ) -> Result<ChecksumContext> {
+    ) -> Result<Self> {
         let store = SnapshotStore::new(
             snap,
             req.get_start_ts(),
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
         );
-        Ok(ChecksumContext {
+        Ok(Self {
             req,
             store,
             ranges: ranges.into_iter(),
@@ -79,7 +79,7 @@ impl ChecksumContext {
         }
     }
 
-    fn new_scanner(&self, range: KeyRange) -> Result<Scanner> {
+    fn new_scanner(&self, range: KeyRange) -> Result<Scanner<S>> {
         let scan_on = match self.req.get_scan_on() {
             ChecksumScanOn::Table => ScanOn::Table,
             ChecksumScanOn::Index => ScanOn::Index,
@@ -88,7 +88,7 @@ impl ChecksumContext {
     }
 }
 
-impl RequestHandler for ChecksumContext {
+impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
     fn handle_request(&mut self, _region_id: u64) -> Result<Response> {
         let algorithm = self.req.get_algorithm();
         if algorithm != ChecksumAlgorithm::Crc64_Xor {
