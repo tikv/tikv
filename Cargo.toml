@@ -9,7 +9,6 @@ time = "0.1"
 
 [features]
 default = []
-dev = ["clippy"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
 mem-profiling = ["jemallocator"]
@@ -50,7 +49,6 @@ toml = "0.4"
 libc = "0.2"
 crc = "1.2"
 fs2 = "0.4"
-clippy = {version = "*", optional = true}
 protobuf = "~2.0"
 nix = "0.9.0"
 utime = "0.2"
@@ -97,9 +95,12 @@ git = "https://github.com/pingcap/kvproto.git"
 git = "https://github.com/pingcap/tipb.git"
 
 [dependencies.prometheus]
-version = "0.4"
+version = "0.4.2"
 default-features = false
 features = ["nightly", "push", "process"]
+
+[dependencies.prometheus-static-metric]
+version = "0.1.4"
 
 [dependencies.jemallocator]
 git = "https://github.com/busyjay/jemallocator.git"

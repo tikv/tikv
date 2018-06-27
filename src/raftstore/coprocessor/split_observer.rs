@@ -40,7 +40,8 @@ impl SplitObserver {
         // + version or TABLE_PREFIX + table_id + INDEX_PREFIX_SEP + index_id + values + version
         // or meta_key + version
         // The length of TABLE_PREFIX + table_id is TABLE_PREFIX_KEY_LEN.
-        if key.starts_with(table::TABLE_PREFIX) && key.len() > table::TABLE_PREFIX_KEY_LEN
+        if key.starts_with(table::TABLE_PREFIX)
+            && key.len() > table::TABLE_PREFIX_KEY_LEN
             && key[table::TABLE_PREFIX_KEY_LEN..].starts_with(table::RECORD_PREFIX_SEP)
         {
             // row key, truncate to handle
@@ -95,7 +96,6 @@ mod test {
     use raftstore::coprocessor::AdminObserver;
     use raftstore::coprocessor::ObserverContext;
     use util::codec::bytes::encode_bytes;
-    use util::codec::number::NumberEncoder;
 
     fn new_split_request(key: &[u8]) -> AdminRequest {
         let mut req = AdminRequest::new();
@@ -107,9 +107,7 @@ mod test {
     }
 
     fn new_row_key(table_id: i64, row_id: i64, column_id: u64, version_id: u64) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(table::ID_LEN);
-        buf.encode_i64(row_id).unwrap();
-        let mut key = table::encode_row_key(table_id, &buf);
+        let mut key = table::encode_row_key(table_id, row_id);
         if column_id > 0 {
             key.write_u64::<BigEndian>(column_id).unwrap();
         }

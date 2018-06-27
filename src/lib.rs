@@ -13,25 +13,18 @@
 
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
+#![feature(proc_macro)]
 #![feature(fnbox)]
 #![feature(alloc)]
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
 #![feature(integer_atomics)]
 #![feature(entry_or_default)]
-#![cfg_attr(feature = "dev", feature(plugin))]
-#![cfg_attr(feature = "dev", plugin(clippy))]
-#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-#![recursion_limit = "200"]
+#![feature(proc_macro_non_items)]
+#![feature(proc_macro_gen)]
 #![feature(ascii_ctype)]
-#![allow(module_inception)]
-#![allow(should_implement_trait)]
-#![allow(large_enum_variant)]
-#![allow(needless_pass_by_value)]
-#![allow(unreadable_literal)]
-#![allow(new_without_default_derive)]
-#![allow(verbose_bit_mask)]
-#![allow(implicit_hasher)]
+#![recursion_limit = "200"]
+#![cfg_attr(not(feature = "cargo-clippy"), allow(unknown_lints))]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
 #![allow(nonminimal_bool)]
@@ -63,6 +56,7 @@ extern crate mio;
 extern crate murmur3;
 #[macro_use]
 extern crate prometheus;
+extern crate prometheus_static_metric;
 extern crate protobuf;
 #[macro_use]
 extern crate quick_error;

@@ -18,10 +18,12 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Write;
 use std::mem;
 use std::str::FromStr;
-use std::{str, i64};
+use std::{i64, str};
 
-use super::mysql::{self, parse_json_path_expr, Decimal, DecimalEncoder, Duration, Json,
-                   JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP};
+use super::mysql::{
+    self, parse_json_path_expr, Decimal, DecimalEncoder, Duration, Json, JsonEncoder,
+    PathExpression, Time, DEFAULT_FSP, MAX_FSP,
+};
 use super::{convert, Error, Result};
 use coprocessor::dag::expr::EvalContext;
 use util::codec::bytes::{self, BytesEncoder};
@@ -331,6 +333,7 @@ impl Datum {
                 d.as_f64()
             }
             Datum::Dec(d) => d.as_f64(),
+            Datum::Json(j) => j.cast_to_real(ctx),
             _ => Err(box_err!("failed to convert {} to f64", self)),
         }
     }
@@ -514,8 +517,8 @@ impl Datum {
                 match a / b {
                     None => Ok(Datum::Null),
                     Some(res) => {
-                        let d = res.into_result()?;
-                        Ok(Datum::Dec(d))
+                        let d: Result<Decimal> = res.into();
+                        d.map(Datum::Dec)
                     }
                 }
             }
@@ -539,8 +542,8 @@ impl Datum {
                 }
             }
             (&Datum::Dec(ref l), &Datum::Dec(ref r)) => {
-                let dec = (l + r).into_result()?;
-                return Ok(Datum::Dec(dec));
+                let dec: Result<Decimal> = (l + r).into();
+                return dec.map(Datum::Dec);
             }
             (l, r) => return Err(invalid_type!("{:?} and {:?} can't be add together.", l, r)),
         };
@@ -567,8 +570,8 @@ impl Datum {
             (&Datum::U64(l), &Datum::U64(r)) => l.checked_sub(r).into(),
             (&Datum::F64(l), &Datum::F64(r)) => return Ok(Datum::F64(l - r)),
             (&Datum::Dec(ref l), &Datum::Dec(ref r)) => {
-                let dec = (l - r).into_result()?;
-                return Ok(Datum::Dec(dec));
+                let dec: Result<Decimal> = (l - r).into();
+                return dec.map(Datum::Dec);
             }
             (l, r) => return Err(invalid_type!("{:?} can't minus {:?}", l, r)),
         };
@@ -620,8 +623,8 @@ impl Datum {
             (Datum::Dec(l), Datum::Dec(r)) => match l % r {
                 None => Ok(Datum::Null),
                 Some(res) => {
-                    let d = res.into_result()?;
-                    Ok(Datum::Dec(d))
+                    let d: Result<Decimal> = res.into();
+                    d.map(Datum::Dec)
                 }
             },
             (l, r) => Err(invalid_type!("{:?} can't mod {:?}", l, r)),
@@ -763,24 +766,25 @@ pub fn decode_datum(data: &mut BytesSlice) -> Result<Datum> {
     if !data.is_empty() {
         let flag = data[0];
         *data = &data[1..];
-        match flag {
-            INT_FLAG => number::decode_i64(data).map(Datum::I64),
-            UINT_FLAG => number::decode_u64(data).map(Datum::U64),
-            BYTES_FLAG => bytes::decode_bytes(data, false).map(Datum::Bytes),
-            COMPACT_BYTES_FLAG => bytes::decode_compact_bytes(data).map(Datum::Bytes),
-            NIL_FLAG => Ok(Datum::Null),
-            FLOAT_FLAG => number::decode_f64(data).map(Datum::F64),
+        let datum = match flag {
+            INT_FLAG => number::decode_i64(data).map(Datum::I64)?,
+            UINT_FLAG => number::decode_u64(data).map(Datum::U64)?,
+            BYTES_FLAG => bytes::decode_bytes(data, false).map(Datum::Bytes)?,
+            COMPACT_BYTES_FLAG => bytes::decode_compact_bytes(data).map(Datum::Bytes)?,
+            NIL_FLAG => Datum::Null,
+            FLOAT_FLAG => number::decode_f64(data).map(Datum::F64)?,
             DURATION_FLAG => {
                 let nanos = number::decode_i64(data)?;
                 let dur = Duration::from_nanos(nanos, MAX_FSP)?;
-                Ok(Datum::Dur(dur))
+                Datum::Dur(dur)
             }
-            DECIMAL_FLAG => Decimal::decode(data).map(Datum::Dec),
-            VAR_INT_FLAG => number::decode_var_i64(data).map(Datum::I64),
-            VAR_UINT_FLAG => number::decode_var_u64(data).map(Datum::U64),
-            JSON_FLAG => Json::decode(data).map(Datum::Json),
-            f => Err(invalid_type!("unsupported data type `{}`", f)),
-        }
+            DECIMAL_FLAG => Decimal::decode(data).map(Datum::Dec)?,
+            VAR_INT_FLAG => number::decode_var_i64(data).map(Datum::I64)?,
+            VAR_UINT_FLAG => number::decode_var_u64(data).map(Datum::U64)?,
+            JSON_FLAG => Json::decode(data).map(Datum::Json)?,
+            f => Err(invalid_type!("unsupported data type `{}`", f))?,
+        };
+        Ok(datum)
     } else {
         Err(Error::unexpected_eof())
     }
@@ -965,6 +969,7 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
 mod test {
     use super::*;
     use coprocessor::codec::mysql::{Decimal, Duration, Time, MAX_FSP};
+    use coprocessor::dag::expr::{EvalConfig, EvalContext, FLAG_IGNORE_TRUNCATE};
     use util::as_slice;
 
     use std::cmp::Ordering;
@@ -1652,7 +1657,6 @@ mod test {
             ),
             (Datum::Dec(0u64.into()), Some(false)),
         ];
-        use coprocessor::dag::expr::{EvalConfig, EvalContext, FLAG_IGNORE_TRUNCATE};
 
         let cfg = EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
         let mut ctx = EvalContext::new(Arc::new(cfg));
@@ -1801,6 +1805,44 @@ mod test {
 
         for d in illegal_cases {
             assert!(d.into_json().is_err());
+        }
+    }
+
+    #[test]
+    fn test_into_f64() {
+        let tests = vec![
+            (Datum::I64(1), f64::from(1)),
+            (Datum::U64(1), f64::from(1)),
+            (Datum::F64(3.3), f64::from(3.3)),
+            (Datum::Bytes(b"Hello,world".to_vec()), f64::from(0)),
+            (Datum::Bytes(b"123".to_vec()), f64::from(123)),
+            (
+                Datum::Time(Time::parse_utc_datetime("2012-12-31 11:30:45", 0).unwrap()),
+                Decimal::from_bytes(b"20121231113045")
+                    .unwrap()
+                    .unwrap()
+                    .as_f64()
+                    .unwrap(),
+            ),
+            (
+                Datum::Dur(Duration::parse(b"11:30:45", 0).unwrap()),
+                f64::from(113045),
+            ),
+            (
+                Datum::Dec(Decimal::from_bytes(b"11.2").unwrap().unwrap()),
+                f64::from(11.2),
+            ),
+            (
+                Datum::Json(Json::from_str(r#"false"#).unwrap()),
+                f64::from(0),
+            ),
+        ];
+
+        let cfg = EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+        for (d, exp) in tests {
+            let got = d.into_f64(&mut ctx).unwrap();
+            assert_eq!(Datum::F64(got), Datum::F64(exp));
         }
     }
 }

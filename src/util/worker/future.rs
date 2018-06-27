@@ -18,8 +18,8 @@ use std::io;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder, JoinHandle};
 
-use futures::Stream;
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::Stream;
 use tokio_core::reactor::{Core, Handle};
 
 use super::metrics::*;
@@ -208,7 +208,8 @@ mod test {
     impl Runnable<u64> for StepRunner {
         fn run(&mut self, step: u64, handle: &Handle) {
             self.ch.send(step).unwrap();
-            let f = self.timer
+            let f = self
+                .timer
                 .sleep(Duration::from_millis(step))
                 .map_err(|_| ());
             handle.spawn(f);

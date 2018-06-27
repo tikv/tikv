@@ -27,10 +27,7 @@ ${LOCAL_DIR}/bin/kcov:
 		make install; \
 	fi
 
-prepare-rustfmt:
-	 rustup component add rustfmt-preview --toolchain `tail -n 1 ${CI_BUILD_DIR}/../RUST_VERSION`
-
-prepare_linux: ${LOCAL_DIR}/bin/kcov  prepare-rustfmt
+prepare_linux: ${LOCAL_DIR}/bin/kcov
 
 prepare_brew:
 	brew update && \

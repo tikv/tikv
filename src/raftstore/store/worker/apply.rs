@@ -18,8 +18,8 @@ use std::collections::VecDeque;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 
 use protobuf::RepeatedField;
 use rocksdb::rocksdb_options::WriteOptions;
@@ -28,10 +28,13 @@ use uuid::Uuid;
 
 use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region};
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType,
-                          CommitMergeRequest, RaftCmdRequest, RaftCmdResponse, Request, Response};
-use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState,
-                             RegionLocalState};
+use kvproto::raft_cmdpb::{
+    AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
+    RaftCmdRequest, RaftCmdResponse, Request, Response,
+};
+use kvproto::raft_serverpb::{
+    MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
+};
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
 
 use import::SSTImporter;
@@ -41,8 +44,9 @@ use raftstore::store::engine::{Mutable, Peekable, Snapshot};
 use raftstore::store::metrics::*;
 use raftstore::store::msg::Callback;
 use raftstore::store::peer::Peer;
-use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply_state,
-                                     write_peer_state};
+use raftstore::store::peer_storage::{
+    self, compact_raft_log, write_initial_apply_state, write_peer_state,
+};
 use raftstore::store::util::check_region_epoch;
 use raftstore::store::{cmd_resp, keys, util, Store};
 use raftstore::{Error, Result};
@@ -56,6 +60,7 @@ use super::metrics::*;
 
 const WRITE_BATCH_MAX_KEYS: usize = 128;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
+const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
 pub struct PendingCmd {
     pub index: u64,
@@ -105,6 +110,11 @@ pub struct PendingCmdQueue {
 impl PendingCmdQueue {
     fn pop_normal(&mut self, term: u64) -> Option<PendingCmd> {
         self.normals.pop_front().and_then(|cmd| {
+            if self.normals.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP
+                && self.normals.len() < SHRINK_PENDING_CMD_QUEUE_CAP
+            {
+                self.normals.shrink_to_fit();
+            }
             if cmd.term > term {
                 self.normals.push_front(cmd);
                 return None;
@@ -208,7 +218,9 @@ impl ApplyCallback {
     fn invoke_all(self, host: &CoprocessorHost) {
         for (cb, mut resp) in self.cbs {
             host.post_apply(&self.region, &mut resp);
-            cb.map(|cb| cb.invoke_with_response(resp));
+            if let Some(cb) = cb {
+                cb.invoke_with_response(resp)
+            };
         }
     }
 
@@ -924,7 +936,8 @@ impl ApplyDelegate {
         response.set_cmd_type(cmd_type);
 
         let mut resp = RaftCmdResponse::new();
-        let uuid = ctx.exec_ctx
+        let uuid = ctx
+            .exec_ctx
             .as_ref()
             .unwrap()
             .req
@@ -1576,7 +1589,8 @@ impl ApplyDelegate {
         }
 
         let mut resp = RaftCmdResponse::new();
-        let uuid = ctx.exec_ctx
+        let uuid = ctx
+            .exec_ctx
             .as_ref()
             .unwrap()
             .req
@@ -2243,7 +2257,9 @@ mod tests {
         let mut e = Entry::new();
         e.set_index(index);
         e.set_term(term);
-        req.map(|r| e.set_data(r.write_to_bytes().unwrap()));
+        if let Some(r) = req {
+            e.set_data(r.write_to_bytes().unwrap())
+        };
         e
     }
 
@@ -2378,9 +2394,11 @@ mod tests {
         let cc_resp = cc_rx.try_recv().unwrap();
         assert!(cc_resp.get_header().get_error().has_stale_command());
 
-        runner.run(Task::applies(vec![
-            Apply::new(1, 1, vec![new_entry(2, 3, None)]),
-        ]));
+        runner.run(Task::applies(vec![Apply::new(
+            1,
+            1,
+            vec![new_entry(2, 3, None)],
+        )]));
         // non registered region should be ignored.
         assert!(rx.try_recv().is_err());
 
@@ -2391,9 +2409,11 @@ mod tests {
 
         let apply_state_key = keys::apply_state_key(2);
         assert!(db.get(&apply_state_key).unwrap().is_none());
-        runner.run(Task::applies(vec![
-            Apply::new(2, 11, vec![new_entry(5, 4, None)]),
-        ]));
+        runner.run(Task::applies(vec![Apply::new(
+            2,
+            11,
+            vec![new_entry(5, 4, None)],
+        )]));
         let res = match rx.try_recv() {
             Ok(TaskRes::Applys(res)) => res,
             e => panic!("unexpected apply result: {:?}", e),

@@ -22,9 +22,9 @@ use util::escape;
 
 //use super::datum::DatumDecoder;
 use super::mysql::{types, Duration, Time};
-use super::{datum, Datum, Result};
-use util::codec::BytesSlice;
+use super::{datum, Datum, Error, Result};
 use util::codec::number::{self, NumberEncoder};
+use util::codec::BytesSlice;
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -41,13 +41,13 @@ trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {
         self.write_all(TABLE_PREFIX)?;
         self.encode_i64(table_id)?;
-        self.write_all(RECORD_PREFIX_SEP).map_err(From::from)
+        self.write_all(RECORD_PREFIX_SEP).map_err(Error::from)
     }
 
     fn append_table_index_prefix(&mut self, table_id: i64) -> Result<()> {
         self.write_all(TABLE_PREFIX)?;
         self.encode_i64(table_id)?;
-        self.write_all(INDEX_PREFIX_SEP).map_err(From::from)
+        self.write_all(INDEX_PREFIX_SEP).map_err(Error::from)
     }
 }
 
@@ -90,7 +90,7 @@ pub fn decode_table_id(key: &[u8]) -> Result<i64> {
     }
 
     let mut remaining = &key[TABLE_PREFIX.len()..];
-    number::decode_i64(&mut remaining)
+    number::decode_i64(&mut remaining).map_err(Error::from)
 }
 
 pub fn flatten(data: Datum) -> Result<Datum> {
@@ -124,11 +124,11 @@ pub fn encode_row(row: Vec<Datum>, col_ids: &[i64]) -> Result<Vec<u8>> {
 }
 
 /// `encode_row_key` encodes the table id and record handle into a byte array.
-pub fn encode_row_key(table_id: i64, encoded_handle: &[u8]) -> Vec<u8> {
+pub fn encode_row_key(table_id: i64, handle: i64) -> Vec<u8> {
     let mut key = Vec::with_capacity(RECORD_ROW_KEY_LEN);
     // can't panic
     key.append_table_record_prefix(table_id).unwrap();
-    key.write_all(encoded_handle).unwrap();
+    key.encode_i64(handle).unwrap();
     key
 }
 
@@ -161,7 +161,7 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
     }
 
     remaining = &remaining[RECORD_PREFIX_SEP.len()..];
-    number::decode_i64(&mut remaining)
+    number::decode_i64(&mut remaining).map_err(Error::from)
 }
 
 /// `truncate_as_row_key` truncate extra part of a tidb key and just keep the row key part.
@@ -335,8 +335,8 @@ impl RowColsDict {
         self.cols.insert(cid, RowColMeta::new(offset, length));
     }
 
-    // get binary of cols, keep the origin order and return one slice.
-    pub fn get_column_values(&self) -> &[u8] {
+    // get binary of cols, keep the origin order, return one slice and cols' end offsets.
+    pub fn get_column_values_and_end_offsets(&self) -> (&[u8], Vec<usize>) {
         let mut start = self.value.len();
         let mut length = 0;
         for meta in self.cols.values() {
@@ -345,7 +345,13 @@ impl RowColsDict {
             }
             length += meta.length;
         }
-        &self.value[start..start + length]
+        let end_offsets = self
+            .cols
+            .values()
+            .into_iter()
+            .map(|meta| meta.offset + meta.length - start)
+            .collect();
+        (&self.value[start..start + length], end_offsets)
     }
 }
 
@@ -392,7 +398,7 @@ pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option
         if tmp_data.is_empty() {
             None
         } else {
-            Some(box_try!(datum::decode_datum(&mut tmp_data)).i64())
+            Some(datum::decode_datum(&mut tmp_data)?.i64())
         }
     };
     Ok((RowColsDict::new(meta_map, key), handle))
@@ -406,7 +412,6 @@ mod test {
 
     use coprocessor::codec::datum::{self, Datum};
     use coprocessor::codec::mysql::types;
-    use util::codec::number::NumberEncoder;
     use util::collections::{HashMap, HashSet};
 
     use super::*;
@@ -415,9 +420,7 @@ mod test {
     fn test_row_key_codec() {
         let tests = vec![i64::MIN, i64::MAX, -1, 0, 2, 3, 1024];
         for &t in &tests {
-            let mut buf = vec![];
-            buf.encode_i64(t).unwrap();
-            let k = encode_row_key(1, &buf);
+            let k = encode_row_key(1, t);
             assert_eq!(t, decode_handle(&k).unwrap());
         }
     }
@@ -484,7 +487,8 @@ mod test {
 
         let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
         let col_values: Vec<_> = row.iter().map(|(_, v)| v.clone()).collect();
-        let mut col_encoded: HashMap<_, _> = row.iter()
+        let mut col_encoded: HashMap<_, _> = row
+            .iter()
             .map(|(k, v)| {
                 let f = super::flatten(v.clone()).unwrap();
                 (*k, datum::encode_value(&[f]).unwrap())
@@ -637,9 +641,7 @@ mod test {
     fn test_decode_table_id() {
         let tests = vec![0, 2, 3, 1024, i64::MAX];
         for &tid in &tests {
-            let mut buf = vec![];
-            buf.encode_i64(1).unwrap();
-            let k = encode_row_key(tid, &buf);
+            let k = encode_row_key(tid, 1);
             assert_eq!(tid, decode_table_id(&k).unwrap());
             let k = encode_index_seek_key(tid, 1, &k);
             assert_eq!(tid, decode_table_id(&k).unwrap());

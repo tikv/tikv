@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{Error, EvalContext, FnCall, Result};
-use coprocessor::codec::Datum;
+use super::{Error, EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::Decimal;
+use coprocessor::codec::Datum;
 use std::borrow::Cow;
 use std::i64;
 
-impl FnCall {
+impl ScalarFunc {
     #[inline]
     pub fn abs_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
@@ -112,7 +112,7 @@ impl FnCall {
 mod test {
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::{convert, mysql, Datum};
-    use coprocessor::dag::expr::test::{check_overflow, datum_expr, fncall_expr, str2dec};
+    use coprocessor::dag::expr::test::{check_overflow, datum_expr, scalar_func_expr, str2dec};
     use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
     use std::sync::Arc;
     use std::{f64, i64, u64};
@@ -140,7 +140,7 @@ mod test {
         let mut ctx = EvalContext::default();
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
-            let mut f = fncall_expr(sig, &[arg]);
+            let mut f = scalar_func_expr(sig, &[arg]);
             if sig == ScalarFuncSig::AbsUInt {
                 f.mut_field_type().set_flag(types::UNSIGNED_FLAG as u32);
             }
@@ -156,7 +156,7 @@ mod test {
         let mut ctx = EvalContext::default();
         for tt in tests {
             let arg = datum_expr(tt.1);
-            let op = Expression::build(&mut ctx, fncall_expr(tt.0, &[arg])).unwrap();
+            let op = Expression::build(&mut ctx, scalar_func_expr(tt.0, &[arg])).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
@@ -217,7 +217,8 @@ mod test {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
-            let mut op = Expression::build(&mut ctx, fncall_expr(sig, &[arg.clone()])).unwrap();
+            let mut op =
+                Expression::build(&mut ctx, scalar_func_expr(sig, &[arg.clone()])).unwrap();
             if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
@@ -284,7 +285,8 @@ mod test {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
-            let mut op = Expression::build(&mut ctx, fncall_expr(sig, &[arg.clone()])).unwrap();
+            let mut op =
+                Expression::build(&mut ctx, scalar_func_expr(sig, &[arg.clone()])).unwrap();
             if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }

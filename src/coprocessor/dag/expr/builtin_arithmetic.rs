@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{Error, EvalContext, FnCall, Result};
+use super::{Error, EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::{Decimal, Res};
-use coprocessor::codec::{mysql, Datum, div_i64, div_i64_with_u64, div_u64_with_i64};
+use coprocessor::codec::{div_i64, div_i64_with_u64, div_u64_with_i64, mysql, Datum};
 use std::borrow::Cow;
 use std::ops::{Add, Mul, Sub};
 use std::{f64, i64, u64};
 
-impl FnCall {
+impl ScalarFunc {
     pub fn plus_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let lhs = try_opt!(self.children[0].eval_real(ctx, row));
         let rhs = try_opt!(self.children[1].eval_real(ctx, row));
@@ -280,11 +280,12 @@ impl FnCall {
 
 #[cfg(test)]
 mod test {
+    use coprocessor::codec::error::ERR_DIVISION_BY_ZERO;
     use coprocessor::codec::mysql::{types, Decimal};
     use coprocessor::codec::{mysql, Datum};
-    use coprocessor::dag::expr::err;
-    use coprocessor::dag::expr::test::{check_divide_by_zero, check_overflow, datum_expr,
-                                       fncall_expr, str2dec};
+    use coprocessor::dag::expr::test::{
+        check_divide_by_zero, check_overflow, datum_expr, scalar_func_expr, str2dec,
+    };
     use coprocessor::dag::expr::*;
     use std::sync::Arc;
     use std::{f64, i64, u64};
@@ -525,7 +526,7 @@ mod test {
             let rus = mysql::has_unsigned_flag(rhs.get_field_type().get_flag());
             let unsigned = lus | rus;
 
-            let mut op = Expression::build(&mut ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
+            let mut op = Expression::build(&mut ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
             if unsigned {
                 // According to TiDB, the result is unsigned if any of arguments is unsigned.
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
@@ -629,7 +630,7 @@ mod test {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let op = Expression::build(&mut ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
+            let op = Expression::build(&mut ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, tt.3);
         }
@@ -848,7 +849,7 @@ mod test {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let op = Expression::build(&mut ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
+            let op = Expression::build(&mut ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, tt.3);
         }
@@ -925,7 +926,7 @@ mod test {
             let rus = mysql::has_unsigned_flag(rhs.get_field_type().get_flag());
             let unsigned = lus | rus;
 
-            let mut op = Expression::build(&mut ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
+            let mut op = Expression::build(&mut ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
             if unsigned {
                 // According to TiDB, the result is unsigned if any of arguments is unsigned.
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
@@ -965,7 +966,7 @@ mod test {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let op = Expression::build(&mut ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
+            let op = Expression::build(&mut ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
@@ -1018,13 +1019,13 @@ mod test {
         for (sig, left, right) in data {
             let lhs = datum_expr(left);
             let rhs = datum_expr(right);
-            let fncall = fncall_expr(sig, &[lhs, rhs]);
+            let scalar_func = scalar_func_expr(sig, &[lhs, rhs]);
             for (flag, sql_mode, strict_sql_mode, is_ok, has_warning) in &cases {
                 let mut cfg = EvalConfig::new(0, *flag).unwrap();
                 cfg.set_sql_mode(*sql_mode);
                 cfg.set_strict_sql_mode(*strict_sql_mode);
                 let mut ctx = EvalContext::new(Arc::new(cfg));
-                let op = Expression::build(&mut ctx, fncall.clone()).unwrap();
+                let op = Expression::build(&mut ctx, scalar_func.clone()).unwrap();
                 let got = op.eval(&mut ctx, &[]);
                 if *is_ok {
                     assert_eq!(got.unwrap(), Datum::Null);
@@ -1034,7 +1035,7 @@ mod test {
                 if *has_warning {
                     assert_eq!(
                         ctx.take_warnings().warnings[0].get_code(),
-                        err::ERR_DIVISION_BY_ZERO
+                        ERR_DIVISION_BY_ZERO
                     );
                 } else {
                     assert!(ctx.take_warnings().warnings.is_empty());

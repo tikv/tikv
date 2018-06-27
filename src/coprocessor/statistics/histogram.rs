@@ -86,7 +86,8 @@ impl Histogram {
     pub fn into_proto(self) -> analyze::Histogram {
         let mut hist = analyze::Histogram::new();
         hist.set_ndv(self.ndv as i64);
-        let buckets: Vec<analyze::Bucket> = self.buckets
+        let buckets: Vec<analyze::Bucket> = self
+            .buckets
             .into_iter()
             .map(|bucket| bucket.into_proto())
             .collect();

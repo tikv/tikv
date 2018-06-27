@@ -31,27 +31,27 @@ use super::fmsketch::FMSketch;
 use super::histogram::Histogram;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
-pub struct AnalyzeContext {
+pub struct AnalyzeContext<S: Snapshot> {
     req: AnalyzeReq,
-    snap: Option<SnapshotStore>,
+    snap: Option<SnapshotStore<S>>,
     ranges: Vec<KeyRange>,
     metrics: ExecutorMetrics,
 }
 
-impl AnalyzeContext {
+impl<S: Snapshot> AnalyzeContext<S> {
     pub fn new(
         req: AnalyzeReq,
         ranges: Vec<KeyRange>,
-        snap: Box<Snapshot>,
+        snap: S,
         req_ctx: &ReqContext,
-    ) -> Result<AnalyzeContext> {
+    ) -> Result<Self> {
         let snap = SnapshotStore::new(
             snap,
             req.get_start_ts(),
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
         );
-        Ok(AnalyzeContext {
+        Ok(Self {
             req,
             snap: Some(snap),
             ranges,
@@ -62,7 +62,7 @@ impl AnalyzeContext {
     // handle_column is used to process `AnalyzeColumnsReq`
     // it would build a histogram for the primary key(if needed) and
     // collectors for each column value.
-    fn handle_column(builder: &mut SampleBuilder) -> Result<Vec<u8>> {
+    fn handle_column(builder: &mut SampleBuilder<S>) -> Result<Vec<u8>> {
         let (collectors, pk_builder) = builder.collect_columns_stats()?;
 
         let pk_hist = pk_builder.into_proto();
@@ -80,17 +80,19 @@ impl AnalyzeContext {
 
     // handle_index is used to handle `AnalyzeIndexReq`,
     // it would build a histogram and count-min sketch of index values.
-    fn handle_index(req: AnalyzeIndexReq, scanner: &mut IndexScanExecutor) -> Result<Vec<u8>> {
+    fn handle_index(req: AnalyzeIndexReq, scanner: &mut IndexScanExecutor<S>) -> Result<Vec<u8>> {
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
         let mut cms = CMSketch::new(
             req.get_cmsketch_depth() as usize,
             req.get_cmsketch_width() as usize,
         );
         while let Some(row) = scanner.next()? {
-            let bytes = row.data.get_column_values();
+            let (bytes, end_offsets) = row.data.get_column_values_and_end_offsets();
             hist.append(bytes);
             if let Some(c) = cms.as_mut() {
-                c.insert(bytes)
+                for end_offset in end_offsets {
+                    c.insert(&bytes[..end_offset])
+                }
             }
         }
         let mut res = analyze::AnalyzeIndexResp::new();
@@ -103,7 +105,7 @@ impl AnalyzeContext {
     }
 }
 
-impl RequestHandler for AnalyzeContext {
+impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
     fn handle_request(&mut self) -> Result<Response> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex => {
@@ -148,8 +150,8 @@ impl RequestHandler for AnalyzeContext {
     }
 }
 
-struct SampleBuilder {
-    data: TableScanExecutor,
+struct SampleBuilder<S: Snapshot> {
+    data: TableScanExecutor<S>,
     cols: Vec<ColumnInfo>,
     // the number of columns need to be sampled. It equals to cols.len()
     // if cols[0] is not pk handle, or it should be cols.len() - 1.
@@ -164,12 +166,12 @@ struct SampleBuilder {
 /// `SampleBuilder` is used to analyze columns. It collects sample from
 /// the result set using Reservoir Sampling algorithm, estimates NDVs
 /// using FM Sketch during the collecting process, and builds count-min sketch.
-impl SampleBuilder {
+impl<S: Snapshot> SampleBuilder<S> {
     fn new(
         mut req: AnalyzeColumnsReq,
-        snap: SnapshotStore,
+        snap: SnapshotStore<S>,
         ranges: Vec<KeyRange>,
-    ) -> Result<SampleBuilder> {
+    ) -> Result<Self> {
         let cols_info = req.take_columns_info();
         if cols_info.is_empty() {
             return Err(box_err!("empty columns_info"));
@@ -183,7 +185,7 @@ impl SampleBuilder {
         let mut meta = TableScan::new();
         meta.set_columns(cols_info);
         let table_scanner = TableScanExecutor::new(&meta, ranges, snap, false)?;
-        Ok(SampleBuilder {
+        Ok(Self {
             data: table_scanner,
             cols: meta.take_columns().to_vec(),
             col_len,

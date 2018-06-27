@@ -22,8 +22,8 @@ use tikv::import::Config as ImportConfig;
 use tikv::pd::Config as PdConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
-use tikv::server::Config as ServerConfig;
 use tikv::server::config::GrpcCompressionType;
+use tikv::server::Config as ServerConfig;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
 use tikv::util::security::SecurityConfig;
@@ -60,8 +60,6 @@ fn test_serde_custom_tikv_config() {
         addr: "example.com:443".to_owned(),
         labels: map!{ "a".to_owned() => "b".to_owned() },
         advertise_addr: "example.com:443".to_owned(),
-        notify_capacity: 12_345,
-        messages_per_tick: 123,
         concurrent_send_snap_limit: 4,
         concurrent_recv_snap_limit: 4,
         grpc_compression_type: GrpcCompressionType::Gzip,
@@ -129,6 +127,7 @@ fn test_serde_custom_tikv_config() {
         clean_stale_peer_delay: ReadableDuration::secs(13),
         region_compact_check_step: 1_234,
         region_compact_min_tombstones: 999,
+        region_compact_tombstones_percent: 33,
         pd_heartbeat_tick_interval: ReadableDuration::minutes(12),
         pd_store_heartbeat_tick_interval: ReadableDuration::secs(12),
         notify_capacity: 12_345,
@@ -399,8 +398,6 @@ fn test_serde_custom_tikv_config() {
         gc_ratio_threshold: 1.2,
         max_key_size: 8192,
         scheduler_notify_capacity: 123,
-
-        scheduler_messages_per_tick: 123,
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
@@ -419,6 +416,10 @@ fn test_serde_custom_tikv_config() {
     value.import = ImportConfig {
         import_dir: "/abc".to_owned(),
         num_threads: 123,
+        num_import_jobs: 123,
+        num_import_sst_jobs: 123,
+        max_prepare_duration: ReadableDuration::minutes(12),
+        region_split_size: ReadableSize::mb(123),
         stream_channel_window: 123,
     };
 

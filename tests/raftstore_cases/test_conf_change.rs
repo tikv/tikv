@@ -11,7 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc,
+};
 use std::thread;
 use std::time::Duration;
 
@@ -20,8 +23,8 @@ use kvproto::raft_cmdpb::RaftResponseHeader;
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use tikv::pd::PdClient;
-use tikv::raftstore::Result;
 use tikv::raftstore::store::*;
+use tikv::raftstore::Result;
 use tikv::storage::CF_RAFT;
 use tikv::util::HandyRwLock;
 
@@ -115,7 +118,8 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let resp = cluster
         .call_command_on_leader(admin_req, Duration::from_secs(3))
         .unwrap();
-    let exec_res = resp.get_header()
+    let exec_res = resp
+        .get_header()
         .get_error()
         .get_message()
         .contains("duplicated");
@@ -715,8 +719,14 @@ fn test_learner_with_slow_snapshot() {
 
     impl Filter<RaftMessage> for SnapshotFilter {
         fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
-            let count = msgs.iter()
-                .filter(|m| m.get_message().get_msg_type() == MessageType::MsgSnapshot)
+            let count = msgs
+                .iter()
+                .filter(|m| {
+                    // A snapshot stream should have 2 chunks at least,
+                    // the first for metadata and subsequences for data.
+                    m.get_message().get_msg_type() == MessageType::MsgSnapshot
+                        && m.get_message().get_snapshot().has_metadata()
+                })
                 .count();
             self.count.fetch_add(count, Ordering::SeqCst);
 
@@ -771,5 +781,5 @@ fn test_learner_with_slow_snapshot() {
     // Transfer leader so that peer 3 can report to pd with `Peer` in memory.
     pd_client.transfer_leader(r1, new_peer(3, 3));
     pd_client.region_leader_must_be(r1, new_peer(3, 3));
-    assert_eq!(count.load(Ordering::SeqCst), 1);
+    assert!(count.load(Ordering::SeqCst) > 0);
 }
