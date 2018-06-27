@@ -13,7 +13,7 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::{f64, i64};
+use std::i64;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};

@@ -20,6 +20,7 @@ use tipb::expression::ScalarFuncSig;
 use tipb::select;
 
 use regex::Error as RegexpError;
+
 use util;
 
 pub const ERR_UNKNOWN: i32 = 1105;
