@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::i64;
 use std::slice::Iter;
 use std::str;
 
