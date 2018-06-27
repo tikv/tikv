@@ -156,7 +156,7 @@ fn must_not_stale_read(
         new_leader,
     );
 
-    // Leaders can always propose read index despite split.
+    // Leaders can always propose read index despite split/merge.
     let propose_readindex = "before_propose_readindex";
     fail::cfg(propose_readindex, "return(true)").unwrap();
 
@@ -245,11 +245,10 @@ fn test_stale_read_during_merging() {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
     configure_for_merge(&mut cluster);
-    configure_for_lease_read(&mut cluster);
+    let lease = configure_for_lease_read(&mut cluster, None, None);
     cluster.cfg.raft_store.right_derive_when_split = false;
     cluster.cfg.raft_store.pd_heartbeat_tick_interval =
         cluster.cfg.raft_store.raft_base_tick_interval.clone();
-    let lease = cluster.cfg.raft_store.raft_store_max_leader_lease.clone();
     debug!("max leader lease: {:?}", lease);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();

@@ -1805,7 +1805,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let peer = self.region_peers.get_mut(&region.get_id()).unwrap();
             peer.pending_merge_state = Some(state);
             peer.set_region(region.clone());
-            peer.post_prepare_merge();
         }
 
         if merged {
@@ -1881,7 +1880,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             info!("{} notify pd with rollback merge {}", peer.tag, commit);
             peer.heartbeat_pd(&self.pd_worker);
         }
-        peer.post_rollback_merge();
     }
 
     fn on_merge_fail(&mut self, region_id: u64) {
