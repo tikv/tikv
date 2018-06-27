@@ -12,10 +12,11 @@
 // limitations under the License.
 
 use super::{Error, Result};
-use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
-use coprocessor::codec::mysql::{types, Decimal, DecimalEncoder, Duration, DurationEncoder, Json,
-                                JsonEncoder, Time, TimeEncoder};
+use coprocessor::codec::mysql::{
+    types, Decimal, DecimalEncoder, Duration, DurationEncoder, Json, JsonEncoder, Time, TimeEncoder,
+};
+use coprocessor::codec::Datum;
 use tipb::expression::FieldType;
 use util::codec::number::{self, NumberEncoder};
 

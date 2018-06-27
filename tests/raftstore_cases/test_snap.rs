@@ -19,10 +19,10 @@ use std::time::{Duration, Instant};
 
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::{Message, MessageType};
-use tikv::raftstore::Result;
 use tikv::raftstore::store::Msg;
-use tikv::util::HandyRwLock;
+use tikv::raftstore::Result;
 use tikv::util::config::*;
+use tikv::util::HandyRwLock;
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;

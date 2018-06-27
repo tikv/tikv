@@ -410,6 +410,12 @@ impl<'de> Deserialize<'de> for ReadableSize {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReadableDuration(pub Duration);
 
+impl Into<Duration> for ReadableDuration {
+    fn into(self) -> Duration {
+        self.0
+    }
+}
+
 impl ReadableDuration {
     pub fn secs(secs: u64) -> ReadableDuration {
         ReadableDuration(Duration::new(secs, 0))
@@ -1040,7 +1046,7 @@ mod test {
         }
 
         let illegal_cases = vec![
-            "0.5kb", "0.5kB", "0.5Kb", "0.5k", "0.5g", "b", "gb", "1b", "B"
+            "0.5kb", "0.5kB", "0.5Kb", "0.5k", "0.5g", "b", "gb", "1b", "B",
         ];
         for src in illegal_cases {
             let src_str = format!("s = {:?}", src);

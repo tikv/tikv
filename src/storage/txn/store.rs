@@ -16,20 +16,20 @@ use kvproto::kvrpcpb::IsolationLevel;
 use storage::mvcc::{Error as MvccError, MvccReader};
 use storage::{Key, KvPair, ScanMode, Snapshot, Statistics, Value};
 
-pub struct SnapshotStore {
-    snapshot: Box<Snapshot>,
+pub struct SnapshotStore<S: Snapshot> {
+    snapshot: S,
     start_ts: u64,
     isolation_level: IsolationLevel,
     fill_cache: bool,
 }
 
-impl SnapshotStore {
+impl<S: Snapshot> SnapshotStore<S> {
     pub fn new(
-        snapshot: Box<Snapshot>,
+        snapshot: S,
         start_ts: u64,
         isolation_level: IsolationLevel,
         fill_cache: bool,
-    ) -> SnapshotStore {
+    ) -> Self {
         SnapshotStore {
             snapshot,
             start_ts,
@@ -82,7 +82,7 @@ impl SnapshotStore {
         key_only: bool,
         lower_bound: Option<Vec<u8>>,
         upper_bound: Option<Vec<u8>>,
-    ) -> Result<StoreScanner> {
+    ) -> Result<StoreScanner<S>> {
         let mut reader = MvccReader::new(
             self.snapshot.clone(),
             Some(mode),
@@ -99,8 +99,8 @@ impl SnapshotStore {
     }
 }
 
-pub struct StoreScanner {
-    reader: MvccReader,
+pub struct StoreScanner<S: Snapshot> {
+    reader: MvccReader<S>,
     start_ts: u64,
 }
 
@@ -120,7 +120,7 @@ fn handle_mvcc_err(e: MvccError, result: &mut Vec<Result<KvPair>>) -> Result<Key
     }
 }
 
-impl StoreScanner {
+impl<S: Snapshot> StoreScanner<S> {
     pub fn seek(&mut self, key: Key) -> Result<Option<(Key, Value)>> {
         Ok(self.reader.seek(key, self.start_ts)?)
     }
@@ -175,7 +175,7 @@ impl StoreScanner {
 mod test {
     use super::SnapshotStore;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
-    use storage::engine::{self, Engine, Snapshot, TEMP_DIR};
+    use storage::engine::{self, Engine, RocksEngine, RocksSnapshot, TEMP_DIR};
     use storage::mvcc::MvccTxn;
     use storage::{make_key, KvPair, Mutation, Options, ScanMode, Statistics, Value, ALL_CFS};
 
@@ -186,9 +186,9 @@ mod test {
 
     struct TestStore {
         keys: Vec<String>,
-        snapshot: Box<Snapshot>,
+        snapshot: RocksSnapshot,
         ctx: Context,
-        engine: Box<Engine>,
+        engine: RocksEngine,
     }
 
     impl TestStore {
@@ -256,7 +256,7 @@ mod test {
             self.snapshot = self.engine.snapshot(&self.ctx).unwrap()
         }
 
-        fn store(&self) -> SnapshotStore {
+        fn store(&self) -> SnapshotStore<RocksSnapshot> {
             SnapshotStore::new(
                 self.snapshot.clone(),
                 COMMIT_TS + 1,
