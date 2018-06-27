@@ -11,17 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use byteorder::WriteBytesExt;
 use std::cmp::Ordering;
-use std::str;
 use std::fmt::{self, Display, Formatter};
+use std::io::Write;
+use std::{mem, str};
 
 use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Timelike, Utc, Weekday};
 
-use coprocessor::codec::mysql::{self, check_fsp, parse_frac, types};
-use coprocessor::codec::mysql::Decimal;
+use super::super::{Error, Result, TEN_POW};
 use coprocessor::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
-use super::super::{Result, TEN_POW};
-
+use coprocessor::codec::mysql::Decimal;
+use coprocessor::codec::mysql::{self, check_fsp, parse_frac, types};
+use util::codec::number::{self, NumberEncoder};
+use util::codec::BytesSlice;
 const ZERO_DATETIME_STR: &str = "0000-00-00 00:00:00";
 const ZERO_DATE_STR: &str = "0000-00-00";
 /// In go, `time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC)` will be adjusted to
@@ -44,7 +47,7 @@ const MONTH_NAMES: &[&str] = &[
 ];
 
 const MONTH_NAMES_ABBR: &[&str] = &[
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
 bitflags! {
@@ -322,8 +325,8 @@ pub struct Time {
 impl Time {
     pub fn new(time: DateTime<FixedOffset>, tp: u8, fsp: i8) -> Result<Time> {
         Ok(Time {
-            time: time,
-            tp: tp,
+            time,
+            tp,
             fsp: check_fsp(fsp)?,
         })
     }
@@ -414,80 +417,80 @@ impl Time {
         let mut frac_str = "";
         let mut need_adjust = false;
         let parts = Time::parse_datetime_format(s);
-        let (mut y, m, d, h, minute, sec): (i32, u32, u32, u32, u32, u32) = match *parts.as_slice()
-        {
-            [s1] => {
-                need_adjust = s1.len() == 12 || s1.len() == 6;
-                match s1.len() {
-                    14 | 12 | 8 | 6 => split_ymd_hms(s1.as_bytes())?,
-                    _ => return Err(box_err!("invalid datetime: {}", s)),
+        let (mut year, month, day, hour, minute, sec): (i32, u32, u32, u32, u32, u32) =
+            match *parts.as_slice() {
+                [s1] => {
+                    need_adjust = s1.len() == 12 || s1.len() == 6;
+                    match s1.len() {
+                        14 | 12 | 8 | 6 => split_ymd_hms(s1.as_bytes())?,
+                        _ => return Err(box_err!("invalid datetime: {}", s)),
+                    }
                 }
-            }
-            [s1, frac] => {
-                frac_str = frac;
-                need_adjust = s1.len() == 12;
-                match s1.len() {
-                    14 | 12 => split_ymd_hms(s1.as_bytes())?,
-                    _ => return Err(box_err!("invalid datetime: {}", s)),
+                [s1, frac] => {
+                    frac_str = frac;
+                    need_adjust = s1.len() == 12;
+                    match s1.len() {
+                        14 | 12 => split_ymd_hms(s1.as_bytes())?,
+                        _ => return Err(box_err!("invalid datetime: {}", s)),
+                    }
                 }
-            }
-            [year, month, day] => (
-                box_try!(year.parse()),
-                box_try!(month.parse()),
-                box_try!(day.parse()),
-                0,
-                0,
-                0,
-            ),
-            [year, month, day, hour, min, sec] => (
-                box_try!(year.parse()),
-                box_try!(month.parse()),
-                box_try!(day.parse()),
-                box_try!(hour.parse()),
-                box_try!(min.parse()),
-                box_try!(sec.parse()),
-            ),
-            [year, month, day, hour, min, sec, frac] => {
-                frac_str = frac;
-                (
+                [year, month, day] => (
+                    box_try!(year.parse()),
+                    box_try!(month.parse()),
+                    box_try!(day.parse()),
+                    0,
+                    0,
+                    0,
+                ),
+                [year, month, day, hour, min, sec] => (
                     box_try!(year.parse()),
                     box_try!(month.parse()),
                     box_try!(day.parse()),
                     box_try!(hour.parse()),
                     box_try!(min.parse()),
                     box_try!(sec.parse()),
-                )
-            }
-            _ => return Err(box_err!("invalid datetime: {}", s)),
-        };
+                ),
+                [year, month, day, hour, min, sec, frac] => {
+                    frac_str = frac;
+                    (
+                        box_try!(year.parse()),
+                        box_try!(month.parse()),
+                        box_try!(day.parse()),
+                        box_try!(hour.parse()),
+                        box_try!(min.parse()),
+                        box_try!(sec.parse()),
+                    )
+                }
+                _ => return Err(box_err!("invalid datetime: {}", s)),
+            };
 
         if need_adjust || parts[0].len() == 2 {
-            if y >= 0 && y <= 69 {
-                y += 2000;
-            } else if y >= 70 && y <= 99 {
-                y += 1900;
+            if year >= 0 && year <= 69 {
+                year += 2000;
+            } else if year >= 70 && year <= 99 {
+                year += 1900;
             }
         }
 
         let frac = parse_frac(frac_str.as_bytes(), fsp)?;
-        if y == 0 && m == 0 && d == 0 && h == 0 && minute == 0 && sec == 0 {
+        if year == 0 && month == 0 && day == 0 && hour == 0 && minute == 0 && sec == 0 {
             return Ok(zero_datetime(tz));
         }
         // it won't happen until 10000
-        if y < 0 || y > 9999 {
-            return Err(box_err!("unsupport year: {}", y));
+        if year < 0 || year > 9999 {
+            return Err(box_err!("unsupport year: {}", year));
         }
-        let t = ymd_hms_nanos(
+        let time = ymd_hms_nanos(
             tz,
-            y,
-            m,
-            d,
-            h,
+            year,
+            month,
+            day,
+            hour,
             minute,
             sec,
             frac * TEN_POW[9 - fsp as usize],
         )?;
-        Time::new(t, types::DATETIME as u8, fsp as i8)
+        Time::new(time, types::DATETIME as u8, fsp as i8)
     }
 
     /// Get time from packed u64. When `tp` is `TIMESTAMP`, the packed time should
@@ -804,6 +807,81 @@ impl Display for Time {
             write!(f, ".{0:01$}", nanos, self.fsp as usize)?;
         }
         Ok(())
+    }
+}
+
+impl<T: Write> TimeEncoder for T {}
+pub trait TimeEncoder: NumberEncoder {
+    fn encode_time(&mut self, v: &Time) -> Result<()> {
+        if !v.is_zero() {
+            self.encode_u16(v.time.year() as u16)?;
+            self.write_u8(v.time.month() as u8)?;
+            self.write_u8(v.time.day() as u8)?;
+            self.write_u8(v.time.hour() as u8)?;
+            self.write_u8(v.time.minute() as u8)?;
+            self.write_u8(v.time.second() as u8)?;
+            self.encode_u32(v.time.nanosecond() / 1000)?;
+        } else {
+            let len = mem::size_of::<u16>() + mem::size_of::<u32>() + 5;
+            let buf = vec![0; len];
+            self.write_all(&buf)?;
+        }
+
+        self.write_u8(v.tp)?;
+        self.write_u8(v.fsp).map_err(From::from)
+    }
+}
+
+impl Time {
+    /// `decode` decodes time encoded by `encode_time`.
+    pub fn decode(data: &mut BytesSlice) -> Result<Time> {
+        let year = i32::from(number::decode_u16(data)?);
+        let (month, day, hour, minute, second) = if data.len() >= 5 {
+            (
+                u32::from(data[0]),
+                u32::from(data[1]),
+                u32::from(data[2]),
+                u32::from(data[3]),
+                u32::from(data[4]),
+            )
+        } else {
+            return Err(Error::unexpected_eof());
+        };
+        *data = &data[5..];
+        let nanoseconds = 1000 * number::decode_u32(data)?;
+        let (tp, fsp) = if data.len() >= 2 {
+            (data[0], data[1])
+        } else {
+            return Err(Error::unexpected_eof());
+        };
+        *data = &data[2..];
+        let tz = FixedOffset::east(0); // TODO
+        if year == 0
+            && month == 0
+            && day == 0
+            && hour == 0
+            && minute == 0
+            && second == 0
+            && nanoseconds == 0
+        {
+            return Ok(zero_datetime(&tz));
+        }
+        let t = if tp == types::TIMESTAMP {
+            let t = ymd_hms_nanos(&Utc, year, month, day, hour, minute, second, nanoseconds)?;
+            tz.from_utc_datetime(&t.naive_utc())
+        } else {
+            ymd_hms_nanos(
+                &FixedOffset::east(0),
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                nanoseconds,
+            )?
+        };
+        Time::new(t, tp, fsp as i8)
     }
 }
 
@@ -1125,13 +1203,9 @@ mod test {
             utc_t.round_frac(fsp).unwrap();
             let expect = Time::parse_utc_datetime(exp, UN_SPECIFIED_FSP).unwrap();
             assert_eq!(
-                utc_t,
-                expect,
+                utc_t, expect,
                 "input:{:?}, exp:{:?}, utc_t:{:?}, expect:{:?}",
-                input,
-                exp,
-                utc_t,
-                expect
+                input, exp, utc_t, expect
             );
 
             for mut offset in MIN_OFFSET..MAX_OFFSET {
@@ -1141,14 +1215,9 @@ mod test {
                 t.round_frac(fsp).unwrap();
                 let expect = Time::parse_datetime(exp, UN_SPECIFIED_FSP, &tz).unwrap();
                 assert_eq!(
-                    t,
-                    expect,
+                    t, expect,
                     "tz:{:?},input:{:?}, exp:{:?}, utc_t:{:?}, expect:{:?}",
-                    offset,
-                    input,
-                    exp,
-                    t,
-                    expect
+                    offset, input, exp, t, expect
                 );
             }
         }
@@ -1179,7 +1248,8 @@ mod test {
         for s in cases {
             let d = MyDuration::parse(s.as_bytes(), MAX_FSP).unwrap();
             let get = Time::from_duration(&tz, types::DATETIME, &d).unwrap();
-            let get_today = get.time
+            let get_today = get
+                .time
                 .checked_sub_signed(Duration::nanoseconds(d.to_nanos()))
                 .unwrap();
             let now = Utc::now();
@@ -1256,6 +1326,26 @@ mod test {
             let t = Time::parse_utc_datetime(s, 6).unwrap();
             let get = t.date_format(layout.to_string()).unwrap();
             assert_eq!(get, expect);
+        }
+    }
+
+    #[test]
+    fn test_chunk_codec() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4),
+            ("2012-12-31 11:30:45.123456", 6),
+            ("2012-12-31 11:30:45.123456", 0),
+            ("2012-12-31 11:30:45.999999", 0),
+            ("2017-01-05 08:40:59.575601", 0),
+            ("2017-01-05 23:59:59.575601", 0),
+            ("0000-00-00 00:00:00", 6),
+        ];
+        for (s, fsp) in cases {
+            let t = Time::parse_utc_datetime(s, fsp).unwrap();
+            let mut buf = vec![];
+            buf.encode_time(&t).unwrap();
+            let got = Time::decode(&mut buf.as_slice()).unwrap();
+            assert_eq!(got, t);
         }
     }
 }

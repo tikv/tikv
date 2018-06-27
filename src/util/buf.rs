@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::{BufRead, ErrorKind, Read, Result, Write};
-use std::fmt::{self, Debug, Formatter};
 use alloc::raw_vec::RawVec;
+use std::fmt::{self, Debug, Formatter};
+use std::io::{BufRead, ErrorKind, Read, Result, Write};
 use std::{cmp, mem, ptr, slice};
 
 use util::escape;
@@ -335,7 +335,8 @@ impl PartialEq for PipeBuffer {
             mem::swap(&mut l1, &mut l2);
             mem::swap(&mut r1, &mut r2);
         }
-        l1 == &l2[..l1.len()] && r1[..l2.len() - l1.len()] == l2[l1.len()..]
+        l1 == &l2[..l1.len()]
+            && r1[..l2.len() - l1.len()] == l2[l1.len()..]
             && &r1[l2.len() - l1.len()..] == r2
     }
 }

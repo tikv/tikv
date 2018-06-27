@@ -13,18 +13,18 @@
 
 use std::fmt::{self, Display, Formatter};
 
-use crc::crc32::{self, Digest, Hasher32};
 use byteorder::{BigEndian, WriteBytesExt};
+use crc::crc32::{self, Digest, Hasher32};
 
 use kvproto::metapb::Region;
-use raftstore::store::{keys, Msg};
 use raftstore::store::engine::{Iterable, Peekable, Snapshot};
+use raftstore::store::{keys, Msg};
 use storage::CF_RAFT;
 use util::worker::Runnable;
 
 use super::metrics::*;
-use raftstore::store::metrics::*;
 use super::MsgSender;
+use raftstore::store::metrics::*;
 
 /// Consistency checking task.
 pub enum Task {
@@ -38,9 +38,9 @@ pub enum Task {
 impl Task {
     pub fn compute_hash(region: Region, index: u64, snap: Snapshot) -> Task {
         Task::ComputeHash {
-            region: region,
-            index: index,
-            snap: snap,
+            region,
+            index,
+            snap,
         }
     }
 }
@@ -61,7 +61,7 @@ pub struct Runner<C: MsgSender> {
 
 impl<C: MsgSender> Runner<C> {
     pub fn new(ch: C) -> Runner<C> {
-        Runner { ch: ch }
+        Runner { ch }
     }
 
     fn compute_hash(&mut self, region: Region, index: u64, snap: Snapshot) {
@@ -78,7 +78,7 @@ impl<C: MsgSender> Runner<C> {
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         for cf in cf_names {
-            let res = snap.scan_cf(cf, &start_key, &end_key, false, &mut |k, v| {
+            let res = snap.scan_cf(cf, &start_key, &end_key, false, |k, v| {
                 digest.write(k);
                 digest.write(v);
                 Ok(true)
@@ -110,8 +110,8 @@ impl<C: MsgSender> Runner<C> {
         let mut checksum = Vec::with_capacity(4);
         checksum.write_u32::<BigEndian>(sum).unwrap();
         let msg = Msg::ComputeHashResult {
-            region_id: region_id,
-            index: index,
+            region_id,
+            index,
             hash: checksum,
         };
         if let Err(e) = self.ch.try_send(msg) {
@@ -137,19 +137,19 @@ impl<C: MsgSender> Runnable<Task> for Runner<C> {
 
 #[cfg(test)]
 mod test {
-    use rocksdb::Writable;
-    use tempdir::TempDir;
-    use storage::{CF_DEFAULT, CF_RAFT};
-    use crc::crc32::{self, Digest, Hasher32};
-    use std::sync::{mpsc, Arc};
-    use std::time::Duration;
+    use super::*;
     use byteorder::{BigEndian, WriteBytesExt};
+    use crc::crc32::{self, Digest, Hasher32};
     use kvproto::metapb::*;
-    use util::rocksdb::new_engine;
-    use util::worker::Runnable;
     use raftstore::store::engine::Snapshot;
     use raftstore::store::{keys, Msg};
-    use super::*;
+    use rocksdb::Writable;
+    use std::sync::{mpsc, Arc};
+    use std::time::Duration;
+    use storage::{CF_DEFAULT, CF_RAFT};
+    use tempdir::TempDir;
+    use util::rocksdb::new_engine;
+    use util::worker::Runnable;
 
     #[test]
     fn test_consistency_check() {

@@ -11,13 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::i64;
 use std::borrow::Cow;
-use super::{Error, EvalContext, FnCall, Result};
-use coprocessor::codec::{mysql, Datum};
-use coprocessor::codec::mysql::Decimal;
+use std::i64;
 
-impl FnCall {
+use super::{Error, EvalContext, Result, ScalarFunc};
+use coprocessor::codec::mysql::Decimal;
+use coprocessor::codec::{mysql, Datum};
+
+impl ScalarFunc {
     pub fn logical_and(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = self.children[0].eval_int(ctx, row)?;
         if arg0.map_or(false, |v| v == 0) {
@@ -95,12 +96,12 @@ impl FnCall {
         if mysql::has_unsigned_flag(u64::from(self.children[0].get_tp().get_flag())) {
             let uval = val as u64;
             if uval > i64::MAX as u64 + 1 {
-                return Err(Error::Overflow);
+                return Err(Error::overflow("BIGINT", &format!("-{}", uval)));
             } else if uval == i64::MAX as u64 + 1 {
                 return Ok(Some(i64::MIN));
             }
         } else if val == i64::MIN {
-            return Err(Error::Overflow);
+            return Err(Error::overflow("BIGINT", &format!("-{}", val)));
         }
         Ok(Some(-val))
     }
@@ -180,12 +181,12 @@ impl FnCall {
 
 #[cfg(test)]
 mod test {
+    use coprocessor::codec::mysql::Duration;
+    use coprocessor::codec::Datum;
+    use coprocessor::dag::expr::test::{check_overflow, datum_expr, scalar_func_expr, str2dec};
+    use coprocessor::dag::expr::{EvalContext, Expression};
     use std::i64;
     use tipb::expression::ScalarFuncSig;
-    use coprocessor::codec::Datum;
-    use coprocessor::codec::mysql::Duration;
-    use coprocessor::dag::expr::{Error, EvalContext, Expression};
-    use coprocessor::dag::expr::test::{datum_expr, fncall_expr, str2dec};
 
     #[test]
     fn test_logic_op() {
@@ -284,14 +285,15 @@ mod test {
             let arg1 = datum_expr(lhs);
             let arg2 = datum_expr(rhs);
             {
-                let op =
-                    Expression::build(&mut ctx, fncall_expr(op, &[arg1.clone(), arg2.clone()]))
-                        .unwrap();
+                let op = Expression::build(
+                    &mut ctx,
+                    scalar_func_expr(op, &[arg1.clone(), arg2.clone()]),
+                ).unwrap();
                 let res = op.eval_int(&mut ctx, &[]).unwrap();
                 assert_eq!(res, exp);
             }
             {
-                let op = Expression::build(&mut ctx, fncall_expr(op, &[arg2, arg1])).unwrap();
+                let op = Expression::build(&mut ctx, scalar_func_expr(op, &[arg2, arg1])).unwrap();
                 let res = op.eval_int(&mut ctx, &[]).unwrap();
                 assert_eq!(res, exp);
             }
@@ -345,7 +347,7 @@ mod test {
         let mut ctx = EvalContext::default();
         for (operator, arg, exp) in tests {
             let arg1 = datum_expr(arg);
-            let op = Expression::build(&mut ctx, fncall_expr(operator, &[arg1])).unwrap();
+            let op = Expression::build(&mut ctx, scalar_func_expr(operator, &[arg1])).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -403,16 +405,9 @@ mod test {
         let mut ctx = EvalContext::default();
         for (op, arg, exp) in tests {
             let arg1 = datum_expr(arg);
-            let op = Expression::build(&mut ctx, fncall_expr(op, &[arg1])).unwrap();
+            let op = Expression::build(&mut ctx, scalar_func_expr(op, &[arg1])).unwrap();
             let res = op.eval_int(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
-        }
-    }
-
-    fn check_overflow(e: Error) -> Result<(), ()> {
-        match e {
-            Error::Overflow => Ok(()),
-            _ => Err(()),
         }
     }
 
@@ -428,7 +423,7 @@ mod test {
         let mut ctx = EvalContext::default();
         for (op, argument) in tests {
             let arg = datum_expr(argument);
-            let op = Expression::build(&mut ctx, fncall_expr(op, &[arg])).unwrap();
+            let op = Expression::build(&mut ctx, scalar_func_expr(op, &[arg])).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
@@ -444,8 +439,8 @@ mod test {
         let mut ctx = EvalContext::default();
         for (lhs, rhs, exp) in cases {
             let args = &[datum_expr(lhs), datum_expr(rhs)];
-            let op =
-                Expression::build(&mut ctx, fncall_expr(ScalarFuncSig::BitAndSig, args)).unwrap();
+            let op = Expression::build(&mut ctx, scalar_func_expr(ScalarFuncSig::BitAndSig, args))
+                .unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -461,8 +456,8 @@ mod test {
         let mut ctx = EvalContext::default();
         for (lhs, rhs, exp) in cases {
             let args = &[datum_expr(lhs), datum_expr(rhs)];
-            let op =
-                Expression::build(&mut ctx, fncall_expr(ScalarFuncSig::BitOrSig, args)).unwrap();
+            let op = Expression::build(&mut ctx, scalar_func_expr(ScalarFuncSig::BitOrSig, args))
+                .unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -478,8 +473,8 @@ mod test {
         let mut ctx = EvalContext::default();
         for (lhs, rhs, exp) in cases {
             let args = &[datum_expr(lhs), datum_expr(rhs)];
-            let op =
-                Expression::build(&mut ctx, fncall_expr(ScalarFuncSig::BitXorSig, args)).unwrap();
+            let op = Expression::build(&mut ctx, scalar_func_expr(ScalarFuncSig::BitXorSig, args))
+                .unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -495,8 +490,8 @@ mod test {
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
             let args = &[datum_expr(arg)];
-            let op =
-                Expression::build(&mut ctx, fncall_expr(ScalarFuncSig::BitNegSig, args)).unwrap();
+            let op = Expression::build(&mut ctx, scalar_func_expr(ScalarFuncSig::BitNegSig, args))
+                .unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }

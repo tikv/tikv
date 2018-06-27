@@ -13,41 +13,42 @@
 
 use std::sync::Arc;
 
+use kvproto::coprocessor::KeyRange;
 use tipb::executor::{self, ExecType};
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
-use kvproto::coprocessor::KeyRange;
 
-use coprocessor::codec::mysql;
-use coprocessor::codec::datum::{self, Datum};
-use coprocessor::codec::table::{RowColsDict, TableDecoder};
-use coprocessor::endpoint::get_pk;
-use coprocessor::dag::expr::{EvalConfig, EvalContext};
-use coprocessor::{Error, Result};
 use storage::SnapshotStore;
-use util::codec::number::NumberDecoder;
+use util::codec::number;
 use util::collections::HashSet;
 
-mod scanner;
-mod table_scan;
+use coprocessor::codec::datum::{self, Datum};
+use coprocessor::codec::mysql;
+use coprocessor::codec::table::{self, RowColsDict};
+use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings};
+use coprocessor::util;
+use coprocessor::*;
+
+mod aggregate;
+mod aggregation;
 mod index_scan;
+mod limit;
+mod scanner;
 mod selection;
+mod table_scan;
 mod topn;
 mod topn_heap;
-mod limit;
-mod aggregation;
-mod aggregate;
 
 mod metrics;
 
-pub use self::table_scan::TableScanExecutor;
-pub use self::index_scan::IndexScanExecutor;
-pub use self::selection::SelectionExecutor;
-pub use self::topn::TopNExecutor;
-pub use self::limit::LimitExecutor;
 pub use self::aggregation::{HashAggExecutor, StreamAggExecutor};
-pub use self::scanner::{ScanOn, Scanner};
+pub use self::index_scan::IndexScanExecutor;
+pub use self::limit::LimitExecutor;
 pub use self::metrics::*;
+pub use self::scanner::{ScanOn, Scanner};
+pub use self::selection::SelectionExecutor;
+pub use self::table_scan::TableScanExecutor;
+pub use self::topn::TopNExecutor;
 
 pub struct ExprColumnRefVisitor {
     cols_offset: HashSet<usize>,
@@ -58,13 +59,13 @@ impl ExprColumnRefVisitor {
     pub fn new(cols_len: usize) -> ExprColumnRefVisitor {
         ExprColumnRefVisitor {
             cols_offset: HashSet::default(),
-            cols_len: cols_len,
+            cols_len,
         }
     }
 
     pub fn visit(&mut self, expr: &Expr) -> Result<()> {
         if expr.get_tp() == ExprType::ColumnRef {
-            let offset = box_try!(expr.get_val().decode_i64()) as usize;
+            let offset = box_try!(number::decode_i64(&mut expr.get_val())) as usize;
             if offset >= self.cols_len {
                 return Err(Error::Other(box_err!(
                     "offset {} overflow, should be less than {}",
@@ -101,10 +102,7 @@ pub struct Row {
 
 impl Row {
     pub fn new(handle: i64, data: RowColsDict) -> Row {
-        Row {
-            handle: handle,
-            data: data,
-        }
+        Row { handle, data }
     }
 
     // get binary of each column in order of columns
@@ -112,7 +110,7 @@ impl Row {
         let mut res = Vec::with_capacity(columns.len());
         for col in columns {
             if col.get_pk_handle() {
-                let v = get_pk(col, self.handle);
+                let v = util::get_pk(col, self.handle);
                 let bt = box_try!(datum::encode_value(&[v]));
                 res.push(bt);
                 continue;
@@ -137,6 +135,12 @@ pub trait Executor {
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>);
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics);
 
+    /// Only executors with eval computation need to implement `take_eval_warnings`
+    /// It returns warnings happened during eval computation.
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        None
+    }
+
     /// Only `TableScan` and `IndexScan` need to implement `start_scan`.
     fn start_scan(&mut self) {}
 
@@ -160,12 +164,13 @@ pub fn build_exec(
     store: SnapshotStore,
     ranges: Vec<KeyRange>,
     ctx: Arc<EvalConfig>,
+    collect: bool,
 ) -> Result<DAGExecutor> {
     let mut execs = execs.into_iter();
     let first = execs
         .next()
         .ok_or_else(|| Error::Other(box_err!("has no executor")))?;
-    let (mut src, columns) = build_first_executor(first, store, ranges)?;
+    let (mut src, columns) = build_first_executor(first, store, ranges, collect)?;
     let mut has_aggr = false;
     let mut has_topn = false;
     for mut exec in execs {
@@ -212,9 +217,9 @@ pub fn build_exec(
     }
     Ok(DAGExecutor {
         exec: src,
-        columns: columns,
-        has_aggr: has_aggr,
-        has_topn: has_topn,
+        columns,
+        has_aggr,
+        has_topn,
     })
 }
 
@@ -224,11 +229,17 @@ fn build_first_executor(
     mut first: executor::Executor,
     store: SnapshotStore,
     ranges: Vec<KeyRange>,
+    collect: bool,
 ) -> Result<FirstExecutor> {
     match first.get_tp() {
         ExecType::TypeTableScan => {
             let cols = Arc::new(first.get_tbl_scan().get_columns().to_vec());
-            let ex = Box::new(TableScanExecutor::new(first.get_tbl_scan(), ranges, store)?);
+            let ex = Box::new(TableScanExecutor::new(
+                first.get_tbl_scan(),
+                ranges,
+                store,
+                collect,
+            )?);
             Ok((ex, cols))
         }
         ExecType::TypeIndexScan => {
@@ -239,6 +250,7 @@ fn build_first_executor(
                 ranges,
                 store,
                 unique,
+                collect,
             )?);
             Ok((ex, cols))
         }
@@ -260,20 +272,24 @@ pub fn inflate_with_col_for_dag(
     for offset in offsets {
         let col = &columns[*offset];
         if col.get_pk_handle() {
-            let v = get_pk(col, h);
+            let v = util::get_pk(col, h);
             res[*offset] = v;
         } else {
             let col_id = col.get_column_id();
             let value = match values.get(col_id) {
                 None if col.has_default_val() => {
                     // TODO: optimize it to decode default value only once.
-                    box_try!(col.get_default_val().decode_col_value(ctx, col))
+                    box_try!(table::decode_col_value(
+                        &mut col.get_default_val(),
+                        ctx,
+                        col
+                    ))
                 }
                 None if mysql::has_not_null_flag(col.get_flag() as u64) => {
                     return Err(box_err!("column {} of {} is missing", col_id, h));
                 }
                 None => Datum::Null,
-                Some(mut bs) => box_try!(bs.decode_col_value(ctx, col)),
+                Some(mut bs) => box_try!(table::decode_col_value(&mut bs, ctx, col)),
             };
             res[*offset] = value;
         }

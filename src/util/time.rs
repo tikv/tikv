@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::{Duration, SystemTime};
-use std::thread::{self, Builder, JoinHandle};
-use std::sync::mpsc::{self, Sender};
-use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::cmp::Ordering;
+use std::ops::{Add, AddAssign, Sub, SubAssign};
+use std::sync::mpsc::{self, Sender};
+use std::thread::{self, Builder, JoinHandle};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use time::{Duration as TimeDuration, Timespec};
 
@@ -43,6 +43,15 @@ pub fn duration_to_nanos(d: Duration) -> u64 {
     d.as_secs() * 1_000_000_000 + nanos
 }
 
+/// Get the current timestamp in seconds.
+#[inline]
+pub fn time_now_sec() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
 pub struct SlowTimer {
     slow_time: Duration,
     t: Instant,
@@ -55,7 +64,7 @@ impl SlowTimer {
 
     pub fn from(slow_time: Duration) -> SlowTimer {
         SlowTimer {
-            slow_time: slow_time,
+            slow_time,
             t: Instant::now_coarse(),
         }
     }
@@ -119,7 +128,7 @@ impl Monitor {
             .unwrap();
 
         Monitor {
-            tx: tx,
+            tx,
             handle: Some(h),
         }
     }
@@ -150,10 +159,10 @@ impl Drop for Monitor {
     }
 }
 
+use self::inner::monotonic_coarse_now;
+pub use self::inner::monotonic_now;
 /// `monotonic_raw_now` returns the monotonic raw time since some unspecified starting point.
 pub use self::inner::monotonic_raw_now;
-use self::inner::monotonic_now;
-use self::inner::monotonic_coarse_now;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 const MILLISECOND_PER_SECOND: i64 = 1_000;
@@ -161,8 +170,8 @@ const NANOSECONDS_PER_MILLISECOND: i64 = 1_000_000;
 
 #[cfg(not(target_os = "linux"))]
 mod inner {
-    use time::{self, Timespec};
     use super::NANOSECONDS_PER_SECOND;
+    use time::{self, Timespec};
 
     pub fn monotonic_raw_now() -> Timespec {
         // TODO Add monotonic raw clock time impl for macos and windows
@@ -186,22 +195,26 @@ mod inner {
 
 #[cfg(target_os = "linux")]
 mod inner {
+    use libc;
     use std::io;
     use time::Timespec;
-    use libc;
 
+    #[inline]
     pub fn monotonic_raw_now() -> Timespec {
         get_time(libc::CLOCK_MONOTONIC_RAW)
     }
 
+    #[inline]
     pub fn monotonic_now() -> Timespec {
         get_time(libc::CLOCK_MONOTONIC)
     }
 
+    #[inline]
     pub fn monotonic_coarse_now() -> Timespec {
         get_time(libc::CLOCK_MONOTONIC_COARSE)
     }
 
+    #[inline]
     fn get_time(clock: libc::clockid_t) -> Timespec {
         let mut t = libc::timespec {
             tv_sec: 0,
@@ -386,11 +399,11 @@ impl Sub<Instant> for Instant {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, SystemTime};
-    use std::thread;
-    use std::ops::Sub;
-    use std::f64;
     use super::*;
+    use std::f64;
+    use std::ops::Sub;
+    use std::thread;
+    use std::time::{Duration, SystemTime};
 
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;

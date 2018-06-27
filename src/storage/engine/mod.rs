@@ -11,25 +11,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{error, result};
-use std::fmt::Debug;
-use std::cmp::Ordering;
 use std::boxed::FnBox;
+use std::cmp::Ordering;
+use std::fmt::Debug;
 use std::time::Duration;
+use std::{error, result};
 
 pub use self::rocksdb::EngineRocksdb;
+use kvproto::errorpb::Error as ErrorHeader;
+use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
 use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
 use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
-use kvproto::errorpb::Error as ErrorHeader;
 
 use config;
 
 use util::rocksdb::CFOptions;
 
-mod rocksdb;
-pub mod raftkv;
 mod metrics;
+pub mod raftkv;
+mod rocksdb;
 use super::super::raftstore::store::engine::IterOption;
 
 // only used for rocksdb without persistent.
@@ -117,8 +117,14 @@ pub trait Engine: Send + Debug {
         self.write(ctx, vec![Modify::Delete(cf, key)])
     }
 
-    /// Create a share Engine pointer.
-    fn clone(&self) -> Box<Engine + 'static>;
+    /// Create a shared Engine pointer.
+    fn clone_box(&self) -> Box<Engine + 'static>;
+}
+
+impl Clone for Box<Engine> {
+    fn clone(&self) -> Box<Engine> {
+        self.clone_box()
+    }
 }
 
 pub trait Snapshot: Send + Debug {
@@ -155,7 +161,7 @@ pub trait Iterator {
 }
 
 macro_rules! near_loop {
-    ($cond:expr, $fallback:expr, $st:expr) => ({
+    ($cond:expr, $fallback:expr, $st:expr) => {{
         let mut cnt = 0;
         while $cond {
             cnt += 1;
@@ -164,7 +170,7 @@ macro_rules! near_loop {
                 return $fallback;
             }
         }
-    })
+    }};
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -303,7 +309,7 @@ pub struct Cursor {
 impl Cursor {
     pub fn new(iter: Box<Iterator + Send>, mode: ScanMode) -> Cursor {
         Cursor {
-            iter: iter,
+            iter,
             scan_mode: mode,
             min_key: None,
             max_key: None,
@@ -317,7 +323,8 @@ impl Cursor {
             return Ok(false);
         }
 
-        if self.scan_mode == ScanMode::Forward && self.valid()
+        if self.scan_mode == ScanMode::Forward
+            && self.valid()
             && self.iter.key() >= key.encoded().as_slice()
         {
             return Ok(true);
@@ -404,7 +411,8 @@ impl Cursor {
             return Ok(false);
         }
 
-        if self.scan_mode == ScanMode::Backward && self.valid()
+        if self.scan_mode == ScanMode::Backward
+            && self.valid()
             && self.iter.key() <= key.encoded().as_slice()
         {
             return Ok(true);
@@ -517,6 +525,12 @@ impl Cursor {
     }
 
     #[inline]
+    pub fn internal_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        statistics.seek += 1;
+        self.iter.seek(key)
+    }
+
+    #[inline]
     pub fn next(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.next += 1;
         self.iter.next()
@@ -597,14 +611,14 @@ pub type Result<T> = result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::super::raftstore::store::engine::IterOption;
     use super::SEEK_BOUND;
-    use tempdir::TempDir;
+    use super::*;
+    use kvproto::kvrpcpb::Context;
     use storage::{make_key, CfName, CF_DEFAULT};
+    use tempdir::TempDir;
     use util::codec::bytes;
     use util::escape;
-    use kvproto::kvrpcpb::Context;
-    use super::super::super::raftstore::store::engine::IterOption;
 
     const TEST_ENGINE_CFS: &[CfName] = &["cf"];
 
@@ -799,9 +813,11 @@ mod tests {
         assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
         assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
         let mut statistics = CFStatistics::default();
-        assert!(!cursor
-            .near_seek(&make_key(b"z\x00"), &mut statistics)
-            .unwrap());
+        assert!(
+            !cursor
+                .near_seek(&make_key(b"z\x00"), &mut statistics)
+                .unwrap()
+        );
         // Insert many key-values between 'x' and 'z' then near_seek will fallback to seek.
         for i in 0..super::SEEK_BOUND {
             let key = format!("y{}", i);
@@ -828,30 +844,41 @@ mod tests {
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CFStatistics::default();
-        assert!(!cursor
-            .near_reverse_seek(&make_key(b"x"), &mut statistics)
-            .unwrap());
-        assert!(!cursor
-            .near_reverse_seek(&make_key(b"z"), &mut statistics)
-            .unwrap());
-        assert!(!cursor
-            .near_reverse_seek(&make_key(b"w"), &mut statistics)
-            .unwrap());
+        assert!(
+            !cursor
+                .near_reverse_seek(&make_key(b"x"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            !cursor
+                .near_reverse_seek(&make_key(b"z"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            !cursor
+                .near_reverse_seek(&make_key(b"w"), &mut statistics)
+                .unwrap()
+        );
         assert!(!cursor.near_seek(&make_key(b"x"), &mut statistics).unwrap());
         assert!(!cursor.near_seek(&make_key(b"z"), &mut statistics).unwrap());
         assert!(!cursor.near_seek(&make_key(b"w"), &mut statistics).unwrap());
     }
 
     macro_rules! assert_seek {
-        ($cursor:ident, $func:ident, $k:expr, $res:ident) => ({
+        ($cursor:ident, $func:ident, $k:expr, $res:ident) => {{
             let mut statistics = CFStatistics::default();
-            assert_eq!($cursor.$func(&$k, &mut statistics).unwrap(), $res.is_some(),
-                       "assert_seek {} failed exp {:?}", $k, $res);
+            assert_eq!(
+                $cursor.$func(&$k, &mut statistics).unwrap(),
+                $res.is_some(),
+                "assert_seek {} failed exp {:?}",
+                $k,
+                $res
+            );
             if let Some((ref k, ref v)) = $res {
                 assert_eq!($cursor.key(), bytes::encode_bytes(k.as_bytes()).as_slice());
                 assert_eq!($cursor.value(), v.as_bytes());
             }
-        })
+        }};
     }
 
     #[derive(PartialEq, Eq, Clone, Copy)]
@@ -861,20 +888,19 @@ mod tests {
         ForPrev,
     }
 
-    #[allow(cyclomatic_complexity)]
     // use step to control the distance between target key and current key in cursor.
     fn test_linear_seek(
         snapshot: &Snapshot,
         mode: ScanMode,
         seek_mode: SeekMode,
-        start: usize,
+        start_idx: usize,
         step: usize,
     ) {
         let mut cursor = snapshot.iter(IterOption::default(), mode).unwrap();
         let mut near_cursor = snapshot.iter(IterOption::default(), mode).unwrap();
         let limit = (SEEK_BOUND * 10 + 50 - 1) * 2;
 
-        for (_, mut i) in (start..SEEK_BOUND * 30)
+        for (_, mut i) in (start_idx..(SEEK_BOUND * 30))
             .enumerate()
             .filter(|&(i, _)| i % step == 0)
         {

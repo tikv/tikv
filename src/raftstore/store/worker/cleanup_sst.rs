@@ -14,12 +14,12 @@
 use std::fmt;
 use std::sync::Arc;
 
-use kvproto::importpb::SSTMeta;
+use kvproto::import_sstpb::SSTMeta;
 
-use pd::PdClient;
 use import::SSTImporter;
-use raftstore::store::Msg;
+use pd::PdClient;
 use raftstore::store::util::is_epoch_stale;
+use raftstore::store::Msg;
 use util::transport::SendCh;
 use util::worker::Runnable;
 
@@ -52,10 +52,10 @@ impl<C: PdClient> Runner<C> {
         pd_client: Arc<C>,
     ) -> Runner<C> {
         Runner {
-            store_id: store_id,
-            store_ch: store_ch,
-            importer: importer,
-            pd_client: pd_client,
+            store_id,
+            store_ch,
+            importer,
+            pd_client,
         }
     }
 

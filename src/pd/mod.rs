@@ -11,25 +11,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod metrics;
 mod client;
+mod metrics;
 mod util;
 
+mod config;
 pub mod errors;
 pub mod pd;
-mod config;
-pub use self::errors::{Error, Result};
 pub use self::client::RpcClient;
-pub use self::util::validate_endpoints;
-pub use self::pd::{Runner as PdRunner, Task as PdTask};
-pub use self::util::RECONNECT_INTERVAL_SEC;
 pub use self::config::Config;
+pub use self::errors::{Error, Result};
+pub use self::pd::{Runner as PdRunner, Task as PdTask};
+pub use self::util::validate_endpoints;
+pub use self::util::RECONNECT_INTERVAL_SEC;
+use raftstore::store::util::RegionApproximateStat;
 
 use std::ops::Deref;
 
+use futures::Future;
 use kvproto::metapb;
 use kvproto::pdpb;
-use futures::Future;
 
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = Box<Future<Item = T, Error = Error> + Send>;
@@ -42,32 +43,11 @@ pub struct RegionStat {
     pub written_keys: u64,
     pub read_bytes: u64,
     pub read_keys: u64,
-    pub approximate_size: u64,
+    pub approximate_stat: RegionApproximateStat,
+    pub last_report_ts: u64,
 }
 
-impl RegionStat {
-    pub fn new(
-        down_peers: Vec<pdpb::PeerStats>,
-        pending_peers: Vec<metapb::Peer>,
-        written_bytes: u64,
-        written_keys: u64,
-        read_bytes: u64,
-        read_keys: u64,
-        approximate_size: u64,
-    ) -> RegionStat {
-        RegionStat {
-            down_peers: down_peers,
-            pending_peers: pending_peers,
-            written_bytes: written_bytes,
-            written_keys: written_keys,
-            read_bytes: read_bytes,
-            read_keys: read_keys,
-            approximate_size: approximate_size,
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RegionInfo {
     pub region: metapb::Region,
     pub leader: Option<metapb::Peer>,
@@ -75,10 +55,7 @@ pub struct RegionInfo {
 
 impl RegionInfo {
     pub fn new(region: metapb::Region, leader: Option<metapb::Peer>) -> RegionInfo {
-        RegionInfo {
-            region: region,
-            leader: leader,
-        }
+        RegionInfo { region, leader }
     }
 }
 

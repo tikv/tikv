@@ -11,17 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::usize;
+use std::cell::RefCell;
+use std::cmp::{self, Ordering};
 use std::collections::BinaryHeap;
 use std::sync::Arc;
-use std::cmp::{self, Ordering};
-use std::cell::RefCell;
+use std::usize;
 use tipb::expression::ByItem;
 
-use coprocessor::codec::table::RowColsDict;
 use coprocessor::codec::datum::Datum;
-use coprocessor::dag::expr::{EvalConfig, EvalContext};
-use coprocessor::Result;
+use coprocessor::codec::table::RowColsDict;
+use coprocessor::dag::expr::{EvalContext, Result};
 
 const HEAP_MAX_CAPACITY: usize = 1024;
 
@@ -30,7 +29,7 @@ pub struct SortRow {
     pub data: RowColsDict,
     pub key: Vec<Datum>,
     order_cols: Arc<Vec<ByItem>>,
-    eval_cfg: Arc<EvalConfig>,
+    eval_ctx: Arc<RefCell<EvalContext>>,
     err: Arc<RefCell<Option<String>>>,
 }
 
@@ -40,16 +39,16 @@ impl SortRow {
         data: RowColsDict,
         key: Vec<Datum>,
         order_cols: Arc<Vec<ByItem>>,
-        eval_cfg: Arc<EvalConfig>,
+        ctx: Arc<RefCell<EvalContext>>,
         err: Arc<RefCell<Option<String>>>,
     ) -> SortRow {
         SortRow {
-            handle: handle,
-            data: data,
-            key: key,
-            order_cols: order_cols,
-            eval_cfg: eval_cfg,
-            err: err,
+            handle,
+            data,
+            key,
+            order_cols,
+            eval_ctx: ctx,
+            err,
         }
     }
 
@@ -57,7 +56,7 @@ impl SortRow {
         // check err
         self.check_err()?;
         let values = self.key.iter().zip(right.key.iter());
-        let mut ctx = EvalContext::new(Arc::clone(&self.eval_cfg));
+        let mut ctx = self.eval_ctx.borrow_mut();
         for (col, (v1, v2)) in self.order_cols.as_ref().iter().zip(values) {
             match v1.cmp(&mut ctx, v2) {
                 Ok(Ordering::Equal) => {
@@ -95,20 +94,20 @@ pub struct TopNHeap {
     pub rows: BinaryHeap<SortRow>,
     limit: usize,
     err: Arc<RefCell<Option<String>>>,
-    eval_cfg: Arc<EvalConfig>,
+    ctx: Arc<RefCell<EvalContext>>,
 }
 
 impl TopNHeap {
-    pub fn new(limit: usize, eval_cfg: Arc<EvalConfig>) -> Result<TopNHeap> {
+    pub fn new(limit: usize, ctx: Arc<RefCell<EvalContext>>) -> Result<TopNHeap> {
         if limit == usize::MAX {
             return Err(box_err!("invalid limit"));
         }
         let cap = cmp::min(limit, HEAP_MAX_CAPACITY);
         Ok(TopNHeap {
             rows: BinaryHeap::with_capacity(cap),
-            limit: limit,
+            limit,
             err: Arc::new(RefCell::new(None)),
-            eval_cfg: eval_cfg,
+            ctx,
         })
     }
 
@@ -135,7 +134,7 @@ impl TopNHeap {
             data,
             values,
             order_cols,
-            Arc::clone(&self.eval_cfg),
+            Arc::clone(&self.ctx),
             Arc::clone(&self.err),
         );
         // push into heap when heap is not full
@@ -185,20 +184,18 @@ impl PartialOrd for SortRow {
     }
 }
 
-unsafe impl Send for TopNHeap {}
-unsafe impl Send for SortRow {}
-
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::sync::Arc;
 
     use tipb::expression::{ByItem, Expr, ExprType};
 
-    use util::collections::HashMap;
-    use util::codec::number::*;
-    use coprocessor::codec::Datum;
     use coprocessor::codec::table::RowColsDict;
-    use coprocessor::dag::expr::EvalConfig;
+    use coprocessor::codec::Datum;
+    use coprocessor::dag::expr::EvalContext;
+    use util::codec::number::*;
+    use util::collections::HashMap;
 
     use super::*;
 
@@ -218,7 +215,8 @@ mod tests {
         order_cols.push(new_order_by(0, true));
         order_cols.push(new_order_by(1, false));
         let order_cols = Arc::new(order_cols);
-        let mut topn_heap = TopNHeap::new(5, Arc::new(EvalConfig::default())).unwrap();
+        let mut topn_heap =
+            TopNHeap::new(5, Arc::new(RefCell::new(EvalContext::default()))).unwrap();
         let test_data = vec![
             (1, String::from("data1"), Datum::Null, Datum::I64(1)),
             (
@@ -331,7 +329,8 @@ mod tests {
         order_cols.push(new_order_by(0, true));
         order_cols.push(new_order_by(1, false));
         let order_cols = Arc::new(order_cols);
-        let mut topn_heap = TopNHeap::new(5, Arc::new(EvalConfig::default())).unwrap();
+        let mut topn_heap =
+            TopNHeap::new(5, Arc::new(RefCell::new(EvalContext::default()))).unwrap();
 
         let std_key: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2)];
         let row_data = RowColsDict::new(HashMap::default(), b"name:1".to_vec());
@@ -363,7 +362,8 @@ mod tests {
         order_cols.push(new_order_by(0, true));
         order_cols.push(new_order_by(1, false));
         let order_cols = Arc::new(order_cols);
-        let mut topn_heap = TopNHeap::new(10, Arc::new(EvalConfig::default())).unwrap();
+        let mut topn_heap =
+            TopNHeap::new(10, Arc::new(RefCell::new(EvalContext::default()))).unwrap();
         let test_data = vec![
             (
                 3,
@@ -454,15 +454,19 @@ mod tests {
 
     #[test]
     fn test_topn_limit_oom() {
-        let topn_heap = TopNHeap::new(usize::MAX - 1, Arc::new(EvalConfig::default()));
+        let topn_heap = TopNHeap::new(
+            usize::MAX - 1,
+            Arc::new(RefCell::new(EvalContext::default())),
+        );
         assert!(topn_heap.is_ok());
-        let topn_heap = TopNHeap::new(usize::MAX, Arc::new(EvalConfig::default()));
+        let topn_heap = TopNHeap::new(usize::MAX, Arc::new(RefCell::new(EvalContext::default())));
         assert!(topn_heap.is_err());
     }
 
     #[test]
     fn test_topn_with_empty_limit() {
-        let mut topn_heap = TopNHeap::new(0, Arc::new(EvalConfig::default())).unwrap();
+        let mut topn_heap =
+            TopNHeap::new(0, Arc::new(RefCell::new(EvalContext::default()))).unwrap();
         let cur_key: Vec<Datum> = vec![Datum::I64(1), Datum::I64(2)];
         let row_data = RowColsDict::new(HashMap::default(), b"ssss".to_vec());
         topn_heap

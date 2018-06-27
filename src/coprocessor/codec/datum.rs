@@ -11,23 +11,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use byteorder::WriteBytesExt;
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::{str, i64};
-use std::io::Write;
-use std::str::FromStr;
-use std::mem;
 use std::fmt::{self, Debug, Display, Formatter};
-use byteorder::{ReadBytesExt, WriteBytesExt};
+use std::io::Write;
+use std::mem;
+use std::str::FromStr;
+use std::{i64, str};
 
-use util::escape;
-use util::codec::{bytes, number};
-use util::codec::number::NumberDecoder;
-use util::codec::bytes::BytesEncoder;
+use super::mysql::{
+    self, parse_json_path_expr, Decimal, DecimalEncoder, Duration, Json, JsonEncoder,
+    PathExpression, Time, DEFAULT_FSP, MAX_FSP,
+};
+use super::{convert, Error, Result};
 use coprocessor::dag::expr::EvalContext;
-use super::{convert, Result};
-use super::mysql::{self, parse_json_path_expr, Decimal, DecimalDecoder, DecimalEncoder, Duration,
-                   Json, JsonDecoder, JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP};
+use util::codec::bytes::{self, BytesEncoder};
+use util::codec::{number, BytesSlice};
+use util::escape;
 
 pub const NIL_FLAG: u8 = 0;
 const BYTES_FLAG: u8 = 1;
@@ -515,8 +516,8 @@ impl Datum {
                 match a / b {
                     None => Ok(Datum::Null),
                     Some(res) => {
-                        let d = res.into_result()?;
-                        Ok(Datum::Dec(d))
+                        let d: Result<Decimal> = res.into();
+                        d.map(Datum::Dec)
                     }
                 }
             }
@@ -540,8 +541,8 @@ impl Datum {
                 }
             }
             (&Datum::Dec(ref l), &Datum::Dec(ref r)) => {
-                let dec = (l + r).into_result()?;
-                return Ok(Datum::Dec(dec));
+                let dec: Result<Decimal> = (l + r).into();
+                return dec.map(Datum::Dec);
             }
             (l, r) => return Err(invalid_type!("{:?} and {:?} can't be add together.", l, r)),
         };
@@ -568,8 +569,8 @@ impl Datum {
             (&Datum::U64(l), &Datum::U64(r)) => l.checked_sub(r).into(),
             (&Datum::F64(l), &Datum::F64(r)) => return Ok(Datum::F64(l - r)),
             (&Datum::Dec(ref l), &Datum::Dec(ref r)) => {
-                let dec = (l - r).into_result()?;
-                return Ok(Datum::Dec(dec));
+                let dec: Result<Decimal> = (l - r).into();
+                return dec.map(Datum::Dec);
             }
             (l, r) => return Err(invalid_type!("{:?} can't minus {:?}", l, r)),
         };
@@ -621,8 +622,8 @@ impl Datum {
             (Datum::Dec(l), Datum::Dec(r)) => match l % r {
                 None => Ok(Datum::Null),
                 Some(res) => {
-                    let d = res.into_result()?;
-                    Ok(Datum::Dec(d))
+                    let d: Result<Decimal> = res.into();
+                    d.map(Datum::Dec)
                 }
             },
             (l, r) => Err(invalid_type!("{:?} can't mod {:?}", l, r)),
@@ -630,38 +631,38 @@ impl Datum {
     }
 
     // `checked_int_div` computes the result of a / b, both a and b are integer.
-    pub fn checked_int_div(self, _: &mut EvalContext, d: Datum) -> Result<Datum> {
-        match d {
+    pub fn checked_int_div(self, _: &mut EvalContext, datum: Datum) -> Result<Datum> {
+        match datum {
             Datum::I64(0) | Datum::U64(0) => return Ok(Datum::Null),
             _ => {}
         }
-        match (self, d) {
-            (Datum::I64(l), Datum::I64(r)) => match l.checked_div(r) {
-                None => Err(box_err!("{} intdiv {} overflow", l, r)),
+        match (self, datum) {
+            (Datum::I64(left), Datum::I64(right)) => match left.checked_div(right) {
+                None => Err(box_err!("{} intdiv {} overflow", left, right)),
                 Some(res) => Ok(Datum::I64(res)),
             },
-            (Datum::I64(l), Datum::U64(r)) => if l < 0 {
-                if l.overflowing_neg().0 as u64 >= r {
-                    Err(box_err!("{} intdiv {} overflow", l, r))
+            (Datum::I64(left), Datum::U64(right)) => if left < 0 {
+                if left.overflowing_neg().0 as u64 >= right {
+                    Err(box_err!("{} intdiv {} overflow", left, right))
                 } else {
                     Ok(Datum::U64(0))
                 }
             } else {
-                Ok(Datum::U64(l as u64 / r))
+                Ok(Datum::U64(left as u64 / right))
             },
-            (Datum::U64(l), Datum::I64(r)) => if r < 0 {
-                if l != 0 && r.overflowing_neg().0 as u64 <= l {
-                    Err(box_err!("{} intdiv {} overflow", l, r))
+            (Datum::U64(left), Datum::I64(right)) => if right < 0 {
+                if left != 0 && right.overflowing_neg().0 as u64 <= left {
+                    Err(box_err!("{} intdiv {} overflow", left, right))
                 } else {
                     Ok(Datum::U64(0))
                 }
             } else {
-                Ok(Datum::U64(l / r as u64))
+                Ok(Datum::U64(left / right as u64))
             },
-            (Datum::U64(l), Datum::U64(r)) => Ok(Datum::U64(l / r)),
-            (l, r) => {
-                let a = l.into_dec()?;
-                let b = r.into_dec()?;
+            (Datum::U64(left), Datum::U64(right)) => Ok(Datum::U64(left / right)),
+            (left, right) => {
+                let a = left.into_dec()?;
+                let b = right.into_dec()?;
                 match a / b {
                     None => Ok(Datum::Null),
                     Some(res) => {
@@ -759,44 +760,44 @@ impl From<Json> for Datum {
     }
 }
 
-pub trait DatumDecoder: DecimalDecoder + JsonDecoder {
-    /// `decode_datum` decodes on a datum from a byte slice generated by tidb.
-    fn decode_datum(&mut self) -> Result<Datum> {
-        let flag = self.read_u8()?;
-        match flag {
-            INT_FLAG => self.decode_i64().map(Datum::I64),
-            UINT_FLAG => self.decode_u64().map(Datum::U64),
-            BYTES_FLAG => self.decode_bytes(false).map(Datum::Bytes),
-            COMPACT_BYTES_FLAG => self.decode_compact_bytes().map(Datum::Bytes),
-            NIL_FLAG => Ok(Datum::Null),
-            FLOAT_FLAG => self.decode_f64().map(Datum::F64),
+/// `decode_datum` decodes on a datum from a byte slice generated by tidb.
+pub fn decode_datum(data: &mut BytesSlice) -> Result<Datum> {
+    if !data.is_empty() {
+        let flag = data[0];
+        *data = &data[1..];
+        let datum = match flag {
+            INT_FLAG => number::decode_i64(data).map(Datum::I64)?,
+            UINT_FLAG => number::decode_u64(data).map(Datum::U64)?,
+            BYTES_FLAG => bytes::decode_bytes(data, false).map(Datum::Bytes)?,
+            COMPACT_BYTES_FLAG => bytes::decode_compact_bytes(data).map(Datum::Bytes)?,
+            NIL_FLAG => Datum::Null,
+            FLOAT_FLAG => number::decode_f64(data).map(Datum::F64)?,
             DURATION_FLAG => {
-                let nanos = self.decode_i64()?;
+                let nanos = number::decode_i64(data)?;
                 let dur = Duration::from_nanos(nanos, MAX_FSP)?;
-                Ok(Datum::Dur(dur))
+                Datum::Dur(dur)
             }
-            DECIMAL_FLAG => self.decode_decimal().map(Datum::Dec),
-            VAR_INT_FLAG => self.decode_var_i64().map(Datum::I64),
-            VAR_UINT_FLAG => self.decode_var_u64().map(Datum::U64),
-            JSON_FLAG => self.decode_json().map(Datum::Json),
-            f => Err(invalid_type!("unsupported data type `{}`", f)),
-        }
-    }
-
-    /// `decode` decodes all datum from a byte slice generated by tidb.
-    fn decode(&mut self) -> Result<Vec<Datum>> {
-        let mut res = vec![];
-
-        while self.remaining() > 0 {
-            let v = self.decode_datum()?;
-            res.push(v);
-        }
-
-        Ok(res)
+            DECIMAL_FLAG => Decimal::decode(data).map(Datum::Dec)?,
+            VAR_INT_FLAG => number::decode_var_i64(data).map(Datum::I64)?,
+            VAR_UINT_FLAG => number::decode_var_u64(data).map(Datum::U64)?,
+            JSON_FLAG => Json::decode(data).map(Datum::Json)?,
+            f => Err(invalid_type!("unsupported data type `{}`", f))?,
+        };
+        Ok(datum)
+    } else {
+        Err(Error::unexpected_eof())
     }
 }
 
-impl<T: DecimalDecoder> DatumDecoder for T {}
+/// `decode` decodes all datum from a byte slice generated by tidb.
+pub fn decode(data: &mut BytesSlice) -> Result<Vec<Datum>> {
+    let mut res = vec![];
+    while !data.is_empty() {
+        let v = decode_datum(data)?;
+        res.push(v);
+    }
+    Ok(res)
+}
 
 pub trait DatumEncoder: BytesEncoder + DecimalEncoder + JsonEncoder {
     /// Encode values to buf slice.
@@ -940,19 +941,19 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
         VAR_INT_FLAG => {
             let mut v = &buf[1..];
             let l = v.len();
-            v.decode_var_i64()?;
+            number::decode_var_i64(&mut v)?;
             l - v.len()
         }
         VAR_UINT_FLAG => {
             let mut v = &buf[1..];
             let l = v.len();
-            v.decode_var_u64()?;
+            number::decode_var_u64(&mut v)?;
             l - v.len()
         }
         JSON_FLAG => {
             let mut v = &buf[1..];
             let l = v.len();
-            v.decode_json()?;
+            Json::decode(&mut v)?;
             l - v.len()
         }
         f => return Err(invalid_type!("unsupported data type `{}`", f)),
@@ -1058,11 +1059,11 @@ mod test {
         ];
         for vs in table {
             let mut buf = encode_key(&vs).unwrap();
-            let decoded = buf.as_slice().decode().unwrap();
+            let decoded = decode(&mut buf.as_slice()).unwrap();
             assert_eq!(vs, decoded);
 
             buf = encode_value(&vs).unwrap();
-            let decoded = buf.as_slice().decode().unwrap();
+            let decoded = decode(&mut buf.as_slice()).unwrap();
             assert_eq!(vs, decoded);
         }
     }

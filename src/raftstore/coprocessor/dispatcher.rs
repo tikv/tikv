@@ -13,11 +13,11 @@
 
 use rocksdb::DB;
 
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::Region;
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
-use util::transport::{RetryableSendCh, Sender};
 use raftstore::store::msg::Msg;
+use util::transport::{RetryableSendCh, Sender};
 
 use super::*;
 
@@ -45,7 +45,10 @@ pub struct Registry {
 macro_rules! push {
     ($p:expr, $t:ident, $vec:expr) => {
         $t.start();
-        let e = Entry { priority: $p, observer: $t };
+        let e = Entry {
+            priority: $p,
+            observer: $t,
+        };
         let vec = &mut $vec;
         vec.push(e);
         vec.sort_by(|l, r| l.priority.cmp(&r.priority));
@@ -102,7 +105,7 @@ macro_rules! loop_ob {
         for o in $obs {
             loop_ob!(_exec $res_type, o.observer, $hook, &mut ctx, $($args)*);
             if ctx.bypass {
-                return loop_ob!(_done $res_type);
+                break;
             }
         }
         loop_ob!(_done $res_type)
@@ -128,22 +131,17 @@ impl CoprocessorHost {
         let mut registry = Registry::default();
         let split_size_check_observer =
             SizeCheckObserver::new(cfg.region_max_size.0, cfg.region_split_size.0, ch);
-        registry.register_split_check_observer(
-            SIZE_CHECK_OBSERVER_PRIORITY,
-            Box::new(split_size_check_observer),
-        );
+        registry.register_split_check_observer(200, Box::new(split_size_check_observer));
 
+        // TableCheckObserver has higher priority than SizeCheckObserver.
         registry.register_split_check_observer(
-            HALF_SPLIT_OBSERVER_PRIORITY,
+            100,
             Box::new(HalfCheckObserver::new(cfg.region_max_size.0)),
         );
         if cfg.split_region_on_table {
-            registry.register_split_check_observer(
-                TABLE_CHECK_OBSERVER_PRIORITY,
-                Box::new(TableCheckObserver::default()),
-            );
+            registry.register_split_check_observer(400, Box::new(TableCheckObserver::default()));
         }
-        CoprocessorHost { registry: registry }
+        CoprocessorHost { registry }
     }
 
     /// Call all prepose hooks until bypass is set to true.
@@ -208,41 +206,21 @@ impl CoprocessorHost {
         }
     }
 
-    pub fn new_split_check_status(
+    pub fn new_split_checker_host(
         &self,
         region: &Region,
         engine: &DB,
         auto_split: bool,
-    ) -> SplitCheckStatus {
-        let mut ob_ctx = ObserverContext::new(region);
-        let mut split_status = SplitCheckStatus::new(auto_split);
-        for entry in &self.registry.split_check_observers {
-            entry
-                .observer
-                .new_split_check_status(&mut ob_ctx, &mut split_status, engine);
-        }
-        split_status
-    }
-
-    /// Hook to call for every check during split.
-    pub fn on_split_check(
-        &self,
-        region: &Region,
-        split_status: &mut SplitCheckStatus,
-        key: &[u8],
-        value_size: u64,
-    ) -> Option<Vec<u8>> {
-        let mut ob_ctx = ObserverContext::new(region);
-        for entry in &self.registry.split_check_observers {
-            if let Some(split_key) =
-                entry
-                    .observer
-                    .on_split_check(&mut ob_ctx, split_status, key, value_size)
-            {
-                return Some(split_key);
-            }
-        }
-        None
+    ) -> SplitCheckerHost {
+        let mut host = SplitCheckerHost::new(auto_split);
+        loop_ob!(
+            region,
+            &self.registry.split_check_observers,
+            add_checker,
+            &mut host,
+            engine
+        );
+        host
     }
 
     pub fn on_role_change(&self, region: &Region, role: StateRole) {
@@ -264,14 +242,15 @@ impl CoprocessorHost {
 
 #[cfg(test)]
 mod test {
-    use raftstore::coprocessor::*;
-    use std::sync::*;
-    use std::sync::atomic::*;
     use protobuf::RepeatedField;
+    use raftstore::coprocessor::*;
+    use std::sync::atomic::*;
+    use std::sync::*;
 
     use kvproto::metapb::Region;
-    use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse,
-                              Request, Response};
+    use kvproto::raft_cmdpb::{
+        AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request, Response,
+    };
 
     #[derive(Clone, Default)]
     struct TestCoprocessor {
@@ -336,19 +315,19 @@ mod test {
     }
 
     macro_rules! assert_all {
-        ($target:expr, $expect:expr) => ({
+        ($target:expr, $expect:expr) => {{
             for (c, e) in ($target).iter().zip($expect) {
                 assert_eq!(c.load(Ordering::SeqCst), *e);
             }
-        })
+        }};
     }
 
     macro_rules! set_all {
-        ($target:expr, $v:expr) => ({
+        ($target:expr, $v:expr) => {{
             for v in $target {
                 v.store($v, Ordering::SeqCst);
             }
-        })
+        }};
     }
 
     #[test]

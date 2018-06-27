@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(plugin)]
-#![cfg_attr(feature = "dev", plugin(clippy))]
-
 extern crate clap;
 extern crate grpcio as grpc;
 extern crate kvproto;
@@ -34,8 +31,8 @@ extern crate tikv;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::str;
-use std::time::Duration;
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::{App, Arg, SubCommand};
 use grpc::{CallOption, ChannelBuilder, EnvBuilder};

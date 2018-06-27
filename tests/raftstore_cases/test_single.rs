@@ -16,9 +16,9 @@ use std::time::Duration;
 use tikv::util::config::*;
 
 use super::cluster::{Cluster, Simulator};
-use super::util::*;
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
+use super::util::*;
 
 // TODO add stale epoch test cases.
 
@@ -67,21 +67,23 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
 fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
 
+    let cf = "lock";
+
     for i in 1..1000 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
         let key = k.as_bytes();
         let value = v.as_bytes();
-        cluster.must_put(key, value);
-        let v = cluster.get(key);
+        cluster.must_put_cf(cf, key, value);
+        let v = cluster.get_cf(cf, key);
         assert_eq!(v, Some(value.to_vec()));
     }
 
-    cluster.must_delete_range(b"key1", b"key9999");
+    cluster.must_delete_range_cf(cf, b"key1", b"key9999");
 
     for i in 1..1000 {
         let k = format!("key{}", i);
         let key = k.as_bytes();
-        assert!(cluster.get(key).is_none());
+        assert!(cluster.get_cf(cf, key).is_none());
     }
 }
 
@@ -99,12 +101,14 @@ fn test_wrong_store_id<T: Simulator>(cluster: &mut Cluster<T>) {
     leader.set_store_id(store_id + 1);
     req.mut_header().set_peer(leader);
     let result = cluster.call_command_on_node(store_id, req, Duration::from_secs(5));
-    assert!(!result
-        .unwrap()
-        .get_header()
-        .get_error()
-        .get_message()
-        .is_empty());
+    assert!(
+        !result
+            .unwrap()
+            .get_header()
+            .get_error()
+            .get_message()
+            .is_empty()
+    );
 }
 
 fn test_put_large_entry<T: Simulator>(cluster: &mut Cluster<T>) {

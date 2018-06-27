@@ -13,26 +13,21 @@
 
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
+#![feature(proc_macro)]
 #![feature(fnbox)]
 #![feature(alloc)]
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
-#![feature(iterator_for_each)]
-#![feature(conservative_impl_trait)]
+#![feature(integer_atomics)]
 #![feature(entry_or_default)]
-#![cfg_attr(feature = "dev", feature(plugin))]
-#![cfg_attr(feature = "dev", plugin(clippy))]
-#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-#![recursion_limit = "100"]
+#![feature(proc_macro_non_items)]
+#![feature(proc_macro_gen)]
 #![feature(ascii_ctype)]
-#![allow(module_inception)]
-#![allow(should_implement_trait)]
-#![allow(large_enum_variant)]
-#![allow(needless_pass_by_value)]
-#![allow(unreadable_literal)]
-#![allow(new_without_default_derive)]
-#![allow(verbose_bit_mask)]
-#![allow(implicit_hasher)]
+#![recursion_limit = "200"]
+#![cfg_attr(not(feature = "cargo-clippy"), allow(unknown_lints))]
+// Currently this raises some false positives, so we allow it:
+// https://github.com/rust-lang-nursery/rust-clippy/issues/2638
+#![allow(nonminimal_bool)]
 
 extern crate alloc;
 extern crate backtrace;
@@ -44,11 +39,11 @@ extern crate crc;
 extern crate crossbeam_channel;
 #[macro_use]
 extern crate fail;
-extern crate flat_map;
 extern crate fnv;
 extern crate fs2;
 extern crate futures;
 extern crate futures_cpupool;
+extern crate fxhash;
 extern crate grpcio as grpc;
 extern crate indexmap;
 extern crate kvproto;
@@ -61,6 +56,7 @@ extern crate mio;
 extern crate murmur3;
 #[macro_use]
 extern crate prometheus;
+extern crate prometheus_static_metric;
 extern crate protobuf;
 #[macro_use]
 extern crate quick_error;
@@ -72,6 +68,12 @@ extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
+#[macro_use(slog_o, slog_kv)]
+extern crate slog;
+extern crate slog_async;
+extern crate slog_scope;
+extern crate slog_stdlog;
+extern crate slog_term;
 extern crate sys_info;
 extern crate tempdir;
 #[cfg(test)]
@@ -91,12 +93,12 @@ extern crate zipf;
 #[macro_use]
 pub mod util;
 pub mod config;
-pub mod storage;
-pub mod raftstore;
-pub mod pd;
-pub mod server;
 pub mod coprocessor;
 pub mod import;
+pub mod pd;
+pub mod raftstore;
+pub mod server;
+pub mod storage;
 
 pub use storage::Storage;
 

@@ -12,10 +12,14 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 use futures::{Future, Sink, Stream};
-use grpc::{DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
-           Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags};
+use grpc::{
+    DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
+    Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
+};
 use tikv::pd::Error as PdError;
 use tikv::util::security::*;
 
@@ -24,34 +28,48 @@ use kvproto::pdpb_grpc::{self, Pd};
 
 use super::mocker::*;
 
-pub struct Server {
-    server: GrpcServer,
+pub struct Server<C: PdMocker> {
+    server: Option<GrpcServer>,
+    mocker: PdMock<C>,
 }
 
-impl Server {
-    pub fn run<C>(eps_count: usize, handler: Arc<Service>, case: Option<Arc<C>>) -> Server
-    where
-        C: PdMocker + Send + Sync + 'static,
-    {
-        let eps = vec![("127.0.0.1".to_owned(), 0); eps_count];
+impl Server<Service> {
+    pub fn new(eps_count: usize) -> Server<Service> {
         let mgr = SecurityManager::new(&SecurityConfig::default()).unwrap();
-        Server::run_with_eps(&mgr, eps, handler, case)
+        let eps = vec![("127.0.0.1".to_owned(), 0); eps_count];
+        let case = Option::None::<Arc<Service>>;
+        Self::with_configuration(&mgr, eps, case)
+    }
+}
+
+impl<C: PdMocker + Send + Sync + 'static> Server<C> {
+    pub fn with_case(eps_count: usize, case: Arc<C>) -> Server<C> {
+        let mgr = SecurityManager::new(&SecurityConfig::default()).unwrap();
+        let eps = vec![("127.0.0.1".to_owned(), 0); eps_count];
+        Server::with_configuration(&mgr, eps, Some(case))
     }
 
-    pub fn run_with_eps<C>(
+    pub fn with_configuration(
         mgr: &SecurityManager,
         eps: Vec<(String, u16)>,
-        handler: Arc<Service>,
         case: Option<Arc<C>>,
-    ) -> Server
-    where
-        C: PdMocker + Send + Sync + 'static,
-    {
-        let m = PdMock {
-            default_handler: Arc::clone(&handler),
+    ) -> Server<C> {
+        let handler = Arc::new(Service::new());
+        let default_handler = Arc::clone(&handler);
+        let mocker = PdMock {
+            default_handler,
             case: case.clone(),
         };
-        let service = pdpb_grpc::create_pd(m);
+        let mut server = Server {
+            server: None,
+            mocker,
+        };
+        server.start(mgr, eps);
+        server
+    }
+
+    pub fn start(&mut self, mgr: &SecurityManager, eps: Vec<(String, u16)>) {
+        let service = pdpb_grpc::create_pd(self.mocker.clone());
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(1)
@@ -65,29 +83,29 @@ impl Server {
 
         let mut server = sb.build().unwrap();
         {
-            let addrs = server.bind_addrs();
-            handler.set_endpoints(
-                addrs
-                    .iter()
-                    .map(|addr| format!("{}:{}", addr.0, addr.1))
-                    .collect(),
-            );
-            if let Some(case) = case.as_ref() {
-                case.set_endpoints(
-                    addrs
-                        .iter()
-                        .map(|addr| format!("{}:{}", addr.0, addr.1))
-                        .collect(),
-                );
+            let addrs: Vec<String> = server
+                .bind_addrs()
+                .iter()
+                .map(|addr| format!("{}:{}", addr.0, addr.1))
+                .collect();
+            self.mocker.default_handler.set_endpoints(addrs.clone());
+            if let Some(case) = self.mocker.case.as_ref() {
+                case.set_endpoints(addrs);
             }
         }
 
         server.start();
-        Server { server: server }
+        self.server = Some(server);
+        // Ensure that server is ready.
+        thread::sleep(Duration::from_secs(1));
+    }
+
+    pub fn stop(&mut self) {
+        self.server.take();
     }
 
     pub fn bind_addrs(&self) -> Vec<(String, u16)> {
-        self.server.bind_addrs().to_vec()
+        self.server.as_ref().unwrap().bind_addrs().to_vec()
     }
 }
 
@@ -96,7 +114,8 @@ where
     R: Send + 'static,
     F: Fn(&PdMocker) -> Option<Result<R>>,
 {
-    let resp = mock.case
+    let resp = mock
+        .case
         .as_ref()
         .and_then(|case| f(case.as_ref()))
         .or_else(|| f(mock.default_handler.as_ref()));
@@ -210,12 +229,14 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         sink: DuplexSink<RegionHeartbeatResponse>,
     ) {
         let mock = self.clone();
-        let f = sink.sink_map_err(PdError::from)
+        let f = sink
+            .sink_map_err(PdError::from)
             .send_all(
                 stream
                     .map_err(PdError::from)
                     .and_then(move |req| {
-                        let resp = mock.case
+                        let resp = mock
+                            .case
                             .as_ref()
                             .and_then(|case| case.region_heartbeat(&req))
                             .or_else(|| mock.default_handler.region_heartbeat(&req));

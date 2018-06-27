@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use storage::{Key, KvPair, ScanMode, Snapshot, Statistics, Value};
-use storage::mvcc::{Error as MvccError, MvccReader};
 use super::{Error, Result};
 use kvproto::kvrpcpb::IsolationLevel;
+use storage::mvcc::{Error as MvccError, MvccReader};
+use storage::{Key, KvPair, ScanMode, Snapshot, Statistics, Value};
 
 pub struct SnapshotStore {
     snapshot: Box<Snapshot>,
@@ -31,10 +31,10 @@ impl SnapshotStore {
         fill_cache: bool,
     ) -> SnapshotStore {
         SnapshotStore {
-            snapshot: snapshot,
-            start_ts: start_ts,
-            isolation_level: isolation_level,
-            fill_cache: fill_cache,
+            snapshot,
+            start_ts,
+            isolation_level,
+            fill_cache,
         }
     }
 
@@ -93,7 +93,7 @@ impl SnapshotStore {
         );
         reader.set_key_only(key_only);
         Ok(StoreScanner {
-            reader: reader,
+            reader,
             start_ts: self.start_ts,
         })
     }
@@ -173,11 +173,11 @@ impl StoreScanner {
 
 #[cfg(test)]
 mod test {
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
     use super::SnapshotStore;
+    use kvproto::kvrpcpb::{Context, IsolationLevel};
+    use storage::engine::{self, Engine, Snapshot, TEMP_DIR};
     use storage::mvcc::MvccTxn;
     use storage::{make_key, KvPair, Mutation, Options, ScanMode, Statistics, Value, ALL_CFS};
-    use storage::engine::{self, Engine, Snapshot, TEMP_DIR};
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: u64 = 10;
@@ -200,10 +200,10 @@ mod test {
             let ctx = Context::new();
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut store = TestStore {
-                keys: keys,
-                snapshot: snapshot,
-                ctx: ctx,
-                engine: engine,
+                keys,
+                snapshot,
+                ctx,
+                engine,
             };
             store.init_data();
             store

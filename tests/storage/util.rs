@@ -11,15 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tikv::storage::{self, Engine};
-use tikv::storage::config::Config;
+use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::Context;
 use raftstore::cluster::Cluster;
-use raftstore::server::ServerCluster;
 use raftstore::server::new_server_cluster;
-use tikv::util::HandyRwLock;
+use raftstore::server::ServerCluster;
 use tikv::server::readpool::{self, ReadPool};
-use super::sync_storage::SyncStorage;
+use tikv::storage::config::Config;
+use tikv::storage::{self, Engine};
+use tikv::util::worker::FutureWorker;
+use tikv::util::HandyRwLock;
 
 pub fn new_raft_engine(count: usize, key: &str) -> (Cluster<ServerCluster>, Box<Engine>, Context) {
     let mut cluster = new_server_cluster(0, count);
@@ -40,8 +41,9 @@ pub fn new_raft_storage_with_store_count(
     count: usize,
     key: &str,
 ) -> (Cluster<ServerCluster>, SyncStorage, Context) {
+    let pd_worker = FutureWorker::new("test future worker");
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-        || storage::ReadPoolContext::new(None)
+        || storage::ReadPoolContext::new(pd_worker.scheduler())
     });
     let (cluster, engine, ctx) = new_raft_engine(count, key);
     (

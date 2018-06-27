@@ -11,33 +11,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
+use std::sync::{Arc, RwLock};
+use std::{cmp, i32};
 
 use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
-use kvproto::tikvpb_grpc::*;
 use kvproto::debugpb_grpc::create_debug;
-use kvproto::importpb_grpc::create_import_sst;
+use kvproto::import_sstpb_grpc::create_import_sst;
+use kvproto::tikvpb_grpc::*;
 
+use coprocessor::{self, EndPointHost, EndPointTask};
 use import::ImportSSTService;
-use util::worker::{Builder as WorkerBuilder, FutureScheduler, Worker};
-use util::security::SecurityManager;
-use storage::Storage;
 use raftstore::store::{Engines, SnapManager};
+use storage::Storage;
+use util::security::SecurityManager;
+use util::worker::{Builder as WorkerBuilder, Worker};
 
-use super::{Config, Result};
-use coprocessor::{EndPointHost, EndPointTask};
-use coprocessor::cache::SQLCache;
-use super::service::*;
-use super::transport::{RaftStoreRouter, ServerTransport};
-use super::resolve::StoreAddrResolver;
-use super::snap::{Runner as SnapHandler, Task as SnapTask};
 use super::raft_client::RaftClient;
-use pd::PdTask;
+use super::readpool::ReadPool;
+use coprocessor::cache::SQLCache;
+use super::resolve::StoreAddrResolver;
+use super::service::*;
+use super::snap::{Runner as SnapHandler, Task as SnapTask};
+use super::transport::{RaftStoreRouter, ServerTransport};
+use super::{Config, Result};
 
 const DEFAULT_COPROCESSOR_BATCH: usize = 256;
-const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
+const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
@@ -54,7 +55,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
-    pd_scheduler: FutureScheduler<PdTask>,
+    cop_readpool: ReadPool<coprocessor::ReadPoolContext>,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
@@ -64,10 +65,11 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         security_mgr: &Arc<SecurityManager>,
         region_split_size: usize,
         storage: Storage,
+        // TODO: Remove once endpoint itself is passed to here.
+        cop_readpool: ReadPool<coprocessor::ReadPoolContext>,
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
-        pd_scheduler: FutureScheduler<PdTask>,
         debug_engines: Option<Engines>,
         import_service: Option<ImportSSTService<T>>,
     ) -> Result<Server<T, S>> {
@@ -99,10 +101,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         info!("listening on {}", addr);
         let ip = format!("{}", addr.ip());
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
-            .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
+            .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
-            .max_send_message_len(region_split_size as usize * 4)
+            .max_send_message_len(cmp::max(region_split_size * 4, i32::MAX as usize) as i32)
             .build_args();
         let grpc_server = {
             let mut sb = ServerBuilder::new(Arc::clone(&env))
@@ -133,15 +135,15 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 
         let svr = Server {
             env: Arc::clone(&env),
-            grpc_server: grpc_server,
+            grpc_server,
             local_addr: addr,
-            trans: trans,
-            raft_router: raft_router,
-            storage: storage,
-            end_point_worker: end_point_worker,
-            snap_mgr: snap_mgr,
-            snap_worker: snap_worker,
-            pd_scheduler: pd_scheduler,
+            trans,
+            raft_router,
+            storage,
+            end_point_worker,
+            snap_mgr,
+            snap_worker,
+            cop_readpool,
         };
 
         Ok(svr)
@@ -161,7 +163,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             self.storage.get_engine(),
             self.end_point_worker.scheduler(),
             &cfg,
-            self.pd_scheduler.clone(),
+            self.cop_readpool.clone(),
             distsql_cache,
         );
         box_try!(self.end_point_worker.start(end_point));
@@ -170,6 +172,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             self.snap_mgr.clone(),
             self.raft_router.clone(),
             security_mgr,
+            Arc::clone(&cfg),
         );
         box_try!(self.snap_worker.start(snap_runner));
         self.grpc_server.start();
@@ -197,24 +200,25 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-    use std::sync::*;
-    use std::sync::mpsc::*;
     use std::sync::atomic::*;
+    use std::sync::mpsc::*;
+    use std::sync::*;
+    use std::time::Duration;
 
     use super::*;
-    use super::super::{Config, Result};
-    use super::super::transport::RaftStoreRouter;
+
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
-    use storage::{self, Config as StorageConfig, Storage};
+    use super::super::transport::RaftStoreRouter;
+    use super::super::{Config, Result};
     use kvproto::raft_serverpb::RaftMessage;
-    use raftstore::Result as RaftStoreResult;
+    use raftstore::store::transport::Transport;
     use raftstore::store::Msg as StoreMsg;
     use raftstore::store::*;
-    use raftstore::store::transport::Transport;
-    use util::worker::FutureWorker;
-    use util::security::SecurityConfig;
+    use raftstore::Result as RaftStoreResult;
     use server::readpool::{self, ReadPool};
+    use storage::{self, Config as StorageConfig, Storage};
+    use util::security::SecurityConfig;
+    use util::worker::FutureWorker;
 
     #[derive(Clone)]
     struct MockResolver {
@@ -228,7 +232,8 @@ mod tests {
                 return Err(box_err!("quick fail"));
             }
             let addr = self.addr.lock().unwrap();
-            cb(addr.as_ref()
+            cb(addr
+                .as_ref()
                 .map(|s| s.to_owned())
                 .ok_or(box_err!("not set")));
             Ok(())
@@ -272,36 +277,46 @@ mod tests {
         let storage_cfg = StorageConfig::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(None)
-        });
-        let mut storage = Storage::new(&storage_cfg, read_pool).unwrap();
+        let pd_worker = FutureWorker::new("test future worker");
+        let storage_read_pool = ReadPool::new(
+            "storage-readpool",
+            &readpool::Config::default_for_test(),
+            || || storage::ReadPoolContext::new(pd_worker.scheduler()),
+        );
+        let mut storage = Storage::new(&storage_cfg, storage_read_pool).unwrap();
         storage.start(&storage_cfg).unwrap();
 
         let (tx, rx) = mpsc::channel();
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
         let router = TestRaftStoreRouter {
-            tx: tx,
-            significant_msg_sender: significant_msg_sender,
+            tx,
+            significant_msg_sender,
         };
 
         let addr = Arc::new(Mutex::new(None));
         let quick_fail = Arc::new(AtomicBool::new(false));
-        let pd_worker = FutureWorker::new("pd worker");
         let cfg = Arc::new(cfg);
         let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+
+        let pd_worker = FutureWorker::new("test-pd-worker");
+        let cop_read_pool = ReadPool::new(
+            "cop-readpool",
+            &readpool::Config::default_for_test(),
+            || || coprocessor::ReadPoolContext::new(pd_worker.scheduler()),
+        );
+
         let mut server = Server::new(
             &cfg,
             &security_mgr,
             1024,
             storage,
+            cop_read_pool,
             router,
             MockResolver {
                 quick_fail: Arc::clone(&quick_fail),
                 addr: Arc::clone(&addr),
             },
             SnapManager::new("", None),
-            pd_worker.scheduler(),
             None,
             None,
         ).unwrap();

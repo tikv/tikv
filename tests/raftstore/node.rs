@@ -11,32 +11,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::{mpsc, Arc, RwLock};
 use std::ops::Deref;
 use std::path::Path;
+use std::sync::{mpsc, Arc, RwLock};
+use tikv::util::collections::{HashMap, HashSet};
 
 use tempdir::TempDir;
 
 use super::cluster::{Cluster, Simulator};
-use tikv::server::Node;
-use tikv::raftstore::store::*;
+use super::pd::TestPdClient;
+use super::transport_simulate::*;
+use super::util::create_test_engine;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use raft::eraftpb::MessageType;
-use tikv::config::TiKvConfig;
-use tikv::raftstore::Result;
-use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::util::HandyRwLock;
-use tikv::util::worker::FutureWorker;
-use tikv::util::transport::SendCh;
-use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use raft::SnapshotStatus;
+use tikv::config::TiKvConfig;
 use tikv::import::SSTImporter;
-use super::pd::TestPdClient;
-use super::transport_simulate::*;
-use super::util::create_test_engine;
+use tikv::raftstore::coprocessor::CoprocessorHost;
+use tikv::raftstore::store::*;
+use tikv::raftstore::Result;
+use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
+use tikv::server::Node;
+use tikv::util::transport::SendCh;
+use tikv::util::worker::FutureWorker;
+use tikv::util::HandyRwLock;
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
@@ -52,8 +52,8 @@ impl ChannelTransport {
     pub fn new() -> ChannelTransport {
         ChannelTransport {
             core: Arc::new(RwLock::new(ChannelTransportCore {
-                snap_paths: HashMap::new(),
-                routers: HashMap::new(),
+                snap_paths: HashMap::default(),
+                routers: HashMap::default(),
             })),
         }
     }
@@ -137,9 +137,9 @@ impl NodeCluster {
     pub fn new(pd_client: Arc<TestPdClient>) -> NodeCluster {
         NodeCluster {
             trans: ChannelTransport::new(),
-            pd_client: pd_client,
-            nodes: HashMap::new(),
-            simulate_trans: HashMap::new(),
+            pd_client,
+            nodes: HashMap::default(),
+            simulate_trans: HashMap::default(),
         }
     }
 }

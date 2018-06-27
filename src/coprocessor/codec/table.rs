@@ -11,20 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use kvproto::coprocessor::KeyRange;
 use std::io::Write;
 use std::{cmp, u8};
 use tipb::schema::ColumnInfo;
-use kvproto::coprocessor::KeyRange;
 
 use coprocessor::dag::expr::EvalContext;
-use util::escape;
 use util::collections::{HashMap, HashSet};
+use util::escape;
 
-use util::codec::number::{NumberDecoder, NumberEncoder};
-use util::codec::bytes::BytesDecoder;
-use super::datum::DatumDecoder;
-use super::{datum, Datum, Result};
+//use super::datum::DatumDecoder;
 use super::mysql::{types, Duration, Time};
+use super::{datum, Datum, Error, Result};
+use util::codec::number::{self, NumberEncoder};
+use util::codec::BytesSlice;
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -41,13 +41,13 @@ trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {
         self.write_all(TABLE_PREFIX)?;
         self.encode_i64(table_id)?;
-        self.write_all(RECORD_PREFIX_SEP).map_err(From::from)
+        self.write_all(RECORD_PREFIX_SEP).map_err(Error::from)
     }
 
     fn append_table_index_prefix(&mut self, table_id: i64) -> Result<()> {
         self.write_all(TABLE_PREFIX)?;
         self.encode_i64(table_id)?;
-        self.write_all(INDEX_PREFIX_SEP).map_err(From::from)
+        self.write_all(INDEX_PREFIX_SEP).map_err(Error::from)
     }
 }
 
@@ -81,6 +81,18 @@ pub fn check_table_ranges(ranges: &[KeyRange]) -> Result<()> {
     Ok(())
 }
 
+pub fn decode_table_id(key: &[u8]) -> Result<i64> {
+    if !key.starts_with(TABLE_PREFIX) {
+        return Err(invalid_type!(
+            "record key expected, but got {}",
+            escape(key)
+        ));
+    }
+
+    let mut remaining = &key[TABLE_PREFIX.len()..];
+    number::decode_i64(&mut remaining).map_err(Error::from)
+}
+
 pub fn flatten(data: Datum) -> Result<Datum> {
     match data {
         Datum::Dur(d) => Ok(Datum::I64(d.to_nanos())),
@@ -112,11 +124,11 @@ pub fn encode_row(row: Vec<Datum>, col_ids: &[i64]) -> Result<Vec<u8>> {
 }
 
 /// `encode_row_key` encodes the table id and record handle into a byte array.
-pub fn encode_row_key(table_id: i64, encoded_handle: &[u8]) -> Vec<u8> {
+pub fn encode_row_key(table_id: i64, handle: i64) -> Vec<u8> {
     let mut key = Vec::with_capacity(RECORD_ROW_KEY_LEN);
     // can't panic
     key.append_table_record_prefix(table_id).unwrap();
-    key.write_all(encoded_handle).unwrap();
+    key.encode_i64(handle).unwrap();
     key
 }
 
@@ -139,7 +151,7 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
     }
 
     let mut remaining = &encoded[TABLE_PREFIX.len()..];
-    remaining.decode_i64()?;
+    number::decode_i64(&mut remaining)?;
 
     if !remaining.starts_with(RECORD_PREFIX_SEP) {
         return Err(invalid_type!(
@@ -149,7 +161,7 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
     }
 
     remaining = &remaining[RECORD_PREFIX_SEP.len()..];
-    remaining.decode_i64()
+    number::decode_i64(&mut remaining).map_err(Error::from)
 }
 
 /// `truncate_as_row_key` truncate extra part of a tidb key and just keep the row key part.
@@ -180,7 +192,7 @@ pub fn decode_index_key(
         if encoded.is_empty() {
             return Err(box_err!("{} is too short.", escape(encoded)));
         }
-        let mut v = encoded.decode_datum()?;
+        let mut v = datum::decode_datum(&mut encoded)?;
         v = unflatten(ctx, v, info)?;
         res.push(v);
     }
@@ -235,45 +247,45 @@ fn unflatten(ctx: &mut EvalContext, datum: Datum, col: &ColumnInfo) -> Result<Da
     }
 }
 
-pub trait TableDecoder: DatumDecoder {
-    // `decode_col_value` decodes data to a Datum according to the column info.
-    fn decode_col_value(&mut self, ctx: &mut EvalContext, col: &ColumnInfo) -> Result<Datum> {
-        let d = self.decode_datum()?;
-        unflatten(ctx, d, col)
-    }
+// `decode_col_value` decodes data to a Datum according to the column info.
+pub fn decode_col_value(
+    data: &mut BytesSlice,
+    ctx: &mut EvalContext,
+    col: &ColumnInfo,
+) -> Result<Datum> {
+    let d = datum::decode_datum(data)?;
+    unflatten(ctx, d, col)
+}
 
-    // `decode_row` decodes a byte slice into datums.
-    // TODO: We should only decode columns in the cols map.
-    // Row layout: colID1, value1, colID2, value2, .....
-    fn decode_row(
-        &mut self,
-        ctx: &mut EvalContext,
-        cols: &HashMap<i64, ColumnInfo>,
-    ) -> Result<HashMap<i64, Datum>> {
-        let mut values = self.decode()?;
-        if values.get(0).map_or(true, |d| *d == Datum::Null) {
-            return Ok(HashMap::default());
-        }
-        if values.len() & 1 == 1 {
-            return Err(box_err!("decoded row values' length should be even!"));
-        }
-        let mut row = HashMap::with_capacity_and_hasher(cols.len(), Default::default());
-        let mut drain = values.drain(..);
-        loop {
-            let id = match drain.next() {
-                None => return Ok(row),
-                Some(id) => id.i64(),
-            };
-            let v = drain.next().unwrap();
-            if let Some(ci) = cols.get(&id) {
-                let v = unflatten(ctx, v, ci)?;
-                row.insert(id, v);
-            }
+// `decode_row` decodes a byte slice into datums.
+// TODO: We should only decode columns in the cols map.
+// Row layout: colID1, value1, colID2, value2, .....
+pub fn decode_row(
+    data: &mut BytesSlice,
+    ctx: &mut EvalContext,
+    cols: &HashMap<i64, ColumnInfo>,
+) -> Result<HashMap<i64, Datum>> {
+    let mut values = datum::decode(data)?;
+    if values.get(0).map_or(true, |d| *d == Datum::Null) {
+        return Ok(HashMap::default());
+    }
+    if values.len() & 1 == 1 {
+        return Err(box_err!("decoded row values' length should be even!"));
+    }
+    let mut row = HashMap::with_capacity_and_hasher(cols.len(), Default::default());
+    let mut drain = values.drain(..);
+    loop {
+        let id = match drain.next() {
+            None => return Ok(row),
+            Some(id) => id.i64(),
+        };
+        let v = drain.next().unwrap();
+        if let Some(ci) = cols.get(&id) {
+            let v = unflatten(ctx, v, ci)?;
+            row.insert(id, v);
         }
     }
 }
-
-impl<T: BytesDecoder> TableDecoder for T {}
 
 #[derive(Debug)]
 pub struct RowColMeta {
@@ -292,19 +304,13 @@ pub struct RowColsDict {
 
 impl RowColMeta {
     pub fn new(offset: usize, length: usize) -> RowColMeta {
-        RowColMeta {
-            offset: offset,
-            length: length,
-        }
+        RowColMeta { offset, length }
     }
 }
 
 impl RowColsDict {
-    pub fn new(cols: HashMap<i64, RowColMeta>, val: Vec<u8>) -> RowColsDict {
-        RowColsDict {
-            value: val,
-            cols: cols,
-        }
+    pub fn new(cols: HashMap<i64, RowColMeta>, value: Vec<u8>) -> RowColsDict {
+        RowColsDict { value, cols }
     }
 
     pub fn len(&self) -> usize {
@@ -329,8 +335,8 @@ impl RowColsDict {
         self.cols.insert(cid, RowColMeta::new(offset, length));
     }
 
-    // get binary of cols, keep the origin order and return one slice.
-    pub fn get_column_values(&self) -> &[u8] {
+    // get binary of cols, keep the origin order, return one slice and cols' end offsets.
+    pub fn get_column_values_and_end_offsets(&self) -> (&[u8], Vec<usize>) {
         let mut start = self.value.len();
         let mut length = 0;
         for meta in self.cols.values() {
@@ -339,7 +345,13 @@ impl RowColsDict {
             }
             length += meta.length;
         }
-        &self.value[start..start + length]
+        let end_offsets = self
+            .cols
+            .values()
+            .into_iter()
+            .map(|meta| meta.offset + meta.length - start)
+            .collect();
+        (&self.value[start..start + length], end_offsets)
     }
 }
 
@@ -355,7 +367,7 @@ pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
         let length = data.len();
         let mut tmp_data: &[u8] = data.as_ref();
         while !tmp_data.is_empty() && meta_map.len() < cols.len() {
-            let id = tmp_data.decode_datum()?.i64();
+            let id = datum::decode_datum(&mut tmp_data)?.i64();
             let offset = length - tmp_data.len();
             let (val, rem) = datum::split_datum(tmp_data, false)?;
             if cols.contains(&id) {
@@ -386,7 +398,7 @@ pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option
         if tmp_data.is_empty() {
             None
         } else {
-            Some(box_try!(tmp_data.decode_datum()).i64())
+            Some(datum::decode_datum(&mut tmp_data)?.i64())
         }
     };
     Ok((RowColsDict::new(meta_map, key), handle))
@@ -398,9 +410,8 @@ mod test {
 
     use tipb::schema::ColumnInfo;
 
+    use coprocessor::codec::datum::{self, Datum};
     use coprocessor::codec::mysql::types;
-    use coprocessor::codec::datum::{self, Datum, DatumDecoder};
-    use util::codec::number::NumberEncoder;
     use util::collections::{HashMap, HashSet};
 
     use super::*;
@@ -409,9 +420,7 @@ mod test {
     fn test_row_key_codec() {
         let tests = vec![i64::MIN, i64::MAX, -1, 0, 2, 3, 1024];
         for &t in &tests {
-            let mut buf = vec![];
-            buf.encode_i64(t).unwrap();
-            let k = encode_row_key(1, &buf);
+            let k = encode_row_key(1, t);
             assert_eq!(t, decode_handle(&k).unwrap());
         }
     }
@@ -478,7 +487,8 @@ mod test {
 
         let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
         let col_values: Vec<_> = row.iter().map(|(_, v)| v.clone()).collect();
-        let mut col_encoded: HashMap<_, _> = row.iter()
+        let mut col_encoded: HashMap<_, _> = row
+            .iter()
             .map(|(k, v)| {
                 let f = super::flatten(v.clone()).unwrap();
                 (*k, datum::encode_value(&[f]).unwrap())
@@ -489,7 +499,7 @@ mod test {
         let bs = encode_row(col_values, &col_ids).unwrap();
         assert!(!bs.is_empty());
         let mut ctx = EvalContext::default();
-        let r = bs.as_slice().decode_row(&mut ctx, &cols).unwrap();
+        let r = decode_row(&mut bs.as_slice(), &mut ctx, &cols).unwrap();
         assert_eq!(row, r);
 
         let mut datums: HashMap<_, _>;
@@ -497,7 +507,7 @@ mod test {
         assert_eq!(col_encoded, datums);
 
         cols.insert(4, new_col_info(types::FLOAT));
-        let r = bs.as_slice().decode_row(&mut ctx, &cols).unwrap();
+        let r = decode_row(&mut bs.as_slice(), &mut ctx, &cols).unwrap();
         assert_eq!(row, r);
 
         col_id_set.insert(4);
@@ -506,7 +516,7 @@ mod test {
 
         cols.remove(&4);
         cols.remove(&3);
-        let r = bs.as_slice().decode_row(&mut ctx, &cols).unwrap();
+        let r = decode_row(&mut bs.as_slice(), &mut ctx, &cols).unwrap();
         row.remove(&3);
         assert_eq!(row, r);
 
@@ -519,8 +529,7 @@ mod test {
         let bs = encode_row(vec![], &[]).unwrap();
         assert!(!bs.is_empty());
         assert!(
-            bs.as_slice()
-                .decode_row(&mut ctx, &cols)
+            decode_row(&mut bs.as_slice(), &mut ctx, &cols)
                 .unwrap()
                 .is_empty()
         );
@@ -569,8 +578,7 @@ mod test {
             None
         } else {
             Some(
-                (handle_data.as_ref() as &[u8])
-                    .decode_datum()
+                datum::decode_datum(&mut (handle_data.as_ref() as &[u8]))
                     .unwrap()
                     .i64(),
             )
@@ -627,5 +635,17 @@ mod test {
         range.set_start(small_key);
         range.set_end(b"xx".to_vec());
         assert!(check_table_ranges(&[range]).is_err());
+    }
+
+    #[test]
+    fn test_decode_table_id() {
+        let tests = vec![0, 2, 3, 1024, i64::MAX];
+        for &tid in &tests {
+            let k = encode_row_key(tid, 1);
+            assert_eq!(tid, decode_table_id(&k).unwrap());
+            let k = encode_index_seek_key(tid, 1, &k);
+            assert_eq!(tid, decode_table_id(&k).unwrap());
+            assert!(decode_table_id(b"xxx").is_err());
+        }
     }
 }

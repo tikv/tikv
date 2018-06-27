@@ -11,18 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{self, Display, Formatter};
-use std::error;
 use std::collections::VecDeque;
+use std::error;
+use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
-use util::worker::Runnable;
-use util::rocksdb;
-use util::escape;
-use util::rocksdb::compact_range;
-use util::properties::MvccProperties;
 use rocksdb::{CFHandle, Range, DB};
 use storage::CF_WRITE;
+use util::escape;
+use util::properties::MvccProperties;
+use util::rocksdb;
+use util::rocksdb::compact_range;
+use util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
 
@@ -36,9 +36,10 @@ pub enum Task {
     },
 
     CheckAndCompact {
-        cf_names: Vec<String>,     // Column families need to compact
-        ranges: Vec<Key>,          // Ranges need to check
-        tombstones_threshold: u64, // The minimum RocksDB tombstones a range that need compacting has
+        cf_names: Vec<String>,         // Column families need to compact
+        ranges: Vec<Key>,              // Ranges need to check
+        tombstones_num_threshold: u64, // The minimum RocksDB tombstones a range that need compacting has
+        tombstones_percent_threshold: u64,
     },
 }
 
@@ -49,7 +50,8 @@ impl Display for Task {
                 ref cf_name,
                 ref start_key,
                 ref end_key,
-            } => f.debug_struct("Compact")
+            } => f
+                .debug_struct("Compact")
                 .field("cf_name", cf_name)
                 .field("start_key", &start_key.as_ref().map(|k| escape(k)))
                 .field("end_key", &end_key.as_ref().map(|k| escape(k)))
@@ -57,11 +59,17 @@ impl Display for Task {
             Task::CheckAndCompact {
                 ref cf_names,
                 ref ranges,
-                tombstones_threshold,
-            } => f.debug_struct("CheckAndCompact")
+                tombstones_num_threshold,
+                tombstones_percent_threshold,
+            } => f
+                .debug_struct("CheckAndCompact")
                 .field("cf_names", cf_names)
                 .field("ranges", ranges)
-                .field("tombstones_threshold", &tombstones_threshold)
+                .field("tombstones_num_threshold", &tombstones_num_threshold)
+                .field(
+                    "tombstones_percent_threshold",
+                    &tombstones_percent_threshold,
+                )
                 .finish(),
         }
     }
@@ -85,7 +93,7 @@ pub struct Runner {
 
 impl Runner {
     pub fn new(engine: Arc<DB>) -> Runner {
-        Runner { engine: engine }
+        Runner { engine }
     }
 
     pub fn compact_range_cf(
@@ -100,7 +108,14 @@ impl Runner {
             .start_coarse_timer();
         let start = start_key.as_ref().map(Vec::as_slice);
         let end = end_key.as_ref().map(Vec::as_slice);
-        compact_range(&self.engine, handle, start, end, false);
+        compact_range(
+            &self.engine,
+            handle,
+            start,
+            end,
+            false,
+            1, /* threads */
+        );
         compact_range_timer.observe_duration();
         Ok(())
     }
@@ -124,8 +139,14 @@ impl Runnable<Task> for Runner {
             Task::CheckAndCompact {
                 cf_names,
                 ranges,
-                tombstones_threshold,
-            } => match collect_ranges_need_compact(&self.engine, ranges, tombstones_threshold) {
+                tombstones_num_threshold,
+                tombstones_percent_threshold,
+            } => match collect_ranges_need_compact(
+                &self.engine,
+                ranges,
+                tombstones_num_threshold,
+                tombstones_percent_threshold,
+            ) {
                 Ok(mut ranges) => for (start, end) in ranges.drain(..) {
                     for cf in &cf_names {
                         if let Err(e) = self.compact_range_cf(
@@ -146,15 +167,20 @@ impl Runnable<Task> for Runner {
     }
 }
 
-fn need_compact(num_entires: u64, num_versions: u64, tombstones_threshold: u64) -> bool {
+fn need_compact(
+    num_entires: u64,
+    num_versions: u64,
+    tombstones_num_threshold: u64,
+    tombstones_percent_threshold: u64,
+) -> bool {
     if num_entires <= num_versions {
         return false;
     }
 
-    // When the number of tombstones exceed threshold and at least 50% entries
-    // are tombstones, this range need compacting.
+    // When the number of tombstones exceed threshold and ratio, this range need compacting.
     let estimate_num_del = num_entires - num_versions;
-    estimate_num_del >= tombstones_threshold && estimate_num_del * 2 >= num_versions
+    estimate_num_del >= tombstones_num_threshold
+        && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires
 }
 
 fn get_range_entries_and_versions(
@@ -191,7 +217,8 @@ fn get_range_entries_and_versions(
 fn collect_ranges_need_compact(
     engine: &DB,
     ranges: Vec<Key>,
-    tombstones_threshold: u64,
+    tombstones_num_threshold: u64,
+    tombstones_percent_threshold: u64,
 ) -> Result<VecDeque<(Key, Key)>, Error> {
     // Check the SST properties for each range, and we will compact a range if the range
     // contains too much RocksDB tombstones. we will merge multiple neighbouring ranges
@@ -205,7 +232,12 @@ fn collect_ranges_need_compact(
         if let Some((num_ent, num_ver)) =
             get_range_entries_and_versions(engine, cf, &range[0], &range[1])
         {
-            if need_compact(num_ent, num_ver, tombstones_threshold) {
+            if need_compact(
+                num_ent,
+                num_ver,
+                tombstones_num_threshold,
+                tombstones_percent_threshold,
+            ) {
                 if compact_start.is_none() {
                     // The previous range doesn't need compacting.
                     compact_start = Some(range[0].clone());
@@ -234,19 +266,19 @@ fn collect_ranges_need_compact(
 
 #[cfg(test)]
 mod test {
-    use std::time::Duration;
     use std::thread::sleep;
+    use std::time::Duration;
 
     use tempdir::TempDir;
 
+    use raftstore::store::keys::data_key;
     use rocksdb::{self, Writable, WriteBatch, DB};
-    use storage::types::Key as MvccKey;
     use storage::mvcc::{Write, WriteType};
+    use storage::types::Key as MvccKey;
     use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use util::properties::MvccPropertiesCollectorFactory;
     use util::rocksdb::new_engine;
     use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
-    use util::properties::MvccPropertiesCollectorFactory;
-    use raftstore::store::keys::data_key;
 
     use super::*;
 
@@ -283,7 +315,8 @@ mod test {
         db.flush_cf(handle, true).unwrap();
 
         // get total sst files size.
-        let old_sst_files_size = db.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
+        let old_sst_files_size = db
+            .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
             .unwrap();
 
         // schedule compact range task
@@ -295,7 +328,8 @@ mod test {
         sleep(Duration::from_secs(5));
 
         // get total sst files size after compact range.
-        let new_sst_files_size = db.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
+        let new_sst_files_size = db
+            .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
             .unwrap();
         assert!(old_sst_files_size > new_sst_files_size);
     }
@@ -371,6 +405,7 @@ mod test {
             &engine,
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
+            50,
         ).unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k5"));
         let mut expected_ranges = VecDeque::new();
@@ -393,6 +428,7 @@ mod test {
             &engine,
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
+            50,
         ).unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k9"));
         let mut expected_ranges = VecDeque::new();

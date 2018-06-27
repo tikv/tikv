@@ -11,13 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs::File;
 use std::error::Error;
+use std::fs::File;
 use std::io::Read;
 use std::ptr;
 
-use grpc::{Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder,
-           ServerCredentialsBuilder};
+use grpc::{
+    Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder, ServerCredentialsBuilder,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -27,7 +28,8 @@ pub struct SecurityConfig {
     pub cert_path: String,
     pub key_path: String,
     // Test purpose only.
-    #[serde(skip)] pub override_ssl_target: String,
+    #[serde(skip)]
+    pub override_ssl_target: String,
 }
 
 impl Default for SecurityConfig {
@@ -79,6 +81,7 @@ impl SecurityConfig {
     }
 }
 
+#[derive(Default)]
 pub struct SecurityManager {
     ca: Vec<u8>,
     cert: Vec<u8>,

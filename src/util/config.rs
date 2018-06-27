@@ -14,15 +14,15 @@
 use std::error::Error;
 use std::fmt::{self, Write};
 use std::fs;
+use std::net::{SocketAddrV4, SocketAddrV6};
+use std::ops::{Div, Mul};
 use std::path::Path;
 use std::str::{self, FromStr};
 use std::time::Duration;
-use std::net::{SocketAddrV4, SocketAddrV6};
-use std::ops::{Div, Mul};
 
-use url;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde::de::{self, Unexpected, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use url;
 
 use util;
 
@@ -55,9 +55,9 @@ quick_error! {
 pub mod compression_type_level_serde {
     use std::fmt;
 
-    use serde::{Deserializer, Serializer};
     use serde::de::{Error, SeqAccess, Unexpected, Visitor};
     use serde::ser::SerializeSeq;
+    use serde::{Deserializer, Serializer};
 
     use rocksdb::DBCompressionType;
 
@@ -135,72 +135,6 @@ pub mod compression_type_level_serde {
         }
 
         deserializer.deserialize_seq(SeqVisitor)
-    }
-}
-
-pub mod order_map_serde {
-    use std::fmt;
-    use std::hash::Hash;
-    use std::marker::PhantomData;
-
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use serde::de::{MapAccess, Visitor};
-    use serde::ser::SerializeMap;
-
-    use util::collections::HashMap;
-
-    pub fn serialize<S, K, V>(m: &HashMap<K, V>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-        K: Serialize + Hash + Eq,
-        V: Serialize,
-    {
-        let mut s = serializer.serialize_map(Some(m.len()))?;
-        for (k, v) in m {
-            s.serialize_entry(k, v)?;
-        }
-        s.end()
-    }
-
-    pub fn deserialize<'de, D, K, V>(deserializer: D) -> Result<HashMap<K, V>, D::Error>
-    where
-        D: Deserializer<'de>,
-        K: Deserialize<'de> + Eq + Hash,
-        V: Deserialize<'de>,
-    {
-        struct MapVisitor<K, V> {
-            phantom: PhantomData<HashMap<K, V>>,
-        }
-
-        impl<'de, K, V> Visitor<'de> for MapVisitor<K, V>
-        where
-            K: Deserialize<'de> + Eq + Hash,
-            V: Deserialize<'de>,
-        {
-            type Value = HashMap<K, V>;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a map")
-            }
-
-            fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
-            where
-                M: MapAccess<'de>,
-            {
-                let mut map = HashMap::with_capacity_and_hasher(
-                    access.size_hint().unwrap_or(0),
-                    Default::default(),
-                );
-                while let Some((key, value)) = access.next_entry()? {
-                    map.insert(key, value);
-                }
-                Ok(map)
-            }
-        }
-
-        deserializer.deserialize_map(MapVisitor {
-            phantom: PhantomData,
-        })
     }
 }
 
@@ -476,6 +410,12 @@ impl<'de> Deserialize<'de> for ReadableSize {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReadableDuration(pub Duration);
 
+impl Into<Duration> for ReadableDuration {
+    fn into(self) -> Duration {
+        self.0
+    }
+}
+
 impl ReadableDuration {
     pub fn secs(secs: u64) -> ReadableDuration {
         ReadableDuration(Duration::new(secs, 0))
@@ -626,8 +566,8 @@ pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<E
 
 #[cfg(unix)]
 pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
-    use std::mem;
     use libc;
+    use std::mem;
 
     unsafe {
         let mut fd_limit = mem::zeroed();
@@ -750,12 +690,12 @@ pub fn check_kernel() -> Vec<ConfigError> {
 
 #[cfg(target_os = "linux")]
 mod check_data_dir {
+    use libc;
+    use std::ffi::{CStr, CString};
     use std::fs::{self, File};
     use std::io::Read;
-    use std::ffi::{CStr, CString};
     use std::path::Path;
     use std::sync::Mutex;
-    use libc;
 
     use super::{canonicalize_path, ConfigError};
 
@@ -1033,8 +973,6 @@ mod test {
     use tempdir::TempDir;
     use toml;
 
-    use util::collections::HashMap;
-
     #[test]
     fn test_readable_size() {
         let s = ReadableSize::kb(2);
@@ -1108,37 +1046,12 @@ mod test {
         }
 
         let illegal_cases = vec![
-            "0.5kb", "0.5kB", "0.5Kb", "0.5k", "0.5g", "b", "gb", "1b", "B"
+            "0.5kb", "0.5kB", "0.5Kb", "0.5k", "0.5g", "b", "gb", "1b", "B",
         ];
         for src in illegal_cases {
             let src_str = format!("s = {:?}", src);
             assert!(toml::from_str::<SizeHolder>(&src_str).is_err(), "{}", src);
         }
-    }
-
-    #[test]
-    fn test_parse_hash_map() {
-        #[derive(Serialize, Deserialize)]
-        struct MapHolder {
-            #[serde(with = "super::order_map_serde")] m: HashMap<String, String>,
-        }
-
-        let legal_cases = vec![
-            (map![], ""),
-            (map!["k1".to_owned() => "v1".to_owned()], "k1 = \"v1\"\n"),
-        ];
-
-        for (src, exp) in legal_cases {
-            let m = MapHolder { m: src };
-            let res_str = toml::to_string(&m).unwrap();
-            let exp_str = format!("[m]\n{}", exp);
-            assert_eq!(res_str, exp_str);
-            let exp_m: MapHolder = toml::from_str(&exp_str).unwrap();
-            assert_eq!(m.m, exp_m.m);
-        }
-        // inline table should be supported.
-        let m: MapHolder = toml::from_str(r#"m = {"k1" = "v1"}"#).unwrap();
-        assert_eq!(&m.m["k1"], "v1");
     }
 
     #[test]
@@ -1207,7 +1120,8 @@ mod test {
     fn test_parse_compression_type() {
         #[derive(Serialize, Deserialize)]
         struct CompressionTypeHolder {
-            #[serde(with = "compression_type_level_serde")] tp: [DBCompressionType; 7],
+            #[serde(with = "compression_type_level_serde")]
+            tp: [DBCompressionType; 7],
         }
 
         let all_tp = vec![
@@ -1283,8 +1197,8 @@ mod test {
     #[cfg(target_os = "linux")]
     #[test]
     fn test_check_kernel() {
-        use std::i64;
         use super::check_kernel::{check_kernel_params, Checker};
+        use std::i64;
 
         // The range of vm.swappiness is from 0 to 100.
         let table: Vec<(&str, i64, Box<Checker>, bool)> = vec![

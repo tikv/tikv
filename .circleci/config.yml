@@ -1,0 +1,118 @@
+version: 2
+jobs:
+  test:
+    working_directory: ~/tikv-ci
+    machine: true
+    environment:
+      # CircleCI does not support env variable interpolation, set those later
+      # Variables used by cargo
+      RUST_TEST_THREADS: "1"
+      RUST_BACKTRACE: "1"
+      RUSTFLAGS: "-Dwarnings"
+      FAIL_POINT: "1"
+      TARPAULIN_VERSION: "0.6.1"
+    steps:
+      - run:
+          name: Updating PATH and Define Environment Variable at Runtime
+          # Define variables that need interpolation
+          # As CircleCI's each `run` declaration starts a new shell, we need to persist them to $BASH_ENV
+          command: |
+            echo 'export PATH=$HOME/.local/cmake/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH' >> $BASH_ENV
+            echo 'export LD_RUN_PATH=$LD_RUN_PATH:$HOME/.local/lib' >> $BASH_ENV
+            echo 'export DYLD_LIBRARY_PATH=$DYLD_LIBRARY_PATH:$HOME/.local/lib' >> $BASH_ENV
+            echo 'export LDFLAGS=-L$HOME/.local/lib' >> $BASH_ENV
+            echo 'export CPPFLAGS=-I$HOME/.local/include' >> $BASH_ENV
+            echo 'export CXXFLAGS=-I$HOME/.local/include' >> $BASH_ENV
+            echo 'export LOCAL_PREFIX=$HOME/.local' >> $BASH_ENV
+      - checkout
+      - run:
+          name: Installing Build Dependencies
+          command: |
+            sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y;
+            sudo apt-get update -y;
+            sudo apt-get install -y g++-4.8 curl libdw-dev libelf-dev elfutils binutils-dev libssl-dev pkg-config zlib1g-dev
+      - restore_cache:
+          name: Restoring ~/.local Cache
+          keys:
+            - v2-local-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
+            - v2-local-{{ .Branch }}
+            - v2-local
+      - restore_cache:
+          name: Restoring ~/.cargo Cache
+          keys:
+            - v2-cargo-{{ .Branch }}-{{ checksum "Cargo.lock" }}
+            - v2-cargo-{{ .Branch }}
+            - v2-cargo
+      - run:
+          name: Setting up Rust and the rest of the Build Environment
+          command: |
+            if [[ ! -e $HOME/.cargo ]]; then
+              curl https://sh.rustup.rs -sSf |
+                sh -s -- --no-modify-path --default-toolchain none -y;
+            fi
+
+            if [[ ! -f $HOME/.local/cmake/bin/cmake ]]; then
+              curl https://cmake.org/files/v3.10/cmake-3.10.0-Linux-x86_64.tar.gz -sSf | tar xzf -;
+              rm -rf $HOME/.local/cmake
+              mv cmake-3.10.0-Linux-x86_64 $HOME/.local/cmake
+            fi
+            # Print kernel config and log.
+            cat /boot/config-`uname -r`
+            dmesg
+            # Force a clock update and stop ntp.
+            sudo service ntp stop
+            sudo ntpd -gq
+      # check format first
+      - run:
+          name: Checking Format
+          command: make format && git diff-index --quiet HEAD -- || (git diff; echo please make format and run tests before creating a PR!; exit 1)
+      - run:
+          name: Installing tarpaulin
+          command: |
+            CURRENT_TARPAULIN_VERSION=`(cargo tarpaulin --version || echo "0") | awk '{ print $3 }'`
+            echo "Tarpaulin version is now: ${CURRENT_TARPAULIN_VERSION}"
+            echo "Tarpaulin version should be: ${TARPAULIN_VERSION}"
+            if [[ "${CURRENT_TARPAULIN_VERSION}" != "${TARPAULIN_VERSION}" ]]; then
+                RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin  --version ${TARPAULIN_VERSION} --force
+            fi
+      - restore_cache:
+          name: Restoring ./target Cache
+          keys:
+            - v2-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
+            - v2-target-{{ .Branch }}
+            - v2-target
+      - run:
+          name: Building
+          command: env SKIP_TESTS=true make trace_test
+          no_output_timeout: 1800s
+      - save_cache:
+          name: Saving ~/.cargo Cache
+          key: v2-cargo-{{ .Branch }}-{{ checksum "Cargo.lock" }}
+          paths:
+            - ~/.cargo
+      - save_cache:
+          name: Saving ~/.local Cache
+          key: v2-local-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
+          paths:
+            - ~/.local
+            - ~/.rustup
+      - run:
+          name: Testing
+          command: make trace_test
+          no_output_timeout: 1800s
+      - run:
+          name: Calculating code coverage
+          command: |
+            cargo tarpaulin --no-count --skip-clean --out Xml
+            bash <(curl -s https://codecov.io/bash)
+          no_output_timeout: 1800s
+      - save_cache:
+          name: Saving ./target Cache
+          key: v2-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
+          paths:
+            - target
+workflows:
+  version: 2
+  ci-test:
+      jobs:
+        - test

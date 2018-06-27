@@ -11,27 +11,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Duration;
+use std::iter::*;
 use std::sync::Arc;
 use std::thread;
-use std::iter::*;
+use std::time::Duration;
 
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
-use tikv::util::config::*;
-use tikv::storage::CF_RAFT;
 use tikv::raftstore::store::Peekable;
+use tikv::storage::CF_RAFT;
 
 use super::node::new_node_cluster;
 use super::util;
-use raftstore::util::*;
 use raftstore::transport_simulate::*;
+use raftstore::util::*;
 
 /// Test if merge is working as expected in a general condition.
 #[test]
 fn test_node_base_merge() {
     let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
 
     cluster.run();
 
@@ -117,9 +117,7 @@ fn test_node_base_merge() {
 fn test_node_merge_prerequisites_check() {
     // ::util::init_log();
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 100;
-    cluster.cfg.raft_store.raft_log_gc_threshold = 500;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
 
     cluster.run();
@@ -189,8 +187,7 @@ fn test_node_merge_prerequisites_check() {
 fn test_node_check_merged_message() {
     // ::util::init_log();
     let mut cluster = new_node_cluster(0, 4);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 100;
-    cluster.cfg.raft_store.raft_log_gc_threshold = 100;
+    configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -272,8 +269,7 @@ fn test_node_check_merged_message() {
 fn test_node_merge_dist_isolation() {
     // ::util::init_log();
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
-    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
+    configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -288,7 +284,8 @@ fn test_node_merge_dist_isolation() {
     let right = pd_client.get_region(b"k3").unwrap();
 
     cluster.must_transfer_leader(right.get_id(), new_peer(1, 1));
-    let target_leader = left.get_peers()
+    let target_leader = left
+        .get_peers()
         .iter()
         .find(|p| p.get_store_id() == 3)
         .unwrap()
@@ -328,7 +325,8 @@ fn test_node_merge_dist_isolation() {
     // Leader can't find replica 3 of right region, so it fails.
     assert!(res.get_header().has_error(), "{:?}", res);
 
-    let target_leader = left.get_peers()
+    let target_leader = left
+        .get_peers()
         .iter()
         .find(|p| p.get_store_id() == 2)
         .unwrap()
@@ -347,9 +345,9 @@ fn test_node_merge_dist_isolation() {
 fn test_node_merge_brain_split() {
     // ::util::init_log();
     let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
-    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
 
     cluster.run();
 

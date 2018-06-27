@@ -11,51 +11,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{BTreeMap, HashMap};
-use std::{cmp, mem};
-use std::sync::mpsc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::i64;
-use std::thread;
-use std::time::Duration;
+use futures::sync::{mpsc as futures_mpsc, oneshot};
 use futures::{Future, Stream};
-use futures::sync::mpsc as futures_mpsc;
-use futures_cpupool::CpuPool;
+use std::collections::{BTreeMap, HashMap};
+use std::i64;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread;
+use std::{cmp, mem};
 
-use tikv::coprocessor::*;
-use kvproto::kvrpcpb::Context;
-use tikv::coprocessor::codec::{datum, table, Datum};
-use tikv::coprocessor::codec::datum::DatumDecoder;
-use tikv::util::codec::number::*;
-use tikv::server::{Config, CopStream, OnResponse};
-use tikv::server::readpool::{self, ReadPool};
-use tikv::storage::{self, Key, Mutation, ALL_CFS};
-use tikv::storage::engine::{self, Engine, TEMP_DIR};
-use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
 use kvproto::coprocessor::{KeyRange, Request, Response};
-use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
-use tipb::executor::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
-use tipb::schema::{self, ColumnInfo};
-use tipb::expression::{ByItem, Expr, ExprType, ScalarFuncSig};
+use kvproto::kvrpcpb::Context;
 use protobuf::{Message, RepeatedField};
+use tikv::coprocessor::codec::{datum, table, Datum};
+use tikv::coprocessor::*;
+use tikv::server::readpool::{self, ReadPool};
+use tikv::server::{Config, OnResponse};
+use tikv::storage::engine::{self, Engine, TEMP_DIR};
+use tikv::storage::{self, Key, Mutation, ALL_CFS};
+use tikv::util::codec::number::*;
+use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
+use tipb::executor::{
+    Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN,
+};
+use tipb::expression::{ByItem, Expr, ExprType, ScalarFuncSig};
+use tipb::schema::{self, ColumnInfo};
+use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 
-use raftstore::util::MAX_LEADER_LEASE;
 use storage::sync_storage::SyncStorage;
 use storage::util::new_raft_engine;
 
 const FLAG_IGNORE_TRUNCATE: u64 = 1;
+const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
 
 static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
 
 const TYPE_VAR_CHAR: i32 = 1;
 const TYPE_LONG: i32 = 2;
-
-fn new_endpoint_test_config() -> Config {
-    Config {
-        end_point_concurrency: 2,
-        ..Config::default()
-    }
-}
 
 pub fn next_id() -> i64 {
     ID_GENERATOR.fetch_add(1, Ordering::Relaxed) as i64
@@ -63,7 +54,7 @@ pub fn next_id() -> i64 {
 
 fn check_chunk_datum_count(chunks: &[Chunk], datum_limit: usize) {
     let mut iter = chunks.iter();
-    let res = iter.any(|x| x.get_rows_data().decode().unwrap().len() != datum_limit);
+    let res = iter.any(|x| datum::decode(&mut x.get_rows_data()).unwrap().len() != datum_limit);
     if res {
         assert!(iter.next().is_none());
     }
@@ -78,8 +69,8 @@ struct DAGChunkSpliter {
 impl DAGChunkSpliter {
     fn new(chunks: Vec<Chunk>, col_cnt: usize) -> DAGChunkSpliter {
         DAGChunkSpliter {
-            chunks: chunks,
-            col_cnt: col_cnt,
+            chunks,
+            col_cnt,
             datums: Vec::with_capacity(0),
         }
     }
@@ -95,7 +86,7 @@ impl Iterator for DAGChunkSpliter {
             } else if self.datums.is_empty() {
                 let chunk = self.chunks.remove(0);
                 let mut data = chunk.get_rows_data();
-                self.datums = data.decode().unwrap();
+                self.datums = datum::decode(&mut data).unwrap();
                 continue;
             }
             assert_eq!(self.datums.len() >= self.col_cnt, true);
@@ -222,12 +213,8 @@ impl Table {
 
     pub fn get_select_range(&self) -> KeyRange {
         let mut range = KeyRange::new();
-        let mut buf = Vec::with_capacity(8);
-        buf.encode_i64(i64::MIN).unwrap();
-        range.set_start(table::encode_row_key(self.id, &buf));
-        buf.clear();
-        buf.encode_i64(i64::MAX).unwrap();
-        range.set_end(table::encode_row_key(self.id, &buf));
+        range.set_start(table::encode_row_key(self.id, i64::MIN));
+        range.set_end(table::encode_row_key(self.id, i64::MAX));
         range
     }
 
@@ -306,8 +293,8 @@ struct Insert<'a> {
 impl<'a> Insert<'a> {
     fn new(store: &'a mut Store, table: &'a Table) -> Insert<'a> {
         Insert {
-            store: store,
-            table: table,
+            store,
+            table,
             values: BTreeMap::new(),
         }
     }
@@ -323,11 +310,12 @@ impl<'a> Insert<'a> {
     }
 
     fn execute_with_ctx(self, ctx: Context) -> i64 {
-        let handle = self.values
+        let handle = self
+            .values
             .get(&self.table.handle_id)
             .cloned()
             .unwrap_or_else(|| Datum::I64(next_id()));
-        let key = build_row_key(self.table.id, handle.i64());
+        let key = table::encode_row_key(self.table.id, handle.i64());
         let ids: Vec<_> = self.values.keys().cloned().collect();
         let values: Vec<_> = self.values.values().cloned().collect();
         let value = table::encode_row(values, &ids).unwrap();
@@ -352,10 +340,7 @@ struct Delete<'a> {
 
 impl<'a> Delete<'a> {
     fn new(store: &'a mut Store, table: &'a Table) -> Delete<'a> {
-        Delete {
-            store: store,
-            table: table,
-        }
+        Delete { store, table }
     }
 
     fn execute(self, id: i64, row: Vec<Datum>) {
@@ -363,7 +348,7 @@ impl<'a> Delete<'a> {
         for (&id, v) in self.table.cols.keys().zip(row) {
             values.insert(id, v);
         }
-        let key = build_row_key(self.table.id, id);
+        let key = table::encode_row_key(self.table.id, id);
         let mut keys = vec![];
         keys.push(key);
         for (&idx_id, idx_cols) in &self.table.idxs {
@@ -385,8 +370,9 @@ pub struct Store {
 
 impl Store {
     fn new(engine: Box<Engine>) -> Store {
+        let pd_worker = FutureWorker::new("test future worker");
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(None)
+            || storage::ReadPoolContext::new(pd_worker.scheduler())
         });
         Store {
             store: SyncStorage::from_engine(engine, &Default::default(), read_pool),
@@ -411,7 +397,8 @@ impl Store {
     fn put(&mut self, ctx: Context, mut kv: Vec<(Vec<u8>, Vec<u8>)>) {
         self.handles.extend(kv.iter().map(|&(ref k, _)| k.clone()));
         let pk = kv[0].0.clone();
-        let kv = kv.drain(..)
+        let kv = kv
+            .drain(..)
             .map(|(k, v)| Mutation::Put((Key::from_raw(&k), v)))
             .collect();
         self.store.prewrite(ctx, kv, pk, self.current_ts).unwrap();
@@ -424,7 +411,8 @@ impl Store {
     fn delete(&mut self, mut keys: Vec<Vec<u8>>) {
         self.handles.extend(keys.clone());
         let pk = keys[0].clone();
-        let mutations = keys.drain(..)
+        let mutations = keys
+            .drain(..)
             .map(|k| Mutation::Delete(Key::from_raw(&k)))
             .collect();
         self.store
@@ -442,12 +430,6 @@ impl Store {
             .commit(ctx, handles, self.current_ts, next_id() as u64)
             .unwrap();
     }
-}
-
-fn build_row_key(table_id: i64, id: i64) -> Vec<u8> {
-    let mut buf = [0; 8];
-    (&mut buf as &mut [u8]).encode_i64(id).unwrap();
-    table::encode_row_key(table_id, &buf)
 }
 
 /// An example table for test purpose.
@@ -480,10 +462,10 @@ impl ProductTable {
             .build();
 
         ProductTable {
-            id: id,
-            name: name,
-            count: count,
-            table: table,
+            id,
+            name,
+            count,
+            table,
         }
     }
 }
@@ -495,7 +477,7 @@ fn init_data_with_engine_and_commit(
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
 ) -> (Store, Worker<EndPointTask>) {
-    init_data_with_details(ctx, engine, tbl, vals, commit, new_endpoint_test_config())
+    init_data_with_details(ctx, engine, tbl, vals, commit, Config::default())
 }
 
 fn init_data_with_details(
@@ -520,17 +502,14 @@ fn init_data_with_details(
     if commit {
         store.commit_with_ctx(ctx);
     }
+    let pd_worker = FutureWorker::new("test-pd-worker");
+    let pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+        || ReadPoolContext::new(pd_worker.scheduler())
+    });
     let mut end_point = WorkerBuilder::new("test select worker")
         .batch_size(5)
         .create();
-    let pd_worker = FutureWorker::new("test pd worker");
-    let runner = EndPointHost::new(
-        store.get_engine(),
-        end_point.scheduler(),
-        &cfg,
-        pd_worker.scheduler(),
-        None,
-    );
+    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), &cfg, pool, None);
     end_point.start(runner).unwrap();
 
     (store, end_point)
@@ -585,12 +564,8 @@ impl DAGSelect {
         exec.set_tbl_scan(tbl_scan);
 
         let mut range = KeyRange::new();
-        let mut buf = Vec::with_capacity(8);
-        buf.encode_i64(i64::MIN).unwrap();
-        range.set_start(table::encode_row_key(table.id, &buf));
-        buf.clear();
-        buf.encode_i64(i64::MAX).unwrap();
-        range.set_end(table::encode_row_key(table.id, &buf));
+        range.set_start(table::encode_row_key(table.id, i64::MIN));
+        range.set_end(table::encode_row_key(table.id, i64::MAX));
 
         DAGSelect {
             execs: vec![exec],
@@ -769,6 +744,7 @@ impl DAGSelect {
         dag.set_executors(RepeatedField::from_vec(self.execs));
         dag.set_start_ts(next_id() as u64);
         dag.set_flags(flags.iter().fold(0, |acc, f| acc | *f));
+        dag.set_collect_range_counts(true);
 
         let output_offsets = if self.output_offsets.is_some() {
             self.output_offsets.take().unwrap()
@@ -825,7 +801,7 @@ fn test_batch_row_limit() {
     let product = ProductTable::new();
     let (_, mut end_point) = {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
-        let mut cfg = new_endpoint_test_config();
+        let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = batch_row_limit;
         init_data_with_details(Context::new(), engine, &product, &data, true, cfg)
     };
@@ -860,7 +836,7 @@ fn test_stream_batch_row_limit() {
     let stream_row_limit = 2;
     let (_, mut end_point) = {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
-        let mut cfg = new_endpoint_test_config();
+        let mut cfg = Config::default();
         cfg.end_point_stream_batch_row_limit = stream_row_limit;
         init_data_with_details(Context::new(), engine, &product, &data, true, cfg)
     };
@@ -879,12 +855,16 @@ fn test_stream_batch_row_limit() {
 
     let resps = handle_streaming_select(&end_point, req, check_range);
     assert_eq!(resps.len(), 3);
-
+    let expected_output_counts = vec![vec![2 as i64], vec![2 as i64], vec![1 as i64]];
     for (i, resp) in resps.into_iter().enumerate() {
         // For now, we only support default encode type.
         assert_eq!(resp.get_encode_type(), EncodeType::TypeDefault);
         let mut chunk = Chunk::new();
         chunk.merge_from_bytes(resp.get_data()).unwrap();
+        assert_eq!(
+            resp.get_output_counts(),
+            expected_output_counts[i].as_slice()
+        );
 
         let chunks = vec![chunk];
         let chunk_data_limit = stream_row_limit * 3; // we have 3 fields.
@@ -915,12 +895,12 @@ fn test_select_after_lease() {
     ];
 
     let product = ProductTable::new();
-    let (_cluster, raft_engine, ctx) = new_raft_engine(1, "");
+    let (cluster, raft_engine, ctx) = new_raft_engine(1, "");
     let (_, mut end_point) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
 
     // Sleep until the leader lease is expired.
-    thread::sleep(Duration::from_millis(MAX_LEADER_LEASE));
+    thread::sleep(cluster.cfg.raft_store.raft_store_max_leader_lease.0);
     let req = DAGSelect::from(&product.table).build_with(ctx.clone(), &[0]);
     let mut resp = handle_select(&end_point, req);
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
@@ -930,6 +910,45 @@ fn test_select_after_lease() {
             datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()]).unwrap();
         let result_encoded = datum::encode_value(&row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
+    }
+
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
+fn test_scan_detail() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let mut cfg = Config::default();
+        cfg.end_point_batch_row_limit = 50;
+        init_data_with_details(Context::new(), engine, &product, &data, true, cfg)
+    };
+
+    let reqs = vec![
+        DAGSelect::from(&product.table).build(),
+        DAGSelect::from_index(&product.table, product.name).build(),
+    ];
+
+    for mut req in reqs {
+        req.mut_context().set_scan_detail(true);
+        req.mut_context().set_handle_time(true);
+
+        let resp = handle_request(&end_point, req);
+        assert!(resp.get_exec_details().has_handle_time());
+
+        let scan_detail = resp.get_exec_details().get_scan_detail();
+        // Values would occur in data cf are inlined in write cf.
+        assert_eq!(scan_detail.get_write().get_total(), 5);
+        assert_eq!(scan_detail.get_write().get_processed(), 4);
+        assert_eq!(scan_detail.get_lock().get_total(), 1);
     }
 
     end_point.stop().unwrap().join().unwrap();
@@ -1486,11 +1505,11 @@ fn test_reverse() {
 }
 
 pub fn handle_request(end_point: &Worker<EndPointTask>, req: Request) -> Response {
-    let (tx, rx) = mpsc::channel();
-    let on_resp = OnResponse::Unary(box move |r| tx.send(r).unwrap());
-    let req = RequestTask::new(req, on_resp, 100).unwrap();
+    let (tx, rx) = oneshot::channel();
+    let on_resp = OnResponse::Unary(tx);
+    let req = RequestTask::new(String::from("127.0.0.1"), req, on_resp, 100).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();
-    rx.recv().unwrap()
+    rx.wait().unwrap()
 }
 
 fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectResponse {
@@ -1509,28 +1528,26 @@ fn handle_streaming_select<F>(
 where
     F: FnMut(&Response) + Send + 'static,
 {
-    let (ftx, frx) = futures_mpsc::channel(16);
-    let callback = box move |s: CopStream<Response>, executor: Option<CpuPool>| {
-        let f = s.forward(ftx);
-        if let Some(executor) = executor {
-            return executor.spawn(f).forget();
-        }
-        f.wait().unwrap();
-    };
-    let req = RequestTask::new(req, OnResponse::Streaming(callback), 100).unwrap();
+    let (stream_tx, stream_rx) = futures_mpsc::channel(10);
+    let req = RequestTask::new(
+        String::from("127.0.0.1"),
+        req,
+        OnResponse::Streaming(stream_tx),
+        100,
+    ).unwrap();
     end_point.schedule(EndPointTask::Request(req)).unwrap();
-
-    let (tx, rx) = mpsc::channel();
-    for resp in frx.wait() {
-        let resp = resp.unwrap();
-        check_range(&resp);
-        assert!(!resp.get_data().is_empty());
-        let mut stream_resp = StreamResponse::new();
-        stream_resp.merge_from_bytes(resp.get_data()).unwrap();
-        tx.send(stream_resp).unwrap();
-    }
-    drop(tx);
-    rx.into_iter().collect()
+    stream_rx
+        .wait()
+        .into_iter()
+        .map(|resp| {
+            let resp = resp.unwrap();
+            check_range(&resp);
+            assert!(!resp.get_data().is_empty());
+            let mut stream_resp = StreamResponse::new();
+            stream_resp.merge_from_bytes(resp.get_data()).unwrap();
+            stream_resp
+        })
+        .collect()
 }
 
 #[test]
@@ -2096,7 +2113,18 @@ fn test_handle_truncate() {
         let req = DAGSelect::from(&product.table)
             .where_expr(cond.clone())
             .build_with(Context::new(), &[FLAG_IGNORE_TRUNCATE]);
+        let resp = handle_select(&end_point, req);
+        assert!(!resp.has_error());
+        assert!(resp.get_warnings().is_empty());
+
+        // truncate as warning
+        let req = DAGSelect::from(&product.table)
+            .where_expr(cond.clone())
+            .build_with(Context::new(), &[FLAG_TRUNCATE_AS_WARNING]);
         let mut resp = handle_select(&end_point, req);
+        assert!(!resp.has_error());
+        assert!(!resp.get_warnings().is_empty());
+        // check data
         let mut spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
         let row = spliter.next().unwrap();
         let (id, name, cnt) = data[2];
@@ -2111,12 +2139,9 @@ fn test_handle_truncate() {
         let req = DAGSelect::from(&product.table)
             .where_expr(cond.clone())
             .build();
-        let (tx, rx) = mpsc::channel();
-        let on_resp = OnResponse::Unary(box move |r| tx.send(r).unwrap());
-        let req = RequestTask::new(req, on_resp, 100).unwrap();
-        end_point.schedule(EndPointTask::Request(req)).unwrap();
-        let resp = rx.recv().unwrap();
-        assert!(!resp.get_other_error().is_empty());
+        let mut resp = handle_select(&end_point, req);
+        assert!(resp.has_error());
+        assert!(resp.get_warnings().is_empty());
     }
 
     end_point.stop().unwrap().join().unwrap();

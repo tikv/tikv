@@ -13,9 +13,9 @@
 
 use std::borrow::Cow;
 
-use coprocessor::codec::Datum;
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
 use super::{Constant, Result};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use coprocessor::codec::Datum;
 
 impl Datum {
     #[inline]
@@ -126,11 +126,11 @@ impl Constant {
 
 #[cfg(test)]
 mod test {
-    use std::u64;
-    use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-    use coprocessor::dag::expr::{EvalContext, Expression};
+    use coprocessor::codec::Datum;
     use coprocessor::dag::expr::test::datum_expr;
+    use coprocessor::dag::expr::{EvalContext, Expression};
+    use std::u64;
 
     #[derive(PartialEq, Debug)]
     struct EvalResults(
@@ -175,19 +175,24 @@ mod test {
 
             let i = e.eval_int(&mut ctx, &[]).unwrap_or(None);
             let r = e.eval_real(&mut ctx, &[]).unwrap_or(None);
-            let dec = e.eval_decimal(&mut ctx, &[])
+            let dec = e
+                .eval_decimal(&mut ctx, &[])
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let s = e.eval_string(&mut ctx, &[])
+            let s = e
+                .eval_string(&mut ctx, &[])
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let t = e.eval_time(&mut ctx, &[])
+            let t = e
+                .eval_time(&mut ctx, &[])
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let dur = e.eval_duration(&mut ctx, &[])
+            let dur = e
+                .eval_duration(&mut ctx, &[])
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let j = e.eval_json(&mut ctx, &[])
+            let j = e
+                .eval_json(&mut ctx, &[])
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
 

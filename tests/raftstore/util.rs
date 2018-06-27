@@ -11,39 +11,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{mpsc, Arc};
-use std::time::Duration;
-use std::thread;
 use std::path::Path;
+use std::sync::{mpsc, Arc};
+use std::thread;
+use std::time::Duration;
 
 use tempdir::TempDir;
 
-use rocksdb::{CompactionJobInfo, DB};
 use protobuf;
+use rocksdb::{CompactionJobInfo, DB};
 
 use kvproto::metapb::{self, RegionEpoch};
-use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
-use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
 use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
+use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
+use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
 use raft::eraftpb::ConfChangeType;
 
+use tikv::config::*;
+use tikv::raftstore::store::Msg as StoreMsg;
 use tikv::raftstore::store::*;
-use tikv::raftstore::{Error, Result};
+use tikv::raftstore::Result;
 use tikv::server::Config as ServerConfig;
-use tikv::server::readpool::Config as ReadPoolInstanceConfig;
 use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
+use tikv::util::config::*;
 use tikv::util::escape;
 use tikv::util::rocksdb::{self, CompactionListener};
-use tikv::util::config::*;
-use tikv::config::{ReadPoolConfig, TiKvConfig};
 use tikv::util::transport::SendCh;
-use tikv::raftstore::store::Msg as StoreMsg;
 
 use super::cluster::{Cluster, Simulator};
 
-pub use tikv::raftstore::store::util::find_peer;
-
-pub const MAX_LEADER_LEASE: u64 = 250; // 250ms
+pub use tikv::raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
@@ -98,16 +95,17 @@ pub fn new_store_cfg() -> Config {
         // Use a value of 3 seconds as max_leader_missing_duration just for test.
         // In production environment, the value of max_leader_missing_duration
         // should be configured far beyond the election timeout.
-        max_leader_missing_duration: ReadableDuration::secs(3),
+        max_leader_missing_duration: ReadableDuration::secs(2),
         // To make a valid config, use a value of 2 seconds as
         // abnormal_leader_missing_duration and set
         // peer_stale_state_check_interval to 1 second.
-        abnormal_leader_missing_duration: ReadableDuration::secs(2),
+        abnormal_leader_missing_duration: ReadableDuration::millis(1500),
         peer_stale_state_check_interval: ReadableDuration::secs(1),
         pd_heartbeat_tick_interval: ReadableDuration::millis(20),
         region_split_check_diff: ReadableSize(10000),
         report_region_flow_interval: ReadableDuration::millis(100),
-        raft_store_max_leader_lease: ReadableDuration::millis(MAX_LEADER_LEASE),
+        raft_store_max_leader_lease: ReadableDuration::millis(250),
+        clean_stale_peer_delay: ReadableDuration::secs(0),
         allow_remove_leader: true,
         ..Config::default()
     }
@@ -115,20 +113,30 @@ pub fn new_store_cfg() -> Config {
 
 pub fn new_server_config(cluster_id: u64) -> ServerConfig {
     ServerConfig {
-        cluster_id: cluster_id,
+        cluster_id,
         addr: "127.0.0.1:0".to_owned(),
         grpc_concurrency: 1,
         // Considering connection selection algo is involved, maybe
         // use 2 or larger value here?
         grpc_raft_conn_num: 1,
-        end_point_concurrency: 1,
         ..ServerConfig::default()
     }
 }
 
 pub fn new_readpool_cfg() -> ReadPoolConfig {
     ReadPoolConfig {
-        storage: ReadPoolInstanceConfig::default_for_test(),
+        storage: StorageReadPoolConfig {
+            high_concurrency: 1,
+            normal_concurrency: 1,
+            low_concurrency: 1,
+            ..StorageReadPoolConfig::default()
+        },
+        coprocessor: CoprocessorReadPoolConfig {
+            high_concurrency: 1,
+            normal_concurrency: 1,
+            low_concurrency: 1,
+            ..CoprocessorReadPoolConfig::default()
+        },
     }
 }
 
@@ -186,6 +194,14 @@ pub fn new_get_cmd(key: &[u8]) -> Request {
     let mut cmd = Request::new();
     cmd.set_cmd_type(CmdType::Get);
     cmd.mut_get().set_key(key.to_vec());
+    cmd
+}
+
+pub fn new_get_cf_cmd(cf: &str, key: &[u8]) -> Request {
+    let mut cmd = Request::new();
+    cmd.set_cmd_type(CmdType::Get);
+    cmd.mut_get().set_key(key.to_vec());
+    cmd.mut_get().set_cf(cf.to_string());
     cmd
 }
 
@@ -268,13 +284,6 @@ pub fn new_prepare_merge(target_region: metapb::Region) -> AdminRequest {
     cmd.set_cmd_type(AdminCmdType::PrepareMerge);
     cmd.mut_prepare_merge().set_target(target_region);
     cmd
-}
-
-pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
-    let mut peer = metapb::Peer::new();
-    peer.set_store_id(store_id);
-    peer.set_id(peer_id);
-    peer
 }
 
 pub fn new_store(store_id: u64, addr: String) -> metapb::Store {
@@ -368,25 +377,27 @@ pub fn read_on_peer<T: Simulator>(
     peer: metapb::Peer,
     region: metapb::Region,
     key: &[u8],
+    read_quorum: bool,
     timeout: Duration,
-) -> Result<Vec<u8>> {
+) -> Result<RaftCmdResponse> {
     let mut request = new_request(
         region.get_id(),
         region.get_region_epoch().clone(),
         vec![new_get_cmd(key)],
-        false,
+        read_quorum,
     );
     request.mut_header().set_peer(peer);
-    let mut resp = cluster.call_command(request, timeout)?;
+    cluster.call_command(request, timeout)
+}
+
+pub fn must_get_value(resp: &RaftCmdResponse) -> Vec<u8> {
     if resp.get_header().has_error() {
-        return Err(Error::Other(box_err!(
-            resp.mut_header().take_error().take_message()
-        )));
+        panic!("failed to read {:?}", resp);
     }
     assert_eq!(resp.get_responses().len(), 1);
     assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
     assert!(resp.get_responses()[0].has_get());
-    Ok(resp.mut_responses()[0].mut_get().take_value())
+    resp.get_responses()[0].get_get().get_value().to_vec()
 }
 
 pub fn must_read_on_peer<T: Simulator>(
@@ -397,16 +408,14 @@ pub fn must_read_on_peer<T: Simulator>(
     value: &[u8],
 ) {
     let timeout = Duration::from_secs(1);
-    match read_on_peer(cluster, peer, region, key, timeout) {
-        Ok(v) => if v != value {
-            panic!(
-                "read key {}, expect value {}, got {}",
-                escape(key),
-                escape(value),
-                escape(&v)
-            )
-        },
-        Err(e) => panic!("failed to read for key {}, err {:?}", escape(key), e),
+    match read_on_peer(cluster, peer, region, key, false, timeout) {
+        Ok(ref resp) if value == must_get_value(resp).as_slice() => (),
+        other => panic!(
+            "read key {}, expect value {:?}, got {:?}",
+            escape(key),
+            value,
+            other
+        ),
     }
 }
 
@@ -417,12 +426,15 @@ pub fn must_error_read_on_peer<T: Simulator>(
     key: &[u8],
     timeout: Duration,
 ) {
-    if let Ok(value) = read_on_peer(cluster, peer, region, key, timeout) {
-        panic!(
-            "key {}, expect error but got {}",
-            escape(key),
-            escape(&value)
-        );
+    if let Ok(mut resp) = read_on_peer(cluster, peer, region, key, false, timeout) {
+        if !resp.get_header().has_error() {
+            let value = resp.mut_responses()[0].mut_get().take_value();
+            panic!(
+                "key {}, expect error but got {}",
+                escape(key),
+                escape(&value)
+            );
+        }
     }
 }
 
@@ -468,9 +480,44 @@ pub fn create_test_engine(
 }
 
 pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
-    // truncate the log quickly so that we can force sending snapshot.
+    // Truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
     cluster.cfg.raft_store.merge_max_log_gap = 1;
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+}
+
+pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
+    // Avoid log compaction which will prevent merge.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
+    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    // Make merge check resume quickly.
+    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
+}
+
+pub fn configure_for_lease_read<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    base_tick_ms: Option<u64>,
+    election_ticks: Option<usize>,
+) -> Duration {
+    if let Some(base_tick_ms) = base_tick_ms {
+        cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(base_tick_ms);
+    }
+    let base_tick_interval = cluster.cfg.raft_store.raft_base_tick_interval.0;
+    if let Some(election_ticks) = election_ticks {
+        cluster.cfg.raft_store.raft_election_timeout_ticks = election_ticks;
+    }
+    let election_ticks = cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+    let election_timeout = base_tick_interval * election_ticks;
+    // Adjust max leader lease.
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(election_timeout);
+    // Use large peer check interval, abnormal and max leader missing duration to make a valid config,
+    // that is election timeout x 2 < peer stale state check < abnormal < max leader missing duration.
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration(election_timeout * 3);
+    cluster.cfg.raft_store.abnormal_leader_missing_duration =
+        ReadableDuration(election_timeout * 4);
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration(election_timeout * 5);
+
+    election_timeout
 }

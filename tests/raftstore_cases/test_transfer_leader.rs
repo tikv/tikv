@@ -12,17 +12,17 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
 use raft::eraftpb::MessageType;
 use tikv::util::config::*;
 
-use super::util::*;
 use super::cluster::{Cluster, Simulator};
-use super::transport_simulate::*;
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
+use super::transport_simulate::*;
+use super::util::*;
 
 fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
@@ -49,7 +49,10 @@ fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     req.mut_header().set_peer(leader);
     cluster.call_command(req, Duration::from_secs(3)).unwrap();
     thread::sleep(reserved_time);
-    assert_eq!(cluster.query_leader(2, 1), Some(new_peer(2, 2)));
+    assert_eq!(
+        cluster.query_leader(2, 1, Duration::from_secs(5)),
+        Some(new_peer(2, 2))
+    );
 
     let mut req = new_request(
         region.get_id(),

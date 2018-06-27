@@ -11,37 +11,47 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
-use futures::{future, Future, Stream};
 use futures::sync::mpsc;
+use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
-use kvproto::importpb::*;
-use kvproto::importpb_grpc::*;
+use grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
+use kvproto::import_sstpb::*;
+use kvproto::import_sstpb_grpc::*;
 use kvproto::raft_cmdpb::*;
+use rocksdb::DB;
 
-use util::future::paired_future_callback;
-use util::time::Instant;
 use raftstore::store::Callback;
 use server::transport::RaftStoreRouter;
+use util::future::paired_future_callback;
+use util::rocksdb::compact_files_in_range;
+use util::time::Instant;
 
-use super::service::*;
+use super::import_mode::*;
 use super::metrics::*;
+use super::service::*;
 use super::{Config, Error, SSTImporter};
 
+/// ImportSSTService provides tikv-server with the ability to ingest SST files.
+///
+/// It saves the SST sent from client to a file and then sends a command to
+/// raftstore to trigger the ingest process.
 #[derive(Clone)]
 pub struct ImportSSTService<Router> {
     cfg: Config,
     router: Router,
+    engine: Arc<DB>,
     threads: CpuPool,
     importer: Arc<SSTImporter>,
+    switcher: Arc<Mutex<ImportModeSwitcher>>,
 }
 
 impl<Router: RaftStoreRouter> ImportSSTService<Router> {
     pub fn new(
         cfg: Config,
         router: Router,
+        engine: Arc<DB>,
         importer: Arc<SSTImporter>,
     ) -> ImportSSTService<Router> {
         let threads = Builder::new()
@@ -49,15 +59,46 @@ impl<Router: RaftStoreRouter> ImportSSTService<Router> {
             .pool_size(cfg.num_threads)
             .create();
         ImportSSTService {
-            cfg: cfg,
-            router: router,
-            threads: threads,
-            importer: importer,
+            cfg,
+            router,
+            engine,
+            threads,
+            importer,
+            switcher: Arc::new(Mutex::new(ImportModeSwitcher::new())),
         }
     }
 }
 
 impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
+    fn switch_mode(
+        &self,
+        ctx: RpcContext,
+        req: SwitchModeRequest,
+        sink: UnarySink<SwitchModeResponse>,
+    ) {
+        let label = "switch_mode";
+        let timer = Instant::now_coarse();
+
+        let res = {
+            let mut switcher = self.switcher.lock().unwrap();
+            match req.get_mode() {
+                SwitchMode::Normal => switcher.enter_normal_mode(&self.engine),
+                SwitchMode::Import => switcher.enter_import_mode(&self.engine),
+            }
+        };
+        match res {
+            Ok(_) => info!("switch mode {:?}", req.get_mode()),
+            Err(ref e) => error!("switch mode {:?}: {:?}", req.get_mode(), e),
+        }
+
+        ctx.spawn(
+            future::result(res)
+                .map(|_| SwitchModeResponse::new())
+                .then(move |res| send_rpc_response!(res, sink, label, timer)),
+        )
+    }
+
+    /// Receive SST from client and save the file for later ingesting.
     fn upload(
         &self,
         ctx: RpcContext,
@@ -66,37 +107,41 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
     ) {
         let label = "upload";
         let timer = Instant::now_coarse();
-
-        let token = self.importer.token();
-        let import1 = Arc::clone(&self.importer);
-        let import2 = Arc::clone(&self.importer);
+        let import = Arc::clone(&self.importer);
         let bounded_stream = mpsc::spawn(stream, &self.threads, self.cfg.stream_channel_window);
 
         ctx.spawn(
             self.threads.spawn(
                 bounded_stream
-                    .map_err(Error::from)
-                    .for_each(move |chunk| {
-                        let start = Instant::now_coarse();
-                        if chunk.has_meta() {
-                            import1.create(token, chunk.get_meta())?;
-                        }
-                        if !chunk.get_data().is_empty() {
-                            let data = chunk.get_data();
-                            import1.append(token, data)?;
-                            IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
-                        }
-                        IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
-                        Ok(())
+                    .into_future()
+                    .map_err(|(e, _)| Error::from(e))
+                    .and_then(move |(chunk, stream)| {
+                        // The first message of the stream contains metadata
+                        // of the file.
+                        let meta = match chunk {
+                            Some(ref chunk) if chunk.has_meta() => chunk.get_meta(),
+                            _ => return Err(Error::InvalidChunk),
+                        };
+                        let file = import.create(meta)?;
+                        Ok((file, stream))
                     })
-                    .then(move |res| match res {
-                        Ok(_) => import2.finish(token),
-                        Err(e) => {
-                            if let Some(f) = import2.remove(token) {
-                                error!("remove {:?}: {:?}", f, e);
-                            }
-                            Err(e)
-                        }
+                    .and_then(move |(file, stream)| {
+                        stream
+                            .map_err(Error::from)
+                            .fold(file, |mut file, chunk| {
+                                let start = Instant::now_coarse();
+                                let data = chunk.get_data();
+                                if data.is_empty() {
+                                    return future::err(Error::InvalidChunk);
+                                }
+                                if let Err(e) = file.append(data) {
+                                    return future::err(e);
+                                }
+                                IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
+                                IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
+                                future::ok(file)
+                            })
+                            .and_then(|mut file| file.finish())
                     })
                     .map(|_| UploadResponse::new())
                     .then(move |res| send_rpc_response!(res, sink, label, timer)),
@@ -104,6 +149,11 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         )
     }
 
+    /// Ingest the file by sending a raft command to raftstore.
+    ///
+    /// If the ingestion fails because the region is not found or the epoch does
+    /// not match, the remaining files will eventually be cleaned up by
+    /// CleanupSSTWorker.
     fn ingest(&self, ctx: RpcContext, mut req: IngestRequest, sink: UnarySink<IngestResponse>) {
         let label = "ingest";
         let timer = Instant::now_coarse();
@@ -142,5 +192,47 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                 })
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
+    }
+
+    fn compact(&self, ctx: RpcContext, req: CompactRequest, sink: UnarySink<CompactResponse>) {
+        let label = "compact";
+        let timer = Instant::now_coarse();
+        let engine = Arc::clone(&self.engine);
+
+        ctx.spawn(self.threads.spawn_fn(move || {
+            let (start, end) = if !req.has_range() {
+                (None, None)
+            } else {
+                (
+                    Some(req.get_range().get_start()),
+                    Some(req.get_range().get_end()),
+                )
+            };
+            let output_level = if req.get_output_level() == -1 {
+                None
+            } else {
+                Some(req.get_output_level())
+            };
+
+            let res = compact_files_in_range(&engine, start, end, output_level);
+            match res {
+                Ok(_) => info!(
+                    "compact files in range [{:?}, {:?}) to level {:?} takes {:?}",
+                    start,
+                    end,
+                    output_level,
+                    timer.elapsed()
+                ),
+                Err(ref e) => error!(
+                    "compact files in range [{:?}, {:?}) to level {:?}: {:?}",
+                    start, end, output_level, e
+                ),
+            }
+
+            future::result(res)
+                .map_err(Error::from)
+                .map(|_| CompactResponse::new())
+                .then(move |res| send_rpc_response!(res, sink, label, timer))
+        }))
     }
 }

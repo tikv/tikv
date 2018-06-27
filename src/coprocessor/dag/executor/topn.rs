@@ -11,17 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::usize;
+use std::cell::RefCell;
 use std::sync::Arc;
+use std::usize;
 use std::vec::IntoIter;
 
 use tipb::executor::TopN;
-use tipb::schema::ColumnInfo;
 use tipb::expression::ByItem;
+use tipb::schema::ColumnInfo;
 
 use coprocessor::codec::datum::Datum;
+use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use coprocessor::Result;
-use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 
 use super::topn_heap::TopNHeap;
 use super::{inflate_with_col_for_dag, Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
@@ -33,20 +34,21 @@ struct OrderBy {
 
 impl OrderBy {
     fn new(ctx: &mut EvalContext, mut order_by: Vec<ByItem>) -> Result<OrderBy> {
-        let exprs: Vec<Expression> = box_try!(
-            order_by
-                .iter_mut()
-                .map(|v| Expression::build(ctx, v.take_expr()))
-                .collect()
-        );
+        let mut exprs = Vec::with_capacity(order_by.len());
+        for v in &mut order_by {
+            exprs.push(Expression::build(ctx, v.take_expr())?);
+        }
         Ok(OrderBy {
             items: Arc::new(order_by),
-            exprs: exprs,
+            exprs,
         })
     }
 
     fn eval(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Vec<Datum>> {
-        let res: Vec<Datum> = box_try!(self.exprs.iter().map(|v| v.eval(ctx, row)).collect());
+        let mut res = Vec::with_capacity(self.exprs.len());
+        for expr in &self.exprs {
+            res.push(expr.eval(ctx, row)?);
+        }
         Ok(res)
     }
 }
@@ -56,10 +58,10 @@ pub struct TopNExecutor {
     cols: Arc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
     iter: Option<IntoIter<Row>>,
-    ctx: EvalContext,
+    eval_ctx: Option<EvalContext>,
+    eval_warnings: Option<EvalWarnings>,
     src: Box<Executor + Send>,
     limit: usize,
-    count: i64,
     first_collect: bool,
 }
 
@@ -67,25 +69,26 @@ impl TopNExecutor {
     pub fn new(
         mut meta: TopN,
         eval_cfg: Arc<EvalConfig>,
-        columns_info: Arc<Vec<ColumnInfo>>,
+        cols: Arc<Vec<ColumnInfo>>,
         src: Box<Executor + Send>,
     ) -> Result<TopNExecutor> {
         let order_by = meta.take_order_by().into_vec();
 
-        let mut visitor = ExprColumnRefVisitor::new(columns_info.len());
+        let mut visitor = ExprColumnRefVisitor::new(cols.len());
         for by_item in &order_by {
             visitor.visit(by_item.get_expr())?;
         }
-        let mut ctx = EvalContext::new(eval_cfg);
+        let mut eval_ctx = EvalContext::new(Arc::clone(&eval_cfg));
+        let order_by = OrderBy::new(&mut eval_ctx, order_by)?;
         Ok(TopNExecutor {
-            order_by: OrderBy::new(&mut ctx, order_by)?,
-            cols: columns_info,
+            order_by,
+            cols,
             related_cols_offset: visitor.column_offsets(),
             iter: None,
-            ctx: ctx,
-            src: src,
+            eval_ctx: Some(eval_ctx),
+            eval_warnings: None,
+            src,
             limit: meta.get_limit() as usize,
-            count: 0,
             first_collect: true,
         })
     }
@@ -96,16 +99,22 @@ impl TopNExecutor {
             return Ok(());
         }
 
-        let mut heap = TopNHeap::new(self.limit, Arc::clone(&self.ctx.cfg))?;
+        if self.eval_ctx.is_none() {
+            return Ok(());
+        }
+
+        let ctx = Arc::new(RefCell::new(self.eval_ctx.take().unwrap()));
+        let mut heap = TopNHeap::new(self.limit, Arc::clone(&ctx))?;
+
         while let Some(row) = self.src.next()? {
             let cols = inflate_with_col_for_dag(
-                &mut self.ctx,
+                &mut ctx.borrow_mut(),
                 &row.data,
                 self.cols.as_ref(),
                 &self.related_cols_offset,
                 row.handle,
             )?;
-            let ob_values = self.order_by.eval(&mut self.ctx, &cols)?;
+            let ob_values = self.order_by.eval(&mut ctx.borrow_mut(), &cols)?;
             heap.try_add_row(
                 row.handle,
                 row.data,
@@ -122,6 +131,7 @@ impl TopNExecutor {
             })
             .collect();
         self.iter = Some(data.into_iter());
+        self.eval_warnings = Some(ctx.borrow_mut().take_warnings());
         Ok(())
     }
 }
@@ -133,18 +143,13 @@ impl Executor for TopNExecutor {
         }
         let iter = self.iter.as_mut().unwrap();
         match iter.next() {
-            Some(sort_row) => {
-                self.count += 1;
-                Ok(Some(sort_row))
-            }
+            Some(sort_row) => Ok(Some(sort_row)),
             None => Ok(None),
         }
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
         self.src.collect_output_counts(counts);
-        counts.push(self.count);
-        self.count = 0;
     }
 
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
@@ -154,10 +159,22 @@ impl Executor for TopNExecutor {
             self.first_collect = false;
         }
     }
+
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        if let Some(mut warnings) = self.src.take_eval_warnings() {
+            if let Some(mut topn_warnings) = self.eval_warnings.take() {
+                warnings.merge(topn_warnings);
+            }
+            Some(warnings)
+        } else {
+            self.eval_warnings.take()
+        }
+    }
 }
 
 #[cfg(test)]
 pub mod test {
+    use std::cell::RefCell;
     use std::sync::Arc;
 
     use kvproto::kvrpcpb::IsolationLevel;
@@ -165,17 +182,17 @@ pub mod test {
     use tipb::executor::TableScan;
     use tipb::expression::{Expr, ExprType};
 
-    use coprocessor::codec::Datum;
-    use coprocessor::codec::table::{self, RowColsDict};
     use coprocessor::codec::mysql::types;
-    use util::collections::HashMap;
+    use coprocessor::codec::table::{self, RowColsDict};
+    use coprocessor::codec::Datum;
     use util::codec::number::NumberEncoder;
+    use util::collections::HashMap;
 
     use storage::SnapshotStore;
 
-    use super::*;
-    use super::super::table_scan::TableScanExecutor;
     use super::super::scanner::test::{get_range, new_col_info, TestStore};
+    use super::super::table_scan::TableScanExecutor;
+    use super::*;
 
     fn new_order_by(offset: i64, desc: bool) -> ByItem {
         let mut item = ByItem::new();
@@ -194,7 +211,8 @@ pub mod test {
         order_cols.push(new_order_by(1, false));
         let order_cols = Arc::new(order_cols);
 
-        let mut topn_heap = TopNHeap::new(5, Arc::new(EvalConfig::default())).unwrap();
+        let mut topn_heap =
+            TopNHeap::new(5, Arc::new(RefCell::new(EvalContext::default()))).unwrap();
 
         let test_data = vec![
             (1, String::from("data1"), Datum::Null, Datum::I64(1)),
@@ -308,7 +326,8 @@ pub mod test {
         order_cols.push(new_order_by(0, false));
         order_cols.push(new_order_by(1, true));
         let order_cols = Arc::new(order_cols);
-        let mut topn_heap = TopNHeap::new(5, Arc::new(EvalConfig::default())).unwrap();
+        let mut topn_heap =
+            TopNHeap::new(5, Arc::new(RefCell::new(EvalContext::default()))).unwrap();
 
         let ob_values1: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2)];
         let row_data = RowColsDict::new(HashMap::default(), b"name:1".to_vec());
@@ -344,9 +363,7 @@ pub mod test {
         for cols in rows.iter() {
             let col_values: Vec<_> = cols.to_vec();
             let value = table::encode_row(col_values, &col_ids).unwrap();
-            let mut buf = vec![];
-            buf.encode_i64(cols[0].i64()).unwrap();
-            let key = table::encode_row_key(tid, &buf);
+            let key = table::encode_row_key(tid, cols[0].i64());
             kv_data.push((key, value));
         }
         kv_data
@@ -411,7 +428,7 @@ pub mod test {
         // init TableScan
         let (snapshot, start_ts) = test_store.get_snapshot();
         let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, snap).unwrap();
+        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, snap, true).unwrap();
 
         // init TopN meta
         let mut ob_vec = Vec::with_capacity(2);
@@ -437,7 +454,7 @@ pub mod test {
         for (row, handle) in topn_rows.iter().zip(expect_row_handles) {
             assert_eq!(row.handle, handle);
         }
-        let expected_counts = vec![6, limit as i64];
+        let expected_counts = vec![3, 3];
         let mut counts = Vec::with_capacity(2);
         topn_ect.collect_output_counts(&mut counts);
         assert_eq!(expected_counts, counts);
@@ -452,13 +469,11 @@ pub mod test {
             new_col_info(2, types::VARCHAR),
             new_col_info(3, types::NEW_DECIMAL),
         ];
-        let raw_data = vec![
-            vec![
-                Datum::I64(1),
-                Datum::Bytes(b"a".to_vec()),
-                Datum::Dec(7.into()),
-            ],
-        ];
+        let raw_data = vec![vec![
+            Datum::I64(1),
+            Datum::Bytes(b"a".to_vec()),
+            Datum::Dec(7.into()),
+        ]];
         let table_data = gen_table_data(tid, &cis, &raw_data);
         let mut test_store = TestStore::new(&table_data);
         // init table scan meta
@@ -485,7 +500,7 @@ pub mod test {
             topn,
             Arc::new(EvalConfig::default()),
             Arc::new(cis),
-            Box::new(TableScanExecutor::new(&table_scan, key_ranges, snap).unwrap()),
+            Box::new(TableScanExecutor::new(&table_scan, key_ranges, snap, false).unwrap()),
         ).unwrap();
         assert!(topn_ect.next().unwrap().is_none());
     }

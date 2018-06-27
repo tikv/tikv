@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rand::{self, Rng};
+use std::sync::mpsc::channel;
+use std::sync::Arc;
 use std::time::Duration;
 use std::{fs, thread};
-use std::sync::Arc;
-use std::sync::mpsc::channel;
-use rand::{self, Rng};
 
 use kvproto::metapb;
 use raft::eraftpb::MessageType;
@@ -23,14 +23,14 @@ use raft::eraftpb::MessageType;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
+use super::transport_simulate::*;
 use super::util;
 use tikv::pd::PdClient;
-use tikv::storage::{CF_DEFAULT, CF_WRITE};
+use tikv::raftstore::store::engine::Iterable;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::{Callback, WriteResponse};
-use tikv::raftstore::store::engine::Iterable;
+use tikv::storage::{CF_DEFAULT, CF_WRITE};
 use tikv::util::config::*;
-use super::transport_simulate::*;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
@@ -268,7 +268,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut size = 0;
     cluster.engines[&store_id]
         .kv_engine
-        .scan(&data_key(b""), &data_key(middle_key), false, &mut |k, v| {
+        .scan(&data_key(b""), &data_key(middle_key), false, |k, v| {
             size += k.len() as u64;
             size += v.len() as u64;
             Ok(true)
@@ -468,8 +468,8 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for _ in 0..100 {
         // write many logs to force log GC for region 1 and region 2.
-        cluster.get(b"k1").unwrap();
-        cluster.get(b"k2").unwrap();
+        cluster.must_put(b"k1", b"v1");
+        cluster.must_put(b"k2", b"v2");
     }
 
     cluster.clear_send_filters();
@@ -716,7 +716,11 @@ fn test_quick_election_after_split<T: Simulator>(cluster: &mut Cluster<T>) {
     let new_region = cluster.get_region(b"k3");
     // Ensure the new leader is established for the newly split region, and it shares the
     // same store with the leader of old region.
-    let new_leader = cluster.query_leader(old_leader.get_store_id(), new_region.get_id());
+    let new_leader = cluster.query_leader(
+        old_leader.get_store_id(),
+        new_region.get_id(),
+        Duration::from_secs(5),
+    );
     assert!(new_leader.is_some());
 }
 

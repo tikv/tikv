@@ -11,19 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::option::Option;
-use std::ops::Deref;
-use std::sync::Arc;
 use std::fmt::{self, Debug, Formatter};
+use std::ops::Deref;
+use std::option::Option;
+use std::sync::Arc;
 
-use rocksdb::{CFHandle, DBIterator, DBVector, ReadOptions, Writable, WriteBatch, DB};
-use rocksdb::rocksdb_options::UnsafeSnap;
-use protobuf;
 use byteorder::{BigEndian, ByteOrder};
+use protobuf;
+use rocksdb::rocksdb_options::UnsafeSnap;
+use rocksdb::{CFHandle, DBIterator, DBVector, ReadOptions, Writable, WriteBatch, DB};
 use util::rocksdb;
 
-use raftstore::Result;
 use raftstore::Error;
+use raftstore::Result;
 
 pub struct Snapshot {
     db: Arc<DB>,
@@ -61,7 +61,7 @@ impl Snapshot {
         unsafe {
             Snapshot {
                 snap: db.unsafe_snap(),
-                db: db,
+                db,
             }
         }
     }
@@ -119,10 +119,7 @@ pub trait Peekable {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>>;
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>>;
 
-    fn get_msg<M>(&self, key: &[u8]) -> Result<Option<M>>
-    where
-        M: protobuf::Message + protobuf::MessageStatic,
-    {
+    fn get_msg<M: protobuf::Message>(&self, key: &[u8]) -> Result<Option<M>> {
         let value = self.get_value(key)?;
 
         if value.is_none() {
@@ -134,10 +131,7 @@ pub trait Peekable {
         Ok(Some(m))
     }
 
-    fn get_msg_cf<M>(&self, cf: &str, key: &[u8]) -> Result<Option<M>>
-    where
-        M: protobuf::Message + protobuf::MessageStatic,
-    {
+    fn get_msg_cf<M: protobuf::Message>(&self, cf: &str, key: &[u8]) -> Result<Option<M>> {
         let value = self.get_value_cf(cf, key)?;
 
         if value.is_none() {
@@ -195,10 +189,10 @@ impl IterOption {
         fill_cache: bool,
     ) -> IterOption {
         IterOption {
-            lower_bound: lower_bound,
-            upper_bound: upper_bound,
+            lower_bound,
+            upper_bound,
             prefix_same_as_start: false,
-            fill_cache: fill_cache,
+            fill_cache,
             seek_mode: SeekMode::TotalOrder,
         }
     }
@@ -276,7 +270,7 @@ pub trait Iterable {
     fn new_iterator_cf(&self, &str, iter_opt: IterOption) -> Result<DBIterator<&DB>>;
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
-    fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: &mut F) -> Result<()>
+    fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: F) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
@@ -292,7 +286,7 @@ pub trait Iterable {
         start_key: &[u8],
         end_key: &[u8],
         fill_cache: bool,
-        f: &mut F,
+        f: F,
     ) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
@@ -317,7 +311,7 @@ pub trait Iterable {
     }
 }
 
-fn scan_impl<F>(mut it: DBIterator<&DB>, start_key: &[u8], f: &mut F) -> Result<()>
+fn scan_impl<F>(mut it: DBIterator<&DB>, start_key: &[u8], mut f: F) -> Result<()>
 where
     F: FnMut(&[u8], &[u8]) -> Result<bool>,
 {
@@ -433,11 +427,11 @@ impl Mutable for WriteBatch {}
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use tempdir::TempDir;
-    use rocksdb::Writable;
     use super::*;
     use kvproto::metapb::Region;
+    use rocksdb::Writable;
+    use std::sync::Arc;
+    use tempdir::TempDir;
 
     #[test]
     fn test_base() {
@@ -518,7 +512,7 @@ mod tests {
 
         let mut data = vec![];
         engine
-            .scan(b"", &[0xFF, 0xFF], false, &mut |key, value| {
+            .scan(b"", &[0xFF, 0xFF], false, |key, value| {
                 data.push((key.to_vec(), value.to_vec()));
                 Ok(true)
             })
@@ -533,7 +527,7 @@ mod tests {
         data.clear();
 
         engine
-            .scan_cf(cf, b"", &[0xFF, 0xFF], false, &mut |key, value| {
+            .scan_cf(cf, b"", &[0xFF, 0xFF], false, |key, value| {
                 data.push((key.to_vec(), value.to_vec()));
                 Ok(true)
             })
@@ -556,7 +550,7 @@ mod tests {
 
         let mut index = 0;
         engine
-            .scan(b"", &[0xFF, 0xFF], false, &mut |key, value| {
+            .scan(b"", &[0xFF, 0xFF], false, |key, value| {
                 data.push((key.to_vec(), value.to_vec()));
                 index += 1;
                 Ok(index != 1)
@@ -576,7 +570,7 @@ mod tests {
 
         data.clear();
 
-        snap.scan(b"", &[0xFF, 0xFF], false, &mut |key, value| {
+        snap.scan(b"", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
             Ok(true)
         }).unwrap();

@@ -11,15 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::usize;
-use std::time::Duration;
-use std::sync::{Arc, Condvar, Mutex};
-use std::thread::{Builder, JoinHandle};
-use std::marker::PhantomData;
 use std::boxed::FnBox;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::fmt::Write;
+use std::marker::PhantomData;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::{Builder, JoinHandle};
+use std::time::Duration;
+use std::usize;
 
 pub const DEFAULT_TASKS_PER_TICK: usize = 10000;
 const DEFAULT_QUEUE_CAPACITY: usize = 1000;
@@ -110,11 +110,11 @@ impl<C: Context + Default + 'static> ThreadPoolBuilder<C, DefaultContextFactory>
 impl<C: Context + 'static, F: ContextFactory<C>> ThreadPoolBuilder<C, F> {
     pub fn new(name: String, factory: F) -> ThreadPoolBuilder<C, F> {
         ThreadPoolBuilder {
-            name: name,
+            name,
             thread_count: DEFAULT_THREAD_COUNT,
             tasks_per_tick: DEFAULT_TASKS_PER_TICK,
             stack_size: None,
-            factory: factory,
+            factory,
             _ctx: PhantomData,
         }
     }
@@ -188,17 +188,18 @@ where
             if let Some(stack_size) = stack_size {
                 tb = tb.stack_size(stack_size);
             }
-            let thread = tb.spawn(move || {
-                let mut worker = Worker::new(state, task_num, tasks_per_tick, ctx);
-                worker.run();
-            }).unwrap();
+            let thread =
+                tb.spawn(move || {
+                    let mut worker = Worker::new(state, task_num, tasks_per_tick, ctx);
+                    worker.run();
+                }).unwrap();
             threads.push(thread);
         }
 
         ThreadPool {
-            state: state,
-            threads: threads,
-            task_count: task_count,
+            state,
+            threads,
+            task_count,
         }
     }
 
@@ -265,11 +266,11 @@ where
         ctx: C,
     ) -> Worker<C> {
         Worker {
-            state: state,
-            task_count: task_count,
-            tasks_per_tick: tasks_per_tick,
+            state,
+            task_count,
+            tasks_per_tick,
             task_counter: 0,
-            ctx: ctx,
+            ctx,
         }
     }
 
@@ -324,10 +325,10 @@ where
 mod test {
     use super::*;
 
-    use std::time::Duration;
+    use std::sync::atomic::{AtomicIsize, Ordering};
     use std::sync::mpsc::{channel, Sender};
     use std::sync::{Arc, Mutex};
-    use std::sync::atomic::{AtomicIsize, Ordering};
+    use std::time::Duration;
 
     #[test]
     fn test_get_task_count() {
@@ -404,7 +405,7 @@ mod test {
 
         let f = TestContextFactory {
             counter: Arc::new(AtomicIsize::new(0)),
-            tx: tx,
+            tx,
         };
         let ctx = f.create();
         let name = thd_name!("test_tasks_with_contexts");
@@ -456,7 +457,7 @@ mod test {
 
         let f = TestContextFactory {
             counter: Arc::new(AtomicIsize::new(0)),
-            tx: tx,
+            tx,
         };
         let ctx = f.create();
         let name = thd_name!("test_tasks_tick");

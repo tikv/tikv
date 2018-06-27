@@ -11,20 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::PathBuf;
-use std::io::Read;
 use std::fs::File;
+use std::io::Read;
+use std::path::PathBuf;
 
-use log::LogLevelFilter;
 use rocksdb::{CompactionPriority, DBCompactionStyle, DBCompressionType, DBRecoveryMode};
-use tikv::pd::Config as PdConfig;
-use tikv::server::Config as ServerConfig;
-use tikv::server::readpool::Config as ReadPoolInstanceConfig;
-use tikv::raftstore::store::Config as RaftstoreConfig;
-use tikv::raftstore::coprocessor::Config as CopConfig;
+use slog::Level;
 use tikv::config::*;
-use tikv::storage::Config as StorageConfig;
 use tikv::import::Config as ImportConfig;
+use tikv::pd::Config as PdConfig;
+use tikv::raftstore::coprocessor::Config as CopConfig;
+use tikv::raftstore::store::Config as RaftstoreConfig;
+use tikv::server::config::GrpcCompressionType;
+use tikv::server::Config as ServerConfig;
+use tikv::storage::Config as StorageConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
 use tikv::util::security::SecurityConfig;
 
@@ -53,25 +53,28 @@ fn read_file_in_project_dir(path: &str) -> String {
 #[test]
 fn test_serde_custom_tikv_config() {
     let mut value = TiKvConfig::default();
-    value.log_level = LogLevelFilter::Debug;
+    value.log_level = Level::Debug;
     value.log_file = "foo".to_owned();
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
         addr: "example.com:443".to_owned(),
         labels: map!{ "a".to_owned() => "b".to_owned() },
         advertise_addr: "example.com:443".to_owned(),
-        notify_capacity: 12_345,
-        messages_per_tick: 123,
+        concurrent_send_snap_limit: 4,
+        concurrent_recv_snap_limit: 4,
+        grpc_compression_type: GrpcCompressionType::Gzip,
         grpc_concurrency: 123,
         grpc_concurrent_stream: 1_234,
         grpc_raft_conn_num: 123,
         grpc_stream_initial_window_size: ReadableSize(12_345),
-        end_point_concurrency: 12,
-        end_point_max_tasks: 12,
+        grpc_keepalive_time: ReadableDuration::secs(3),
+        grpc_keepalive_timeout: ReadableDuration::secs(60),
+        end_point_concurrency: None,
+        end_point_max_tasks: None,
+        end_point_stack_size: None,
         enable_distsql_cache: false,
         distsql_cache_size: ReadableSize(256 * 1024 * 1024),
         distsql_cache_entry_max_size: ReadableSize(5 * 1024 * 1024),
-        end_point_stack_size: ReadableSize::mb(12),
         end_point_recursion_limit: 100,
         end_point_stream_channel_size: 16,
         end_point_batch_row_limit: 64,
@@ -81,14 +84,23 @@ fn test_serde_custom_tikv_config() {
         snap_max_total_size: ReadableSize::gb(10),
     };
     value.readpool = ReadPoolConfig {
-        storage: ReadPoolInstanceConfig {
+        storage: StorageReadPoolConfig {
             high_concurrency: 1,
             normal_concurrency: 3,
             low_concurrency: 7,
-            max_tasks_high: 10000,
-            max_tasks_normal: 20000,
-            max_tasks_low: 30000,
+            max_tasks_per_worker_high: 1000,
+            max_tasks_per_worker_normal: 1500,
+            max_tasks_per_worker_low: 2500,
             stack_size: ReadableSize::mb(20),
+        },
+        coprocessor: CoprocessorReadPoolConfig {
+            high_concurrency: 2,
+            normal_concurrency: 4,
+            low_concurrency: 6,
+            max_tasks_per_worker_high: 2000,
+            max_tasks_per_worker_normal: 1000,
+            max_tasks_per_worker_low: 3000,
+            stack_size: ReadableSize::mb(12),
         },
     };
     value.metric = MetricConfig {
@@ -103,6 +115,8 @@ fn test_serde_custom_tikv_config() {
         raft_base_tick_interval: ReadableDuration::secs(12),
         raft_heartbeat_ticks: 1,
         raft_election_timeout_ticks: 12,
+        raft_min_election_timeout_ticks: 14,
+        raft_max_election_timeout_ticks: 20,
         raft_max_size_per_msg: ReadableSize::mb(12),
         raft_max_inflight_msgs: 123,
         raft_entry_max_size: ReadableSize::mb(12),
@@ -113,8 +127,10 @@ fn test_serde_custom_tikv_config() {
         split_region_check_tick_interval: ReadableDuration::secs(12),
         region_split_check_diff: ReadableSize::mb(6),
         region_compact_check_interval: ReadableDuration::secs(12),
+        clean_stale_peer_delay: ReadableDuration::secs(13),
         region_compact_check_step: 1_234,
         region_compact_min_tombstones: 999,
+        region_compact_tombstones_percent: 33,
         pd_heartbeat_tick_interval: ReadableDuration::minutes(12),
         pd_store_heartbeat_tick_interval: ReadableDuration::secs(12),
         notify_capacity: 12_345,
@@ -385,8 +401,6 @@ fn test_serde_custom_tikv_config() {
         gc_ratio_threshold: 1.2,
         max_key_size: 8192,
         scheduler_notify_capacity: 123,
-
-        scheduler_messages_per_tick: 123,
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
@@ -403,7 +417,12 @@ fn test_serde_custom_tikv_config() {
         override_ssl_target: "".to_owned(),
     };
     value.import = ImportConfig {
+        import_dir: "/abc".to_owned(),
         num_threads: 123,
+        num_import_jobs: 123,
+        num_import_sst_jobs: 123,
+        max_prepare_duration: ReadableDuration::minutes(12),
+        region_split_size: ReadableSize::mb(123),
         stream_channel_window: 123,
     };
 
@@ -412,4 +431,26 @@ fn test_serde_custom_tikv_config() {
     assert_eq!(value, load);
     let dump = toml::to_string_pretty(&load).unwrap();
     assert_eq!(dump, custom);
+}
+
+#[test]
+fn test_serde_default_config() {
+    let cfg: TiKvConfig = toml::from_str("").unwrap();
+    assert_eq!(cfg, TiKvConfig::default());
+
+    let content = read_file_in_project_dir("tests/config/test-default.toml");
+    let cfg: TiKvConfig = toml::from_str(&content).unwrap();
+    assert_eq!(cfg, TiKvConfig::default());
+}
+
+#[test]
+fn test_readpool_default_config() {
+    let content = r#"
+        [readpool.storage]
+        high-concurrency = 1
+    "#;
+    let cfg: TiKvConfig = toml::from_str(content).unwrap();
+    let mut expected = TiKvConfig::default();
+    expected.readpool.storage.high_concurrency = 1;
+    assert_eq!(cfg, expected);
 }

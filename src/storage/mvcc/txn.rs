@@ -11,18 +11,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt;
-use storage::{is_short_value, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK,
-              CF_WRITE};
-use storage::engine::{Modify, ScanMode, Snapshot};
-use super::reader::MvccReader;
 use super::lock::{Lock, LockType};
+use super::metrics::*;
+use super::reader::MvccReader;
 use super::write::{Write, WriteType};
 use super::{Error, Result};
-use super::metrics::*;
 use kvproto::kvrpcpb::IsolationLevel;
+use std::fmt;
+use storage::engine::{Modify, ScanMode, Snapshot};
+use storage::{
+    is_short_value, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
+};
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
+
+pub struct GcInfo {
+    pub found_versions: usize,
+    pub deleted_versions: usize,
+}
 
 pub struct MvccTxn {
     reader: MvccReader,
@@ -48,7 +54,7 @@ impl MvccTxn {
         MvccTxn {
             // Todo: use session variable to indicate fill cache or not
             reader: MvccReader::new(snapshot, mode, fill_cache, None, None, isolation_level),
-            start_ts: start_ts,
+            start_ts,
             writes: vec![],
             write_size: 0,
         }
@@ -123,13 +129,11 @@ impl MvccTxn {
             if let Some((commit, _)) = self.reader.seek_write(key, u64::max_value())? {
                 // Abort on writes after our start timestamp ...
                 if commit >= self.start_ts {
-                    MVCC_CONFLICT_COUNTER
-                        .with_label_values(&["prewrite_write_conflict"])
-                        .inc();
+                    MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
                     return Err(Error::WriteConflict {
                         start_ts: self.start_ts,
                         conflict_ts: commit,
-                        key: key.encoded().to_owned(),
+                        key: key.raw()?,
                         primary: primary.to_vec(),
                     });
                 }
@@ -147,9 +151,7 @@ impl MvccTxn {
             }
             // No need to overwrite the lock and data.
             // If we use single delete, we can't put a key multiple times.
-            MVCC_DUPLICATE_CMD_COUNTER_VEC
-                .with_label_values(&["prewrite"])
-                .inc();
+            MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
             return Ok(());
         }
 
@@ -188,9 +190,7 @@ impl MvccTxn {
             _ => {
                 return match self.reader.get_txn_commit_info(key, self.start_ts)? {
                     Some((_, WriteType::Rollback)) | None => {
-                        MVCC_CONFLICT_COUNTER
-                            .with_label_values(&["commit_lock_not_found"])
-                            .inc();
+                        MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
                         // TODO:None should not appear
                         // Rollbacked by concurrent transaction.
                         info!(
@@ -199,7 +199,7 @@ impl MvccTxn {
                         );
                         Err(Error::TxnLockNotFound {
                             start_ts: self.start_ts,
-                            commit_ts: commit_ts,
+                            commit_ts,
                             key: key.encoded().to_owned(),
                         })
                     }
@@ -207,9 +207,7 @@ impl MvccTxn {
                     Some((_, WriteType::Put))
                     | Some((_, WriteType::Delete))
                     | Some((_, WriteType::Lock)) => {
-                        MVCC_DUPLICATE_CMD_COUNTER_VEC
-                            .with_label_values(&["commit"])
-                            .inc();
+                        MVCC_DUPLICATE_CMD_COUNTER_VEC.commit.inc();
                         Ok(())
                     }
                 };
@@ -238,14 +236,10 @@ impl MvccTxn {
                     Some((ts, write_type)) => {
                         if write_type == WriteType::Rollback {
                             // return Ok on Rollback already exist
-                            MVCC_DUPLICATE_CMD_COUNTER_VEC
-                                .with_label_values(&["rollback"])
-                                .inc();
+                            MVCC_DUPLICATE_CMD_COUNTER_VEC.rollback.inc();
                             Ok(())
                         } else {
-                            MVCC_CONFLICT_COUNTER
-                                .with_label_values(&["rollback_committed"])
-                                .inc();
+                            MVCC_CONFLICT_COUNTER.rollback_committed.inc();
                             info!(
                                 "txn conflict (committed), key:{}, start_ts:{}, commit_ts:{}",
                                 key, self.start_ts, ts
@@ -270,15 +264,15 @@ impl MvccTxn {
         Ok(())
     }
 
-    pub fn gc(&mut self, key: &Key, safe_point: u64) -> Result<()> {
+    pub fn gc(&mut self, key: &Key, safe_point: u64) -> Result<GcInfo> {
         let mut remove_older = false;
         let mut ts: u64 = u64::max_value();
-        let mut versions = 0;
-        let mut delete_versions = 0;
+        let mut found_versions = 0;
+        let mut deleted_versions = 0;
         let mut latest_delete = None;
         while let Some((commit, write)) = self.reader.seek_write(key, ts)? {
             ts = commit - 1;
-            versions += 1;
+            found_versions += 1;
 
             if self.write_size >= MAX_TXN_WRITE_SIZE {
                 // Cannot remove latest delete when we haven't iterate all versions.
@@ -291,7 +285,7 @@ impl MvccTxn {
                 if write.write_type == WriteType::Put && write.short_value.is_none() {
                     self.delete_value(key, write.start_ts);
                 }
-                delete_versions += 1;
+                deleted_versions += 1;
                 continue;
             }
 
@@ -315,32 +309,35 @@ impl MvccTxn {
                 }
                 WriteType::Rollback | WriteType::Lock => {
                     self.delete_write(key, commit);
-                    delete_versions += 1;
+                    deleted_versions += 1;
                 }
                 WriteType::Put => {}
             }
         }
         if let Some(commit) = latest_delete {
             self.delete_write(key, commit);
-            delete_versions += 1;
+            deleted_versions += 1;
         }
-        MVCC_VERSIONS_HISTOGRAM.observe(f64::from(versions));
-        if delete_versions > 0 {
-            GC_DELETE_VERSIONS_HISTOGRAM.observe(f64::from(delete_versions));
+        MVCC_VERSIONS_HISTOGRAM.observe(found_versions as f64);
+        if deleted_versions > 0 {
+            GC_DELETE_VERSIONS_HISTOGRAM.observe(deleted_versions as f64);
         }
-        Ok(())
+        Ok(GcInfo {
+            found_versions,
+            deleted_versions,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use tempdir::TempDir;
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
-    use super::MvccTxn;
-    use super::super::MvccReader;
     use super::super::write::{Write, WriteType};
-    use storage::{make_key, Mutation, Options, ScanMode, ALL_CFS, CF_WRITE, SHORT_VALUE_MAX_LEN};
+    use super::super::MvccReader;
+    use super::MvccTxn;
+    use kvproto::kvrpcpb::{Context, IsolationLevel};
     use storage::engine::{self, Engine, Modify, TEMP_DIR};
+    use storage::{make_key, Mutation, Options, ScanMode, ALL_CFS, CF_WRITE, SHORT_VALUE_MAX_LEN};
+    use tempdir::TempDir;
 
     fn gen_value(v: u8, len: usize) -> Vec<u8> {
         let mut value = Vec::with_capacity(len);
@@ -790,11 +787,13 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 5, None, IsolationLevel::SI, true);
-        assert!(txn.prewrite(
-            Mutation::Put((make_key(key), value.to_vec())),
-            key,
-            &Options::default()
-        ).is_err());
+        assert!(
+            txn.prewrite(
+                Mutation::Put((make_key(key), value.to_vec())),
+                key,
+                &Options::default()
+            ).is_err()
+        );
 
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();

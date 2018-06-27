@@ -11,29 +11,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(plugin)]
 #![feature(test)]
-#![cfg_attr(feature = "dev", plugin(clippy))]
-#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-#![allow(needless_pass_by_value)]
-#![allow(unreadable_literal)]
 
 extern crate kvproto;
 extern crate log;
+#[macro_use(slog_o, slog_kv)]
+extern crate slog;
 extern crate mio;
 extern crate protobuf;
 extern crate raft;
 extern crate rand;
 extern crate rocksdb;
+extern crate slog_async;
+extern crate slog_scope;
+extern crate slog_stdlog;
+extern crate slog_term;
 extern crate tempdir;
 extern crate test;
 extern crate tikv;
 extern crate time;
 
 mod channel;
-mod writebatch;
-mod serialization;
 mod coprocessor;
+mod serialization;
+mod writebatch;
 
 #[allow(dead_code)]
 #[path = "../tests/util/mod.rs"]

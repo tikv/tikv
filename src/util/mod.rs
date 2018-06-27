@@ -11,47 +11,44 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::hash_map::Entry;
+use std::collections::vec_deque::{Iter, VecDeque};
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::ops::Deref;
 use std::ops::DerefMut;
-use std::{slice, thread};
-use std::net::{SocketAddr, ToSocketAddrs};
-use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::collections::vec_deque::{Iter, VecDeque};
 use std::{io, u64};
+use std::{slice, thread};
 
-use rand::{self, ThreadRng};
 use protobuf::Message;
+use rand::{self, ThreadRng};
 
 #[macro_use]
 pub mod macros;
-pub mod logger;
-pub mod panic_hook;
-pub mod worker;
-pub mod codec;
-pub mod rocksdb;
-pub mod config;
 pub mod buf;
-pub mod transport;
+pub mod codec;
+pub mod collections;
+pub mod config;
 pub mod file;
 pub mod file_log;
-pub mod metrics;
-pub mod threadpool;
-pub mod collections;
-pub mod time;
-pub mod io_limiter;
-pub mod security;
-pub mod timer;
-pub mod sys;
 pub mod future;
 pub mod futurepool;
+pub mod io_limiter;
 pub mod jemalloc;
+pub mod logger;
+pub mod metrics;
+pub mod panic_hook;
+pub mod rocksdb;
+pub mod security;
+pub mod sys;
+pub mod threadpool;
+pub mod time;
+pub mod timer;
+pub mod transport;
+pub mod worker;
 
 pub use self::rocksdb::properties;
 pub use self::rocksdb::stats as rocksdb_stats;
-
-#[cfg(target_os = "linux")]
-mod thread_metrics;
 
 pub const NO_LIMIT: u64 = u64::MAX;
 
@@ -200,27 +197,10 @@ pub fn escape(data: &[u8]) -> String {
 /// # Panic
 ///
 /// If s is not a properly encoded string.
-///
-/// # Examples
-///
-/// ```
-/// use tikv::util::unescape;
-///
-/// assert_eq!(unescape(r"ab"), b"ab");
-/// assert_eq!(unescape(r"a\\023"), b"a\\023");
-/// assert_eq!(unescape(r"a\000"), b"a\0");
-/// assert_eq!(unescape("a\\r\\n\\t '\\\"\\\\"), b"a\r\n\t '\"\\");
-/// assert_eq!(unescape(r"\342\235\244\360\237\220\267"), "❤🐷".as_bytes());
-/// ```
-///
 pub fn unescape(s: &str) -> Vec<u8> {
     let mut buf = Vec::with_capacity(s.len());
     let mut bytes = s.bytes();
-    loop {
-        let b = match bytes.next() {
-            None => break,
-            Some(t) => t,
-        };
+    while let Some(b) = bytes.next() {
         if b != b'\\' {
             buf.push(b);
             continue;
@@ -232,6 +212,16 @@ pub fn unescape(s: &str) -> Vec<u8> {
             b'n' => buf.push(b'\n'),
             b't' => buf.push(b'\t'),
             b'r' => buf.push(b'\r'),
+            b'x' => {
+                macro_rules! next_hex {
+                    () => {
+                        bytes.next().map(char::from).unwrap().to_digit(16).unwrap()
+                    };
+                }
+                // Can coerce as u8 since the range of possible values is constrained to
+                // between 00 and FF.
+                buf.push(((next_hex!() << 4) + next_hex!()) as u8);
+            }
             b => {
                 let b1 = b - b'0';
                 let b2 = bytes.next().unwrap() - b'0';
@@ -358,14 +348,6 @@ pub fn print_tikv_info() {
     info!("Rustc Version:     {}", rustc);
 }
 
-#[cfg(target_os = "linux")]
-pub use self::thread_metrics::monitor_threads;
-
-#[cfg(not(target_os = "linux"))]
-pub fn monitor_threads<S: Into<String>>(_: S) -> io::Result<()> {
-    Ok(())
-}
-
 /// A simple ring queue with fixed capacity.
 pub struct RingQueue<T> {
     buf: VecDeque<T>,
@@ -381,7 +363,7 @@ impl<T> RingQueue<T> {
     pub fn with_capacity(cap: usize) -> RingQueue<T> {
         RingQueue {
             buf: VecDeque::with_capacity(cap),
-            cap: cap,
+            cap,
         }
     }
 
@@ -435,7 +417,7 @@ impl<T> MustConsumeVec<T> {
     #[inline]
     pub fn with_capacity(tag: &'static str, cap: usize) -> MustConsumeVec<T> {
         MustConsumeVec {
-            tag: tag,
+            tag,
             v: Vec::with_capacity(cap),
         }
     }
@@ -465,14 +447,13 @@ impl<T> Drop for MustConsumeVec<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::*;
+    use super::*;
+    use protobuf::Message;
+    use raft::eraftpb::Entry;
     use std::net::{AddrParseError, SocketAddr};
     use std::rc::Rc;
-    use std::*;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use raft::eraftpb::Entry;
-    use protobuf::Message;
-    use super::*;
+    use std::*;
 
     #[test]
     fn test_to_socket_addr() {
@@ -599,13 +580,9 @@ mod tests {
                         res.extend_from_slice(p2);
                         let exp: Vec<_> = (low..high).collect();
                         assert_eq!(
-                            res,
-                            exp,
+                            res, exp,
                             "[{}, {}) in {:?} with first: {}",
-                            low,
-                            high,
-                            v,
-                            first
+                            low, high, v, first
                         );
                     }
                 }
@@ -645,5 +622,24 @@ mod tests {
             v.push(2);
         });
         res.unwrap_err();
+    }
+
+    #[test]
+    fn test_unescape() {
+        // No escapes
+        assert_eq!(unescape(r"ab"), b"ab");
+        // Escaped backslash
+        assert_eq!(unescape(r"a\\023"), b"a\\023");
+        // Escaped three digit octal
+        assert_eq!(unescape(r"a\000"), b"a\0");
+        assert_eq!(
+            unescape(r"\342\235\244\360\237\220\267"),
+            "❤🐷".as_bytes()
+        );
+        // Whitespace
+        assert_eq!(unescape("a\\r\\n\\t '\\\"\\\\"), b"a\r\n\t '\"\\");
+        // Hex Octals
+        assert_eq!(unescape(r"abc\x64\x65\x66ghi"), b"abcdefghi");
+        assert_eq!(unescape(r"JKL\x4d\x4E\x4fPQR"), b"JKLMNOPQR");
     }
 }

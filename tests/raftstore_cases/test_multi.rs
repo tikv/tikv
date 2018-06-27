@@ -11,26 +11,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tikv::raftstore::store::*;
-use tikv::util::HandyRwLock;
-use tikv::util::config::*;
-use tikv::server::transport::RaftStoreRouter;
-use tikv::raftstore::Result;
-use raft::eraftpb::MessageType;
 use kvproto::raft_cmdpb::RaftCmdResponse;
+use raft::eraftpb::MessageType;
+use tikv::raftstore::store::*;
+use tikv::raftstore::Result;
+use tikv::server::transport::RaftStoreRouter;
+use tikv::util::config::*;
+use tikv::util::HandyRwLock;
 
-use super::util::*;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::transport_simulate::*;
+use super::util::*;
 
 use rand;
 use rand::Rng;
-use std::time::Duration;
+use std::sync::atomic::*;
 use std::sync::*;
 use std::thread;
-use std::sync::atomic::*;
+use std::time::Duration;
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
@@ -140,7 +140,7 @@ fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize
         cluster.stop_node(i);
     }
     if let Some(leader) = cluster.leader_of_region(1) {
-        if leader.get_store_id() >= half + 1 {
+        if leader.get_store_id() > half {
             cluster.stop_node(leader.get_store_id());
         }
     }
@@ -216,9 +216,9 @@ fn test_multi_server_base() {
 
 fn test_multi_latency<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
-    cluster.add_send_filter(CloneFilterFactory(DelayFilter::new(
-        Duration::from_millis(30),
-    )));
+    cluster.add_send_filter(CloneFilterFactory(DelayFilter::new(Duration::from_millis(
+        30,
+    ))));
     test_multi_base_after_bootstrap(cluster);
 }
 

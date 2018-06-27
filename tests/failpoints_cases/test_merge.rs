@@ -11,17 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::*;
 use std::sync::Arc;
+use std::time::*;
 
 use fail;
 use futures::Future;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
-use tikv::util::config::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
-use tikv::storage::CF_RAFT;
 use tikv::raftstore::store::Peekable;
+use tikv::storage::CF_RAFT;
 
 use raftstore::node::new_node_cluster;
 use raftstore::transport_simulate::*;
@@ -33,7 +32,7 @@ use raftstore::util::*;
 fn test_node_merge_rollback() {
     let _guard = ::setup();
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
+    configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -76,6 +75,7 @@ fn test_node_merge_rollback() {
     // After rollback, version becomes 3 + 1 = 4;
     region.mut_region_epoch().set_version(4);
     for i in 1..3 {
+        must_get_equal(&cluster.get_engine(i), b"k11", b"v11");
         let state_key = keys::region_state_key(region.get_id());
         let state: RegionLocalState = cluster
             .get_engine(i)
@@ -102,6 +102,7 @@ fn test_node_merge_rollback() {
     // After premerge and rollback, version becomes 4 + 2 = 6;
     region.mut_region_epoch().set_version(4);
     for i in 1..3 {
+        must_get_equal(&cluster.get_engine(i), b"k12", b"v12");
         let state_key = keys::region_state_key(region.get_id());
         let state: RegionLocalState = cluster
             .get_engine(i)
@@ -119,7 +120,7 @@ fn test_node_merge_restart() {
     let _guard = ::setup();
     // ::util::init_log();
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
+    configure_for_merge(&mut cluster);
     cluster.run();
 
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -217,8 +218,9 @@ fn test_node_merge_restart() {
 fn test_node_merge_recover_snapshot() {
     let _guard = ::setup();
     let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 12;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
-    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 

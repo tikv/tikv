@@ -13,19 +13,19 @@
 
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
-use tikv::raftstore::{Error, Result};
 use tikv::raftstore::store::{Msg as StoreMsg, SignificantMsg, Transport};
+use tikv::raftstore::{Error, Result};
 use tikv::server::transport::*;
 use tikv::server::StoreAddrResolver;
 use tikv::util::{transport, Either, HandyRwLock};
 
 use rand;
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, RwLock};
-use std::sync::mpsc::Sender;
 use std::marker::PhantomData;
-use std::{thread, time, usize};
 use std::sync::atomic::*;
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex, RwLock};
+use std::{thread, time, usize};
+use tikv::util::collections::{HashMap, HashSet};
 
 pub trait Channel<M>: Send + Clone {
     fn send(&self, m: M) -> Result<()>;
@@ -83,6 +83,54 @@ pub trait Filter<M>: Send + Sync {
 pub type SendFilter = Box<Filter<RaftMessage>>;
 pub type RecvFilter = Box<Filter<StoreMsg>>;
 
+/// Emits a notification for each given message type that it sees.
+#[allow(dead_code)]
+pub struct MessageTypeNotifier {
+    message_type: MessageType,
+    notifier: Mutex<Sender<()>>,
+    pending_notify: AtomicUsize,
+    ready_notify: Arc<AtomicBool>,
+}
+
+impl MessageTypeNotifier {
+    #[allow(dead_code)]
+    pub fn new(
+        message_type: MessageType,
+        notifier: Sender<()>,
+        ready_notify: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            message_type,
+            notifier: Mutex::new(notifier),
+            ready_notify,
+            pending_notify: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl Filter<RaftMessage> for MessageTypeNotifier {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        for msg in msgs.iter() {
+            if msg.get_message().get_msg_type() == self.message_type
+                && self.ready_notify.load(Ordering::SeqCst)
+            {
+                self.pending_notify.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn after(&self, _: Result<()>) -> Result<()> {
+        while self.pending_notify.load(Ordering::SeqCst) > 0 {
+            debug!("notify {:?}", self.message_type);
+            self.pending_notify.fetch_sub(1, Ordering::SeqCst);
+            let _ = self.notifier.lock().unwrap().send(());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 pub struct DropPacketFilter {
     rate: u32,
@@ -90,7 +138,7 @@ pub struct DropPacketFilter {
 
 impl DropPacketFilter {
     pub fn new(rate: u32) -> DropPacketFilter {
-        DropPacketFilter { rate: rate }
+        DropPacketFilter { rate }
     }
 }
 
@@ -108,7 +156,7 @@ pub struct DelayFilter {
 
 impl DelayFilter {
     pub fn new(duration: time::Duration) -> DelayFilter {
-        DelayFilter { duration: duration }
+        DelayFilter { duration }
     }
 }
 
@@ -241,24 +289,20 @@ pub struct PartitionFilterFactory {
 
 impl PartitionFilterFactory {
     pub fn new(s1: Vec<u64>, s2: Vec<u64>) -> PartitionFilterFactory {
-        PartitionFilterFactory { s1: s1, s2: s2 }
+        PartitionFilterFactory { s1, s2 }
     }
 }
 
 impl FilterFactory for PartitionFilterFactory {
     fn generate(&self, node_id: u64) -> Vec<SendFilter> {
         if self.s1.contains(&node_id) {
-            return vec![
-                box PartitionFilter {
-                    node_ids: self.s2.clone(),
-                },
-            ];
+            return vec![box PartitionFilter {
+                node_ids: self.s2.clone(),
+            }];
         }
-        return vec![
-            box PartitionFilter {
-                node_ids: self.s1.clone(),
-            },
-        ];
+        return vec![box PartitionFilter {
+            node_ids: self.s1.clone(),
+        }];
     }
 }
 
@@ -268,7 +312,7 @@ pub struct IsolationFilterFactory {
 
 impl IsolationFilterFactory {
     pub fn new(node_id: u64) -> IsolationFilterFactory {
-        IsolationFilterFactory { node_id: node_id }
+        IsolationFilterFactory { node_id }
     }
 }
 
@@ -277,11 +321,9 @@ impl FilterFactory for IsolationFilterFactory {
         if node_id == self.node_id {
             return vec![box DropPacketFilter { rate: 100 }];
         }
-        vec![
-            box PartitionFilter {
-                node_ids: vec![self.node_id],
-            },
-        ]
+        vec![box PartitionFilter {
+            node_ids: vec![self.node_id],
+        }]
     }
 }
 
@@ -330,7 +372,8 @@ impl Filter<RaftMessage> for RegionPacketFilter {
             if self.region_id == region_id
                 && (self.direction.is_send() && self.store_id == from_store_id
                     || self.direction.is_recv() && self.store_id == to_store_id)
-                && self.msg_type
+                && self
+                    .msg_type
                     .as_ref()
                     .map_or(true, |t| t == &m.get_message().get_msg_type())
             {
@@ -356,8 +399,8 @@ impl Filter<RaftMessage> for RegionPacketFilter {
 impl RegionPacketFilter {
     pub fn new(region_id: u64, store_id: u64) -> RegionPacketFilter {
         RegionPacketFilter {
-            region_id: region_id,
-            store_id: store_id,
+            region_id,
+            store_id,
             direction: Direction::Both,
             msg_type: None,
             block: Either::Right(Arc::new(AtomicBool::new(true))),
@@ -422,7 +465,7 @@ impl CollectSnapshotFilter {
         CollectSnapshotFilter {
             dropped: AtomicBool::new(false),
             stale: AtomicBool::new(false),
-            pending_msg: Mutex::new(HashMap::new()),
+            pending_msg: Mutex::new(HashMap::default()),
             pending_count_sender: Mutex::new(sender),
         }
     }
@@ -532,7 +575,7 @@ impl LeadingDuplicatedSnapshotFilter {
     pub fn new(stale: Arc<AtomicBool>) -> LeadingDuplicatedSnapshotFilter {
         LeadingDuplicatedSnapshotFilter {
             dropped: AtomicBool::new(false),
-            stale: stale,
+            stale,
             last_msg: Mutex::new(None),
         }
     }
@@ -576,7 +619,8 @@ impl Filter<StoreMsg> for LeadingDuplicatedSnapshotFilter {
     }
 
     fn after(&self, res: Result<()>) -> Result<()> {
-        let dropped = self.dropped
+        let dropped = self
+            .dropped
             .compare_and_swap(true, false, Ordering::Relaxed);
         if res.is_err() && dropped {
             Ok(())

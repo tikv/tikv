@@ -11,214 +11,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod builtin_arithmetic;
+mod builtin_cast;
+mod builtin_compare;
+mod builtin_control;
+mod builtin_json;
+mod builtin_math;
+mod builtin_op;
+mod builtin_time;
 mod column;
 mod constant;
-mod fncall;
-mod builtin_cast;
-mod builtin_control;
-mod builtin_op;
-mod compare;
-mod arithmetic;
-mod math;
-mod json;
-mod time;
+mod ctx;
+mod scalar_function;
 
-use std::{error, io, mem, str};
-use std::borrow::Cow;
-use std::string::FromUtf8Error;
-use std::str::Utf8Error;
-use std::sync::Arc;
+pub use self::ctx::*;
+pub use coprocessor::codec::{Error, Result};
 
-use chrono::FixedOffset;
-use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
-use tipb::select;
-
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Res, Time, MAX_FSP};
-use coprocessor::codec::mysql::decimal::DecimalDecoder;
-use coprocessor::codec::mysql::json::JsonDecoder;
 use coprocessor::codec::mysql::{charset, types};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::{self, Datum};
-use util;
-use util::codec::number::NumberDecoder;
-use util::codec::Error as CError;
-
-/// Flags are used by `DAGRequest.flags` to handle execution mode, like how to handle
-/// truncate error.
-/// `FLAG_IGNORE_TRUNCATE` indicates if truncate error should be ignored.
-/// Read-only statements should ignore truncate error, write statements should not ignore
-/// truncate error.
-pub const FLAG_IGNORE_TRUNCATE: u64 = 1;
-/// `FLAG_TRUNCATE_AS_WARNING` indicates if truncate error should be returned as warning.
-/// This flag only matters if `FLAG_IGNORE_TRUNCATE` is not set, in strict sql mode, truncate error
-/// should be returned as error, in non-strict sql mode, truncate error should be saved as warning.
-pub const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
-
-#[derive(Debug)]
-pub struct EvalConfig {
-    /// timezone to use when parse/calculate time.
-    pub tz: FixedOffset,
-    pub ignore_truncate: bool,
-    pub truncate_as_warning: bool,
-}
-
-impl Default for EvalConfig {
-    fn default() -> EvalConfig {
-        EvalConfig {
-            tz: FixedOffset::east(0),
-            ignore_truncate: false,
-            truncate_as_warning: false,
-        }
-    }
-}
-
-impl EvalConfig {
-    pub fn new(tz_offset: i64, flags: u64) -> Result<EvalConfig> {
-        if tz_offset <= -ONE_DAY || tz_offset >= ONE_DAY {
-            return Err(Error::Eval(format!("invalid tz offset {}", tz_offset)));
-        }
-        let tz = match FixedOffset::east_opt(tz_offset as i32) {
-            None => return Err(Error::Eval(format!("invalid tz offset {}", tz_offset))),
-            Some(tz) => tz,
-        };
-
-        let e = EvalConfig {
-            tz: tz,
-            ignore_truncate: (flags & FLAG_IGNORE_TRUNCATE) > 0,
-            truncate_as_warning: (flags & FLAG_TRUNCATE_AS_WARNING) > 0,
-        };
-
-        Ok(e)
-    }
-}
-
-#[derive(Debug, Default)]
-/// Some global variables needed in an evaluation.
-pub struct EvalContext {
-    pub cfg: Arc<EvalConfig>,
-    warnings: Vec<select::Error>,
-}
-
-const ONE_DAY: i64 = 3600 * 24;
-
-impl EvalContext {
-    pub fn new(cfg: Arc<EvalConfig>) -> EvalContext {
-        EvalContext {
-            cfg: cfg,
-            warnings: Vec::new(),
-        }
-    }
-
-    pub fn append_warning(&mut self, err: Error) -> Result<()> {
-        self.warnings.push(err.into());
-        Ok(())
-    }
-
-    pub fn handle_truncate(&mut self, is_truncated: bool) -> Result<()> {
-        if !is_truncated {
-            return Ok(());
-        }
-        self.handle_truncate_err(Error::Truncated("[1265] Data Truncated".into()))
-    }
-
-    pub fn handle_truncate_err(&mut self, err: Error) -> Result<()> {
-        if self.cfg.ignore_truncate {
-            return Ok(());
-        }
-        if self.cfg.truncate_as_warning {
-            return self.append_warning(err);
-        }
-        Err(err)
-    }
-
-    pub fn take_warnings(&mut self) -> Vec<select::Error> {
-        mem::replace(&mut self.warnings, Vec::default())
-    }
-}
-
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Io(err: io::Error) {
-            from()
-            description("io error")
-            display("I/O error: {}", err)
-            cause(err)
-        }
-        Type { has: &'static str, expected: &'static str } {
-            description("type error")
-            display("type error: cannot get {:?} result from {:?} expression", expected, has)
-        }
-        Codec(err: util::codec::Error) {
-            from()
-            description("codec error")
-            display("codec error: {}", err)
-            cause(err)
-        }
-        ColumnOffset(offset: usize) {
-            description("column offset not found")
-            display("illegal column offset: {}", offset)
-        }
-        UnknownSignature(sig: ScalarFuncSig) {
-            description("Unknown signature")
-            display("Unknown signature: {:?}", sig)
-        }
-        Truncated(s:String) {
-            description("Truncated")
-            display("{}",s)
-        }
-        Overflow {
-            description("Overflow")
-            display("error Overflow")
-        }
-        Eval(s: String) {
-            description("evaluation failed")
-            display("{}", s)
-        }
-        Other(err: Box<error::Error + Send + Sync>) {
-            from()
-            cause(err.as_ref())
-            description(err.description())
-            display("unknown error {:?}", err)
-        }
-    }
-}
-
-impl Into<select::Error> for Error {
-    fn into(self) -> select::Error {
-        let mut err = select::Error::new();
-        err.set_msg(format!("{:?}", self));
-        err
-    }
-}
-
-impl From<FromUtf8Error> for Error {
-    fn from(err: FromUtf8Error) -> Error {
-        Error::Codec(CError::Encoding(err.utf8_error()))
-    }
-}
-impl From<Utf8Error> for Error {
-    fn from(err: Utf8Error) -> Error {
-        Error::Codec(CError::Encoding(err))
-    }
-}
-
-pub type Result<T> = ::std::result::Result<T, Error>;
-
-impl<T> Into<Result<T>> for Res<T> {
-    fn into(self) -> Result<T> {
-        match self {
-            Res::Ok(t) => Ok(t),
-            Res::Truncated(_) => Err(Error::Truncated("Truncated".into())),
-            Res::Overflow(_) => Err(Error::Overflow),
-        }
-    }
-}
+use std::borrow::Cow;
+use std::str;
+use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
+use util::codec::number;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
     Constant(Constant),
     ColumnRef(Column),
-    ScalarFn(FnCall),
+    ScalarFn(ScalarFunc),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -235,7 +56,7 @@ pub struct Constant {
 
 /// A single scalar function call
 #[derive(Debug, Clone, PartialEq)]
-pub struct FnCall {
+pub struct ScalarFunc {
     sig: ScalarFuncSig,
     children: Vec<Expression>,
     tp: FieldType,
@@ -305,7 +126,7 @@ impl Expression {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_string(),
-            Expression::ColumnRef(ref column) => column.eval_string(row),
+            Expression::ColumnRef(ref column) => column.eval_string(ctx, row),
             Expression::ScalarFn(ref f) => f.eval_bytes(ctx, row),
         }
     }
@@ -370,16 +191,8 @@ impl Expression {
     /// For Bit/Hex, we will get a wrong result if we convert it to int as a string value.
     /// For example, when convert `0b101` to int, the result should be 5, but we will get
     /// 101 if we regard it as a string.
-    fn is_hybrid_type(&self) -> bool {
-        match self.get_tp().get_tp() as u8 {
-            types::ENUM | types::BIT | types::SET => {
-                return true;
-            }
-            _ => {}
-        }
-        // TODO:For a constant, the field type will be inferred as `VARCHAR`
-        // when the kind of it is `HEX` or `BIT`.
-        false
+    pub fn is_hybrid_type(&self) -> bool {
+        types::is_hybrid_type(self.get_tp().get_tp() as u8)
     }
 }
 
@@ -402,72 +215,63 @@ impl Expression {
     }
 
     pub fn build(ctx: &mut EvalContext, mut expr: Expr) -> Result<Self> {
+        debug!("build expr:{:?}", expr);
         let tp = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
-            ExprType::Int64 => expr.get_val()
-                .decode_i64()
+            ExprType::Int64 => number::decode_i64(&mut expr.get_val())
                 .map(Datum::I64)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
-            ExprType::Uint64 => expr.get_val()
-                .decode_u64()
+            ExprType::Uint64 => number::decode_u64(&mut expr.get_val())
                 .map(Datum::U64)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
             ExprType::String | ExprType::Bytes => {
                 Ok(Expression::new_const(Datum::Bytes(expr.take_val()), tp))
             }
-            ExprType::Float32 | ExprType::Float64 => expr.get_val()
-                .decode_f64()
+            ExprType::Float32 | ExprType::Float64 => number::decode_f64(&mut expr.get_val())
                 .map(Datum::F64)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
-            ExprType::MysqlTime => expr.get_val()
-                .decode_u64()
+            ExprType::MysqlTime => number::decode_u64(&mut expr.get_val())
+                .map_err(Error::from)
                 .and_then(|i| {
                     let fsp = tp.get_decimal() as i8;
                     let t = tp.get_tp() as u8;
                     Time::from_packed_u64(i, t, fsp, &ctx.cfg.tz)
                 })
-                .map(|t| Expression::new_const(Datum::Time(t), tp))
-                .map_err(Error::from),
-            ExprType::MysqlDuration => expr.get_val()
-                .decode_i64()
+                .map(|t| Expression::new_const(Datum::Time(t), tp)),
+            ExprType::MysqlDuration => number::decode_i64(&mut expr.get_val())
+                .map_err(Error::from)
                 .and_then(|n| Duration::from_nanos(n, MAX_FSP))
                 .map(Datum::Dur)
-                .map(|e| Expression::new_const(e, tp))
-                .map_err(Error::from),
-            ExprType::MysqlDecimal => expr.get_val()
-                .decode_decimal()
+                .map(|e| Expression::new_const(e, tp)),
+            ExprType::MysqlDecimal => Decimal::decode(&mut expr.get_val())
                 .map(Datum::Dec)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
-            ExprType::MysqlJson => expr.get_val()
-                .decode_json()
+            ExprType::MysqlJson => Json::decode(&mut expr.get_val())
                 .map(Datum::Json)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
             ExprType::ScalarFunc => {
-                FnCall::check_args(expr.get_sig(), expr.get_children().len())?;
+                ScalarFunc::check_args(expr.get_sig(), expr.get_children().len())?;
                 expr.take_children()
                     .into_iter()
                     .map(|child| Expression::build(ctx, child))
                     .collect::<Result<Vec<_>>>()
                     .map(|children| {
-                        Expression::ScalarFn(FnCall {
+                        Expression::ScalarFn(ScalarFunc {
                             sig: expr.get_sig(),
-                            children: children,
-                            tp: tp,
+                            children,
+                            tp,
                         })
                     })
             }
             ExprType::ColumnRef => {
-                let offset = expr.get_val().decode_i64().map_err(Error::from)? as usize;
-                let column = Column {
-                    offset: offset,
-                    tp: tp,
-                };
+                let offset = number::decode_i64(&mut expr.get_val()).map_err(Error::from)? as usize;
+                let column = Column { offset, tp };
                 Ok(Expression::ColumnRef(column))
             }
             unhandled => Err(box_err!("can't handle {:?} expr in DAG mode", unhandled)),
@@ -493,15 +297,17 @@ where
 
 #[cfg(test)]
 mod test {
-    use std::{i64, u64};
-    use std::sync::Arc;
-    use coprocessor::codec::{convert, mysql, Datum};
-    use coprocessor::codec::mysql::{charset, types, Decimal, DecimalEncoder, Duration, Json, Time};
+    use super::{Error, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
+    use coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
     use coprocessor::codec::mysql::json::JsonEncoder;
+    use coprocessor::codec::mysql::{
+        charset, types, Decimal, DecimalEncoder, Duration, Json, Time,
+    };
+    use coprocessor::codec::{convert, mysql, Datum};
+    use std::sync::Arc;
+    use std::{i64, u64};
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
     use util::codec::number::{self, NumberEncoder};
-    use super::{Error, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE,
-                FLAG_TRUNCATE_AS_WARNING};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
@@ -515,13 +321,23 @@ mod test {
 
     #[inline]
     pub fn check_overflow(e: Error) -> Result<(), ()> {
-        match e {
-            Error::Overflow => Ok(()),
-            _ => Err(()),
+        if e.code() == ERR_DATA_OUT_OF_RANGE {
+            Ok(())
+        } else {
+            Err(())
         }
     }
 
-    pub fn fncall_expr(sig: ScalarFuncSig, children: &[Expr]) -> Expr {
+    #[inline]
+    pub fn check_divide_by_zero(e: Error) -> Result<(), ()> {
+        if e.code() == ERR_DIVISION_BY_ZERO {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    pub fn scalar_func_expr(sig: ScalarFuncSig, children: &[Expr]) -> Expr {
         let mut expr = Expr::new();
         expr.set_tp(ExprType::ScalarFunc);
         expr.set_sig(sig);
@@ -642,7 +458,7 @@ mod test {
         ];
         for (sig, cols, exp) in cases {
             let col_expr = col_expr(0);
-            let mut ex = fncall_expr(sig, &[col_expr]);
+            let mut ex = scalar_func_expr(sig, &[col_expr]);
             ex.mut_field_type()
                 .set_decimal(convert::UNSPECIFIED_LENGTH as i32);
             ex.mut_field_type()
@@ -667,7 +483,7 @@ mod test {
         ];
         for (flag, cols, exp) in cases {
             let col_expr = col_expr(0);
-            let mut ex = fncall_expr(ScalarFuncSig::CastIntAsInt, &[col_expr]);
+            let mut ex = scalar_func_expr(ScalarFuncSig::CastIntAsInt, &[col_expr]);
             if flag.is_some() {
                 ex.mut_field_type().set_flag(flag.unwrap() as u32);
             }
@@ -675,27 +491,5 @@ mod test {
             let res = e.eval(&mut ctx, &cols).unwrap();
             assert_eq!(res, exp);
         }
-    }
-
-    #[test]
-    fn test_handle_truncate() {
-        // ignore_truncate = false, truncate_as_warning = false
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, 0).unwrap()));
-        assert!(ctx.handle_truncate(false).is_ok());
-        assert!(ctx.handle_truncate(true).is_err());
-        assert!(ctx.take_warnings().is_empty());
-        // ignore_truncate = false;
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
-        assert!(ctx.handle_truncate(false).is_ok());
-        assert!(ctx.handle_truncate(true).is_ok());
-        assert!(ctx.take_warnings().is_empty());
-
-        // ignore_truncate = false, truncate_as_warning = true
-        let mut ctx = EvalContext::new(Arc::new(
-            EvalConfig::new(0, FLAG_TRUNCATE_AS_WARNING).unwrap(),
-        ));
-        assert!(ctx.handle_truncate(false).is_ok());
-        assert!(ctx.handle_truncate(true).is_ok());
-        assert!(!ctx.take_warnings().is_empty());
     }
 }

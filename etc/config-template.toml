@@ -5,25 +5,44 @@
 #   Time(based on ms): ms, s, m, h
 #    e.g.: 78_000 = "1.3m"
 
-# log level: trace, debug, info, warn, error, off.
+# log level: trace, debug, info, warning, error, critical.
+# Note that `debug` and `trace` are only available in development builds.
 # log-level = "info"
+
 # file to store log, write to stderr if it's empty.
 # log-file = ""
 
+# timespan between rotating the log files.
+# Once this timespan passes the existing log file will have a timestamp appended to its name,
+# and a new file will be created.
+# log-rotation-timespan = "24h"
+
 [readpool.storage]
-# size of thread pool for high-priority read operations
-# high-concurrency = 8
-# size of thread pool for normal-priority read operations
-# normal-concurrency = 8
-# size of thread pool for low-priority read operations
-# low-concurrency = 8
-# max running high-priority read operations, reject if exceed
-# max-tasks-high = 16000
-# max running normal-priority read operations, reject if exceed
-# max-tasks-normal = 16000
-# max running low-priority read operations, reject if exceed
-# max-tasks-low = 16000
+# size of thread pool for high-priority operations
+# high-concurrency = 4
+# size of thread pool for normal-priority operations
+# normal-concurrency = 4
+# size of thread pool for low-priority operations
+# low-concurrency = 4
+# max running high-priority operations of each worker, reject if exceed
+# max-tasks-per-worker-high = 2000
+# max running normal-priority operations of each worker, reject if exceed
+# max-tasks-per-worker-normal = 2000
+# max running low-priority operations of each worker, reject if exceed
+# max-tasks-per-worker-low = 2000
 # size of stack size for each thread pool
+# stack-size = "10MB"
+
+[readpool.coprocessor]
+# Notice: if CPU_NUM > 8, default thread pool size for coprocessors
+# will be set to CPU_NUM * 0.8.
+
+# high-concurrency = 8
+# normal-concurrency = 8
+# low-concurrency = 8
+# max-tasks-per-worker-high = 2000
+# max-tasks-per-worker-normal = 2000
+# max-tasks-per-worker-low = 2000
 # stack-size = "10MB"
 
 [server]
@@ -36,6 +55,8 @@
 # maximum number of messages can be processed in one tick.
 # messages-per-tick = 4096
 
+# compression type for grpc channel, available values are none, deflate and gzip.
+# grpc-compression-type = "none"
 # size of thread pool for grpc server.
 # grpc-concurrency = 4
 # The number of max concurrent streams/requests on a client connection.
@@ -45,14 +66,11 @@
 # Amount to read ahead on individual grpc streams.
 # grpc-stream-initial-window-size = "2MB"
 
-# size of thread pool for endpoint task, should less than total cpu cores.
-# end-point-concurrency = 8
+# How many snapshots can be sent concurrently.
+# concurrent-send-snap-limit = 32
+# How many snapshots can be recv concurrently.
+# concurrent-recv-snap-limit = 32
 
-# max count of tasks being handled, new tasks will be rejected.
-# end-point-max-tasks = 2000
-
-# stack size of endpoint, complicated tasks may involve very deep recursion.
-# end-point-stack-size = "10MB"
 # max recursion level allowed when decoding dag expression
 # end-point-recursion-limit = 1000
 
@@ -157,21 +175,34 @@
 
 # Interval to check whether start manual compaction for a region,
 # region-compact-check-interval = "5m"
+
 # Number of regions for each time to check.
 # region-compact-check-step = 100
+
 # The minimum number of delete tombstones to trigger manual compaction.
 # region-compact-min-tombstones = 10000
+
+# The minimum percentage of delete tombstones to trigger manual compaction.
+# Should between 1 and 100. Manual compaction only triggered when the number
+# of delete tombstones exceeds region-compact-min-tombstones and the percentage
+# of delete tombstones exceeds region-compact-tombstones-percent.
+# region-compact-tombstones-percent = 30
+
 # Interval to check whether should start a manual compaction for lock column family,
 # if written bytes reach lock-cf-compact-threshold for lock column family, will fire
 # a manual compaction for lock column family.
 # lock-cf-compact-interval = "10m"
+
 # lock-cf-compact-bytes-threshold = "256MB"
 
 # Interval (s) to check region whether the data are consistent.
 # consistency-check-interval = 0
 
 # Use delete range to drop a large number of continuous keys.
-# use-delete-range = true
+# use-delete-range = false
+
+# delay time before deleting a stale peer
+# clean-stale-peer-delay = "10m"
 
 # Interval to cleanup import sst files.
 # cleanup-import-sst-interval = "10m"
@@ -247,9 +278,6 @@
 
 # rocksdb max total wal size
 # max-total-wal-size = "4GB"
-
-# rocksdb writable file max buffer size
-# writable-file-max-buffer-size = "1MB"
 
 # Rocksdb Statistics provides cumulative stats over time.
 # Turn statistics on will introduce about 5%-10% overhead for RocksDB,
@@ -418,7 +446,6 @@
 # max-open-files = 40960
 # max-manifest-file-size = "20MB"
 # create-if-missing = true
-# writable-file-max-buffer-size = "1MB"
 
 # enable-statistics = true
 # stats-dump-period = "10m"
@@ -428,6 +455,8 @@
 # use-direct-io-for-flush-and-compaction = false
 # enable-pipelined-write = true
 # allow-concurrent-memtable-write = false
+# bytes-per-sync = "0MB"
+# wal-bytes-per-sync = "0KB"
 
 [raftdb.defaultcf]
 # compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
@@ -447,7 +476,6 @@
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = 0
 # read-amp-bytes-per-bit = 0
-# wal-bytes-per-sync = 0
 # dynamic-level-bytes = false
 
 [security]

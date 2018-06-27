@@ -12,18 +12,18 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
-use rocksdb::Writable;
 use protobuf::Message;
+use rocksdb::Writable;
 
-use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
-use super::transport_simulate::*;
 use super::server::new_server_cluster;
+use super::transport_simulate::*;
 use super::util::*;
+use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
 use tikv::raftstore::store::{keys, Iterable, Mutable, Peekable};
 use tikv::storage::CF_RAFT;
 use tikv::util::rocksdb::get_cf_handle;
@@ -66,7 +66,7 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut existing_kvs = vec![];
     for cf in engine_2.cf_names() {
         engine_2
-            .scan_cf(cf, b"", &[0xFF], false, &mut |k, v| {
+            .scan_cf(cf, b"", &[0xFF], false, |k, v| {
                 existing_kvs.push((k.to_vec(), v.to_vec()));
                 Ok(true)
             })

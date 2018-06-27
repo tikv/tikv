@@ -11,33 +11,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
 use std::fmt::{self, Display, Formatter};
+use std::sync::Arc;
 
 use futures::Future;
 use tokio_core::reactor::Handle;
 
+use fs2;
 use kvproto::metapb;
-use raft::eraftpb::ConfChangeType;
+use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest};
 use kvproto::raft_serverpb::RaftMessage;
-use kvproto::pdpb;
+use raft::eraftpb::ConfChangeType;
 use rocksdb::DB;
-use fs2;
 
-use util::worker::FutureRunnable as Runnable;
-use util::escape;
-use util::transport::SendCh;
-use util::rocksdb::*;
+use super::metrics::*;
 use pd::{PdClient, RegionStat};
-use raftstore::store::Msg;
-use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
+use prometheus::local::LocalHistogram;
 use raftstore::store::store::StoreInfo;
+use raftstore::store::util::{is_epoch_stale, RegionApproximateStat};
 use raftstore::store::Callback;
+use raftstore::store::Msg;
 use storage::FlowStatistics;
 use util::collections::HashMap;
-use prometheus::local::LocalHistogram;
-use super::metrics::*;
+use util::escape;
+use util::rocksdb::*;
+use util::time::time_now_sec;
+use util::transport::SendCh;
+use util::worker::FutureRunnable as Runnable;
 
 // Use an asynchronous thread to tell pd something.
 pub enum Task {
@@ -56,7 +57,7 @@ pub enum Task {
         pending_peers: Vec<metapb::Peer>,
         written_bytes: u64,
         written_keys: u64,
-        region_size: Option<u64>,
+        approximate_stat: Option<RegionApproximateStat>,
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
@@ -84,6 +85,7 @@ pub struct StoreStat {
     pub engine_total_keys_read: u64,
     pub engine_last_total_bytes_read: u64,
     pub engine_last_total_keys_read: u64,
+    pub last_report_ts: u64,
 
     pub region_bytes_read: LocalHistogram,
     pub region_keys_read: LocalHistogram,
@@ -99,6 +101,7 @@ impl Default for StoreStat {
             region_bytes_written: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
             region_keys_written: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
 
+            last_report_ts: 0,
             engine_total_bytes_read: 0,
             engine_total_keys_read: 0,
             engine_last_total_bytes_read: 0,
@@ -115,6 +118,7 @@ pub struct PeerStat {
     pub last_read_keys: u64,
     pub last_written_bytes: u64,
     pub last_written_keys: u64,
+    pub last_report_ts: u64,
 }
 
 impl Display for Task {
@@ -177,10 +181,10 @@ pub struct Runner<T: PdClient> {
 impl<T: PdClient> Runner<T> {
     pub fn new(store_id: u64, pd_client: Arc<T>, ch: SendCh<Msg>, db: Arc<DB>) -> Runner<T> {
         Runner {
-            store_id: store_id,
-            pd_client: pd_client,
-            ch: ch,
-            db: db,
+            store_id,
+            pd_client,
+            ch,
+            db,
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
             store_stat: StoreStat::default(),
@@ -247,7 +251,8 @@ impl<T: PdClient> Runner<T> {
             .observe(region_stat.read_keys as f64);
 
         // Now we use put region protocol for heartbeat.
-        let f = self.pd_client
+        let f = self
+            .pd_client
             .region_heartbeat(region.clone(), peer.clone(), region_stat)
             .map_err(move |e| {
                 debug!(
@@ -309,9 +314,12 @@ impl<T: PdClient> Runner<T> {
         stats.set_keys_read(
             self.store_stat.engine_total_keys_read - self.store_stat.engine_last_total_keys_read,
         );
+        let mut interval = pdpb::TimeInterval::new();
+        interval.set_start_timestamp(self.store_stat.last_report_ts);
+        stats.set_interval(interval);
         self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
         self.store_stat.engine_last_total_keys_read = self.store_stat.engine_total_keys_read;
-
+        self.store_stat.last_report_ts = time_now_sec();
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
         self.store_stat.region_bytes_read.flush();
@@ -319,10 +327,10 @@ impl<T: PdClient> Runner<T> {
 
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["capacity"])
-            .set(capacity as f64);
+            .set(capacity as i64);
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["available"])
-            .set(available as f64);
+            .set(available as i64);
 
         let f = self.pd_client.store_heartbeat(stats).map_err(|e| {
             error!("store heartbeat failed {:?}", e);
@@ -345,7 +353,8 @@ impl<T: PdClient> Runner<T> {
         merge_source: Option<u64>,
     ) {
         let ch = self.ch.clone();
-        let f = self.pd_client
+        let f = self
+            .pd_client
             .get_region_by_id(local_region.get_id())
             .then(move |resp| {
                 match resp {
@@ -372,7 +381,11 @@ impl<T: PdClient> Runner<T> {
                             return Ok(());
                         }
 
-                        if pd_region.get_peers().into_iter().all(|p| p != &peer) {
+                        if pd_region
+                            .get_peers()
+                            .into_iter()
+                            .all(|p| p.get_id() != peer.get_id())
+                        {
                             // Peer is not a member of this region anymore. Probably it's removed out.
                             // Send it a raft massage to destroy it since it's obsolete.
                             info!(
@@ -418,7 +431,8 @@ impl<T: PdClient> Runner<T> {
     fn schedule_heartbeat_receiver(&mut self, handle: &Handle) {
         let ch = self.ch.clone();
         let store_id = self.store_id;
-        let f = self.pd_client
+        let f = self
+            .pd_client
             .handle_region_heartbeat_response(self.store_id, move |mut resp| {
                 let region_id = resp.get_region_id();
                 let epoch = resp.take_region_epoch();
@@ -488,7 +502,8 @@ impl<T: PdClient> Runner<T> {
 
     fn handle_read_stats(&mut self, read_stats: HashMap<u64, FlowStatistics>) {
         for (region_id, stats) in read_stats {
-            let peer_stat = self.region_peers
+            let peer_stat = self
+                .region_peers
                 .entry(region_id)
                 .or_insert_with(PeerStat::default);
             peer_stat.read_bytes += stats.read_bytes as u64;
@@ -529,44 +544,55 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 pending_peers,
                 written_bytes,
                 written_keys,
-                region_size,
+                approximate_stat,
             } => {
-                let approximate_size = match region_size {
-                    Some(size) => size,
-                    None => get_region_approximate_size(&self.db, &region).unwrap_or(0),
+                let approximate_stat = match approximate_stat {
+                    Some(stat) => stat,
+                    None => RegionApproximateStat::new(&self.db, &region).unwrap_or_default(),
                 };
-                let (read_bytes_delta, read_keys_delta, written_bytes_delta, written_keys_delta) = {
-                    let peer_stat = self.region_peers
+                let (
+                    read_bytes_delta,
+                    read_keys_delta,
+                    written_bytes_delta,
+                    written_keys_delta,
+                    last_report_ts,
+                ) = {
+                    let peer_stat = self
+                        .region_peers
                         .entry(region.get_id())
                         .or_insert_with(PeerStat::default);
                     let read_bytes_delta = peer_stat.read_bytes - peer_stat.last_read_bytes;
                     let read_keys_delta = peer_stat.read_keys - peer_stat.last_read_keys;
                     let written_bytes_delta = written_bytes - peer_stat.last_written_bytes;
                     let written_keys_delta = written_keys - peer_stat.last_written_keys;
+                    let last_report_ts = peer_stat.last_report_ts;
                     peer_stat.last_written_bytes = written_bytes;
                     peer_stat.last_written_keys = written_keys;
                     peer_stat.last_read_bytes = peer_stat.read_bytes;
                     peer_stat.last_read_keys = peer_stat.read_keys;
+                    peer_stat.last_report_ts = time_now_sec();
                     (
                         read_bytes_delta,
                         read_keys_delta,
                         written_bytes_delta,
                         written_keys_delta,
+                        last_report_ts,
                     )
                 };
                 self.handle_heartbeat(
                     handle,
                     region,
                     peer,
-                    RegionStat::new(
+                    RegionStat {
                         down_peers,
                         pending_peers,
-                        written_bytes_delta,
-                        written_keys_delta,
-                        read_bytes_delta,
-                        read_keys_delta,
-                        approximate_size,
-                    ),
+                        written_bytes: written_bytes_delta,
+                        written_keys: written_keys_delta,
+                        read_bytes: read_bytes_delta,
+                        read_keys: read_keys_delta,
+                        approximate_stat,
+                        last_report_ts,
+                    },
                 )
             }
             Task::StoreHeartbeat { stats, store_info } => {

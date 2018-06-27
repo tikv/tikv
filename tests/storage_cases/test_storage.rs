@@ -11,19 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::channel;
-use std::time::Duration;
-use std::thread;
-use rand::random;
 use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::{Context, LockInfo};
-use tikv::storage::{self, make_key, Key, Mutation, ALL_CFS};
-use tikv::storage::engine::{Engine, EngineRocksdb, TEMP_DIR};
-use tikv::storage::txn::{GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
-use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
+use rand::random;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::channel;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use tikv::server::readpool::{self, ReadPool};
+use tikv::storage::engine::{Engine, EngineRocksdb, TEMP_DIR};
+use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
+use tikv::storage::txn::{GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
+use tikv::storage::{self, make_key, Key, Mutation, ALL_CFS, CF_DEFAULT, CF_LOCK};
+use tikv::util::worker::FutureWorker;
 
 use super::assert_storage::AssertionStorage;
 use std::u64;
@@ -38,6 +39,14 @@ fn test_txn_store_get() {
     store.get_none(b"x", 9);
     store.get_ok(b"x", 10, b"x");
     store.get_ok(b"x", 11, b"x");
+}
+
+#[test]
+fn test_txn_store_get_with_type_lock() {
+    let store = AssertionStorage::default();
+    store.put_ok(b"k1", b"v1", 1, 2);
+    store.prewrite_ok(vec![Mutation::Lock(make_key(b"k1"))], b"k1", 5);
+    store.get_ok(b"k1", 20, b"v1");
 }
 
 #[test]
@@ -268,6 +277,143 @@ fn test_txn_store_scan() {
                 Some((b"D", b"D40")),
                 Some((b"E", b"E10")),
             ],
+        );
+    };
+    check_v10();
+    check_v20();
+    check_v30();
+    check_v40();
+}
+
+#[test]
+fn test_txn_store_reverse_scan() {
+    let store = AssertionStorage::default();
+
+    // ver10: A(10) - B(_) - C(10) - D(_) - E(10)
+    store.put_ok(b"A", b"A10", 5, 10);
+    store.put_ok(b"C", b"C10", 5, 10);
+    store.put_ok(b"E", b"E10", 5, 10);
+
+    let check_v10 = || {
+        store.reverse_scan_ok(b"Z", 0, 10, vec![]);
+        store.reverse_scan_ok(b"Z", 1, 10, vec![Some((b"E", b"E10"))]);
+        store.reverse_scan_ok(
+            b"Z",
+            2,
+            10,
+            vec![Some((b"E", b"E10")), Some((b"C", b"C10"))],
+        );
+        store.reverse_scan_ok(
+            b"Z",
+            3,
+            10,
+            vec![
+                Some((b"E", b"E10")),
+                Some((b"C", b"C10")),
+                Some((b"A", b"A10")),
+            ],
+        );
+        store.reverse_scan_ok(
+            b"Z",
+            4,
+            10,
+            vec![
+                Some((b"E", b"E10")),
+                Some((b"C", b"C10")),
+                Some((b"A", b"A10")),
+            ],
+        );
+        store.reverse_scan_ok(
+            b"E\x00",
+            3,
+            10,
+            vec![
+                Some((b"E", b"E10")),
+                Some((b"C", b"C10")),
+                Some((b"A", b"A10")),
+            ],
+        );
+        store.reverse_scan_ok(
+            b"E",
+            3,
+            10,
+            vec![Some((b"C", b"C10")), Some((b"A", b"A10"))],
+        );
+        store.reverse_scan_ok(b"", 1, 10, vec![]);
+    };
+    check_v10();
+
+    // ver20: A(10) - B(20) - C(10) - D(20) - E(10)
+    store.put_ok(b"B", b"B20", 15, 20);
+    store.put_ok(b"D", b"D20", 15, 20);
+
+    let check_v20 = || {
+        store.reverse_scan_ok(
+            b"Z",
+            5,
+            20,
+            vec![
+                Some((b"E", b"E10")),
+                Some((b"D", b"D20")),
+                Some((b"C", b"C10")),
+                Some((b"B", b"B20")),
+                Some((b"A", b"A10")),
+            ],
+        );
+        store.reverse_scan_ok(
+            b"C",
+            5,
+            20,
+            vec![Some((b"B", b"B20")), Some((b"A", b"A10"))],
+        );
+        store.reverse_scan_ok(b"D\x00", 1, 20, vec![Some((b"D", b"D20"))]);
+    };
+    check_v10();
+    check_v20();
+
+    // ver30: A(_) - B(20) - C(10) - D(_) - E(10)
+    store.delete_ok(b"A", 25, 30);
+    store.delete_ok(b"D", 25, 30);
+
+    let check_v30 = || {
+        store.reverse_scan_ok(
+            b"Z",
+            5,
+            30,
+            vec![
+                Some((b"E", b"E10")),
+                Some((b"C", b"C10")),
+                Some((b"B", b"B20")),
+            ],
+        );
+        store.reverse_scan_ok(b"E", 1, 30, vec![Some((b"C", b"C10"))]);
+        store.reverse_scan_ok(b"B\x00", 5, 30, vec![Some((b"B", b"B20"))]);
+    };
+    check_v10();
+    check_v20();
+    check_v30();
+
+    // ver40: A(_) - B(_) - C(40) - D(40) - E(10)
+    store.delete_ok(b"B", 35, 40);
+    store.put_ok(b"C", b"C40", 35, 40);
+    store.put_ok(b"D", b"D40", 35, 40);
+
+    let check_v40 = || {
+        store.reverse_scan_ok(
+            b"Z",
+            5,
+            40,
+            vec![
+                Some((b"E", b"E10")),
+                Some((b"D", b"D40")),
+                Some((b"C", b"C40")),
+            ],
+        );
+        store.reverse_scan_ok(
+            b"E",
+            5,
+            100,
+            vec![Some((b"D", b"D40")), Some((b"C", b"C40"))],
         );
     };
     check_v10();
@@ -570,38 +716,67 @@ fn test_txn_store_gc3() {
 #[test]
 fn test_txn_store_rawkv() {
     let store = AssertionStorage::default();
-    store.raw_get_ok(b"key".to_vec(), None);
-    store.raw_put_ok(b"key".to_vec(), b"value".to_vec());
-    store.raw_get_ok(b"key".to_vec(), Some(b"value".to_vec()));
-    store.raw_put_ok(b"key".to_vec(), b"v2".to_vec());
-    store.raw_get_ok(b"key".to_vec(), Some(b"v2".to_vec()));
-    store.raw_delete_ok(b"key".to_vec());
-    store.raw_get_ok(b"key".to_vec(), None);
+    store.raw_get_ok("".to_string(), b"key".to_vec(), None);
+    store.raw_put_ok("".to_string(), b"key".to_vec(), b"value".to_vec());
+    store.raw_get_ok("".to_string(), b"key".to_vec(), Some(b"value".to_vec()));
+    store.raw_put_ok("".to_string(), b"key".to_vec(), b"v2".to_vec());
+    store.raw_get_ok("".to_string(), b"key".to_vec(), Some(b"v2".to_vec()));
+    store.raw_delete_ok("".to_string(), b"key".to_vec());
+    store.raw_get_ok("".to_string(), b"key".to_vec(), None);
 
-    store.raw_put_ok(b"k1".to_vec(), b"v1".to_vec());
-    store.raw_put_ok(b"k2".to_vec(), b"v2".to_vec());
-    store.raw_put_ok(b"k3".to_vec(), b"v3".to_vec());
-    store.raw_scan_ok(b"".to_vec(), 1, vec![(b"k1", b"v1")]);
-    store.raw_scan_ok(b"k1".to_vec(), 1, vec![(b"k1", b"v1")]);
-    store.raw_scan_ok(b"k10".to_vec(), 1, vec![(b"k2", b"v2")]);
-    store.raw_scan_ok(b"".to_vec(), 2, vec![(b"k1", b"v1"), (b"k2", b"v2")]);
+    store.raw_put_ok("".to_string(), b"k1".to_vec(), b"v1".to_vec());
+    store.raw_put_ok("".to_string(), b"k2".to_vec(), b"v2".to_vec());
+    store.raw_put_ok("".to_string(), b"k3".to_vec(), b"v3".to_vec());
+    store.raw_scan_ok("".to_string(), b"".to_vec(), 1, vec![(b"k1", b"v1")]);
+    store.raw_scan_ok("".to_string(), b"k1".to_vec(), 1, vec![(b"k1", b"v1")]);
+    store.raw_scan_ok("".to_string(), b"k10".to_vec(), 1, vec![(b"k2", b"v2")]);
     store.raw_scan_ok(
+        "".to_string(),
+        b"".to_vec(),
+        2,
+        vec![(b"k1", b"v1"), (b"k2", b"v2")],
+    );
+    store.raw_scan_ok(
+        "".to_string(),
         b"k1".to_vec(),
         5,
         vec![(b"k1", b"v1"), (b"k2", b"v2"), (b"k3", b"v3")],
     );
-    store.raw_scan_ok(b"".to_vec(), 0, vec![]);
-    store.raw_scan_ok(b"k5".to_vec(), 1, vec![]);
+    store.raw_scan_ok("".to_string(), b"".to_vec(), 0, vec![]);
+    store.raw_scan_ok("".to_string(), b"k5".to_vec(), 1, vec![]);
+}
+
+#[test]
+fn test_txn_store_rawkv_cf() {
+    let store = AssertionStorage::default();
+    store.raw_put_ok(CF_DEFAULT.to_string(), b"k1".to_vec(), b"v1".to_vec());
+    store.raw_get_ok(CF_DEFAULT.to_string(), b"k1".to_vec(), Some(b"v1".to_vec()));
+    store.raw_get_ok("".to_string(), b"k1".to_vec(), Some(b"v1".to_vec()));
+    store.raw_get_ok(CF_LOCK.to_string(), b"k1".to_vec(), None);
+
+    store.raw_put_ok("".to_string(), b"k2".to_vec(), b"v2".to_vec());
+    store.raw_put_ok(CF_LOCK.to_string(), b"k3".to_vec(), b"v3".to_vec());
+    store.raw_get_ok(CF_DEFAULT.to_string(), b"k2".to_vec(), Some(b"v2".to_vec()));
+    store.raw_get_ok(CF_LOCK.to_string(), b"k3".to_vec(), Some(b"v3".to_vec()));
+    store.raw_get_ok(CF_DEFAULT.to_string(), b"k3".to_vec(), None);
+    store.raw_scan_ok(
+        CF_DEFAULT.to_string(),
+        b"".to_vec(),
+        3,
+        vec![(b"k1", b"v1"), (b"k2", b"v2")],
+    );
+
+    store.raw_put_err("foobar".to_string(), b"key".to_vec(), b"value".to_vec());
 }
 
 #[test]
 fn test_txn_storage_keysize() {
     let store = AssertionStorage::default();
     let long_key = vec![b'x'; 10240];
-    store.raw_put_ok(b"short_key".to_vec(), b"v".to_vec());
-    store.raw_put_err(long_key.clone(), b"v".to_vec());
-    store.raw_delete_ok(b"short_key".to_vec());
-    store.raw_delete_err(long_key.clone());
+    store.raw_put_ok("".to_string(), b"short_key".to_vec(), b"v".to_vec());
+    store.raw_put_err("".to_string(), long_key.clone(), b"v".to_vec());
+    store.raw_delete_ok("".to_string(), b"short_key".to_vec());
+    store.raw_delete_err("".to_string(), long_key.clone());
     store.prewrite_ok(
         vec![Mutation::Put((make_key(b"short_key"), b"v".to_vec()))],
         b"short_key",
@@ -649,6 +824,24 @@ fn test_txn_store_lock_primary() {
     );
 }
 
+#[test]
+fn test_txn_store_write_conflict() {
+    let store = AssertionStorage::default();
+    let key = b"key";
+    let primary = b"key";
+    let start_ts = 5;
+    let conflict_ts = 10;
+    store.put_ok(key, primary, start_ts, conflict_ts);
+    let start_ts2 = 6;
+    store.prewrite_conflict(
+        vec![Mutation::Put((make_key(key), primary.to_vec()))],
+        primary,
+        start_ts2,
+        key,
+        conflict_ts,
+    );
+}
+
 struct Oracle {
     ts: AtomicUsize,
 }
@@ -683,9 +876,10 @@ fn inc(store: &SyncStorage, oracle: &Oracle, key: &[u8]) -> Result<i32, ()> {
         if store
             .prewrite(
                 Context::new(),
-                vec![
-                    Mutation::Put((make_key(key), next.to_string().into_bytes())),
-                ],
+                vec![Mutation::Put((
+                    make_key(key),
+                    next.to_string().into_bytes(),
+                ))],
                 key.to_vec(),
                 start_ts,
             )
@@ -861,9 +1055,10 @@ fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
 #[test]
 fn test_conflict_commands_on_fault_engine() {
     let engine = EngineRocksdb::new(TEMP_DIR, ALL_CFS, None).unwrap();
-    let box_engine = engine.clone();
+    let box_engine = engine.clone_box();
+    let pd_worker = FutureWorker::new("test future worker");
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-        || storage::ReadPoolContext::new(None)
+        || storage::ReadPoolContext::new(pd_worker.scheduler())
     });
     let config = Default::default();
     let mut store = SyncStorage::prepare(box_engine, &config, read_pool);

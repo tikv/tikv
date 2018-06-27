@@ -11,26 +11,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Duration;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc,
+};
 use std::thread;
+use std::time::Duration;
 
-use tikv::raftstore::store::*;
-use tikv::storage::CF_RAFT;
-use raft::eraftpb::ConfChangeType;
+use kvproto::metapb;
 use kvproto::raft_cmdpb::RaftResponseHeader;
 use kvproto::raft_serverpb::*;
-use kvproto::metapb;
+use raft::eraftpb::{ConfChangeType, MessageType};
 use tikv::pd::PdClient;
+use tikv::raftstore::store::*;
+use tikv::raftstore::Result;
+use tikv::storage::CF_RAFT;
+use tikv::util::HandyRwLock;
 
 use futures::Future;
 
 use super::cluster::{Cluster, Simulator};
-use super::transport_simulate::*;
 use super::node::new_node_cluster;
-use super::server::new_server_cluster;
-use super::util::*;
 use super::pd::TestPdClient;
+use super::server::new_server_cluster;
+use super::transport_simulate::*;
+use super::util::*;
 
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -113,7 +118,8 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let resp = cluster
         .call_command_on_leader(admin_req, Duration::from_secs(3))
         .unwrap();
-    let exec_res = resp.get_header()
+    let exec_res = resp
+        .get_header()
         .get_error()
         .get_message()
         .contains("duplicated");
@@ -591,6 +597,58 @@ fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_remove_peer(region_id, new_peer(2, 2));
 }
 
+fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    assert_eq!(cluster.get(b"k1"), Some(b"v1".to_vec()));
+
+    // Add voter (2, 2) to region 1.
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    // Add learner (4, 10) to region 1.
+    let engine_4 = cluster.get_engine(4);
+    pd_client.must_add_peer(r1, new_learner_peer(4, 10));
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&engine_4, b"k1", b"v1");
+    must_get_equal(&engine_4, b"k2", b"v2");
+
+    // Remove learner (4, 10) from region 1.
+    pd_client.must_remove_peer(r1, new_learner_peer(4, 10));
+    pd_client.must_add_peer(r1, new_learner_peer(4, 10));
+    must_get_equal(&engine_4, b"k2", b"v2");
+
+    // Can't transfer leader to learner.
+    pd_client.transfer_leader(r1, new_learner_peer(4, 10));
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(4), b"k3", b"v3");
+    pd_client.region_leader_must_be(r1, new_peer(1, 1));
+
+    // Promote learner (4 ,10) to voter.
+    pd_client.must_add_peer(r1, new_peer(4, 10));
+    pd_client.must_none_pending_peer(new_peer(4, 10));
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&engine_4, b"k3", b"v3");
+
+    // Transfer leader to (4, 10) and check pd heartbeats from it.
+    pd_client.transfer_leader(r1, new_peer(4, 10));
+    pd_client.region_leader_must_be(r1, new_peer(4, 10));
+
+    // Add learner on store which already has peer.
+    pd_client.add_peer(r1, new_learner_peer(4, 10));
+    pd_client.must_add_peer(r1, new_peer(5, 100)); // For ensure the last is proposed.
+    pd_client.must_have_peer(r1, new_peer(4, 10));
+
+    // Add peer with different id on store which already has learner.
+    pd_client.must_remove_peer(r1, new_peer(4, 10));
+    pd_client.must_add_peer(r1, new_learner_peer(4, 11));
+    pd_client.add_peer(r1, new_learner_peer(4, 12));
+    pd_client.must_none_peer(r1, new_learner_peer(4, 12));
+    pd_client.add_peer(r1, new_peer(4, 13));
+    pd_client.must_none_peer(r1, new_peer(4, 13));
+}
+
 #[test]
 fn test_node_conf_change_safe() {
     let count = 5;
@@ -636,4 +694,92 @@ fn test_conf_change_remove_leader() {
         "{:?}",
         res
     );
+}
+
+#[test]
+fn test_node_learner_conf_change() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_learner_conf_change(&mut cluster);
+}
+
+#[test]
+fn test_learner_with_slow_snapshot() {
+    let mut cluster = new_server_cluster(0, 3);
+    configure_for_snapshot(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    (0..10).for_each(|_| cluster.must_put(b"k1", b"v1"));
+
+    struct SnapshotFilter {
+        count: Arc<AtomicUsize>,
+        filter: Arc<AtomicBool>,
+    }
+
+    impl Filter<RaftMessage> for SnapshotFilter {
+        fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+            let count = msgs
+                .iter()
+                .filter(|m| {
+                    // A snapshot stream should have 2 chunks at least,
+                    // the first for metadata and subsequences for data.
+                    m.get_message().get_msg_type() == MessageType::MsgSnapshot
+                        && m.get_message().get_snapshot().has_metadata()
+                })
+                .count();
+            self.count.fetch_add(count, Ordering::SeqCst);
+
+            if self.filter.load(Ordering::SeqCst) {
+                let old_len = msgs.len();
+                msgs.retain(|m| m.get_message().get_msg_type() != MessageType::MsgSnapshot);
+                if msgs.len() < old_len {
+                    return Err(box_err!("send snapshot fail"));
+                }
+            }
+            Ok(())
+        }
+    }
+
+    let count = Arc::new(AtomicUsize::new(0));
+    let filter = Arc::new(AtomicBool::new(true));
+    let snap_filter = box SnapshotFilter {
+        count: Arc::clone(&count),
+        filter: Arc::clone(&filter),
+    };
+
+    // New added learner should keep pending until snapshot is applied.
+    cluster.sim.wl().add_send_filter(1, snap_filter);
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
+    for _ in 0..500 {
+        sleep_ms(10);
+        if count.load(Ordering::SeqCst) > 0 {
+            break;
+        }
+    }
+    assert!(count.load(Ordering::SeqCst) > 0);
+    assert_eq!(pd_client.get_pending_peers()[&2], new_learner_peer(2, 2));
+
+    // Clear snapshot filter and promote peer 2 to voter.
+    filter.store(false, Ordering::SeqCst);
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    // Add a learner peer and test promoting it with snapshot instead of proposal.
+    pd_client.must_add_peer(r1, new_learner_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    cluster.stop_node(3);
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+    // Ensure raftstore will gc all applied raft logs.
+    (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
+
+    // peer 3 will be promoted by snapshot instead of normal proposal.
+    count.store(0, Ordering::SeqCst);
+    cluster.run_node(3);
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+    // Transfer leader so that peer 3 can report to pd with `Peer` in memory.
+    pd_client.transfer_leader(r1, new_peer(3, 3));
+    pd_client.region_leader_must_be(r1, new_peer(3, 3));
+    assert!(count.load(Ordering::SeqCst) > 0);
 }

@@ -37,10 +37,10 @@
 // FIXME: remove following later
 #![allow(dead_code)]
 
-use std::ops::Index;
-use regex::Regex;
-use coprocessor::codec::Result;
 use super::json_unquote::unquote_string;
+use coprocessor::codec::Result;
+use regex::Regex;
+use std::ops::Index;
 
 pub const PATH_EXPR_ASTERISK: &str = "*";
 
@@ -109,7 +109,8 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
     let mut last_end = 0;
     for (start, end) in RE.find_iter(expr) {
         // Check all characters between two legs are blank.
-        if expr.index(last_end..start)
+        if expr
+            .index(last_end..start)
             .char_indices()
             .any(|(_, c)| !c.is_ascii_whitespace())
         {
@@ -155,10 +156,7 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
             return Err(box_err!("Invalid JSON path: {}", path_expr));
         }
     }
-    Ok(PathExpression {
-        legs: legs,
-        flags: flags,
-    })
+    Ok(PathExpression { legs, flags })
 }
 
 #[cfg(test)]
@@ -237,12 +235,9 @@ mod test {
                 let got = r.unwrap();
                 let expected = expected.unwrap();
                 assert_eq!(
-                    got,
-                    expected,
+                    got, expected,
                     "#{} expect {:?} but got {:?}",
-                    i,
-                    expected,
-                    got
+                    i, expected, got
                 );
             } else {
                 assert!(r.is_err(), "#{} expect error but got {:?}", i, r);

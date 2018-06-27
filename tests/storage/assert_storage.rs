@@ -12,17 +12,18 @@
 // limitations under the License.
 
 use super::sync_storage::SyncStorage;
+use super::util::new_raft_storage_with_store_count;
 use kvproto::kvrpcpb::{Context, LockInfo};
-use tikv::storage::{self, make_key, Key, KvPair, Mutation, Value};
-use tikv::storage::mvcc::{self, MAX_TXN_WRITE_SIZE};
-use tikv::storage::txn;
 use raftstore::cluster::Cluster;
 use raftstore::server::ServerCluster;
-use tikv::util::HandyRwLock;
-use super::util::new_raft_storage_with_store_count;
+use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::config::Config;
 use tikv::storage::engine;
-use tikv::server::readpool::{self, ReadPool};
+use tikv::storage::mvcc::{self, MAX_TXN_WRITE_SIZE};
+use tikv::storage::txn;
+use tikv::storage::{self, make_key, Key, KvPair, Mutation, Value};
+use tikv::util::worker::FutureWorker;
+use tikv::util::HandyRwLock;
 
 #[derive(Clone)]
 pub struct AssertionStorage {
@@ -32,8 +33,9 @@ pub struct AssertionStorage {
 
 impl Default for AssertionStorage {
     fn default() -> AssertionStorage {
+        let pd_worker = FutureWorker::new("test future worker");
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(None)
+            || storage::ReadPoolContext::new(pd_worker.scheduler())
         });
         AssertionStorage {
             ctx: Context::new(),
@@ -48,10 +50,7 @@ impl AssertionStorage {
         key: &str,
     ) -> (Cluster<ServerCluster>, AssertionStorage) {
         let (cluster, store, ctx) = new_raft_storage_with_store_count(count, key);
-        let storage = AssertionStorage {
-            ctx: ctx,
-            store: store,
-        };
+        let storage = AssertionStorage { ctx, store };
         (cluster, storage)
     }
 
@@ -67,8 +66,9 @@ impl AssertionStorage {
         self.ctx.set_region_id(region.get_id());
         self.ctx.set_region_epoch(region.get_region_epoch().clone());
         self.ctx.set_peer(leader.clone());
+        let pd_worker = FutureWorker::new("test future worker");
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(None)
+            || storage::ReadPoolContext::new(pd_worker.scheduler())
         });
         self.store = SyncStorage::from_engine(engine, &Config::default(), read_pool);
     }
@@ -93,7 +93,8 @@ impl AssertionStorage {
 
     pub fn batch_get_ok(&self, keys: &[&[u8]], ts: u64, expect: Vec<&[u8]>) {
         let keys: Vec<Key> = keys.into_iter().map(|x| make_key(x)).collect();
-        let result: Vec<Vec<u8>> = self.store
+        let result: Vec<Vec<u8>> = self
+            .store
             .batch_get(self.ctx.clone(), &keys, ts)
             .unwrap()
             .into_iter()
@@ -105,9 +106,9 @@ impl AssertionStorage {
 
     fn expect_not_leader_or_stale_command(&self, err: storage::Error) {
         match err {
-            storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(
-                engine::Error::Request(ref e),
-            )))
+            storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(engine::Error::Request(
+                ref e,
+            ))))
             | storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e)))
             | storage::Error::Engine(engine::Error::Request(ref e)) => {
                 assert!(
@@ -250,7 +251,8 @@ impl AssertionStorage {
 
         success = false;
         for _ in 0..retry_time {
-            let res = self.store
+            let res = self
+                .store
                 .commit(self.ctx.clone(), commit_keys.clone(), start_ts, commit_ts);
             if res.is_ok() {
                 success = true;
@@ -270,8 +272,29 @@ impl AssertionStorage {
         expect: Vec<Option<(&[u8], &[u8])>>,
     ) {
         let key_address = make_key(start_key);
-        let result = self.store
+        let result = self
+            .store
             .scan(self.ctx.clone(), key_address, limit, false, ts)
+            .unwrap();
+        let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
+        let expect: Vec<Option<KvPair>> = expect
+            .into_iter()
+            .map(|x| x.map(|(k, v)| (k.to_vec(), v.to_vec())))
+            .collect();
+        assert_eq!(result, expect);
+    }
+
+    pub fn reverse_scan_ok(
+        &self,
+        start_key: &[u8],
+        limit: usize,
+        ts: u64,
+        expect: Vec<Option<(&[u8], &[u8])>>,
+    ) {
+        let key_address = make_key(start_key);
+        let result = self
+            .store
+            .reverse_scan(self.ctx.clone(), key_address, limit, false, ts)
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -289,7 +312,8 @@ impl AssertionStorage {
         expect: Vec<Option<&[u8]>>,
     ) {
         let key_address = make_key(start_key);
-        let result = self.store
+        let result = self
+            .store
             .scan(self.ctx.clone(), key_address, limit, true, ts)
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
@@ -319,10 +343,12 @@ impl AssertionStorage {
         start_ts: u64,
         expect_locks: Vec<(&[u8], &[u8], u64)>,
     ) {
-        let res = self.store
+        let res = self
+            .store
             .prewrite(self.ctx.clone(), mutations, primary.to_vec(), start_ts)
             .unwrap();
-        let locks: Vec<(&[u8], &[u8], u64)> = res.iter()
+        let locks: Vec<(&[u8], &[u8], u64)> = res
+            .iter()
             .filter_map(|x| {
                 if let Err(storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked {
                     ref key,
@@ -340,6 +366,42 @@ impl AssertionStorage {
         assert_eq!(expect_locks, locks);
     }
 
+    pub fn prewrite_conflict(
+        &self,
+        mutations: Vec<Mutation>,
+        cur_primary: &[u8],
+        cur_start_ts: u64,
+        confl_key: &[u8],
+        confl_ts: u64,
+    ) {
+        let err = self
+            .store
+            .prewrite(
+                self.ctx.clone(),
+                mutations,
+                cur_primary.to_vec(),
+                cur_start_ts,
+            )
+            .unwrap_err();
+
+        match err {
+            storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict {
+                start_ts,
+                conflict_ts,
+                ref key,
+                ref primary,
+            })) => {
+                assert_eq!(cur_start_ts, start_ts);
+                assert_eq!(confl_ts, conflict_ts);
+                assert_eq!(key.to_owned(), confl_key.to_owned());
+                assert_eq!(primary.to_owned(), cur_primary.to_owned());
+            }
+            _ => {
+                panic!("expect conflict error, but got {:?}", err);
+            }
+        }
+    }
+
     pub fn commit_ok(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
         let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
         self.store
@@ -349,7 +411,8 @@ impl AssertionStorage {
 
     pub fn commit_with_illegal_tso(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
         let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
-        let resp = self.store
+        let resp = self
+            .store
             .commit(self.ctx.clone(), keys, start_ts, commit_ts);
         self.expect_invalid_tso_err(resp, start_ts, commit_ts);
     }
@@ -421,7 +484,8 @@ impl AssertionStorage {
     }
 
     pub fn resolve_lock_with_illegal_tso(&self, start_ts: u64, commit_ts: Option<u64>) {
-        let resp = self.store
+        let resp = self
+            .store
             .resolve_lock(self.ctx.clone(), start_ts, commit_ts);
         self.expect_invalid_tso_err(resp, start_ts, commit_ts.unwrap())
     }
@@ -447,31 +511,45 @@ impl AssertionStorage {
         panic!("failed with 3 retry!");
     }
 
-    pub fn raw_get_ok(&self, key: Vec<u8>, value: Option<Vec<u8>>) {
-        assert_eq!(self.store.raw_get(self.ctx.clone(), key).unwrap(), value);
+    pub fn raw_get_ok(&self, cf: String, key: Vec<u8>, value: Option<Vec<u8>>) {
+        assert_eq!(
+            self.store.raw_get(self.ctx.clone(), cf, key).unwrap(),
+            value
+        );
     }
 
-    pub fn raw_put_ok(&self, key: Vec<u8>, value: Vec<u8>) {
-        self.store.raw_put(self.ctx.clone(), key, value).unwrap();
-    }
-
-    pub fn raw_put_err(&self, key: Vec<u8>, value: Vec<u8>) {
+    pub fn raw_put_ok(&self, cf: String, key: Vec<u8>, value: Vec<u8>) {
         self.store
-            .raw_put(self.ctx.clone(), key, value)
+            .raw_put(self.ctx.clone(), cf, key, value)
+            .unwrap();
+    }
+
+    pub fn raw_put_err(&self, cf: String, key: Vec<u8>, value: Vec<u8>) {
+        self.store
+            .raw_put(self.ctx.clone(), cf, key, value)
             .unwrap_err();
     }
 
-    pub fn raw_delete_ok(&self, key: Vec<u8>) {
-        self.store.raw_delete(self.ctx.clone(), key).unwrap()
+    pub fn raw_delete_ok(&self, cf: String, key: Vec<u8>) {
+        self.store.raw_delete(self.ctx.clone(), cf, key).unwrap()
     }
 
-    pub fn raw_delete_err(&self, key: Vec<u8>) {
-        self.store.raw_delete(self.ctx.clone(), key).unwrap_err();
+    pub fn raw_delete_err(&self, cf: String, key: Vec<u8>) {
+        self.store
+            .raw_delete(self.ctx.clone(), cf, key)
+            .unwrap_err();
     }
 
-    pub fn raw_scan_ok(&self, start_key: Vec<u8>, limit: usize, expect: Vec<(&[u8], &[u8])>) {
-        let result: Vec<KvPair> = self.store
-            .raw_scan(self.ctx.clone(), start_key, limit)
+    pub fn raw_scan_ok(
+        &self,
+        cf: String,
+        start_key: Vec<u8>,
+        limit: usize,
+        expect: Vec<(&[u8], &[u8])>,
+    ) {
+        let result: Vec<KvPair> = self
+            .store
+            .raw_scan(self.ctx.clone(), cf, start_key, limit)
             .unwrap()
             .into_iter()
             .map(|x| x.unwrap())

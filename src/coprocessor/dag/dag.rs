@@ -13,19 +13,20 @@
 
 use std::sync::Arc;
 
-use tipb::schema::ColumnInfo;
-use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message as PbMsg, RepeatedField};
+use tipb::schema::ColumnInfo;
+use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 
-use coprocessor::codec::mysql;
+use storage::{Snapshot, SnapshotStore};
+
 use coprocessor::codec::datum::{Datum, DatumEncoder};
+use coprocessor::codec::mysql;
 use coprocessor::dag::expr::EvalConfig;
 use coprocessor::cache::*;
 use coprocessor::metrics::*;
-use coprocessor::Result;
-use coprocessor::endpoint::{get_pk, ReqContext};
-use storage::{Snapshot, SnapshotStore};
+use coprocessor::util;
+use coprocessor::*;
 
 use super::executor::{build_exec, Executor, ExecutorMetrics, Row};
 
@@ -40,6 +41,7 @@ pub struct DAGContext {
     distsql_cache: Option<Arc<SQLCache>>,
     start_ts: u64,
     distsql_cache_entry_max_size: usize,
+    batch_row_limit: usize,
 }
 
 impl DAGContext {
@@ -50,16 +52,23 @@ impl DAGContext {
         req_ctx: ReqContext,
         distsql_cache: Option<Arc<SQLCache>>,
         distsql_cache_entry_max_size: usize,
+        batch_row_limit: usize,
     ) -> Result<DAGContext> {
-        let eval_cfg = Arc::new(box_try!(EvalConfig::new(
-            req.get_time_zone_offset(),
-            req.get_flags()
-        )));
+        let mut eval_cfg = box_try!(EvalConfig::new(req.get_time_zone_offset(), req.get_flags(),));
+        if req.has_max_warning_count() {
+            eval_cfg.set_max_warning_cnt(req.get_max_warning_count() as usize);
+        }
+        if req.has_sql_mode() {
+            eval_cfg.set_sql_mode(req.get_sql_mode())
+        }
+        if req.has_is_strict_sql_mode() {
+            eval_cfg.set_strict_sql_mode(req.get_is_strict_sql_mode());
+        }
         let store = SnapshotStore::new(
             snap,
             req.get_start_ts(),
-            req_ctx.isolation_level,
-            req_ctx.fill_cache,
+            req_ctx.context.get_isolation_level(),
+            !req_ctx.context.get_not_fill_cache(),
         );
         let cache_key = format!(
             "{:?} {:?} {:?} {:?}",
@@ -69,7 +78,13 @@ impl DAGContext {
             req.get_executors()
         );
 
-        let dag_executor = build_exec(req.take_executors().into_vec(), store, ranges, eval_cfg)?;
+        let dag_executor = build_exec(
+            req.take_executors().into_vec(),
+            store,
+            ranges,
+            Arc::new(eval_cfg),
+            req.get_collect_range_counts(),
+        )?;
         Ok(DAGContext {
             columns: dag_executor.columns,
             has_aggr: dag_executor.has_aggr,
@@ -84,7 +99,27 @@ impl DAGContext {
         })
     }
 
-    pub fn handle_request(&mut self, batch_row_limit: usize, region_id: u64) -> Result<Response> {
+    fn make_stream_response(&mut self, chunk: Chunk, range: Option<KeyRange>) -> Result<Response> {
+        let mut s_resp = StreamResponse::new();
+        s_resp.set_encode_type(EncodeType::TypeDefault);
+        s_resp.set_data(box_try!(chunk.write_to_bytes()));
+        if let Some(eval_warnings) = self.exec.take_eval_warnings() {
+            s_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
+            s_resp.set_warning_count(eval_warnings.warning_cnt as i64);
+        }
+        self.exec.collect_output_counts(s_resp.mut_output_counts());
+
+        let mut resp = Response::new();
+        resp.set_data(box_try!(s_resp.write_to_bytes()));
+        if let Some(range) = range {
+            resp.set_range(range);
+        }
+        Ok(resp)
+    }
+}
+
+impl RequestHandler for DAGContext {
+    fn handle_request(&mut self, region_id: u64) -> Result<Response> {
         let mut record_cnt = 0;
         let mut chunks = Vec::new();
         let mut version: u64 = 0;
@@ -103,10 +138,10 @@ impl DAGContext {
         }
 
         loop {
-            match self.exec.next()? {
-                Some(row) => {
+            match self.exec.next() {
+                Ok(Some(row)) => {
                     self.req_ctx.check_if_outdated()?;
-                    if chunks.is_empty() || record_cnt >= batch_row_limit {
+                    if chunks.is_empty() || record_cnt >= self.batch_row_limit {
                         let chunk = Chunk::new();
                         chunks.push(chunk);
                         record_cnt = 0;
@@ -120,10 +155,14 @@ impl DAGContext {
                         chunk.mut_rows_data().extend_from_slice(&value);
                     }
                 }
-                None => {
+                Ok(None) => {
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
+                    if let Some(eval_warnings) = self.exec.take_eval_warnings() {
+                        sel_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
+                        sel_resp.set_warning_count(eval_warnings.warning_cnt as i64);
+                    }
                     self.exec
                         .collect_output_counts(sel_resp.mut_output_counts());
                     let data = box_try!(sel_resp.write_to_bytes());
@@ -146,6 +185,15 @@ impl DAGContext {
                     resp.set_data(data);
                     return Ok(resp);
                 }
+                Err(Error::Eval(err)) => {
+                    let mut resp = Response::new();
+                    let mut sel_resp = SelectResponse::new();
+                    sel_resp.set_error(err);
+                    let data = box_try!(sel_resp.write_to_bytes());
+                    resp.set_data(data);
+                    return Ok(resp);
+                }
+                Err(e) => return Err(e),
             }
         }
     }
@@ -162,16 +210,13 @@ impl DAGContext {
         }
     }
 
-    pub fn handle_streaming_request(
-        &mut self,
-        batch_row_limit: usize,
-    ) -> Result<(Option<Response>, bool)> {
+    fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
         let (mut record_cnt, mut finished) = (0, false);
         let mut chunk = Chunk::new();
         self.exec.start_scan();
-        while record_cnt < batch_row_limit {
-            match self.exec.next()? {
-                Some(row) => {
+        while record_cnt < self.batch_row_limit {
+            match self.exec.next() {
+                Ok(Some(row)) => {
                     record_cnt += 1;
                     if self.has_aggr {
                         chunk.mut_rows_data().extend_from_slice(&row.data.value);
@@ -180,35 +225,31 @@ impl DAGContext {
                         chunk.mut_rows_data().extend_from_slice(&value);
                     }
                 }
-                None => {
+                Ok(None) => {
                     finished = true;
                     break;
                 }
+                Err(Error::Eval(err)) => {
+                    let mut resp = Response::new();
+                    let mut sel_resp = StreamResponse::new();
+                    sel_resp.set_error(err);
+                    let data = box_try!(sel_resp.write_to_bytes());
+                    resp.set_data(data);
+                    return Ok((Some(resp), true));
+                }
+                Err(e) => return Err(e),
             }
         }
         if record_cnt > 0 {
             let range = self.exec.stop_scan();
-            return self.make_stream_response(chunk, range)
+            return self
+                .make_stream_response(chunk, range)
                 .map(|r| (Some(r), finished));
         }
         Ok((None, true))
     }
 
-    fn make_stream_response(&mut self, chunk: Chunk, range: Option<KeyRange>) -> Result<Response> {
-        let mut s_resp = StreamResponse::new();
-        s_resp.set_encode_type(EncodeType::TypeDefault);
-        s_resp.set_data(box_try!(chunk.write_to_bytes()));
-        self.exec.collect_output_counts(s_resp.mut_output_counts());
-
-        let mut resp = Response::new();
-        resp.set_data(box_try!(s_resp.write_to_bytes()));
-        if let Some(range) = range {
-            resp.set_range(range);
-        }
-        Ok(resp)
-    }
-
-    pub fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         self.exec.collect_metrics_into(metrics);
     }
 }
@@ -224,7 +265,7 @@ fn inflate_cols(row: &Row, cols: &[ColumnInfo], output_offsets: &[u32]) -> Resul
         match data.get(col_id) {
             Some(value) => values.extend_from_slice(value),
             None if col.get_pk_handle() => {
-                let pk = get_pk(col, row.handle);
+                let pk = util::get_pk(col, row.handle);
                 box_try!(values.encode(&[pk], false));
             }
             None if col.has_default_val() => {

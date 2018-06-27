@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Duration;
 use std::u64;
 
 use time::Duration as TimeDuration;
@@ -33,6 +34,8 @@ pub struct Config {
     pub raft_base_tick_interval: ReadableDuration,
     pub raft_heartbeat_ticks: usize,
     pub raft_election_timeout_ticks: usize,
+    pub raft_min_election_timeout_ticks: usize,
+    pub raft_max_election_timeout_ticks: usize,
     pub raft_max_size_per_msg: ReadableSize,
     pub raft_max_inflight_msgs: usize,
     // When the entry exceed the max size, reject to propose it.
@@ -55,10 +58,15 @@ pub struct Config {
     pub region_split_check_diff: ReadableSize,
     /// Interval (ms) to check whether start compaction for a region.
     pub region_compact_check_interval: ReadableDuration,
+    // delay time before deleting a stale peer
+    pub clean_stale_peer_delay: ReadableDuration,
     /// Number of regions for each time checking.
     pub region_compact_check_step: u64,
     /// Minimum number of tombstones to trigger manual compaction.
     pub region_compact_min_tombstones: u64,
+    /// Minimum percentage of tombstones to trigger manual compaction.
+    /// Should between 1 and 100.
+    pub region_compact_tombstones_percent: u64,
     pub pd_heartbeat_tick_interval: ReadableDuration,
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
     pub snap_mgr_gc_tick_interval: ReadableDuration,
@@ -126,6 +134,8 @@ impl Default for Config {
             raft_base_tick_interval: ReadableDuration::secs(1),
             raft_heartbeat_ticks: 2,
             raft_election_timeout_ticks: 10,
+            raft_min_election_timeout_ticks: 0,
+            raft_max_election_timeout_ticks: 0,
             raft_max_size_per_msg: ReadableSize::mb(1),
             raft_max_inflight_msgs: 256,
             raft_entry_max_size: ReadableSize::mb(8),
@@ -136,9 +146,11 @@ impl Default for Config {
             raft_log_gc_size_limit: split_size * 3 / 4,
             split_region_check_tick_interval: ReadableDuration::secs(10),
             region_split_check_diff: split_size / 16,
+            clean_stale_peer_delay: ReadableDuration::minutes(10),
             region_compact_check_interval: ReadableDuration::minutes(5),
             region_compact_check_step: 100,
             region_compact_min_tombstones: 10000,
+            region_compact_tombstones_percent: 30,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             notify_capacity: 40960,
@@ -161,7 +173,7 @@ impl Default for Config {
             allow_remove_leader: false,
             merge_max_log_gap: 10,
             merge_check_tick_interval: ReadableDuration::secs(10),
-            use_delete_range: true,
+            use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
 
             // They are preserved for compatibility check.
@@ -180,7 +192,11 @@ impl Config {
         TimeDuration::from_std(self.raft_store_max_leader_lease.0).unwrap()
     }
 
-    pub fn validate(&self) -> Result<()> {
+    pub fn raft_heartbeat_interval(&self) -> Duration {
+        self.raft_base_tick_interval.0 * self.raft_heartbeat_ticks as u32
+    }
+
+    pub fn validate(&mut self) -> Result<()> {
         if self.raft_heartbeat_ticks == 0 {
             return Err(box_err!("heartbeat tick must greater than 0"));
         }
@@ -195,6 +211,25 @@ impl Config {
         if self.raft_election_timeout_ticks <= self.raft_heartbeat_ticks {
             return Err(box_err!(
                 "election tick must be greater than heartbeat tick"
+            ));
+        }
+
+        if self.raft_min_election_timeout_ticks == 0 {
+            self.raft_min_election_timeout_ticks = self.raft_election_timeout_ticks;
+        }
+
+        if self.raft_max_election_timeout_ticks == 0 {
+            self.raft_max_election_timeout_ticks = self.raft_election_timeout_ticks * 2;
+        }
+
+        if self.raft_min_election_timeout_ticks < self.raft_election_timeout_ticks
+            || self.raft_min_election_timeout_ticks >= self.raft_max_election_timeout_ticks
+        {
+            return Err(box_err!(
+                "invalid timeout range [{}, {}) for timeout {}",
+                self.raft_min_election_timeout_ticks,
+                self.raft_max_election_timeout_ticks,
+                self.raft_election_timeout_ticks
             ));
         }
 
@@ -259,6 +294,15 @@ impl Config {
             ));
         }
 
+        if self.region_compact_tombstones_percent < 1
+            || self.region_compact_tombstones_percent > 100
+        {
+            return Err(box_err!(
+                "region-compact-tombstones-percent must between 1 and 100, current value is {}",
+                self.region_compact_tombstones_percent
+            ));
+        }
+
         Ok(())
     }
 }
@@ -272,7 +316,15 @@ mod tests {
     #[test]
     fn test_config_validate() {
         let mut cfg = Config::new();
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
+        assert_eq!(
+            cfg.raft_min_election_timeout_ticks,
+            cfg.raft_election_timeout_ticks
+        );
+        assert_eq!(
+            cfg.raft_max_election_timeout_ticks,
+            cfg.raft_election_timeout_ticks * 2
+        );
 
         cfg.raft_heartbeat_ticks = 0;
         assert!(cfg.validate().is_err());
@@ -281,6 +333,14 @@ mod tests {
         cfg.raft_election_timeout_ticks = 10;
         cfg.raft_heartbeat_ticks = 10;
         assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.raft_min_election_timeout_ticks = 5;
+        cfg.validate().unwrap_err();
+        cfg.raft_min_election_timeout_ticks = 25;
+        cfg.validate().unwrap_err();
+        cfg.raft_min_election_timeout_ticks = 10;
+        cfg.validate().unwrap();
 
         cfg.raft_heartbeat_ticks = 11;
         assert!(cfg.validate().is_err());

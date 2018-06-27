@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test::BenchSamples;
-use test_util::*;
 use cluster::*;
 use node::new_node_cluster;
 use server::new_server_cluster;
+use test::BenchSamples;
+use test_util::*;
 
 use rocksdb::{Writable, WriteBatch, DB};
 use tikv::raftstore::store::*;
@@ -58,40 +58,42 @@ fn bench_set<T: Simulator>(mut cluster: Cluster<T>, value_size: usize) -> BenchS
 
     let mut kvs = KvGenerator::new(100, value_size);
 
-    bench!{
-            let (k, v) = kvs.next().unwrap();
-            cluster.must_put(&k, &v)
-    }
+    bench!("bench_set", || {
+        let (k, v) = kvs.next().unwrap();
+        cluster.must_put(&k, &v)
+    })
 }
 
 fn bench_get<T: Simulator>(mut cluster: Cluster<T>) -> BenchSamples {
     let mut kvs = generate_random_kvs(DEFAULT_DATA_SIZE, 100, 128);
     prepare_cluster(&mut cluster, &kvs);
 
-    let mut keys = kvs.drain(..)
+    let mut keys = kvs
+        .drain(..)
         .take(DEFAULT_DATA_SIZE / 10)
         .map(|i| i.0)
         .chain(KvGenerator::new(100, 0).map(|i| i.0));
 
-    bench!{
-            let k = keys.next().unwrap();
-            cluster.get(&k)
-    }
+    bench!("bench_get", || {
+        let k = keys.next().unwrap();
+        cluster.get(&k)
+    })
 }
 
 fn bench_delete<T: Simulator>(mut cluster: Cluster<T>) -> BenchSamples {
     let mut kvs = generate_random_kvs(DEFAULT_DATA_SIZE, 100, 128);
     prepare_cluster(&mut cluster, &kvs);
 
-    let mut keys = kvs.drain(..)
+    let mut keys = kvs
+        .drain(..)
         .take(DEFAULT_DATA_SIZE / 10)
         .map(|i| i.0)
         .chain(KvGenerator::new(100, 0).map(|i| i.0));
 
-    bench!{
-            let k = keys.next().unwrap();
-            cluster.must_delete(&k)
-    }
+    bench!("bench_delete", || {
+        let k = keys.next().unwrap();
+        cluster.must_delete(&k)
+    })
 }
 
 fn bench_raft_cluster<T, F>(factory: F, tag: &'static str)

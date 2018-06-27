@@ -11,23 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-use std::fmt::{self, Display, Formatter};
-use std::collections::BinaryHeap;
 use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+use std::fmt::{self, Display, Formatter};
+use std::sync::Arc;
 
-use rocksdb::{DBIterator, DB};
-use kvproto::metapb::RegionEpoch;
 use kvproto::metapb::Region;
+use kvproto::metapb::RegionEpoch;
+use rocksdb::{DBIterator, DB};
 
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::{keys, Callback, Msg};
 use raftstore::store::engine::{IterOption, Iterable};
+use raftstore::store::{keys, Callback, Msg};
 use raftstore::Result;
+use storage::{CfName, LARGE_CFS};
 use util::escape;
 use util::transport::{RetryableSendCh, Sender};
 use util::worker::Runnable;
-use storage::{CfName, LARGE_CFS};
 
 use super::metrics::*;
 
@@ -42,8 +42,8 @@ impl KeyEntry {
     fn new(key: Vec<u8>, pos: usize, value_size: usize) -> KeyEntry {
         KeyEntry {
             key: Some(key),
-            pos: pos,
-            value_size: value_size,
+            pos,
+            value_size,
         }
     }
 
@@ -95,10 +95,7 @@ impl<'a> MergedIterator<'a> {
             }
             iters.push(iter);
         }
-        Ok(MergedIterator {
-            iters: iters,
-            heap: heap,
-        })
+        Ok(MergedIterator { iters, heap })
     }
 
     fn next(&mut self) -> Option<KeyEntry> {
@@ -127,11 +124,8 @@ pub struct Task {
 }
 
 impl Task {
-    pub fn new(region: &Region, auto_split: bool) -> Task {
-        Task {
-            region: region.clone(),
-            auto_split: auto_split,
-        }
+    pub fn new(region: Region, auto_split: bool) -> Task {
+        Task { region, auto_split }
     }
 }
 
@@ -159,18 +153,18 @@ impl<C: Sender<Msg>> Runner<C> {
         coprocessor: Arc<CoprocessorHost>,
     ) -> Runner<C> {
         Runner {
-            engine: engine,
-            ch: ch,
-            coprocessor: coprocessor,
+            engine,
+            ch,
+            coprocessor,
         }
     }
 
     fn check_split(&mut self, task: Task) {
         let region = &task.region;
-        let mut split_ctx =
+        let mut host =
             self.coprocessor
-                .new_split_check_status(region, &self.engine, task.auto_split);
-        if split_ctx.skip() {
+                .new_split_checker_host(region, &self.engine, task.auto_split);
+        if host.skip() {
             debug!("[region {}] skip split check", region.get_id());
             return;
         }
@@ -186,39 +180,29 @@ impl<C: Sender<Msg>> Runner<C> {
         );
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
-        let mut split_key = None;
-        let coprocessor = &mut self.coprocessor;
-
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
         let res = MergedIterator::new(self.engine.as_ref(), LARGE_CFS, &start_key, &end_key, false)
             .map(|mut iter| {
                 while let Some(e) = iter.next() {
-                    if let Some(key) = coprocessor.on_split_check(
-                        region,
-                        &mut split_ctx,
-                        e.key.as_ref().unwrap(),
-                        e.value_size as u64,
-                    ) {
-                        split_key = Some(key);
+                    if host.on_kv(region, e.key.as_ref().unwrap(), e.value_size as u64) {
                         break;
                     }
                 }
             });
         timer.observe_duration();
 
-        if split_key.is_none() {
-            split_key = split_ctx.split_key();
-        }
-
         if let Err(e) = res {
             error!("[region {}] failed to scan split key: {}", region_id, e);
             return;
         }
 
-        if let Some(split_key) = split_key {
+        let split_key = host.split_key();
+
+        if let Some(key) = split_key {
             let region_epoch = region.get_region_epoch().clone();
-            let res = self.ch
-                .try_send(new_split_region(region_id, region_epoch, split_key));
+            let res = self
+                .ch
+                .try_send(new_split_region(region_id, region_epoch, key));
             if let Err(e) = res {
                 warn!("[region {}] failed to send check result: {}", region_id, e);
             }
@@ -243,12 +227,12 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
     }
 }
 
-fn new_split_region(region_id: u64, epoch: RegionEpoch, split_key: Vec<u8>) -> Msg {
-    let key = keys::origin_key(split_key.as_slice()).to_vec();
+fn new_split_region(region_id: u64, region_epoch: RegionEpoch, key: Vec<u8>) -> Msg {
+    let split_key = keys::origin_key(key.as_slice()).to_vec();
     Msg::SplitRegion {
-        region_id: region_id,
-        region_epoch: epoch,
-        split_key: key,
+        region_id,
+        region_epoch,
+        split_key,
         callback: Callback::None,
     }
 }

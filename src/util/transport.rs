@@ -11,14 +11,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{error, io, thread};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::mpsc;
 use std::time::Duration;
-use super::metrics::*;
+use std::{error, io, thread};
 
 use mio;
+use prometheus::IntCounterVec;
+
+lazy_static! {
+    pub static ref CHANNEL_FULL_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_channel_full_total",
+        "Total number of channel full errors.",
+        &["type"]
+    ).unwrap();
+}
 
 const MAX_SEND_RETRY_CNT: usize = 5;
 
@@ -101,8 +109,8 @@ unsafe impl<T, C: Sender<T> + Sync> Sync for RetryableSendCh<T, C> {}
 impl<T: Debug, C: Sender<T>> RetryableSendCh<T, C> {
     pub fn new(ch: C, name: &'static str) -> RetryableSendCh<T, C> {
         RetryableSendCh {
-            ch: ch,
-            name: name,
+            ch,
+            name,
             marker: Default::default(),
         }
     }
@@ -155,8 +163,8 @@ pub type SyncSendCh<T> = RetryableSendCh<T, mpsc::SyncSender<T>>;
 
 #[cfg(test)]
 mod tests {
-    use std::thread;
     use std::sync::mpsc::Receiver;
+    use std::thread;
     use std::time::Duration;
 
     use mio::{EventLoop, EventLoopConfig, Handler};

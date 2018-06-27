@@ -11,18 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tikv::storage::CF_WRITE;
-use tikv::storage::types::Key as MvccKey;
-use tikv::storage::mvcc::{Write, WriteType};
-use tikv::util::rocksdb::get_cf_handle;
-use tikv::util::config::*;
 use tikv::raftstore::store::keys::{data_key, DATA_MAX_KEY};
+use tikv::storage::mvcc::{Write, WriteType};
+use tikv::storage::types::Key as MvccKey;
+use tikv::storage::CF_WRITE;
+use tikv::util::config::*;
+use tikv::util::rocksdb::get_cf_handle;
 
 use rocksdb::Range;
 
-use super::util::*;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
+use super::util::*;
 
 fn gen_mvcc_put_kv(k: &[u8], v: &[u8], start_ts: u64, commit_ts: u64) -> (Vec<u8>, Vec<u8>) {
     let k = MvccKey::from_encoded(data_key(k));
@@ -40,6 +40,7 @@ fn gen_delete_k(k: &[u8], commit_ts: u64) -> Vec<u8> {
 fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.region_compact_check_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.region_compact_min_tombstones = 500;
+    cluster.cfg.raft_store.region_compact_tombstones_percent = 50;
     cluster.cfg.raft_store.region_compact_check_step = 1;
     cluster.run();
 

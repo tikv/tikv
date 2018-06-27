@@ -13,7 +13,7 @@
 
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
 use coprocessor::codec::table;
-use util::codec::bytes::{encode_bytes, BytesDecoder};
+use util::codec::bytes::{self, encode_bytes};
 
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
 use std::result::Result as StdResult;
@@ -31,7 +31,7 @@ impl SplitObserver {
             return Err("split key is expected!".to_owned());
         }
 
-        let mut key = match split.get_split_key().decode_bytes(false) {
+        let mut key = match bytes::decode_bytes(&mut split.get_split_key(), false) {
             Ok(x) => x,
             Err(_) => return Ok(()),
         };
@@ -40,7 +40,8 @@ impl SplitObserver {
         // + version or TABLE_PREFIX + table_id + INDEX_PREFIX_SEP + index_id + values + version
         // or meta_key + version
         // The length of TABLE_PREFIX + table_id is TABLE_PREFIX_KEY_LEN.
-        if key.starts_with(table::TABLE_PREFIX) && key.len() > table::TABLE_PREFIX_KEY_LEN
+        if key.starts_with(table::TABLE_PREFIX)
+            && key.len() > table::TABLE_PREFIX_KEY_LEN
             && key[table::TABLE_PREFIX_KEY_LEN..].starts_with(table::RECORD_PREFIX_SEP)
         {
             // row key, truncate to handle
@@ -50,7 +51,7 @@ impl SplitObserver {
         let region_start_key = ctx.region().get_start_key();
 
         let key = encode_bytes(&key);
-        if &*key <= region_start_key {
+        if *key <= *region_start_key {
             return Err("no need to split".to_owned());
         }
 
@@ -88,14 +89,13 @@ impl AdminObserver for SplitObserver {
 #[cfg(test)]
 mod test {
     use super::*;
-    use raftstore::coprocessor::ObserverContext;
-    use raftstore::coprocessor::AdminObserver;
+    use byteorder::{BigEndian, WriteBytesExt};
+    use coprocessor::codec::{datum, table, Datum};
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
-    use coprocessor::codec::{datum, table, Datum};
-    use util::codec::number::NumberEncoder;
+    use raftstore::coprocessor::AdminObserver;
+    use raftstore::coprocessor::ObserverContext;
     use util::codec::bytes::encode_bytes;
-    use byteorder::{BigEndian, WriteBytesExt};
 
     fn new_split_request(key: &[u8]) -> AdminRequest {
         let mut req = AdminRequest::new();
@@ -107,9 +107,7 @@ mod test {
     }
 
     fn new_row_key(table_id: i64, row_id: i64, column_id: u64, version_id: u64) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(table::ID_LEN);
-        buf.encode_i64(row_id).unwrap();
-        let mut key = table::encode_row_key(table_id, &buf);
+        let mut key = table::encode_row_key(table_id, row_id);
         if column_id > 0 {
             key.write_u64::<BigEndian>(column_id).unwrap();
         }

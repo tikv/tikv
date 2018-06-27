@@ -13,48 +13,54 @@
 
 #![allow(dead_code)]
 
-use std::sync::Arc;
-use std::sync::mpsc::Sender;
+use std::cmp;
+use std::collections::VecDeque;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
-use std::collections::VecDeque;
-use std::cmp;
+use std::sync::mpsc::Sender;
+use std::sync::Arc;
 
-use rocksdb::{Writable, WriteBatch, DB};
-use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::RepeatedField;
+use rocksdb::rocksdb_options::WriteOptions;
+use rocksdb::{Writable, WriteBatch, DB};
 use uuid::Uuid;
 
+use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region};
+use kvproto::raft_cmdpb::{
+    AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
+    RaftCmdRequest, RaftCmdResponse, Request, Response,
+};
+use kvproto::raft_serverpb::{
+    MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
+};
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
-use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState,
-                             RegionLocalState};
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType,
-                          CommitMergeRequest, RaftCmdRequest, RaftCmdResponse, Request, Response};
-use kvproto::importpb::SSTMeta;
 
+use import::SSTImporter;
+use raft::NO_LIMIT;
+use raftstore::coprocessor::CoprocessorHost;
+use raftstore::store::engine::{Mutable, Peekable, Snapshot};
+use raftstore::store::metrics::*;
+use raftstore::store::msg::Callback;
+use raftstore::store::peer::Peer;
+use raftstore::store::peer_storage::{
+    self, compact_raft_log, write_initial_apply_state, write_peer_state,
+};
+use raftstore::store::util::check_region_epoch;
+use raftstore::store::{cmd_resp, keys, util, Store};
+use raftstore::{Error, Result};
+use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use util::collections::HashMap;
+use util::time::{duration_to_sec, Instant, SlowTimer};
 use util::worker::Runnable;
 use util::{escape, rocksdb, MustConsumeVec};
-use util::time::{duration_to_sec, Instant, SlowTimer};
-use util::collections::HashMap;
-use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use raft::NO_LIMIT;
-use raftstore::{Error, Result};
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::{cmd_resp, keys, util, Store};
-use raftstore::store::msg::Callback;
-use raftstore::store::engine::{Mutable, Peekable, Snapshot};
-use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply_state,
-                                     write_peer_state};
-use raftstore::store::peer::{check_epoch, Peer};
-use raftstore::store::metrics::*;
-use import::SSTImporter;
 
 use super::metrics::*;
 
 const WRITE_BATCH_MAX_KEYS: usize = 128;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
+const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
 pub struct PendingCmd {
     pub index: u64,
@@ -65,8 +71,8 @@ pub struct PendingCmd {
 impl PendingCmd {
     fn new(index: u64, term: u64, cb: Callback) -> PendingCmd {
         PendingCmd {
-            index: index,
-            term: term,
+            index,
+            term,
             cb: Some(cb),
         }
     }
@@ -104,6 +110,11 @@ pub struct PendingCmdQueue {
 impl PendingCmdQueue {
     fn pop_normal(&mut self, term: u64) -> Option<PendingCmd> {
         self.normals.pop_front().and_then(|cmd| {
+            if self.normals.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP
+                && self.normals.len() < SHRINK_PENDING_CMD_QUEUE_CAP
+            {
+                self.normals.shrink_to_fit();
+            }
             if cmd.term > term {
                 self.normals.push_front(cmd);
                 return None;
@@ -145,9 +156,9 @@ pub struct Range {
 impl Range {
     fn new(cf: String, start_key: Vec<u8>, end_key: Vec<u8>) -> Range {
         Range {
-            cf: cf,
-            start_key: start_key,
-            end_key: end_key,
+            cf,
+            start_key,
+            end_key,
         }
     }
 }
@@ -207,7 +218,9 @@ impl ApplyCallback {
     fn invoke_all(self, host: &CoprocessorHost) {
         for (cb, mut resp) in self.cbs {
             host.post_apply(&self.region, &mut resp);
-            cb.map(|cb| cb.invoke_with_response(resp));
+            if let Some(cb) = cb {
+                cb.invoke_with_response(resp)
+            };
         }
     }
 
@@ -247,8 +260,8 @@ struct ApplyContextCore<'a> {
 impl<'a> ApplyContextCore<'a> {
     pub fn new(host: &'a CoprocessorHost, importer: &'a SSTImporter) -> ApplyContextCore<'a> {
         ApplyContextCore {
-            host: host,
-            importer: importer,
+            host,
+            importer,
             wb: None,
             cbs: MustConsumeVec::new("callback of apply context"),
             merged_regions: vec![],
@@ -747,7 +760,7 @@ impl ApplyDelegate {
             // clear dirty values.
             ctx.wb_mut().rollback_to_save_point().unwrap();
             match e {
-                Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
+                Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
                 _ => error!("{} execute raft command err: {:?}", self.tag, e),
             }
             (cmd_resp::new_error(e), None)
@@ -859,12 +872,17 @@ struct ExecContext {
 }
 
 impl ExecContext {
-    pub fn new(state: RaftApplyState, req: RaftCmdRequest, index: u64, term: u64) -> ExecContext {
+    pub fn new(
+        apply_state: RaftApplyState,
+        req: RaftCmdRequest,
+        index: u64,
+        term: u64,
+    ) -> ExecContext {
         ExecContext {
-            apply_state: state,
+            apply_state,
             req: Rc::new(req),
-            index: index,
-            term: term,
+            index,
+            term,
         }
     }
 }
@@ -880,7 +898,7 @@ impl ApplyDelegate {
         // Include region for stale epoch after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
-        check_epoch(&self.region, &req, include_region)?;
+        check_region_epoch(&req, &self.region, include_region)?;
         if req.has_admin_request() {
             self.exec_admin_cmd(ctx, req.get_admin_request())
         } else {
@@ -918,7 +936,8 @@ impl ApplyDelegate {
         response.set_cmd_type(cmd_type);
 
         let mut resp = RaftCmdResponse::new();
-        let uuid = ctx.exec_ctx
+        let uuid = ctx
+            .exec_ctx
             .as_ref()
             .unwrap()
             .req
@@ -949,9 +968,7 @@ impl ApplyDelegate {
         );
 
         // TODO: we should need more check, like peer validation, duplicated id, etc.
-        let exists = util::find_peer(&region, store_id).is_some();
         let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
-
         region.mut_region_epoch().set_conf_ver(conf_ver);
 
         match change_type {
@@ -960,26 +977,31 @@ impl ApplyDelegate {
                     .with_label_values(&["add_peer", "all"])
                     .inc();
 
-                if exists {
-                    error!(
-                        "{} can't add duplicated peer {:?} to region {:?}",
-                        self.tag, peer, self.region
-                    );
-                    return Err(box_err!(
-                        "can't add duplicated peer {:?} to region {:?}",
-                        peer,
-                        self.region
-                    ));
+                let mut exists = false;
+                if let Some(p) = util::find_peer_mut(&mut region, store_id) {
+                    exists = true;
+                    if !p.get_is_learner() || p.get_id() != peer.get_id() {
+                        error!(
+                            "{} can't add duplicated peer {:?} to region {:?}",
+                            self.tag, peer, self.region
+                        );
+                        return Err(box_err!(
+                            "can't add duplicated peer {:?} to region {:?}",
+                            peer,
+                            self.region
+                        ));
+                    } else {
+                        p.set_is_learner(false);
+                    }
                 }
-
-                // TODO: Do we allow adding peer in same node?
-
-                region.mut_peers().push(peer.clone());
+                if !exists {
+                    // TODO: Do we allow adding peer in same node?
+                    region.mut_peers().push(peer.clone());
+                }
 
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["add_peer", "success"])
                     .inc();
-
                 info!(
                     "{} add peer {:?} to region {:?}",
                     self.tag, peer, self.region
@@ -990,7 +1012,25 @@ impl ApplyDelegate {
                     .with_label_values(&["remove_peer", "all"])
                     .inc();
 
-                if !exists {
+                if let Some(p) = util::remove_peer(&mut region, store_id) {
+                    // Considering `is_learner` flag in `Peer` here is by design.
+                    if &p != peer {
+                        error!(
+                            "{} remove unmatched peer: expect: {:?}, get {:?}, ignore",
+                            self.tag, peer, p
+                        );
+                        return Err(box_err!(
+                            "remove unmatched peer: expect: {:?}, get {:?}, ignore",
+                            peer,
+                            p
+                        ));
+                    }
+                    if self.id == peer.get_id() {
+                        // Remove ourself, we will destroy all region data later.
+                        // So we need not to apply following logs.
+                        self.pending_remove = true;
+                    }
+                } else {
                     error!(
                         "{} remove missing peer {:?} from region {:?}",
                         self.tag, peer, self.region
@@ -1002,18 +1042,9 @@ impl ApplyDelegate {
                     ));
                 }
 
-                if self.id == peer.get_id() {
-                    // Remove ourself, we will destroy all region data later.
-                    // So we need not to apply following logs.
-                    self.pending_remove = true;
-                }
-
-                util::remove_peer(&mut region, store_id).unwrap();
-
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["remove_peer", "success"])
                     .inc();
-
                 info!(
                     "{} remove {} from region:{:?}",
                     self.tag,
@@ -1021,7 +1052,32 @@ impl ApplyDelegate {
                     self.region
                 );
             }
-            ConfChangeType::AddLearnerNode => unimplemented!(),
+            ConfChangeType::AddLearnerNode => {
+                PEER_ADMIN_CMD_COUNTER_VEC
+                    .with_label_values(&["add_learner", "all"])
+                    .inc();
+
+                if util::find_peer(&region, store_id).is_some() {
+                    error!(
+                        "{} can't add duplicated learner {:?} to region {:?}",
+                        self.tag, peer, self.region
+                    );
+                    return Err(box_err!(
+                        "can't add duplicated learner {:?} to region {:?}",
+                        peer,
+                        self.region
+                    ));
+                }
+                region.mut_peers().push(peer.clone());
+
+                PEER_ADMIN_CMD_COUNTER_VEC
+                    .with_label_values(&["add_learner", "success"])
+                    .inc();
+                info!(
+                    "{} add learner {:?} to region {:?}",
+                    self.tag, peer, self.region
+                );
+            }
         }
 
         let state = if self.pending_remove {
@@ -1041,7 +1097,7 @@ impl ApplyDelegate {
             Some(ExecResult::ChangePeer(ChangePeer {
                 conf_change: Default::default(),
                 peer: peer.clone(),
-                region: region,
+                region,
             })),
         ))
     }
@@ -1051,6 +1107,15 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, Option<ExecResult>)> {
+        let apply_before_split = || {
+            fail_point!(
+                "apply_before_split_1_3",
+                { self.id == 3 && self.region_id() == 1 },
+                |_| {}
+            );
+        };
+        apply_before_split();
+
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["split", "all"])
             .inc();
@@ -1218,7 +1283,7 @@ impl ApplyDelegate {
         Ok((
             AdminResponse::new(),
             Some(ExecResult::PrepareMerge {
-                region: region,
+                region,
                 state: merging_state,
             }),
         ))
@@ -1376,7 +1441,7 @@ impl ApplyDelegate {
         Ok((
             resp,
             Some(ExecResult::CommitMerge {
-                region: region,
+                region,
                 source: source_region.to_owned(),
             }),
         ))
@@ -1423,7 +1488,7 @@ impl ApplyDelegate {
         Ok((
             resp,
             Some(ExecResult::RollbackMerge {
-                region: region,
+                region,
                 commit: rollback.get_commit(),
             }),
         ))
@@ -1482,7 +1547,7 @@ impl ApplyDelegate {
             resp,
             Some(ExecResult::CompactLog {
                 state: apply_state.get_truncated_state().clone(),
-                first_index: first_index,
+                first_index,
             }),
         ))
     }
@@ -1524,7 +1589,8 @@ impl ApplyDelegate {
         }
 
         let mut resp = RaftCmdResponse::new();
-        let uuid = ctx.exec_ctx
+        let uuid = ctx
+            .exec_ctx
             .as_ref()
             .unwrap()
             .req
@@ -1536,9 +1602,9 @@ impl ApplyDelegate {
 
         assert!(ranges.is_empty() || ssts.is_empty());
         let exec_res = if !ranges.is_empty() {
-            Some(ExecResult::DeleteRange { ranges: ranges })
+            Some(ExecResult::DeleteRange { ranges })
         } else if !ssts.is_empty() {
-            Some(ExecResult::IngestSST { ssts: ssts })
+            Some(ExecResult::IngestSST { ssts })
         } else {
             None
         };
@@ -1548,7 +1614,8 @@ impl ApplyDelegate {
 
     fn handle_put(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
-        check_data_key(key, &self.region)?;
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(key, &self.region)?;
 
         let resp = Response::new();
         let key = keys::data_key(key);
@@ -1590,7 +1657,8 @@ impl ApplyDelegate {
 
     fn handle_delete(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
         let key = req.get_delete().get_key();
-        check_data_key(key, &self.region)?;
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(key, &self.region)?;
 
         let key = keys::data_key(key);
         // since size_diff_hint is not accurate, so we just skip calculate the value size.
@@ -1636,7 +1704,8 @@ impl ApplyDelegate {
                 e_key
             ));
         }
-        check_data_key(s_key, &self.region)?;
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(s_key, &self.region)?;
         let end_key = keys::data_end_key(e_key);
         let region_end_key = keys::data_end_key(self.region.get_end_key());
         if end_key > region_end_key {
@@ -1669,17 +1738,21 @@ impl ApplyDelegate {
             });
 
         // Delete all remaining keys.
-        util::delete_all_in_range_cf(&self.engine, cf, &start_key, &end_key, use_delete_range)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                    self.tag,
-                    escape(&start_key),
-                    escape(&end_key),
-                    cf,
-                    e
-                );
-            });
+        // If it's not CF_LOCK and use_delete_range is false, skip this step to speed up (#3034)
+        // TODO: Remove the `if` line after apply pool is implemented
+        if cf == CF_LOCK || use_delete_range {
+            util::delete_all_in_range_cf(&self.engine, cf, &start_key, &end_key, use_delete_range)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
+                        self.tag,
+                        escape(&start_key),
+                        escape(&end_key),
+                        cf,
+                        e
+                    );
+                });
+        }
 
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
@@ -1724,13 +1797,6 @@ pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
     Some(req.get_change_peer())
 }
 
-fn check_data_key(key: &[u8], region: &Region) -> Result<()> {
-    // region key range has no data prefix, so we must use origin key to check.
-    util::check_key_in_region(key, region)?;
-
-    Ok(())
-}
-
 fn check_sst_for_ingestion(sst: &SSTMeta, region: &Region) -> Result<()> {
     let uuid = sst.get_uuid();
     if let Err(e) = Uuid::from_bytes(uuid) {
@@ -1761,36 +1827,6 @@ fn check_sst_for_ingestion(sst: &SSTMeta, region: &Region) -> Result<()> {
     util::check_key_in_region(range.get_end(), region)?;
 
     Ok(())
-}
-
-pub fn do_get(tag: &str, region: &Region, snap: &Snapshot, req: &Request) -> Result<Response> {
-    // TODO: the get_get looks wried, maybe we should figure out a better name later.
-    let key = req.get_get().get_key();
-    check_data_key(key, region)?;
-
-    let mut resp = Response::new();
-    let res = if !req.get_get().get_cf().is_empty() {
-        let cf = req.get_get().get_cf();
-        // TODO: check whether cf exists or not.
-        snap.get_value_cf(cf, &keys::data_key(key))
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to get {} with cf {}: {:?}",
-                    tag,
-                    escape(key),
-                    cf,
-                    e
-                )
-            })
-    } else {
-        snap.get_value(&keys::data_key(key))
-            .unwrap_or_else(|e| panic!("{} failed to get {}: {:?}", tag, escape(key), e))
-    };
-    if let Some(res) = res {
-        resp.mut_get().set_value(res.to_vec());
-    }
-
-    Ok(resp)
 }
 
 // Consistency Check
@@ -1824,13 +1860,7 @@ impl ApplyDelegate {
         let index = verify_req.get_index();
         let hash = verify_req.get_hash().to_vec();
         let resp = AdminResponse::new();
-        Ok((
-            resp,
-            Some(ExecResult::VerifyHash {
-                index: index,
-                hash: hash,
-            }),
-        ))
+        Ok((resp, Some(ExecResult::VerifyHash { index, hash })))
     }
 }
 
@@ -1843,9 +1873,9 @@ pub struct Apply {
 impl Apply {
     pub fn new(region_id: u64, term: u64, entries: Vec<Entry>) -> Apply {
         Apply {
-            region_id: region_id,
-            term: term,
-            entries: entries,
+            region_id,
+            term,
+            entries,
         }
     }
 }
@@ -1881,10 +1911,10 @@ pub struct Proposal {
 impl Proposal {
     pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback) -> Proposal {
         Proposal {
-            is_conf_change: is_conf_change,
-            index: index,
-            term: term,
-            cb: cb,
+            is_conf_change,
+            index,
+            term,
+            cb,
         }
     }
 }
@@ -1898,9 +1928,9 @@ pub struct RegionProposal {
 impl RegionProposal {
     pub fn new(id: u64, region_id: u64, props: Vec<Proposal>) -> RegionProposal {
         RegionProposal {
-            id: id,
-            region_id: region_id,
-            props: props,
+            id,
+            region_id,
+            props,
         }
     }
 }
@@ -1935,9 +1965,7 @@ impl Task {
     }
 
     pub fn destroy(region_id: u64) -> Task {
-        Task::Destroy(Destroy {
-            region_id: region_id,
-        })
+        Task::Destroy(Destroy { region_id })
     }
 }
 
@@ -2012,10 +2040,10 @@ impl Runner {
             raft_db: store.raft_engine(),
             host: Arc::clone(&store.coprocessor_host),
             importer: Arc::clone(&store.importer),
-            delegates: delegates,
-            notifier: notifier,
-            sync_log: sync_log,
-            use_delete_range: use_delete_range,
+            delegates,
+            notifier,
+            sync_log,
+            use_delete_range,
             tag: format!("[store {}]", store.store_id()),
         }
     }
@@ -2172,17 +2200,17 @@ impl Runnable<Task> for Runner {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::*;
     use std::sync::atomic::*;
+    use std::sync::*;
     use std::time::*;
 
-    use tempdir::TempDir;
-    use rocksdb::{Writable, WriteBatch, DB};
-    use protobuf::Message;
     use kvproto::metapb::RegionEpoch;
     use kvproto::raft_cmdpb::*;
+    use protobuf::Message;
     use raftstore::coprocessor::*;
     use raftstore::store::msg::WriteResponse;
+    use rocksdb::{Writable, WriteBatch, DB};
+    use tempdir::TempDir;
 
     use super::*;
     use import::test_helpers::*;
@@ -2213,10 +2241,10 @@ mod tests {
         tx: Sender<TaskRes>,
     ) -> Runner {
         Runner {
-            db: db,
-            raft_db: raft_db,
-            host: host,
-            importer: importer,
+            db,
+            raft_db,
+            host,
+            importer,
             delegates: HashMap::default(),
             notifier: tx,
             sync_log: false,
@@ -2229,7 +2257,9 @@ mod tests {
         let mut e = Entry::new();
         e.set_index(index);
         e.set_term(term);
-        req.map(|r| e.set_data(r.write_to_bytes().unwrap()));
+        if let Some(r) = req {
+            e.set_data(r.write_to_bytes().unwrap())
+        };
         e
     }
 
@@ -2364,9 +2394,11 @@ mod tests {
         let cc_resp = cc_rx.try_recv().unwrap();
         assert!(cc_resp.get_header().get_error().has_stale_command());
 
-        runner.run(Task::applies(vec![
-            Apply::new(1, 1, vec![new_entry(2, 3, None)]),
-        ]));
+        runner.run(Task::applies(vec![Apply::new(
+            1,
+            1,
+            vec![new_entry(2, 3, None)],
+        )]));
         // non registered region should be ignored.
         assert!(rx.try_recv().is_err());
 
@@ -2377,9 +2409,11 @@ mod tests {
 
         let apply_state_key = keys::apply_state_key(2);
         assert!(db.get(&apply_state_key).unwrap().is_none());
-        runner.run(Task::applies(vec![
-            Apply::new(2, 11, vec![new_entry(5, 4, None)]),
-        ]));
+        runner.run(Task::applies(vec![Apply::new(
+            2,
+            11,
+            vec![new_entry(5, 4, None)],
+        )]));
         let res = match rx.try_recv() {
             Ok(TaskRes::Applys(res)) => res,
             e => panic!("unexpected apply result: {:?}", e),
@@ -2424,10 +2458,7 @@ mod tests {
             let mut entry = Entry::new();
             entry.set_index(index);
             entry.set_term(term);
-            EntryBuilder {
-                entry: entry,
-                req: req,
-            }
+            EntryBuilder { entry, req }
         }
 
         fn capture_resp(
@@ -2710,14 +2741,14 @@ mod tests {
         let sst_range = (0, 100);
         let (mut meta1, data1) = gen_sst_file(&sst_path, sst_range);
         meta1.set_region_epoch(sst_epoch);
-        importer.create(1, &meta1).unwrap();
-        importer.append(1, &data1).unwrap();
-        importer.finish(1).unwrap();
+        let mut file1 = importer.create(&meta1).unwrap();
+        file1.append(&data1).unwrap();
+        file1.finish().unwrap();
         let (mut meta2, data2) = gen_sst_file(&sst_path, sst_range);
         meta2.mut_region_epoch().set_version(1234);
-        importer.create(2, &meta2).unwrap();
-        importer.append(2, &data2).unwrap();
-        importer.finish(2).unwrap();
+        let mut file2 = importer.create(&meta2).unwrap();
+        file2.append(&data2).unwrap();
+        file2.finish().unwrap();
 
         // IngestSST
         let put_ok = EntryBuilder::new(9, 3)

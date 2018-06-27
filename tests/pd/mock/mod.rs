@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod server;
 pub mod mocker;
+mod server;
 
-pub use self::server::Server;
 pub use self::mocker::PdMocker;
+pub use self::server::Server;

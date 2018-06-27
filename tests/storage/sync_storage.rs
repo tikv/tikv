@@ -11,15 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use futures::Future;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
-use tikv::util::collections::HashMap;
-use tikv::storage::{self, Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
-use tikv::storage::config::Config;
-use tikv::server::readpool::ReadPool;
 use kvproto::kvrpcpb::{Context, LockInfo};
+use tikv::server::readpool::ReadPool;
+use tikv::storage::config::Config;
+use tikv::storage::{self, Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
+use tikv::util::collections::HashMap;
 
 /// `SyncStorage` wraps `Storage` with sync API, usually used for testing.
 pub struct SyncStorage {
@@ -101,6 +101,25 @@ impl SyncStorage {
             .wait()
     }
 
+    pub fn reverse_scan(
+        &self,
+        ctx: Context,
+        key: Key,
+        limit: usize,
+        key_only: bool,
+        start_ts: u64,
+    ) -> Result<Vec<Result<KvPair>>> {
+        self.store
+            .async_scan(
+                ctx,
+                key,
+                limit,
+                start_ts,
+                Options::new(0, false, key_only).reverse_scan(),
+            )
+            .wait()
+    }
+
     pub fn prewrite(
         &self,
         ctx: Context,
@@ -143,7 +162,8 @@ impl SyncStorage {
         start_key: Vec<u8>,
         limit: usize,
     ) -> Result<Vec<LockInfo>> {
-        wait_op!(|cb| self.store
+        wait_op!(|cb| self
+            .store
             .async_scan_lock(ctx, max_ts, start_key, limit, cb))
             .unwrap()
     }
@@ -163,25 +183,28 @@ impl SyncStorage {
         wait_op!(|cb| self.store.async_gc(ctx, safe_point, cb)).unwrap()
     }
 
-    pub fn raw_get(&self, ctx: Context, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
-        self.store.async_raw_get(ctx, key).wait()
+    pub fn raw_get(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
+        self.store.async_raw_get(ctx, cf, key).wait()
     }
 
-    pub fn raw_put(&self, ctx: Context, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
-        wait_op!(|cb| self.store.async_raw_put(ctx, key, value, cb)).unwrap()
+    pub fn raw_put(&self, ctx: Context, cf: String, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
+        wait_op!(|cb| self.store.async_raw_put(ctx, cf, key, value, cb)).unwrap()
     }
 
-    pub fn raw_delete(&self, ctx: Context, key: Vec<u8>) -> Result<()> {
-        wait_op!(|cb| self.store.async_raw_delete(ctx, key, cb)).unwrap()
+    pub fn raw_delete(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<()> {
+        wait_op!(|cb| self.store.async_raw_delete(ctx, cf, key, cb)).unwrap()
     }
 
     pub fn raw_scan(
         &self,
         ctx: Context,
+        cf: String,
         start_key: Vec<u8>,
         limit: usize,
     ) -> Result<Vec<Result<KvPair>>> {
-        self.store.async_raw_scan(ctx, start_key, limit).wait()
+        self.store
+            .async_raw_scan(ctx, cf, start_key, limit, false)
+            .wait()
     }
 }
 

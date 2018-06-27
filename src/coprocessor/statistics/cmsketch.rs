@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use byteorder::{ByteOrder, LittleEndian};
-use protobuf::RepeatedField;
 use murmur3::murmur3_x64_128;
+use protobuf::RepeatedField;
 use tipb::analyze;
 
 /// `CMSketch` is used to estimate point queries.
@@ -75,14 +75,14 @@ impl CMSketch {
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
-    use std::cmp::min;
-    use rand::{Rng, SeedableRng, StdRng};
-    use zipf::ZipfDistribution;
+    use super::*;
     use coprocessor::codec::datum;
     use coprocessor::codec::datum::Datum;
+    use rand::{Rng, SeedableRng, StdRng};
+    use std::cmp::min;
     use util::as_slice;
-    use super::*;
+    use util::collections::HashMap;
+    use zipf::ZipfDistribution;
 
     impl CMSketch {
         fn query(&self, bytes: &[u8]) -> u32 {
@@ -110,7 +110,7 @@ mod test {
 
     fn average_error(depth: usize, width: usize, total: u32, max_value: usize, s: f64) -> u64 {
         let mut c = CMSketch::new(depth, width).unwrap();
-        let mut map: HashMap<u64, u32> = HashMap::new();
+        let mut map: HashMap<u64, u32> = HashMap::default();
         let seed: &[_] = &[1, 2, 3, 4];
         let mut gen: ZipfDistribution<StdRng> =
             ZipfDistribution::new(SeedableRng::from_seed(seed), max_value, s).unwrap();
