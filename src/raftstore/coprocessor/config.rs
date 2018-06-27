@@ -36,7 +36,7 @@ pub struct Config {
 
 /// Default region split size.
 pub const SPLIT_SIZE_MB: u64 = 96;
-pub const SPLIT_ROWS: u64 = 1440000;
+pub const SPLIT_ROWS: u64 = 960000;
 
 impl Default for Config {
     fn default() -> Config {
@@ -61,9 +61,9 @@ impl Config {
             ));
         }
 
-        if self.region_max_rows < self.region_split_rows {
+        if self.region_max_rows <= self.region_split_rows {
             return Err(box_err!(
-                "region max rows {} must >= split rows {}",
+                "region max rows {} must > split rows {}",
                 self.region_max_rows,
                 self.region_split_rows
             ));
