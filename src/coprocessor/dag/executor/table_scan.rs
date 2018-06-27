@@ -18,7 +18,7 @@ use std::vec::IntoIter;
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::TableScan;
 
-use storage::{Key, SnapshotStore};
+use storage::{Key, Snapshot, SnapshotStore};
 use util::collections::HashSet;
 
 use coprocessor::codec::table;
@@ -27,8 +27,8 @@ use coprocessor::*;
 
 use super::{Executor, ExecutorMetrics, Row};
 
-pub struct TableScanExecutor {
-    store: SnapshotStore,
+pub struct TableScanExecutor<S: Snapshot> {
+    store: SnapshotStore<S>,
     desc: bool,
     col_ids: HashSet<i64>,
     key_ranges: Peekable<IntoIter<KeyRange>>,
@@ -36,20 +36,20 @@ pub struct TableScanExecutor {
     current_range: Option<KeyRange>,
     // The `KeyRange` scaned between `start_scan` and `stop_scan`.
     scan_range: KeyRange,
-    scanner: Option<Scanner>,
+    scanner: Option<Scanner<S>>,
     // The number of scan keys for each range.
     counts: Option<Vec<i64>>,
     metrics: ExecutorMetrics,
     first_collect: bool,
 }
 
-impl TableScanExecutor {
+impl<S: Snapshot> TableScanExecutor<S> {
     pub fn new(
         meta: &TableScan,
         mut key_ranges: Vec<KeyRange>,
-        store: SnapshotStore,
+        store: SnapshotStore<S>,
         collect: bool,
-    ) -> Result<TableScanExecutor> {
+    ) -> Result<Self> {
         box_try!(table::check_table_ranges(&key_ranges));
         let col_ids = meta
             .get_columns()
@@ -65,7 +65,7 @@ impl TableScanExecutor {
 
         let counts = if collect { Some(Vec::default()) } else { None };
 
-        Ok(TableScanExecutor {
+        Ok(Self {
             store,
             desc,
             col_ids,
@@ -106,7 +106,7 @@ impl TableScanExecutor {
         Ok(None)
     }
 
-    fn new_scanner(&self, range: KeyRange) -> Result<Scanner> {
+    fn new_scanner(&self, range: KeyRange) -> Result<Scanner<S>> {
         Scanner::new(
             &self.store,
             ScanOn::Table,
@@ -117,7 +117,7 @@ impl TableScanExecutor {
     }
 }
 
-impl Executor for TableScanExecutor {
+impl<S: Snapshot> Executor for TableScanExecutor<S> {
     fn next(&mut self) -> Result<Option<Row>> {
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
