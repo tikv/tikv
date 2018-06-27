@@ -13,13 +13,19 @@ use tikv::server::transport::RaftStoreRouter;
 use tikv::storage::engine::raftkv::CmdRes;
 use tikv::storage::engine::{BatchCallback, BatchResults, Callback as EngineCallback, Modify};
 use tikv::storage::types::Key;
-use tikv::storage::{Engine, RaftKv, Snapshot, ALL_CFS, CF_DEFAULT};
+use tikv::storage::{Engine, RaftKv, ALL_CFS, CF_DEFAULT};
 use tikv::util::rocksdb;
 
 #[derive(Clone)]
 struct SyncBenchRouter {
     db: Arc<DB>,
     region: Region,
+}
+
+impl SyncBenchRouter {
+    fn new(region: Region, db: Arc<DB>) -> SyncBenchRouter {
+        SyncBenchRouter { db, region }
+    }
 }
 
 impl SyncBenchRouter {
@@ -51,15 +57,10 @@ impl SyncBenchRouter {
                 let snapshot = engine::Snapshot::new(Arc::clone(&self.db));
                 let region = self.region.to_owned();
                 match on_finished {
-                    Callback::BatchRead(on_finished) => on_finished(vec![
-                        Some(ReadResponse {
-                            response,
-                            snapshot: Some(RegionSnapshot::from_snapshot(
-                                snapshot.into_sync(),
-                                region,
-                            )),
-                        }),
-                    ]),
+                    Callback::BatchRead(on_finished) => on_finished(vec![Some(ReadResponse {
+                        response,
+                        snapshot: Some(RegionSnapshot::from_snapshot(snapshot.into_sync(), region)),
+                    })]),
                     _ => unreachable!(),
                 }
             }
@@ -102,10 +103,7 @@ fn bench_async_batch_snapshots(b: &mut test::Bencher) {
     region.mut_region_epoch().set_version(2);
     region.mut_region_epoch().set_conf_ver(5);
     let (_tmp, db) = new_engine();
-    let kv = RaftKv::new(SyncBenchRouter {
-        db,
-        region: region.clone(),
-    });
+    let kv = RaftKv::new(SyncBenchRouter::new(region.clone(), db));
 
     b.iter(|| {
         let mut ctx = Context::new();
@@ -113,7 +111,7 @@ fn bench_async_batch_snapshots(b: &mut test::Bencher) {
         ctx.set_region_epoch(region.get_region_epoch().clone());
         ctx.set_peer(leader.clone());
 
-        let on_finished: BatchCallback<Box<Snapshot>> = Box::new(move |results| {
+        let on_finished: BatchCallback<RegionSnapshot> = Box::new(move |results| {
             test::black_box(results);
         });
         kv.async_batch_snapshot(vec![ctx], on_finished).unwrap();
@@ -125,7 +123,7 @@ fn bench_async_batch_snapshots(b: &mut test::Bencher) {
 #[allow(unit_arg)]
 fn bench_async_batch_snapshots_noop(b: &mut test::Bencher) {
     b.iter(|| {
-        let on_finished: BatchCallback<Box<Snapshot>> = Box::new(move |results: Vec<_>| {
+        let on_finished: BatchCallback<RegionSnapshot> = Box::new(move |results: Vec<_>| {
             test::black_box(results);
         });
         let on_finished: BatchCallback<CmdRes> = Box::new(move |results: BatchResults<_>| {
@@ -151,17 +149,14 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     region.mut_region_epoch().set_version(2);
     region.mut_region_epoch().set_conf_ver(5);
     let (_tmp, db) = new_engine();
-    let kv = RaftKv::new(SyncBenchRouter {
-        db,
-        region: region.clone(),
-    });
+    let kv = RaftKv::new(SyncBenchRouter::new(region.clone(), db));
 
     let mut ctx = Context::new();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader.clone());
     b.iter(|| {
-        let on_finished: EngineCallback<Box<Snapshot>> = Box::new(move |results| {
+        let on_finished: EngineCallback<RegionSnapshot> = Box::new(move |results| {
             test::black_box(results);
         });
         kv.async_snapshot(&ctx, on_finished).unwrap();
@@ -179,10 +174,7 @@ fn bench_async_write(b: &mut test::Bencher) {
     region.mut_region_epoch().set_version(2);
     region.mut_region_epoch().set_conf_ver(5);
     let (_tmp, db) = new_engine();
-    let kv = RaftKv::new(SyncBenchRouter {
-        db,
-        region: region.clone(),
-    });
+    let kv = RaftKv::new(SyncBenchRouter::new(region.clone(), db));
 
     let mut ctx = Context::new();
     ctx.set_region_id(region.get_id());
@@ -194,9 +186,10 @@ fn bench_async_write(b: &mut test::Bencher) {
         });
         kv.async_write(
             &ctx,
-            vec![
-                Modify::Delete(CF_DEFAULT, Key::from_encoded(b"fooo".to_vec())),
-            ],
+            vec![Modify::Delete(
+                CF_DEFAULT,
+                Key::from_encoded(b"fooo".to_vec()),
+            )],
             on_finished,
         ).unwrap();
     });
