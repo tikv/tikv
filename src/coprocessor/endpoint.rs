@@ -106,7 +106,7 @@ impl<E: Engine> Host<E> {
         self.running_task_count.load(Ordering::Acquire)
     }
 
-    fn notify_failed<ERR: Into<Error> + Debug>(&mut self, e: ERR, reqs: Vec<RequestTask>) {
+    fn notify_failed<Err: Into<Error> + Debug>(&mut self, e: Err, reqs: Vec<RequestTask>) {
         debug!("failed to handle batch request: {:?}", e);
         let resp = err_multi_resp(e.into(), reqs.len(), &mut self.basic_local_metrics);
         for t in reqs {
@@ -115,7 +115,7 @@ impl<E: Engine> Host<E> {
     }
 
     #[inline]
-    fn notify_batch_failed<ERR: Into<Error> + Debug>(&mut self, e: ERR, batch_id: u64) {
+    fn notify_batch_failed<Err: Into<Error> + Debug>(&mut self, e: Err, batch_id: u64) {
         let reqs = self.reqs.remove(&batch_id).unwrap();
         self.notify_failed(e, reqs);
     }

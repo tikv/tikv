@@ -913,8 +913,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         };
 
         let task = EndPointTask::Request(req_task);
-        if self.end_point_scheduler.schedule(task).is_err() {
-            let error = Error::EndPointStopped;
+        if let Err(e) = self.end_point_scheduler.schedule(task) {
+            let error = Error::from(e);
             let code = RpcStatusCode::ResourceExhausted;
             return self.send_fail_status(ctx, sink, error, code);
         }
@@ -960,8 +960,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         };
 
         let task = EndPointTask::Request(req_task);
-        if self.end_point_scheduler.schedule(task).is_err() {
-            let error = Error::EndPointStopped;
+        if let Err(e) = self.end_point_scheduler.schedule(task) {
+            let error = Error::from(e);
             let code = RpcStatusCode::ResourceExhausted;
             return self.send_fail_status_to_stream(ctx, sink, error, code);
         }
