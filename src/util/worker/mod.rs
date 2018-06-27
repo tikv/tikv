@@ -60,30 +60,24 @@ impl<T> ScheduleError<T> {
     }
 }
 
+impl<T> Error for ScheduleError<T> {
+    fn description(&self) -> &str {
+        match *self {
+            ScheduleError::Stopped(_) => "channel has been closed",
+            ScheduleError::Full(_) => "channel is full",
+        }
+    }
+}
+
 impl<T> Display for ScheduleError<T> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match *self {
-            ScheduleError::Stopped(_) => write!(f, "channel has been closed"),
-            ScheduleError::Full(_) => write!(f, "channel is full"),
-        }
+        write!(f, "{}", self.description())
     }
 }
 
 impl<T> Debug for ScheduleError<T> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match *self {
-            ScheduleError::Stopped(_) => write!(f, "channel has been closed"),
-            ScheduleError::Full(_) => write!(f, "channel is full"),
-        }
-    }
-}
-
-impl<T> From<ScheduleError<T>> for Box<Error + Sync + Send + 'static> {
-    fn from(e: ScheduleError<T>) -> Box<Error + Sync + Send + 'static> {
-        match e {
-            ScheduleError::Stopped(_) => box_err!("channel has been closed"),
-            ScheduleError::Full(_) => box_err!("channel is full"),
-        }
+        Display::fmt(self, f)
     }
 }
 

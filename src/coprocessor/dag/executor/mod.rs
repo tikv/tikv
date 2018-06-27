@@ -18,7 +18,7 @@ use tipb::executor::{self, ExecType};
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
 
-use storage::SnapshotStore;
+use storage::{Snapshot, SnapshotStore};
 use util::codec::number;
 use util::collections::HashSet;
 
@@ -158,9 +158,9 @@ pub struct DAGExecutor {
     pub has_aggr: bool,
 }
 
-pub fn build_exec(
+pub fn build_exec<S: Snapshot + 'static>(
     execs: Vec<executor::Executor>,
-    store: SnapshotStore,
+    store: SnapshotStore<S>,
     ranges: Vec<KeyRange>,
     ctx: Arc<EvalConfig>,
     collect: bool,
@@ -219,9 +219,10 @@ pub fn build_exec(
 
 type FirstExecutor = (Box<Executor + Send>, Arc<Vec<ColumnInfo>>);
 
-fn build_first_executor(
+// We have trait objects which requires 'static.
+fn build_first_executor<S: Snapshot + 'static>(
     mut first: executor::Executor,
-    store: SnapshotStore,
+    store: SnapshotStore<S>,
     ranges: Vec<KeyRange>,
     collect: bool,
 ) -> Result<FirstExecutor> {
