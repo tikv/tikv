@@ -6,9 +6,11 @@ use kvproto::raft_cmdpb::{RaftCmdResponse, Response};
 use rocksdb::DB;
 use tempdir::TempDir;
 use test;
+use tikv::raftstore::store::{
+    cmd_resp, engine, util, BatchReadCallback, Callback, Msg, ReadResponse, RegionSnapshot,
+    SignificantMsg, WriteResponse,
+};
 use tikv::raftstore::Result;
-use tikv::raftstore::store::{cmd_resp, engine, util, BatchReadCallback, Callback, Msg,
-                             ReadResponse, RegionSnapshot, SignificantMsg, WriteResponse};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::storage::engine::raftkv::CmdRes;
 use tikv::storage::engine::{BatchCallback, BatchResults, Callback as EngineCallback, Modify};
@@ -20,6 +22,12 @@ use tikv::util::rocksdb;
 struct SyncBenchRouter {
     db: Arc<DB>,
     region: Region,
+}
+
+impl SyncBenchRouter {
+    fn new(region: Region, db: Arc<DB>) -> SyncBenchRouter {
+        SyncBenchRouter { db, region }
+    }
 }
 
 impl SyncBenchRouter {
@@ -51,15 +59,10 @@ impl SyncBenchRouter {
                 let snapshot = engine::Snapshot::new(Arc::clone(&self.db));
                 let region = self.region.to_owned();
                 match on_finished {
-                    Callback::BatchRead(on_finished) => on_finished(vec![
-                        Some(ReadResponse {
-                            response,
-                            snapshot: Some(RegionSnapshot::from_snapshot(
-                                snapshot.into_sync(),
-                                region,
-                            )),
-                        }),
-                    ]),
+                    Callback::BatchRead(on_finished) => on_finished(vec![Some(ReadResponse {
+                        response,
+                        snapshot: Some(RegionSnapshot::from_snapshot(snapshot.into_sync(), region)),
+                    })]),
                     _ => unreachable!(),
                 }
             }
@@ -102,10 +105,7 @@ fn bench_async_batch_snapshots(b: &mut test::Bencher) {
     region.mut_region_epoch().set_version(2);
     region.mut_region_epoch().set_conf_ver(5);
     let (_tmp, db) = new_engine();
-    let kv = RaftKv::new(SyncBenchRouter {
-        db,
-        region: region.clone(),
-    });
+    let kv = RaftKv::new(SyncBenchRouter::new(region.clone(), db));
 
     b.iter(|| {
         let mut ctx = Context::new();
@@ -151,10 +151,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     region.mut_region_epoch().set_version(2);
     region.mut_region_epoch().set_conf_ver(5);
     let (_tmp, db) = new_engine();
-    let kv = RaftKv::new(SyncBenchRouter {
-        db,
-        region: region.clone(),
-    });
+    let kv = RaftKv::new(SyncBenchRouter::new(region.clone(), db));
 
     let mut ctx = Context::new();
     ctx.set_region_id(region.get_id());
@@ -179,10 +176,7 @@ fn bench_async_write(b: &mut test::Bencher) {
     region.mut_region_epoch().set_version(2);
     region.mut_region_epoch().set_conf_ver(5);
     let (_tmp, db) = new_engine();
-    let kv = RaftKv::new(SyncBenchRouter {
-        db,
-        region: region.clone(),
-    });
+    let kv = RaftKv::new(SyncBenchRouter::new(region.clone(), db));
 
     let mut ctx = Context::new();
     ctx.set_region_id(region.get_id());
@@ -194,9 +188,10 @@ fn bench_async_write(b: &mut test::Bencher) {
         });
         kv.async_write(
             &ctx,
-            vec![
-                Modify::Delete(CF_DEFAULT, Key::from_encoded(b"fooo".to_vec())),
-            ],
+            vec![Modify::Delete(
+                CF_DEFAULT,
+                Key::from_encoded(b"fooo".to_vec()),
+            )],
             on_finished,
         ).unwrap();
     });

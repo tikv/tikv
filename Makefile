@@ -42,6 +42,10 @@ clippy: pre-clippy
 	    -A unreadable_literal -A should_implement_trait -A verbose_bit_mask \
 	    -A implicit_hasher -A large_enum_variant -A new_without_default_derive \
 	    -A neg_cmp_op_on_partial_ord
+	cargo clippy --bench benches -- -A module_inception -A needless_pass_by_value -A cyclomatic_complexity \
+	    -A unreadable_literal -A should_implement_trait -A verbose_bit_mask \
+	    -A implicit_hasher -A large_enum_variant -A new_without_default_derive \
+	    -A neg_cmp_op_on_partial_ord
 
 dev: format clippy
 	@env FAIL_POINT=1 make test
