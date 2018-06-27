@@ -9,8 +9,8 @@ use super::transport_simulate::*;
 use super::util::*;
 use raft::eraftpb::MessageType;
 
-// Validate that prevote is used in elections if it is on, or not if it is off.
-fn test_prevote<T: Simulator>(cluster: &mut Cluster<T>, prevote_enabled: bool) {
+// Validate that prevote is used in elections after a leader is isolated if it is on, or not if it is off.
+fn test_prevote_on_leader_isolation<T: Simulator>(cluster: &mut Cluster<T>, prevote_enabled: bool) {
     cluster.cfg.raft_store.prevote = prevote_enabled;
 
     // Setup a notifier
@@ -39,21 +39,36 @@ fn test_prevote<T: Simulator>(cluster: &mut Cluster<T>, prevote_enabled: bool) {
         .unwrap()
         .add_send_filter(2, request_notifier);
 
-    // Since the cluster is already started we might have missed some or all of the election.
-    // In order to resolve this we need to essentially force an unplanned election.
+    // Force an unplanned election.
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.add_send_filter(IsolationFilterFactory::new(1));
 
-    // Once we see a response on the wire we know an election will happen soon.
+    // Once we see a response on the wire we know a prevote round is happening.
     let recieved = rx.recv_timeout(Duration::from_secs(2));
     assert_eq!(
         recieved.is_ok(),
         prevote_enabled,
         "Recieve a PreVote or PreVoteResponse to a peer when a leader was isolated.",
     );
+}
 
-    // Cleanup and make a new notifier.
-    cluster.clear_send_filters();
+#[test]
+fn test_server_prevote_on_leader_isolation() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_prevote_on_leader_isolation(&mut cluster, true);
+}
+
+#[test]
+fn test_server_no_prevote_on_leader_isolation() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_prevote_on_leader_isolation(&mut cluster, false);
+}
+
+fn test_prevote_on_leader_reboot<T: Simulator>(cluster: &mut Cluster<T>, prevote_enabled: bool) {
+    cluster.cfg.raft_store.prevote = prevote_enabled;
+    cluster.run();
+
+    // Setup a notifier
     let (tx, rx) = mpsc::channel();
     let response_notifier = Box::new(MessageTypeNotifier::new(
         MessageType::MsgRequestPreVoteResponse,
@@ -66,7 +81,7 @@ fn test_prevote<T: Simulator>(cluster: &mut Cluster<T>, prevote_enabled: bool) {
         Arc::from(AtomicBool::new(true)),
     ));
 
-    // Make a node a leader, then kill it, letting it ask for a prevote.
+    // Make a node a leader, then kill it and bring it back up letting it ask for a prevote.
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.stop_node(1);
     cluster.run_node(1);
@@ -83,20 +98,25 @@ fn test_prevote<T: Simulator>(cluster: &mut Cluster<T>, prevote_enabled: bool) {
         .unwrap()
         .add_send_filter(3, request_notifier);
 
+    // Once we see a response on the wire we know a prevote round is happening.
     let recieved = rx.recv_timeout(Duration::from_secs(2));
-    assert_eq!(recieved.is_ok(), prevote_enabled, "Recieved a PreVote or PreVoteResponse when a leader is elected then unexpectedly killed.");
+    assert_eq!(
+        recieved.is_ok(),
+        prevote_enabled,
+        "Recieved a PreVote or PreVoteResponse when a leader is elected then unexpectedly killed."
+    );
 }
 
 #[test]
-fn test_server_prevote() {
+fn test_server_prevote_on_leader_reboot() {
     let mut cluster = new_server_cluster(0, 3);
-    test_prevote(&mut cluster, true);
+    test_prevote_on_leader_reboot(&mut cluster, true);
 }
 
 #[test]
-fn test_server_no_prevote() {
+fn test_server_no_prevote_on_leader_reboot() {
     let mut cluster = new_server_cluster(0, 3);
-    test_prevote(&mut cluster, false);
+    test_prevote_on_leader_reboot(&mut cluster, false);
 }
 
 // Test isolating a minority of the cluster and make sure that the remove themselves.
