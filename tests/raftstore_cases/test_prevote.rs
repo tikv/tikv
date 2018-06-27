@@ -9,6 +9,7 @@ use super::transport_simulate::*;
 use super::util::*;
 use raft::eraftpb::MessageType;
 
+// Validate that prevote is used in elections if it is on, or not if it is off.
 fn test_prevote<T: Simulator>(cluster: &mut Cluster<T>, prevote_enabled: bool) {
     cluster.cfg.raft_store.prevote = prevote_enabled;
 
@@ -48,7 +49,7 @@ fn test_prevote<T: Simulator>(cluster: &mut Cluster<T>, prevote_enabled: bool) {
     assert_eq!(
         recieved.is_ok(),
         prevote_enabled,
-        "Didn't recieve a PreVote or PreVoteResponse",
+        "Recieve a PreVote or PreVoteResponse to a peer when a leader was isolated.",
     );
 
     // Cleanup and make a new notifier.
@@ -83,7 +84,7 @@ fn test_prevote<T: Simulator>(cluster: &mut Cluster<T>, prevote_enabled: bool) {
         .add_send_filter(3, request_notifier);
 
     let recieved = rx.recv_timeout(Duration::from_secs(2));
-    assert_eq!(recieved.is_ok(), prevote_enabled);
+    assert_eq!(recieved.is_ok(), prevote_enabled, "Recieved a PreVote or PreVoteResponse when a leader is elected then unexpectedly killed.");
 }
 
 #[test]
@@ -103,17 +104,13 @@ fn test_pair_isolated<T: Simulator>(cluster: &mut Cluster<T>) {
     let region = 1;
     let pd_client = Arc::clone(&cluster.pd_client);
 
-    // We must start the cluster before adding send filters, otherwise it panics.
+    // Given some nodes A, B, C, D, E, we partition the cluster such that D, E are isolated from the rest.
     cluster.run();
-
+    // Choose a predictable leader so we don't accidently partition the leader.
     cluster.must_transfer_leader(region, new_peer(1, 1));
-
-    cluster.must_put(b"k1", b"v1");
-
-    // Split the nodes and ensure they will eventually remove themselves if isolated.
     cluster.partition(vec![1, 2, 3], vec![4, 5]);
 
-    // Verify that pd has removed them.
+    // Then, add a policy to PD that it should ask the Raft leader to remove the peer from the group.
     pd_client.must_remove_peer(region, new_peer(4, 4));
     pd_client.must_remove_peer(region, new_peer(5, 5));
 
