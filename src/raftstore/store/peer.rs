@@ -263,7 +263,7 @@ pub struct Peer {
 
     leader_missing_time: Option<Instant>,
 
-    leader_lease: RefCell<Lease>,
+    leader_lease: Lease,
 
     // If a snapshot is being applied asynchronously, messages should not be sent.
     pending_messages: Vec<eraftpb::Message>,
@@ -392,7 +392,7 @@ impl Peer {
             },
             raft_log_size_hint: 0,
             raft_entry_max_size: cfg.raft_entry_max_size.0,
-            leader_lease: RefCell::new(Lease::new(cfg.raft_store_max_leader_lease())),
+            leader_lease: Lease::new(cfg.raft_store_max_leader_lease()),
             cfg,
             pending_messages: vec![],
             peer_stat: PeerStat::default(),
@@ -594,7 +594,7 @@ impl Peer {
                     // network partition from the new leader.
                     // For lease safety during leader transfer, transit `leader_lease`
                     // to suspect.
-                    self.leader_lease.borrow_mut().suspect(monotonic_raw_now());
+                    self.leader_lease.suspect(monotonic_raw_now());
 
                     metrics.timeout_now += 1;
                 }
@@ -765,7 +765,7 @@ impl Peer {
                     self.heartbeat_pd(worker)
                 }
                 StateRole::Follower => {
-                    self.leader_lease.borrow_mut().expire();
+                    self.leader_lease.expire();
                 }
                 _ => {}
             }
@@ -1027,7 +1027,7 @@ impl Peer {
         if let Some(propose_time) = propose_time {
             // `propose_time` is a placeholder, here cares about `Suspect` only,
             // and if it is in `Suspect` phase, the actual timestamp is useless.
-            if self.leader_lease.borrow().inspect(Some(propose_time)) == LeaseState::Suspect {
+            if self.leader_lease.inspect(Some(propose_time)) == LeaseState::Suspect {
                 return;
             }
             self.maybe_renew_leader_lease(propose_time);
@@ -1093,7 +1093,7 @@ impl Peer {
             debug!("{} prevents renew lease while splitting", self.tag);
             return;
         }
-        self.leader_lease.borrow_mut().renew(ts);
+        self.leader_lease.renew(ts);
     }
 
     pub fn maybe_campaign(
@@ -1145,7 +1145,7 @@ impl Peer {
 
         let mut is_conf_change = false;
 
-        let policy = RequestInspector::with_condition(self).inspect(&req);
+        let policy = self.inspect(&req);
         let res = match policy {
             Ok(RequestPolicy::ReadLocal) => {
                 self.read_local(req, cb, metrics);
@@ -1199,7 +1199,7 @@ impl Peer {
 
         // TODO: deny non-snapshot request.
 
-        let policy = RequestInspector::with_condition(self).inspect(&req);
+        let policy = self.inspect(&req);
         match policy {
             Ok(RequestPolicy::ReadLocal) => {
                 metrics.local_read += 1;
@@ -1439,7 +1439,7 @@ impl Peer {
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
-        if self.leader_lease.borrow().inspect(Some(renew_lease_time)) == LeaseState::Suspect {
+        if self.leader_lease.inspect(Some(renew_lease_time)) == LeaseState::Suspect {
             let req = RaftCmdRequest::new();
             if let Ok(index) = self.propose_normal(req, metrics) {
                 let meta = ProposalMeta {
@@ -1812,28 +1812,16 @@ enum RequestPolicy {
     ProposeConfChange,
 }
 
-/// A `RequestCondition` helps `RequestInspector` make a `RequestPolicy`.
-trait RequestCondition {
+/// `RequestInspector` makes `RequestPolicy` for requests.
+trait RequestInspector {
     /// Has the current term been applied?
     fn has_applied_current_term(&self) -> bool;
     /// Inspects its lease.
-    fn inspect_lease(&self) -> LeaseState;
-}
-
-/// `RequestInspector` makes `RequestPolicy` for requests.
-struct RequestInspector<'a, T: 'a + RequestCondition> {
-    condition: &'a T,
-}
-
-impl<'a, T: RequestCondition> RequestInspector<'a, T> {
-    /// Create a `RequestInspector`.
-    fn with_condition(condition: &'a T) -> RequestInspector<T> {
-        RequestInspector { condition }
-    }
+    fn inspect_lease(&mut self) -> LeaseState;
 
     /// Inspect a request, return a policy that tells us how to
     /// handle the request.
-    fn inspect(&self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
+    fn inspect(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
         if req.has_admin_request() {
             if apply::get_change_peer_cmd(req).is_some() {
                 return Ok(RequestPolicy::ProposeConfChange);
@@ -1875,13 +1863,13 @@ impl<'a, T: RequestCondition> RequestInspector<'a, T> {
 
         // If applied index's term is differ from current raft's term, leader transfer
         // must happened, if read locally, we may read old value.
-        if !self.condition.has_applied_current_term() {
+        if !self.has_applied_current_term() {
             return Ok(RequestPolicy::ReadIndex);
         }
 
         // Local read should be performed, if and only if leader is in lease.
         // None for now.
-        match self.condition.inspect_lease() {
+        match self.inspect_lease() {
             LeaseState::Valid => Ok(RequestPolicy::ReadLocal),
             LeaseState::Expired | LeaseState::Suspect => {
                 // Perform a consistent read to Raft quorum and try to renew the leader lease.
@@ -1891,18 +1879,17 @@ impl<'a, T: RequestCondition> RequestInspector<'a, T> {
     }
 }
 
-impl RequestCondition for Peer {
+impl RequestInspector for Peer {
     fn has_applied_current_term(&self) -> bool {
-        // TODO: add it in queue directly if it is false.
         self.get_store().applied_index_term == self.term()
     }
 
-    fn inspect_lease(&self) -> LeaseState {
+    fn inspect_lease(&mut self) -> LeaseState {
         if !self.raft_group.raft.in_lease() {
             return LeaseState::Suspect;
         }
         // None means now.
-        let state = self.leader_lease.borrow().inspect(None);
+        let state = self.leader_lease.inspect(None);
         match state {
             LeaseState::Expired => {
                 debug!(
@@ -1910,7 +1897,7 @@ impl RequestCondition for Peer {
                     self.tag, self.leader_lease
                 );
                 // The lease is expired, call `expire` explicitly.
-                self.leader_lease.borrow_mut().expire();
+                self.leader_lease.expire();
                 LeaseState::Expired
             }
             other => other,
@@ -2095,15 +2082,15 @@ mod tests {
     #[allow(useless_vec)]
     #[test]
     fn test_request_inspector() {
-        struct DummyCondition {
+        struct DummyInspector {
             applied_index_term: bool,
             lease_state: LeaseState,
         }
-        impl RequestCondition for DummyCondition {
+        impl RequestInspector for DummyInspector {
             fn has_applied_current_term(&self) -> bool {
                 self.applied_index_term
             }
-            fn inspect_lease(&self) -> LeaseState {
+            fn inspect_lease(&mut self) -> LeaseState {
                 self.lease_state.clone()
             }
         }
@@ -2144,7 +2131,7 @@ mod tests {
 
         for b in vec![true, false] {
             for (req, mut policy) in table.clone() {
-                let condition = DummyCondition {
+                let mut inspector = DummyInspector {
                     applied_index_term: b,
                     lease_state: LeaseState::Valid,
                 };
@@ -2154,7 +2141,7 @@ mod tests {
                     policy
                 };
                 assert_eq!(
-                    RequestInspector::with_condition(&condition)
+                    inspector
                         .inspect(&req)
                         .unwrap(),
                     policy
@@ -2164,7 +2151,7 @@ mod tests {
 
         for s in vec![LeaseState::Expired, LeaseState::Suspect] {
             for (req, policy) in table.clone() {
-                let condition = DummyCondition {
+                let mut inspector = DummyInspector {
                     applied_index_term: true,
                     lease_state: s.clone(),
                 };
@@ -2174,7 +2161,7 @@ mod tests {
                     policy
                 };
                 assert_eq!(
-                    RequestInspector::with_condition(&condition)
+                    inspector
                         .inspect(&req)
                         .unwrap(),
                     policy
@@ -2187,12 +2174,12 @@ mod tests {
         request.set_cmd_type(CmdType::Snap);
         req.set_requests(vec![request].into());
         req.mut_header().set_read_quorum(true);
-        let condition = DummyCondition {
+        let mut inspector = DummyInspector {
             applied_index_term: true,
             lease_state: LeaseState::Valid,
         };
         assert_eq!(
-            RequestInspector::with_condition(&condition)
+            inspector
                 .inspect(&req)
                 .unwrap(),
             RequestPolicy::ReadIndex
@@ -2215,12 +2202,12 @@ mod tests {
         err_table.push(req.clone());
 
         for req in err_table {
-            let condition = DummyCondition {
+            let mut inspector = DummyInspector {
                 applied_index_term: true,
                 lease_state: LeaseState::Valid,
             };
             assert!(
-                RequestInspector::with_condition(&condition)
+                inspector
                     .inspect(&req)
                     .is_err()
             );
