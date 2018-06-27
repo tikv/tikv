@@ -736,7 +736,7 @@ impl Peer {
         // Updates the `leader_missing_time` according to the current state.
         //
         // If we are checking this it means we suspect the leader might be missing.
-        // Mark down the when we are called, so we can check later if it's been longer than it
+        // Mark down the time when we are called, so we can check later if it's been longer than it
         // should be.
         match self.leader_missing_time {
             None => {
