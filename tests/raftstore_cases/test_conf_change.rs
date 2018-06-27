@@ -12,8 +12,7 @@
 // limitations under the License.
 
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering}, Arc,
 };
 use std::thread;
 use std::time::Duration;

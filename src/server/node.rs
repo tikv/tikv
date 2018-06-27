@@ -21,12 +21,12 @@ use mio::EventLoop;
 
 use super::transport::RaftStoreRouter;
 use super::Result;
+use coprocessor::cache::SQLCache;
 use import::SSTImporter;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use protobuf::RepeatedField;
-use coprocessor::cache::SQLCache;
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::store::{
     self, keys, Config as StoreConfig, Engines, Msg, Peekable, SignificantMsg, SnapManager, Store,

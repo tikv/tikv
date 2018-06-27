@@ -38,12 +38,13 @@ use kvproto::raft_serverpb::{
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
+use coprocessor::cache::SQLCache;
 use pd::{PdClient, PdRunner, PdTask};
+use raftstore::coprocessor::distsql_cache_observer::DistSQLObserver;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::util::RegionApproximateStat;
 use raftstore::{Error, Result};
-use raftstore::coprocessor::distsql_cache_observer::DistSQLObserver;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::collections::{HashMap, HashSet};
 use util::rocksdb::{CompactedEvent, CompactionListener};

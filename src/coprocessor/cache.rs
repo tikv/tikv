@@ -14,9 +14,9 @@
 use std::collections::HashMap;
 use std::option::Option;
 // use std::sync::Mutex;
-use spin::Mutex;
-use linked_hash_map::LinkedHashMap;
 use super::metrics::*;
+use linked_hash_map::LinkedHashMap;
+use spin::Mutex;
 
 type DistSQLCacheKey = String;
 pub type SQLCache = Mutex<DistSQLCache>;
@@ -47,11 +47,11 @@ impl DistSQLCacheEntry {
     ) -> DistSQLCacheEntry {
         let size = value.len() + DISTSQL_CACHE_ENTRY_ADDITION_SIZE + 2 * key_size;
         DistSQLCacheEntry {
-            region_id: region_id,
-            version: version,
-            value: value,
-            size: size,
-            start_ts: start_ts,
+            region_id,
+            version,
+            value,
+            size,
+            start_ts,
         }
     }
 
@@ -311,14 +311,17 @@ impl DistSQLCache {
     }
 
     pub fn disable_region_cache(&mut self, region_id: u64) {
-        let entry = self.regions
+        let entry = self
+            .regions
             .entry(region_id)
             .or_insert_with(Default::default);
         entry.enable = false;
     }
 
     pub fn enable_region_cache(&mut self, region_id: u64) {
-        self.regions.get_mut(&region_id).map(|e| e.enable = true);
+        if let Some(e) = self.regions.get_mut(&region_id) {
+            e.enable = true;
+        }
     }
 
     fn is_region_cache_enabled(&self, region_id: u64) -> bool {
@@ -326,7 +329,8 @@ impl DistSQLCache {
     }
 
     fn update_regions(&mut self, region_id: u64, k: DistSQLCacheKey) {
-        let opt = self.regions
+        let opt = self
+            .regions
             .entry(region_id)
             .or_insert_with(Default::default);
         opt.cached_items.insert(k, 1);

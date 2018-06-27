@@ -20,10 +20,10 @@ use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse
 
 use storage::{Snapshot, SnapshotStore};
 
+use coprocessor::cache::*;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::codec::mysql;
 use coprocessor::dag::expr::EvalConfig;
-use coprocessor::cache::*;
 use coprocessor::metrics::*;
 use coprocessor::util;
 use coprocessor::*;
@@ -50,9 +50,9 @@ impl DAGContext {
         ranges: Vec<KeyRange>,
         snap: Box<Snapshot>,
         req_ctx: ReqContext,
+        batch_row_limit: usize,
         distsql_cache: Option<Arc<SQLCache>>,
         distsql_cache_entry_max_size: usize,
-        batch_row_limit: usize,
     ) -> Result<DAGContext> {
         let mut eval_cfg = box_try!(EvalConfig::new(req.get_time_zone_offset(), req.get_flags(),));
         if req.has_max_warning_count() {
@@ -89,14 +89,27 @@ impl DAGContext {
             columns: dag_executor.columns,
             has_aggr: dag_executor.has_aggr,
             has_topn: dag_executor.has_topn,
-            req_ctx: req_ctx,
+            req_ctx,
             exec: dag_executor.exec,
             output_offsets: req.take_output_offsets(),
-            cache_key: cache_key,
-            distsql_cache: distsql_cache,
+            cache_key,
+            distsql_cache,
             start_ts: req.get_start_ts(),
-            distsql_cache_entry_max_size: distsql_cache_entry_max_size,
+            distsql_cache_entry_max_size,
+            batch_row_limit,
         })
+    }
+
+    fn can_cache(&mut self) -> bool {
+        self.distsql_cache.is_some() && (self.has_aggr || self.has_topn)
+    }
+
+    fn can_cache_with_size(&mut self, data: &[u8]) -> bool {
+        if data.len() > self.distsql_cache_entry_max_size {
+            false
+        } else {
+            self.can_cache()
+        }
     }
 
     fn make_stream_response(&mut self, chunk: Chunk, range: Option<KeyRange>) -> Result<Response> {
@@ -195,18 +208,6 @@ impl RequestHandler for DAGContext {
                 }
                 Err(e) => return Err(e),
             }
-        }
-    }
-
-    pub fn can_cache(&mut self) -> bool {
-        self.distsql_cache.is_some() && (self.has_aggr || self.has_topn)
-    }
-
-    pub fn can_cache_with_size(&mut self, data: &[u8]) -> bool {
-        if data.len() > self.distsql_cache_entry_max_size {
-            false
-        } else {
-            self.can_cache()
         }
     }
 

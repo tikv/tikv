@@ -447,7 +447,10 @@ impl SnapContext {
         let mut timeout_ranges = self.pending_delete_ranges.drain_timeout_ranges(now);
         for (region_id, start_key, end_key) in timeout_ranges.drain(..) {
             self.cleanup_range(
-                region_id, start_key, end_key, true, /* use_delete_files */
+                region_id,
+                start_key,
+                end_key,
+                true, /* use_delete_files */
             );
         }
     }
@@ -511,7 +514,10 @@ impl Runnable<Task> for Runner {
                     end_key.clone(),
                 ) {
                     self.ctx.cleanup_range(
-                        region_id, start_key, end_key, false, /* use_delete_files */
+                        region_id,
+                        start_key,
+                        end_key,
+                        false, /* use_delete_files */
                     );
                 }
             }

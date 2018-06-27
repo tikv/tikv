@@ -30,12 +30,12 @@ use util::worker::{Builder as WorkerBuilder, Worker};
 
 use super::raft_client::RaftClient;
 use super::readpool::ReadPool;
-use coprocessor::cache::SQLCache;
 use super::resolve::StoreAddrResolver;
 use super::service::*;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::{Config, Result};
+use coprocessor::cache::SQLCache;
 
 const DEFAULT_COPROCESSOR_BATCH: usize = 256;
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;

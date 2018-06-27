@@ -17,9 +17,9 @@ use protobuf::RepeatedField;
 use raft::StateRole;
 use rocksdb::DB;
 
-pub mod distsql_cache_observer;
 pub mod config;
 pub mod dispatcher;
+pub mod distsql_cache_observer;
 mod error;
 mod metrics;
 mod split_check;

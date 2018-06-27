@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod cache;
 mod checksum;
 pub mod codec;
 mod dag;
@@ -20,7 +21,6 @@ pub mod local_metrics;
 mod metrics;
 mod readpool_context;
 mod statistics;
-pub mod cache;
 mod util;
 
 pub use self::endpoint::err_resp;
@@ -42,7 +42,7 @@ const SINGLE_GROUP: &[u8] = b"SingleGroup";
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
 trait RequestHandler: Send {
-    fn handle_request(&mut self) -> Result<coppb::Response> {
+    fn handle_request(&mut self, _region_id: u64) -> Result<coppb::Response> {
         panic!("unary request is not supported for this handler");
     }
 

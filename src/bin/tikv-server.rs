@@ -58,6 +58,7 @@ use fs2::FileExt;
 
 use tikv::config::{check_and_persist_critical_config, TiKvConfig};
 use tikv::coprocessor;
+use tikv::coprocessor::cache::new_mutex_cache;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::pd::{PdClient, RpcClient};
 use tikv::raftstore::coprocessor::CoprocessorHost;
@@ -72,7 +73,6 @@ use tikv::util::security::SecurityManager;
 use tikv::util::time::Monitor;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::FutureWorker;
-use tikv::coprocessor::cache::new_mutex_cache;
 use tikv::util::{self as tikv_util, panic_hook, rocksdb as rocksdb_util};
 
 const RESERVED_OPEN_FDS: u64 = 1000;

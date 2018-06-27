@@ -96,7 +96,7 @@ impl Host {
             basic_local_metrics: BasicLocalMetrics::default(),
             // TODO: Deprecate after totally switching to read pool
             max_running_task_count,
-            distsql_cache: distsql_cache,
+            distsql_cache,
             distsql_cache_entry_max_size: cfg.distsql_cache_entry_max_size.0 as usize,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
@@ -211,7 +211,7 @@ impl Host {
                 let mut ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx).unwrap();
                 let do_request = move |_| {
                     tracker.record_wait();
-                    let mut resp = ctx.handle_request().unwrap_or_else(|e| {
+                    let mut resp = ctx.handle_request(0).unwrap_or_else(|e| {
                         let mut metrics = tracker.get_basic_metrics();
                         err_resp(e, &mut metrics)
                     });
@@ -227,7 +227,7 @@ impl Host {
                 let mut ctx = ChecksumContext::new(checksum, ranges, snap, &req_ctx).unwrap();
                 let do_request = move |_| {
                     tracker.record_wait();
-                    let mut resp = ctx.handle_request().unwrap_or_else(|e| {
+                    let mut resp = ctx.handle_request(0).unwrap_or_else(|e| {
                         let mut metrics = tracker.get_basic_metrics();
                         err_resp(e, &mut metrics)
                     });
@@ -879,7 +879,7 @@ mod tests {
             &readpool::Config::default_with_concurrency(1),
             || || ReadPoolContext::new(pd_worker.scheduler()),
         );
-        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, read_pool);
+        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, read_pool, None);
         end_point.max_running_task_count = 1;
         worker.start(end_point).unwrap();
 

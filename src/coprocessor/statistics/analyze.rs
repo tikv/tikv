@@ -106,7 +106,7 @@ impl AnalyzeContext {
 }
 
 impl RequestHandler for AnalyzeContext {
-    fn handle_request(&mut self) -> Result<Response> {
+    fn handle_request(&mut self, _region_id: u64) -> Result<Response> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();

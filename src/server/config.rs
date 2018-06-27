@@ -16,11 +16,11 @@ use std::i32;
 use super::Result;
 use grpc::CompressionAlgorithms;
 
+use coprocessor::cache::{DEFAULT_DISTSQL_CACHE_ENTRY_MAX_SIZE, DEFAULT_DISTSQL_CACHE_SIZE};
 use coprocessor::DEFAULT_REQUEST_MAX_HANDLE_SECS;
 use util::collections::HashMap;
 use util::config::{self, ReadableDuration, ReadableSize};
 use util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
-use coprocessor::cache::{DEFAULT_DISTSQL_CACHE_ENTRY_MAX_SIZE, DEFAULT_DISTSQL_CACHE_SIZE};
 
 pub use raftstore::store::Config as RaftStoreConfig;
 pub use storage::Config as StorageConfig;

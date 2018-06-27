@@ -683,8 +683,7 @@ impl Default for MetricConfig {
 
 pub mod log_level_serde {
     use serde::{
-        de::{Error, Unexpected},
-        Deserialize, Deserializer, Serialize, Serializer,
+        de::{Error, Unexpected}, Deserialize, Deserializer, Serialize, Serializer,
     };
     use slog::Level;
     use util::logger::{get_level_by_string, get_string_by_level};

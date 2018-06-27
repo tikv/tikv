@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
 use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
 use protobuf::RepeatedField;
+use std::sync::Arc;
 
-use coprocessor::cache::SQLCache;
 use super::{AdminObserver, Coprocessor, ObserverContext, QueryObserver};
+use coprocessor::cache::SQLCache;
 
 pub struct DistSQLObserver {
     cache: Arc<SQLCache>,
@@ -24,7 +24,7 @@ pub struct DistSQLObserver {
 
 impl DistSQLObserver {
     pub fn new(cache: Arc<SQLCache>) -> Box<DistSQLObserver> {
-        box DistSQLObserver { cache: cache }
+        box DistSQLObserver { cache }
     }
     fn disable_cache(&self, ctx: &mut ObserverContext) {
         let region_id = ctx.region().get_id();
