@@ -191,7 +191,6 @@ fn must_not_stale_read(
     fail::remove(propose_readindex);
 }
 
-#[allow(too_many_arguments)]
 fn must_not_eq_on_key(
     cluster: &mut Cluster<NodeCluster>,
     key: &[u8],

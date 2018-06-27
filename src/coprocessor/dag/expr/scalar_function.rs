@@ -16,12 +16,12 @@ use std::usize;
 
 use tipb::expression::ScalarFuncSig;
 
-use super::compare::CmpOp;
-use super::{Error, EvalContext, FnCall, Result};
-use coprocessor::codec::Datum;
+use super::builtin_compare::CmpOp;
+use super::{Error, EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::{self, Decimal, Duration, Json, Time};
+use coprocessor::codec::Datum;
 
-impl FnCall {
+impl ScalarFunc {
     pub fn check_args(sig: ScalarFuncSig, args: usize) -> Result<()> {
         let (min_args, max_args) = match sig {
             ScalarFuncSig::LTInt
@@ -265,7 +265,7 @@ macro_rules! dispatch_call {
         DUR_CALLS {$($u_sig:ident => $u_func:ident $($u_arg:expr)*,)*}
         JSON_CALLS {$($j_sig:ident => $j_func:ident $($j_arg:expr)*,)*}
     ) => {
-        impl FnCall {
+        impl ScalarFunc {
             pub fn eval_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
                 match self.sig {
                     $(ScalarFuncSig::$i_sig => self.$i_func(ctx, row, $($i_arg),*)),*,

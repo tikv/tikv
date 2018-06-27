@@ -26,8 +26,8 @@ use coprocessor::codec::table::RowColsDict;
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use coprocessor::*;
 
-use super::ExecutorMetrics;
 use super::aggregate::{self, AggrFunc};
+use super::ExecutorMetrics;
 use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
 
 struct AggFuncExpr {
@@ -411,8 +411,8 @@ mod test {
     use util::codec::number::NumberEncoder;
     use util::collections::HashMap;
 
-    use super::super::index_scan::IndexScanExecutor;
     use super::super::index_scan::test::IndexTestWrapper;
+    use super::super::index_scan::IndexScanExecutor;
     use super::super::scanner::test::{get_range, new_col_info, Data, TestStore};
     use super::super::table_scan::TableScanExecutor;
     use super::super::topn::test::gen_table_data;
@@ -541,9 +541,10 @@ mod test {
         assert_eq!(expected_counts, counts);
 
         // test one row
-        let idx_vals = vec![
-            vec![(2, Datum::Bytes(b"a".to_vec())), (3, Datum::Dec(12.into()))],
-        ];
+        let idx_vals = vec![vec![
+            (2, Datum::Bytes(b"a".to_vec())),
+            (3, Datum::Dec(12.into())),
+        ]];
         let idx_data = prepare_index_data(tid, idx_id, col_infos.clone(), idx_vals);
         let idx_row_cnt = idx_data.kv_data.len() as i64;
         let unique = false;
@@ -565,16 +566,14 @@ mod test {
             row_data.push(row.data);
         }
         assert_eq!(row_data.len(), expect_row_cnt);
-        let expect_row_data = vec![
-            (
-                1 as u64,
-                Decimal::from(12),
-                1 as u64,
-                Decimal::from(12),
-                b"a".as_ref(),
-                Decimal::from(12),
-            ),
-        ];
+        let expect_row_data = vec![(
+            1 as u64,
+            Decimal::from(12),
+            1 as u64,
+            Decimal::from(12),
+            b"a".as_ref(),
+            Decimal::from(12),
+        )];
         let expect_col_cnt = 6;
         for (row, expect_cols) in row_data.into_iter().zip(expect_row_data) {
             let ds = datum::decode(&mut row.value.as_slice()).unwrap();

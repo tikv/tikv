@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{EvalContext, FnCall, Result};
+use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
 
-impl FnCall {
+impl ScalarFunc {
     #[inline]
     pub fn date_format<'a, 'b: 'a>(
         &'b self,
@@ -35,9 +35,9 @@ impl FnCall {
 
 #[cfg(test)]
 mod test {
-    use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::Time;
-    use coprocessor::dag::expr::test::{datum_expr, fncall_expr};
+    use coprocessor::codec::Datum;
+    use coprocessor::dag::expr::test::{datum_expr, scalar_func_expr};
     use coprocessor::dag::expr::{EvalContext, Expression};
     use tipb::expression::ScalarFuncSig;
     #[test]
@@ -85,7 +85,7 @@ mod test {
         for (arg1, arg2, exp) in tests {
             let arg1 = datum_expr(Datum::Time(Time::parse_utc_datetime(arg1, 6).unwrap()));
             let arg2 = datum_expr(Datum::Bytes(arg2.to_string().into_bytes()));
-            let f = fncall_expr(ScalarFuncSig::DateFormatSig, &[arg1, arg2]);
+            let f = scalar_func_expr(ScalarFuncSig::DateFormatSig, &[arg1, arg2]);
             let op = Expression::build(&mut ctx, f).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, Datum::Bytes(exp.to_string().into_bytes()));

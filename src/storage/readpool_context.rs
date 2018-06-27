@@ -101,7 +101,8 @@ impl Context {
 
     #[inline]
     pub fn collect_read_flow(&mut self, region_id: u64, statistics: &storage::Statistics) {
-        let flow_stats = self.read_flow_stats
+        let flow_stats = self
+            .read_flow_stats
             .entry(region_id)
             .or_insert_with(storage::FlowStatistics::default);
         flow_stats.add(&statistics.write.flow_stats);
@@ -123,7 +124,8 @@ impl futurepool::Context for Context {
         if !self.read_flow_stats.is_empty() {
             let mut read_stats = HashMap::default();
             mem::swap(&mut read_stats, &mut self.read_flow_stats);
-            let result = self.pd_sender
+            let result = self
+                .pd_sender
                 .schedule(pd::PdTask::ReadStats { read_stats });
             if let Err(e) = result {
                 error!("Failed to send readpool read flow statistics: {:?}", e);

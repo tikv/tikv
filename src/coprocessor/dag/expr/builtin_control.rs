@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{EvalContext, FnCall, Result};
-use coprocessor::codec::Datum;
+use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use coprocessor::codec::Datum;
 use coprocessor::dag::expr::Expression;
 use std::borrow::Cow;
 
@@ -29,7 +29,7 @@ where
 }
 
 fn if_condition<F, T>(
-    expr: &FnCall,
+    expr: &ScalarFunc,
     ctx: &mut EvalContext,
     row: &[Datum],
     mut f: F,
@@ -47,7 +47,7 @@ where
 
 /// See <https://dev.mysql.com/doc/refman/5.7/en/case.html>
 fn case_when<'a, F, T>(
-    expr: &'a FnCall,
+    expr: &'a ScalarFunc,
     ctx: &mut EvalContext,
     row: &'a [Datum],
     f: F,
@@ -69,7 +69,7 @@ where
     Ok(None)
 }
 
-impl FnCall {
+impl ScalarFunc {
     pub fn if_null_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         if_null(|i| self.children[i].eval_int(ctx, row))
     }
@@ -232,9 +232,9 @@ mod test {
     use protobuf::RepeatedField;
     use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
-    use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::{Duration, Json, Time};
-    use coprocessor::dag::expr::test::{col_expr, datum_expr, fncall_expr, str2dec};
+    use coprocessor::codec::Datum;
+    use coprocessor::dag::expr::test::{col_expr, datum_expr, scalar_func_expr, str2dec};
     use coprocessor::dag::expr::{EvalContext, Expression};
 
     #[test]
@@ -329,7 +329,8 @@ mod test {
         for (operator, branch1, branch2, exp) in tests {
             let arg1 = datum_expr(branch1);
             let arg2 = datum_expr(branch2);
-            let op = Expression::build(&mut ctx, fncall_expr(operator, &[arg1, arg2])).unwrap();
+            let op =
+                Expression::build(&mut ctx, scalar_func_expr(operator, &[arg1, arg2])).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -464,8 +465,8 @@ mod test {
             let arg2 = datum_expr(branch1);
             let arg3 = datum_expr(branch2);
             let expected = Expression::build(&mut ctx, datum_expr(exp)).unwrap();
-            let op =
-                Expression::build(&mut ctx, fncall_expr(operator, &[arg1, arg2, arg3])).unwrap();
+            let op = Expression::build(&mut ctx, scalar_func_expr(operator, &[arg1, arg2, arg3]))
+                .unwrap();
             let lhs = op.eval(&mut ctx, &[]).unwrap();
             let rhs = expected.eval(&mut ctx, &[]).unwrap();
             assert_eq!(lhs, rhs);
