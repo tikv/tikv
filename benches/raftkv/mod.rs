@@ -19,9 +19,11 @@ use kvproto::raft_cmdpb::{RaftCmdResponse, Response};
 use rocksdb::DB;
 use tempdir::TempDir;
 use test;
+use tikv::raftstore::store::{
+    cmd_resp, engine, util, BatchReadCallback, Callback, Msg, ReadResponse, RegionSnapshot,
+    SignificantMsg, WriteResponse,
+};
 use tikv::raftstore::Result;
-use tikv::raftstore::store::{cmd_resp, engine, util, BatchReadCallback, Callback, Msg,
-                             ReadResponse, RegionSnapshot, SignificantMsg, WriteResponse};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::storage::engine::raftkv::CmdRes;
 use tikv::storage::engine::{BatchCallback, BatchResults, Callback as EngineCallback, Modify};
