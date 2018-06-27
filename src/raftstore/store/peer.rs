@@ -1822,7 +1822,7 @@ enum RequestPolicy {
 /// `RequestInspector` makes `RequestPolicy` for requests.
 trait RequestInspector {
     /// Has the current term been applied?
-    fn has_applied_current_term(&self) -> bool;
+    fn has_applied_to_current_term(&self) -> bool;
     /// Inspects its lease.
     fn inspect_lease(&mut self) -> LeaseState;
 
@@ -1870,7 +1870,7 @@ trait RequestInspector {
 
         // If applied index's term is differ from current raft's term, leader transfer
         // must happened, if read locally, we may read old value.
-        if !self.has_applied_current_term() {
+        if !self.has_applied_to_current_term() {
             return Ok(RequestPolicy::ReadIndex);
         }
 
@@ -1887,7 +1887,7 @@ trait RequestInspector {
 }
 
 impl RequestInspector for Peer {
-    fn has_applied_current_term(&self) -> bool {
+    fn has_applied_to_current_term(&self) -> bool {
         self.get_store().applied_index_term == self.term()
     }
 
@@ -1897,18 +1897,15 @@ impl RequestInspector for Peer {
         }
         // None means now.
         let state = self.leader_lease.inspect(None);
-        match state {
-            LeaseState::Expired => {
-                debug!(
-                    "{} leader lease is expired: {:?}",
-                    self.tag, self.leader_lease
-                );
-                // The lease is expired, call `expire` explicitly.
-                self.leader_lease.expire();
-                LeaseState::Expired
-            }
-            other => other,
+        if LeaseState::Expired == state {
+            debug!(
+                "{} leader lease is expired: {:?}",
+                self.tag, self.leader_lease
+            );
+            // The lease is expired, call `expire` explicitly.
+            self.leader_lease.expire();
         }
+        state
     }
 }
 
@@ -2090,12 +2087,12 @@ mod tests {
     #[test]
     fn test_request_inspector() {
         struct DummyInspector {
-            applied_index_term: bool,
+            applied_to_index_term: bool,
             lease_state: LeaseState,
         }
         impl RequestInspector for DummyInspector {
-            fn has_applied_current_term(&self) -> bool {
-                self.applied_index_term
+            fn has_applied_to_current_term(&self) -> bool {
+                self.applied_to_index_term
             }
             fn inspect_lease(&mut self) -> LeaseState {
                 self.lease_state.clone()
@@ -2136,43 +2133,22 @@ mod tests {
             table.push((req.clone(), policy));
         }
 
-        for b in vec![true, false] {
-            for (req, mut policy) in table.clone() {
-                let mut inspector = DummyInspector {
-                    applied_index_term: b,
-                    lease_state: LeaseState::Valid,
-                };
-                let policy = if !b && policy == RequestPolicy::ReadLocal {
-                    RequestPolicy::ReadIndex
-                } else {
-                    policy
-                };
-                assert_eq!(
-                    inspector
-                        .inspect(&req)
-                        .unwrap(),
-                    policy
-                );
-            }
-        }
-
-        for s in vec![LeaseState::Expired, LeaseState::Suspect] {
-            for (req, policy) in table.clone() {
-                let mut inspector = DummyInspector {
-                    applied_index_term: true,
-                    lease_state: s.clone(),
-                };
-                let policy = if policy == RequestPolicy::ReadLocal {
-                    RequestPolicy::ReadIndex
-                } else {
-                    policy
-                };
-                assert_eq!(
-                    inspector
-                        .inspect(&req)
-                        .unwrap(),
-                    policy
-                );
+        for applied_to_index_term in vec![true, false] {
+            for lease_state in vec![LeaseState::Expired, LeaseState::Suspect, LeaseState::Valid] {
+                for (req, mut policy) in table.clone() {
+                    let mut inspector = DummyInspector {
+                        applied_to_index_term,
+                        lease_state,
+                    };
+                    // Leader can not read local as long as
+                    // it has not applied to its term or it does has a valid lease.
+                    if policy == RequestPolicy::ReadLocal
+                        && (!applied_to_index_term || LeaseState::Valid != inspector.lease_state)
+                    {
+                        policy = RequestPolicy::ReadIndex;
+                    }
+                    assert_eq!(inspector.inspect(&req).unwrap(), policy);
+                }
             }
         }
 
@@ -2182,15 +2158,10 @@ mod tests {
         req.set_requests(vec![request].into());
         req.mut_header().set_read_quorum(true);
         let mut inspector = DummyInspector {
-            applied_index_term: true,
+            applied_to_index_term: true,
             lease_state: LeaseState::Valid,
         };
-        assert_eq!(
-            inspector
-                .inspect(&req)
-                .unwrap(),
-            RequestPolicy::ReadIndex
-        );
+        assert_eq!(inspector.inspect(&req).unwrap(), RequestPolicy::ReadIndex);
         req.clear_header();
 
         // Err(_)
@@ -2210,14 +2181,10 @@ mod tests {
 
         for req in err_table {
             let mut inspector = DummyInspector {
-                applied_index_term: true,
+                applied_to_index_term: true,
                 lease_state: LeaseState::Valid,
             };
-            assert!(
-                inspector
-                    .inspect(&req)
-                    .is_err()
-            );
+            assert!(inspector.inspect(&req).is_err());
         }
     }
 }
