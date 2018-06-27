@@ -26,7 +26,7 @@ use tikv::coprocessor::codec::{datum, table, Datum};
 use tikv::coprocessor::*;
 use tikv::server::readpool::{self, ReadPool};
 use tikv::server::{Config, OnResponse};
-use tikv::storage::engine::{self, Engine, TEMP_DIR};
+use tikv::storage::engine::{self, Engine, RocksEngine, TEMP_DIR};
 use tikv::storage::{self, Key, Mutation, ALL_CFS};
 use tikv::util::codec::number::*;
 use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
@@ -284,14 +284,14 @@ impl TableBuilder {
     }
 }
 
-struct Insert<'a> {
-    store: &'a mut Store,
+struct Insert<'a, E: Engine> {
+    store: &'a mut Store<E>,
     table: &'a Table,
     values: BTreeMap<i64, Datum>,
 }
 
-impl<'a> Insert<'a> {
-    fn new(store: &'a mut Store, table: &'a Table) -> Insert<'a> {
+impl<'a, E: Engine> Insert<'a, E> {
+    fn new(store: &'a mut Store<E>, table: &'a Table) -> Self {
         Insert {
             store,
             table,
@@ -299,7 +299,7 @@ impl<'a> Insert<'a> {
         }
     }
 
-    fn set(mut self, col: Column, value: Datum) -> Insert<'a> {
+    fn set(mut self, col: Column, value: Datum) -> Self {
         assert!(self.table.cols.contains_key(&col.id));
         self.values.insert(col.id, value);
         self
@@ -333,13 +333,13 @@ impl<'a> Insert<'a> {
     }
 }
 
-struct Delete<'a> {
-    store: &'a mut Store,
+struct Delete<'a, E: Engine> {
+    store: &'a mut Store<E>,
     table: &'a Table,
 }
 
-impl<'a> Delete<'a> {
-    fn new(store: &'a mut Store, table: &'a Table) -> Delete<'a> {
+impl<'a, E: Engine> Delete<'a, E> {
+    fn new(store: &'a mut Store<E>, table: &'a Table) -> Self {
         Delete { store, table }
     }
 
@@ -362,26 +362,26 @@ impl<'a> Delete<'a> {
     }
 }
 
-pub struct Store {
-    store: SyncStorage,
+pub struct Store<E: Engine> {
+    store: SyncStorage<E>,
     current_ts: u64,
     handles: Vec<Vec<u8>>,
 }
 
-impl Store {
-    fn new(engine: Box<Engine>) -> Store {
+impl<E: Engine> Store<E> {
+    fn new(engine: E) -> Self {
         let pd_worker = FutureWorker::new("test future worker");
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || storage::ReadPoolContext::new(pd_worker.scheduler())
         });
-        Store {
+        Self {
             store: SyncStorage::from_engine(engine, &Default::default(), read_pool),
             current_ts: 1,
             handles: vec![],
         }
     }
 
-    pub fn get_engine(&self) -> Box<Engine> {
+    pub fn get_engine(&self) -> E {
         self.store.get_engine()
     }
 
@@ -390,7 +390,7 @@ impl Store {
         self.handles.clear();
     }
 
-    fn insert_into<'a>(&'a mut self, table: &'a Table) -> Insert<'a> {
+    fn insert_into<'a>(&'a mut self, table: &'a Table) -> Insert<'a, E> {
         Insert::new(self, table)
     }
 
@@ -404,7 +404,7 @@ impl Store {
         self.store.prewrite(ctx, kv, pk, self.current_ts).unwrap();
     }
 
-    fn delete_from<'a>(&'a mut self, table: &'a Table) -> Delete<'a> {
+    fn delete_from<'a>(&'a mut self, table: &'a Table) -> Delete<'a, E> {
         Delete::new(self, table)
     }
 
@@ -470,24 +470,24 @@ impl ProductTable {
     }
 }
 
-fn init_data_with_engine_and_commit(
+fn init_data_with_engine_and_commit<E: Engine>(
     ctx: Context,
-    engine: Box<Engine>,
+    engine: E,
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
-) -> (Store, Worker<EndPointTask>) {
+) -> (Store<E>, Worker<EndPointTask<E>>) {
     init_data_with_details(ctx, engine, tbl, vals, commit, Config::default())
 }
 
-fn init_data_with_details(
+fn init_data_with_details<E: Engine>(
     ctx: Context,
-    engine: Box<Engine>,
+    engine: E,
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
     cfg: Config,
-) -> (Store, Worker<EndPointTask>) {
+) -> (Store<E>, Worker<EndPointTask<E>>) {
     let mut store = Store::new(engine);
 
     store.begin();
@@ -519,7 +519,7 @@ pub fn init_data_with_commit(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
-) -> (Store, Worker<EndPointTask>) {
+) -> (Store<RocksEngine>, Worker<EndPointTask<RocksEngine>>) {
     let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
     init_data_with_engine_and_commit(Context::new(), engine, tbl, vals, commit)
 }
@@ -528,7 +528,7 @@ pub fn init_data_with_commit(
 fn init_with_data(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
-) -> (Store, Worker<EndPointTask>) {
+) -> (Store<RocksEngine>, Worker<EndPointTask<RocksEngine>>) {
     init_data_with_commit(tbl, vals, true)
 }
 
@@ -1504,7 +1504,7 @@ fn test_reverse() {
     end_point.stop().unwrap().join().unwrap();
 }
 
-pub fn handle_request(end_point: &Worker<EndPointTask>, req: Request) -> Response {
+pub fn handle_request<E: Engine>(end_point: &Worker<EndPointTask<E>>, req: Request) -> Response {
     let (tx, rx) = oneshot::channel();
     let on_resp = OnResponse::Unary(tx);
     let req = RequestTask::new(String::from("127.0.0.1"), req, on_resp, 100).unwrap();
@@ -1512,7 +1512,7 @@ pub fn handle_request(end_point: &Worker<EndPointTask>, req: Request) -> Respons
     rx.wait().unwrap()
 }
 
-fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectResponse {
+fn handle_select<E: Engine>(end_point: &Worker<EndPointTask<E>>, req: Request) -> SelectResponse {
     let resp = handle_request(end_point, req);
     assert!(!resp.get_data().is_empty(), "{:?}", resp);
     let mut sel_resp = SelectResponse::new();
@@ -1520,8 +1520,8 @@ fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectRespon
     sel_resp
 }
 
-fn handle_streaming_select<F>(
-    end_point: &Worker<EndPointTask>,
+fn handle_streaming_select<E: Engine, F>(
+    end_point: &Worker<EndPointTask<E>>,
     req: Request,
     mut check_range: F,
 ) -> Vec<StreamResponse>
