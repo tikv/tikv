@@ -84,19 +84,6 @@ fn stale_read_during_splitting(right_derive: bool) {
     let leader2 = cluster.leader_of_region(region2.get_id()).unwrap();
     assert_ne!(leader1.get_store_id(), leader2.get_store_id());
 
-    // A new value for key2.
-    let v3 = b"v3";
-    let mut request = new_request(
-        region2.get_id(),
-        region2.get_region_epoch().clone(),
-        vec![new_put_cf_cmd("default", stale_key, v3)],
-        false,
-    );
-    request.mut_header().set_peer(leader2.clone());
-    cluster
-        .call_command_on_node(leader2.get_store_id(), request, Duration::from_secs(5))
-        .unwrap();
-
     must_not_stale_read(
         &mut cluster,
         stale_key,

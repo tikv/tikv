@@ -273,8 +273,7 @@ pub struct Peer {
 
     pub pending_remove: bool,
 
-    // Indicates the region is going to be merged.
-    // It is set to true if the prepare merge is committed in the current term.
+    // The index of the latest committed prepare merge command.
     last_committed_prepare_merge_idx: u64,
     pub pending_merge_state: Option<MergeState>,
 
@@ -1012,14 +1011,21 @@ impl Peer {
                 if entry.term == self.term() && (split_to_be_updated || merge_to_be_update) {
                     let ctx = ProposalContext::from_bytes(&entry.context);
                     if split_to_be_updated && ctx.contains(ProposalContext::SPLIT) {
+                        // We dont need to suspect its lease because peers of new region that
+                        // in other store do not start election before theirs election timeout
+                        // which is longer than the max leader lease.
+                        // It's safe to read local within its current lease, however, it's not
+                        // safe to renew its lease.
                         self.last_committed_split_idx = entry.index;
                         split_to_be_updated = false;
                     }
                     if merge_to_be_update && ctx.contains(ProposalContext::PREPARE_MERGE) {
                         // We committed prepare merge, to prevent unsafe read index,
-                        // we must set the pending_merge.
-                        debug!("commit prepare_merge at {}", entry.get_index());
+                        // we must record its index.
                         self.last_committed_prepare_merge_idx = entry.get_index();
+                        // After prepare_mrege is committed, the leader can not know
+                        // when the target region merges majority of this region, also
+                        // it can not know when the target region writes new values.
                         // To prevent unsafe local read, we suspect its leader lease.
                         self.leader_lease.suspect(monotonic_raw_now());
                         merge_to_be_update = false;
