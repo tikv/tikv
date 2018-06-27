@@ -87,7 +87,6 @@ git = "https://github.com/pingcap/murmur3.git"
 
 [dependencies.rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"
-rev = "9a1c83c5382fbaee8a5102213c711bbe52d71470"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
