@@ -71,7 +71,7 @@ use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTER
 use tikv::util::security::SecurityManager;
 use tikv::util::time::Monitor;
 use tikv::util::transport::SendCh;
-use tikv::util::worker::FutureWorker;
+use tikv::util::worker::{FutureWorker, Worker};
 use tikv::util::{self as tikv_util, panic_hook, rocksdb as rocksdb_util};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
@@ -124,7 +124,14 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .unwrap_or_else(|e| fatal!("failed to create event loop: {:?}", e));
     let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
     let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
-    let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), significant_msg_sender);
+
+    // Create Local Reader.
+    let local_reader = Worker::new("local-reader");
+    let local_ch = local_reader.scheduler();
+
+    // Create router.
+    let raft_router =
+        ServerRaftStoreRouter::new(store_sendch.clone(), significant_msg_sender, local_ch);
     let compaction_listener = new_compaction_listener(store_sendch.clone());
 
     // Create pd client and pd worker
@@ -212,6 +219,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         snap_mgr,
         significant_msg_receiver,
         pd_worker,
+        local_reader,
         coprocessor_host,
         importer,
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));

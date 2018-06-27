@@ -27,7 +27,7 @@ use util::rocksdb::CompactedEvent;
 
 use super::RegionSnapshot;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ReadResponse {
     pub response: RaftCmdResponse,
     pub snapshot: Option<RegionSnapshot>,
@@ -269,7 +269,7 @@ mod tests {
     use mio::{EventLoop, Handler};
 
     use super::*;
-    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusRequest};
     use raftstore::Error;
     use util::transport::SendCh;
 
@@ -324,6 +324,7 @@ mod tests {
 
         let mut request = RaftCmdRequest::new();
         request.mut_header().set_region_id(u64::max_value());
+        request.set_status_request(StatusRequest::new());
         assert!(call_command(sendch, request.clone(), Duration::from_millis(500)).is_ok());
         match call_command(sendch, request, Duration::from_millis(10)) {
             Err(Error::Timeout(_)) => {}

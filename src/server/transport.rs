@@ -21,8 +21,10 @@ use super::metrics::*;
 use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
 use raft::SnapshotStatus;
-use raftstore::store::{BatchReadCallback, Callback, Msg as StoreMsg, SignificantMsg, Transport};
-use raftstore::Result as RaftStoreResult;
+use raftstore::store::{
+    BatchReadCallback, Callback, Msg as StoreMsg, ReadTask, SignificantMsg, Transport,
+};
+use raftstore::{Error as RaftStoreError, Result as RaftStoreResult};
 use server::raft_client::RaftClient;
 use server::Result;
 use util::collections::HashSet;
@@ -86,29 +88,42 @@ pub trait RaftStoreRouter: Send + Clone {
 pub struct ServerRaftStoreRouter {
     pub ch: SendCh<StoreMsg>,
     pub significant_msg_sender: Sender<SignificantMsg>,
+    local_reader_ch: Scheduler<ReadTask>,
 }
 
 impl ServerRaftStoreRouter {
     pub fn new(
-        ch: SendCh<StoreMsg>,
+        raftstore_ch: SendCh<StoreMsg>,
         significant_msg_sender: Sender<SignificantMsg>,
+        local_reader_ch: Scheduler<ReadTask>,
     ) -> ServerRaftStoreRouter {
         ServerRaftStoreRouter {
-            ch,
+            ch: raftstore_ch,
             significant_msg_sender,
+            local_reader_ch,
         }
     }
 }
 
 impl RaftStoreRouter for ServerRaftStoreRouter {
     fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        self.ch.try_send(msg)?;
-        Ok(())
+        if ReadTask::acceptable(&msg) {
+            self.local_reader_ch
+                .schedule(ReadTask::Read(msg))
+                .map_err(|e| box_err!(e))
+        } else {
+            self.ch.try_send(msg).map_err(RaftStoreError::Transport)
+        }
     }
 
     fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        self.ch.send(msg)?;
-        Ok(())
+        if ReadTask::acceptable(&msg) {
+            self.local_reader_ch
+                .schedule(ReadTask::Read(msg))
+                .map_err(|e| box_err!(e))
+        } else {
+            self.ch.send(msg).map_err(RaftStoreError::Transport)
+        }
     }
 
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {

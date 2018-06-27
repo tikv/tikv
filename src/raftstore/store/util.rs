@@ -11,7 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::option::Option;
+use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
+use std::sync::Arc;
 use std::{fmt, u64};
 
 use kvproto::metapb;
@@ -415,14 +416,15 @@ pub fn region_on_same_stores(lhs: &metapb::Region, rhs: &metapb::Region) -> bool
 ///   - The valid leader lease should be `lease = max_lease - (commit_ts - send_ts)`
 ///     And the expired timestamp for that leader lease is `commit_ts + lease`,
 ///     which is `send_ts + max_lease` in short.
-// TODO: add a remote Lease. A special lease that derives from Lease, it will be sent
-//       to the local read thread, so name it remote. If Lease expires, the remote must
-//       expire too.
 pub struct Lease {
     // A suspect timestamp is in the Either::Left(_),
     // a valid timestamp is in the Either::Right(_).
     bound: Option<Either<Timespec, Timespec>>,
     max_lease: Duration,
+
+    max_drift: Duration,
+    last_update: Timespec,
+    remote: Option<RemoteLease>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -440,6 +442,10 @@ impl Lease {
         Lease {
             bound: None,
             max_lease,
+
+            max_drift: max_lease / 3,
+            last_update: Timespec::new(0, 0),
+            remote: None,
         }
     }
 
@@ -453,20 +459,31 @@ impl Lease {
     /// Renew the lease to the bound.
     pub fn renew(&mut self, send_ts: Timespec) {
         let bound = self.next_expired_time(send_ts);
-        match self.bound {
+        let ts = match self.bound {
             // Longer than suspect ts or longer than valid ts.
             Some(Either::Left(ts)) | Some(Either::Right(ts)) => if ts <= bound {
                 self.bound = Some(Either::Right(bound));
+                Some(bound)
+            } else {
+                None
             },
             // Or an empty lease
             None => {
                 self.bound = Some(Either::Right(bound));
+                Some(bound)
+            }
+        };
+        if let Some(bound) = ts {
+            if bound - self.last_update > self.max_drift {
+                self.last_update = bound;
+                self.remote.as_ref().map(|r| r.renew(bound));
             }
         }
     }
 
     /// Suspect the lease to the bound.
     pub fn suspect(&mut self, send_ts: Timespec) {
+        self.disconnect();
         let bound = self.next_expired_time(send_ts);
         self.bound = Some(Either::Left(bound));
     }
@@ -485,7 +502,35 @@ impl Lease {
     }
 
     pub fn expire(&mut self) {
+        self.disconnect();
         self.bound = None;
+    }
+
+    pub fn disconnect(&mut self) {
+        self.remote.as_ref().map(|r| r.expire());
+        self.remote.take();
+    }
+
+    pub fn remote(&mut self, term: u64) -> Option<RemoteLease> {
+        if self.remote.is_none() {
+            let expired_time = match self.bound {
+                Some(Either::Right(ts)) => ts.sec,
+                _ => 0,
+            };
+            let remote = RemoteLease {
+                expired_time: Arc::new(AtomicI64::new(expired_time)),
+                term,
+            };
+            // Clone the remote.
+            let remote_clone = RemoteLease {
+                expired_time: Arc::clone(&remote.expired_time),
+                term,
+            };
+            self.remote = Some(remote);
+            Some(remote_clone)
+        } else {
+            None
+        }
     }
 }
 
@@ -497,6 +542,38 @@ impl fmt::Debug for Lease {
             Some(Either::Right(ts)) => fmter.field("valid", &ts).finish(),
             None => fmter.finish(),
         }
+    }
+}
+
+/// A remote lease, it can only be derived by `Lease`. It will be sent
+/// to the local read thread, so name it remote. If Lease expires, the remote must
+/// expire too.
+#[derive(Debug)]
+pub struct RemoteLease {
+    expired_time: Arc<AtomicI64>,
+    term: u64,
+}
+
+impl RemoteLease {
+    pub fn inspect(&self, ts: Option<Timespec>) -> LeaseState {
+        let expired_time = Timespec::new(self.expired_time.load(AtomicOrdering::Acquire), 0);
+        if ts.unwrap_or_else(monotonic_raw_now) < expired_time {
+            LeaseState::Valid
+        } else {
+            LeaseState::Expired
+        }
+    }
+
+    fn renew(&self, bound: Timespec) {
+        self.expired_time.store(bound.sec, AtomicOrdering::Release);
+    }
+
+    fn expire(&self) {
+        self.expired_time.store(0, AtomicOrdering::Release);
+    }
+
+    pub fn term(&self) -> u64 {
+        self.term
     }
 }
 
@@ -589,10 +666,15 @@ mod tests {
 
         // Empty lease.
         let mut lease = Lease::new(duration);
-        assert_eq!(
-            lease.inspect(Some(monotonic_raw_now())),
-            LeaseState::Expired
-        );
+        let remote = lease.remote(1).unwrap();
+        let inspect_test = |lease: &Lease, ts: Option<Timespec>, state: LeaseState| {
+            assert_eq!(lease.inspect(ts), state);
+            if state == LeaseState::Expired || state == LeaseState::Suspect {
+                assert_eq!(remote.inspect(ts), LeaseState::Expired);
+            }
+        };
+
+        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Expired);
 
         let now = monotonic_raw_now();
         let next_expired_time = lease.next_expired_time(now);
@@ -600,29 +682,27 @@ mod tests {
 
         // Transit to the Valid state.
         lease.renew(now);
-        assert_eq!(lease.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
-        assert_eq!(lease.inspect(None), LeaseState::Valid);
+        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Valid);
+        inspect_test(&lease, None, LeaseState::Valid);
 
         // After lease expired time.
         sleep_test(duration, &lease, LeaseState::Expired);
+        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Expired);
+        inspect_test(&lease, None, LeaseState::Expired);
 
         // Transit to the Suspect state.
         lease.suspect(monotonic_raw_now());
-        assert_eq!(
-            lease.inspect(Some(monotonic_raw_now())),
-            LeaseState::Suspect
-        );
-        assert_eq!(lease.inspect(None), LeaseState::Suspect);
+        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Suspect);
+        inspect_test(&lease, None, LeaseState::Suspect);
 
-        // After lease expired time. Always suspect.
+        // After lease expired time, still suspect.
         sleep_test(duration, &lease, LeaseState::Suspect);
+        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Suspect);
 
         // Clear lease.
         lease.expire();
-        assert_eq!(
-            lease.inspect(Some(monotonic_raw_now())),
-            LeaseState::Expired
-        );
+        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Expired);
+        inspect_test(&lease, None, LeaseState::Expired);
     }
 
     // Tests the util function `check_key_in_region`.

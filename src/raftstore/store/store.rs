@@ -67,8 +67,9 @@ use super::transport::Transport;
 use super::worker::apply::{ApplyMetrics, ApplyRes, ChangePeer, ExecResult};
 use super::worker::{
     ApplyRunner, ApplyTask, ApplyTaskRes, CleanupSSTRunner, CleanupSSTTask, CompactRunner,
-    CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
-    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask, STALE_PEER_CHECK_INTERVAL,
+    CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, LocalReader, RaftlogGcRunner,
+    RaftlogGcTask, ReadTask, RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask,
+    STALE_PEER_CHECK_INTERVAL,
 };
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use import::SSTImporter;
@@ -164,6 +165,7 @@ pub struct Store<T, C: 'static> {
     consistency_check_worker: Worker<ConsistencyCheckTask>,
     cleanup_sst_worker: Worker<CleanupSSTTask>,
     pub apply_worker: Worker<ApplyTask>,
+    local_reader: Worker<ReadTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
 
     last_compact_checked_key: Key,
@@ -215,6 +217,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         pd_client: Arc<C>,
         mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
+        local_reader: Worker<ReadTask>,
         mut coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
     ) -> Result<Store<T, C>> {
@@ -248,6 +251,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             cleanup_sst_worker: Worker::new("cleanup sst worker"),
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
+            local_reader,
             last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
             region_ranges: BTreeMap::new(),
             pending_snapshot_regions: vec![],
@@ -456,6 +460,10 @@ impl<T, C> Store<T, C> {
         self.apply_worker.scheduler()
     }
 
+    pub fn read_scheduler(&self) -> Scheduler<ReadTask> {
+        self.local_reader.scheduler()
+    }
+
     pub fn kv_engine(&self) -> Arc<DB> {
         Arc::clone(&self.kv_engine)
     }
@@ -601,6 +609,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
 
+        let local_reader = LocalReader::new(self);
+        box_try!(self.local_reader.start(local_reader));
+
         if let Err(e) = util_sys::pri::set_priority(util_sys::HIGH_PRI) {
             warn!("set priority for raftstore failed, error: {:?}", e);
         }
@@ -627,6 +638,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         handles.push(self.consistency_check_worker.stop());
         handles.push(self.cleanup_sst_worker.stop());
         handles.push(self.apply_worker.stop());
+        handles.push(self.local_reader.stop());
 
         for h in handles {
             if let Some(h) = h {
@@ -1381,6 +1393,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.apply_worker
                 .schedule(ApplyTask::destroy(job.region_id))
                 .unwrap();
+            self.local_reader
+                .schedule(ReadTask::destroy(job.region_id))
+                .unwrap();
         }
         if job.async_remove {
             info!(
@@ -1636,9 +1651,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 } else {
                     new_peer.size_diff_hint = self.cfg.region_split_check_diff.0;
                 }
-                self.apply_worker
-                    .schedule(ApplyTask::register(&new_peer))
-                    .unwrap();
+                new_peer.register_delegates();
                 self.region_peers.insert(new_region_id, new_peer);
             }
         }

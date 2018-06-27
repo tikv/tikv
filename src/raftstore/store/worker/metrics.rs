@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{exponential_buckets, Gauge, Histogram, HistogramVec, IntCounterVec};
+use prometheus::{exponential_buckets, Gauge, Histogram, HistogramVec, IntCounterVec, IntGauge};
 
 lazy_static! {
     pub static ref SNAP_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
@@ -52,5 +52,19 @@ lazy_static! {
     pub static ref STALE_PEER_PENDING_DELETE_RANGE_GAUGE: Gauge = register_gauge!(
         "tikv_pending_delete_ranges_of_stale_peer",
         "Total number of tikv pending delete range of stale peer"
+    ).unwrap();
+    pub static ref LOCAL_READ: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_local_read_total",
+        "Total number of requests that routed to the local read thread.",
+        &["result"]
+    ).unwrap();
+    pub static ref LOCAL_READ_LEADER: IntGauge = register_int_gauge!(
+        "tikv_raftstore_local_read_leader_total",
+        "Total number of leaders that can local read."
+    ).unwrap();
+    pub static ref LOCAL_READ_REJECT: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_local_read_reject_total",
+        "Total number of rejection of the local read thread.",
+        &["reason"]
     ).unwrap();
 }

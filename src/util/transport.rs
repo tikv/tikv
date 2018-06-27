@@ -124,6 +124,10 @@ impl<T: Debug, C: Sender<T>> RetryableSendCh<T, C> {
         self.send_with_try_times(t, 1)
     }
 
+    pub fn into_inner(self) -> C {
+        self.ch
+    }
+
     fn send_with_try_times(&self, mut t: T, mut try_times: usize) -> Result<(), Error> {
         loop {
             t = match self.ch.send(t) {

@@ -39,7 +39,9 @@ pub use self::msg::{
     BatchReadCallback, Callback, Msg, ReadCallback, ReadResponse, SignificantMsg, Tick,
     WriteCallback, WriteResponse,
 };
-pub use self::peer::{Peer, ProposalContext};
+pub use self::peer::{
+    Peer, PeerStat, ProposalContext, ReadExecutor, RequestInspector, RequestPolicy,
+};
 pub use self::peer_storage::{
     clear_meta, do_snapshot, init_apply_state, init_raft_state, write_initial_apply_state,
     write_initial_raft_state, write_peer_state, CacheQueryStats, PeerStorage, SnapState,
@@ -54,6 +56,7 @@ pub use self::store::{
     create_event_loop, new_compaction_listener, Engines, Store, StoreChannel, StoreStat,
 };
 pub use self::transport::Transport;
+pub use self::worker::ReadTask;
 
 // Only used in tests
 #[cfg(test)]
