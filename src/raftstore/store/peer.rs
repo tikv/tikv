@@ -638,9 +638,10 @@ impl Peer {
         );
         if self.is_leader() && m.get_from() != INVALID_ID {
             self.peer_heartbeats.insert(m.get_from(), Instant::now());
-        }
-        if m.get_from() == self.leader_id() {
-            // We know we're not isolated.
+            // As the leader we know we are not missing.
+            self.leader_missing_time.take();
+        } else if m.get_from() == self.leader_id() {
+            // As another role know we're not missing.
             self.leader_missing_time.take();
         }
         self.raft_group.step(m)?;
