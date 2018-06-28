@@ -11,42 +11,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use chrono::{DateTime, Duration, Utc};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use time::{self, Timespec, Tm};
+use std::path::{Path, PathBuf};
 
-const ONE_DAY_SECONDS: u64 = 60 * 60 * 24;
-
-fn systemtime_to_tm(t: SystemTime) -> Tm {
-    let duration = t.duration_since(UNIX_EPOCH).unwrap();
-    let spec = Timespec::new(duration.as_secs() as i64, duration.subsec_nanos() as i32);
-    time::at(spec)
+fn compute_rotation_time(initial: &DateTime<Utc>, timespan: Duration) -> DateTime<Utc> {
+    *initial + timespan
 }
 
-fn compute_rollover_time(tm: Tm) -> Tm {
-    let day_start_tm = Tm {
-        tm_hour: 0,
-        tm_min: 0,
-        tm_sec: 0,
-        tm_nsec: 0,
-        ..tm
-    };
-    let duration = time::Duration::from_std(Duration::new(ONE_DAY_SECONDS, 0)).unwrap();
-    (day_start_tm.to_utc() + duration).to_local()
+fn rotation_file_path_with_timestamp(
+    file_path: impl AsRef<Path>,
+    timestamp: &DateTime<Utc>,
+) -> PathBuf {
+    let file_path = file_path.as_ref();
+    let file_name = file_path
+        .file_name()
+        .and_then(|x| x.to_str())
+        .expect("Log file name was not valid.");
+    file_path.with_file_name(format!(
+        "{}.{}",
+        file_name,
+        timestamp.format("%Y-%m-%d-%H:%M:%S")
+    ))
 }
 
-/// Returns a Tm at the time one day before the given Tm.
-/// It expects the argument `tm` to be in local timezone. The resulting Tm is in local timezone.
-fn one_day_before(tm: Tm) -> Tm {
-    let duration = time::Duration::from_std(Duration::new(ONE_DAY_SECONDS, 0)).unwrap();
-    (tm.to_utc() - duration).to_local()
-}
-
-fn open_log_file(path: &str) -> io::Result<File> {
-    let p = Path::new(path);
-    let parent = p.parent().unwrap();
+fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
+    let path = path.as_ref();
+    let parent = path
+        .parent()
+        .expect("Unable to get parent directory of log file");
     if !parent.is_dir() {
         fs::create_dir_all(parent)?
     }
@@ -54,23 +48,25 @@ fn open_log_file(path: &str) -> io::Result<File> {
 }
 
 pub struct RotatingFileLogger {
-    rollover_time: Tm,
-    file_path: String,
+    rotation_timespan: Duration,
+    next_rotation_time: DateTime<Utc>,
+    file_path: PathBuf,
     file: File,
 }
 
 impl RotatingFileLogger {
-    pub fn new(path: &str) -> io::Result<Self> {
-        let file = open_log_file(path)?;
-        let file_attr = fs::metadata(path).unwrap();
-        let file_modified_time = file_attr.modified().unwrap();
-        let rollover_time = compute_rollover_time(systemtime_to_tm(file_modified_time));
-        let ret = Self {
-            rollover_time,
-            file_path: path.to_string(),
+    pub fn new(file_path: impl AsRef<Path>, rotation_timespan: Duration) -> io::Result<Self> {
+        let file_path = file_path.as_ref().to_path_buf();
+        let file = open_log_file(&file_path)?;
+        let file_attr = fs::metadata(&file_path)?;
+        let file_modified_time = file_attr.modified().unwrap().into();
+        let next_rotation_time = compute_rotation_time(&file_modified_time, rotation_timespan);
+        Ok(Self {
+            next_rotation_time,
+            file_path,
+            rotation_timespan,
             file,
-        };
-        Ok(ret)
+        })
     }
 
     fn open(&mut self) -> io::Result<()> {
@@ -78,23 +74,21 @@ impl RotatingFileLogger {
         Ok(())
     }
 
-    fn should_rollover(&mut self) -> bool {
-        time::now() > self.rollover_time
+    fn should_rotate(&mut self) -> bool {
+        Utc::now() > self.next_rotation_time
     }
 
-    fn do_rollover(&mut self) -> io::Result<()> {
+    fn rotate(&mut self) -> io::Result<()> {
         self.close()?;
-        let mut s = self.file_path.clone();
-        s.push_str(".");
-        s.push_str(&time::strftime("%Y%m%d", &one_day_before(self.rollover_time)).unwrap());
-        fs::rename(&self.file_path, &s)?;
-        self.update_rollover_time();
+        let new_path = rotation_file_path_with_timestamp(&self.file_path, &Utc::now());
+        fs::rename(&self.file_path, &new_path)?;
+        self.update_rotation_time();
         self.open()
     }
 
-    fn update_rollover_time(&mut self) {
-        let now = time::now();
-        self.rollover_time = compute_rollover_time(now);
+    fn update_rotation_time(&mut self) {
+        let now = Utc::now();
+        self.next_rotation_time = compute_rotation_time(&now, self.rotation_timespan);
     }
 
     fn close(&mut self) -> io::Result<()> {
@@ -108,8 +102,8 @@ impl Write for RotatingFileLogger {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        if self.should_rollover() {
-            self.do_rollover()?;
+        if self.should_rotate() {
+            self.rotate()?;
         };
         self.file.flush()
     }
@@ -126,22 +120,15 @@ mod tests {
     use std::fs::OpenOptions;
     use std::io::prelude::*;
     use std::path::Path;
-    use time::{self, Timespec};
 
+    use chrono::{Duration, Utc};
     use tempdir::TempDir;
     use utime;
 
-    use super::{RotatingFileLogger, ONE_DAY_SECONDS};
+    use super::{rotation_file_path_with_timestamp, RotatingFileLogger};
 
-    #[test]
-    fn test_one_day_before() {
-        let tm = time::strptime("2016-08-30", "%Y-%m-%d").unwrap().to_local();
-        let one_day_ago = time::strptime("2016-08-29", "%Y-%m-%d").unwrap().to_local();
-        assert_eq!(one_day_ago, super::one_day_before(tm));
-    }
-
-    fn file_exists(file: &str) -> bool {
-        let path = Path::new(file);
+    fn file_exists(file: impl AsRef<Path>) -> bool {
+        let path = file.as_ref();
         path.exists() && path.is_file()
     }
 
@@ -163,21 +150,18 @@ mod tests {
                 .unwrap();
             file.write_all(b"hello world!").unwrap();
         }
-        let ts = time::now().to_timespec();
-        let one_day_ago = Timespec::new(ts.sec - ONE_DAY_SECONDS as i64, ts.nsec);
-        let time_in_sec = one_day_ago.sec as u64;
-        utime::set_file_times(&log_file, time_in_sec, time_in_sec).unwrap();
+        let now = Utc::now();
+        let one_day = Duration::days(1);
+        let one_day_ago = now - one_day;
+        let one_day_ago_ts = one_day_ago.timestamp() as u64;
+        utime::set_file_times(&log_file, one_day_ago_ts, one_day_ago_ts).unwrap();
         // initialize the logger
-        let mut core = RotatingFileLogger::new(&log_file).unwrap();
-        assert!(core.should_rollover());
-        core.do_rollover().unwrap();
+        let mut logger = RotatingFileLogger::new(&log_file, one_day).unwrap();
+        assert!(logger.should_rotate());
+        logger.rotate().unwrap();
         // check the rotated file exist
-        let mut rotated_file = log_file.clone();
-        rotated_file.push_str(".");
-        let file_suffix_time =
-            super::one_day_before(super::compute_rollover_time(time::at(one_day_ago)));
-        rotated_file.push_str(&time::strftime("%Y%m%d", &file_suffix_time).unwrap());
+        let rotated_file = rotation_file_path_with_timestamp(&log_file, &now);
         assert!(file_exists(&rotated_file));
-        assert!(!core.should_rollover());
+        assert!(!logger.should_rotate());
     }
 }

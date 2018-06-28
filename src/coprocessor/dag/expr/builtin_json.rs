@@ -12,9 +12,9 @@
 // limitations under the License.
 
 use super::{Error, EvalContext, Expression, Result, ScalarFunc};
-use coprocessor::codec::Datum;
-use coprocessor::codec::mysql::Json;
 use coprocessor::codec::mysql::json::{parse_json_path_expr, ModifyType, PathExpression};
+use coprocessor::codec::mysql::Json;
+use coprocessor::codec::Datum;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
@@ -186,7 +186,8 @@ impl<'a> JsonFuncArgsParser<'a> {
     }
 
     fn get_json(&self, ctx: &mut EvalContext, e: &Expression) -> Result<Option<Json>> {
-        let j = e.eval_json(ctx, self.row)?
+        let j = e
+            .eval_json(ctx, self.row)?
             .map_or(Json::None, Cow::into_owned);
         Ok(Some(j))
     }
@@ -199,8 +200,8 @@ impl<'a> JsonFuncArgsParser<'a> {
 
 #[cfg(test)]
 mod test {
-    use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::Json;
+    use coprocessor::codec::Datum;
     use coprocessor::dag::expr::test::{datum_expr, make_null_datums, scalar_func_expr};
     use coprocessor::dag::expr::{EvalContext, Expression};
     use tipb::expression::ScalarFuncSig;
