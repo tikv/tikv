@@ -394,6 +394,7 @@ pub struct DbConfig {
     pub compaction_readahead_size: ReadableSize,
     pub info_log_max_size: ReadableSize,
     pub info_log_roll_time: ReadableDuration,
+    pub info_log_keep_log_file_num: u64,
     pub info_log_dir: String,
     pub rate_bytes_per_sec: ReadableSize,
     pub bytes_per_sync: ReadableSize,
@@ -425,6 +426,7 @@ impl Default for DbConfig {
             compaction_readahead_size: ReadableSize::kb(0),
             info_log_max_size: ReadableSize::kb(0),
             info_log_roll_time: ReadableDuration::secs(0),
+            info_log_keep_log_file_num: 1000,
             info_log_dir: "".to_owned(),
             rate_bytes_per_sec: ReadableSize::kb(0),
             bytes_per_sync: ReadableSize::mb(1),
@@ -460,6 +462,7 @@ impl DbConfig {
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
+        opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
         if !self.info_log_dir.is_empty() {
             opts.create_info_log(&self.info_log_dir)
                 .unwrap_or_else(|e| {
@@ -634,6 +637,7 @@ impl RaftDbConfig {
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
+        opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
         if !self.info_log_dir.is_empty() {
             opts.create_info_log(&self.info_log_dir)
                 .unwrap_or_else(|e| {
