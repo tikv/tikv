@@ -1,6 +1,4 @@
-use std::sync::atomic::AtomicBool;
-use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{atomic::AtomicBool, mpsc, Arc};
 use std::time::Duration;
 
 use super::cluster::{Cluster, Simulator};
@@ -9,10 +7,12 @@ use super::transport_simulate::*;
 use super::util::*;
 use raft::eraftpb::MessageType;
 
-// Validate that prevote is used in elections after a leader is isolated if it is on, or not if it is off.
-fn test_prevote_on_leader_isolation<T: Simulator>(cluster: &mut Cluster<T>, prevote_enabled: bool) {
-    cluster.cfg.raft_store.prevote = prevote_enabled;
+enum FailureType<'a> {
+    Partition(&'a [u64], &'a [u64]),
+    Reboot(&'a [u64]),
+}
 
+fn attach_prevote_notifiers<T: Simulator>(cluster: &Cluster<T>, peer: u64) -> mpsc::Receiver<()> {
     // Setup a notifier
     let (tx, rx) = mpsc::channel();
     let response_notifier = Box::new(MessageTypeNotifier::new(
@@ -25,98 +25,168 @@ fn test_prevote_on_leader_isolation<T: Simulator>(cluster: &mut Cluster<T>, prev
         tx.clone(),
         Arc::from(AtomicBool::new(true)),
     ));
+
+    cluster
+        .sim
+        .write()
+        .unwrap()
+        .add_send_filter(peer, response_notifier);
+    cluster
+        .sim
+        .write()
+        .unwrap()
+        .add_send_filter(peer, request_notifier);
+
+    rx
+}
+
+// Validate that prevote is used in elections after partition or reboot of some nodes.
+fn test_prevote<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    failure_type: FailureType,
+    leader_after_failure_id: impl Into<Option<u64>>,
+    detect_during_failure: (u64, bool),
+    detect_during_recovery: (u64, bool),
+) {
+    cluster.cfg.raft_store.prevote = true;
+
+    let leader_id = 1;
 
     // We must start the cluster before adding send filters, otherwise it panics.
     cluster.run();
-    cluster
-        .sim
-        .write()
-        .unwrap()
-        .add_send_filter(2, response_notifier);
-    cluster
-        .sim
-        .write()
-        .unwrap()
-        .add_send_filter(2, request_notifier);
 
-    // Force an unplanned election.
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-    cluster.add_send_filter(IsolationFilterFactory::new(1));
+    cluster.must_transfer_leader(1, new_peer(leader_id, 1));
+    cluster.must_put(b"k1", b"v1");
+
+    // Determine how to fail.
+    let rx = attach_prevote_notifiers(cluster, detect_during_failure.0);
+    match failure_type {
+        FailureType::Partition(majority, minority) => {
+            cluster.partition(majority.clone().to_vec(), minority.clone().to_vec());
+        }
+        FailureType::Reboot(peers) => {
+            peers.iter().for_each(|&peer| cluster.stop_node(peer));
+        }
+    };
 
     // Once we see a response on the wire we know a prevote round is happening.
-    let recieved = rx.recv_timeout(Duration::from_secs(2));
+    let received = rx.recv_timeout(Duration::from_secs(3));
     assert_eq!(
-        recieved.is_ok(),
-        prevote_enabled,
-        "Recieve a PreVote or PreVoteResponse to a peer when a leader was isolated.",
+        received.is_ok(),
+        detect_during_failure.1,
+        "Sends a PreVote or PreVoteResponse during failure.",
+    );
+
+    if let Some(leader_id) = leader_after_failure_id.into() {
+        cluster.must_transfer_leader(1, new_peer(leader_id, 1));
+    }
+
+    // Prepare to listen.
+    let rx = attach_prevote_notifiers(cluster, detect_during_recovery.0);
+
+    // Let the cluster recover.
+    match failure_type {
+        FailureType::Partition(_, _) => {
+            cluster.clear_send_filters();
+        }
+        FailureType::Reboot(peers) => {
+            cluster.clear_send_filters();
+            peers.iter().for_each(|&peer| cluster.run_node(peer));
+        }
+    };
+
+    // Once we see a response on the wire we know a prevote round is happening.
+    let received = rx.recv_timeout(Duration::from_secs(3));
+
+    cluster.must_put(b"k3", b"v3");
+    assert_eq!(cluster.must_get(b"k1"), Some(b"v1".to_vec()));
+
+    assert_eq!(
+        received.is_ok(),
+        detect_during_recovery.1,
+        "Sends a PreVote or PreVoteResponse during recovery.",
     );
 }
 
 #[test]
-fn test_server_prevote_on_leader_isolation() {
-    let mut cluster = new_server_cluster(0, 3);
-    test_prevote_on_leader_isolation(&mut cluster, true);
-}
-
-#[test]
-fn test_server_no_prevote_on_leader_isolation() {
-    let mut cluster = new_server_cluster(0, 3);
-    test_prevote_on_leader_isolation(&mut cluster, false);
-}
-
-fn test_prevote_on_leader_reboot<T: Simulator>(cluster: &mut Cluster<T>, prevote_enabled: bool) {
-    cluster.cfg.raft_store.prevote = prevote_enabled;
-    cluster.run();
-
-    // Setup a notifier
-    let (tx, rx) = mpsc::channel();
-    let response_notifier = Box::new(MessageTypeNotifier::new(
-        MessageType::MsgRequestPreVoteResponse,
-        tx.clone(),
-        Arc::from(AtomicBool::new(true)),
-    ));
-    let request_notifier = Box::new(MessageTypeNotifier::new(
-        MessageType::MsgRequestPreVote,
-        tx.clone(),
-        Arc::from(AtomicBool::new(true)),
-    ));
-
-    // Make a node a leader, then kill it and bring it back up letting it ask for a prevote.
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-    cluster.stop_node(1);
-    cluster.run_node(1);
-
-    // The remaining nodes should hold a new election.
-    cluster
-        .sim
-        .write()
-        .unwrap()
-        .add_send_filter(3, response_notifier);
-    cluster
-        .sim
-        .write()
-        .unwrap()
-        .add_send_filter(3, request_notifier);
-
-    // Once we see a response on the wire we know a prevote round is happening.
-    let recieved = rx.recv_timeout(Duration::from_secs(2));
-    assert_eq!(
-        recieved.is_ok(),
-        prevote_enabled,
-        "Recieved a PreVote or PreVoteResponse when a leader is elected then unexpectedly killed."
+fn test_prevote_partition_leader_in_majority_detect_in_majority() {
+    let mut cluster = new_server_cluster(0, 5);
+    // Since the leader is in the majority and not rebooted, it sees no prevote.
+    test_prevote(
+        &mut cluster,
+        FailureType::Partition(&[1, 2, 3], &[4, 5]),
+        None,
+        (1, false),
+        (1, false),
     );
 }
 
 #[test]
-fn test_server_prevote_on_leader_reboot() {
-    let mut cluster = new_server_cluster(0, 3);
-    test_prevote_on_leader_reboot(&mut cluster, true);
+fn test_prevote_partition_leader_in_majority_detect_in_minority() {
+    let mut cluster = new_server_cluster(0, 5);
+    // The follower is in the minority and is part of a prevote process. On rejoin it adopts the
+    // old leader.
+    test_prevote(
+        &mut cluster,
+        FailureType::Partition(&[1, 2, 3], &[4, 5]),
+        None,
+        (4, true),
+        (4, false),
+    );
 }
 
 #[test]
-fn test_server_no_prevote_on_leader_reboot() {
-    let mut cluster = new_server_cluster(0, 3);
-    test_prevote_on_leader_reboot(&mut cluster, false);
+fn test_prevote_partition_leader_in_minority_detect_in_majority() {
+    let mut cluster = new_server_cluster(0, 5);
+    // The follower is in the minority and is part of a prevote process. On rejoin it adopts the
+    // old leader.
+    test_prevote(
+        &mut cluster,
+        FailureType::Partition(&[1, 2], &[3, 4, 5]),
+        None,
+        (4, true),
+        (4, false),
+    );
+}
+
+#[test]
+fn test_prevote_partition_leader_in_minority_detect_in_minority() {
+    let mut cluster = new_server_cluster(0, 5);
+    // The follower is in the minority and is part of a prevote process. On rejoin it adopts the
+    // old leader.
+    test_prevote(
+        &mut cluster,
+        FailureType::Partition(&[1, 2, 3], &[3, 4, 5]),
+        None,
+        (4, true),
+        (4, false),
+    );
+}
+
+#[test]
+fn test_prevote_reboot_majority_followers() {
+    let mut cluster = new_server_cluster(0, 5);
+    // A prevote round will start, but nothing will succeed.
+    test_prevote(
+        &mut cluster,
+        FailureType::Reboot(&[3, 4, 5]),
+        1,
+        (1, true),
+        (1, false),
+    );
+}
+
+#[test]
+fn test_prevote_reboot_minority_followers() {
+    let mut cluster = new_server_cluster(0, 5);
+    // A prevote round will start, but nothing will succeed until recovery.
+    test_prevote(
+        &mut cluster,
+        FailureType::Reboot(&[4, 5]),
+        None,
+        (2, false),
+        (2, false),
+    );
 }
 
 // Test isolating a minority of the cluster and make sure that the remove themselves.
