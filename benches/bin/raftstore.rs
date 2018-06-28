@@ -68,7 +68,8 @@ fn bench_get<T: Simulator>(mut cluster: Cluster<T>) -> BenchSamples {
     let mut kvs = generate_random_kvs(DEFAULT_DATA_SIZE, 100, 128);
     prepare_cluster(&mut cluster, &kvs);
 
-    let mut keys = kvs.drain(..)
+    let mut keys = kvs
+        .drain(..)
         .take(DEFAULT_DATA_SIZE / 10)
         .map(|i| i.0)
         .chain(KvGenerator::new(100, 0).map(|i| i.0));
@@ -83,7 +84,8 @@ fn bench_delete<T: Simulator>(mut cluster: Cluster<T>) -> BenchSamples {
     let mut kvs = generate_random_kvs(DEFAULT_DATA_SIZE, 100, 128);
     prepare_cluster(&mut cluster, &kvs);
 
-    let mut keys = kvs.drain(..)
+    let mut keys = kvs
+        .drain(..)
         .take(DEFAULT_DATA_SIZE / 10)
         .map(|i| i.0)
         .chain(KvGenerator::new(100, 0).map(|i| i.0));

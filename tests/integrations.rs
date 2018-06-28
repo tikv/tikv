@@ -11,18 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(stable_features)]
 #![feature(mpsc_recv_timeout)]
-#![feature(plugin)]
 #![feature(test)]
-#![cfg_attr(feature = "dev", plugin(clippy))]
-#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-#![feature(btree_range, collections_bound)]
+#![feature(btree_range)]
+#![feature(collections_bound)]
 #![feature(box_syntax)]
-#![allow(new_without_default)]
 #![feature(const_fn)]
-#![allow(needless_pass_by_value)]
-#![allow(unreadable_literal)]
 
 extern crate crc;
 extern crate futures;

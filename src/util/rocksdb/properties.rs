@@ -19,8 +19,9 @@ use std::ops::{Deref, DerefMut};
 use std::u64;
 
 use raftstore::store::keys;
-use rocksdb::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory,
-              UserCollectedProperties};
+use rocksdb::{
+    DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, UserCollectedProperties,
+};
 use storage::mvcc::{Write, WriteType};
 use storage::types;
 use util::codec::number::{self, NumberEncoder};
@@ -470,8 +471,8 @@ mod tests {
     use super::*;
     use raftstore::store::keys;
     use rocksdb::{DBEntryType, TablePropertiesCollector};
-    use storage::Key;
     use storage::mvcc::{Write, WriteType};
+    use storage::Key;
     use test::Bencher;
 
     #[test]

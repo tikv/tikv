@@ -26,23 +26,25 @@ use protobuf::Message;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use rocksdb::{CFHandle, Writable, WriteBatch, DB};
 
-use raftstore::Result as RaftStoreResult;
 use raftstore::errors::Error as RaftStoreError;
-use raftstore::store::Msg;
 use raftstore::store::util::check_key_in_region;
+use raftstore::store::Msg;
+use raftstore::Result as RaftStoreResult;
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use util::HandyRwLock;
 use util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use util::collections::{HashMap, HashMapEntry as Entry};
 use util::io_limiter::{IOLimiter, LimitWriter};
 use util::rocksdb::{prepare_sst_for_ingestion, validate_sst_for_ingestion};
 use util::transport::SendCh;
+use util::HandyRwLock;
 
 use raftstore::store::engine::{Iterable, Snapshot as DbSnapshot};
 use raftstore::store::keys::{self, enc_end_key, enc_start_key};
 
-use raftstore::store::metrics::{INGEST_SST_DURATION_SECONDS, SNAPSHOT_BUILD_TIME_HISTOGRAM,
-                                SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE};
+use raftstore::store::metrics::{
+    INGEST_SST_DURATION_SECONDS, SNAPSHOT_BUILD_TIME_HISTOGRAM, SNAPSHOT_CF_KV_COUNT,
+    SNAPSHOT_CF_SIZE,
+};
 use raftstore::store::peer_storage::JOB_STATUS_CANCELLING;
 
 // Data in CF_RAFT should be excluded for a snapshot.
@@ -224,7 +226,7 @@ use rocksdb::{DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileW
 use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
 use std::time::Instant;
-use util::file::{delete_file_if_exist, file_exists, get_file_size, calc_crc32};
+use util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size};
 use util::rocksdb;
 use util::rocksdb::get_fastest_supported_compression_type;
 use util::time::duration_to_sec;
@@ -723,7 +725,8 @@ impl Snap {
             } else {
                 let mut key_count = 0;
                 let mut size = 0;
-                let base = self.limiter
+                let base = self
+                    .limiter
                     .as_ref()
                     .map_or(0 as i64, |l| l.get_max_bytes_per_time());
                 let mut bytes: i64 = 0;
@@ -1065,7 +1068,8 @@ impl Write for Snap {
 impl Drop for Snap {
     fn drop(&mut self) {
         // cleanup if some of the cf files and meta file is partly written
-        if self.cf_files
+        if self
+            .cf_files
             .iter()
             .any(|cf_file| file_exists(&cf_file.tmp_path))
             || file_exists(&self.meta_file.tmp_path)
@@ -1449,23 +1453,26 @@ mod test {
     use protobuf::Message;
     use std::fs::{self, File, OpenOptions};
     use std::io::{self, Read, Seek, SeekFrom, Write};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::Arc;
     use tempdir::TempDir;
 
-    use super::{ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder, Snapshot,
-                SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS,
-                SNAP_GEN_PREFIX};
+    use super::{
+        ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder, Snapshot,
+        SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
+    };
 
     use kvproto::metapb::{Peer, Region};
-    use kvproto::raft_serverpb::{RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta};
+    use kvproto::raft_serverpb::{
+        RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,
+    };
     use rocksdb::DB;
     use std::path::PathBuf;
 
-    use raftstore::Result;
     use raftstore::store::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
     use raftstore::store::keys;
     use raftstore::store::peer_storage::JOB_STATUS_RUNNING;
+    use raftstore::Result;
     use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use util::rocksdb;
 
@@ -1815,7 +1822,8 @@ mod test {
         for p in read_dir {
             if p.is_ok() {
                 let e = p.as_ref().unwrap();
-                if !e.file_name()
+                if !e
+                    .file_name()
                     .into_string()
                     .unwrap()
                     .ends_with(META_FILE_SUFFIX)

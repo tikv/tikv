@@ -38,7 +38,8 @@ fn rotation_file_path_with_timestamp(
 
 fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
     let path = path.as_ref();
-    let parent = path.parent()
+    let parent = path
+        .parent()
         .expect("Unable to get parent directory of log file");
     if !parent.is_dir() {
         fs::create_dir_all(parent)?

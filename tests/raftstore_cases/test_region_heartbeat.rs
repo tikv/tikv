@@ -1,10 +1,10 @@
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use tikv::util::HandyRwLock;
 use tikv::util::config::*;
+use tikv::util::HandyRwLock;
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
