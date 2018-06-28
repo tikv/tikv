@@ -341,7 +341,7 @@ impl RequestTracker {
     #[allow(useless_let_if_seq)]
     fn on_handle_finish(&mut self, resp: Option<&mut Response>, mut exec_metrics: ExecutorMetrics) {
         // Record delta perf statistics
-        if let Some(perf_stats) = self.perf_statistics_start {
+        if let Some(perf_stats) = self.perf_statistics_start.take() {
             self.total_perf_statistics.add(&perf_stats.delta());
         }
 
