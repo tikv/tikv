@@ -645,23 +645,6 @@ impl Debugger {
             .collect();
         Ok(res)
     }
-
-    pub fn get_region_approximate_middle_key(
-        &self,
-        region_id: u64,
-        cf: &str,
-    ) -> Result<Option<Vec<u8>>> {
-        if ![CF_DEFAULT, CF_WRITE, CF_LOCK].iter().any(|&c| c == cf) {
-            return Err(box_err!("invalid cf: {}", cf));
-        }
-        let region_state = self.get_region_state(region_id)?;
-        let key = box_try!(raftstore_util::get_region_approximate_middle_cf(
-            self.engines.kv_engine.as_ref(),
-            cf,
-            region_state.get_region(),
-        ));
-        Ok(key)
-    }
 }
 
 pub struct MvccChecker {

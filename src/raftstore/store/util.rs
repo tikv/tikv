@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::Bound::Excluded;
 use std::option::Option;
 use std::{fmt, u64};
 
@@ -325,37 +324,6 @@ pub fn get_region_approximate_size_cf(
         size += props.get_approximate_size_in_range(&start, &end);
     }
     Ok(size)
-}
-
-/// Get the approxmiate middle key of the region. The returned key maybe
-/// is timpstamped if transaction KV is used, and must start with "z".
-pub fn get_region_approximate_middle_cf(
-    db: &DB,
-    cfname: &str,
-    region: &metapb::Region,
-) -> Result<Option<Vec<u8>>> {
-    let cf = rocksdb_util::get_cf_handle(db, cfname)?;
-    let start = keys::enc_start_key(region);
-    let end = keys::enc_end_key(region);
-    let range = Range::new(&start, &end);
-    let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
-
-    let mut keys = Vec::new();
-    for (_, v) in &*collection {
-        let props = SizeProperties::decode(v.user_collected_properties())?;
-        keys.extend(
-            props
-                .index_handles
-                .range::<[u8], _>((Excluded(start.as_slice()), Excluded(end.as_slice())))
-                .map(|(k, _)| k.to_owned()),
-        );
-    }
-
-    if keys.is_empty() {
-        return Ok(None);
-    }
-    let middle = (keys.len() - 1) / 2;
-    Ok(Some(keys.swap_remove(middle)))
 }
 
 pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u64> {
