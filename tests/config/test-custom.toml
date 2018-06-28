@@ -1,28 +1,27 @@
 log-level = "debug"
 log-file = "foo"
+log-rotation-timespan = "24h"
 [readpool.storage]
 high-concurrency = 1
 normal-concurrency = 3
 low-concurrency = 7
-max-tasks-high = 10000
-max-tasks-normal = 20000
-max-tasks-low = 30000
+max-tasks-per-worker-high = 1000
+max-tasks-per-worker-normal = 1500
+max-tasks-per-worker-low = 2500
 stack-size = "20MB"
 
 [readpool.coprocessor]
 high-concurrency = 2
 normal-concurrency = 4
 low-concurrency = 6
-max-tasks-high = 20000
-max-tasks-normal = 30000
-max-tasks-low = 40000
+max-tasks-per-worker-high = 2000
+max-tasks-per-worker-normal = 1000
+max-tasks-per-worker-low = 3000
 stack-size = "12MB"
 
 [server]
 addr = "example.com:443"
 advertise-addr = "example.com:443"
-notify-capacity = 12345
-messages-per-tick = 123
 grpc-compression-type = "gzip"
 grpc-concurrency = 123
 grpc-concurrent-stream = 1234
@@ -32,7 +31,6 @@ grpc-keepalive-time = "3s"
 grpc-keepalive-timeout = "1m"
 concurrent-send-snap-limit = 4
 concurrent-recv-snap-limit = 4
-end-point-max-tasks = 12
 end-point-recursion-limit = 100
 end-point-stream-channel-size = 16
 end-point-batch-row-limit = 64
@@ -49,7 +47,6 @@ data-dir = "/var"
 gc-ratio-threshold = 1.2
 max-key-size = 8192
 scheduler-notify-capacity = 123
-scheduler-messages-per-tick = 123
 scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
@@ -86,6 +83,7 @@ region-compact-check-interval = "12s"
 clean-stale-peer-delay = "13s"
 region-compact-check-step = 1234
 region-compact-min-tombstones = 999
+region-compact-tombstones-percent = 33
 pd-heartbeat-tick-interval = "12m"
 pd-store-heartbeat-tick-interval = "12s"
 snap-mgr-gc-tick-interval = "12m"
@@ -359,4 +357,8 @@ key-path = "invalid path"
 [import]
 import-dir = "/abc"
 num-threads = 123
+num-import-jobs = 123
+num-import-sst-jobs = 123
+max-prepare-duration = "12m"
+region-split-size = "123MB"
 stream-channel-window = 123

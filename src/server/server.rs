@@ -14,6 +14,7 @@
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
+use std::{cmp, i32};
 
 use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
 use kvproto::debugpb_grpc::create_debug;
@@ -23,7 +24,7 @@ use kvproto::tikvpb_grpc::*;
 use coprocessor::{self, EndPointHost, EndPointTask};
 use import::ImportSSTService;
 use raftstore::store::{Engines, SnapManager};
-use storage::Storage;
+use storage::{Engine, Storage};
 use util::security::SecurityManager;
 use util::worker::{Builder as WorkerBuilder, Worker};
 
@@ -36,9 +37,9 @@ use super::transport::{RaftStoreRouter, ServerTransport};
 use super::{Config, Result};
 
 const DEFAULT_COPROCESSOR_BATCH: usize = 256;
-const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
+const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 
-pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
+pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static, E: Engine> {
     env: Arc<Environment>,
     // Grpc server.
     grpc_server: GrpcServer,
@@ -47,22 +48,22 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     trans: ServerTransport<T, S>,
     raft_router: T,
     // The kv storage.
-    storage: Storage,
+    storage: Storage<E>,
     // For handling coprocessor requests.
-    end_point_worker: Worker<EndPointTask>,
+    end_point_worker: Worker<EndPointTask<E>>,
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
     cop_readpool: ReadPool<coprocessor::ReadPoolContext>,
 }
 
-impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
+impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S, E> {
     #[allow(too_many_arguments)]
     pub fn new(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
         region_split_size: usize,
-        storage: Storage,
+        storage: Storage<E>,
         // TODO: Remove once endpoint itself is passed to here.
         cop_readpool: ReadPool<coprocessor::ReadPoolContext>,
         raft_router: T,
@@ -70,7 +71,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         snap_mgr: SnapManager,
         debug_engines: Option<Engines>,
         import_service: Option<ImportSSTService<T>>,
-    ) -> Result<Server<T, S>> {
+    ) -> Result<Self> {
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(cfg.grpc_concurrency)
@@ -99,10 +100,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         info!("listening on {}", addr);
         let ip = format!("{}", addr.ip());
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
-            .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
+            .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
-            .max_send_message_len(region_split_size as usize * 4)
+            .max_send_message_len(cmp::max(region_split_size * 4, i32::MAX as usize) as i32)
             .build_args();
         let grpc_server = {
             let mut sb = ServerBuilder::new(Arc::clone(&env))
@@ -203,10 +204,10 @@ mod tests {
     use super::super::transport::RaftStoreRouter;
     use super::super::{Config, Result};
     use kvproto::raft_serverpb::RaftMessage;
-    use raftstore::Result as RaftStoreResult;
-    use raftstore::store::Msg as StoreMsg;
     use raftstore::store::transport::Transport;
+    use raftstore::store::Msg as StoreMsg;
     use raftstore::store::*;
+    use raftstore::Result as RaftStoreResult;
     use server::readpool::{self, ReadPool};
     use storage::{self, Config as StorageConfig, Storage};
     use util::security::SecurityConfig;
@@ -224,7 +225,8 @@ mod tests {
                 return Err(box_err!("quick fail"));
             }
             let addr = self.addr.lock().unwrap();
-            cb(addr.as_ref()
+            cb(addr
+                .as_ref()
                 .map(|s| s.to_owned())
                 .ok_or(box_err!("not set")));
             Ok(())

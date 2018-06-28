@@ -28,9 +28,9 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use raft::eraftpb::ConfChangeType;
 
 use tikv::config::*;
-use tikv::raftstore::Result;
 use tikv::raftstore::store::Msg as StoreMsg;
 use tikv::raftstore::store::*;
+use tikv::raftstore::Result;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
 use tikv::util::config::*;
@@ -41,8 +41,6 @@ use tikv::util::transport::SendCh;
 use super::cluster::{Cluster, Simulator};
 
 pub use tikv::raftstore::store::util::{find_peer, new_learner_peer, new_peer};
-
-pub const MAX_LEADER_LEASE: u64 = 250; // 250ms
 
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
@@ -106,7 +104,7 @@ pub fn new_store_cfg() -> Config {
         pd_heartbeat_tick_interval: ReadableDuration::millis(20),
         region_split_check_diff: ReadableSize(10000),
         report_region_flow_interval: ReadableDuration::millis(100),
-        raft_store_max_leader_lease: ReadableDuration::millis(MAX_LEADER_LEASE),
+        raft_store_max_leader_lease: ReadableDuration::millis(250),
         clean_stale_peer_delay: ReadableDuration::secs(0),
         allow_remove_leader: true,
         ..Config::default()
@@ -498,13 +496,28 @@ pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
 }
 
-pub fn configure_for_lease_read<T: Simulator>(cluster: &mut Cluster<T>) {
-    let base_tick = cluster.cfg.raft_store.raft_base_tick_interval.0;
-    let election_timeout = base_tick * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+pub fn configure_for_lease_read<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    base_tick_ms: Option<u64>,
+    election_ticks: Option<usize>,
+) -> Duration {
+    if let Some(base_tick_ms) = base_tick_ms {
+        cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(base_tick_ms);
+    }
+    let base_tick_interval = cluster.cfg.raft_store.raft_base_tick_interval.0;
+    if let Some(election_ticks) = election_ticks {
+        cluster.cfg.raft_store.raft_election_timeout_ticks = election_ticks;
+    }
+    let election_ticks = cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+    let election_timeout = base_tick_interval * election_ticks;
+    // Adjust max leader lease.
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(election_timeout);
     // Use large peer check interval, abnormal and max leader missing duration to make a valid config,
     // that is election timeout x 2 < peer stale state check < abnormal < max leader missing duration.
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration(election_timeout * 3);
     cluster.cfg.raft_store.abnormal_leader_missing_duration =
         ReadableDuration(election_timeout * 4);
     cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration(election_timeout * 5);
+
+    election_timeout
 }

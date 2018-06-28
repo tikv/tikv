@@ -11,17 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(plugin)]
 #![feature(slice_patterns)]
-#![cfg_attr(feature = "dev", plugin(clippy))]
-#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-#![allow(needless_pass_by_value)]
-#![allow(unreadable_literal)]
-// TODO: remove this once rust-lang/rust#43268 is resolved.
-#![allow(logic_bug)]
 
 #[macro_use]
 extern crate clap;
+extern crate chrono;
 extern crate fs2;
 #[cfg(feature = "mem-profiling")]
 extern crate jemallocator;
@@ -45,11 +39,10 @@ extern crate tikv;
 extern crate toml;
 
 #[cfg(unix)]
-mod profiling;
 #[macro_use]
-mod setup;
-use setup::*;
-mod signal_handler;
+mod util;
+use util::setup::*;
+use util::signal_handler;
 
 use std::env;
 use std::fs::File;
@@ -79,18 +72,18 @@ use tikv::util::security::SecurityManager;
 use tikv::util::time::Monitor;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::FutureWorker;
-use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
+use tikv::util::{self as tikv_util, panic_hook, rocksdb as rocksdb_util};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 fn check_system_config(config: &TiKvConfig) {
-    if let Err(e) = util::config::check_max_open_fds(
+    if let Err(e) = tikv_util::config::check_max_open_fds(
         RESERVED_OPEN_FDS + (config.rocksdb.max_open_files + config.raftdb.max_open_files) as u64,
     ) {
         fatal!("{:?}", e);
     }
 
-    for e in util::config::check_kernel() {
+    for e in tikv_util::config::check_kernel() {
         warn!("{:?}", e);
     }
 
@@ -100,11 +93,11 @@ fn check_system_config(config: &TiKvConfig) {
     }
 
     // check rocksdb data dir
-    if let Err(e) = util::config::check_data_dir(&config.storage.data_dir) {
+    if let Err(e) = tikv_util::config::check_data_dir(&config.storage.data_dir) {
         warn!("{:?}", e);
     }
     // check raft data dir
-    if let Err(e) = util::config::check_data_dir(&config.raft_store.raftdb_path) {
+    if let Err(e) = tikv_util::config::check_data_dir(&config.raft_store.raftdb_path) {
         warn!("{:?}", e);
     }
 }
@@ -182,6 +175,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let import_service = ImportSSTService::new(
         cfg.import.clone(),
         raft_router.clone(),
+        Arc::clone(&kv_engine),
         Arc::clone(&importer),
     );
 
@@ -261,7 +255,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
 fn main() {
     let long_version: String = {
-        let (hash, branch, time, rust_ver) = util::build_info();
+        let (hash, branch, time, rust_ver) = tikv_util::build_info();
         format!(
             "\nRelease Version:   {}\
              \nGit Commit Hash:   {}\
@@ -310,7 +304,7 @@ fn main() {
                 .takes_value(true)
                 .value_name("LEVEL")
                 .possible_values(&[
-                    "trace", "debug", "info", "warn", "warning", "error", "critical"
+                    "trace", "debug", "info", "warn", "warning", "error", "critical",
                 ])
                 .help("Sets log level"),
         )
@@ -370,11 +364,6 @@ fn main() {
                 ),
         )
         .arg(
-            Arg::with_name("import-mode")
-                .long("import-mode")
-                .help("Run in import mode"),
-        )
-        .arg(
             Arg::with_name("print-sample-config")
                 .long("print-sample-config")
                 .help("Print a sample config to stdout"),
@@ -403,7 +392,7 @@ fn main() {
     init_log(&config);
 
     // Print version information.
-    util::print_tikv_info();
+    tikv_util::print_tikv_info();
 
     panic_hook::set_exit_hook(false);
 

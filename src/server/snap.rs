@@ -13,22 +13,24 @@
 
 use std::boxed::FnBox;
 use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::{future, Async, Future, Poll, Stream};
 use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
-use grpc::{ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus,
-           RpcStatusCode, WriteFlags};
+use grpc::{
+    ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus, RpcStatusCode,
+    WriteFlags,
+};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb_grpc::TikvClient;
 
 use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
-use util::DeferContext;
 use util::security::SecurityManager;
 use util::worker::Runnable;
+use util::DeferContext;
 
 use super::metrics::*;
 use super::transport::RaftStoreRouter;
@@ -151,7 +153,7 @@ fn send_snap(
     };
 
     let cb = ChannelBuilder::new(env)
-        .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
+        .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
         .keepalive_time(cfg.grpc_keepalive_time.0)
         .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
         .default_compression_algorithm(cfg.grpc_compression_algorithm());
@@ -161,7 +163,8 @@ fn send_snap(
     let (sink, receiver) = client.snapshot()?;
 
     let send = chunks.forward(sink).map_err(Error::from);
-    let send = send.and_then(|(s, _)| receiver.map_err(Error::from).map(|_| s))
+    let send = send
+        .and_then(|(s, _)| receiver.map_err(Error::from).map(|_| s))
         .then(move |result| {
             send_timer.observe_duration();
             drop(deregister);

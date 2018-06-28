@@ -13,8 +13,8 @@
 
 use std::cell::RefMut;
 use std::fmt::{self, Debug, Display, Formatter};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use std::{mem, usize};
 
@@ -33,7 +33,7 @@ use tipb::select::DAGRequest;
 use server::readpool::{self, ReadPool};
 use server::{Config, OnResponse};
 use storage::engine::Error as EngineError;
-use storage::{self, engine, Engine, Snapshot};
+use storage::{self, engine, Engine};
 use util::collections::HashMap;
 use util::futurepool;
 use util::time::{duration_to_sec, Instant};
@@ -41,8 +41,8 @@ use util::worker::{Runnable, Scheduler};
 
 use super::checksum::ChecksumContext;
 use super::codec::table;
-use super::dag::DAGContext;
 use super::dag::executor::ExecutorMetrics;
+use super::dag::DAGContext;
 use super::local_metrics::BasicLocalMetrics;
 use super::metrics::*;
 use super::statistics::analyze::AnalyzeContext;
@@ -58,27 +58,31 @@ const OUTDATED_ERROR_MSG: &str = "request outdated.";
 
 const ENDPOINT_IS_BUSY: &str = "endpoint is busy";
 
-pub struct Host {
-    engine: Box<Engine>,
-    sched: Scheduler<Task>,
+pub struct Host<E: Engine> {
+    engine: E,
+    sched: Scheduler<Task<E>>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
     pool: ReadPool<ReadPoolContext>,
     basic_local_metrics: BasicLocalMetrics,
+    // TODO: Deprecate after totally switching to read pool
     max_running_task_count: usize,
+    // TODO: Deprecate after totally switching to read pool
     running_task_count: Arc<AtomicUsize>,
     batch_row_limit: usize,
     stream_batch_row_limit: usize,
     request_max_handle_duration: Duration,
 }
 
-impl Host {
+impl<E: Engine> Host<E> {
     pub fn new(
-        engine: Box<Engine>,
-        sched: Scheduler<Task>,
+        engine: E,
+        sched: Scheduler<Task<E>>,
         cfg: &Config,
         pool: ReadPool<ReadPoolContext>,
-    ) -> Host {
+    ) -> Self {
+        // Use read pool's max task config
+        let max_running_task_count = pool.get_max_tasks();
         Host {
             engine,
             sched,
@@ -86,20 +90,23 @@ impl Host {
             last_req_id: 0,
             pool,
             basic_local_metrics: BasicLocalMetrics::default(),
-            max_running_task_count: cfg.end_point_max_tasks,
+            // TODO: Deprecate after totally switching to read pool
+            max_running_task_count,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             request_max_handle_duration: cfg.end_point_request_max_handle_duration.0,
+            // TODO: Deprecate after totally switching to read pool
             running_task_count: Arc::new(AtomicUsize::new(0)),
         }
     }
 
     #[inline]
+    // TODO: Deprecate after totally switching to read pool
     fn running_task_count(&self) -> usize {
         self.running_task_count.load(Ordering::Acquire)
     }
 
-    fn notify_failed<E: Into<Error> + Debug>(&mut self, e: E, reqs: Vec<RequestTask>) {
+    fn notify_failed<Err: Into<Error> + Debug>(&mut self, e: Err, reqs: Vec<RequestTask>) {
         debug!("failed to handle batch request: {:?}", e);
         let resp = err_multi_resp(e.into(), reqs.len(), &mut self.basic_local_metrics);
         for t in reqs {
@@ -108,12 +115,12 @@ impl Host {
     }
 
     #[inline]
-    fn notify_batch_failed<E: Into<Error> + Debug>(&mut self, e: E, batch_id: u64) {
+    fn notify_batch_failed<Err: Into<Error> + Debug>(&mut self, e: Err, batch_id: u64) {
         let reqs = self.reqs.remove(&batch_id).unwrap();
         self.notify_failed(e, reqs);
     }
 
-    fn handle_request(&mut self, snap: Box<Snapshot>, t: RequestTask) {
+    fn handle_request(&mut self, snap: E::Snap, t: RequestTask) {
         // Collect metrics into it before requests enter into execute pool.
         // Otherwize collect into thread local contexts.
         let metrics = &mut self.basic_local_metrics;
@@ -220,7 +227,7 @@ impl Host {
         }
     }
 
-    fn handle_snapshot_result(&mut self, id: u64, snapshot: engine::Result<Box<Snapshot>>) {
+    fn handle_snapshot_result(&mut self, id: u64, snapshot: engine::Result<E::Snap>) {
         let snap = match snapshot {
             Ok(s) => s,
             Err(e) => return self.notify_batch_failed(e, id),
@@ -231,14 +238,14 @@ impl Host {
     }
 }
 
-pub enum Task {
+pub enum Task<E: Engine> {
     Request(RequestTask),
-    SnapRes(u64, engine::Result<Box<Snapshot>>),
-    BatchSnapRes(Vec<(u64, engine::Result<Box<Snapshot>>)>),
+    SnapRes(u64, engine::Result<E::Snap>),
+    BatchSnapRes(Vec<(u64, engine::Result<E::Snap>)>),
     RetryRequests(Vec<u64>),
 }
 
-impl Display for Task {
+impl<E: Engine> Display for Task<E> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
             Task::Request(ref req) => write!(f, "{}", req),
@@ -559,14 +566,14 @@ impl Display for RequestTask {
     }
 }
 
-impl Runnable<Task> for Host {
+impl<E: Engine> Runnable<Task<E>> for Host<E> {
     // TODO: limit pending reqs
-    fn run(&mut self, _: Task) {
+    fn run(&mut self, _: Task<E>) {
         panic!("Shouldn't call Host::run directly");
     }
 
     #[allow(for_kv_map)]
-    fn run_batch(&mut self, tasks: &mut Vec<Task>) {
+    fn run_batch(&mut self, tasks: &mut Vec<Task<E>>) {
         let mut grouped_reqs = map![];
         for task in tasks.drain(..) {
             match task {
@@ -624,7 +631,7 @@ impl Runnable<Task> for Host {
         let end_id = self.last_req_id;
 
         let sched = self.sched.clone();
-        let on_finished: engine::BatchCallback<Box<Snapshot>> = box move |results: Vec<_>| {
+        let on_finished: engine::BatchCallback<E::Snap> = box move |results: Vec<_>| {
             let mut ready = Vec::with_capacity(results.len());
             let mut retry = Vec::new();
             for (id, res) in (start_id..end_id + 1).zip(results) {
@@ -724,8 +731,8 @@ pub fn get_req_pri_str(pri: CommandPri) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::Future;
     use futures::sync::oneshot;
+    use futures::Future;
     use storage::engine::{self, TEMP_DIR};
 
     use kvproto::coprocessor::Request;

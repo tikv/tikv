@@ -89,8 +89,8 @@ impl SplitCheckObserver for HalfCheckObserver {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::sync::mpsc;
+    use std::sync::Arc;
 
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
@@ -155,7 +155,7 @@ mod tests {
                     assert_eq!(split_key, b"0006");
                     break;
                 }
-                Ok(Msg::ApproximateRegionSize { region_id, .. }) => {
+                Ok(Msg::RegionApproximateStat { region_id, .. }) => {
                     assert_eq!(region_id, region.get_id());
                     continue;
                 }

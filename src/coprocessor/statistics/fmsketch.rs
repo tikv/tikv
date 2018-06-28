@@ -13,8 +13,8 @@
 
 use byteorder::{ByteOrder, LittleEndian};
 use murmur3::murmur3_x64_128;
-use std::collections::HashSet;
 use tipb::analyze;
+use util::collections::HashSet;
 
 /// `FMSketch` is used to count the approximate number of distinct
 /// elements in multiset.
@@ -31,7 +31,7 @@ impl FMSketch {
         FMSketch {
             mask: 0,
             max_size,
-            hash_set: HashSet::with_capacity(max_size + 1),
+            hash_set: HashSet::with_capacity_and_hasher(max_size + 1, Default::default()),
         }
     }
 
@@ -68,9 +68,9 @@ impl FMSketch {
 #[cfg(test)]
 mod test {
     use super::*;
-    use coprocessor::codec::Result;
     use coprocessor::codec::datum;
     use coprocessor::codec::datum::Datum;
+    use coprocessor::codec::Result;
     use std::iter::repeat;
     use util::as_slice;
 

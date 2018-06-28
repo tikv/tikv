@@ -11,8 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use util::codec::{Error, Result};
+pub mod error;
 
+pub use self::error::{Error, Result};
 const TEN_POW: &[u32] = &[
     1,
     10,
@@ -29,11 +30,11 @@ const TEN_POW: &[u32] = &[
 /// A shortcut to box an error.
 macro_rules! invalid_type {
     ($e:expr) => ({
-        use util::codec::Error;
+        use coprocessor::codec::Error;
         Error::InvalidDataType(($e).into())
     });
     ($f:tt, $($arg:expr),+) => ({
-        use util::codec::Error;
+        use coprocessor::codec::Error;
         Error::InvalidDataType(format!($f, $($arg),+))
     });
 }
@@ -42,6 +43,8 @@ pub mod chunk;
 pub mod convert;
 pub mod datum;
 pub mod mysql;
+mod overflow;
 pub mod table;
 
 pub use self::datum::Datum;
+pub use self::overflow::{div_i64, div_i64_with_u64, div_u64_with_i64};

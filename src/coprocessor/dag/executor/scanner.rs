@@ -16,7 +16,7 @@ use kvproto::coprocessor::KeyRange;
 use coprocessor::codec::table::truncate_as_row_key;
 use coprocessor::util;
 use storage::txn::Result;
-use storage::{Key, ScanMode, SnapshotStore, Statistics, StoreScanner, Value};
+use storage::{Key, ScanMode, Snapshot, SnapshotStore, Statistics, StoreScanner, Value};
 use util::escape;
 
 #[derive(Copy, Clone)]
@@ -27,12 +27,12 @@ pub enum ScanOn {
 
 // `Scanner` is a helper struct to wrap all common scan operations
 // for `TableScanExecutor` and `IndexScanExecutor`
-pub struct Scanner {
+pub struct Scanner<S: Snapshot> {
     scan_mode: ScanMode,
     scan_on: ScanOn,
     key_only: bool,
     seek_key: Vec<u8>,
-    scanner: StoreScanner,
+    scanner: StoreScanner<S>,
     range: KeyRange,
     no_more: bool,
     // statistics_cache caches Statistics because
@@ -40,14 +40,14 @@ pub struct Scanner {
     statistics_cache: Statistics,
 }
 
-impl Scanner {
+impl<S: Snapshot> Scanner<S> {
     pub fn new(
-        store: &SnapshotStore,
+        store: &SnapshotStore<S>,
         scan_on: ScanOn,
         desc: bool,
         key_only: bool,
         range: KeyRange,
-    ) -> Result<Scanner> {
+    ) -> Result<Self> {
         let (scan_mode, seek_key) = if desc {
             (ScanMode::Backward, range.get_end().to_vec())
         } else {
@@ -55,7 +55,7 @@ impl Scanner {
         };
         let scanner = Self::range_scanner(store, scan_mode, key_only, &range)?;
 
-        Ok(Scanner {
+        Ok(Self {
             scan_mode,
             scan_on,
             key_only,
@@ -68,17 +68,17 @@ impl Scanner {
     }
 
     fn range_scanner(
-        store: &SnapshotStore,
+        store: &SnapshotStore<S>,
         scan_mode: ScanMode,
         key_only: bool,
         range: &KeyRange,
-    ) -> Result<StoreScanner> {
+    ) -> Result<StoreScanner<S>> {
         let lower_bound = Some(Key::from_raw(range.get_start()).encoded().to_vec());
         let upper_bound = Some(Key::from_raw(range.get_end()).encoded().to_vec());
         store.scanner(scan_mode, key_only, lower_bound, upper_bound)
     }
 
-    pub fn reset_range(&mut self, range: KeyRange, store: &SnapshotStore) -> Result<()> {
+    pub fn reset_range(&mut self, range: KeyRange, store: &SnapshotStore<S>) -> Result<()> {
         self.range = range;
         self.no_more = false;
         match self.scan_mode {
@@ -171,10 +171,9 @@ pub mod test {
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::table;
     use coprocessor::util;
-    use storage::engine::{self, Engine, Modify, TEMP_DIR};
+    use storage::engine::{self, Engine, Modify, RocksEngine, RocksSnapshot, TEMP_DIR};
     use storage::mvcc::MvccTxn;
-    use storage::{make_key, Mutation, Options, Snapshot, SnapshotStore, ALL_CFS};
-    use util::codec::number::NumberEncoder;
+    use storage::{make_key, Mutation, Options, SnapshotStore, ALL_CFS};
     use util::collections::HashMap;
 
     use super::*;
@@ -229,7 +228,8 @@ pub mod test {
             ];
             let mut expect_row = HashMap::default();
             let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
-            let col_values: Vec<_> = row.iter()
+            let col_values: Vec<_> = row
+                .iter()
                 .map(|(cid, v)| {
                     let f = table::flatten(v.clone()).unwrap();
                     let value = datum::encode_value(&[f]).unwrap();
@@ -239,9 +239,7 @@ pub mod test {
                 .collect();
 
             let value = table::encode_row(col_values, &col_ids).unwrap();
-            let mut buf = vec![];
-            buf.encode_i64(handle as i64).unwrap();
-            let key = table::encode_row_key(table_id, &buf);
+            let key = table::encode_row_key(table_id, handle as i64);
             expect_rows.push(expect_row);
             kv_data.push((key, value));
         }
@@ -256,9 +254,9 @@ pub mod test {
     const COMMIT_TS: u64 = 20;
 
     pub struct TestStore {
-        snapshot: Box<Snapshot>,
+        snapshot: RocksSnapshot,
         ctx: Context,
-        engine: Box<Engine>,
+        engine: RocksEngine,
     }
 
     impl TestStore {
@@ -327,27 +325,21 @@ pub mod test {
             self.snapshot = self.engine.snapshot(&self.ctx).unwrap()
         }
 
-        pub fn get_snapshot(&mut self) -> (Box<Snapshot>, u64) {
+        pub fn get_snapshot(&mut self) -> (RocksSnapshot, u64) {
             (self.snapshot.clone(), COMMIT_TS + 1)
         }
     }
 
     #[inline]
     pub fn get_range(table_id: i64, start: i64, end: i64) -> KeyRange {
-        let mut start_buf = Vec::with_capacity(8);
-        start_buf.encode_i64(start).unwrap();
-        let mut end_buf = Vec::with_capacity(8);
-        end_buf.encode_i64(end).unwrap();
         let mut key_range = KeyRange::new();
-        key_range.set_start(table::encode_row_key(table_id, &start_buf));
-        key_range.set_end(table::encode_row_key(table_id, &end_buf));
+        key_range.set_start(table::encode_row_key(table_id, start));
+        key_range.set_end(table::encode_row_key(table_id, end));
         key_range
     }
 
     pub fn get_point_range(table_id: i64, handle: i64) -> KeyRange {
-        let mut start_buf = Vec::with_capacity(8);
-        start_buf.encode_i64(handle).unwrap();
-        let start_key = table::encode_row_key(table_id, &start_buf);
+        let start_key = table::encode_row_key(table_id, handle);
         let end = util::prefix_next(&start_key);
         let mut key_range = KeyRange::new();
         key_range.set_start(start_key);
@@ -358,11 +350,11 @@ pub mod test {
     #[test]
     fn test_scan() {
         let table_id = 1;
-        let pk = table::encode_row_key(table_id, b"key1");
+        let pk = table::encode_row_key(table_id, 1);
         let pv = b"value1";
         let test_data = vec![
             (pk.clone(), pv.to_vec()),
-            (table::encode_row_key(table_id, b"key2"), b"value2".to_vec()),
+            (table::encode_row_key(table_id, 2), b"value2".to_vec()),
         ];
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
@@ -399,11 +391,11 @@ pub mod test {
     #[test]
     fn test_scan_key_only() {
         let table_id = 1;
-        let pk = table::encode_row_key(table_id, b"key1");
+        let pk = table::encode_row_key(table_id, 1);
         let pv = b"value1";
         let test_data = vec![
             (pk.clone(), pv.to_vec()),
-            (table::encode_row_key(table_id, b"key2"), b"value2".to_vec()),
+            (table::encode_row_key(table_id, 2), b"value2".to_vec()),
         ];
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
@@ -417,7 +409,7 @@ pub mod test {
     #[test]
     fn test_seek_key() {
         let table_id = 1;
-        let pk = table::encode_row_key(table_id, b"key1");
+        let pk = table::encode_row_key(table_id, 1);
         let pv = b"value1";
         let test_data = vec![(pk.clone(), pv.to_vec())];
         let mut test_store = TestStore::new(&test_data);

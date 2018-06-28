@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
 use std::time::Duration;
+use tikv::util::collections::{HashMap, HashSet};
 
 use grpc::{EnvBuilder, Error as GrpcError};
 use tempdir::TempDir;
@@ -33,9 +33,11 @@ use tikv::server::readpool::ReadPool;
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::transport::ServerRaftStoreRouter;
-use tikv::server::{create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient,
-                   Server, ServerTransport};
-use tikv::storage::{self, Engine};
+use tikv::server::{
+    create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, Server,
+    ServerTransport,
+};
+use tikv::storage::{self, RaftKv};
 use tikv::util::security::SecurityManager;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::{FutureWorker, Worker};
@@ -48,10 +50,11 @@ use super::util::create_test_engine;
 type SimulateStoreTransport = SimulateTransport<StoreMsg, ServerRaftStoreRouter>;
 type SimulateServerTransport =
     SimulateTransport<RaftMessage, ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
+pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
 
 struct ServerMeta {
     node: Node<TestPdClient>,
-    server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
+    server: Server<SimulateStoreTransport, PdStoreAddrResolver, SimulateEngine>,
     router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     store_ch: SendCh<StoreMsg>,
@@ -61,7 +64,7 @@ struct ServerMeta {
 pub struct ServerCluster {
     metas: HashMap<u64, ServerMeta>,
     addrs: HashMap<u64, String>,
-    pub storages: HashMap<u64, Box<Engine>>,
+    pub storages: HashMap<u64, SimulateEngine>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient,
@@ -77,11 +80,11 @@ impl ServerCluster {
         );
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
         ServerCluster {
-            metas: HashMap::new(),
-            addrs: HashMap::new(),
+            metas: HashMap::default(),
+            addrs: HashMap::default(),
             pd_client,
-            storages: HashMap::new(),
-            snap_paths: HashMap::new(),
+            storages: HashMap::default(),
+            snap_paths: HashMap::default(),
             raft_client: RaftClient::new(env, Arc::new(Config::default()), security_mgr),
         }
     }
@@ -92,7 +95,6 @@ impl ServerCluster {
 }
 
 impl Simulator for ServerCluster {
-    #[allow(useless_format)]
     fn run_node(
         &mut self,
         node_id: u64,
@@ -144,6 +146,7 @@ impl Simulator for ServerCluster {
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
             sim_router.clone(),
+            Arc::clone(&engines.kv_engine),
             Arc::clone(&importer),
         );
 

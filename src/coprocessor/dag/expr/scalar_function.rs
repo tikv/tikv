@@ -16,12 +16,12 @@ use std::usize;
 
 use tipb::expression::ScalarFuncSig;
 
-use super::compare::CmpOp;
-use super::{Error, EvalContext, FnCall, Result};
-use coprocessor::codec::Datum;
+use super::builtin_compare::CmpOp;
+use super::{Error, EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::{self, Decimal, Duration, Json, Time};
+use coprocessor::codec::Datum;
 
-impl FnCall {
+impl ScalarFunc {
     pub fn check_args(sig: ScalarFuncSig, args: usize) -> Result<()> {
         let (min_args, max_args) = match sig {
             ScalarFuncSig::LTInt
@@ -94,6 +94,11 @@ impl FnCall {
             | ScalarFuncSig::LogicalXor
             | ScalarFuncSig::DivideDecimal
             | ScalarFuncSig::DivideReal
+            | ScalarFuncSig::IntDivideInt
+            | ScalarFuncSig::IntDivideDecimal
+            | ScalarFuncSig::ModReal
+            | ScalarFuncSig::ModDecimal
+            | ScalarFuncSig::ModInt
             | ScalarFuncSig::BitAndSig
             | ScalarFuncSig::BitOrSig
             | ScalarFuncSig::BitXorSig
@@ -223,6 +228,7 @@ impl FnCall {
             ScalarFuncSig::JsonSetSig
             | ScalarFuncSig::JsonInsertSig
             | ScalarFuncSig::JsonReplaceSig => (3, usize::MAX),
+            _ => unimplemented!(),
         };
         if args < min_args || args > max_args {
             return Err(box_err!(
@@ -259,7 +265,7 @@ macro_rules! dispatch_call {
         DUR_CALLS {$($u_sig:ident => $u_func:ident $($u_arg:expr)*,)*}
         JSON_CALLS {$($j_sig:ident => $j_func:ident $($j_arg:expr)*,)*}
     ) => {
-        impl FnCall {
+        impl ScalarFunc {
             pub fn eval_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
                 match self.sig {
                     $(ScalarFuncSig::$i_sig => self.$i_func(ctx, row, $($i_arg),*)),*,
@@ -361,6 +367,7 @@ macro_rules! dispatch_call {
                     $(ScalarFuncSig::$j_sig => {
                         self.$j_func(ctx, row, $($j_arg)*).map(Datum::from)
                     })*
+                    _ => unimplemented!(),
                 }
             }
         }
@@ -444,6 +451,9 @@ dispatch_call! {
         PlusInt => plus_int,
         MinusInt => minus_int,
         MultiplyInt => multiply_int,
+        IntDivideInt => int_divide_int,
+        IntDivideDecimal => int_divide_decimal,
+        ModInt => mod_int,
 
         LogicalAnd => logical_and,
         LogicalOr => logical_or,
@@ -498,6 +508,8 @@ dispatch_call! {
         PlusReal => plus_real,
         MinusReal => minus_real,
         MultiplyReal => multiply_real,
+        DivideReal => divide_real,
+        ModReal => mod_real,
 
         AbsReal => abs_real,
         CeilReal => ceil_real,
@@ -508,7 +520,6 @@ dispatch_call! {
 
         CoalesceReal => coalesce_real,
         CaseWhenReal => case_when_real,
-        DivideReal => divide_real,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -523,6 +534,8 @@ dispatch_call! {
         PlusDecimal => plus_decimal,
         MinusDecimal => minus_decimal,
         MultiplyDecimal => multiply_decimal,
+        DivideDecimal => divide_decimal,
+        ModDecimal => mod_decimal,
 
         AbsDecimal => abs_decimal,
         CeilDecToDec => ceil_dec_to_dec,
@@ -535,7 +548,6 @@ dispatch_call! {
 
         CoalesceDecimal => coalesce_decimal,
         CaseWhenDecimal => case_when_decimal,
-        DivideDecimal => divide_decimal,
     }
     BYTES_CALLS {
         CastIntAsString => cast_int_as_str,

@@ -27,10 +27,8 @@ fn stale_read_during_splitting(right_derive: bool) {
 
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
-    configure_for_lease_read(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
-    let base_tick = cluster.cfg.raft_store.raft_base_tick_interval.0;
-    let election_timeout = base_tick * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+    let election_timeout = configure_for_lease_read(&mut cluster, None, None);
     cluster.run();
 
     // Write the initial values.
@@ -158,7 +156,6 @@ fn stale_read_during_splitting(right_derive: bool) {
     fail::remove(propose_readindex);
 }
 
-#[allow(too_many_arguments)]
 fn must_not_eq_on_key(
     cluster: &mut Cluster<NodeCluster>,
     key: &[u8],

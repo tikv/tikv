@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::i32;
+
 use super::Result;
 use grpc::CompressionAlgorithms;
 
@@ -25,18 +27,10 @@ pub use storage::Config as StorageConfig;
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
-const DEFAULT_NOTIFY_CAPACITY: usize = 40960;
 const DEFAULT_GRPC_CONCURRENCY: usize = 4;
-const DEFAULT_GRPC_CONCURRENT_STREAM: usize = 1024;
+const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 10;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
-const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
-
-// Assume a request can be finished in 1ms, a request at position x will wait about
-// 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
-// backoff. So when it needs to wait for more than 2 seconds, return error won't causse
-// larger latency.
-pub const DEFAULT_MAX_RUNNING_TASK_COUNT: usize = 2 as usize * 1000;
 
 // Number of rows in each chunk.
 pub const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
@@ -65,12 +59,11 @@ pub struct Config {
     // Server advertise listening address for outer communication.
     // If not set, we will use listening address instead.
     pub advertise_addr: String,
-    pub notify_capacity: usize,
-    pub messages_per_tick: usize,
+
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
     pub grpc_compression_type: GrpcCompressionType,
     pub grpc_concurrency: usize,
-    pub grpc_concurrent_stream: usize,
+    pub grpc_concurrent_stream: i32,
     pub grpc_raft_conn_num: usize,
     pub grpc_stream_initial_window_size: ReadableSize,
     pub grpc_keepalive_time: ReadableDuration,
@@ -79,7 +72,6 @@ pub struct Config {
     pub concurrent_send_snap_limit: usize,
     /// How many snapshots can be recv concurrently.
     pub concurrent_recv_snap_limit: usize,
-    pub end_point_max_tasks: usize,
     pub end_point_recursion_limit: u32,
     pub end_point_stream_channel_size: usize,
     pub end_point_batch_row_limit: usize,
@@ -100,6 +92,11 @@ pub struct Config {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub end_point_stack_size: Option<ReadableSize>,
+
+    // deprecated. use readpool.coprocessor.max_tasks_per_worker_xx.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub end_point_max_tasks: Option<usize>,
 }
 
 impl Default for Config {
@@ -109,8 +106,6 @@ impl Default for Config {
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
             labels: HashMap::default(),
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
-            notify_capacity: DEFAULT_NOTIFY_CAPACITY,
-            messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
             grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
@@ -123,8 +118,8 @@ impl Default for Config {
             concurrent_send_snap_limit: 32,
             concurrent_recv_snap_limit: 32,
             end_point_concurrency: None, // deprecated
-            end_point_max_tasks: DEFAULT_MAX_RUNNING_TASK_COUNT,
-            end_point_stack_size: None, // deprecated
+            end_point_max_tasks: None,   // deprecated
+            end_point_stack_size: None,  // deprecated
             end_point_recursion_limit: 1000,
             end_point_stream_channel_size: 8,
             end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,
@@ -163,7 +158,6 @@ impl Config {
                 "concurrent-recv-snap-limit",
                 self.concurrent_recv_snap_limit,
             ),
-            ("end-point-max-tasks", self.end_point_max_tasks),
         ];
         for (label, value) in non_zero_entries {
             if value == 0 {
@@ -178,6 +172,12 @@ impl Config {
         if self.end_point_request_max_handle_duration.as_secs() < DEFAULT_REQUEST_MAX_HANDLE_SECS {
             return Err(box_err!(
                 "server.end-point-request-max-handle-secs is too small."
+            ));
+        }
+
+        if self.grpc_stream_initial_window_size.0 > i32::MAX as u64 {
+            return Err(box_err!(
+                "server.grpc_stream_initial_window_size is too large."
             ));
         }
 
@@ -250,10 +250,6 @@ mod tests {
         assert!(invalid_cfg.validate().is_err());
 
         let mut invalid_cfg = cfg.clone();
-        invalid_cfg.end_point_max_tasks = 0;
-        assert!(invalid_cfg.validate().is_err());
-
-        let mut invalid_cfg = cfg.clone();
         invalid_cfg.end_point_recursion_limit = 0;
         assert!(invalid_cfg.validate().is_err());
 
@@ -266,6 +262,10 @@ mod tests {
         assert!(invalid_cfg.validate().is_err());
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
         invalid_cfg.validate().unwrap();
+
+        let mut invalid_cfg = cfg.clone();
+        invalid_cfg.grpc_stream_initial_window_size = ReadableSize(i32::MAX as u64 + 1);
+        assert!(invalid_cfg.validate().is_err());
 
         cfg.labels.insert("k1".to_owned(), "v1".to_owned());
         cfg.validate().unwrap();
@@ -282,7 +282,7 @@ mod tests {
         }
 
         let valid_cases = vec![
-            "a", "0", "a.1-2", "Cab", "abC", "b_1.2", "cab-012", "3ac.8b2"
+            "a", "0", "a.1-2", "Cab", "abC", "b_1.2", "cab-012", "3ac.8b2",
         ];
 
         for case in valid_cases {

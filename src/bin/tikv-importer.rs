@@ -11,17 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(plugin)]
 #![feature(slice_patterns)]
-#![cfg_attr(feature = "dev", plugin(clippy))]
-#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-#![allow(needless_pass_by_value)]
-#![allow(unreadable_literal)]
-// TODO: remove this once rust-lang/rust#43268 is resolved.
-#![allow(logic_bug)]
 
 #[macro_use]
 extern crate clap;
+extern crate chrono;
 extern crate fs2;
 #[cfg(feature = "mem-profiling")]
 extern crate jemallocator;
@@ -45,11 +39,10 @@ extern crate tikv;
 extern crate toml;
 
 #[cfg(unix)]
-mod profiling;
 #[macro_use]
-mod setup;
-use setup::*;
-mod signal_handler;
+mod util;
+use util::setup::*;
+use util::signal_handler;
 
 use std::process;
 use std::sync::atomic::Ordering;
@@ -58,11 +51,11 @@ use clap::{App, Arg, ArgMatches};
 
 use tikv::config::TiKvConfig;
 use tikv::import::ImportKVServer;
-use tikv::util::{self, panic_hook};
+use tikv::util::{self as tikv_util, panic_hook};
 
 fn main() {
     let long_version: String = {
-        let (hash, branch, time, rust_ver) = util::build_info();
+        let (hash, branch, time, rust_ver) = tikv_util::build_info();
         format!(
             "\nRelease Version:   {}\
              \nGit Commit Hash:   {}\
@@ -125,7 +118,7 @@ fn main() {
     init_log(&config);
     initial_metric(&config.metric, None);
 
-    util::print_tikv_info();
+    tikv_util::print_tikv_info();
     panic_hook::set_exit_hook(false);
     configure_grpc_poll_strategy();
 

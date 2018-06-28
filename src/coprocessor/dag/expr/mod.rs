@@ -11,38 +11,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod arithmetic;
+mod builtin_arithmetic;
 mod builtin_cast;
+mod builtin_compare;
 mod builtin_control;
+mod builtin_json;
+mod builtin_math;
 mod builtin_op;
+mod builtin_time;
 mod column;
-mod compare;
 mod constant;
 mod ctx;
-mod err;
-mod fncall;
-mod json;
-mod math;
-mod time;
-pub use self::ctx::*;
-pub use self::err::*;
+mod scalar_function;
 
+pub use self::ctx::*;
+pub use coprocessor::codec::{Error, Result};
+
+use coprocessor::codec::mysql::{charset, types};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
+use coprocessor::codec::{self, Datum};
 use std::borrow::Cow;
 use std::str;
-
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
-
-use coprocessor::codec::mysql::json::JsonDecoder;
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
-use coprocessor::codec::mysql::{charset, types};
-use coprocessor::codec::{self, Datum};
-use util::codec::number::{self, NumberDecoder};
+use util::codec::number;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
     Constant(Constant),
     ColumnRef(Column),
-    ScalarFn(FnCall),
+    ScalarFn(ScalarFunc),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -59,7 +56,7 @@ pub struct Constant {
 
 /// A single scalar function call
 #[derive(Debug, Clone, PartialEq)]
-pub struct FnCall {
+pub struct ScalarFunc {
     sig: ScalarFuncSig,
     children: Vec<Expression>,
     tp: FieldType,
@@ -222,13 +219,11 @@ impl Expression {
         let tp = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
-            ExprType::Int64 => expr.get_val()
-                .decode_i64()
+            ExprType::Int64 => number::decode_i64(&mut expr.get_val())
                 .map(Datum::I64)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
-            ExprType::Uint64 => expr.get_val()
-                .decode_u64()
+            ExprType::Uint64 => number::decode_u64(&mut expr.get_val())
                 .map(Datum::U64)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
@@ -239,38 +234,35 @@ impl Expression {
                 .map(Datum::F64)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
-            ExprType::MysqlTime => expr.get_val()
-                .decode_u64()
+            ExprType::MysqlTime => number::decode_u64(&mut expr.get_val())
+                .map_err(Error::from)
                 .and_then(|i| {
                     let fsp = tp.get_decimal() as i8;
                     let t = tp.get_tp() as u8;
                     Time::from_packed_u64(i, t, fsp, &ctx.cfg.tz)
                 })
-                .map(|t| Expression::new_const(Datum::Time(t), tp))
-                .map_err(Error::from),
-            ExprType::MysqlDuration => expr.get_val()
-                .decode_i64()
+                .map(|t| Expression::new_const(Datum::Time(t), tp)),
+            ExprType::MysqlDuration => number::decode_i64(&mut expr.get_val())
+                .map_err(Error::from)
                 .and_then(|n| Duration::from_nanos(n, MAX_FSP))
                 .map(Datum::Dur)
-                .map(|e| Expression::new_const(e, tp))
-                .map_err(Error::from),
+                .map(|e| Expression::new_const(e, tp)),
             ExprType::MysqlDecimal => Decimal::decode(&mut expr.get_val())
                 .map(Datum::Dec)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
-            ExprType::MysqlJson => expr.get_val()
-                .decode_json()
+            ExprType::MysqlJson => Json::decode(&mut expr.get_val())
                 .map(Datum::Json)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
             ExprType::ScalarFunc => {
-                FnCall::check_args(expr.get_sig(), expr.get_children().len())?;
+                ScalarFunc::check_args(expr.get_sig(), expr.get_children().len())?;
                 expr.take_children()
                     .into_iter()
                     .map(|child| Expression::build(ctx, child))
                     .collect::<Result<Vec<_>>>()
                     .map(|children| {
-                        Expression::ScalarFn(FnCall {
+                        Expression::ScalarFn(ScalarFunc {
                             sig: expr.get_sig(),
                             children,
                             tp,
@@ -278,7 +270,7 @@ impl Expression {
                     })
             }
             ExprType::ColumnRef => {
-                let offset = expr.get_val().decode_i64().map_err(Error::from)? as usize;
+                let offset = number::decode_i64(&mut expr.get_val()).map_err(Error::from)? as usize;
                 let column = Column { offset, tp };
                 Ok(Expression::ColumnRef(column))
             }
@@ -305,10 +297,12 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::{Error, EvalConfig, EvalContext, Expression, ERR_DATA_OUT_OF_RANGE,
-                FLAG_IGNORE_TRUNCATE};
+    use super::{Error, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
+    use coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
     use coprocessor::codec::mysql::json::JsonEncoder;
-    use coprocessor::codec::mysql::{charset, types, Decimal, DecimalEncoder, Duration, Json, Time};
+    use coprocessor::codec::mysql::{
+        charset, types, Decimal, DecimalEncoder, Duration, Json, Time,
+    };
     use coprocessor::codec::{convert, mysql, Datum};
     use std::sync::Arc;
     use std::{i64, u64};
@@ -334,7 +328,16 @@ mod test {
         }
     }
 
-    pub fn fncall_expr(sig: ScalarFuncSig, children: &[Expr]) -> Expr {
+    #[inline]
+    pub fn check_divide_by_zero(e: Error) -> Result<(), ()> {
+        if e.code() == ERR_DIVISION_BY_ZERO {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    pub fn scalar_func_expr(sig: ScalarFuncSig, children: &[Expr]) -> Expr {
         let mut expr = Expr::new();
         expr.set_tp(ExprType::ScalarFunc);
         expr.set_sig(sig);
@@ -455,7 +458,7 @@ mod test {
         ];
         for (sig, cols, exp) in cases {
             let col_expr = col_expr(0);
-            let mut ex = fncall_expr(sig, &[col_expr]);
+            let mut ex = scalar_func_expr(sig, &[col_expr]);
             ex.mut_field_type()
                 .set_decimal(convert::UNSPECIFIED_LENGTH as i32);
             ex.mut_field_type()
@@ -480,7 +483,7 @@ mod test {
         ];
         for (flag, cols, exp) in cases {
             let col_expr = col_expr(0);
-            let mut ex = fncall_expr(ScalarFuncSig::CastIntAsInt, &[col_expr]);
+            let mut ex = scalar_func_expr(ScalarFuncSig::CastIntAsInt, &[col_expr]);
             if flag.is_some() {
                 ex.mut_field_type().set_flag(flag.unwrap() as u32);
             }

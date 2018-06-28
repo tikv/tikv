@@ -18,8 +18,8 @@ use tipb::executor::{self, ExecType};
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
 
-use storage::SnapshotStore;
-use util::codec::number::NumberDecoder;
+use storage::{Snapshot, SnapshotStore};
+use util::codec::number;
 use util::collections::HashSet;
 
 use coprocessor::codec::datum::{self, Datum};
@@ -65,7 +65,7 @@ impl ExprColumnRefVisitor {
 
     pub fn visit(&mut self, expr: &Expr) -> Result<()> {
         if expr.get_tp() == ExprType::ColumnRef {
-            let offset = box_try!(expr.get_val().decode_i64()) as usize;
+            let offset = box_try!(number::decode_i64(&mut expr.get_val())) as usize;
             if offset >= self.cols_len {
                 return Err(Error::Other(box_err!(
                     "offset {} overflow, should be less than {}",
@@ -158,9 +158,9 @@ pub struct DAGExecutor {
     pub has_aggr: bool,
 }
 
-pub fn build_exec(
+pub fn build_exec<S: Snapshot + 'static>(
     execs: Vec<executor::Executor>,
-    store: SnapshotStore,
+    store: SnapshotStore<S>,
     ranges: Vec<KeyRange>,
     ctx: Arc<EvalConfig>,
     collect: bool,
@@ -219,9 +219,10 @@ pub fn build_exec(
 
 type FirstExecutor = (Box<Executor + Send>, Arc<Vec<ColumnInfo>>);
 
-fn build_first_executor(
+// We have trait objects which requires 'static.
+fn build_first_executor<S: Snapshot + 'static>(
     mut first: executor::Executor,
-    store: SnapshotStore,
+    store: SnapshotStore<S>,
     ranges: Vec<KeyRange>,
     collect: bool,
 ) -> Result<FirstExecutor> {

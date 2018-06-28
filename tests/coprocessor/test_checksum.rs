@@ -19,7 +19,7 @@ use protobuf::Message;
 use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
 
 use tikv::coprocessor::*;
-use tikv::storage::SnapshotStore;
+use tikv::storage::{Engine, SnapshotStore};
 
 use super::test_select::*;
 
@@ -72,7 +72,11 @@ fn test_checksum() {
     }
 }
 
-fn reversed_checksum_crc64_xor(store: &Store, range: KeyRange, scan_on: ChecksumScanOn) -> u64 {
+fn reversed_checksum_crc64_xor<E: Engine>(
+    store: &Store<E>,
+    range: KeyRange,
+    scan_on: ChecksumScanOn,
+) -> u64 {
     use crc::crc64::{self, Digest, Hasher64};
 
     let ctx = Context::new();
@@ -87,11 +91,8 @@ fn reversed_checksum_crc64_xor(store: &Store, range: KeyRange, scan_on: Checksum
         ChecksumScanOn::Index => ScanOn::Index,
     };
     let mut scanner = Scanner::new(
-        &snap,
-        scan_on,
-        true, // Scan in reversed order.
-        false,
-        range,
+        &snap, scan_on, true, // Scan in reversed order.
+        false, range,
     ).unwrap();
 
     let mut checksum = 0;

@@ -15,8 +15,10 @@ use super::test_select::*;
 use kvproto::coprocessor::{KeyRange, Request};
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::{Message, RepeatedField};
-use tipb::analyze::{AnalyzeColumnsReq, AnalyzeColumnsResp, AnalyzeIndexReq, AnalyzeIndexResp,
-                    AnalyzeReq, AnalyzeType};
+use tipb::analyze::{
+    AnalyzeColumnsReq, AnalyzeColumnsResp, AnalyzeIndexReq, AnalyzeIndexResp, AnalyzeReq,
+    AnalyzeType,
+};
 
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 
@@ -203,7 +205,7 @@ fn test_analyze_index() {
     let rows = analyze_resp.get_cms().get_rows();
     assert_eq!(rows.len(), 4);
     let sum: u32 = rows.first().unwrap().get_counters().iter().sum();
-    assert_eq!(sum, 4);
+    assert_eq!(sum, 8);
     end_point.stop().unwrap().join().unwrap();
 }
 

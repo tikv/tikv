@@ -11,21 +11,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
 use std::result;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
+use util::collections::HashSet;
 
 use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
 use futures::task::Task;
 use futures::{task, Async, Future, Poll, Stream};
-use grpc::{CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
-           Result as GrpcResult};
-use kvproto::pdpb::{ErrorType, GetMembersRequest, GetMembersResponse, Member,
-                    RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader};
+use grpc::{
+    CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
+    Result as GrpcResult,
+};
+use kvproto::pdpb::{
+    ErrorType, GetMembersRequest, GetMembersResponse, Member, RegionHeartbeatRequest,
+    RegionHeartbeatResponse, ResponseHeader,
+};
 use kvproto::pdpb_grpc::PdClient;
 use tokio_timer::Timer;
 
@@ -124,10 +128,12 @@ impl LeaderClient {
             receiver: None,
             inner: Arc::clone(&self.inner),
         };
-        Box::new(recv.for_each(move |resp| {
-            f(resp);
-            Ok(())
-        }).map_err(|e| panic!("unexpected error: {:?}", e)))
+        Box::new(
+            recv.for_each(move |resp| {
+                f(resp);
+                Ok(())
+            }).map_err(|e| panic!("unexpected error: {:?}", e)),
+        )
     }
 
     pub fn on_reconnect(&self, f: Box<Fn() + Sync + Send + 'static>) {
@@ -329,7 +335,7 @@ pub fn validate_endpoints(
     security_mgr: &SecurityManager,
 ) -> Result<(PdClient, GetMembersResponse)> {
     let len = cfg.endpoints.len();
-    let mut endpoints_set = HashSet::with_capacity(len);
+    let mut endpoints_set = HashSet::with_capacity_and_hasher(len, Default::default());
 
     let mut members = None;
     let mut cluster_id = None;
@@ -383,7 +389,8 @@ fn connect(
     addr: &str,
 ) -> Result<(PdClient, GetMembersResponse)> {
     info!("connect to PD endpoint: {:?}", addr);
-    let addr = addr.trim_left_matches("http://")
+    let addr = addr
+        .trim_left_matches("http://")
         .trim_left_matches("https://");
     let cb = ChannelBuilder::new(env)
         .keepalive_time(Duration::from_secs(10))

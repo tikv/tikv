@@ -17,7 +17,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 use std::{error, result};
 
-pub use self::rocksdb::EngineRocksdb;
+pub use self::rocksdb::{RocksEngine, RocksSnapshot};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
 use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
@@ -69,9 +69,12 @@ pub enum Modify {
     DeleteRange(CfName, Key, Key),
 }
 
-pub trait Engine: Send + Debug {
+pub trait Engine: Send + Debug + Clone + Sized + 'static {
+    type Iter: Iterator;
+    type Snap: Snapshot<Iter = Self::Iter>;
+
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
-    fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()>;
+    fn async_snapshot(&self, ctx: &Context, callback: Callback<Self::Snap>) -> Result<()>;
     /// Snapshots are token by `Context`s, the results are send to the `on_finished` callback,
     /// with the same order. If a read-index is occurred, a `None` is placed in the corresponding
     /// slot, and the caller is responsible for reissuing it again, in `async_snapshot`.
@@ -82,7 +85,7 @@ pub trait Engine: Send + Debug {
     fn async_batch_snapshot(
         &self,
         batch: Vec<Context>,
-        on_finished: BatchCallback<Box<Snapshot>>,
+        on_finished: BatchCallback<Self::Snap>,
     ) -> Result<()>;
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
@@ -93,7 +96,7 @@ pub trait Engine: Send + Debug {
         }
     }
 
-    fn snapshot(&self, ctx: &Context) -> Result<Box<Snapshot>> {
+    fn snapshot(&self, ctx: &Context) -> Result<Self::Snap> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         match wait_op!(|cb| self.async_snapshot(ctx, cb), timeout) {
             Some((_, res)) => res,
@@ -116,34 +119,31 @@ pub trait Engine: Send + Debug {
     fn delete_cf(&self, ctx: &Context, cf: CfName, key: Key) -> Result<()> {
         self.write(ctx, vec![Modify::Delete(cf, key)])
     }
-
-    /// Create a shared Engine pointer.
-    fn clone_box(&self) -> Box<Engine + 'static>;
 }
 
-impl Clone for Box<Engine> {
-    fn clone(&self) -> Box<Engine> {
-        self.clone_box()
-    }
-}
+pub trait Snapshot: Send + Debug + Clone + Sized {
+    type Iter: Iterator;
 
-pub trait Snapshot: Send + Debug {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
     #[allow(needless_lifetimes)]
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor>;
+    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
     #[allow(needless_lifetimes)]
-    fn iter_cf(&self, cf: CfName, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor>;
+    fn iter_cf(
+        &self,
+        cf: CfName,
+        iter_opt: IterOption,
+        mode: ScanMode,
+    ) -> Result<Cursor<Self::Iter>>;
     fn get_properties(&self) -> Result<TablePropertiesCollection> {
         self.get_properties_cf(CF_DEFAULT)
     }
     fn get_properties_cf(&self, _: CfName) -> Result<TablePropertiesCollection> {
         Err(Error::RocksDb("no user properties".to_owned()))
     }
-    fn clone(&self) -> Box<Snapshot>;
 }
 
-pub trait Iterator {
+pub trait Iterator: Send + Sized {
     fn next(&mut self) -> bool;
     fn prev(&mut self) -> bool;
     fn seek(&mut self, key: &Key) -> Result<bool>;
@@ -298,17 +298,17 @@ impl StatisticsSummary {
     }
 }
 
-pub struct Cursor {
-    iter: Box<Iterator + Send>,
+pub struct Cursor<I: Iterator> {
+    iter: I,
     scan_mode: ScanMode,
     // the data cursor can be seen will be
     min_key: Option<Vec<u8>>,
     max_key: Option<Vec<u8>>,
 }
 
-impl Cursor {
-    pub fn new(iter: Box<Iterator + Send>, mode: ScanMode) -> Cursor {
-        Cursor {
+impl<I: Iterator> Cursor<I> {
+    pub fn new(iter: I, mode: ScanMode) -> Self {
+        Self {
             iter,
             scan_mode: mode,
             min_key: None,
@@ -323,7 +323,8 @@ impl Cursor {
             return Ok(false);
         }
 
-        if self.scan_mode == ScanMode::Forward && self.valid()
+        if self.scan_mode == ScanMode::Forward
+            && self.valid()
             && self.iter.key() >= key.encoded().as_slice()
         {
             return Ok(true);
@@ -410,7 +411,8 @@ impl Cursor {
             return Ok(false);
         }
 
-        if self.scan_mode == ScanMode::Backward && self.valid()
+        if self.scan_mode == ScanMode::Backward
+            && self.valid()
             && self.iter.key() <= key.encoded().as_slice()
         {
             return Ok(true);
@@ -523,6 +525,12 @@ impl Cursor {
     }
 
     #[inline]
+    pub fn internal_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        statistics.seek += 1;
+        self.iter.seek(key)
+    }
+
+    #[inline]
     pub fn next(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.next += 1;
         self.iter.next()
@@ -541,7 +549,7 @@ impl Cursor {
 }
 
 /// Create a local Rocskdb engine. (Without raft, mainly for tests).
-pub fn new_local_engine(path: &str, cfs: &[CfName]) -> Result<Box<Engine>> {
+pub fn new_local_engine(path: &str, cfs: &[CfName]) -> Result<RocksEngine> {
     let mut cfs_opts = Vec::with_capacity(cfs.len());
     let cfg_rocksdb = config::DbConfig::default();
     for cf in cfs {
@@ -554,7 +562,7 @@ pub fn new_local_engine(path: &str, cfs: &[CfName]) -> Result<Box<Engine>> {
         };
         cfs_opts.push(cf_opt);
     }
-    EngineRocksdb::new(path, cfs, Some(cfs_opts)).map(|engine| -> Box<Engine> { Box::new(engine) })
+    RocksEngine::new(path, cfs, Some(cfs_opts))
 }
 
 quick_error! {
@@ -617,74 +625,74 @@ mod tests {
     #[test]
     fn rocksdb() {
         let dir = TempDir::new("rocksdb_test").unwrap();
-        let e = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
+        let engine = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
 
-        test_get_put(e.as_ref());
-        test_batch(e.as_ref());
-        test_empty_seek(e.as_ref());
-        test_seek(e.as_ref());
-        test_near_seek(e.as_ref());
-        test_cf(e.as_ref());
-        test_empty_write(e.as_ref());
-        test_empty_batch_snapshot(e.as_ref());
+        test_get_put(&engine);
+        test_batch(&engine);
+        test_empty_seek(&engine);
+        test_seek(&engine);
+        test_near_seek(&engine);
+        test_cf(&engine);
+        test_empty_write(&engine);
+        test_empty_batch_snapshot(&engine);
     }
 
     #[test]
     fn rocksdb_reopen() {
         let dir = TempDir::new("rocksdb_test").unwrap();
         {
-            let e = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
-            must_put_cf(e.as_ref(), "cf", b"k", b"v1");
+            let engine = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
+            must_put_cf(&engine, "cf", b"k", b"v1");
         }
         {
-            let e = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
-            assert_has_cf(e.as_ref(), "cf", b"k", b"v1");
+            let engine = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
+            assert_has_cf(&engine, "cf", b"k", b"v1");
         }
     }
 
-    fn must_put(engine: &Engine, key: &[u8], value: &[u8]) {
+    fn must_put<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
         engine
             .put(&Context::new(), make_key(key), value.to_vec())
             .unwrap();
     }
 
-    fn must_put_cf(engine: &Engine, cf: CfName, key: &[u8], value: &[u8]) {
+    fn must_put_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8], value: &[u8]) {
         engine
             .put_cf(&Context::new(), cf, make_key(key), value.to_vec())
             .unwrap();
     }
 
-    fn must_delete(engine: &Engine, key: &[u8]) {
+    fn must_delete<E: Engine>(engine: &E, key: &[u8]) {
         engine.delete(&Context::new(), make_key(key)).unwrap();
     }
 
-    fn muest_delete_cf(engine: &Engine, cf: CfName, key: &[u8]) {
+    fn must_delete_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8]) {
         engine
             .delete_cf(&Context::new(), cf, make_key(key))
             .unwrap();
     }
 
-    fn assert_has(engine: &Engine, key: &[u8], value: &[u8]) {
+    fn assert_has<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         assert_eq!(snapshot.get(&make_key(key)).unwrap().unwrap(), value);
     }
 
-    fn assert_has_cf(engine: &Engine, cf: CfName, key: &[u8], value: &[u8]) {
+    fn assert_has_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8], value: &[u8]) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         assert_eq!(snapshot.get_cf(cf, &make_key(key)).unwrap().unwrap(), value);
     }
 
-    fn assert_none(engine: &Engine, key: &[u8]) {
+    fn assert_none<E: Engine>(engine: &E, key: &[u8]) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         assert_eq!(snapshot.get(&make_key(key)).unwrap(), None);
     }
 
-    fn assert_none_cf(engine: &Engine, cf: CfName, key: &[u8]) {
+    fn assert_none_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8]) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         assert_eq!(snapshot.get_cf(cf, &make_key(key)).unwrap(), None);
     }
 
-    fn assert_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
+    fn assert_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut iter = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
@@ -697,7 +705,7 @@ mod tests {
         );
     }
 
-    fn assert_reverse_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
+    fn assert_reverse_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut iter = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
@@ -710,7 +718,7 @@ mod tests {
         );
     }
 
-    fn assert_near_seek(cursor: &mut Cursor, key: &[u8], pair: (&[u8], &[u8])) {
+    fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
         let mut statistics = CFStatistics::default();
         assert!(
             cursor.near_seek(&make_key(key), &mut statistics).unwrap(),
@@ -722,7 +730,11 @@ mod tests {
         );
     }
 
-    fn assert_near_reverse_seek(cursor: &mut Cursor, key: &[u8], pair: (&[u8], &[u8])) {
+    fn assert_near_reverse_seek<I: Iterator>(
+        cursor: &mut Cursor<I>,
+        key: &[u8],
+        pair: (&[u8], &[u8]),
+    ) {
         let mut statistics = CFStatistics::default();
         assert!(
             cursor
@@ -736,7 +748,7 @@ mod tests {
         );
     }
 
-    fn test_get_put(engine: &Engine) {
+    fn test_get_put<E: Engine>(engine: &E) {
         assert_none(engine, b"x");
         must_put(engine, b"x", b"1");
         assert_has(engine, b"x", b"1");
@@ -744,7 +756,7 @@ mod tests {
         assert_has(engine, b"x", b"2");
     }
 
-    fn test_batch(engine: &Engine) {
+    fn test_batch<E: Engine>(engine: &E) {
         engine
             .write(
                 &Context::new(),
@@ -770,7 +782,7 @@ mod tests {
         assert_none(engine, b"y");
     }
 
-    fn test_seek(engine: &Engine) {
+    fn test_seek<E: Engine>(engine: &E) {
         must_put(engine, b"x", b"1");
         assert_seek(engine, b"x", (b"x", b"1"));
         assert_seek(engine, b"a", (b"x", b"1"));
@@ -791,7 +803,7 @@ mod tests {
         must_delete(engine, b"z");
     }
 
-    fn test_near_seek(engine: &Engine) {
+    fn test_near_seek<E: Engine>(engine: &E) {
         must_put(engine, b"x", b"1");
         must_put(engine, b"z", b"2");
         let snapshot = engine.snapshot(&Context::new()).unwrap();
@@ -805,9 +817,11 @@ mod tests {
         assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
         assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
         let mut statistics = CFStatistics::default();
-        assert!(!cursor
-            .near_seek(&make_key(b"z\x00"), &mut statistics)
-            .unwrap());
+        assert!(
+            !cursor
+                .near_seek(&make_key(b"z\x00"), &mut statistics)
+                .unwrap()
+        );
         // Insert many key-values between 'x' and 'z' then near_seek will fallback to seek.
         for i in 0..super::SEEK_BOUND {
             let key = format!("y{}", i);
@@ -828,21 +842,27 @@ mod tests {
         }
     }
 
-    fn test_empty_seek(engine: &Engine) {
+    fn test_empty_seek<E: Engine>(engine: &E) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut cursor = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CFStatistics::default();
-        assert!(!cursor
-            .near_reverse_seek(&make_key(b"x"), &mut statistics)
-            .unwrap());
-        assert!(!cursor
-            .near_reverse_seek(&make_key(b"z"), &mut statistics)
-            .unwrap());
-        assert!(!cursor
-            .near_reverse_seek(&make_key(b"w"), &mut statistics)
-            .unwrap());
+        assert!(
+            !cursor
+                .near_reverse_seek(&make_key(b"x"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            !cursor
+                .near_reverse_seek(&make_key(b"z"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            !cursor
+                .near_reverse_seek(&make_key(b"w"), &mut statistics)
+                .unwrap()
+        );
         assert!(!cursor.near_seek(&make_key(b"x"), &mut statistics).unwrap());
         assert!(!cursor.near_seek(&make_key(b"z"), &mut statistics).unwrap());
         assert!(!cursor.near_seek(&make_key(b"w"), &mut statistics).unwrap());
@@ -872,10 +892,9 @@ mod tests {
         ForPrev,
     }
 
-    #[allow(cyclomatic_complexity)]
     // use step to control the distance between target key and current key in cursor.
-    fn test_linear_seek(
-        snapshot: &Snapshot,
+    fn test_linear_seek<S: Snapshot>(
+        snapshot: &S,
         mode: ScanMode,
         seek_mode: SeekMode,
         start_idx: usize,
@@ -946,32 +965,32 @@ mod tests {
     #[test]
     fn test_linear() {
         let dir = TempDir::new("rocksdb_test").unwrap();
-        let e = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
+        let engine = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
         for i in 50..50 + SEEK_BOUND * 10 {
             let key = format!("key_{}", i * 2);
             let value = format!("value_{}", i);
-            must_put(e.as_ref(), key.as_bytes(), value.as_bytes());
+            must_put(&engine, key.as_bytes(), value.as_bytes());
         }
-        let snapshot = e.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
 
         for step in 1..SEEK_BOUND * 3 {
             for start in 0..10 {
                 test_linear_seek(
-                    snapshot.as_ref(),
+                    &snapshot,
                     ScanMode::Forward,
                     SeekMode::Normal,
                     start * SEEK_BOUND,
                     step,
                 );
                 test_linear_seek(
-                    snapshot.as_ref(),
+                    &snapshot,
                     ScanMode::Backward,
                     SeekMode::Reverse,
                     start * SEEK_BOUND,
                     step,
                 );
                 test_linear_seek(
-                    snapshot.as_ref(),
+                    &snapshot,
                     ScanMode::Backward,
                     SeekMode::ForPrev,
                     start * SEEK_BOUND,
@@ -983,7 +1002,7 @@ mod tests {
             for step in 1..SEEK_BOUND * 3 {
                 for start in 0..10 {
                     test_linear_seek(
-                        snapshot.as_ref(),
+                        &snapshot,
                         ScanMode::Mixed,
                         seek_mode,
                         start * SEEK_BOUND,
@@ -994,19 +1013,19 @@ mod tests {
         }
     }
 
-    fn test_cf(engine: &Engine) {
+    fn test_cf<E: Engine>(engine: &E) {
         assert_none_cf(engine, "cf", b"key");
         must_put_cf(engine, "cf", b"key", b"value");
         assert_has_cf(engine, "cf", b"key", b"value");
-        muest_delete_cf(engine, "cf", b"key");
+        must_delete_cf(engine, "cf", b"key");
         assert_none_cf(engine, "cf", b"key");
     }
 
-    fn test_empty_write(engine: &Engine) {
+    fn test_empty_write<E: Engine>(engine: &E) {
         engine.write(&Context::new(), vec![]).unwrap_err();
     }
 
-    fn test_empty_batch_snapshot(engine: &Engine) {
+    fn test_empty_batch_snapshot<E: Engine>(engine: &E) {
         let on_finished = box move |_| {};
         engine
             .async_batch_snapshot(vec![], on_finished)

@@ -22,7 +22,6 @@ pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 const DEFAULT_MAX_KEY_SIZE: usize = 4 * 1024;
 const DEFAULT_SCHED_CAPACITY: usize = 10240;
-const DEFAULT_SCHED_MSG_PER_TICK: usize = 1024;
 const DEFAULT_SCHED_CONCURRENCY: usize = 102400;
 
 // According to "Little's law", assuming you can write 100MB per
@@ -39,7 +38,6 @@ pub struct Config {
     pub gc_ratio_threshold: f64,
     pub max_key_size: usize,
     pub scheduler_notify_capacity: usize,
-    pub scheduler_messages_per_tick: usize,
     pub scheduler_concurrency: usize,
     pub scheduler_worker_pool_size: usize,
     pub scheduler_pending_write_threshold: ReadableSize,
@@ -53,7 +51,6 @@ impl Default for Config {
             gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
             max_key_size: DEFAULT_MAX_KEY_SIZE,
             scheduler_notify_capacity: DEFAULT_SCHED_CAPACITY,
-            scheduler_messages_per_tick: DEFAULT_SCHED_MSG_PER_TICK,
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
             scheduler_worker_pool_size: if total_cpu >= 16 { 8 } else { 4 },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),

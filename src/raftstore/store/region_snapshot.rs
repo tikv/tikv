@@ -16,9 +16,9 @@ use rocksdb::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use std::cmp;
 use std::sync::Arc;
 
-use raftstore::Result;
 use raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
 use raftstore::store::{keys, util, PeerStorage};
+use raftstore::Result;
 
 /// Snapshot of a region.
 ///
@@ -31,7 +31,7 @@ pub struct RegionSnapshot {
 
 impl RegionSnapshot {
     pub fn new(ps: &PeerStorage) -> RegionSnapshot {
-        RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.get_region().clone())
+        RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.region().clone())
     }
 
     pub fn from_raw(db: Arc<DB>, region: Region) -> RegionSnapshot {
@@ -42,13 +42,6 @@ impl RegionSnapshot {
         RegionSnapshot {
             snap,
             region: Arc::new(region),
-        }
-    }
-
-    pub fn clone(&self) -> RegionSnapshot {
-        RegionSnapshot {
-            snap: self.snap.clone(),
-            region: Arc::clone(&self.region),
         }
     }
 
@@ -125,6 +118,15 @@ impl RegionSnapshot {
 
     pub fn get_end_key(&self) -> &[u8] {
         self.region.get_end_key()
+    }
+}
+
+impl Clone for RegionSnapshot {
+    fn clone(&self) -> Self {
+        RegionSnapshot {
+            snap: self.snap.clone(),
+            region: Arc::clone(&self.region),
+        }
     }
 }
 
@@ -319,10 +321,10 @@ mod tests {
     use rocksdb::{Writable, DB};
     use tempdir::TempDir;
 
-    use raftstore::Result;
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
     use raftstore::store::{CacheQueryStats, PeerStorage};
+    use raftstore::Result;
     use storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS, CF_DEFAULT};
     use util::{escape, rocksdb, worker};
 
@@ -530,9 +532,10 @@ mod tests {
 
         let snap = RegionSnapshot::new(&store);
         let mut statistics = CFStatistics::default();
-        let mut iter = Cursor::new(Box::new(snap.iter(IterOption::default())), ScanMode::Mixed);
+        let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
         assert!(
-            !iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics)
+            !iter
+                .reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics)
                 .unwrap()
         );
         assert!(
@@ -548,7 +551,8 @@ mod tests {
         pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
         assert!(
-            !iter.reverse_seek(&Key::from_encoded(b"a3".to_vec()), &mut statistics)
+            !iter
+                .reverse_seek(&Key::from_encoded(b"a3".to_vec()), &mut statistics)
                 .unwrap()
         );
         assert!(
@@ -577,9 +581,10 @@ mod tests {
         region.mut_peers().push(Peer::new());
         let store = new_peer_storage(Arc::clone(&engine), Arc::clone(&raft_engine), &region);
         let snap = RegionSnapshot::new(&store);
-        let mut iter = Cursor::new(Box::new(snap.iter(IterOption::default())), ScanMode::Mixed);
+        let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
         assert!(
-            !iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics)
+            !iter
+                .reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics)
                 .unwrap()
         );
         assert!(

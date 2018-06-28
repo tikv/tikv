@@ -16,8 +16,9 @@ use std::fs::File;
 use std::io::Read;
 use std::ptr;
 
-use grpc::{Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder,
-           ServerCredentialsBuilder};
+use grpc::{
+    Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder, ServerCredentialsBuilder,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -80,6 +81,7 @@ impl SecurityConfig {
     }
 }
 
+#[derive(Default)]
 pub struct SecurityManager {
     ca: Vec<u8>,
     cert: Vec<u8>,

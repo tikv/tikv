@@ -39,25 +39,30 @@ use std::time::Duration;
 use std::u64;
 
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
-use prometheus::HistogramTimer;
 use prometheus::local::{LocalHistogramVec, LocalIntCounter};
+use prometheus::HistogramTimer;
 
-use storage::engine::{self, Callback as EngineCallback, CbContext, Error as EngineError, Modify,
-                      Result as EngineResult};
-use storage::mvcc::{Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write,
-                    MAX_TXN_WRITE_SIZE};
+use storage::engine::{
+    self, Callback as EngineCallback, CbContext, Error as EngineError, Modify,
+    Result as EngineResult,
+};
+use storage::mvcc::{
+    Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, MAX_TXN_WRITE_SIZE,
+};
+use storage::{
+    Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
+    Statistics, StatisticsSummary, StorageCb,
+};
 use storage::{Key, KvPair, MvccInfo, Value, CMD_TAG_GC};
-use storage::{Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
-              Statistics, StatisticsSummary, StorageCb};
 use util::collections::HashMap;
 use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
 use util::time::SlowTimer;
 use util::worker::{self, Runnable, ScheduleError};
 
 use super::super::metrics::*;
+use super::latch::{Latches, Lock};
 use super::Error;
 use super::Result;
-use super::latch::{Latches, Lock};
 
 pub const CMD_BATCH_SIZE: usize = 256;
 // TODO: make it configurable.
@@ -66,6 +71,14 @@ pub const GC_BATCH_SIZE: usize = 512;
 // To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
 // The write batch will be around 32KB if we scan 256 keys each time.
 pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;
+
+/// After the GC scan of a key, output a message to the log if there are at least this many
+/// versions of the key.
+const GC_LOG_FOUND_VERSION_THRESHOLD: usize = 30;
+
+/// After the GC delete versions of a key, output a message to the log if at least this many
+/// versions are deleted.
+const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
 
 /// Process result of a command.
 pub enum ProcessResult {
@@ -80,10 +93,10 @@ pub enum ProcessResult {
     Failed { err: StorageError },
 }
 
-type SnapshotResult = (Vec<u64>, CbContext, EngineResult<Box<Snapshot>>);
+type SnapshotResult<T> = (Vec<u64>, CbContext, EngineResult<T>);
 
 /// Message types for the scheduler event loop.
-pub enum Msg {
+pub enum Msg<E: Engine> {
     Quit,
     RawCmd {
         cmd: Command,
@@ -93,10 +106,10 @@ pub enum Msg {
     SnapshotFinished {
         cids: Vec<u64>,
         cb_ctx: CbContext,
-        snapshot: EngineResult<Box<Snapshot>>,
+        snapshot: EngineResult<E::Snap>,
     },
     BatchSnapshotFinished {
-        batch: Vec<SnapshotResult>,
+        batch: Vec<SnapshotResult<E::Snap>>,
     },
     ReadFinished {
         cid: u64,
@@ -122,7 +135,7 @@ pub enum Msg {
 }
 
 /// Debug for messages.
-impl Debug for Msg {
+impl<E: Engine> Debug for Msg<E> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
             Msg::Quit => write!(f, "Quit"),
@@ -148,7 +161,7 @@ impl Debug for Msg {
 }
 
 /// Display for messages.
-impl Display for Msg {
+impl<E: Engine> Display for Msg<E> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
             Msg::Quit => write!(f, "Quit"),
@@ -273,11 +286,11 @@ impl Drop for RunningCtx {
 }
 
 /// Creates a callback to receive async results of write prepare from the storage engine.
-fn make_engine_cb(
+fn make_engine_cb<E: Engine>(
     cmd: &'static str,
     cid: u64,
     pr: ProcessResult,
-    scheduler: worker::Scheduler<Msg>,
+    scheduler: worker::Scheduler<Msg<E>>,
     rows: usize,
 ) -> EngineCallback<()> {
     Box::new(move |(cb_ctx, result)| {
@@ -332,8 +345,8 @@ impl Hash for HashableContext {
 impl Eq for HashableContext {}
 
 /// Scheduler which schedules the execution of `storage::Command`s.
-pub struct Scheduler {
-    engine: Box<Engine>,
+pub struct Scheduler<E: Engine> {
+    engine: E,
 
     // cid -> RunningCtx
     cmd_ctxs: HashMap<u64, RunningCtx>,
@@ -341,7 +354,7 @@ pub struct Scheduler {
     grouped_cmds: Option<HashMap<HashableContext, Vec<u64>>>,
 
     // actual scheduler to schedule the execution of commands
-    scheduler: worker::Scheduler<Msg>,
+    scheduler: worker::Scheduler<Msg<E>>,
 
     // cmd id generator
     id_alloc: u64,
@@ -368,8 +381,8 @@ pub struct Scheduler {
 // Make clippy happy.
 type MultipleReturnValue = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, Value)>);
 
-fn find_mvcc_infos_by_key(
-    reader: &mut MvccReader,
+fn find_mvcc_infos_by_key<S: Snapshot>(
+    reader: &mut MvccReader<S>,
     key: &Key,
     mut ts: u64,
 ) -> Result<MultipleReturnValue> {
@@ -392,15 +405,15 @@ fn find_mvcc_infos_by_key(
     Ok((lock, writes, values))
 }
 
-impl Scheduler {
+impl<E: Engine> Scheduler<E> {
     /// Creates a scheduler.
     pub fn new(
-        engine: Box<Engine>,
-        scheduler: worker::Scheduler<Msg>,
+        engine: E,
+        scheduler: worker::Scheduler<Msg<E>>,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
-    ) -> Scheduler {
+    ) -> Self {
         Scheduler {
             engine,
             cmd_ctxs: Default::default(),
@@ -426,12 +439,12 @@ impl Scheduler {
 
 /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
 /// event loop.
-fn process_read(
+fn process_read<E: Engine>(
     sched_ctx: &mut SchedContext,
     cid: u64,
     mut cmd: Command,
-    scheduler: worker::Scheduler<Msg>,
-    snapshot: Box<Snapshot>,
+    scheduler: worker::Scheduler<Msg<E>>,
+    snapshot: E::Snap,
 ) -> Statistics {
     fail_point!("txn_before_process_read");
     debug!("process read cmd(cid={}) in worker pool.", cid);
@@ -654,11 +667,11 @@ fn process_read(
 
 /// Processes a write command within a worker thread, then posts either a `WritePrepareFinished`
 /// message if successful or a `WritePrepareFailed` message back to the event loop.
-fn process_write(
+fn process_write<E: Engine>(
     cid: u64,
     cmd: Command,
-    scheduler: worker::Scheduler<Msg>,
-    snapshot: Box<Snapshot>,
+    scheduler: worker::Scheduler<Msg<E>>,
+    snapshot: E::Snap,
 ) -> Statistics {
     fail_point!("txn_before_process_write");
     let mut statistics = Statistics::default();
@@ -674,11 +687,11 @@ fn process_write(
     statistics
 }
 
-fn process_write_impl(
+fn process_write_impl<E: Engine>(
     cid: u64,
     mut cmd: Command,
-    scheduler: worker::Scheduler<Msg>,
-    snapshot: Box<Snapshot>,
+    scheduler: worker::Scheduler<Msg<E>>,
+    snapshot: E::Snap,
     statistics: &mut Statistics,
 ) -> Result<()> {
     let (pr, modifies, rows) = match cmd {
@@ -862,7 +875,27 @@ fn process_write_impl(
             );
             let rows = keys.len();
             for k in keys {
-                txn.gc(k, safe_point)?;
+                let gc_info = txn.gc(k, safe_point)?;
+
+                if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
+                    info!(
+                        "[region {}] GC found at least {} versions for key {}",
+                        ctx.get_region_id(),
+                        gc_info.found_versions,
+                        k
+                    );
+                }
+                // TODO: we may delete only part of the versions in a batch, which may not beyond
+                // the logging threshold `GC_LOG_DELETED_VERSION_THRESHOLD`.
+                if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
+                    info!(
+                        "[region {}] GC deleted {} versions for key {}",
+                        ctx.get_region_id(),
+                        gc_info.deleted_versions,
+                        k
+                    );
+                }
+
                 if txn.write_size() >= MAX_TXN_WRITE_SIZE {
                     scan_key = Some(k.to_owned());
                     break;
@@ -947,7 +980,7 @@ impl ThreadContext for SchedContext {
     }
 }
 
-impl Scheduler {
+impl<E: Engine> Scheduler<E> {
     /// Generates the next command ID.
     fn gen_id(&mut self) -> u64 {
         self.id_alloc += 1;
@@ -996,7 +1029,7 @@ impl Scheduler {
     }
 
     /// Delivers a command to a worker thread for processing.
-    fn process_by_worker(&mut self, cid: u64, cb_ctx: CbContext, snapshot: Box<Snapshot>) {
+    fn process_by_worker(&mut self, cid: u64, cb_ctx: CbContext, snapshot: E::Snap) {
         SCHED_STAGE_COUNTER_VEC
             .with_label_values(&[self.get_ctx_tag(cid), "process"])
             .inc();
@@ -1018,7 +1051,8 @@ impl Scheduler {
         let scheduler = self.scheduler.clone();
         if readcmd {
             worker_pool.execute(move |ctx: &mut SchedContext| {
-                let _processing_read_timer = ctx.processing_read_duration
+                let _processing_read_timer = ctx
+                    .processing_read_duration
                     .with_label_values(&[tag])
                     .start_coarse_timer();
 
@@ -1027,7 +1061,8 @@ impl Scheduler {
             });
         } else {
             worker_pool.execute(move |ctx: &mut SchedContext| {
-                let _processing_write_timer = ctx.processing_write_duration
+                let _processing_write_timer = ctx
+                    .processing_write_duration
                     .with_label_values(&[tag])
                     .start_coarse_timer();
 
@@ -1186,7 +1221,7 @@ impl Scheduler {
 
         let scheduler = self.scheduler.clone();
         let batch1 = batch.iter().map(|&(ref ctx, _)| ctx.clone()).collect();
-        let on_finished: engine::BatchCallback<Box<Snapshot>> = box move |results: Vec<_>| {
+        let on_finished: engine::BatchCallback<E::Snap> = box move |results: Vec<_>| {
             let mut ready = Vec::with_capacity(results.len());
             let mut retry = Vec::new();
             for ((ctx, cids), snapshot) in batch.into_iter().zip(results) {
@@ -1259,7 +1294,7 @@ impl Scheduler {
         &mut self,
         cids: Vec<u64>,
         cb_ctx: CbContext,
-        snapshot: EngineResult<Box<Snapshot>>,
+        snapshot: EngineResult<E::Snap>,
     ) {
         fail_point!("scheduler_async_snapshot_finish");
         debug!(
@@ -1280,7 +1315,8 @@ impl Scheduler {
                     SCHED_STAGE_COUNTER_VEC
                         .with_label_values(&[self.get_ctx_tag(cid), "snapshot_err"])
                         .inc();
-                    let e = e.maybe_clone()
+                    let e = e
+                        .maybe_clone()
                         .unwrap_or_else(|| EngineError::Other(box_err!("{:?}", e)));
 
                     self.finish_with_err(cid, Error::from(e));
@@ -1343,7 +1379,8 @@ impl Scheduler {
             return self.on_write_finished(cid, pr, Ok(()));
         }
         let engine_cb = make_engine_cb(cmd.tag(), cid, pr, self.scheduler.clone(), rows);
-        if let Err(e) = self.engine
+        if let Err(e) = self
+            .engine
             .async_write(cmd.get_context(), to_be_write, engine_cb)
         {
             SCHED_STAGE_COUNTER_VEC
@@ -1392,7 +1429,8 @@ impl Scheduler {
     fn lock_and_register_get_snapshot(&mut self, cid: u64) {
         if self.acquire_lock(cid) {
             let ctx = self.extract_context(cid).clone();
-            let group = self.grouped_cmds
+            let group = self
+                .grouped_cmds
                 .as_mut()
                 .unwrap()
                 .entry(HashableContext(ctx))
@@ -1402,8 +1440,8 @@ impl Scheduler {
     }
 }
 
-impl Runnable<Msg> for Scheduler {
-    fn run(&mut self, msg: Msg) {
+impl<E: Engine> Runnable<Msg<E>> for Scheduler<E> {
+    fn run(&mut self, msg: Msg<E>) {
         match msg {
             Msg::Quit => {
                 self.shutdown();
@@ -1434,7 +1472,7 @@ impl Runnable<Msg> for Scheduler {
         }
     }
 
-    fn run_batch(&mut self, msgs: &mut Vec<Msg>) {
+    fn run_batch(&mut self, msgs: &mut Vec<Msg<E>>) {
         for msg in msgs.drain(..) {
             self.run(msg);
         }
@@ -1563,12 +1601,10 @@ mod tests {
                 ctx: Context::new(),
                 txn_status: temp_map.clone(),
                 scan_key: None,
-                key_locks: vec![
-                    (
-                        make_key(b"k"),
-                        mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None),
-                    ),
-                ],
+                key_locks: vec![(
+                    make_key(b"k"),
+                    mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None),
+                )],
             },
         ];
 

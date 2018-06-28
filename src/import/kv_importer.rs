@@ -22,34 +22,47 @@ use uuid::Uuid;
 use config::DbConfig;
 use util::collections::HashMap;
 
+use super::client::*;
 use super::engine::*;
+use super::import::*;
 use super::{Config, Error, Result};
 
+pub struct Inner {
+    engines: HashMap<Uuid, Arc<EngineFile>>,
+    import_jobs: HashMap<Uuid, Arc<ImportJob<Client>>>,
+}
+
+/// KVImporter manages all engines according to UUID.
 pub struct KVImporter {
+    cfg: Config,
     dir: EngineDir,
-    engines: Mutex<HashMap<Uuid, Arc<EngineFile>>>,
+    inner: Mutex<Inner>,
 }
 
 impl KVImporter {
     pub fn new(cfg: Config, opts: DbConfig) -> Result<KVImporter> {
         let dir = EngineDir::new(&cfg.import_dir, opts)?;
         Ok(KVImporter {
+            cfg,
             dir,
-            engines: Mutex::new(HashMap::default()),
+            inner: Mutex::new(Inner {
+                engines: HashMap::default(),
+                import_jobs: HashMap::default(),
+            }),
         })
     }
 
     /// Open the engine.
     pub fn open_engine(&self, uuid: Uuid) -> Result<()> {
-        let mut engines = self.engines.lock().unwrap();
-        if engines.contains_key(&uuid) {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.engines.contains_key(&uuid) {
             return Ok(());
         }
 
         match self.dir.open(uuid) {
             Ok(engine) => {
                 info!("open {:?}", engine);
-                engines.insert(uuid, Arc::new(engine));
+                inner.engines.insert(uuid, Arc::new(engine));
                 Ok(())
             }
             Err(e) => {
@@ -59,9 +72,10 @@ impl KVImporter {
         }
     }
 
+    /// Returns an opened engine reference for write.
     pub fn bind_engine(&self, uuid: Uuid) -> Result<Arc<EngineFile>> {
-        let engines = self.engines.lock().unwrap();
-        match engines.get(&uuid) {
+        let inner = self.inner.lock().unwrap();
+        match inner.engines.get(&uuid) {
             Some(engine) => Ok(Arc::clone(engine)),
             None => Err(Error::EngineNotFound(uuid)),
         }
@@ -71,15 +85,15 @@ impl KVImporter {
     /// Engine can not be closed when it is writing.
     pub fn close_engine(&self, uuid: Uuid) -> Result<()> {
         let mut engine = {
-            let mut engines = self.engines.lock().unwrap();
-            let engine = match engines.remove(&uuid) {
+            let mut inner = self.inner.lock().unwrap();
+            let engine = match inner.engines.remove(&uuid) {
                 Some(engine) => engine,
                 None => return Err(Error::EngineNotFound(uuid)),
             };
             match Arc::try_unwrap(engine) {
                 Ok(engine) => engine,
                 Err(engine) => {
-                    engines.insert(uuid, engine);
+                    inner.engines.insert(uuid, engine);
                     return Err(Error::EngineInUse(uuid));
                 }
             }
@@ -96,8 +110,76 @@ impl KVImporter {
             }
         }
     }
+
+    /// Import the engine to TiKV stores.
+    /// Engine can not be imported before it is closed.
+    pub fn import_engine(&self, uuid: Uuid, pd_addr: &str) -> Result<()> {
+        let client = Client::new(pd_addr, self.cfg.num_import_jobs)?;
+        let job = {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.engines.contains_key(&uuid) || inner.import_jobs.contains_key(&uuid) {
+                return Err(Error::EngineInUse(uuid));
+            }
+            let engine = self.dir.import(uuid)?;
+            let job = Arc::new(ImportJob::new(self.cfg.clone(), client, engine));
+            inner.import_jobs.insert(uuid, Arc::clone(&job));
+            job
+        };
+
+        let res = job.run();
+        self.inner.lock().unwrap().import_jobs.remove(&uuid);
+
+        match res {
+            Ok(_) => {
+                info!("import {}", uuid);
+                Ok(())
+            }
+            Err(e) => {
+                error!("import {}: {:?}", uuid, e);
+                Err(e)
+            }
+        }
+    }
+
+    /// Clean up the engine.
+    /// Engine can not be cleaned up when it is writing or importing.
+    pub fn cleanup_engine(&self, uuid: Uuid) -> Result<()> {
+        // Drop the engine outside of the lock.
+        let _ = {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.import_jobs.contains_key(&uuid) {
+                return Err(Error::EngineInUse(uuid));
+            }
+            if let Some(engine) = inner.engines.remove(&uuid) {
+                match Arc::try_unwrap(engine) {
+                    Ok(engine) => Some(engine),
+                    Err(engine) => {
+                        inner.engines.insert(uuid, engine);
+                        return Err(Error::EngineInUse(uuid));
+                    }
+                }
+            } else {
+                None
+            }
+        };
+
+        match self.dir.cleanup(uuid) {
+            Ok(_) => {
+                info!("cleanup {}", uuid);
+                Ok(())
+            }
+            Err(e) => {
+                error!("cleanup {}: {:?}", uuid, e);
+                Err(e)
+            }
+        }
+    }
 }
 
+/// EngineDir is responsible for managing engine directories.
+///
+/// The temporary RocksDB engine is placed in `$root/.temp/$uuid`. After writing
+/// is completed, the files are stored in `$root/$uuid`.
 pub struct EngineDir {
     opts: DbConfig,
     root_dir: PathBuf,
@@ -110,9 +192,10 @@ impl EngineDir {
     fn new<P: AsRef<Path>>(root: P, opts: DbConfig) -> Result<EngineDir> {
         let root_dir = root.as_ref().to_owned();
         let temp_dir = root_dir.join(Self::TEMP_DIR);
-        if !temp_dir.exists() {
-            fs::create_dir_all(&temp_dir)?;
+        if temp_dir.exists() {
+            fs::remove_dir_all(&temp_dir)?;
         }
+        fs::create_dir_all(&temp_dir)?;
         Ok(EngineDir {
             opts,
             root_dir,
@@ -137,6 +220,22 @@ impl EngineDir {
         }
         EngineFile::new(uuid, path, self.opts.clone())
     }
+
+    fn import(&self, uuid: Uuid) -> Result<Engine> {
+        let path = self.join(uuid);
+        Engine::new(&path.save, uuid, self.opts.clone())
+    }
+
+    fn cleanup(&self, uuid: Uuid) -> Result<EnginePath> {
+        let path = self.join(uuid);
+        if path.save.exists() {
+            fs::remove_dir_all(&path.save)?;
+        }
+        if path.temp.exists() {
+            fs::remove_dir_all(&path.temp)?;
+        }
+        Ok(path)
+    }
 }
 
 #[derive(Clone)]
@@ -156,6 +255,8 @@ impl fmt::Debug for EnginePath {
     }
 }
 
+/// EngineFile creates an engine in the temp directory for writing, and when
+/// writing is completed, it moves files to the save directory.
 pub struct EngineFile {
     uuid: Uuid,
     path: EnginePath,
@@ -176,6 +277,7 @@ impl EngineFile {
         self.engine.as_ref().unwrap().write(batch)
     }
 
+    /// Finish writing and move files from temp directory to save directory.
     fn close(&mut self) -> Result<()> {
         self.engine.take().unwrap().flush(true)?;
         if self.path.save.exists() {
@@ -185,6 +287,7 @@ impl EngineFile {
         Ok(())
     }
 
+    /// Close the engine and remove all temp files.
     fn cleanup(&mut self) -> Result<()> {
         self.engine.take();
         if self.path.temp.exists() {

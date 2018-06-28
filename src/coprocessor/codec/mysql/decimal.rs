@@ -17,16 +17,13 @@ use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::str::{self, FromStr};
-use std::{cmp, mem, i32, i64, u32, u64};
+use std::{cmp, i32, i64, mem, u32, u64};
 
 use coprocessor::codec::{convert, Error, Result, TEN_POW};
 use coprocessor::dag::expr::EvalContext;
 
-// TODO: We should use same Error in mod `coprocessor`.
-use coprocessor::dag::expr::Error as ExprError;
-
-use util::codec::BytesSlice;
 use util::codec::number::{self, NumberEncoder};
+use util::codec::BytesSlice;
 use util::escape;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -73,12 +70,12 @@ impl<T> Res<T> {
     }
 }
 
-impl<T: Display> Res<T> {
-    pub fn into_result(self) -> Result<T> {
+impl<T> Into<Result<T>> for Res<T> {
+    fn into(self) -> Result<T> {
         match self {
             Res::Ok(t) => Ok(t),
-            Res::Overflow(t) => Err(box_err!("overflow: {}", t)),
-            Res::Truncated(t) => Err(box_err!("truncated: {}", t)),
+            Res::Truncated(_) => Err(Error::truncated()),
+            Res::Overflow(_) => Err(Error::overflow("", "")),
         }
     }
 }
@@ -114,7 +111,7 @@ const MAX_FRACTION: u8 = 30;
 const DEFAULT_DIV_FRAC_INCR: u8 = 4;
 const DIG_2_BYTES: &[u8] = &[0, 1, 1, 2, 2, 3, 3, 4, 4, 4];
 const FRAC_MAX: &[u32] = &[
-    900000000, 990000000, 999000000, 999900000, 999990000, 999999000, 999999900, 999999990
+    900000000, 990000000, 999000000, 999900000, 999990000, 999999000, 999999900, 999999990,
 ];
 const NOT_FIXED_DEC: u8 = 31;
 
@@ -228,7 +225,11 @@ type SubTmp = (usize, usize, u8);
 /// calculate the carry for lhs - rhs, returns the carry and needed temporary results for
 /// beginning a subtraction.
 ///
-/// The new carry can be None if lhs is equals to rhs.
+/// The new carry can be:
+///     1. None if lhs is equals to rhs.
+///     2. Some(0) if abs(lhs) > abs(rhs),
+///     3. Some(1) if abs(lhs) < abs(rhs).
+/// l_frac_word_cnt and r_frac_word_cnt do not contain the suffix 0 when r_int_word_cnt == l_int_word_cnt.
 #[inline]
 fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, SubTmp) {
     let (l_int_word_cnt, mut l_frac_word_cnt) = (word_cnt!(lhs.int_cnt), word_cnt!(lhs.frac_cnt));
@@ -254,15 +255,18 @@ fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, Sub
     } else if r_int_word_cnt == l_int_word_cnt {
         let mut l_end = (l_stop + l_frac_word_cnt as usize - 1) as isize;
         let mut r_end = (r_stop + r_frac_word_cnt as usize - 1) as isize;
+        // trims suffix 0
         while l_idx as isize <= l_end && lhs.word_buf[l_end as usize] == 0 {
             l_end -= 1;
         }
+        // trims suffix 0
         while r_idx as isize <= r_end && rhs.word_buf[r_end as usize] == 0 {
             r_end -= 1;
         }
         l_frac_word_cnt = (l_end + 1 - l_stop as isize) as u8;
         r_frac_word_cnt = (r_end + 1 - r_stop as isize) as u8;
-        while l_idx as isize <= l_end && r_idx as isize <= r_end
+        while l_idx as isize <= l_end
+            && r_idx as isize <= r_end
             && lhs.word_buf[l_idx] == rhs.word_buf[r_idx]
         {
             l_idx += 1;
@@ -287,7 +291,7 @@ fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, Sub
     (carry, frac_word_to, l_res, r_res)
 }
 
-/// subtract rhs from lhs.
+/// subtract rhs from lhs when lhs.negative=rhs.negative.
 fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     let (carry, mut frac_word_to, l_res, r_res) = calc_sub_carry(lhs, rhs);
     if carry.is_none() {
@@ -298,6 +302,7 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     let (mut l_start, mut l_int_word_cnt, mut l_frac_word_cnt) = l_res;
     let (mut r_start, mut r_int_word_cnt, mut r_frac_word_cnt) = r_res;
 
+    // determine the res.negative and make the abs(lhs) > abs(rhs).
     let negative = if carry.unwrap() > 0 {
         mem::swap(&mut lhs, &mut rhs);
         mem::swap(&mut l_start, &mut r_start);
@@ -324,10 +329,12 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     let mut res = res.map(|_| Decimal::new(int_cnt, frac_cnt, negative));
     let mut l_idx = l_start + l_int_word_cnt as usize + l_frac_word_cnt as usize;
     let mut r_idx = r_start + r_int_word_cnt as usize + r_frac_word_cnt as usize;
+    // adjust `l_idx` and `r_idx` to the same position of digits after the point.
     if l_frac_word_cnt > r_frac_word_cnt {
         let l_stop = l_start + l_int_word_cnt as usize + r_frac_word_cnt as usize;
         if l_frac_word_cnt < frac_word_to {
-            idx_to = (frac_word_to - l_frac_word_cnt) as usize;
+            // It happens only when suffix 0 exist(3.10000000000-2.00).
+            idx_to -= (frac_word_to - l_frac_word_cnt) as usize;
         }
         while l_idx > l_stop {
             idx_to -= 1;
@@ -337,7 +344,8 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     } else {
         let r_stop = r_start + r_int_word_cnt as usize + l_frac_word_cnt as usize;
         if frac_word_to > r_frac_word_cnt {
-            idx_to = (frac_word_to - r_frac_word_cnt) as usize;
+            // It happens only when suffix 0 exist(3.00-2.00000000000).
+            idx_to -= (frac_word_to - r_frac_word_cnt) as usize;
         }
         while r_idx > r_stop {
             idx_to -= 1;
@@ -521,7 +529,6 @@ fn do_add<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
 }
 
 // TODO: remove following attribute
-#[allow(cyclomatic_complexity)]
 #[allow(needless_range_loop)]
 fn do_div_mod(
     mut lhs: Decimal,
@@ -530,22 +537,21 @@ fn do_div_mod(
     do_mod: bool,
 ) -> Option<Res<Decimal>> {
     let r_frac_cnt = word_cnt!(rhs.frac_cnt) * DIGITS_PER_WORD;
-    let (r_idx, mut r_prec) = rhs.remove_leading_zeroes();
-    r_prec += r_frac_cnt;
+    let (r_idx, r_prec) = rhs.remove_leading_zeroes(rhs.int_cnt + r_frac_cnt);
     if r_prec == 0 {
         return None;
     }
 
     let l_frac_cnt = word_cnt!(lhs.frac_cnt) * DIGITS_PER_WORD;
-    let (l_idx, mut l_prec) = lhs.remove_leading_zeroes();
-    l_prec += l_frac_cnt;
+    let (l_idx, l_prec) = lhs.remove_leading_zeroes(lhs.int_cnt + l_frac_cnt);
     if l_prec == 0 {
         lhs.reset_to_zero();
         return Some(Res::Ok(lhs));
     }
 
     frac_incr = frac_incr.saturating_sub(l_frac_cnt - lhs.frac_cnt + r_frac_cnt - rhs.frac_cnt);
-    let mut int_cnt_to = (l_prec - l_frac_cnt) as i8 - (r_prec - r_frac_cnt) as i8;
+    let mut int_cnt_to =
+        l_prec.wrapping_sub(l_frac_cnt) as i8 - r_prec.wrapping_sub(r_frac_cnt) as i8;
     if lhs.word_buf[l_idx] >= rhs.word_buf[r_idx] {
         int_cnt_to += 1;
     }
@@ -659,7 +665,7 @@ fn do_div_mod(
             buf[l_idx] = dcarry as u32;
         }
         idx_to = 0;
-        let mut int_word_to = word_cnt!(l_prec - l_frac_cnt) as i8 - l_idx as i8;
+        let mut int_word_to = word_cnt!(l_prec.wrapping_sub(l_frac_cnt) as i8, i8) - l_idx as i8;
         let mut frac_word_to = word_cnt!(res.frac_cnt);
         if int_word_to == 0 && frac_word_to == 0 {
             lhs.reset_to_zero();
@@ -705,18 +711,18 @@ fn do_div_mod(
 /// `do_mul` multiplies two decimals.
 fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
     let (l_int_word_cnt, mut l_frac_word_cnt) = (
-        word_cnt!(lhs.int_cnt) as usize,
-        word_cnt!(lhs.frac_cnt) as usize,
+        i32::from(word_cnt!(lhs.int_cnt)),
+        i32::from(word_cnt!(lhs.frac_cnt)),
     );
     let (mut r_int_word_cnt, mut r_frac_word_cnt) = (
-        word_cnt!(rhs.int_cnt) as usize,
-        word_cnt!(rhs.frac_cnt) as usize,
+        i32::from(word_cnt!(rhs.int_cnt)),
+        i32::from(word_cnt!(rhs.frac_cnt)),
     );
     let (int_word_to, frac_word_to) = (
         word_cnt!(lhs.int_cnt + rhs.int_cnt) as usize,
         l_frac_word_cnt + r_frac_word_cnt,
     );
-    let (mut old_int_word_to, mut old_frac_word_to) = (int_word_to, frac_word_to);
+    let (mut old_int_word_to, mut old_frac_word_to) = (int_word_to as i32, frac_word_to as i32);
     let res = fix_word_cnt_err(int_word_to as u8, frac_word_to as u8, WORD_BUF_LEN);
     let (int_word_to, frac_word_to) = (res.0 as usize, res.1 as usize);
     let negative = lhs.negative != rhs.negative;
@@ -730,14 +736,14 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
 
     if !res.is_ok() {
         dec.frac_cnt = cmp::min(dec.frac_cnt, frac_word_to as u8 * DIGITS_PER_WORD);
-        if old_int_word_to > int_word_to {
-            old_int_word_to -= int_word_to;
+        if old_int_word_to > int_word_to as i32 {
+            old_int_word_to -= int_word_to as i32;
             old_frac_word_to = old_int_word_to / 2;
             r_int_word_cnt = old_int_word_to - old_frac_word_to;
             l_frac_word_cnt = 0;
             r_frac_word_cnt = 0;
         } else {
-            old_frac_word_to -= int_word_to;
+            old_frac_word_to -= int_word_to as i32;
             old_int_word_to = old_frac_word_to / 2;
             if l_frac_word_cnt <= r_frac_word_cnt {
                 l_frac_word_cnt -= old_int_word_to;
@@ -750,8 +756,9 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
     }
 
     let mut start_to = int_word_to + frac_word_to;
-    let r_start = r_int_word_cnt + r_frac_word_cnt;
-    for l_idx in (0..l_int_word_cnt + l_frac_word_cnt).rev() {
+    let r_start = cmp::max(r_int_word_cnt + r_frac_word_cnt, 0) as usize;
+    let left_stop = cmp::max(l_int_word_cnt + l_frac_word_cnt, 0) as usize;
+    for l_idx in (0..left_stop).rev() {
         assert!(start_to >= r_start);
         let (mut carry, mut idx_to) = (0, start_to);
         start_to -= 1;
@@ -834,7 +841,7 @@ pub struct Decimal {
     word_buf: Box<[u32]>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RoundMode {
     // HalfEven rounds normally.
     HalfEven,
@@ -891,27 +898,30 @@ impl Decimal {
         self.word_buf[0] = 0;
     }
 
-    /// get the index of first non-zero word and the actual int_cnt.
-    fn remove_leading_zeroes(&self) -> (usize, u8) {
-        let mut int_cnt = self.int_cnt;
-        let mut i = ((int_cnt + DIGITS_PER_WORD - 1) % DIGITS_PER_WORD) + 1;
+    /// Given a precision count 'prec', get:
+    ///  1. the index of first non-zero word in self.word_buf to hold the leading 'prec' number of
+    ///     digits
+    ///  2. the number of remained digits if we remove all leading zeros for the leading 'prec'
+    ///     number of digits
+    fn remove_leading_zeroes(&self, prec: u8) -> (usize, u8) {
+        let mut cnt = prec;
+        let mut i = ((cnt + DIGITS_PER_WORD - 1) % DIGITS_PER_WORD) + 1;
         let mut word_idx = 0;
-        while int_cnt > 0 && self.word_buf[word_idx] == 0 {
-            int_cnt -= i;
+        while cnt > 0 && self.word_buf[word_idx] == 0 {
+            cnt -= i;
             i = DIGITS_PER_WORD;
             word_idx += 1;
         }
-        if int_cnt > 0 {
-            int_cnt -=
-                count_leading_zeroes((int_cnt - 1) % DIGITS_PER_WORD, self.word_buf[word_idx])
+        if cnt > 0 {
+            cnt -= count_leading_zeroes((cnt - 1) % DIGITS_PER_WORD, self.word_buf[word_idx])
         }
-        (word_idx, int_cnt)
+        (word_idx, cnt)
     }
 
     /// Prepare a buf for string output.
     fn prepare_buf(&self) -> (Vec<u8>, usize, u8, u8, u8) {
         let frac_cnt = self.frac_cnt;
-        let (mut word_start_idx, mut int_cnt) = self.remove_leading_zeroes();
+        let (mut word_start_idx, mut int_cnt) = self.remove_leading_zeroes(self.int_cnt);
         if int_cnt + frac_cnt == 0 {
             int_cnt = 1;
             word_start_idx = 0;
@@ -977,7 +987,7 @@ impl Decimal {
     /// Get the least precision and fraction count to encode this decimal completely.
     pub fn prec_and_frac(&self) -> (u8, u8) {
         if self.precision == 0 {
-            let (_, int_cnt) = self.remove_leading_zeroes();
+            let (_, int_cnt) = self.remove_leading_zeroes(self.int_cnt);
             let prec = int_cnt + self.frac_cnt;
             if prec == 0 {
                 (1, self.frac_cnt)
@@ -1086,7 +1096,7 @@ impl Decimal {
         // TODO: process over_flow
         if !ret.is_zero() && frac > decimal && ret != tmp {
             // TODO handle InInsertStmt in ctx
-            box_try!(ctx.handle_truncate(true));
+            ctx.handle_truncate(true)?;
         }
         Ok(ret)
     }
@@ -1341,11 +1351,13 @@ impl Decimal {
                 return Res::Truncated(self);
             }
             end = (end as isize - diff) as u8;
-            Res::Truncated(self.round_with_word_buf_len(
-                end as i8 - point as i8,
-                word_buf_len,
-                RoundMode::HalfEven,
-            ).unwrap())
+            Res::Truncated(
+                self.round_with_word_buf_len(
+                    end as i8 - point as i8,
+                    word_buf_len,
+                    RoundMode::HalfEven,
+                ).unwrap(),
+            )
         } else {
             Res::Ok(self)
         };
@@ -1436,7 +1448,8 @@ impl Decimal {
         let int_word_cnt = word_cnt!(self.int_cnt) as usize;
         for word_idx in 0..int_word_cnt {
             let y = x;
-            x = x.wrapping_mul(i64::from(WORD_BASE))
+            x = x
+                .wrapping_mul(i64::from(WORD_BASE))
                 .wrapping_sub(i64::from(self.word_buf[word_idx]));
             if y < i64::MIN / i64::from(WORD_BASE) || x > y {
                 if self.negative {
@@ -1460,9 +1473,9 @@ impl Decimal {
     }
 
     /// `as_i64_with_ctx` returns int part of the decimal.
-    pub fn as_i64_with_ctx(&self, ctx: &mut EvalContext) -> ::std::result::Result<i64, ExprError> {
+    pub fn as_i64_with_ctx(&self, ctx: &mut EvalContext) -> Result<i64> {
         let res = self.as_i64();
-        box_try!(ctx.handle_truncate(res.is_truncated()));
+        ctx.handle_truncate(res.is_truncated())?;
         res.into()
     }
 
@@ -1707,7 +1720,8 @@ impl FromStr for Decimal {
 impl Display for Decimal {
     fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
         let mut dec = self.clone();
-        dec = dec.round(self.result_frac_cnt as i8, RoundMode::HalfEven)
+        dec = dec
+            .round(self.result_frac_cnt as i8, RoundMode::HalfEven)
             .unwrap();
         fmt.write_str(&dec.to_string())
     }
@@ -1762,16 +1776,19 @@ macro_rules! read_word {
                 2 => ((i32::from(first as i8) << 8) + i32::from($data[1])) as u32,
                 3 => {
                     if first & 128 > 0 {
-                        (255 << 24) | (u32::from(first) << 16) | (u32::from($data[1]) << 8)
+                        (255 << 24)
+                            | (u32::from(first) << 16)
+                            | (u32::from($data[1]) << 8)
                             | u32::from($data[2])
                     } else {
                         (u32::from(first) << 16) | (u32::from($data[1]) << 8) | u32::from($data[2])
                     }
                 }
                 4 => {
-                    ((i32::from(first as i8) << 24) + (i32::from($data[1]) << 16)
-                        + (i32::from($data[2]) << 8) + i32::from($data[3]))
-                        as u32
+                    ((i32::from(first as i8) << 24)
+                        + (i32::from($data[1]) << 16)
+                        + (i32::from($data[2]) << 8)
+                        + i32::from($data[3])) as u32
                 }
                 _ => unreachable!(),
             };
@@ -1786,7 +1803,6 @@ macro_rules! read_word {
 pub trait DecimalEncoder: NumberEncoder {
     /// Encode decimal to comparable bytes.
     // TODO: resolve following warnings.
-    #[allow(cyclomatic_complexity)]
     fn encode_decimal(&mut self, d: &Decimal, prec: u8, frac: u8) -> Result<Res<()>> {
         self.write_all(&[prec, frac])?;
         let mut mask = if d.negative { u32::MAX } else { 0 };
@@ -1803,7 +1819,7 @@ pub trait DecimalEncoder: NumberEncoder {
         let mut frac_size = frac_word_cnt * WORD_SIZE + DIG_2_BYTES[trailing_digits];
         let src_frac_size = src_frac_word_cnt * WORD_SIZE + DIG_2_BYTES[src_trailing_digits];
 
-        let (mut src_word_start_idx, src_int_cnt) = d.remove_leading_zeroes();
+        let (mut src_word_start_idx, src_int_cnt) = d.remove_leading_zeroes(d.int_cnt);
         if src_int_cnt + src_frac_size == 0 {
             mask = 0;
             int_cnt = 1;
@@ -1913,7 +1929,6 @@ impl<T: Write> DecimalEncoder for T {}
 
 impl Decimal {
     /// `decode` decodes value encoded by `encode_decimal`.
-    #[allow(cyclomatic_complexity)]
     pub fn decode(data: &mut BytesSlice) -> Result<Decimal> {
         if data.len() < 3 {
             return Err(box_err!("decimal too short: {} < 3", data.len()));
@@ -2593,11 +2608,13 @@ mod test {
 
         for (dec_str, scale, half_exp, trunc_exp, ceil_exp) in cases {
             let dec = dec_str.parse::<Decimal>().unwrap();
-            let res = dec.clone()
+            let res = dec
+                .clone()
                 .round(scale, RoundMode::HalfEven)
                 .map(|d| d.to_string());
             assert_eq!(res, half_exp.map(|s| s.to_owned()));
-            let res = dec.clone()
+            let res = dec
+                .clone()
                 .round(scale, RoundMode::Truncate)
                 .map(|d| d.to_string());
             assert_eq!(res, trunc_exp.map(|s| s.to_owned()));
@@ -2884,6 +2901,8 @@ mod test {
             ("-123.45", "-12345", Res::Ok("12221.55")),
             ("-12345", "123.45", Res::Ok("-12468.45")),
             ("12345", "-123.45", Res::Ok("12468.45")),
+            ("3.10000000000", "2.00", Res::Ok("1.10000000000")),
+            ("3.00", "2.0000000000000", Res::Ok("1.0000000000000")),
         ];
 
         for (lhs_str, rhs_str, exp) in cases {
@@ -2913,6 +2932,11 @@ mod test {
             ("123", "0.01", Res::Ok("1.23")),
             ("123", "0", Res::Ok("0")),
             (&a, &b, Res::Overflow("0")),
+            (
+                "0.00000000000000",
+                "0.000000000000000000000000000000000000000000000000000000000000000",
+                Res::Truncated("0.0000000000000000000000000000000"),
+            ),
         ];
 
         for (lhs_str, rhs_str, exp_str) in cases {
@@ -2940,7 +2964,11 @@ mod test {
                 Some("120.00000"),
             ),
             (5, "123", "0", None, None),
+            (5, "123", "0.0", None, None),
+            (5, "123", "00.0000000000", None, None),
             (5, "0", "0", None, None),
+            (5, "0.0", "0.0", None, None),
+            (5, "0.0000000000", "00.0000000000", None, None),
             (
                 5,
                 "-12193185.1853376",
@@ -2956,6 +2984,8 @@ mod test {
                 Some("0"),
             ),
             (5, "0", "987", Some("0"), Some("0")),
+            (5, "0.0", "987", Some("0"), Some("0")),
+            (5, "0.0000000000", "987", Some("0"), Some("0")),
             (5, "1", "3", Some("0.333333333"), Some("1")),
             (
                 5,

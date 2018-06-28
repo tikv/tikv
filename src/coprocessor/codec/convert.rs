@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::borrow::Cow;
-use std::{self, str, i64, u64};
+use std::{self, i64, str, u64};
 
 use super::mysql::Res;
 use super::{Error, Result};
@@ -125,7 +125,7 @@ pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
             }
         }
     }
-    r.ok_or_else(|| Error::Overflow("BIGINT".into(), "".into()))
+    r.ok_or_else(|| Error::overflow("BIGINT", ""))
 }
 
 /// `bytes_to_uint_without_context` converts a byte arrays to an iu64
@@ -142,22 +142,22 @@ pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
         }
 
         for c in trimed.take_while(|&&c| c >= b'0' && c <= b'9') {
-            r = r.and_then(|r| r.checked_mul(10))
+            r = r
+                .and_then(|r| r.checked_mul(10))
                 .and_then(|r| r.checked_add(u64::from(*c - b'0')));
             if r.is_none() {
                 break;
             }
         }
     }
-    r.ok_or_else(|| Error::Overflow("BIGINT UNSIGNED".into(), "".into()))
+    r.ok_or_else(|| Error::overflow("BIGINT UNSIGNED", ""))
 }
 
 /// `bytes_to_int` converts a byte arrays to an i64 in best effort.
 pub fn bytes_to_int(ctx: &mut EvalContext, bytes: &[u8]) -> Result<i64> {
     let s = str::from_utf8(bytes)?.trim();
     let vs = get_valid_int_prefix(ctx, s)?;
-    bytes_to_int_without_context(vs.as_bytes())
-        .map_err(|_| Error::Overflow("BIGINT".into(), vs.into()))
+    bytes_to_int_without_context(vs.as_bytes()).map_err(|_| Error::overflow("BIGINT", &vs))
 }
 
 /// `bytes_to_uint` converts a byte arrays to an u64 in best effort.
@@ -165,7 +165,7 @@ pub fn bytes_to_uint(ctx: &mut EvalContext, bytes: &[u8]) -> Result<u64> {
     let s = str::from_utf8(bytes)?.trim();
     let vs = get_valid_int_prefix(ctx, s)?;
     bytes_to_uint_without_context(vs.as_bytes())
-        .map_err(|_| Error::Overflow("BIGINT UNSIGNED".into(), vs.into()))
+        .map_err(|_| Error::overflow("BIGINT UNSIGNED", &vs))
 }
 
 fn bytes_to_f64_without_context(bytes: &[u8]) -> Result<f64> {
@@ -319,7 +319,7 @@ const MAX_ZERO_COUNT: i64 = 20;
 mod test {
     use std::f64::EPSILON;
     use std::sync::Arc;
-    use std::{isize, f64, i64, u64};
+    use std::{f64, i64, isize, u64};
 
     use coprocessor::codec::mysql::types;
     use coprocessor::dag::expr::{EvalConfig, EvalContext, FLAG_IGNORE_TRUNCATE};
@@ -356,7 +356,7 @@ mod test {
             vec![b"9223372036854775809", b"-9223372036854775810"];
         for bs in invalid_cases {
             match super::bytes_to_int_without_context(bs) {
-                Err(Error::Overflow(_, _)) => {}
+                Err(e) => assert!(e.is_overflow()),
                 res => panic!("expect convert {:?} to overflow, but got {:?}", bs, res),
             };
         }
@@ -389,7 +389,7 @@ mod test {
         let invalid_cases: Vec<&'static [u8]> = vec![b"18446744073709551616"];
         for bs in invalid_cases {
             match super::bytes_to_uint_without_context(bs) {
-                Err(Error::Overflow(_, _)) => {}
+                Err(e) => assert!(e.is_overflow()),
                 res => panic!("expect convert {:?} to overflow, but got {:?}", bs, res),
             };
         }

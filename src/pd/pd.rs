@@ -28,10 +28,10 @@ use rocksdb::DB;
 use super::metrics::*;
 use pd::{PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
+use raftstore::store::store::StoreInfo;
+use raftstore::store::util::{is_epoch_stale, RegionApproximateStat};
 use raftstore::store::Callback;
 use raftstore::store::Msg;
-use raftstore::store::store::StoreInfo;
-use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
 use storage::FlowStatistics;
 use util::collections::HashMap;
 use util::escape;
@@ -57,7 +57,7 @@ pub enum Task {
         pending_peers: Vec<metapb::Peer>,
         written_bytes: u64,
         written_keys: u64,
-        region_size: Option<u64>,
+        approximate_stat: Option<RegionApproximateStat>,
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
@@ -251,7 +251,8 @@ impl<T: PdClient> Runner<T> {
             .observe(region_stat.read_keys as f64);
 
         // Now we use put region protocol for heartbeat.
-        let f = self.pd_client
+        let f = self
+            .pd_client
             .region_heartbeat(region.clone(), peer.clone(), region_stat)
             .map_err(move |e| {
                 debug!(
@@ -352,7 +353,8 @@ impl<T: PdClient> Runner<T> {
         merge_source: Option<u64>,
     ) {
         let ch = self.ch.clone();
-        let f = self.pd_client
+        let f = self
+            .pd_client
             .get_region_by_id(local_region.get_id())
             .then(move |resp| {
                 match resp {
@@ -429,7 +431,8 @@ impl<T: PdClient> Runner<T> {
     fn schedule_heartbeat_receiver(&mut self, handle: &Handle) {
         let ch = self.ch.clone();
         let store_id = self.store_id;
-        let f = self.pd_client
+        let f = self
+            .pd_client
             .handle_region_heartbeat_response(self.store_id, move |mut resp| {
                 let region_id = resp.get_region_id();
                 let epoch = resp.take_region_epoch();
@@ -499,7 +502,8 @@ impl<T: PdClient> Runner<T> {
 
     fn handle_read_stats(&mut self, read_stats: HashMap<u64, FlowStatistics>) {
         for (region_id, stats) in read_stats {
-            let peer_stat = self.region_peers
+            let peer_stat = self
+                .region_peers
                 .entry(region_id)
                 .or_insert_with(PeerStat::default);
             peer_stat.read_bytes += stats.read_bytes as u64;
@@ -540,11 +544,11 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 pending_peers,
                 written_bytes,
                 written_keys,
-                region_size,
+                approximate_stat,
             } => {
-                let approximate_size = match region_size {
-                    Some(size) => size,
-                    None => get_region_approximate_size(&self.db, &region).unwrap_or(0),
+                let approximate_stat = match approximate_stat {
+                    Some(stat) => stat,
+                    None => RegionApproximateStat::new(&self.db, &region).unwrap_or_default(),
                 };
                 let (
                     read_bytes_delta,
@@ -553,7 +557,8 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     written_keys_delta,
                     last_report_ts,
                 ) = {
-                    let peer_stat = self.region_peers
+                    let peer_stat = self
+                        .region_peers
                         .entry(region.get_id())
                         .or_insert_with(PeerStat::default);
                     let read_bytes_delta = peer_stat.read_bytes - peer_stat.last_read_bytes;
@@ -585,7 +590,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                         written_keys: written_keys_delta,
                         read_bytes: read_bytes_delta,
                         read_keys: read_keys_delta,
-                        approximate_size,
+                        approximate_stat,
                         last_report_ts,
                     },
                 )

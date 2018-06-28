@@ -2,6 +2,31 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [2.0.4]
+### Features
+* Add the RocksDB `PerfContext` interface for debugging
+* Add the `region-properties` command for `tikv-ctl`
+### Improvements
+* Make GC record the log when GC encounters many versions of data
+* Remove the `import-mode` parameter
+### Bug Fixes
+* Fix the issue that `reverse-seek` is slow when many RocksDB tombstones exist
+* Fix the crash issue caused by `do_sub`
+
+## [2.0.3]
+### Bug Fixes
+* Correct wrong peer meta for learners
+* Report an error instead of getting a result if divisor/dividend is 0 in do_div_mod
+
+## [2.0.2]
+### Improvements
+* Support configuring more gRPC related parameters
+* Support configuring the timeout range of leader election
+### Bug Fixes
+* Fix the issue that the Raft log is not printed
+* Fix the issue that obsolete learner is not deleted
+* Fix the issue that the snapshot intermediate file is mistakenly deleted
+
 ## [2.0.1]
 ### Performance
 * Reduced number of `thread_yield` calls

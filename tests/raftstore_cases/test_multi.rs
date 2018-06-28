@@ -13,11 +13,11 @@
 
 use kvproto::raft_cmdpb::RaftCmdResponse;
 use raft::eraftpb::MessageType;
-use tikv::raftstore::Result;
 use tikv::raftstore::store::*;
+use tikv::raftstore::Result;
 use tikv::server::transport::RaftStoreRouter;
-use tikv::util::HandyRwLock;
 use tikv::util::config::*;
+use tikv::util::HandyRwLock;
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
