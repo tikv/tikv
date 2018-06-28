@@ -106,7 +106,10 @@ fn new_debug_executor(
         }
         (Some(remote), None) => {
             let env = Arc::new(Environment::new(1));
-            let cb = ChannelBuilder::new(env);
+            let cb = ChannelBuilder::new(env)
+                .max_receive_message_len(2 << 30) // 1G.
+                .max_send_message_len(2 << 30);
+
             let channel = mgr.connect(cb, remote);
             let client = DebugClient::new(channel);
             Box::new(client) as Box<DebugExecutor>
