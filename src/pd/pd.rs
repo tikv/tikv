@@ -36,7 +36,7 @@ use storage::FlowStatistics;
 use util::collections::HashMap;
 use util::escape;
 use util::rocksdb::*;
-use util::time::time_now_as_nanos;
+use util::time::time_now_as_ms;
 use util::transport::SendCh;
 use util::worker::FutureRunnable as Runnable;
 
@@ -319,7 +319,7 @@ impl<T: PdClient> Runner<T> {
         stats.set_interval(interval);
         self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
         self.store_stat.engine_last_total_keys_read = self.store_stat.engine_total_keys_read;
-        self.store_stat.last_report_ts = time_now_as_nanos();
+        self.store_stat.last_report_ts = time_now_as_ms();
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
         self.store_stat.region_bytes_read.flush();
@@ -570,7 +570,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     peer_stat.last_written_keys = written_keys;
                     peer_stat.last_read_bytes = peer_stat.read_bytes;
                     peer_stat.last_read_keys = peer_stat.read_keys;
-                    peer_stat.last_report_ts = time_now_as_nanos();
+                    peer_stat.last_report_ts = time_now_as_ms();
                     (
                         read_bytes_delta,
                         read_keys_delta,
