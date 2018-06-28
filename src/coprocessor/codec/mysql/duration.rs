@@ -15,10 +15,10 @@ use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::time::Duration as StdDuration;
-use std::{str, i64, u64};
+use std::{i64, str, u64};
 use time::{self, Tm};
-use util::codec::BytesSlice;
 use util::codec::number::{self, NumberEncoder};
+use util::codec::BytesSlice;
 
 use super::super::Result;
 use super::{check_fsp, parse_frac, Decimal};

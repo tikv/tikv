@@ -23,9 +23,10 @@ use uuid::Uuid;
 
 use kvproto::import_kvpb::*;
 use kvproto::import_sstpb::*;
-use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
-              ExternalSstFileInfo, ReadOptions, SstFileWriter, Writable, WriteBatch as RawBatch,
-              DB};
+use rocksdb::{
+    BlockBasedOptions, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
+    ExternalSstFileInfo, ReadOptions, SstFileWriter, Writable, WriteBatch as RawBatch, DB,
+};
 
 use config::DbConfig;
 use raftstore::store::keys;
@@ -36,8 +37,8 @@ use util::config::MB;
 use util::rocksdb::properties::{SizeProperties, SizePropertiesCollectorFactory};
 use util::rocksdb::{new_engine_opt, CFOptions};
 
-use super::Result;
 use super::common::*;
+use super::Result;
 
 /// Engine wraps rocksdb::DB with customized options to support efficient bulk
 /// write.
@@ -384,7 +385,7 @@ mod tests {
         let mut region = Region::new();
         region.set_id(1);
         region.mut_peers().push(Peer::new());
-        let snap = Box::new(RegionSnapshot::from_raw(Arc::clone(&db), region));
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region);
 
         let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
         // Make sure that all kvs are right.

@@ -383,8 +383,8 @@ fn like(target: &[u8], pattern: &[u8], escape: u32, recurse_level: usize) -> Res
 #[cfg(test)]
 mod test {
     use super::*;
-    use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+    use coprocessor::codec::Datum;
     use coprocessor::dag::expr::test::{col_expr, datum_expr, scalar_func_expr};
     use coprocessor::dag::expr::{EvalContext, Expression};
     use protobuf::RepeatedField;

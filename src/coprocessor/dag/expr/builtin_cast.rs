@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::borrow::Cow;
-use std::{str, i64, u64};
+use std::{i64, str, u64};
 
 use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
 use coprocessor::codec::mysql::decimal::RoundMode;
@@ -99,7 +99,8 @@ impl ScalarFunc {
     pub fn cast_time_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
         let dec = val.to_decimal()?;
-        let dec = dec.round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
+        let dec = dec
+            .round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
             .unwrap();
         let res = dec.as_i64().unwrap();
         Ok(Some(res))
@@ -112,7 +113,8 @@ impl ScalarFunc {
     ) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let dec = val.to_decimal()?;
-        let dec = dec.round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
+        let dec = dec
+            .round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
             .unwrap();
         let res = dec.as_i64().unwrap();
         Ok(Some(res))
@@ -130,10 +132,9 @@ impl ScalarFunc {
             Ok(Some(self.produce_float_with_specified_tp(ctx, val as f64)?))
         } else {
             let uval = val as u64;
-            Ok(Some(self.produce_float_with_specified_tp(
-                ctx,
-                uval as f64,
-            )?))
+            Ok(Some(
+                self.produce_float_with_specified_tp(ctx, uval as f64)?,
+            ))
         }
     }
 
@@ -181,7 +182,7 @@ impl ScalarFunc {
 
     pub fn cast_json_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let val = val.cast_to_real();
+        let val = val.cast_to_real(ctx)?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, val)?))
     }
 
@@ -269,7 +270,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let val = val.cast_to_real();
+        let val = val.cast_to_real(ctx)?;
         let dec = Decimal::from_f64(val)?;
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
             .map(Some)
@@ -1817,16 +1818,16 @@ mod test {
         let cases = vec![
             (
                 0,
-                vec![
-                    Datum::Dec(Decimal::from_f64(i64::MAX as f64 + 100.5).unwrap()),
-                ],
+                vec![Datum::Dec(
+                    Decimal::from_f64(i64::MAX as f64 + 100.5).unwrap(),
+                )],
                 i64::MAX,
             ),
             (
                 types::UNSIGNED_FLAG,
-                vec![
-                    Datum::Dec(Decimal::from_f64(u64::MAX as f64 + 100.5).unwrap()),
-                ],
+                vec![Datum::Dec(
+                    Decimal::from_f64(u64::MAX as f64 + 100.5).unwrap(),
+                )],
                 u64::MAX as i64,
             ),
         ];
