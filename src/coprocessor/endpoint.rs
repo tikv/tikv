@@ -275,13 +275,13 @@ struct RequestTracker {
     perf_statistics_start: Option<PerfStatisticsInstant>, // The perf statistics when handle begins
     start: Instant,                                       // The request start time.
     total_handle_time: f64,
+    total_perf_statistics: PerfStatisticsDelta, // Accumulated perf statistics
 
     // These 4 fields are for ExecDetails.
     wait_start: Option<Instant>,
     handle_start: Option<Instant>,
     wait_time: Option<f64>,
     handle_time: Option<f64>,
-    perf_statistics: Option<PerfStatisticsDelta>,
 
     region_id: u64,
     txn_start_ts: u64,
@@ -342,7 +342,7 @@ impl RequestTracker {
     fn on_handle_finish(&mut self, resp: Option<&mut Response>, mut exec_metrics: ExecutorMetrics) {
         // Record delta perf statistics
         if let Some(perf_stats) = self.perf_statistics_start {
-            self.perf_statistics = Some(perf_stats.delta());
+            self.total_perf_statistics.add(&perf_stats.delta());
         }
 
         let handle_start = self.handle_start.take().unwrap();
@@ -404,7 +404,7 @@ impl Drop for RequestTracker {
                 self.exec_metrics.cf_stats.total_processed(),
                 self.ranges_len,
                 self.first_range,
-                self.perf_statistics,
+                self.total_perf_statistics,
             );
         }
 
@@ -444,33 +444,31 @@ impl Drop for RequestTracker {
             .with_label_values(&[self.scan_tag])
             .observe(self.exec_metrics.cf_stats.total_op_count() as f64);
 
-        if let Some(stats) = self.perf_statistics {
-            cop_ctx
-                .basic_local_metrics
-                .rocksdb_perf_stats
-                .with_label_values(&[self.scan_tag, "internal_key_skipped_count"])
-                .inc_by(stats.internal_key_skipped_count as i64);
-            cop_ctx
-                .basic_local_metrics
-                .rocksdb_perf_stats
-                .with_label_values(&[self.scan_tag, "internal_delete_skipped_count"])
-                .inc_by(stats.internal_delete_skipped_count as i64);
-            cop_ctx
-                .basic_local_metrics
-                .rocksdb_perf_stats
-                .with_label_values(&[self.scan_tag, "block_cache_hit_count"])
-                .inc_by(stats.block_cache_hit_count as i64);
-            cop_ctx
-                .basic_local_metrics
-                .rocksdb_perf_stats
-                .with_label_values(&[self.scan_tag, "block_read_count"])
-                .inc_by(stats.block_read_count as i64);
-            cop_ctx
-                .basic_local_metrics
-                .rocksdb_perf_stats
-                .with_label_values(&[self.scan_tag, "block_read_byte"])
-                .inc_by(stats.block_read_byte as i64);
-        }
+        cop_ctx
+            .basic_local_metrics
+            .rocksdb_perf_stats
+            .with_label_values(&[self.scan_tag, "internal_key_skipped_count"])
+            .inc_by(self.total_perf_statistics.internal_key_skipped_count as i64);
+        cop_ctx
+            .basic_local_metrics
+            .rocksdb_perf_stats
+            .with_label_values(&[self.scan_tag, "internal_delete_skipped_count"])
+            .inc_by(self.total_perf_statistics.internal_delete_skipped_count as i64);
+        cop_ctx
+            .basic_local_metrics
+            .rocksdb_perf_stats
+            .with_label_values(&[self.scan_tag, "block_cache_hit_count"])
+            .inc_by(self.total_perf_statistics.block_cache_hit_count as i64);
+        cop_ctx
+            .basic_local_metrics
+            .rocksdb_perf_stats
+            .with_label_values(&[self.scan_tag, "block_read_count"])
+            .inc_by(self.total_perf_statistics.block_read_count as i64);
+        cop_ctx
+            .basic_local_metrics
+            .rocksdb_perf_stats
+            .with_label_values(&[self.scan_tag, "block_read_byte"])
+            .inc_by(self.total_perf_statistics.block_read_byte as i64);
 
         let exec_metrics = mem::replace(&mut self.exec_metrics, ExecutorMetrics::default());
         cop_ctx.collect(self.region_id, self.scan_tag, exec_metrics);
@@ -549,7 +547,7 @@ impl RequestTask {
             handle_time: None,
             exec_metrics: ExecutorMetrics::default(),
             perf_statistics_start: None,
-            perf_statistics: None,
+            total_perf_statistics: PerfStatisticsDelta::default(),
 
             region_id: req.get_context().get_region_id(),
             txn_start_ts: start_ts,

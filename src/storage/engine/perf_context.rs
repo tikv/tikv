@@ -51,6 +51,12 @@ macro_rules! define_perf_statistics {
         pub struct PerfStatisticsDelta {
             $(pub $field: usize,)+
         }
+
+        impl PerfStatisticsDelta {
+            pub fn add(&mut self, other: &Self) {
+                $(self.$field += other.$field;)+
+            }
+        }
     }
 }
 
