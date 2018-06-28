@@ -333,6 +333,7 @@ impl Datum {
                 d.as_f64()
             }
             Datum::Dec(d) => d.as_f64(),
+            Datum::Json(j) => j.cast_to_real(ctx),
             _ => Err(box_err!("failed to convert {} to f64", self)),
         }
     }
@@ -968,6 +969,7 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
 mod test {
     use super::*;
     use coprocessor::codec::mysql::{Decimal, Duration, Time, MAX_FSP};
+    use coprocessor::dag::expr::{EvalConfig, EvalContext, FLAG_IGNORE_TRUNCATE};
     use util::as_slice;
 
     use std::cmp::Ordering;
@@ -1655,7 +1657,6 @@ mod test {
             ),
             (Datum::Dec(0u64.into()), Some(false)),
         ];
-        use coprocessor::dag::expr::{EvalConfig, EvalContext, FLAG_IGNORE_TRUNCATE};
 
         let cfg = EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
         let mut ctx = EvalContext::new(Arc::new(cfg));
@@ -1804,6 +1805,44 @@ mod test {
 
         for d in illegal_cases {
             assert!(d.into_json().is_err());
+        }
+    }
+
+    #[test]
+    fn test_into_f64() {
+        let tests = vec![
+            (Datum::I64(1), f64::from(1)),
+            (Datum::U64(1), f64::from(1)),
+            (Datum::F64(3.3), f64::from(3.3)),
+            (Datum::Bytes(b"Hello,world".to_vec()), f64::from(0)),
+            (Datum::Bytes(b"123".to_vec()), f64::from(123)),
+            (
+                Datum::Time(Time::parse_utc_datetime("2012-12-31 11:30:45", 0).unwrap()),
+                Decimal::from_bytes(b"20121231113045")
+                    .unwrap()
+                    .unwrap()
+                    .as_f64()
+                    .unwrap(),
+            ),
+            (
+                Datum::Dur(Duration::parse(b"11:30:45", 0).unwrap()),
+                f64::from(113045),
+            ),
+            (
+                Datum::Dec(Decimal::from_bytes(b"11.2").unwrap().unwrap()),
+                f64::from(11.2),
+            ),
+            (
+                Datum::Json(Json::from_str(r#"false"#).unwrap()),
+                f64::from(0),
+            ),
+        ];
+
+        let cfg = EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+        for (d, exp) in tests {
+            let got = d.into_f64(&mut ctx).unwrap();
+            assert_eq!(Datum::F64(got), Datum::F64(exp));
         }
     }
 }
