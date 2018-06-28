@@ -457,7 +457,7 @@ pub struct Lease {
     max_lease: Duration,
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LeaseState {
     /// The lease is suspicious, may be invalid.
     Suspect,
