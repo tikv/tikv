@@ -61,9 +61,9 @@ impl Config {
             ));
         }
 
-        if self.region_max_rows <= self.region_split_rows {
+        if self.region_max_rows < self.region_split_rows {
             return Err(box_err!(
-                "region max rows {} must > split rows {}",
+                "region max rows {} must >= split rows {}",
                 self.region_max_rows,
                 self.region_split_rows
             ));

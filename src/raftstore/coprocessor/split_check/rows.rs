@@ -45,7 +45,7 @@ impl SplitChecker for Checker {
         if self.current_rows > self.split_rows && self.split_key.is_none() {
             self.split_key = Some(row.key().to_vec());
         }
-        self.current_rows >= self.max_rows
+        self.current_rows > self.max_rows
     }
 
     fn split_key(&mut self) -> Option<Vec<u8>> {
