@@ -837,8 +837,8 @@ impl DebugExecutor for Debugger {
         let props = self
             .get_region_properties(region_id)
             .unwrap_or_else(|e| perror_and_exit("Debugger::get_region_properties", e));
-        for (name, value) in props {
-            println!("{}: {}", name, value);
+        for prop in props.get_props() {
+            println!("{}: {}", prop.get_name(), prop.get_value());
         }
     }
 }

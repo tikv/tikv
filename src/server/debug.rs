@@ -22,7 +22,7 @@ use util::collections::HashSet;
 
 use protobuf::{self, Message, RepeatedField};
 
-use kvproto::debugpb::{DB as DBType, MODULE};
+use kvproto::debugpb::{DB as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
@@ -614,7 +614,7 @@ impl Debugger {
         }
     }
 
-    pub fn get_region_properties(&self, region_id: u64) -> Result<Vec<(String, String)>> {
+    pub fn get_region_properties(&self, region_id: u64) -> Result<GetRegionPropertiesResponse> {
         let region_state = self.get_region_state(region_id)?;
         let region = region_state.get_region();
         let db = &self.engines.kv_engine;
@@ -630,7 +630,17 @@ impl Debugger {
             mvcc_properties.add(&mvcc);
         }
 
-        let res = [
+        let default_cf_middle_key = box_try!(raftstore_util::get_region_approximate_middle_cf(
+            db, CF_DEFAULT, &region
+        ));
+
+        let write_cf_middle_key = box_try!(raftstore_util::get_region_approximate_middle_cf(
+            db, CF_WRITE, &region
+        ));
+
+        let mut resp = GetRegionPropertiesResponse::new();
+
+        for (name, value) in [
             ("num_files", collection.len() as u64),
             ("num_entries", num_entries),
             ("num_deletes", num_entries - mvcc_properties.num_versions),
@@ -641,9 +651,15 @@ impl Debugger {
             ("mvcc.num_versions", mvcc_properties.num_versions),
             ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
         ].iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        Ok(res)
+        {
+            let mut prop = Property::new();
+            prop.set_name(name.to_string());
+            prop.set_value(value.to_string());
+            resp.mut_props().push(prop);
+        }
+        resp.set_default_cf_middle_key(default_cf_middle_key.unwrap_or_default());
+        resp.set_write_cf_middle_key(write_cf_middle_key.unwrap_or_default());
+        Ok(resp)
     }
 }
 
