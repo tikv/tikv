@@ -640,7 +640,7 @@ impl Debugger {
 
         let mut resp = GetRegionPropertiesResponse::new();
 
-        for (name, value) in [
+        for (name, value) in &[
             ("num_files", collection.len() as u64),
             ("num_entries", num_entries),
             ("num_deletes", num_entries - mvcc_properties.num_versions),
@@ -650,8 +650,7 @@ impl Debugger {
             ("mvcc.num_puts", mvcc_properties.num_puts),
             ("mvcc.num_versions", mvcc_properties.num_versions),
             ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
-        ].iter()
-        {
+        ] {
             let mut prop = Property::new();
             prop.set_name(name.to_string());
             prop.set_value(value.to_string());
