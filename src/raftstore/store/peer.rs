@@ -362,6 +362,7 @@ impl Peer {
             check_quorum: true,
             tag: tag.clone(),
             skip_bcast_commit: true,
+            pre_vote: cfg.prevote,
             ..Default::default()
         };
 
@@ -589,6 +590,8 @@ impl Peer {
             match msg_type {
                 MessageType::MsgAppend => metrics.append += 1,
                 MessageType::MsgAppendResponse => metrics.append_resp += 1,
+                MessageType::MsgRequestPreVote => metrics.prevote += 1,
+                MessageType::MsgRequestPreVoteResponse => metrics.prevote_resp += 1,
                 MessageType::MsgRequestVote => metrics.vote += 1,
                 MessageType::MsgRequestVoteResponse => metrics.vote_resp += 1,
                 MessageType::MsgSnapshot => metrics.snapshot += 1,
@@ -606,7 +609,17 @@ impl Peer {
 
                     metrics.timeout_now += 1;
                 }
-                _ => {}
+                // We do not care about these message types for metrics.
+                // Explicitly declare them so when we add new message types we are forced to
+                // decide.
+                MessageType::MsgHup
+                | MessageType::MsgBeat
+                | MessageType::MsgPropose
+                | MessageType::MsgUnreachable
+                | MessageType::MsgSnapStatus
+                | MessageType::MsgCheckQuorum
+                | MessageType::MsgReadIndex
+                | MessageType::MsgReadIndexResp => {}
             }
         }
         Ok(())
@@ -620,6 +633,11 @@ impl Peer {
         );
         if self.is_leader() && m.get_from() != INVALID_ID {
             self.peer_heartbeats.insert(m.get_from(), Instant::now());
+            // As the leader we know we are not missing.
+            self.leader_missing_time.take();
+        } else if m.get_from() == self.leader_id() {
+            // As another role know we're not missing.
+            self.leader_missing_time.take();
         }
         self.raft_group.step(m)?;
         Ok(())
@@ -721,35 +739,31 @@ impl Peer {
     pub fn check_stale_state(&mut self) -> StaleState {
         let naive_peer = !self.is_initialized() || self.raft_group.raft.is_learner;
         // Updates the `leader_missing_time` according to the current state.
-        if self.leader_id() == raft::INVALID_ID {
-            if self.leader_missing_time.is_none() {
-                self.leader_missing_time = Some(Instant::now())
+        //
+        // If we are checking this it means we suspect the leader might be missing.
+        // Mark down the time when we are called, so we can check later if it's been longer than it
+        // should be.
+        match self.leader_missing_time {
+            None => {
+                self.leader_missing_time = Instant::now().into();
+                StaleState::Valid
             }
-        } else if !naive_peer {
-            // Reset leader_missing_time, if the peer has a leader and it is initialized.
-            // For an uninitialized peer and learner, the leader id is unreliable.
-            self.leader_missing_time = None
-        }
-
-        if self.leader_missing_time.is_none() {
-            // The peer has a leader.
-            return StaleState::Valid;
-        }
-
-        // The peer does not have a leader, checks whether it is stale.
-        let duration = self.leader_missing_time.unwrap().elapsed();
-        if duration >= self.cfg.max_leader_missing_duration.0 {
-            // Resets the `leader_missing_time` to avoid sending the same tasks to
-            // PD worker continuously during the leader missing timeout.
-            self.leader_missing_time = Some(Instant::now());
-            StaleState::ToValidate
-        } else if !naive_peer && duration >= self.cfg.abnormal_leader_missing_duration.0 {
-            // A peer is considered as in the leader missing state
-            // if it's initialized but is isolated from its leader or
-            // something bad happens that the raft group can not elect a leader.
-            StaleState::LeaderMissing
-        } else {
-            StaleState::Valid
+            Some(instant) if instant.elapsed() >= self.cfg.max_leader_missing_duration.0 => {
+                // Resets the `leader_missing_time` to avoid sending the same tasks to
+                // PD worker continuously during the leader missing timeout.
+                self.leader_missing_time = Instant::now().into();
+                StaleState::ToValidate
+            }
+            Some(instant)
+                if instant.elapsed() >= self.cfg.abnormal_leader_missing_duration.0
+                    && !naive_peer =>
+            {
+                // A peer is considered as in the leader missing state
+                // if it's initialized but is isolated from its leader or
+                // something bad happens that the raft group can not elect a leader.
+                StaleState::LeaderMissing
+            }
+            _ => StaleState::Valid,
         }
     }
 
