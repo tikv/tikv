@@ -420,7 +420,7 @@ pub struct Storage<E: Engine> {
     worker_scheduler: worker::Scheduler<Msg<E>>,
 
     read_pool: ReadPool<ReadPoolContext>,
-    gc_worker: GCWorker,
+    gc_worker: GCWorker<E>,
 
     // Storage configurations.
     max_key_size: usize,

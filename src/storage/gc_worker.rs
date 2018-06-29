@@ -45,15 +45,15 @@ impl Display for GCTask {
 }
 
 /// `GCRunner` is used to perform GC on the engine
-struct GCRunner {
-    engine: Box<Engine>,
+struct GCRunner<E: Engine> {
+    engine: E,
     ratio_threshold: f64,
 
     stats: StatisticsSummary,
 }
 
-impl GCRunner {
-    pub fn new(engine: Box<Engine>, ratio_threshold: f64) -> GCRunner {
+impl<E: Engine> GCRunner {
+    pub fn new(engine: E, ratio_threshold: f64) -> GCRunner<E> {
         GCRunner {
             engine,
             ratio_threshold,
@@ -245,15 +245,15 @@ impl Runnable<GCTask> for GCRunner {
 
 /// `GCWorker` is used to schedule GC operations
 #[derive(Clone)]
-pub struct GCWorker {
-    engine: Box<Engine>,
+pub struct GCWorker<E: Engine> {
+    engine: E,
     ratio_threshold: f64,
     worker: Arc<Mutex<Worker<GCTask>>>,
     worker_scheduler: worker::Scheduler<GCTask>,
 }
 
-impl GCWorker {
-    pub fn new(engine: Box<Engine>, ratio_threshold: f64) -> GCWorker {
+impl<E: Engine> GCWorker {
+    pub fn new(engine: E, ratio_threshold: f64) -> GCWorker<E> {
         let worker = Arc::new(Mutex::new(
             Builder::new("gc-worker")
                 .pending_capacity(GC_MAX_PENDING_TASKS)
