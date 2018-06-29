@@ -1223,7 +1223,7 @@ name = "tikv-fuzz"
 version = "0.0.1"
 dependencies = [
  "libfuzzer-sys 0.1.0 (git+https://github.com/rust-fuzz/libfuzzer-sys.git)",
- "tikv 2.1.0-alpha.1",
+ "tikv 2.1.0-beta",
 ]
 
 [[package]]
