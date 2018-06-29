@@ -191,8 +191,8 @@ mod tests {
 
     use tipb::expression::{ByItem, Expr, ExprType};
 
-    use coprocessor::codec::Datum;
     use coprocessor::codec::table::RowColsDict;
+    use coprocessor::codec::Datum;
     use coprocessor::dag::expr::EvalContext;
     use util::codec::number::*;
     use util::collections::HashMap;

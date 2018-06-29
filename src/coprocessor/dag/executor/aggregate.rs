@@ -14,9 +14,9 @@
 use std::cmp::Ordering;
 use tipb::expression::ExprType;
 
-use coprocessor::Result;
-use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::Decimal;
+use coprocessor::codec::Datum;
+use coprocessor::Result;
 
 use super::super::expr::{eval_arith, EvalContext};
 
@@ -177,6 +177,7 @@ impl Sum {
     /// add others to res.
     ///
     /// return false means the others is skipped.
+    /// Keep compatible with TiDB's `calculateSum` function.
     fn add_asssign(&mut self, ctx: &mut EvalContext, mut args: Vec<Datum>) -> Result<bool> {
         if args.len() != 1 {
             return Err(box_err!(
@@ -192,7 +193,11 @@ impl Sum {
         let v = match a {
             Datum::I64(v) => Datum::Dec(Decimal::from(v)),
             Datum::U64(v) => Datum::Dec(Decimal::from(v)),
-            v => v,
+            Datum::Dec(d) => Datum::Dec(d),
+            v => {
+                let f = v.into_f64(ctx)?;
+                Datum::F64(f)
+            }
         };
         let res = match self.res.take() {
             Some(b) => eval_arith(ctx, v, b, Datum::checked_add)?,
@@ -280,8 +285,9 @@ impl AggrFunc for Extremum {
 
 #[cfg(test)]
 mod test {
-    use coprocessor::dag::expr::EvalContext;
+    use coprocessor::dag::expr::{EvalConfig, EvalContext, FLAG_IGNORE_TRUNCATE};
     use std::ops::Add;
+    use std::sync::Arc;
     use std::{i64, u64};
 
     use super::*;
@@ -310,5 +316,24 @@ mod test {
         sum.update(&mut ctx, vec![v2]).unwrap();
         let v = sum.res.take().unwrap();
         assert_eq!(v, Datum::Dec(res));
+    }
+
+    #[test]
+    fn test_sum_as_f64() {
+        let mut sum = Sum { res: None };
+        let cfg = EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let data = vec![
+            Datum::Bytes(b"123.09xxx".to_vec()),
+            Datum::Bytes(b"aaa".to_vec()),
+            Datum::Null,
+            Datum::F64(12.1),
+        ];
+        let res = 123.09 + 12.1;
+        for v in data {
+            sum.update(&mut ctx, vec![v]).unwrap();
+        }
+        let v = sum.res.take().unwrap();
+        assert_eq!(v, Datum::F64(res));
     }
 }

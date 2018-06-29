@@ -18,8 +18,8 @@ use fail;
 use futures::Future;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use tikv::pd::PdClient;
-use tikv::raftstore::store::Peekable;
 use tikv::raftstore::store::keys;
+use tikv::raftstore::store::Peekable;
 use tikv::storage::CF_RAFT;
 
 use raftstore::node::new_node_cluster;

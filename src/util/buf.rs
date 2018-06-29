@@ -335,7 +335,8 @@ impl PartialEq for PipeBuffer {
             mem::swap(&mut l1, &mut l2);
             mem::swap(&mut r1, &mut r2);
         }
-        l1 == &l2[..l1.len()] && r1[..l2.len() - l1.len()] == l2[l1.len()..]
+        l1 == &l2[..l1.len()]
+            && r1[..l2.len() - l1.len()] == l2[l1.len()..]
             && &r1[l2.len() - l1.len()..] == r2
     }
 }

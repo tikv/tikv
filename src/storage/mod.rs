@@ -42,9 +42,10 @@ pub mod types;
 
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::engine::raftkv::RaftKv;
-pub use self::engine::{new_local_engine, CFStatistics, Cursor, Engine, Error as EngineError,
-                       FlowStatistics, Iterator, Modify, ScanMode, Snapshot, Statistics,
-                       StatisticsSummary, TEMP_DIR};
+pub use self::engine::{
+    new_local_engine, CFStatistics, Cursor, Engine, Error as EngineError, FlowStatistics, Iterator,
+    Modify, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary, TEMP_DIR,
+};
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
 pub use self::types::{make_key, Key, KvPair, MvccInfo, Value};
@@ -411,12 +412,12 @@ impl Options {
 }
 
 #[derive(Clone)]
-pub struct Storage {
-    engine: Box<Engine>,
+pub struct Storage<E: Engine> {
+    engine: E,
 
     // to schedule the execution of storage commands
-    worker: Arc<Mutex<Worker<Msg>>>,
-    worker_scheduler: worker::Scheduler<Msg>,
+    worker: Arc<Mutex<Worker<Msg<E>>>>,
+    worker_scheduler: worker::Scheduler<Msg<E>>,
 
     read_pool: ReadPool<ReadPoolContext>,
     gc_worker: GCWorker,
@@ -425,12 +426,19 @@ pub struct Storage {
     max_key_size: usize,
 }
 
-impl Storage {
+impl Storage<RocksEngine> {
+    pub fn new(config: &Config, read_pool: ReadPool<ReadPoolContext>) -> Result<Self> {
+        let engine = engine::new_local_engine(&config.data_dir, ALL_CFS)?;
+        Storage::from_engine(engine, config, read_pool)
+    }
+}
+
+impl<E: Engine> Storage<E> {
     pub fn from_engine(
-        engine: Box<Engine>,
+        engine: E,
         config: &Config,
         read_pool: ReadPool<ReadPoolContext>,
-    ) -> Result<Storage> {
+    ) -> Result<Self> {
         info!("storage {:?} started.", engine);
 
         let worker = Arc::new(Mutex::new(
@@ -449,11 +457,6 @@ impl Storage {
             gc_worker,
             max_key_size: config.max_key_size,
         })
-    }
-
-    pub fn new(config: &Config, read_pool: ReadPool<ReadPoolContext>) -> Result<Storage> {
-        let engine = engine::new_local_engine(&config.data_dir, ALL_CFS)?;
-        Storage::from_engine(engine, config, read_pool)
     }
 
     pub fn start(&mut self, config: &Config) -> Result<()> {
@@ -491,7 +494,7 @@ impl Storage {
         Ok(())
     }
 
-    pub fn get_engine(&self) -> Box<Engine> {
+    pub fn get_engine(&self) -> E {
         self.engine.clone()
     }
 
@@ -501,10 +504,7 @@ impl Storage {
         Ok(())
     }
 
-    fn async_snapshot(
-        engine: Box<Engine>,
-        ctx: &Context,
-    ) -> impl Future<Item = Box<Snapshot + 'static>, Error = Error> {
+    fn async_snapshot(engine: E, ctx: &Context) -> impl Future<Item = E::Snap, Error = Error> {
         let (callback, future) = util::future::paired_future_callback();
         let val = engine.async_snapshot(ctx, callback);
 
@@ -535,7 +535,7 @@ impl Storage {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: Box<Snapshot>| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
@@ -590,7 +590,7 @@ impl Storage {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: Box<Snapshot>| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
@@ -660,7 +660,7 @@ impl Storage {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: Box<Snapshot>| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
@@ -894,10 +894,10 @@ impl Storage {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: Box<Snapshot>| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-                    let cf = Storage::rawkv_cf(cf)?;
+                    let cf = Self::rawkv_cf(cf)?;
                     // no scan_count for this kind of op.
 
                     let key_len = key.len();
@@ -946,13 +946,14 @@ impl Storage {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: Box<Snapshot>| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-                    let cf = Storage::rawkv_cf(cf)?;
+                    let cf = Self::rawkv_cf(cf)?;
                     // no scan_count for this kind of op.
                     let mut stats = Statistics::default();
-                    let result: Vec<Result<KvPair>> = keys.iter()
+                    let result: Vec<Result<KvPair>> = keys
+                        .iter()
                         .map(|k| (k, snapshot.get_cf(cf, k)))
                         .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
                         .into_iter()
@@ -995,9 +996,11 @@ impl Storage {
         }
         self.engine.async_write(
             &ctx,
-            vec![
-                Modify::Put(Storage::rawkv_cf(cf)?, Key::from_encoded(key), value),
-            ],
+            vec![Modify::Put(
+                Self::rawkv_cf(cf)?,
+                Key::from_encoded(key),
+                value,
+            )],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&["raw_put"]).inc();
@@ -1011,7 +1014,7 @@ impl Storage {
         pairs: Vec<KvPair>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cf = Storage::rawkv_cf(cf)?;
+        let cf = Self::rawkv_cf(cf)?;
         for &(ref key, _) in &pairs {
             if key.len() > self.max_key_size {
                 callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
@@ -1045,9 +1048,7 @@ impl Storage {
         }
         self.engine.async_write(
             &ctx,
-            vec![
-                Modify::Delete(Storage::rawkv_cf(cf)?, Key::from_encoded(key)),
-            ],
+            vec![Modify::Delete(Self::rawkv_cf(cf)?, Key::from_encoded(key))],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
         KV_COMMAND_COUNTER_VEC
@@ -1074,13 +1075,11 @@ impl Storage {
 
         self.engine.async_write(
             &ctx,
-            vec![
-                Modify::DeleteRange(
-                    Storage::rawkv_cf(cf)?,
-                    Key::from_encoded(start_key),
-                    Key::from_encoded(end_key),
-                ),
-            ],
+            vec![Modify::DeleteRange(
+                Self::rawkv_cf(cf)?,
+                Key::from_encoded(start_key),
+                Key::from_encoded(end_key),
+            )],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
         KV_COMMAND_COUNTER_VEC
@@ -1096,14 +1095,15 @@ impl Storage {
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cf = Storage::rawkv_cf(cf)?;
+        let cf = Self::rawkv_cf(cf)?;
         for key in &keys {
             if key.len() > self.max_key_size {
                 callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
                 return Ok(());
             }
         }
-        let requests = keys.into_iter()
+        let requests = keys
+            .into_iter()
             .map(|k| Modify::Delete(cf, Key::from_encoded(k)))
             .collect();
         self.engine
@@ -1117,7 +1117,7 @@ impl Storage {
     }
 
     fn raw_scan(
-        snapshot: &Snapshot,
+        snapshot: &E::Snap,
         cf: String,
         start_key: &Key,
         end_key: Option<Key>,
@@ -1129,7 +1129,7 @@ impl Storage {
         if let Some(end) = end_key {
             option.set_upper_bound(end.encoded().clone());
         }
-        let mut cursor = snapshot.iter_cf(Storage::rawkv_cf(cf)?, option, ScanMode::Forward)?;
+        let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
         if !cursor.seek(start_key, &mut stats.data)? {
             return Ok(vec![]);
         }
@@ -1168,13 +1168,13 @@ impl Storage {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: Box<Snapshot>| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
                     let mut statistics = Statistics::default();
-                    let result = Storage::raw_scan(
-                        snapshot.as_ref(),
+                    let result = Self::raw_scan(
+                        &snapshot,
                         cf,
                         &Key::from_encoded(key),
                         None,
@@ -1261,7 +1261,7 @@ impl Storage {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: Box<Snapshot>| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
@@ -1283,8 +1283,8 @@ impl Storage {
                         } else {
                             Some(Key::from_encoded(end_key))
                         };
-                        let pairs = Storage::raw_scan(
-                            snapshot.as_ref(),
+                        let pairs = Self::raw_scan(
+                            &snapshot,
                             cf.clone(),
                             &start_key,
                             end_key,

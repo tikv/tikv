@@ -23,8 +23,8 @@ use tikv::storage;
 use tikv::storage::config::Config;
 use tikv::storage::gc_worker::GC_MAX_PENDING_TASKS;
 use tikv::storage::*;
-use tikv::util::HandyRwLock;
 use tikv::util::worker::FutureWorker;
+use tikv::util::HandyRwLock;
 
 #[test]
 fn test_storage_gcworker_busy() {
