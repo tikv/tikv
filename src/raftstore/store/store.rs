@@ -1309,7 +1309,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let mut is_merging;
             let res = {
                 let peer = self.region_peers.get_mut(&region_id).unwrap();
-                is_merging = peer.pending_merge.is_some();
+                is_merging = peer.pending_merge_state.is_some();
                 peer.post_raft_ready_append(
                     &mut self.raft_metrics,
                     &self.trans,
@@ -1730,7 +1730,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         fail_point!("on_schedule_merge", |_| Ok(()));
         let req = {
             let peer = &self.region_peers[&region.get_id()];
-            let state = peer.pending_merge.as_ref().unwrap();
+            let state = peer.pending_merge_state.as_ref().unwrap();
             let expect_region = state.get_target();
             let sibling_peer = match self.get_merge_peer(&peer.tag, expect_region)? {
                 // Wait till next round.
@@ -1781,7 +1781,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn rollback_merge(&mut self, region: &metapb::Region) {
         let req = {
             let peer = &self.region_peers[&region.get_id()];
-            let state = peer.pending_merge.as_ref().unwrap();
+            let state = peer.pending_merge_state.as_ref().unwrap();
             let mut request = new_admin_request(region.get_id(), peer.peer.clone());
             request
                 .mut_header()
@@ -1814,7 +1814,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState, merged: bool) {
         {
             let peer = self.region_peers.get_mut(&region.get_id()).unwrap();
-            peer.pending_merge = Some(state);
+            peer.pending_merge_state = Some(state);
             peer.set_region(region.clone());
         }
 
@@ -1838,7 +1838,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_ready_commit_merge(&mut self, region: metapb::Region, source: metapb::Region) {
         let source_peer = {
             let peer = self.region_peers.get_mut(&source.get_id()).unwrap();
-            assert!(peer.pending_merge.is_some());
+            assert!(peer.pending_merge_state.is_some());
             peer.peer.clone()
         };
         self.destroy_peer(source.get_id(), source_peer, true);
@@ -1870,7 +1870,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         region: Option<metapb::Region>,
     ) {
         let peer = self.region_peers.get_mut(&region_id).unwrap();
-        let pending_commit = peer.pending_merge.as_ref().unwrap().get_commit();
+        let pending_commit = peer.pending_merge_state.as_ref().unwrap().get_commit();
         self.merging_regions.as_mut().unwrap().retain(|r| {
             if r.get_id() != region_id {
                 return true;
@@ -1883,7 +1883,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             false
         });
-        peer.pending_merge = None;
+        peer.pending_merge_state = None;
         if let Some(r) = region {
             peer.set_region(r);
         }
@@ -2020,7 +2020,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let source_peer = &self.region_peers[&source_region.get_id()];
             // only merging peer can propose merge request.
             assert!(
-                source_peer.pending_merge.is_some(),
+                source_peer.pending_merge_state.is_some(),
                 "{} {} should be in merging state",
                 peer.tag,
                 source_peer.tag
