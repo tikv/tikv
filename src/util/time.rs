@@ -43,13 +43,13 @@ pub fn duration_to_nanos(d: Duration) -> u64 {
     d.as_secs() * 1_000_000_000 + nanos
 }
 
-/// Get the current timestamp in seconds.
+/// Get the current timestamp in millisecond.
 #[inline]
-pub fn time_now_sec() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
+pub fn time_now_as_ms() -> u64 {
+    let since_unix_epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    let nanos =
+        since_unix_epoch.as_secs() * 1_000_000_000 + u64::from(since_unix_epoch.subsec_nanos());
+    nanos / 1000_000
 }
 
 pub struct SlowTimer {
