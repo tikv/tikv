@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use std::sync::{atomic::AtomicBool, mpsc, Arc};
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
 use super::cluster::{Cluster, Simulator};
 use super::server::new_server_cluster;
@@ -94,7 +94,6 @@ fn test_prevote<T: Simulator>(
     if let Some(leader_id) = leader_after_failure_id.into() {
         cluster.must_transfer_leader(1, new_peer(leader_id, 1));
     }
-
 
     // Let the cluster recover.
     match failure_type {
@@ -233,9 +232,10 @@ fn test_server_pair_isolated() {
 fn test_isolated_follower_leader_does_not_change<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
-    cluster.partition(vec![1,2,3,4], vec![5]);
+    cluster.partition(vec![1, 2, 3, 4], vec![5]);
     cluster.must_put(b"k1", b"v1");
-    let election_timeout = cluster.cfg.raft_store.raft_base_tick_interval.0 * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+    let election_timeout = cluster.cfg.raft_store.raft_base_tick_interval.0
+        * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
     thread::sleep(election_timeout * 2);
     cluster.clear_send_filters();
     cluster.leader_of_region(1);
