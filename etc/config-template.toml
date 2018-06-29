@@ -121,6 +121,9 @@
 # true (default value) for high reliability, this can prevent data loss when power failure.
 # sync-log = true
 
+# minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
+# prevote = true
+
 # set the path to raftdb directory, default value is data-dir/raft
 # raftdb-path = ""
 
