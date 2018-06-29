@@ -386,8 +386,6 @@ impl ScalarFunc {
             | ScalarFuncSig::RandomBytes
             | ScalarFuncSig::RandWithSeed
             | ScalarFuncSig::RealAnyValue
-            | ScalarFuncSig::RegexpBinarySig
-            | ScalarFuncSig::RegexpSig
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
             | ScalarFuncSig::Replace
@@ -1320,8 +1318,6 @@ mod test {
             ScalarFuncSig::RandomBytes,
             ScalarFuncSig::RandWithSeed,
             ScalarFuncSig::RealAnyValue,
-            ScalarFuncSig::RegexpBinarySig,
-            ScalarFuncSig::RegexpSig,
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,
             ScalarFuncSig::Replace,
