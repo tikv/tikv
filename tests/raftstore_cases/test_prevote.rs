@@ -91,10 +91,6 @@ fn test_prevote<T: Simulator>(
         "Sends a PreVote or PreVoteResponse during failure.",
     );
 
-    if let Some(leader_id) = leader_after_failure_id.into() {
-        cluster.must_transfer_leader(1, new_peer(leader_id, 1));
-    }
-
     // Let the cluster recover.
     match failure_type {
         FailureType::Partition(_, _) => {
@@ -108,6 +104,10 @@ fn test_prevote<T: Simulator>(
 
     // Prepare to listen.
     let rx = attach_prevote_notifiers(cluster, detect_during_recovery.0);
+
+    if let Some(leader_id) = leader_after_failure_id.into() {
+        cluster.must_transfer_leader(1, new_peer(leader_id, 1));
+    }
 
     // Once we see a response on the wire we know a prevote round is happening.
     let received = rx.recv_timeout(Duration::from_secs(5));
@@ -232,13 +232,31 @@ fn test_server_pair_isolated() {
 fn test_isolated_follower_leader_does_not_change<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
-    cluster.partition(vec![1, 2, 3, 4], vec![5]);
     cluster.must_put(b"k1", b"v1");
+    let region_status = new_status_request(1, new_peer(1, 1), new_region_leader_cmd());
+    let resp = cluster
+        .call_command(region_status.clone(), Duration::from_secs(5))
+        .unwrap();
+    let term = resp.get_header().get_current_term();
+    // Isolate peer5.
+    cluster.partition(vec![1, 2, 3, 4], vec![5]);
     let election_timeout = cluster.cfg.raft_store.raft_base_tick_interval.0
         * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+    // Peer5 should not increase its term.
     thread::sleep(election_timeout * 2);
+    // Now peer5 can send messages to others
     cluster.clear_send_filters();
-    cluster.leader_of_region(1);
+    thread::sleep(election_timeout * 2);
+    cluster.must_put(b"k1", b"v1");
+    // Peer1 is still the leader.
+    let leader = cluster.leader_of_region(1);
+    assert_eq!(leader, Some(new_peer(1,1)));
+    // And the term is not changed.
+    let resp = cluster
+        .call_command(region_status, Duration::from_secs(5))
+        .unwrap();
+    let current_term = resp.get_header().get_current_term();
+    assert_eq!(term, current_term);
 }
 
 #[test]
