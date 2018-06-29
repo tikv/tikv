@@ -16,7 +16,7 @@ use super::{
     Result, ScanMode, Snapshot, TEMP_DIR,
 };
 use kvproto::kvrpcpb::Context;
-use raftstore::store::engine::{IterOption, Peekable, SyncSnapshot as RocksSnapshot};
+use raftstore::store::engine::{IterOption, Peekable};
 use raftstore::store::{SeekRegionFilter, SeekRegionResult};
 use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
 use std::fmt::{self, Debug, Display, Formatter};
