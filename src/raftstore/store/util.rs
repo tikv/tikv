@@ -339,7 +339,6 @@ pub fn get_region_approximate_middle_cf(
     let end = keys::enc_end_key(region);
     let range = Range::new(&start, &end);
     let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
-    println!("collection size: {}", collection.len()); // Why is it zero?
 
     let mut keys = Vec::new();
     for (_, v) in &*collection {
@@ -1234,8 +1233,14 @@ mod tests {
         }
 
         let region = make_region(1, vec![], vec![]);
-        let middle_key = get_region_approximate_middle_cf(&engine, CF_DEFAULT, &region).unwrap();
-        let prefix = keys::data_key(Key::from_raw(b"key_0").encoded());
-        assert!(middle_key.unwrap().starts_with(&prefix));
+        let middle_key = get_region_approximate_middle_cf(&engine, CF_DEFAULT, &region)
+            .unwrap()
+            .unwrap();
+
+        let middle_key = Key::from_encoded(keys::origin_key(&middle_key).to_owned())
+            .raw()
+            .unwrap();
+        let prefix = b"key_".to_vec();
+        assert!(middle_key.starts_with(&prefix));
     }
 }
