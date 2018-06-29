@@ -18,9 +18,10 @@ mod store;
 use std::error;
 use std::io::Error as IoError;
 
-pub use self::scheduler::{Msg, Scheduler, CMD_BATCH_SIZE, GC_BATCH_SIZE,
-                          GC_LOG_DELETED_VERSION_THRESHOLD, GC_LOG_FOUND_VERSION_THRESHOLD,
-                          RESOLVE_LOCK_BATCH_SIZE};
+pub use self::scheduler::{
+    Msg, Scheduler, CMD_BATCH_SIZE, GC_BATCH_SIZE, GC_LOG_DELETED_VERSION_THRESHOLD,
+    GC_LOG_FOUND_VERSION_THRESHOLD, RESOLVE_LOCK_BATCH_SIZE,
+};
 pub use self::store::{SnapshotStore, StoreScanner};
 
 quick_error! {

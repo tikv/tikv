@@ -180,7 +180,8 @@ impl GCRunner {
 
         let mut next_key = None;
         loop {
-            let (keys, next) = self.scan_keys(&mut ctx, safe_point, next_key, GC_BATCH_SIZE)
+            let (keys, next) = self
+                .scan_keys(&mut ctx, safe_point, next_key, GC_BATCH_SIZE)
                 .map_err(|e| {
                     warn!("scan_keys failed on region {}: {:?}", safe_point, &e);
                     e
@@ -189,7 +190,8 @@ impl GCRunner {
                 break;
             }
 
-            next_key = self.gc_keys(&mut ctx, safe_point, keys, next)
+            next_key = self
+                .gc_keys(&mut ctx, safe_point, keys, next)
                 .map_err(|e| {
                     warn!("gc_keys failed on region {}: {:?}", safe_point, &e);
                     e
