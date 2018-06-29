@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 use rocksdb::PerfContext;
 
@@ -57,6 +57,12 @@ impl Deref for PerfStatisticsInstant {
     }
 }
 
+impl DerefMut for PerfStatisticsInstant {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 /// Store statistics we need. Data comes from RocksDB's `PerfContext`.
 /// This this statistics store delta values between two instant statistics.
 #[derive(Default, Debug, Clone, Copy, Add, AddAssign, Sub, SubAssign)]
@@ -67,6 +73,12 @@ impl Deref for PerfStatisticsDelta {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl DerefMut for PerfStatisticsDelta {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
@@ -111,5 +123,19 @@ mod tests {
         assert_eq!(f3.internal_key_skipped_count, 1);
         assert_eq!(f3.block_cache_hit_count, 2);
         assert_eq!(f3.block_read_byte, 6);
+    }
+
+    #[test]
+    fn test_deref() {
+        let mut stats = PerfStatisticsDelta(Fields {
+            internal_key_skipped_count: 1,
+            internal_delete_skipped_count: 2,
+            block_cache_hit_count: 3,
+            block_read_count: 4,
+            block_read_byte: 5,
+        });
+        assert_eq!(stats.block_cache_hit_count, 3);
+        stats.block_cache_hit_count = 6;
+        assert_eq!(stats.block_cache_hit_count, 6);
     }
 }
