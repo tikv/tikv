@@ -59,12 +59,17 @@ fn test_prevote<T: Simulator>(
     cluster: &mut Cluster<T>,
     failure_type: FailureType,
     leader_after_failure_id: impl Into<Option<u64>>,
-    detect_during_failure: (u64, bool),
-    detect_during_recovery: (u64, bool),
+    // Sometimes prevotes do not always occur, it depends when the leader reestablishes leadership.
+    detect_during_failure: impl Into<Option<(u64, bool)>>,
+    detect_during_recovery: impl Into<Option<(u64, bool)>>,
 ) {
     cluster.cfg.raft_store.prevote = true;
+    let election_timeout = cluster.cfg.raft_store.raft_base_tick_interval.0
+        * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
 
     let leader_id = 1;
+    let detect_during_failure = detect_during_failure.into();
+    let detect_during_recovery = detect_during_recovery.into();
 
     // We must start the cluster before adding send filters, otherwise it panics.
     cluster.run();
@@ -72,8 +77,13 @@ fn test_prevote<T: Simulator>(
     cluster.must_transfer_leader(1, new_peer(leader_id, 1));
     cluster.must_put(b"k1", b"v1");
 
-    // Determine how to fail.
-    let rx = attach_prevote_notifiers(cluster, detect_during_failure.0);
+    // We may need to detect a prevote in this failure. Get ready.
+    let rx = match detect_during_failure {
+        Some((peer, _)) => attach_prevote_notifiers(cluster, peer).into(),
+        None => None,
+    };
+
+    // Determine how to fail, then fail.
     match failure_type {
         FailureType::Partition(majority, minority) => {
             cluster.partition(majority.clone().to_vec(), minority.clone().to_vec());
@@ -83,13 +93,18 @@ fn test_prevote<T: Simulator>(
         }
     };
 
-    // Once we see a response on the wire we know a prevote round is happening.
-    let received = rx.recv_timeout(Duration::from_secs(5));
-    assert_eq!(
-        received.is_ok(),
-        detect_during_failure.1,
-        "Sends a PreVote or PreVoteResponse during failure.",
-    );
+    if let Some((_, should_detect)) = detect_during_failure {
+        // Once we see a response on the wire we know a prevote round is happening.
+        let received = rx.unwrap().recv_timeout(Duration::from_secs(5));
+        assert_eq!(
+            received.is_ok(),
+            should_detect,
+            "Sends a PreVote or PreVoteResponse during failure.",
+        );
+    }
+
+    // Allow the cluster to settle down. (There might have been a prevote right away.)
+    thread::sleep(election_timeout);
 
     // Let the cluster recover.
     match failure_type {
@@ -101,25 +116,28 @@ fn test_prevote<T: Simulator>(
             peers.iter().for_each(|&peer| cluster.run_node(peer));
         }
     };
-
-    // Prepare to listen.
-    let rx = attach_prevote_notifiers(cluster, detect_during_recovery.0);
+    // We may need to detect a prevote in this recovery. Get ready.
+    let rx = match detect_during_recovery.into() {
+        Some((peer, _)) => attach_prevote_notifiers(cluster, peer).into(),
+        None => None,
+    };
 
     if let Some(leader_id) = leader_after_failure_id.into() {
         cluster.must_transfer_leader(1, new_peer(leader_id, 1));
     }
 
-    // Once we see a response on the wire we know a prevote round is happening.
-    let received = rx.recv_timeout(Duration::from_secs(5));
+    if let Some((_, should_detect)) = detect_during_recovery {
+        // Once we see a response on the wire we know a prevote round is happening.
+        let received = rx.unwrap().recv_timeout(Duration::from_secs(5));
+        assert_eq!(
+            received.is_ok(),
+            should_detect,
+            "Sends a PreVote or PreVoteResponse during recovery.",
+        );
+    }
 
     cluster.must_put(b"k3", b"v3");
     assert_eq!(cluster.must_get(b"k1"), Some(b"v1".to_vec()));
-
-    assert_eq!(
-        received.is_ok(),
-        detect_during_recovery.1,
-        "Sends a PreVote or PreVoteResponse during recovery.",
-    );
 }
 
 #[test]
@@ -159,7 +177,7 @@ fn test_prevote_partition_leader_in_minority_detect_in_majority() {
         FailureType::Partition(&[1, 2], &[3, 4, 5]),
         None,
         (4, true),
-        (4, false),
+        None,
     );
 }
 
@@ -170,10 +188,10 @@ fn test_prevote_partition_leader_in_minority_detect_in_minority() {
     // old leader.
     test_prevote(
         &mut cluster,
-        FailureType::Partition(&[1, 2, 3], &[3, 4, 5]),
+        FailureType::Partition(&[1, 2], &[3, 4, 5]),
         None,
-        (4, true),
-        (4, false),
+        (2, true),
+        None,
     );
 }
 
@@ -183,10 +201,10 @@ fn test_prevote_reboot_majority_followers() {
     // A prevote round will start, but nothing will succeed.
     test_prevote(
         &mut cluster,
-        FailureType::Reboot(&[3, 4, 5]),
+        FailureType::Reboot(&[2, 3, 4, 5]),
         1,
         (1, true),
-        (1, false),
+        None,
     );
 }
 
