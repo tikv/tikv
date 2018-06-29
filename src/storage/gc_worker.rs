@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::engine::{Engine, Error as EngineError, ScanMode, Snapshot, StatisticsSummary};
+use super::engine::{Engine, Error as EngineError, ScanMode, StatisticsSummary};
 use super::metrics::*;
 use super::mvcc::{MvccReader, MvccTxn, MAX_TXN_WRITE_SIZE};
 use super::txn::{GC_BATCH_SIZE, GC_LOG_DELETED_VERSION_THRESHOLD, GC_LOG_FOUND_VERSION_THRESHOLD};
@@ -52,7 +52,7 @@ struct GCRunner<E: Engine> {
     stats: StatisticsSummary,
 }
 
-impl<E: Engine> GCRunner {
+impl<E: Engine> GCRunner<E> {
     pub fn new(engine: E, ratio_threshold: f64) -> GCRunner<E> {
         GCRunner {
             engine,
@@ -210,7 +210,7 @@ impl<E: Engine> GCRunner {
     }
 }
 
-impl<E: Engine> Runnable<GCTask> for GCRunner {
+impl<E: Engine> Runnable<GCTask> for GCRunner<E> {
     fn run(&mut self, task: GCTask) {
         GC_GCTASK_COUNTER.inc();
 
@@ -252,7 +252,7 @@ pub struct GCWorker<E: Engine> {
     worker_scheduler: worker::Scheduler<GCTask>,
 }
 
-impl<E: Engine> GCWorker {
+impl<E: Engine> GCWorker<E> {
     pub fn new(engine: E, ratio_threshold: f64) -> GCWorker<E> {
         let worker = Arc::new(Mutex::new(
             Builder::new("gc-worker")
