@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use tikv::raftstore::store::SeekRegionResult;
+use tikv::storage::Engine;
 use tikv::util::HandyRwLock;
 
 #[test]
