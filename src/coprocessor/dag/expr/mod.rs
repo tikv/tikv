@@ -11,24 +11,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod arithmetic;
+mod builtin_arithmetic;
 mod builtin_cast;
+mod builtin_compare;
 mod builtin_control;
+mod builtin_json;
+mod builtin_math;
 mod builtin_op;
+mod builtin_time;
 mod column;
-mod compare;
 mod constant;
 mod ctx;
-mod fncall;
-mod json;
-mod math;
-mod time;
+mod scalar_function;
 
 pub use self::ctx::*;
 pub use coprocessor::codec::{Error, Result};
 
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::mysql::{charset, types};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::{self, Datum};
 use std::borrow::Cow;
 use std::str;
@@ -39,7 +39,7 @@ use util::codec::number;
 pub enum Expression {
     Constant(Constant),
     ColumnRef(Column),
-    ScalarFn(FnCall),
+    ScalarFn(ScalarFunc),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -56,7 +56,7 @@ pub struct Constant {
 
 /// A single scalar function call
 #[derive(Debug, Clone, PartialEq)]
-pub struct FnCall {
+pub struct ScalarFunc {
     sig: ScalarFuncSig,
     children: Vec<Expression>,
     tp: FieldType,
@@ -256,13 +256,13 @@ impl Expression {
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
             ExprType::ScalarFunc => {
-                FnCall::check_args(expr.get_sig(), expr.get_children().len())?;
+                ScalarFunc::check_args(expr.get_sig(), expr.get_children().len())?;
                 expr.take_children()
                     .into_iter()
                     .map(|child| Expression::build(ctx, child))
                     .collect::<Result<Vec<_>>>()
                     .map(|children| {
-                        Expression::ScalarFn(FnCall {
+                        Expression::ScalarFn(ScalarFunc {
                             sig: expr.get_sig(),
                             children,
                             tp,
@@ -300,7 +300,9 @@ mod test {
     use super::{Error, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
     use coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
     use coprocessor::codec::mysql::json::JsonEncoder;
-    use coprocessor::codec::mysql::{charset, types, Decimal, DecimalEncoder, Duration, Json, Time};
+    use coprocessor::codec::mysql::{
+        charset, types, Decimal, DecimalEncoder, Duration, Json, Time,
+    };
     use coprocessor::codec::{convert, mysql, Datum};
     use std::sync::Arc;
     use std::{i64, u64};
@@ -335,7 +337,7 @@ mod test {
         }
     }
 
-    pub fn fncall_expr(sig: ScalarFuncSig, children: &[Expr]) -> Expr {
+    pub fn scalar_func_expr(sig: ScalarFuncSig, children: &[Expr]) -> Expr {
         let mut expr = Expr::new();
         expr.set_tp(ExprType::ScalarFunc);
         expr.set_sig(sig);
@@ -456,7 +458,7 @@ mod test {
         ];
         for (sig, cols, exp) in cases {
             let col_expr = col_expr(0);
-            let mut ex = fncall_expr(sig, &[col_expr]);
+            let mut ex = scalar_func_expr(sig, &[col_expr]);
             ex.mut_field_type()
                 .set_decimal(convert::UNSPECIFIED_LENGTH as i32);
             ex.mut_field_type()
@@ -481,7 +483,7 @@ mod test {
         ];
         for (flag, cols, exp) in cases {
             let col_expr = col_expr(0);
-            let mut ex = fncall_expr(ScalarFuncSig::CastIntAsInt, &[col_expr]);
+            let mut ex = scalar_func_expr(ScalarFuncSig::CastIntAsInt, &[col_expr]);
             if flag.is_some() {
                 ex.mut_field_type().set_flag(flag.unwrap() as u32);
             }

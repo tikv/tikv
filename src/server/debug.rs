@@ -32,9 +32,11 @@ use rocksdb::{Kv, SeekKey, Writable, WriteBatch, WriteOptions, DB};
 use raft::{self, quorum, RawNode};
 use raftstore::store::engine::{IterOption, Mutable};
 use raftstore::store::util as raftstore_util;
+use raftstore::store::{
+    init_apply_state, init_raft_state, write_initial_apply_state, write_initial_raft_state,
+    write_peer_state,
+};
 use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
-use raftstore::store::{init_apply_state, init_raft_state, write_initial_apply_state,
-                       write_initial_raft_state, write_peer_state};
 use storage::mvcc::{Lock, LockType, Write, WriteType};
 use storage::types::{truncate_ts, Key};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -189,7 +191,8 @@ impl Debugger {
         cfs: Vec<T>,
     ) -> Result<Vec<(T, usize)>> {
         let region_state_key = keys::region_state_key(region_id);
-        match self.engines
+        match self
+            .engines
             .kv_engine
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
         {
@@ -619,9 +622,7 @@ impl Debugger {
         let mut num_entries = 0;
         let mut mvcc_properties = MvccProperties::new();
         let collection = box_try!(raftstore_util::get_region_properties_cf(
-            db,
-            CF_WRITE,
-            region
+            db, CF_WRITE, region
         ));
         for (_, v) in &*collection {
             num_entries += v.num_entries();
@@ -1057,7 +1058,8 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch)
     let id = region.get_id();
     let key = keys::region_state_key(id);
 
-    let region_state = db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
+    let region_state = db
+        .get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
         .map_err(|e| box_err!(e))
         .and_then(|s| s.ok_or_else(|| Error::Other("Can't find RegionLocalState".into())))?;
     if region_state.get_state() == PeerState::Tombstone {
@@ -1785,10 +1787,11 @@ mod tests {
         db.write(wb).unwrap();
         // Check result.
         for (cf, k, _, expect) in kv {
-            let data = db.get_cf(
-                get_cf_handle(&db, cf).unwrap(),
-                &keys::data_key(k.encoded()),
-            ).unwrap();
+            let data =
+                db.get_cf(
+                    get_cf_handle(&db, cf).unwrap(),
+                    &keys::data_key(k.encoded()),
+                ).unwrap();
             match expect {
                 Expect::Keep => assert!(data.is_some()),
                 Expect::Remove => assert!(data.is_none()),

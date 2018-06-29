@@ -22,8 +22,8 @@ pub use self::client::RpcClient;
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
 pub use self::pd::{Runner as PdRunner, Task as PdTask};
-pub use self::util::RECONNECT_INTERVAL_SEC;
 pub use self::util::validate_endpoints;
+pub use self::util::RECONNECT_INTERVAL_SEC;
 use raftstore::store::util::RegionApproximateStat;
 
 use std::ops::Deref;
@@ -47,7 +47,7 @@ pub struct RegionStat {
     pub last_report_ts: u64,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RegionInfo {
     pub region: metapb::Region,
     pub leader: Option<metapb::Peer>,

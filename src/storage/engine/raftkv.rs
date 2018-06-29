@@ -19,19 +19,24 @@ use std::time::Duration;
 
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
-use kvproto::raft_cmdpb::{CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest,
-                          RaftCmdResponse, RaftRequestHeader, Request, Response};
+use kvproto::raft_cmdpb::{
+    CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
+    RaftRequestHeader, Request, Response,
+};
 use protobuf::RepeatedField;
 
 use super::metrics::*;
-use super::{BatchCallback, Callback, CbContext, Cursor, Engine, Iterator as EngineIterator,
-            Modify, ScanMode, Snapshot};
+use super::{
+    BatchCallback, Callback, CbContext, Cursor, Engine, Iterator as EngineIterator, Modify,
+    ScanMode, Snapshot,
+};
 use raftstore::errors::Error as RaftServerError;
 use raftstore::store::engine::IterOption;
 use raftstore::store::engine::Peekable;
 use raftstore::store::{self, Callback as StoreCallback, ReadResponse, WriteResponse};
-use raftstore::store::{Msg as StoreMsg, RegionIterator, RegionSnapshot, SeekRegionFilter,
-                       SeekRegionResult};
+use raftstore::store::{
+    Msg as StoreMsg, RegionIterator, RegionSnapshot, SeekRegionFilter, SeekRegionResult,
+};
 use rocksdb::TablePropertiesCollection;
 use server::transport::RaftStoreRouter;
 use storage::{self, engine, CfName, Key, Value, CF_DEFAULT};
@@ -294,6 +299,9 @@ impl<S: RaftStoreRouter> Debug for RaftKv<S> {
 }
 
 impl<S: RaftStoreRouter> Engine for RaftKv<S> {
+    type Iter = RegionIterator;
+    type Snap = RegionSnapshot;
+
     fn async_write(
         &self,
         ctx: &Context,
@@ -366,7 +374,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         })
     }
 
-    fn async_snapshot(&self, ctx: &Context, cb: Callback<Box<Snapshot>>) -> engine::Result<()> {
+    fn async_snapshot(&self, ctx: &Context, cb: Callback<Self::Snap>) -> engine::Result<()> {
         fail_point!("raftkv_async_snapshot");
         let mut req = Request::new();
         req.set_cmd_type(CmdType::Snap);
@@ -382,7 +390,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             Ok(CmdRes::Snap(s)) => {
                 req_timer.observe_duration();
                 ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
-                cb((cb_ctx, Ok(box s)))
+                cb((cb_ctx, Ok(s)))
             }
             Err(e) => {
                 let status_kind = get_status_kind_from_engine_error(&e);
@@ -399,7 +407,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
     fn async_batch_snapshot(
         &self,
         batch: Vec<Context>,
-        on_finished: BatchCallback<Box<Snapshot>>,
+        on_finished: BatchCallback<Self::Snap>,
     ) -> engine::Result<()> {
         fail_point!("raftkv_async_batch_snapshot");
         if batch.is_empty() {
@@ -427,7 +435,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                     }
                     Some((cb_ctx, Ok(CmdRes::Snap(s)))) => {
                         ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
-                        snapshots.push(Some((cb_ctx, Ok(box s as Box<Snapshot>))));
+                        snapshots.push(Some((cb_ctx, Ok(s))));
                     }
                     Some((cb_ctx, Err(e))) => {
                         let status_kind = get_status_kind_from_engine_error(&e);
@@ -488,13 +496,11 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             )
         })
     }
-
-    fn clone_box(&self) -> Box<Engine> {
-        Box::new(RaftKv::new(self.router.clone()))
-    }
 }
 
 impl Snapshot for RegionSnapshot {
+    type Iter = RegionIterator;
+
     fn get(&self, key: &Key) -> engine::Result<Option<Value>> {
         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
             "injected error for get"
@@ -511,32 +517,30 @@ impl Snapshot for RegionSnapshot {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> engine::Result<Cursor> {
+    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> engine::Result<Cursor<Self::Iter>> {
         fail_point!("raftkv_snapshot_iter", |_| Err(box_err!(
             "injected error for iter"
         )));
-        Ok(Cursor::new(
-            Box::new(RegionSnapshot::iter(self, iter_opt)),
-            mode,
-        ))
+        Ok(Cursor::new(RegionSnapshot::iter(self, iter_opt), mode))
     }
 
-    fn iter_cf(&self, cf: CfName, iter_opt: IterOption, mode: ScanMode) -> engine::Result<Cursor> {
+    fn iter_cf(
+        &self,
+        cf: CfName,
+        iter_opt: IterOption,
+        mode: ScanMode,
+    ) -> engine::Result<Cursor<Self::Iter>> {
         fail_point!("raftkv_snapshot_iter_cf", |_| Err(box_err!(
             "injected error for iter_cf"
         )));
         Ok(Cursor::new(
-            Box::new(RegionSnapshot::iter_cf(self, cf, iter_opt)?),
+            RegionSnapshot::iter_cf(self, cf, iter_opt)?,
             mode,
         ))
     }
 
     fn get_properties_cf(&self, cf: CfName) -> engine::Result<TablePropertiesCollection> {
         RegionSnapshot::get_properties_cf(self, cf).map_err(|e| e.into())
-    }
-
-    fn clone(&self) -> Box<Snapshot> {
-        Box::new(RegionSnapshot::clone(self))
     }
 }
 
@@ -575,15 +579,15 @@ impl EngineIterator for RegionIterator {
         RegionIterator::valid(self)
     }
 
+    fn validate_key(&self, key: &Key) -> engine::Result<()> {
+        self.should_seekable(key.encoded()).map_err(From::from)
+    }
+
     fn key(&self) -> &[u8] {
         RegionIterator::key(self)
     }
 
     fn value(&self) -> &[u8] {
         RegionIterator::value(self)
-    }
-
-    fn validate_key(&self, key: &Key) -> engine::Result<()> {
-        self.should_seekable(key.encoded()).map_err(From::from)
     }
 }
