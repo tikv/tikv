@@ -250,7 +250,7 @@ fn test_isolated_follower_leader_does_not_change<T: Simulator>(cluster: &mut Clu
     cluster.must_put(b"k1", b"v1");
     // Peer1 is still the leader.
     let leader = cluster.leader_of_region(1);
-    assert_eq!(leader, Some(new_peer(1,1)));
+    assert_eq!(leader, Some(new_peer(1, 1)));
     // And the term is not changed.
     let resp = cluster
         .call_command(region_status, Duration::from_secs(5))
