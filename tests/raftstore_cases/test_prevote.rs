@@ -1,5 +1,19 @@
+// Copyright 2016 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::sync::{atomic::AtomicBool, mpsc, Arc};
 use std::time::Duration;
+use std::thread;
 
 use super::cluster::{Cluster, Simulator};
 use super::server::new_server_cluster;
@@ -70,7 +84,7 @@ fn test_prevote<T: Simulator>(
     };
 
     // Once we see a response on the wire we know a prevote round is happening.
-    let received = rx.recv_timeout(Duration::from_secs(3));
+    let received = rx.recv_timeout(Duration::from_secs(5));
     assert_eq!(
         received.is_ok(),
         detect_during_failure.1,
@@ -81,8 +95,6 @@ fn test_prevote<T: Simulator>(
         cluster.must_transfer_leader(1, new_peer(leader_id, 1));
     }
 
-    // Prepare to listen.
-    let rx = attach_prevote_notifiers(cluster, detect_during_recovery.0);
 
     // Let the cluster recover.
     match failure_type {
@@ -95,8 +107,11 @@ fn test_prevote<T: Simulator>(
         }
     };
 
+    // Prepare to listen.
+    let rx = attach_prevote_notifiers(cluster, detect_during_recovery.0);
+
     // Once we see a response on the wire we know a prevote round is happening.
-    let received = rx.recv_timeout(Duration::from_secs(3));
+    let received = rx.recv_timeout(Duration::from_secs(5));
 
     cluster.must_put(b"k3", b"v3");
     assert_eq!(cluster.must_get(b"k1"), Some(b"v1".to_vec()));
@@ -213,4 +228,21 @@ fn test_pair_isolated<T: Simulator>(cluster: &mut Cluster<T>) {
 fn test_server_pair_isolated() {
     let mut cluster = new_server_cluster(0, 5);
     test_pair_isolated(&mut cluster);
+}
+
+fn test_isolated_follower_leader_does_not_change<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.partition(vec![1,2,3,4], vec![5]);
+    cluster.must_put(b"k1", b"v1");
+    let election_timeout = cluster.cfg.raft_store.raft_base_tick_interval.0 * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+    thread::sleep(election_timeout * 2);
+    cluster.clear_send_filters();
+    cluster.leader_of_region(1);
+}
+
+#[test]
+fn test_server_isolated_follower_leader_does_not_change() {
+    let mut cluster = new_server_cluster(0, 5);
+    test_isolated_follower_leader_does_not_change(&mut cluster);
 }
