@@ -500,13 +500,9 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     assert!(header0.get_error().has_region_not_found());
 
     // at least wait for a round of election timeout and check again
-    let term = find_leader_response_header(cluster, r1, new_peer(1, 1)).get_current_term();
-    let mut current_term = term;
-    while current_term < term + 2 {
-        sleep_ms(10);
-        let header2 = find_leader_response_header(cluster, r1, new_peer(1, 1));
-        current_term = header2.get_current_term();
-    }
+    let base_tick = cluster.cfg.raft_store.raft_base_tick_interval.0;
+    let election_timeout = base_tick * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+    thread::sleep(election_timeout * 2);
 
     let header1 = find_leader_response_header(cluster, r1, new_peer(2, 2));
     assert!(header1.get_error().has_region_not_found());
