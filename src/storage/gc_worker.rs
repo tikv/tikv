@@ -62,7 +62,7 @@ impl<E: Engine> GCRunner {
         }
     }
 
-    fn get_snapshot(&self, ctx: &mut Context) -> Result<Box<Snapshot>> {
+    fn get_snapshot(&self, ctx: &mut Context) -> Result<E::Snap> {
         let timeout = Duration::from_secs(GC_SNAPSHOT_TIMEOUT_SECS);
         match wait_op!(|cb| self.engine.async_snapshot(ctx, cb), timeout) {
             Some((cb_ctx, Ok(snapshot))) => {
@@ -210,7 +210,7 @@ impl<E: Engine> GCRunner {
     }
 }
 
-impl Runnable<GCTask> for GCRunner {
+impl<E: Engine> Runnable<GCTask> for GCRunner {
     fn run(&mut self, task: GCTask) {
         GC_GCTASK_COUNTER.inc();
 
