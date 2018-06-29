@@ -32,7 +32,7 @@ use std::io::Read;
 use std::iter::FromIterator;
 use std::sync::Arc;
 use std::thread;
-use std::{process, str, u16, u64};
+use std::{process, str, u64};
 
 use clap::{App, Arg, ArgMatches, SubCommand};
 use futures::{future, stream, Future, Stream};
@@ -107,8 +107,8 @@ fn new_debug_executor(
         (Some(remote), None) => {
             let env = Arc::new(Environment::new(1));
             let cb = ChannelBuilder::new(env)
-                .max_receive_message_len(2 << 30) // 1G.
-                .max_send_message_len(2 << 30);
+                .max_receive_message_len(1 << 30) // 1G.
+                .max_send_message_len(1 << 30);
 
             let channel = mgr.connect(cb, remote);
             let client = DebugClient::new(channel);
@@ -927,17 +927,6 @@ fn main() {
                 .help("encode a key in escaped format"),
             )
         .arg(
-            Arg::with_name("keys-logical-middle")
-                .conflicts_with_all(&["hex-to-escaped", "escaped-to-hex"])
-                .long("keys-logical-middle")
-                .takes_value(true)
-                .multiple(true)
-                .use_delimiter(true)
-                .require_delimiter(true)
-                .value_delimiter(",")
-                .help("get the logical middle position of 2 keys"),
-            )
-        .arg(
             Arg::with_name("pd")
                 .long("pd")
                 .takes_value(true)
@@ -1453,11 +1442,6 @@ fn main() {
     } else if let Some(decoded) = matches.value_of("encode") {
         println!("{}", Key::from_raw(&unescape(decoded)));
         return;
-    } else if let Some(mut keys) = matches.values_of("keys-logical-middle") {
-        let start = unescape(keys.next().unwrap());
-        let end = unescape(keys.next().unwrap());
-        println!("{}", escape(&keys_logical_middle(start, end)));
-        return;
     }
 
     let mgr = new_security_mgr(&matches);
@@ -1818,72 +1802,5 @@ fn compact_whole_cluster(
 
     for h in handles {
         h.join().unwrap();
-    }
-}
-
-fn keys_logical_middle(mut start: Vec<u8>, mut end: Vec<u8>) -> Vec<u8> {
-    if end.is_empty() {
-        end = vec![255; start.len()];
-    } else if start.len() < end.len() {
-        let pad = vec![0; end.len() - start.len()];
-        start.extend_from_slice(pad.as_slice())
-    } else if end.len() < start.len() {
-        let pad = vec![0; start.len() - end.len()];
-        end.extend_from_slice(pad.as_slice())
-    }
-    assert!(start < end);
-
-    let mut i = 0;
-    let mut end_fill_256 = false;
-    let mut target = Vec::new();
-    while i < start.len() {
-        let start_number = u16::from(start[i]);
-        let mut end_number = u16::from(end[i]);
-        if end_fill_256 {
-            end_number += 256;
-            end_fill_256 = false;
-        }
-
-        let mut digit = if (start_number + end_number) % 2 == 0 {
-            (start_number + end_number) / 2
-        } else {
-            end_fill_256 = true;
-            (start_number + end_number - 1) / 2
-        };
-
-        if digit > 255 {
-            for j in (0..i).rev() {
-                if target[j] < 255 {
-                    target[j] += 1;
-                    break;
-                }
-                assert!(j != 0);
-                target[j] = 0;
-            }
-            digit -= 256;
-        }
-        target.push(digit as u8);
-        i += 1;
-    }
-    target
-}
-
-#[test]
-fn test_keys_logical_middle() {
-    let cases = vec![
-        (b"ab".to_vec(), b"ac".to_vec(), b"ab".to_vec()),
-        (b"ab".to_vec(), b"ad".to_vec(), b"ac".to_vec()),
-        (
-            b"ab".to_vec(),
-            b"abccc".to_vec(),
-            vec![b'a', b'b', 49, 177, 177],
-        ),
-        (vec![1, 1, 1], vec![2, 1, 1], vec![1, 129, 1]),
-        (vec![1, 200, 1], vec![2, 200, 1], vec![2, 72, 1]),
-        (vec![1, 255, 200], vec![2, 1, 200], vec![2, 0, 200]),
-    ];
-    for (left, right, expected) in cases.into_iter() {
-        let got = keys_logical_middle(left, right);
-        assert_eq!(got, expected);
     }
 }
