@@ -1844,12 +1844,11 @@ fn keys_logical_middle(mut start: Vec<u8>, mut end: Vec<u8>) -> Vec<u8> {
             end_fill_256 = false;
         }
 
-        let mut digit = match (start_number & 1, end_number & 1) {
-            (1, 1) | (0, 0) => (start_number + end_number) / 2,
-            _ => {
-                end_fill_256 = true;
-                (start_number + end_number - 1) / 2
-            }
+        let mut digit = if (start_number + end_number) % 2 == 0 {
+            (start_number + end_number) / 2
+        } else {
+            end_fill_256 = true;
+            (start_number + end_number - 1) / 2
         };
 
         if digit > 255 {
