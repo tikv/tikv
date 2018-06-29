@@ -1544,7 +1544,7 @@ impl Decimal {
     fn from_bytes_with_word_buf(s: &[u8], word_buf_len: u8) -> Result<Res<Decimal>> {
         // trim whitespace
         let mut bs = match s.iter().position(|c| !c.is_ascii_whitespace()) {
-            //TODO:return badnumber
+            //TODO: return badnumber
             None => return Err(box_err!("\"{}\" is empty", escape(s))),
             Some(pos) => &s[pos..],
         };
@@ -1567,7 +1567,7 @@ impl Decimal {
             0
         };
         if int_cnt + frac_cnt == 0 {
-            // TODO:bad number
+            // TODO: bad number
             return Err(box_err!("\"{}\" is invalid number", escape(s)));
         }
         let int_word_cnt = word_cnt!(int_cnt);
