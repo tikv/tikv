@@ -26,7 +26,10 @@ use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::Entry;
-use rocksdb::{Kv, SeekKey, Writable, WriteBatch, WriteOptions, DB};
+use rocksdb::{
+    CompactOptions, DBBottommostLevelCompaction, Kv, SeekKey, Writable, WriteBatch, WriteOptions,
+    DB,
+};
 
 use raft::{self, RawNode};
 use raftstore::store::engine::{IterOption, Mutable};
@@ -44,7 +47,7 @@ use util::collections::HashSet;
 use util::config::ReadableSize;
 use util::escape;
 use util::properties::MvccProperties;
-use util::rocksdb::{compact_range, get_cf_handle};
+use util::rocksdb::get_cf_handle;
 use util::worker::Worker;
 
 pub type Result<T> = result::Result<T, Error>;
@@ -240,6 +243,7 @@ impl Debugger {
         start: &[u8],
         end: &[u8],
         threads: u32,
+        bottommost: DBBottommostLevelCompaction,
     ) -> Result<()> {
         validate_db_and_cf(db, cf)?;
         let db = self.get_db_from_type(db)?;
@@ -247,7 +251,11 @@ impl Debugger {
         let start = if start.is_empty() { None } else { Some(start) };
         let end = if end.is_empty() { None } else { Some(end) };
         info!("Debugger starts manual comapct on {:?}.{}", db, cf);
-        compact_range(db, handle, start, end, false, threads);
+        let mut opts = CompactOptions::new();
+        opts.set_max_subcompactions(threads as i32);
+        opts.set_exclusive_manual_compaction(false);
+        opts.set_bottommost_level_compaction(bottommost);
+        db.compact_range_cf_opt(handle, &opts, start, end);
         info!("Debugger finishs manual comapct on {:?}.{}", db, cf);
         Ok(())
     }

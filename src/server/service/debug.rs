@@ -24,6 +24,7 @@ use kvproto::raft_cmdpb::{
     StatusCmdType, StatusRequest,
 };
 use protobuf::text_format::print_to_string;
+use rocksdb::DBBottommostLevelCompaction;
 
 use raftstore::store::msg::Callback;
 use raftstore::store::Engines;
@@ -228,6 +229,15 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
 
     fn compact(&self, ctx: RpcContext, req: CompactRequest, sink: UnarySink<CompactResponse>) {
         let debugger = self.debugger.clone();
+
+        let bottommost = match req.get_bottommost_level_compaction() {
+            BottommostLevelCompaction::Skip => DBBottommostLevelCompaction::Skip,
+            BottommostLevelCompaction::Force => DBBottommostLevelCompaction::Force,
+            BottommostLevelCompaction::IfHaveCompactionFilter => {
+                DBBottommostLevelCompaction::IfHaveCompactionFilter
+            }
+        };
+
         let f = self.pool.spawn_fn(move || {
             debugger
                 .compact(
@@ -236,6 +246,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
                     req.get_from_key(),
                     req.get_to_key(),
                     req.get_threads(),
+                    bottommost,
                 )
                 .map(|_| CompactResponse::default())
         });
