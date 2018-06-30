@@ -5,7 +5,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 ## [2.1.0-beta]
 ### Features
 * Upgrade Rust to the `nightly-2018-06-14` version
-* Enable `Raft PreVote` to avoid leader reelection generated when network recovers after network isolation
+* Provide a `Raft PreVote` configuration to avoid leader reelection generated when network recovers after network isolation
 * Add a metric to display the number of files and `ingest` related information in each layer of RocksDB
 * Print `key` with too many versions when GC works
 ### Performance
