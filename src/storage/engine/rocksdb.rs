@@ -17,7 +17,6 @@ use super::{
 };
 use kvproto::kvrpcpb::Context;
 use raftstore::store::engine::{IterOption, Peekable};
-use raftstore::store::{SeekRegionFilter, SeekRegionResult};
 use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::Deref;
@@ -212,15 +211,6 @@ impl Engine for RocksEngine {
                 .schedule(Task::SnapshotBatch(batch.len(), on_finished))
         );
         Ok(())
-    }
-
-    fn seek_region(
-        &self,
-        _from_key: &[u8],
-        _filter: SeekRegionFilter,
-        _limit: u32,
-    ) -> Result<SeekRegionResult> {
-        unimplemented!();
     }
 }
 

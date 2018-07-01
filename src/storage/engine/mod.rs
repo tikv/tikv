@@ -120,14 +120,6 @@ pub trait Engine: Send + Debug + Clone + Sized + 'static {
     fn delete_cf(&self, ctx: &Context, cf: CfName, key: Key) -> Result<()> {
         self.write(ctx, vec![Modify::Delete(cf, key)])
     }
-
-    /// Find next local peer that satisfies the given predicate.
-    fn seek_region(
-        &self,
-        from: &[u8],
-        filter: SeekRegionFilter,
-        limit: u32,
-    ) -> Result<SeekRegionResult>;
 }
 
 pub trait Snapshot: Send + Debug + Clone + Sized {
@@ -167,6 +159,16 @@ pub trait Iterator: Send + Sized {
 
     fn key(&self) -> &[u8];
     fn value(&self) -> &[u8];
+}
+
+pub trait RegionInfoSource: Send + Sized + Clone {
+    /// Find next local peer that satisfies the given predicate.
+    fn seek_region(
+        &self,
+        from: &[u8],
+        filter: SeekRegionFilter,
+        limit: u32,
+    ) -> Result<SeekRegionResult>;
 }
 
 macro_rules! near_loop {

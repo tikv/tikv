@@ -28,7 +28,7 @@ use protobuf::RepeatedField;
 use super::metrics::*;
 use super::{
     BatchCallback, Callback, CbContext, Cursor, Engine, Iterator as EngineIterator, Modify,
-    ScanMode, Snapshot,
+    RegionInfoSource, ScanMode, Snapshot,
 };
 use raftstore::errors::Error as RaftServerError;
 use raftstore::store::engine::IterOption;
@@ -466,7 +466,9 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 e.into()
             })
     }
+}
 
+impl<S: RaftStoreRouter> RegionInfoSource for RaftKv<S> {
     fn seek_region(
         &self,
         from_key: &[u8],
