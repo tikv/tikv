@@ -54,10 +54,7 @@ fn test_seek_region() {
     regions.push(cluster.get_region(b"k9"));
 
     // Wait for raftstore to update regions
-    let pd_client = Arc::clone(&cluster.pd_client);
-    while !pd_client.get_down_peers().is_empty() {
-        thread::sleep(Duration::from_millis(100));
-    }
+    thread::sleep(Duration::from_secs(2));
 
     for node_id in cluster.get_node_ids() {
         let engine = cluster.sim.rl().storages[&node_id].clone();
