@@ -89,6 +89,8 @@ extern crate url;
 extern crate utime;
 extern crate uuid;
 extern crate zipf;
+#[macro_use]
+extern crate derive_more;
 
 #[macro_use]
 pub mod util;

@@ -74,6 +74,8 @@ impl RaftReadyMetrics {
 pub struct RaftMessageMetrics {
     pub append: u64,
     pub append_resp: u64,
+    pub prevote: u64,
+    pub prevote_resp: u64,
     pub vote: u64,
     pub vote_resp: u64,
     pub snapshot: u64,
@@ -98,6 +100,18 @@ impl RaftMessageMetrics {
                 .with_label_values(&["append_resp"])
                 .inc_by(self.append_resp as i64);
             self.append_resp = 0;
+        }
+        if self.prevote > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["prevote"])
+                .inc_by(self.prevote as i64);
+            self.prevote = 0;
+        }
+        if self.prevote_resp > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["prevote_resp"])
+                .inc_by(self.prevote_resp as i64);
+            self.prevote_resp = 0;
         }
         if self.vote > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC

@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "2.1.0-alpha.1"
+version = "2.1.0-beta"
 keywords = ["KV", "distributed-systems", "raft"]
 build = "build.rs"
 
@@ -78,6 +78,7 @@ grpcio = { version = "0.3", features = [ "secure" ] }
 raft = "0.3"
 crossbeam-channel = { version = "0.1", features = [ "nightly" ] }
 fxhash = "0.2"
+derive_more = "0.11.0"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.4"
