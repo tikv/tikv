@@ -716,8 +716,29 @@ mod test {
 
     use coprocessor::codec::mysql::{Duration as MyDuration, MAX_FSP, UN_SPECIFIED_FSP};
 
-    const MIN_OFFSET: i64 = -60 * 24 + 1;
-    const MAX_OFFSET: i64 = 60 * 24;
+    fn for_each_tz<F: FnMut(Tz, i64)>(mut f: F) {
+        const MIN_OFFSET: i64 = -60 * 24 + 1;
+        const MAX_OFFSET: i64 = 60 * 24;
+
+        // test some offset
+        for mut offset in MIN_OFFSET..MAX_OFFSET {
+            offset *= 60;
+            let tz = Tz::from_offset(offset).unwrap();
+            f(tz, offset)
+        }
+
+        // test some time zone name without DST
+        for (name, offset) in vec![
+            ("Etc/GMT+11", -39600),
+            ("Etc/GMT0", 0),
+            ("Etc/GMT-5", 18000),
+            ("UTC", 0),
+            ("Universal", 0),
+        ] {
+            let tz = Tz::from_tz_name(name).unwrap();
+            f(tz, offset)
+        }
+    }
 
     #[test]
     fn test_parse_datetime() {
@@ -768,21 +789,19 @@ mod test {
             let utc_t = Time::parse_utc_datetime(input, fsp).unwrap();
             assert_eq!(format!("{}", utc_t), exp);
 
-            for mut offset in MIN_OFFSET..MAX_OFFSET {
-                offset *= 60;
-                let tz = Tz::from_offset(offset).unwrap();
+            for_each_tz(move |tz, offset| {
                 let t = Time::parse_datetime(input, fsp, &tz).unwrap();
                 if utc_t.is_zero() {
                     assert_eq!(t, utc_t);
                 } else {
                     let exp_t = Time::new(
-                        utc_t.time - Duration::seconds(i64::from(offset)),
+                        utc_t.time - Duration::seconds(offset),
                         utc_t.tp,
                         utc_t.fsp as i8,
                     ).unwrap();
                     assert_eq!(exp_t, t);
                 }
-            }
+            });
         }
 
         let fail_tbl = vec![
@@ -812,9 +831,7 @@ mod test {
             ("2000-06-01 00:00:00.999999", MAX_FSP),
         ];
         for (s, fsp) in cases {
-            for mut offset in MIN_OFFSET..MAX_OFFSET {
-                offset *= 60;
-                let tz = Tz::from_offset(offset).unwrap();
+            for_each_tz(move |tz, offset| {
                 let t = Time::parse_datetime(s, fsp, &tz).unwrap();
                 let packed = t.to_packed_u64();
                 let reverted_datetime =
@@ -826,10 +843,10 @@ mod test {
                     Time::from_packed_u64(packed, mysql::types::TIMESTAMP, fsp, &tz).unwrap();
                 assert_eq!(
                     reverted_timestamp.time,
-                    reverted_datetime.time + Duration::seconds(i64::from(offset))
+                    reverted_datetime.time + Duration::seconds(offset)
                 );
                 assert_eq!(reverted_timestamp.to_packed_u64(), packed);
-            }
+            })
         }
     }
 
@@ -873,9 +890,7 @@ mod test {
         ];
 
         for (t_str, fsp, datetime_dec, date_dec) in cases {
-            for mut offset in MIN_OFFSET..MAX_OFFSET {
-                offset *= 60;
-                let tz = Tz::from_offset(offset).unwrap();
+            for_each_tz(move |tz, _offset| {
                 let mut t = Time::parse_datetime(t_str, fsp, &tz).unwrap();
                 let mut res = format!("{}", t.to_decimal().unwrap());
                 assert_eq!(res, datetime_dec);
@@ -884,7 +899,7 @@ mod test {
                 t.tp = mysql::types::DATE;
                 res = format!("{}", t.to_decimal().unwrap());
                 assert_eq!(res, date_dec);
-            }
+            });
         }
     }
 
@@ -915,13 +930,11 @@ mod test {
         ];
 
         for (l, r, exp) in cases {
-            for mut offset in MIN_OFFSET..MAX_OFFSET {
-                offset *= 60;
-                let tz = Tz::from_offset(offset).unwrap();
+            for_each_tz(move |tz, _offset| {
                 let l_t = Time::parse_datetime(l, MAX_FSP, &tz).unwrap();
                 let r_t = Time::parse_datetime(r, MAX_FSP, &tz).unwrap();
                 assert_eq!(exp, l_t.cmp(&r_t));
-            }
+            });
         }
     }
 
@@ -1029,9 +1042,7 @@ mod test {
                 input, exp, utc_t, expect
             );
 
-            for mut offset in MIN_OFFSET..MAX_OFFSET {
-                offset *= 60;
-                let tz = Tz::from_offset(offset).unwrap();
+            for_each_tz(move |tz, offset| {
                 let mut t = Time::parse_datetime(input, UN_SPECIFIED_FSP, &tz).unwrap();
                 t.round_frac(fsp).unwrap();
                 let expect = Time::parse_datetime(exp, UN_SPECIFIED_FSP, &tz).unwrap();
@@ -1040,7 +1051,7 @@ mod test {
                     "tz:{:?},input:{:?}, exp:{:?}, utc_t:{:?}, expect:{:?}",
                     offset, input, exp, t, expect
                 );
-            }
+            });
         }
     }
 
