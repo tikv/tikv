@@ -682,14 +682,7 @@ impl DebugExecutor for DebugClient {
         for prop in resp.get_props() {
             println!("{}: {}", prop.get_name(), prop.get_value());
         }
-        println!(
-            "default_cf_middle_key: {}",
-            escape(resp.get_default_cf_middle_key())
-        );
-        println!(
-            "write_cf_middle_key: {}",
-            escape(resp.get_write_cf_middle_key())
-        );
+        println!("middle_key: {}", escape(resp.get_middle_key()));
     }
 }
 
@@ -852,14 +845,7 @@ impl DebugExecutor for Debugger {
         for prop in props.get_props() {
             println!("{}: {}", prop.get_name(), prop.get_value());
         }
-        println!(
-            "default_cf_middle_key: {}",
-            escape(props.get_default_cf_middle_key())
-        );
-        println!(
-            "write_cf_middle_key: {}",
-            escape(props.get_write_cf_middle_key())
-        );
+        println!("middle_key: {}", escape(props.get_middle_key()));
     }
 }
 
