@@ -214,7 +214,9 @@ mod test {
         ];
 
         // for ceil decimal to int.
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(
+            EvalConfig::new(None, 0, FLAG_IGNORE_TRUNCATE).unwrap(),
+        ));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
             let mut op =
@@ -282,7 +284,9 @@ mod test {
             ),
         ];
         // for ceil decimal to int.
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(
+            EvalConfig::new(None, 0, FLAG_IGNORE_TRUNCATE).unwrap(),
+        ));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
             let mut op =

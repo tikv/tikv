@@ -436,7 +436,7 @@ mod test {
             ("123.e", "123."),
         ];
 
-        let cfg = EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
+        let cfg = EvalConfig::new(None, 0, FLAG_IGNORE_TRUNCATE).unwrap();
         let mut ctx = EvalContext::new(Arc::new(cfg));
         for (i, o) in cases {
             assert_eq!(super::get_valid_float_prefix(&mut ctx, i).unwrap(), o);

@@ -321,7 +321,7 @@ mod test {
     #[test]
     fn test_sum_as_f64() {
         let mut sum = Sum { res: None };
-        let cfg = EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
+        let cfg = EvalConfig::new(None, 0, FLAG_IGNORE_TRUNCATE).unwrap();
         let mut ctx = EvalContext::new(Arc::new(cfg));
         let data = vec![
             Datum::Bytes(b"123.09xxx".to_vec()),

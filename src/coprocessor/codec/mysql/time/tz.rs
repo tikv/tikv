@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::str::FromStr;
+
 use chrono::{FixedOffset, LocalResult, NaiveDate, NaiveDateTime, Offset, TimeZone};
 use chrono_tz;
 
@@ -18,6 +20,16 @@ use chrono_tz;
 pub enum Tz {
     Offset(FixedOffset),
     Name(chrono_tz::Tz),
+}
+
+impl Tz {
+    pub fn from_offset(secs: i64) -> Option<Self> {
+        FixedOffset::east_opt(secs as i32).map(Tz::Offset)
+    }
+
+    pub fn from_tz_name(name: &str) -> Option<Self> {
+        chrono_tz::Tz::from_str(name).ok().map(Tz::Name)
+    }
 }
 
 impl TimeZone for Tz {

@@ -21,7 +21,7 @@ use std::io::Write;
 use std::{mem, str};
 
 use byteorder::WriteBytesExt;
-use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
 
 use util::codec::number::{self, NumberEncoder};
 use util::codec::BytesSlice;
@@ -32,6 +32,8 @@ use coprocessor::codec::{Error, Result, TEN_POW};
 
 use self::extension::*;
 use self::weekmode::WeekMode;
+
+pub use self::tz::Tz;
 
 const ZERO_DATETIME_STR: &str = "0000-00-00 00:00:00";
 const ZERO_DATE_STR: &str = "0000-00-00";
@@ -59,12 +61,12 @@ const MONTH_NAMES_ABBR: &[&str] = &[
 ];
 
 #[inline]
-fn zero_time(tz: &FixedOffset) -> DateTime<FixedOffset> {
+fn zero_time(tz: &Tz) -> DateTime<Tz> {
     tz.timestamp(ZERO_TIMESTAMP, 0)
 }
 
 #[inline]
-fn zero_datetime(tz: &FixedOffset) -> Time {
+fn zero_datetime(tz: &Tz) -> Time {
     Time::new(zero_time(tz), mysql::types::DATETIME, mysql::DEFAULT_FSP).unwrap()
 }
 
@@ -136,13 +138,13 @@ fn split_ymd_hms(mut s: &[u8]) -> Result<(i32, u32, u32, u32, u32, u32)> {
 #[derive(Clone, Debug)]
 pub struct Time {
     // TimeZone should be loaded from request context.
-    time: DateTime<FixedOffset>,
+    time: DateTime<Tz>,
     tp: u8,
     fsp: u8,
 }
 
 impl Time {
-    pub fn new(time: DateTime<FixedOffset>, tp: u8, fsp: i8) -> Result<Time> {
+    pub fn new(time: DateTime<Tz>, tp: u8, fsp: i8) -> Result<Time> {
         Ok(Time {
             time,
             tp,
@@ -228,10 +230,10 @@ impl Time {
     }
 
     pub fn parse_utc_datetime(s: &str, fsp: i8) -> Result<Time> {
-        Time::parse_datetime(s, fsp, &FixedOffset::east(0))
+        Time::parse_datetime(s, fsp, &Tz::from_offset(0).unwrap())
     }
 
-    pub fn parse_datetime(s: &str, fsp: i8, tz: &FixedOffset) -> Result<Time> {
+    pub fn parse_datetime(s: &str, fsp: i8, tz: &Tz) -> Result<Time> {
         let fsp = mysql::check_fsp(fsp)?;
         let mut frac_str = "";
         let mut need_adjust = false;
@@ -315,7 +317,7 @@ impl Time {
     /// Get time from packed u64. When `tp` is `TIMESTAMP`, the packed time should
     /// be a UTC time; otherwise the packed time should be in the same timezone as `tz`
     /// specified.
-    pub fn from_packed_u64(u: u64, tp: u8, fsp: i8, tz: &FixedOffset) -> Result<Time> {
+    pub fn from_packed_u64(u: u64, tp: u8, fsp: i8, tz: &Tz) -> Result<Time> {
         if u == 0 {
             return Time::new(zero_time(tz), tp, fsp);
         }
@@ -340,7 +342,7 @@ impl Time {
         Time::new(t, tp, fsp as i8)
     }
 
-    pub fn from_duration(tz: &FixedOffset, tp: u8, d: &MyDuration) -> Result<Time> {
+    pub fn from_duration(tz: &Tz, tp: u8, d: &MyDuration) -> Result<Time> {
         let dur = Duration::nanoseconds(d.to_nanos());
         let t = Utc::now()
             .with_timezone(tz)
@@ -674,7 +676,7 @@ impl Time {
             return Err(Error::unexpected_eof());
         };
         *data = &data[2..];
-        let tz = FixedOffset::east(0); // TODO
+        let tz = Tz::from_offset(0).unwrap(); // TODO
         if year == 0
             && month == 0
             && day == 0
@@ -690,7 +692,7 @@ impl Time {
             tz.from_utc_datetime(&t.naive_utc())
         } else {
             ymd_hms_nanos(
-                &FixedOffset::east(0),
+                &Tz::from_offset(0).unwrap(),
                 year,
                 month,
                 day,
@@ -710,12 +712,12 @@ mod test {
 
     use std::cmp::Ordering;
 
-    use chrono::{Duration, FixedOffset};
+    use chrono::Duration;
 
     use coprocessor::codec::mysql::{Duration as MyDuration, MAX_FSP, UN_SPECIFIED_FSP};
 
-    const MIN_OFFSET: i32 = -60 * 24 + 1;
-    const MAX_OFFSET: i32 = 60 * 24;
+    const MIN_OFFSET: i64 = -60 * 24 + 1;
+    const MAX_OFFSET: i64 = 60 * 24;
 
     #[test]
     fn test_parse_datetime() {
@@ -768,7 +770,7 @@ mod test {
 
             for mut offset in MIN_OFFSET..MAX_OFFSET {
                 offset *= 60;
-                let tz = FixedOffset::east(offset);
+                let tz = Tz::from_offset(offset).unwrap();
                 let t = Time::parse_datetime(input, fsp, &tz).unwrap();
                 if utc_t.is_zero() {
                     assert_eq!(t, utc_t);
@@ -793,7 +795,7 @@ mod test {
         ];
 
         for t in fail_tbl {
-            let tz = FixedOffset::east(0);
+            let tz = Tz::from_offset(0).unwrap();
             assert!(Time::parse_datetime(t, 0, &tz).is_err(), t);
         }
     }
@@ -812,7 +814,7 @@ mod test {
         for (s, fsp) in cases {
             for mut offset in MIN_OFFSET..MAX_OFFSET {
                 offset *= 60;
-                let tz = FixedOffset::east(offset);
+                let tz = Tz::from_offset(offset).unwrap();
                 let t = Time::parse_datetime(s, fsp, &tz).unwrap();
                 let packed = t.to_packed_u64();
                 let reverted_datetime =
@@ -873,7 +875,7 @@ mod test {
         for (t_str, fsp, datetime_dec, date_dec) in cases {
             for mut offset in MIN_OFFSET..MAX_OFFSET {
                 offset *= 60;
-                let tz = FixedOffset::east(offset);
+                let tz = Tz::from_offset(offset).unwrap();
                 let mut t = Time::parse_datetime(t_str, fsp, &tz).unwrap();
                 let mut res = format!("{}", t.to_decimal().unwrap());
                 assert_eq!(res, datetime_dec);
@@ -915,7 +917,7 @@ mod test {
         for (l, r, exp) in cases {
             for mut offset in MIN_OFFSET..MAX_OFFSET {
                 offset *= 60;
-                let tz = FixedOffset::east(offset);
+                let tz = Tz::from_offset(offset).unwrap();
                 let l_t = Time::parse_datetime(l, MAX_FSP, &tz).unwrap();
                 let r_t = Time::parse_datetime(r, MAX_FSP, &tz).unwrap();
                 assert_eq!(exp, l_t.cmp(&r_t));
@@ -1029,7 +1031,7 @@ mod test {
 
             for mut offset in MIN_OFFSET..MAX_OFFSET {
                 offset *= 60;
-                let tz = FixedOffset::east(offset);
+                let tz = Tz::from_offset(offset).unwrap();
                 let mut t = Time::parse_datetime(input, UN_SPECIFIED_FSP, &tz).unwrap();
                 t.round_frac(fsp).unwrap();
                 let expect = Time::parse_datetime(exp, UN_SPECIFIED_FSP, &tz).unwrap();
@@ -1063,7 +1065,7 @@ mod test {
     #[test]
     fn test_from_duration() {
         let cases = vec![("11:30:45.123456"), ("-35:30:46")];
-        let tz = FixedOffset::east(0);
+        let tz = Tz::from_offset(0).unwrap();
         for s in cases {
             let d = MyDuration::parse(s.as_bytes(), MAX_FSP).unwrap();
             let get = Time::from_duration(&tz, mysql::types::DATETIME, &d).unwrap();

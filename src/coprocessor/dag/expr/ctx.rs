@@ -14,9 +14,10 @@
 use std::sync::Arc;
 use std::{i64, mem, u64};
 
-use super::{Error, Result};
-use chrono::FixedOffset;
 use tipb::select;
+
+use super::{Error, Result};
+use coprocessor::codec::mysql::Tz;
 
 /// Flags are used by `DAGRequest.flags` to handle execution mode, like how to handle
 /// truncate error.
@@ -50,7 +51,7 @@ const DEFAULT_MAX_WARNING_CNT: usize = 64;
 #[derive(Debug)]
 pub struct EvalConfig {
     /// timezone to use when parse/calculate time.
-    pub tz: FixedOffset,
+    pub tz: Tz,
     pub ignore_truncate: bool,
     pub truncate_as_warning: bool,
     pub overflow_as_warning: bool,
@@ -67,18 +68,21 @@ pub struct EvalConfig {
 
 impl Default for EvalConfig {
     fn default() -> EvalConfig {
-        EvalConfig::new(0, 0).unwrap()
+        EvalConfig::new(None, 0, 0).unwrap()
     }
 }
 
 impl EvalConfig {
-    pub fn new(tz_offset: i64, flags: u64) -> Result<EvalConfig> {
-        if tz_offset <= -ONE_DAY || tz_offset >= ONE_DAY {
-            return Err(Error::unknown_timezone(tz_offset));
-        }
-        let tz = match FixedOffset::east_opt(tz_offset as i32) {
-            None => return Err(Error::unknown_timezone(tz_offset)),
+    pub fn new(tz_name: Option<&str>, tz_offset: i64, flags: u64) -> Result<EvalConfig> {
+        // We respect time zone name first, then offset.
+        let tz_result = match tz_name {
+            Some(name) => Tz::from_tz_name(name),
+            None => Tz::from_offset(tz_offset),
+        };
+        let tz = match tz_result {
             Some(tz) => tz,
+            // Error should never happen, however we still returns an error here.
+            None => return Err(Error::invalid_timezone()),
         };
 
         let e = EvalConfig {
@@ -174,7 +178,6 @@ impl Default for EvalContext {
         EvalContext { cfg, warnings }
     }
 }
-const ONE_DAY: i64 = 3600 * 24;
 
 impl EvalContext {
     pub fn new(cfg: Arc<EvalConfig>) -> EvalContext {
@@ -259,19 +262,21 @@ mod test {
     #[test]
     fn test_handle_truncate() {
         // ignore_truncate = false, truncate_as_warning = false
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, 0).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(None, 0, 0).unwrap()));
         assert!(ctx.handle_truncate(false).is_ok());
         assert!(ctx.handle_truncate(true).is_err());
         assert!(ctx.take_warnings().warnings.is_empty());
         // ignore_truncate = false;
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(
+            EvalConfig::new(None, 0, FLAG_IGNORE_TRUNCATE).unwrap(),
+        ));
         assert!(ctx.handle_truncate(false).is_ok());
         assert!(ctx.handle_truncate(true).is_ok());
         assert!(ctx.take_warnings().warnings.is_empty());
 
         // ignore_truncate = false, truncate_as_warning = true
         let mut ctx = EvalContext::new(Arc::new(
-            EvalConfig::new(0, FLAG_TRUNCATE_AS_WARNING).unwrap(),
+            EvalConfig::new(None, 0, FLAG_TRUNCATE_AS_WARNING).unwrap(),
         ));
         assert!(ctx.handle_truncate(false).is_ok());
         assert!(ctx.handle_truncate(true).is_ok());
@@ -280,7 +285,7 @@ mod test {
 
     #[test]
     fn test_max_warning_cnt() {
-        let eval_cfg = Arc::new(EvalConfig::new(0, FLAG_TRUNCATE_AS_WARNING).unwrap());
+        let eval_cfg = Arc::new(EvalConfig::new(None, 0, FLAG_TRUNCATE_AS_WARNING).unwrap());
         let mut ctx = EvalContext::new(Arc::clone(&eval_cfg));
         assert!(ctx.handle_truncate(true).is_ok());
         assert!(ctx.handle_truncate(true).is_ok());
@@ -329,7 +334,7 @@ mod test {
             ), //warning
         ];
         for (flag, sql_mode, strict_sql_mode, is_ok, is_empty) in cases {
-            let mut cfg = EvalConfig::new(0, flag).unwrap();
+            let mut cfg = EvalConfig::new(None, 0, flag).unwrap();
             cfg.set_sql_mode(sql_mode);
             cfg.set_strict_sql_mode(strict_sql_mode);
             let mut ctx = EvalContext::new(Arc::new(cfg));
