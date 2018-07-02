@@ -1055,7 +1055,7 @@ mod test {
             res.set_tp(mysql::types::DATETIME).unwrap();
             let ep = Time::parse_utc_datetime(exp, UN_SPECIFIED_FSP).unwrap();
             assert_eq!(res, ep);
-            let res = res.set_tp(types::TIMESTAMP);
+            let res = res.set_tp(mysql::types::TIMESTAMP);
             assert!(res.is_err());
         }
     }

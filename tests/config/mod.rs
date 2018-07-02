@@ -107,6 +107,7 @@ fn test_serde_custom_tikv_config() {
     };
     value.raft_store = RaftstoreConfig {
         sync_log: false,
+        prevote: false,
         raftdb_path: "/var".to_owned(),
         capacity: ReadableSize(123),
         raft_base_tick_interval: ReadableDuration::secs(12),
