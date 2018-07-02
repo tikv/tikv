@@ -13,7 +13,7 @@
 
 use super::engine::{Engine, Error as EngineError, ScanMode, StatisticsSummary};
 use super::metrics::*;
-use super::mvcc::{MvccReader, MvccTxn, MAX_TXN_WRITE_SIZE};
+use super::mvcc::{MvccReader, MvccTxn};
 use super::txn::{GC_BATCH_SIZE, GC_LOG_DELETED_VERSION_THRESHOLD, GC_LOG_FOUND_VERSION_THRESHOLD};
 use super::{Callback, Error, Key, Result};
 use kvproto::kvrpcpb::Context;
@@ -157,7 +157,7 @@ impl<E: Engine> GCRunner<E> {
                 );
             }
 
-            if txn.write_size() >= MAX_TXN_WRITE_SIZE {
+            if !gc_info.is_completed {
                 next_scan_key = Some(k);
                 break;
             }
