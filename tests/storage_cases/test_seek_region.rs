@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use raftstore::server::new_server_cluster;
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use tikv::raftstore::store::SeekRegionResult;
