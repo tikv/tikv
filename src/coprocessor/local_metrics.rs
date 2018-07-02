@@ -107,6 +107,7 @@ pub struct BasicLocalMetrics {
     pub wait_time: LocalHistogramVec,
     pub error_cnt: LocalIntCounterVec,
     pub scan_keys: LocalHistogramVec,
+    pub rocksdb_perf_stats: LocalIntCounterVec,
 }
 
 impl Default for BasicLocalMetrics {
@@ -118,6 +119,7 @@ impl Default for BasicLocalMetrics {
             wait_time: COPR_REQ_WAIT_TIME.local(),
             error_cnt: COPR_REQ_ERROR.local(),
             scan_keys: COPR_SCAN_KEYS.local(),
+            rocksdb_perf_stats: COPR_ROCKSDB_PERF_COUNTER.local(),
         }
     }
 }
@@ -130,6 +132,7 @@ impl BasicLocalMetrics {
         self.wait_time.flush();
         self.scan_keys.flush();
         self.error_cnt.flush();
+        self.rocksdb_perf_stats.flush();
     }
 }
 
