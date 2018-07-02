@@ -21,11 +21,12 @@ use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use util::time::duration_to_sec;
+use util::time::{duration_to_sec, SlowTimer};
 use util::worker::{self, Builder, Runnable, ScheduleError, Worker};
 
 pub const GC_MAX_PENDING_TASKS: usize = 2;
 const GC_SNAPSHOT_TIMEOUT_SECS: u64 = 10;
+const GC_TASK_SLOW_SECONDS: u64 = 30;
 
 struct GCTask {
     pub ctx: Context,
@@ -183,7 +184,7 @@ impl<E: Engine> GCRunner<E> {
             let (keys, next) = self
                 .scan_keys(&mut ctx, safe_point, next_key, GC_BATCH_SIZE)
                 .map_err(|e| {
-                    warn!("scan_keys failed on region {}: {:?}", safe_point, &e);
+                    warn!("gc scan_keys failed on region {}: {:?}", safe_point, &e);
                     e
                 })?;
             if keys.is_empty() {
@@ -214,9 +215,10 @@ impl<E: Engine> Runnable<GCTask> for GCRunner<E> {
     fn run(&mut self, task: GCTask) {
         GC_GCTASK_COUNTER.inc();
 
-        let timer = Instant::now();
+        let timer = SlowTimer::from_secs(GC_TASK_SLOW_SECONDS);
         let result = self.gc(task.ctx, task.safe_point);
         GC_DURATION_HISTOGRAM.observe(duration_to_sec(timer.elapsed()));
+        slow_log!(timer, "{}", task);
 
         if result.is_err() {
             GC_GCTASK_FAIL_COUNTER.inc();
@@ -224,9 +226,10 @@ impl<E: Engine> Runnable<GCTask> for GCRunner<E> {
         (task.callback)(result);
     }
 
+    // The default implementation of `run_batch` prints a warning to log when it takes over 1 second
+    // to handle a task. It's not proper here, so override it to remove the log.
     fn run_batch(&mut self, tasks: &mut Vec<GCTask>) {
         for task in tasks.drain(..) {
-            // Do not print slow log
             self.run(task);
         }
     }
