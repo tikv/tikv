@@ -161,7 +161,7 @@ pub trait Iterator: Send + Sized {
     fn value(&self) -> &[u8];
 }
 
-pub trait RegionInfoSource: Send + Sized + Clone {
+pub trait RegionInfoSource: Send + Sized + Clone + 'static {
     /// Find next local peer that satisfies the given predicate.
     fn seek_region(
         &self,
