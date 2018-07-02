@@ -249,7 +249,7 @@ fn zero_datetime(tz: &FixedOffset) -> Time {
     Time::new(zero_time(tz), types::DATETIME, mysql::DEFAULT_FSP).unwrap()
 }
 
-#[allow(too_many_arguments)]
+#[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
 #[inline]
 fn ymd_hms_nanos<T: TimeZone>(
     tz: &T,
