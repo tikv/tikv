@@ -20,7 +20,7 @@ use kvproto::kvrpcpb::Context;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use util::time::{duration_to_sec, SlowTimer};
 use util::worker::{self, Builder, Runnable, ScheduleError, Worker};
 
@@ -172,7 +172,7 @@ impl<E: Engine> GCRunner<E> {
         Ok(next_scan_key)
     }
 
-    pub fn gc(&mut self, mut ctx: Context, safe_point: u64) -> Result<()> {
+    pub fn gc(&mut self, ctx: &mut Context, safe_point: u64) -> Result<()> {
         debug!(
             "doing gc on region {}, safe_point {}",
             ctx.get_region_id(),
@@ -182,7 +182,7 @@ impl<E: Engine> GCRunner<E> {
         let mut next_key = None;
         loop {
             let (keys, next) = self
-                .scan_keys(&mut ctx, safe_point, next_key, GC_BATCH_SIZE)
+                .scan_keys(ctx, safe_point, next_key, GC_BATCH_SIZE)
                 .map_err(|e| {
                     warn!("gc scan_keys failed on region {}: {:?}", safe_point, &e);
                     e
@@ -191,12 +191,10 @@ impl<E: Engine> GCRunner<E> {
                 break;
             }
 
-            next_key = self
-                .gc_keys(&mut ctx, safe_point, keys, next)
-                .map_err(|e| {
-                    warn!("gc_keys failed on region {}: {:?}", safe_point, &e);
-                    e
-                })?;
+            next_key = self.gc_keys(ctx, safe_point, keys, next).map_err(|e| {
+                warn!("gc_keys failed on region {}: {:?}", safe_point, &e);
+                e
+            })?;
             if next_key.is_none() {
                 break;
             }
@@ -212,11 +210,11 @@ impl<E: Engine> GCRunner<E> {
 }
 
 impl<E: Engine> Runnable<GCTask> for GCRunner<E> {
-    fn run(&mut self, task: GCTask) {
+    fn run(&mut self, mut task: GCTask) {
         GC_GCTASK_COUNTER.inc();
 
         let timer = SlowTimer::from_secs(GC_TASK_SLOW_SECONDS);
-        let result = self.gc(task.ctx, task.safe_point);
+        let result = self.gc(&mut task.ctx, task.safe_point);
         GC_DURATION_HISTOGRAM.observe(duration_to_sec(timer.elapsed()));
         slow_log!(timer, "{}", task);
 
