@@ -507,30 +507,32 @@ impl Lease {
     }
 
     pub fn disconnect(&mut self) {
-        self.remote.as_ref().map(|r| r.expire());
+        // Expire remote lease if there is any.
+        if let Some(ref r) = self.remote {
+            r.expire();
+        }
         self.remote.take();
     }
 
     pub fn remote(&mut self, term: u64) -> Option<RemoteLease> {
-        if self.remote.is_none() {
-            let expired_time = match self.bound {
-                Some(Either::Right(ts)) => ts.sec,
-                _ => 0,
-            };
-            let remote = RemoteLease {
-                expired_time: Arc::new(AtomicI64::new(expired_time)),
-                term,
-            };
-            // Clone the remote.
-            let remote_clone = RemoteLease {
-                expired_time: Arc::clone(&remote.expired_time),
-                term,
-            };
-            self.remote = Some(remote);
-            Some(remote_clone)
-        } else {
-            None
+        if self.remote.is_some() {
+            return None;
         }
+        let expired_time = match self.bound {
+            Some(Either::Right(ts)) => ts.sec,
+            _ => 0,
+        };
+        let remote = RemoteLease {
+            expired_time: Arc::new(AtomicI64::new(expired_time)),
+            term,
+        };
+        // Clone the remote.
+        let remote_clone = RemoteLease {
+            expired_time: Arc::clone(&remote.expired_time),
+            term,
+        };
+        self.remote = Some(remote);
+        Some(remote_clone)
     }
 }
 
