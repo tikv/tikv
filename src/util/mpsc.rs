@@ -25,42 +25,42 @@ use std::sync::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError, TryS
 use std::sync::Arc;
 use std::time::Duration;
 
-struct RefCount {
-    sender: AtomicIsize,
-    receiver: AtomicIsize,
+struct State {
+    sender_cnt: AtomicIsize,
+    receiver_cnt: AtomicIsize,
 }
 
-impl RefCount {
-    fn new() -> RefCount {
-        RefCount {
-            sender: AtomicIsize::new(1),
-            receiver: AtomicIsize::new(1),
+impl State {
+    fn new() -> State {
+        State {
+            sender_cnt: AtomicIsize::new(1),
+            receiver_cnt: AtomicIsize::new(1),
         }
     }
 
     #[inline]
     fn is_receiver_closed(&self) -> bool {
-        self.receiver.load(Ordering::Acquire) == 0
+        self.receiver_cnt.load(Ordering::Acquire) == 0
     }
 
     #[inline]
     fn is_sender_closed(&self) -> bool {
-        self.sender.load(Ordering::Acquire) == 0
+        self.sender_cnt.load(Ordering::Acquire) == 0
     }
 }
 
 pub struct Sender<T> {
     sender: crossbeam_channel::Sender<T>,
-    replica_cnt: Arc<RefCount>,
+    state: Arc<State>,
 }
 
 impl<T> Clone for Sender<T> {
     #[inline]
     fn clone(&self) -> Sender<T> {
-        self.replica_cnt.sender.fetch_add(1, Ordering::AcqRel);
+        self.state.sender_cnt.fetch_add(1, Ordering::AcqRel);
         Sender {
             sender: self.sender.clone(),
-            replica_cnt: self.replica_cnt.clone(),
+            state: self.state.clone(),
         }
     }
 }
@@ -68,19 +68,19 @@ impl<T> Clone for Sender<T> {
 impl<T> Drop for Sender<T> {
     #[inline]
     fn drop(&mut self) {
-        self.replica_cnt.sender.fetch_add(-1, Ordering::AcqRel);
+        self.state.sender_cnt.fetch_add(-1, Ordering::AcqRel);
     }
 }
 
 pub struct Receiver<T> {
     receiver: crossbeam_channel::Receiver<T>,
-    replica_cnt: Arc<RefCount>,
+    state: Arc<State>,
 }
 
 impl<T> Sender<T> {
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
-        if !self.replica_cnt.is_receiver_closed() {
+        if !self.state.is_receiver_closed() {
             self.sender.send(t);
             return Ok(());
         }
@@ -89,13 +89,14 @@ impl<T> Sender<T> {
 
     #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
-        if !self.replica_cnt.is_receiver_closed() {
-            return crossbeam_channel::select! {
+        if !self.state.is_receiver_closed() {
+            crossbeam_channel::select! {
                 send(self.sender, t) => Ok(()),
-                default => return Err(TrySendError::Full(t)),
-            };
+                default => Err(TrySendError::Full(t)),
+            }
+        } else {
+            Err(TrySendError::Disconnected(t))
         }
-        Err(TrySendError::Disconnected(t))
     }
 }
 
@@ -110,7 +111,7 @@ impl<T> Receiver<T> {
 
     #[inline]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        if !self.replica_cnt.is_sender_closed() {
+        if !self.state.is_sender_closed() {
             return match self.receiver.try_recv() {
                 Some(t) => Ok(t),
                 None => Err(TryRecvError::Empty),
@@ -134,39 +135,33 @@ impl<T> Receiver<T> {
 impl<T> Drop for Receiver<T> {
     #[inline]
     fn drop(&mut self) {
-        self.replica_cnt.receiver.fetch_add(-1, Ordering::AcqRel);
+        self.state.receiver_cnt.fetch_add(-1, Ordering::AcqRel);
     }
 }
 
 #[inline]
 pub fn unbounded<T>() -> (Sender<T>, Receiver<T>) {
-    let replica_cnt = Arc::new(RefCount::new());
+    let state = Arc::new(State::new());
     let (sender, receiver) = crossbeam_channel::unbounded();
     (
         Sender {
             sender,
-            replica_cnt: replica_cnt.clone(),
+            state: state.clone(),
         },
-        Receiver {
-            receiver,
-            replica_cnt,
-        },
+        Receiver { receiver, state },
     )
 }
 
 #[inline]
 pub fn bounded<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
-    let replica_cnt = Arc::new(RefCount::new());
+    let state = Arc::new(State::new());
     let (sender, receiver) = crossbeam_channel::bounded(cap);
     (
         Sender {
             sender,
-            replica_cnt: replica_cnt.clone(),
+            state: state.clone(),
         },
-        Receiver {
-            receiver,
-            replica_cnt,
-        },
+        Receiver { receiver, state },
     )
 }
 
