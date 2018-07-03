@@ -43,11 +43,12 @@ impl SplitChecker for Checker {
         if self.current_size > self.split_size && self.split_key.is_none() {
             self.split_key = Some(key.to_vec());
         }
+        // should consider max_size may equal to split_size
         self.current_size > self.max_size
     }
 
     fn split_key(&mut self) -> Option<Vec<u8>> {
-        if self.current_size >= self.max_size {
+        if self.current_size > self.max_size {
             self.split_key.take()
         } else {
             None
