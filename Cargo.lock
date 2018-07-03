@@ -215,6 +215,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "derive_more"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "quote 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rustc_version 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "syn 0.13.11 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "dtoa"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -467,7 +477,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#2a150c328125181f48e46b1f0a17c89f2f9b5e45"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#9a1c83c5382fbaee8a5102213c711bbe52d71470"
 dependencies = [
  "bzip2-sys 0.1.6 (git+https://github.com/alexcrichton/bzip2-rs.git)",
  "cc 1.0.3 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -852,7 +862,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#2a150c328125181f48e46b1f0a17c89f2f9b5e45"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#9a1c83c5382fbaee8a5102213c711bbe52d71470"
 dependencies = [
  "crc 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.42 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -878,6 +888,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustc_version"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "semver 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "scoped-tls"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -890,6 +908,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "semver"
 version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "semver"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "semver-parser 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "semver-parser"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
@@ -1130,7 +1161,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "2.1.0-alpha.1"
+version = "2.1.0-beta"
 dependencies = [
  "backtrace 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "bitflags 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1139,6 +1170,7 @@ dependencies = [
  "clap 2.23.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "crc 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "crossbeam-channel 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "derive_more 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "fail 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "fnv 1.0.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "fs2 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1191,7 +1223,7 @@ name = "tikv-fuzz"
 version = "0.0.1"
 dependencies = [
  "libfuzzer-sys 0.1.0 (git+https://github.com/rust-fuzz/libfuzzer-sys.git)",
- "tikv 2.1.0-alpha.1",
+ "tikv 2.1.0-beta",
 ]
 
 [[package]]
@@ -1208,7 +1240,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#62312010ec5a9226fc7de3eaa2e54284e73298b4"
+source = "git+https://github.com/pingcap/tipb.git#658ea9c14169a59084290fe68060d53ea52722a2"
 dependencies = [
  "protobuf 2.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -1449,6 +1481,7 @@ dependencies = [
 "checksum crossbeam-epoch 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "9898f21d6d647793e163c804944941fb19aecd1f4a1a4c254bbb0bee15ccdea5"
 "checksum crossbeam-utils 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "2760899e32a1d58d5abb31129f8fae5de75220bc2176e77ff7c627ae45c918d9"
 "checksum dbghelp-sys 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "97590ba53bcb8ac28279161ca943a924d1fd4a8fb3fa63302591647c4fc5b850"
+"checksum derive_more 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)" = "46c7f14685a20f5dd08e7f754f2ea8cc064d8f4214ae21116c106a2768ba7b9b"
 "checksum dtoa 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)" = "80c8b71fd71146990a9742fc06dcbbde19161a267e0ad4e572c35162f4578c90"
 "checksum fail 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "bd2e1a22c616c8c8c96b6e07c243014551f3ba77291d24c22e0bfea6830c0b4e"
 "checksum fnv 1.0.5 (registry+https://github.com/rust-lang/crates.io-index)" = "6cc484842f1e2884faf56f529f960cc12ad8c71ce96cc7abba0a067c98fee344"
@@ -1529,9 +1562,12 @@ dependencies = [
 "checksum rustc-demangle 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "662b2795f21ff17df7c4c50c1d955c8b5fa9eaddd1cf1bb32f8de2372ffd989b"
 "checksum rustc-serialize 0.3.24 (registry+https://github.com/rust-lang/crates.io-index)" = "dcf128d1287d2ea9d80910b5f1120d0b8eede3fbf1abe91c40d39ea7d51e6fda"
 "checksum rustc_version 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)" = "c5f5376ea5e30ce23c03eb77cbe4962b988deead10910c372b226388b594c084"
+"checksum rustc_version 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "a54aa04a10c68c1c4eacb4337fd883b435997ede17a9385784b990777686b09a"
 "checksum scoped-tls 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "f417c22df063e9450888a7561788e9bd46d3bb3c1466435b4eccb903807f147d"
 "checksum scopeguard 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)" = "94258f53601af11e6a49f722422f6e3425c52b06245a5cf9bc09908b174f5e27"
 "checksum semver 0.1.20 (registry+https://github.com/rust-lang/crates.io-index)" = "d4f410fedcf71af0345d7607d246e7ad15faaadd49d240ee3b24e5dc21a820ac"
+"checksum semver 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)" = "1d7eb9ef2c18661902cc47e535f9bc51b78acd254da71d375c2f6720d9a40403"
+"checksum semver-parser 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)" = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
 "checksum serde 1.0.52 (registry+https://github.com/rust-lang/crates.io-index)" = "1921d0c6997bf121f5a85e3fed9ffd2cdfa87254f84e92f9b72e4cd84fbcf79f"
 "checksum serde_derive 1.0.8 (registry+https://github.com/rust-lang/crates.io-index)" = "10552fad5500771f3902d0c5ba187c5881942b811b7ba0d8fbbfbf84d80806d3"
 "checksum serde_derive_internals 0.15.1 (registry+https://github.com/rust-lang/crates.io-index)" = "37aee4e0da52d801acfbc0cc219eb1eda7142112339726e427926a6f6ee65d3a"
