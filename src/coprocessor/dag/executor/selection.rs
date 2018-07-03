@@ -52,7 +52,7 @@ impl SelectionExecutor {
     }
 }
 
-#[allow(never_loop)]
+#[cfg_attr(feature = "cargo-clippy", allow(never_loop))]
 impl Executor for SelectionExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = self.src.next()? {

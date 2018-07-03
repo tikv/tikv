@@ -338,7 +338,7 @@ impl RequestTracker {
     }
 
     /// Must pair with `on_handle_start` previously.
-    #[allow(useless_let_if_seq)]
+    #[cfg_attr(feature = "cargo-clippy", allow(useless_let_if_seq))]
     fn on_handle_finish(&mut self, resp: Option<&mut Response>, mut exec_metrics: ExecutorMetrics) {
         // Record delta perf statistics
         if let Some(perf_stats) = self.perf_statistics_start.take() {
@@ -614,7 +614,7 @@ impl<E: Engine> Runnable<Task<E>> for Host<E> {
         panic!("Shouldn't call Host::run directly");
     }
 
-    #[allow(for_kv_map)]
+    #[cfg_attr(feature = "cargo-clippy", allow(for_kv_map))]
     fn run_batch(&mut self, tasks: &mut Vec<Task<E>>) {
         let mut grouped_reqs = map![];
         for task in tasks.drain(..) {
