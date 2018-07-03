@@ -82,6 +82,7 @@ impl ScalarFunc {
             | ScalarFuncSig::MultiplyReal
             | ScalarFuncSig::MultiplyDecimal
             | ScalarFuncSig::MultiplyInt
+            | ScalarFuncSig::MultiplyIntUnsigned
             | ScalarFuncSig::IfNullInt
             | ScalarFuncSig::IfNullReal
             | ScalarFuncSig::IfNullString
@@ -365,7 +366,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Minute
             | ScalarFuncSig::Month
             | ScalarFuncSig::MonthName
-            | ScalarFuncSig::MultiplyIntUnsigned
             | ScalarFuncSig::NowWithArg
             | ScalarFuncSig::NowWithoutArg
             | ScalarFuncSig::NullTimeDiff
@@ -722,6 +722,7 @@ dispatch_call! {
         PlusInt => plus_int,
         MinusInt => minus_int,
         MultiplyInt => multiply_int,
+        MultiplyIntUnsigned => multiply_int_unsigned,
         IntDivideInt => int_divide_int,
         IntDivideDecimal => int_divide_decimal,
         ModInt => mod_int,
@@ -964,6 +965,7 @@ mod test {
                     ScalarFuncSig::MultiplyReal,
                     ScalarFuncSig::MultiplyDecimal,
                     ScalarFuncSig::MultiplyInt,
+                    ScalarFuncSig::MultiplyIntUnsigned,
                     ScalarFuncSig::IfNullInt,
                     ScalarFuncSig::IfNullReal,
                     ScalarFuncSig::IfNullString,
@@ -1297,7 +1299,6 @@ mod test {
             ScalarFuncSig::Minute,
             ScalarFuncSig::Month,
             ScalarFuncSig::MonthName,
-            ScalarFuncSig::MultiplyIntUnsigned,
             ScalarFuncSig::NowWithArg,
             ScalarFuncSig::NowWithoutArg,
             ScalarFuncSig::NullTimeDiff,
