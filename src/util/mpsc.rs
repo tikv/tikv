@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2018 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,15 +25,14 @@ use std::sync::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError, TryS
 use std::sync::Arc;
 use std::time::Duration;
 
-struct ReplicaCount {
+struct RefCount {
     sender: AtomicIsize,
     receiver: AtomicIsize,
 }
 
-impl ReplicaCount {
-    #[inline]
-    fn new() -> ReplicaCount {
-        ReplicaCount {
+impl RefCount {
+    fn new() -> RefCount {
+        RefCount {
             sender: AtomicIsize::new(1),
             receiver: AtomicIsize::new(1),
         }
@@ -52,7 +51,7 @@ impl ReplicaCount {
 
 pub struct Sender<T> {
     sender: crossbeam_channel::Sender<T>,
-    replica_cnt: Arc<ReplicaCount>,
+    replica_cnt: Arc<RefCount>,
 }
 
 impl<T> Clone for Sender<T> {
@@ -75,7 +74,7 @@ impl<T> Drop for Sender<T> {
 
 pub struct Receiver<T> {
     receiver: crossbeam_channel::Receiver<T>,
-    replica_cnt: Arc<ReplicaCount>,
+    replica_cnt: Arc<RefCount>,
 }
 
 impl<T> Sender<T> {
@@ -141,7 +140,7 @@ impl<T> Drop for Receiver<T> {
 
 #[inline]
 pub fn unbounded<T>() -> (Sender<T>, Receiver<T>) {
-    let replica_cnt = Arc::new(ReplicaCount::new());
+    let replica_cnt = Arc::new(RefCount::new());
     let (sender, receiver) = crossbeam_channel::unbounded();
     (
         Sender {
@@ -157,7 +156,7 @@ pub fn unbounded<T>() -> (Sender<T>, Receiver<T>) {
 
 #[inline]
 pub fn bounded<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
-    let replica_cnt = Arc::new(ReplicaCount::new());
+    let replica_cnt = Arc::new(RefCount::new());
     let (sender, receiver) = crossbeam_channel::bounded(cap);
     (
         Sender {
