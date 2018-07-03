@@ -100,3 +100,6 @@ format: pre-format
 
 clean:
 	@cargo clean
+
+expression: format clippy
+	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" "coprocessor::dag::expr" -- --nocapture
