@@ -350,7 +350,7 @@ pub fn get_region_approximate_middle_cf(
                 .map(|(k, _)| k.to_owned()),
         );
     }
-
+    keys.sort();
     if keys.is_empty() {
         return Ok(None);
     }
@@ -589,6 +589,7 @@ mod tests {
     use raftstore::store::peer_storage;
     use storage::mvcc::{Write, WriteType};
     use storage::{Key, ALL_CFS, CF_DEFAULT};
+    use util::escape;
     use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
     use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
     use util::time::{monotonic_now, monotonic_raw_now};
@@ -1225,10 +1226,11 @@ mod tests {
         let cf_handle = engine.cf_handle(CF_DEFAULT).unwrap();
         let mut big_value = Vec::with_capacity(256);
         big_value.extend(iter::repeat(b'v').take(256));
-        for i in 0..1000 {
-            let k = format!("key_{:04}", i).into_bytes();
+        for i in 0..100 {
+            let k = format!("key_{:03}", i).into_bytes();
             let k = keys::data_key(Key::from_raw(&k).encoded());
             engine.put_cf(cf_handle, &k, &big_value).unwrap();
+            // Flush for every key so that we can know the exact middle key.
             engine.flush_cf(cf_handle, true).unwrap();
         }
 
@@ -1240,7 +1242,6 @@ mod tests {
         let middle_key = Key::from_encoded(keys::origin_key(&middle_key).to_owned())
             .raw()
             .unwrap();
-        let prefix = b"key_".to_vec();
-        assert!(middle_key.starts_with(&prefix));
+        assert_eq!(escape(&middle_key), "key_049");
     }
 }
