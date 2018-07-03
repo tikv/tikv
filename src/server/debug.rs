@@ -615,7 +615,7 @@ impl Debugger {
         }
     }
 
-    pub fn get_region_properties(&self, region_id: u64) -> Result<GetRegionPropertiesResponse> {
+    pub fn get_region_properties(&self, region_id: u64) -> Result<Vec<(String, String)>> {
         let region_state = self.get_region_state(region_id)?;
         let region = region_state.get_region();
         let db = &self.engines.kv_engine;
@@ -632,12 +632,12 @@ impl Debugger {
         }
 
         // Calculate region middle key based on default and write cf size.
-        let default_cf_size = box_try!(raftstore_util::get_region_approximate_size_cf(
-            db, CF_DEFAULT, &region
-        ));
-        let write_cf_size = box_try!(raftstore_util::get_region_approximate_size_cf(
-            db, CF_DEFAULT, &region
-        ));
+        // It's in encoded format, no timestamp padding and escaped to string.
+        let get_cf_size =
+            |cf: &str| raftstore_util::get_region_approximate_size_cf(db, cf, &region);
+
+        let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
+        let write_cf_size = box_try!(get_cf_size(CF_WRITE));
 
         let middle_by_cf = if default_cf_size >= write_cf_size {
             CF_DEFAULT
@@ -657,9 +657,7 @@ impl Debugger {
             None => Vec::new(),
         };
 
-        let mut resp = GetRegionPropertiesResponse::new();
-
-        for (name, value) in &[
+        let mut res: Vec<(String, String)> = [
             ("num_files", collection.len() as u64),
             ("num_entries", num_entries),
             ("num_deletes", num_entries - mvcc_properties.num_versions),
@@ -669,14 +667,14 @@ impl Debugger {
             ("mvcc.num_puts", mvcc_properties.num_puts),
             ("mvcc.num_versions", mvcc_properties.num_versions),
             ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
-        ] {
-            let mut prop = Property::new();
-            prop.set_name(name.to_string());
-            prop.set_value(value.to_string());
-            resp.mut_props().push(prop);
-        }
-        resp.set_middle_key(middle_key);
-        Ok(resp)
+        ].iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        res.push((
+            "middle_key_by_approximate_size".to_string(),
+            escape(&middle_key),
+        ));
+        Ok(res)
     }
 }
 
