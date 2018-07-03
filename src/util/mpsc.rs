@@ -90,7 +90,7 @@ impl<T> Sender<T> {
     #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
         if !self.replica_cnt.is_receiver_closed() {
-            return select! {
+            return crossbeam_channel::select! {
                 send(self.sender, t) => Ok(()),
                 default => return Err(TrySendError::Full(t)),
             };
@@ -121,7 +121,7 @@ impl<T> Receiver<T> {
 
     #[inline]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
-        select! {
+        crossbeam_channel::select! {
             recv(self.receiver, task) => match task {
                 Some(t) => Ok(t),
                 None => Err(RecvTimeoutError::Disconnected),
