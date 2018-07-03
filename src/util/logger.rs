@@ -286,7 +286,7 @@ macro_rules! s(
     };
 );
 
-#[allow(write_literal)]
+#[cfg_attr(feature = "cargo-clippy", allow(write_literal))]
 impl<'a> slog::ser::Serializer for Serializer<'a> {
     fn emit_none(&mut self, key: Key) -> slog::Result {
         s!(self, key, "None");
