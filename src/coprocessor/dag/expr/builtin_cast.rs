@@ -1741,7 +1741,7 @@ mod test {
         let mut ctx = EvalContext::new(Arc::new(cfg));
         let time_str = "2012-12-12 11:11:11";
         let date_str = "2012-12-12";
-        let tz = Tz::from_offset(0).unwrap();
+        let tz = Tz::utc();
         let time = Time::parse_utc_datetime(time_str, mysql::DEFAULT_FSP).unwrap();
         let time_stamp = {
             let t = time.to_packed_u64();

@@ -159,7 +159,7 @@ impl Time {
     pub fn set_tp(&mut self, tp: u8) -> Result<()> {
         if self.tp != tp && tp == mysql::types::DATE {
             // Truncate hh:mm::ss part if the type is Date
-            self.time = self.time.date().and_hms(0, 0, 0);
+            self.time = self.time.date().and_hms(0, 0, 0); // TODO: might panic!
         }
         if self.tp != tp && tp == mysql::types::TIMESTAMP {
             return Err(box_err!("can not convert datetime/date to timestamp"));
@@ -230,7 +230,7 @@ impl Time {
     }
 
     pub fn parse_utc_datetime(s: &str, fsp: i8) -> Result<Time> {
-        Time::parse_datetime(s, fsp, &Tz::from_offset(0).unwrap())
+        Time::parse_datetime(s, fsp, &Tz::utc())
     }
 
     pub fn parse_datetime(s: &str, fsp: i8, tz: &Tz) -> Result<Time> {
@@ -347,7 +347,7 @@ impl Time {
         let t = Utc::now()
             .with_timezone(tz)
             .date()
-            .and_hms(0, 0, 0)
+            .and_hms(0, 0, 0) // TODO: might panic!
             .checked_add_signed(dur);
         if t.is_none() {
             return Err(box_err!("parse from duration {} overflows", d));
@@ -361,7 +361,7 @@ impl Time {
             ));
         }
         if tp == mysql::types::DATE {
-            let t = t.date().and_hms(0, 0, 0);
+            let t = t.date().and_hms(0, 0, 0); // TODO: might panic!
             Time::new(t, tp, d.fsp as i8)
         } else {
             Time::new(t, tp, d.fsp as i8)
@@ -676,7 +676,7 @@ impl Time {
             return Err(Error::unexpected_eof());
         };
         *data = &data[2..];
-        let tz = Tz::from_offset(0).unwrap(); // TODO
+        let tz = Tz::utc(); // TODO
         if year == 0
             && month == 0
             && day == 0
@@ -692,7 +692,7 @@ impl Time {
             tz.from_utc_datetime(&t.naive_utc())
         } else {
             ymd_hms_nanos(
-                &Tz::from_offset(0).unwrap(),
+                &Tz::utc(),
                 year,
                 month,
                 day,
@@ -814,8 +814,47 @@ mod test {
         ];
 
         for t in fail_tbl {
-            let tz = Tz::from_offset(0).unwrap();
+            let tz = Tz::utc();
             assert!(Time::parse_datetime(t, 0, &tz).is_err(), t);
+        }
+    }
+
+    #[test]
+    fn test_parse_datetime_dst() {
+        let ok_tables = vec![
+            ("Asia/Shanghai", "1988-04-09 23:59:59", 576604799),
+            ("Asia/Shanghai", "1988-04-10 01:00:00", 576604800),
+            ("Asia/Shanghai", "2015-01-02 23:59:59", 1420214399),
+            ("America/Los_Angeles", "1919-03-30 01:59:59", -1601820001),
+            ("America/Los_Angeles", "1919-03-30 03:00:00", -1601820000),
+            ("America/Los_Angeles", "2011-03-13 01:59:59", 1300010399),
+            ("America/Los_Angeles", "2011-03-13 03:00:00", 1300010400),
+            ("America/Los_Angeles", "2011-11-06 01:59:59", 1320569999),
+            ("America/Los_Angeles", "2011-11-06 02:00:00", 1320573600),
+            ("America/Toronto", "2013-11-18 11:55:00", 1384793700),
+        ];
+
+        for (tz_name, time_str, utc_timestamp) in ok_tables {
+            let tz = Tz::from_tz_name(tz_name).unwrap();
+            let t = Time::parse_datetime(time_str, UN_SPECIFIED_FSP, &tz).unwrap();
+            assert_eq!(t.time.timestamp(), utc_timestamp);
+        }
+
+        // TODO: When calling `UNIX_TIMESTAMP()` in MySQL, these date time will not fail.
+        // However it will fail when inserting into a TIMESTAMP field.
+        let fail_tables = vec![
+            ("Asia/Shanghai", "1988-04-10"),
+            ("Asia/Shanghai", "1988-04-10 00:00:00"),
+            ("Asia/Shanghai", "1988-04-10 00:59:59"),
+            ("America/Los_Angeles", "1919-03-30 02:00:00"),
+            ("America/Los_Angeles", "1919-03-30 02:59:59"),
+            ("America/Los_Angeles", "2011-03-13 02:00:00"),
+            ("America/Los_Angeles", "2011-03-13 02:59:59"),
+        ];
+
+        for (tz_name, time_str) in fail_tables {
+            let tz = Tz::from_tz_name(tz_name).unwrap();
+            assert!(Time::parse_datetime(time_str, UN_SPECIFIED_FSP, &tz).is_err());
         }
     }
 
@@ -1076,7 +1115,7 @@ mod test {
     #[test]
     fn test_from_duration() {
         let cases = vec![("11:30:45.123456"), ("-35:30:46")];
-        let tz = Tz::from_offset(0).unwrap();
+        let tz = Tz::utc();
         for s in cases {
             let d = MyDuration::parse(s.as_bytes(), MAX_FSP).unwrap();
             let get = Time::from_duration(&tz, mysql::types::DATETIME, &d).unwrap();
