@@ -14,6 +14,7 @@
 use std::fmt;
 use std::io::{self, Write};
 use std::panic::{RefUnwindSafe, UnwindSafe};
+use std::path::Path;
 
 use chrono;
 use grpc;
@@ -164,7 +165,15 @@ fn print_msg_header(mut rd: &mut RecordDecorator, record: &Record) -> io::Result
     write!(rd, " ")?;
 
     rd.start_msg()?; // There is no `start_line`.
-    write!(rd, "{}:{}", record.file(), record.line())?;
+    write!(
+        rd,
+        "{}:{}",
+        Path::new(record.file())
+            .file_name()
+            .and_then(|path| path.to_str())
+            .unwrap_or("<error>"),
+        record.line()
+    )?;
 
     rd.start_separator()?;
     write!(rd, ":")?;
