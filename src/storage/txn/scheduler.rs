@@ -74,11 +74,11 @@ pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.
-const GC_LOG_FOUND_VERSION_THRESHOLD: usize = 30;
+pub const GC_LOG_FOUND_VERSION_THRESHOLD: usize = 30;
 
 /// After the GC delete versions of a key, output a message to the log if at least this many
 /// versions are deleted.
-const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
+pub const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
 
 /// Process result of a command.
 pub enum ProcessResult {
@@ -948,8 +948,8 @@ impl Default for SchedContext {
             processing_read_duration: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
             processing_write_duration: SCHED_PROCESSING_WRITE_HISTOGRAM_VEC.local(),
             command_keyread_duration: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
-            command_gc_skipped_counter: KV_COMMAND_GC_SKIPPED_COUNTER.local(),
-            command_gc_empty_range_counter: KV_COMMAND_GC_EMPTY_RANGE_COUNTER.local(),
+            command_gc_skipped_counter: KV_GC_SKIPPED_COUNTER.local(),
+            command_gc_empty_range_counter: KV_GC_EMPTY_RANGE_COUNTER.local(),
         }
     }
 }

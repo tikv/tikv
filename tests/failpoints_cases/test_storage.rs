@@ -21,15 +21,15 @@ use storage::util::new_raft_engine;
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage;
 use tikv::storage::config::Config;
+use tikv::storage::gc_worker::GC_MAX_PENDING_TASKS;
 use tikv::storage::*;
 use tikv::util::worker::FutureWorker;
 use tikv::util::HandyRwLock;
 
 #[test]
-fn test_storage_1gc() {
+fn test_storage_gcworker_busy() {
     let _guard = ::setup();
-    let snapshot_fp = "raftkv_async_snapshot_finish";
-    let batch_snapshot_fp = "raftkv_async_batch_snapshot_finish";
+    let snapshot_fp = "raftkv_async_snapshot";
     let (_cluster, engine, ctx) = new_raft_engine(3, "");
     let pd_worker = FutureWorker::new("test future worker");
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
@@ -39,23 +39,35 @@ fn test_storage_1gc() {
     let mut storage = Storage::from_engine(engine.clone(), &config, read_pool).unwrap();
     storage.start(&config).unwrap();
     fail::cfg(snapshot_fp, "pause").unwrap();
-    fail::cfg(batch_snapshot_fp, "pause").unwrap();
     let (tx1, rx1) = channel();
+    // Schedule `GC_MAX_PENDING` GC requests.
+    for _i in 0..GC_MAX_PENDING_TASKS {
+        let tx1 = tx1.clone();
+        storage
+            .async_gc(ctx.clone(), 1, box move |res: storage::Result<()>| {
+                assert!(res.is_ok());
+                tx1.send(1).unwrap();
+            })
+            .unwrap();
+    }
+    // Sleep to make sure the failpoint is triggered.
+    thread::sleep(Duration::from_millis(2000));
+    // Schedule one more request. So that there is a request being processed and
+    // `GC_MAX_PENDING` requests in queue.
     storage
         .async_gc(ctx.clone(), 1, box move |res: storage::Result<()>| {
             assert!(res.is_ok());
             tx1.send(1).unwrap();
         })
         .unwrap();
-    // Sleep to make sure the failpoint is triggered.
-    thread::sleep(Duration::from_millis(2000));
-    // Old GC command is blocked at snapshot stage, the other one will get ServerIsBusy error.
+
+    // Old GC commands are blocked, the new one will get GCWorkerTooBusy error.
     let (tx2, rx2) = channel();
     storage
         .async_gc(Context::new(), 1, box move |res: storage::Result<()>| {
             match res {
-                Err(storage::Error::SchedTooBusy) => {}
-                _ => panic!("expect too busy"),
+                Err(storage::Error::GCWorkerTooBusy) => {}
+                res => panic!("expect too busy, got {:?}", res),
             }
             tx2.send(1).unwrap();
         })
@@ -63,8 +75,9 @@ fn test_storage_1gc() {
 
     rx2.recv().unwrap();
     fail::remove(snapshot_fp);
-    fail::remove(batch_snapshot_fp);
-    rx1.recv().unwrap();
+    for _ in 0..(GC_MAX_PENDING_TASKS + 1) {
+        rx1.recv().unwrap();
+    }
 }
 
 #[test]
