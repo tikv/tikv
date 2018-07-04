@@ -15,7 +15,9 @@ use std::sync::mpsc::channel;
 use std::thread;
 use test::Bencher;
 
+use crossbeam_channel;
 use mio::{EventLoop, Handler, Sender};
+use tikv::util::mpsc;
 
 struct CountHandler {
     n: usize,
@@ -89,6 +91,58 @@ fn bench_thread_channel(b: &mut Bencher) {
     });
 
     tx.send(0).unwrap();
+    let n2 = t.join().unwrap();
+    assert_eq!(n1, n2);
+}
+
+#[bench]
+fn bench_util_channel(b: &mut Bencher) {
+    let (tx, rx) = mpsc::unbounded();
+
+    let t = thread::spawn(move || {
+        let mut n2: usize = 0;
+        loop {
+            let n = rx.recv().unwrap();
+            if n == 0 {
+                return n2;
+            }
+            n2 += 1;
+        }
+    });
+
+    let mut n1 = 0;
+    b.iter(|| {
+        n1 += 1;
+        tx.send(1).unwrap()
+    });
+
+    tx.send(0).unwrap();
+    let n2 = t.join().unwrap();
+    assert_eq!(n1, n2);
+}
+
+#[bench]
+fn bench_crossbeam_channel(b: &mut Bencher) {
+    let (tx, rx) = crossbeam_channel::unbounded();
+
+    let t = thread::spawn(move || {
+        let mut n2: usize = 0;
+        loop {
+            let n = rx.recv().unwrap();
+            if n == 0 {
+                return n2;
+            }
+            n2 += 1;
+        }
+    });
+
+    let mut n1 = 0;
+    b.iter(|| {
+        n1 += 1;
+        tx.send(1)
+    });
+
+    tx.send(0);
     let n2 = t.join().unwrap();
     assert_eq!(n1, n2);
 }
