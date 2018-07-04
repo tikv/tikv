@@ -255,16 +255,21 @@ fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, Sub
     } else if r_int_word_cnt == l_int_word_cnt {
         let mut l_end = (l_stop + l_frac_word_cnt as usize - 1) as isize;
         let mut r_end = (r_stop + r_frac_word_cnt as usize - 1) as isize;
-        // trims suffix 0
+        // trims suffix 0(also trims the suffix 0 before the point
+        // when there is no digit after point).
         while l_idx as isize <= l_end && lhs.word_buf[l_end as usize] == 0 {
             l_end -= 1;
         }
-        // trims suffix 0
+
+        // trims suffix 0(also trims the suffix 0 before the point
+        // when there is no digit after point).
         while r_idx as isize <= r_end && rhs.word_buf[r_end as usize] == 0 {
             r_end -= 1;
         }
-        l_frac_word_cnt = (l_end + 1 - l_stop as isize) as u8;
-        r_frac_word_cnt = (r_end + 1 - r_stop as isize) as u8;
+        // here l_end is the last nonzero index in l.word_buf, attention:it may in the range of (0,l_int_word_cnt)
+        l_frac_word_cnt = cmp::max(0, l_end + 1 - l_stop as isize) as u8;
+        // here r_end is the last nonzero index in r.word_buf, attention:it may in the range of (0,l_int_word_cnt)
+        r_frac_word_cnt = cmp::max(0, r_end + 1 - r_stop as isize) as u8;
         while l_idx as isize <= l_end
             && r_idx as isize <= r_end
             && lhs.word_buf[l_idx] == rhs.word_buf[r_idx]
@@ -529,7 +534,7 @@ fn do_add<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
 }
 
 // TODO: remove following attribute
-#[allow(needless_range_loop)]
+#[cfg_attr(feature = "cargo-clippy", allow(needless_range_loop))]
 fn do_div_mod(
     mut lhs: Decimal,
     rhs: Decimal,
@@ -1651,7 +1656,7 @@ macro_rules! enable_conv_for_int {
     ($s:ty, $t:ty) => {
         impl From<$s> for Decimal {
             fn from(t: $s) -> Decimal {
-                #[allow(cast_lossless)]
+                #[cfg_attr(feature = "cargo-clippy", allow(cast_lossless))]
                 (t as $t).into()
             }
         }
@@ -2233,7 +2238,7 @@ mod test {
     }
 
     #[test]
-    #[allow(approx_constant)]
+    #[cfg_attr(feature = "cargo-clippy", allow(approx_constant))]
     fn test_f64() {
         let cases = vec![
             ("12345", 12345f64),
@@ -2903,6 +2908,11 @@ mod test {
             ("12345", "-123.45", Res::Ok("12468.45")),
             ("3.10000000000", "2.00", Res::Ok("1.10000000000")),
             ("3.00", "2.0000000000000", Res::Ok("1.0000000000000")),
+            (
+                "-20048271934704078000000000000000000000000000000000000",
+                "-20048271934734512000000000000000000000000000000000000",
+                Res::Ok("30434000000000000000000000000000000000000"),
+            ),
         ];
 
         for (lhs_str, rhs_str, exp) in cases {

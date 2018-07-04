@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use self::gc_worker::GCWorker;
 use self::metrics::*;
 use self::mvcc::Lock;
 use self::txn::CMD_BATCH_SIZE;
@@ -32,6 +33,7 @@ use util::worker::{self, Builder, Worker};
 
 pub mod config;
 pub mod engine;
+pub mod gc_worker;
 mod metrics;
 pub mod mvcc;
 mod readpool_context;
@@ -74,7 +76,7 @@ pub enum Mutation {
     Lock(Key),
 }
 
-#[allow(match_same_arms)]
+#[cfg_attr(feature = "cargo-clippy", allow(match_same_arms))]
 impl Mutation {
     pub fn key(&self) -> &Key {
         match *self {
@@ -418,9 +420,9 @@ pub struct Storage<E: Engine> {
     worker_scheduler: worker::Scheduler<Msg<E>>,
 
     read_pool: ReadPool<ReadPoolContext>,
+    gc_worker: GCWorker<E>,
 
     // Storage configurations.
-    gc_ratio_threshold: f64,
     max_key_size: usize,
 }
 
@@ -446,12 +448,13 @@ impl<E: Engine> Storage<E> {
                 .create(),
         ));
         let worker_scheduler = worker.lock().unwrap().scheduler();
+        let gc_worker = GCWorker::new(engine.clone(), config.gc_ratio_threshold);
         Ok(Storage {
-            read_pool,
             engine,
             worker,
             worker_scheduler,
-            gc_ratio_threshold: config.gc_ratio_threshold,
+            read_pool,
+            gc_worker,
             max_key_size: config.max_key_size,
         })
     }
@@ -469,6 +472,7 @@ impl<E: Engine> Storage<E> {
             sched_pending_write_threshold,
         );
         worker.start(scheduler)?;
+        self.gc_worker.start()?;
         Ok(())
     }
 
@@ -483,6 +487,8 @@ impl<E: Engine> Storage<E> {
         if let Err(e) = h.join() {
             return Err(box_err!("failed to join sched_handle, err:{:?}", e));
         }
+
+        self.gc_worker.stop()?;
 
         info!("storage {:?} closed.", self.engine);
         Ok(())
@@ -863,16 +869,10 @@ impl<E: Engine> Storage<E> {
     }
 
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
-        let cmd = Command::Gc {
-            ctx,
-            safe_point,
-            ratio_threshold: self.gc_ratio_threshold,
-            scan_key: None,
-            keys: vec![],
-        };
-        let tag = cmd.tag();
-        self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        self.gc_worker.async_gc(ctx, safe_point, callback)?;
+        KV_COMMAND_COUNTER_VEC
+            .with_label_values(&[CMD_TAG_GC])
+            .inc();
         Ok(())
     }
 
@@ -1383,6 +1383,9 @@ quick_error! {
         }
         SchedTooBusy {
             description("scheduler is too busy")
+        }
+        GCWorkerTooBusy {
+            description("gc worker is too busy")
         }
         KeyTooLarge(size: usize, limit: usize) {
             description("max key size exceeded")

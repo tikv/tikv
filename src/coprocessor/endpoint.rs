@@ -33,6 +33,7 @@ use tipb::select::DAGRequest;
 use server::readpool::{self, ReadPool};
 use server::{Config, OnResponse};
 use storage::engine::Error as EngineError;
+use storage::engine::{PerfStatisticsDelta, PerfStatisticsInstant};
 use storage::{self, engine, Engine};
 use util::collections::HashMap;
 use util::futurepool;
@@ -159,14 +160,14 @@ impl<E: Engine> Host<E> {
                 };
                 if !on_resp.is_streaming() {
                     let do_request = move |_| {
-                        tracker.record_wait();
+                        tracker.on_handle_start();
                         let mut resp = ctx.handle_request().unwrap_or_else(|e| {
                             let mut metrics = tracker.get_basic_metrics();
                             err_resp(e, &mut metrics)
                         });
                         let mut exec_metrics = ExecutorMetrics::default();
                         ctx.collect_metrics_into(&mut exec_metrics);
-                        tracker.record_handle(Some(&mut resp), exec_metrics);
+                        tracker.on_handle_finish(Some(&mut resp), exec_metrics);
                         on_resp.respond(resp);
                         future::ok::<_, ()>(())
                     };
@@ -178,14 +179,14 @@ impl<E: Engine> Host<E> {
                     if finished {
                         return None;
                     }
-                    tracker.record_wait();
+                    tracker.on_handle_start();
                     let (mut item, finished) = ctx.handle_streaming_request().unwrap_or_else(|e| {
                         let mut metrics = tracker.get_basic_metrics();
                         (Some(err_resp(e, &mut metrics)), true)
                     });
                     let mut exec_metrics = ExecutorMetrics::default();
                     ctx.collect_metrics_into(&mut exec_metrics);
-                    tracker.record_handle(item.as_mut(), exec_metrics);
+                    tracker.on_handle_finish(item.as_mut(), exec_metrics);
                     item.map(|resp| {
                         future::ok::<_, futures_mpsc::SendError<_>>((resp, (ctx, finished)))
                     })
@@ -195,14 +196,14 @@ impl<E: Engine> Host<E> {
             CopRequest::Analyze(analyze) => {
                 let mut ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx).unwrap();
                 let do_request = move |_| {
-                    tracker.record_wait();
+                    tracker.on_handle_start();
                     let mut resp = ctx.handle_request().unwrap_or_else(|e| {
                         let mut metrics = tracker.get_basic_metrics();
                         err_resp(e, &mut metrics)
                     });
                     let mut exec_metrics = ExecutorMetrics::default();
                     ctx.collect_metrics_into(&mut exec_metrics);
-                    tracker.record_handle(Some(&mut resp), exec_metrics);
+                    tracker.on_handle_finish(Some(&mut resp), exec_metrics);
                     on_resp.respond(resp);
                     future::ok::<_, ()>(())
                 };
@@ -211,14 +212,14 @@ impl<E: Engine> Host<E> {
             CopRequest::Checksum(checksum) => {
                 let mut ctx = ChecksumContext::new(checksum, ranges, snap, &req_ctx).unwrap();
                 let do_request = move |_| {
-                    tracker.record_wait();
+                    tracker.on_handle_start();
                     let mut resp = ctx.handle_request().unwrap_or_else(|e| {
                         let mut metrics = tracker.get_basic_metrics();
                         err_resp(e, &mut metrics)
                     });
                     let mut exec_metrics = ExecutorMetrics::default();
                     ctx.collect_metrics_into(&mut exec_metrics);
-                    tracker.record_handle(Some(&mut resp), exec_metrics);
+                    tracker.on_handle_finish(Some(&mut resp), exec_metrics);
                     on_resp.respond(resp);
                     future::ok::<_, ()>(())
                 };
@@ -271,8 +272,10 @@ struct RequestTracker {
     record_scan_detail: bool,
 
     exec_metrics: ExecutorMetrics,
-    start: Instant, // The request start time.
+    perf_statistics_start: Option<PerfStatisticsInstant>, // The perf statistics when handle begins
+    start: Instant,                                       // The request start time.
     total_handle_time: f64,
+    total_perf_statistics: PerfStatisticsDelta, // Accumulated perf statistics
 
     // These 4 fields are for ExecDetails.
     wait_start: Option<Instant>,
@@ -307,8 +310,10 @@ impl RequestTracker {
         RefMut::map(ctx, |c| &mut c.basic_local_metrics)
     }
 
-    // This function will be only called in thread pool.
-    fn record_wait(&mut self) {
+    /// This function will be only called in thread pool.
+    /// In this function, we record the wait time, which is the time elapsed until this call.
+    /// We also record the initial perf_statistics.
+    fn on_handle_start(&mut self) {
         let stop_first_wait = self.wait_time.is_none();
         let wait_start = self.wait_start.take().unwrap();
         let now = Instant::now_coarse();
@@ -328,10 +333,18 @@ impl RequestTracker {
                 .with_label_values(&[self.scan_tag])
                 .observe(self.wait_time.unwrap());
         }
+
+        self.perf_statistics_start = Some(PerfStatisticsInstant::new());
     }
 
-    #[allow(useless_let_if_seq)]
-    fn record_handle(&mut self, resp: Option<&mut Response>, mut exec_metrics: ExecutorMetrics) {
+    /// Must pair with `on_handle_start` previously.
+    #[cfg_attr(feature = "cargo-clippy", allow(useless_let_if_seq))]
+    fn on_handle_finish(&mut self, resp: Option<&mut Response>, mut exec_metrics: ExecutorMetrics) {
+        // Record delta perf statistics
+        if let Some(perf_stats) = self.perf_statistics_start.take() {
+            self.total_perf_statistics += perf_stats.delta();
+        }
+
         let handle_start = self.handle_start.take().unwrap();
         let now = Instant::now_coarse();
         self.handle_time = Some(duration_to_sec(now - handle_start));
@@ -378,7 +391,7 @@ impl Drop for RequestTracker {
                 "[region {}] [slow-query] execute takes {:?}, wait takes {:?}, \
                  peer: {:?}, start_ts: {:?}, table_id: {:?}, \
                  scan_type: {} (desc: {:?}) \
-                 [keys: {}, hit: {}, ranges: {} ({:?})]",
+                 [keys: {}, hit: {}, ranges: {} ({:?}), perf: {:?}]",
                 self.region_id,
                 self.total_handle_time,
                 self.wait_time,
@@ -391,6 +404,7 @@ impl Drop for RequestTracker {
                 self.exec_metrics.cf_stats.total_processed(),
                 self.ranges_len,
                 self.first_range,
+                self.total_perf_statistics,
             );
         }
 
@@ -429,6 +443,32 @@ impl Drop for RequestTracker {
             .scan_keys
             .with_label_values(&[self.scan_tag])
             .observe(self.exec_metrics.cf_stats.total_op_count() as f64);
+
+        cop_ctx
+            .basic_local_metrics
+            .rocksdb_perf_stats
+            .with_label_values(&[self.scan_tag, "internal_key_skipped_count"])
+            .inc_by(self.total_perf_statistics.internal_key_skipped_count as i64);
+        cop_ctx
+            .basic_local_metrics
+            .rocksdb_perf_stats
+            .with_label_values(&[self.scan_tag, "internal_delete_skipped_count"])
+            .inc_by(self.total_perf_statistics.internal_delete_skipped_count as i64);
+        cop_ctx
+            .basic_local_metrics
+            .rocksdb_perf_stats
+            .with_label_values(&[self.scan_tag, "block_cache_hit_count"])
+            .inc_by(self.total_perf_statistics.block_cache_hit_count as i64);
+        cop_ctx
+            .basic_local_metrics
+            .rocksdb_perf_stats
+            .with_label_values(&[self.scan_tag, "block_read_count"])
+            .inc_by(self.total_perf_statistics.block_read_count as i64);
+        cop_ctx
+            .basic_local_metrics
+            .rocksdb_perf_stats
+            .with_label_values(&[self.scan_tag, "block_read_byte"])
+            .inc_by(self.total_perf_statistics.block_read_byte as i64);
 
         let exec_metrics = mem::replace(&mut self.exec_metrics, ExecutorMetrics::default());
         cop_ctx.collect(self.region_id, self.scan_tag, exec_metrics);
@@ -506,6 +546,8 @@ impl RequestTask {
             wait_time: None,
             handle_time: None,
             exec_metrics: ExecutorMetrics::default(),
+            perf_statistics_start: None,
+            total_perf_statistics: PerfStatisticsDelta::default(),
 
             region_id: req.get_context().get_region_id(),
             txn_start_ts: start_ts,
@@ -572,7 +614,7 @@ impl<E: Engine> Runnable<Task<E>> for Host<E> {
         panic!("Shouldn't call Host::run directly");
     }
 
-    #[allow(for_kv_map)]
+    #[cfg_attr(feature = "cargo-clippy", allow(for_kv_map))]
     fn run_batch(&mut self, tasks: &mut Vec<Task<E>>) {
         let mut grouped_reqs = map![];
         for task in tasks.drain(..) {
