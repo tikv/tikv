@@ -126,7 +126,7 @@ where
         }
     }
 
-    #[allow(too_many_arguments)]
+    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     pub fn start<T>(
         &mut self,
         event_loop: EventLoop<Store<T, C>>,
@@ -317,7 +317,7 @@ where
         Err(box_err!("check cluster bootstrapped failed"))
     }
 
-    #[allow(too_many_arguments)]
+    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     fn start_store<T>(
         &mut self,
         mut event_loop: EventLoop<Store<T, C>>,

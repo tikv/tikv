@@ -407,7 +407,7 @@ mod tests {
         assert!(v4.is_err());
     }
 
-    #[allow(type_complexity)]
+    #[cfg_attr(feature = "cargo-clippy", allow(type_complexity))]
     #[test]
     fn test_iterate() {
         let path = TempDir::new("test-raftstore").unwrap();
