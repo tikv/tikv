@@ -19,6 +19,8 @@ supports closed detection and try operations.
 
 */
 
+#![cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
+
 use crossbeam_channel;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError};
