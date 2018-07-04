@@ -1650,12 +1650,12 @@ impl Decimal {
                         WORD_BUF_LEN * DIGITS_PER_WORD,
                         0,
                     )),
-                    Res::Truncated(v) => Res::Truncated(v),
                     Res::Ok(v) => if is_truncated {
                         Res::Truncated(v)
                     } else {
                         Res::Ok(v)
                     },
+                    res => res,
                 };
             }
         }
