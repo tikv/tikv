@@ -77,6 +77,7 @@ uuid = { version = "0.6", features = [ "serde", "v4" ] }
 grpcio = { version = "0.3", features = [ "secure" ] }
 raft = "0.3"
 crossbeam-channel = "0.2"
+crossbeam = "0.2"
 fxhash = "0.2"
 derive_more = "0.11.0"
 
@@ -123,4 +124,4 @@ lto = true
 opt-level = 3
 debug = true
 # TODO: remove this once rust-lang/rust#50199 is resolved.
-codegen-units = 2
+codegen-units = 1
