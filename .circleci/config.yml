@@ -115,18 +115,6 @@ jobs:
           paths:
             - ~/tikv_cache_cargo
       - run:
-          name: Testing
-          command: make trace_test
-          no_output_timeout: 1800s
-      - run:
-          name: Calculating code coverage (master branch only)
-          command: |
-            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
-              cargo tarpaulin --no-count --skip-clean --out Xml
-              bash <(curl -s https://codecov.io/bash)
-            fi
-          no_output_timeout: 1800s
-      - run:
           name: Caching ./target (master branch only)
           command: |
             rm -rf ~/tikv_cache_build
@@ -144,6 +132,18 @@ jobs:
           key: v3-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
           paths:
             - ~/tikv_cache_build
+      - run:
+          name: Testing
+          command: make trace_test
+          no_output_timeout: 1800s
+      - run:
+          name: Calculating code coverage (master branch only)
+          command: |
+            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
+              cargo tarpaulin --no-count --skip-clean --out Xml
+              bash <(curl -s https://codecov.io/bash)
+            fi
+          no_output_timeout: 1800s
 workflows:
   version: 2
   ci-test:

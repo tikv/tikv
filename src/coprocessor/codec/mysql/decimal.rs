@@ -541,7 +541,7 @@ fn do_add<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
 }
 
 // TODO: remove following attribute
-#[allow(needless_range_loop)]
+#[cfg_attr(feature = "cargo-clippy", allow(needless_range_loop))]
 fn do_div_mod(
     mut lhs: Decimal,
     rhs: Decimal,
@@ -1682,7 +1682,7 @@ macro_rules! enable_conv_for_int {
     ($s:ty, $t:ty) => {
         impl From<$s> for Decimal {
             fn from(t: $s) -> Decimal {
-                #[allow(cast_lossless)]
+                #[cfg_attr(feature = "cargo-clippy", allow(cast_lossless))]
                 (t as $t).into()
             }
         }
@@ -2264,7 +2264,7 @@ mod test {
     }
 
     #[test]
-    #[allow(approx_constant)]
+    #[cfg_attr(feature = "cargo-clippy", allow(approx_constant))]
     fn test_f64() {
         let cases = vec![
             ("12345", 12345f64),
