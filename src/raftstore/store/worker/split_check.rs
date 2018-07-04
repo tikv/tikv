@@ -14,6 +14,7 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
+use std::mem;
 use std::sync::Arc;
 
 use kvproto::metapb::Region;
@@ -33,7 +34,7 @@ use super::metrics::*;
 
 #[derive(PartialEq, Eq)]
 pub struct KeyEntry {
-    key: Option<Vec<u8>>,
+    key: Vec<u8>,
     pos: usize,
     value_size: usize,
     cf: CfName,
@@ -42,19 +43,19 @@ pub struct KeyEntry {
 impl KeyEntry {
     fn new(key: Vec<u8>, pos: usize, value_size: usize, cf: CfName) -> KeyEntry {
         KeyEntry {
-            key: Some(key),
+            key,
             pos,
             value_size,
             cf,
         }
     }
 
-    fn take(&mut self) -> KeyEntry {
-        KeyEntry::new(self.key.take().unwrap(), self.pos, self.value_size, self.cf)
+    fn replace_with(&mut self, other: &mut KeyEntry) {
+        mem::swap(self, other);
     }
 
     pub fn key(&self) -> &[u8] {
-        self.key.as_ref().unwrap()
+        self.key.as_ref()
     }
 
     pub fn is_from_write_cf(&self) -> bool {
@@ -69,13 +70,7 @@ impl KeyEntry {
 impl PartialOrd for KeyEntry {
     fn partial_cmp(&self, rhs: &KeyEntry) -> Option<Ordering> {
         // BinaryHeap is max heap, so we have to reverse order to get a min heap.
-        Some(
-            self.key
-                .as_ref()
-                .unwrap()
-                .cmp(rhs.key.as_ref().unwrap())
-                .reverse(),
-        )
+        Some(self.key.cmp(&rhs.key).reverse())
     }
 }
 
@@ -125,11 +120,10 @@ impl<'a> MergedIterator<'a> {
         let (cf, iter) = &mut self.iters[pos];
         if iter.next() {
             // TODO: avoid copy key.
-            let e = KeyEntry::new(iter.key().to_vec(), pos, iter.value().len(), cf);
+            let mut e = KeyEntry::new(iter.key().to_vec(), pos, iter.value().len(), cf);
             let mut front = self.heap.peek_mut().unwrap();
-            let res = front.take();
-            *front = e;
-            Some(res)
+            front.replace_with(&mut e);
+            Some(e)
         } else {
             self.heap.pop()
         }
