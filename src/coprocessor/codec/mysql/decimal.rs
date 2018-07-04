@@ -120,9 +120,7 @@ macro_rules! word_cnt {
         word_cnt!($len, u8)
     };
     ($len:expr, $t:ty) => {{
-        if $len <= 0 {
-            0 as $t
-        } else if $len as usize > (DIGITS_PER_WORD * WORD_BUF_LEN) as usize {
+        if $len > 0 && $len as usize > (DIGITS_PER_WORD * WORD_BUF_LEN) as usize {
             // process overflow
             (WORD_BUF_LEN + 1) as $t
         } else {
@@ -567,7 +565,7 @@ fn do_div_mod(
     if lhs.word_buf[l_idx] >= rhs.word_buf[r_idx] {
         int_cnt_to += 1;
     }
-    let int_word_to = if int_cnt_to < 0 {
+    let mut int_word_to = if int_cnt_to < 0 {
         int_cnt_to /= DIGITS_PER_WORD as i8;
         0
     } else {
@@ -579,9 +577,13 @@ fn do_div_mod(
         let frac_cnt = cmp::max(lhs.frac_cnt, rhs.frac_cnt);
         Res::Ok(Decimal::new(0, frac_cnt, lhs.negative))
     } else {
-        frac_word_to = word_cnt!(l_frac_cnt + r_frac_cnt + frac_incr);
+        frac_word_to = word_cnt!(
+            l_frac_cnt
+                .saturating_add(r_frac_cnt)
+                .saturating_add(frac_incr)
+        );
         let res = fix_word_cnt_err(int_word_to, frac_word_to, WORD_BUF_LEN);
-        let int_word_to = res.0;
+        int_word_to = res.0;
         frac_word_to = res.1;
         res.map(|_| {
             Decimal::new(
@@ -599,7 +601,12 @@ fn do_div_mod(
     let i = word_cnt!(l_prec as usize, usize);
     let l_len = cmp::max(
         3,
-        i + word_cnt!(2 * r_frac_cnt + frac_incr + 1) as usize + 1,
+        i + word_cnt!(
+            r_frac_cnt
+                .saturating_mul(2)
+                .saturating_add(frac_incr)
+                .saturating_add(1)
+        ) as usize + 1,
     );
     let mut buf = vec![0; l_len];
     (&mut buf[0..i]).copy_from_slice(&lhs.word_buf[l_idx..l_idx + i]);
@@ -770,8 +777,13 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
     let mut start_to = int_word_to + frac_word_to;
     let r_start = cmp::max(r_int_word_cnt + r_frac_word_cnt, 0) as usize;
     let left_stop = cmp::max(l_int_word_cnt + l_frac_word_cnt, 0) as usize;
+    let r_start = cmp::min(r_start, WORD_BUF_LEN as usize);
+    let left_stop = cmp::min(left_stop, WORD_BUF_LEN as usize);
     for l_idx in (0..left_stop).rev() {
-        assert!(start_to >= r_start);
+        if start_to < r_start {
+            break;
+        }
+        //assert!(start_to >= r_start);
         let (mut carry, mut idx_to) = (0, start_to);
         start_to -= 1;
         for r_idx in (0..r_start).rev() {
@@ -3157,6 +3169,20 @@ mod test {
                 "0.003430",
                 Some("14868.804664723"),
                 Some("0.002760"),
+            ),
+            (
+                5,
+                "3428138243708624600000000000000000000000000000000000",
+                "0.000000000000000000000000000000000000000000010962196522059515",
+                Some("312723662343590746587750435944686855597018456899102054479447138416084646758822"),
+                Some("0.000000000000000000000000000000000003564345362392880000000000")
+            ),
+            (
+                0,
+                "-0.000000000000000000000000000000000000000000004078816115216077",
+                "770994069125765500000000000000000000000000000",
+                Some("-0.000000000000000000000000000000000000000000000000000000000000000"),
+                Some("-0.000000000000000000000000000000000000000000004078816115216077")
             ),
         ];
 
