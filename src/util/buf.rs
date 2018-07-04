@@ -67,7 +67,7 @@ impl PipeBuffer {
     }
 
     #[inline]
-    #[allow(len_zero)]
+    #[cfg_attr(feature = "cargo-clippy", allow(len_zero))]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
