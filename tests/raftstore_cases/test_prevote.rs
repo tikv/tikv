@@ -223,6 +223,7 @@ fn test_prevote_reboot_minority_followers() {
 
 // Test isolating a minority of the cluster and make sure that the remove themselves.
 fn test_pair_isolated<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.raft_store.prevote = true;
     let region = 1;
     let pd_client = Arc::clone(&cluster.pd_client);
 
@@ -248,6 +249,7 @@ fn test_server_pair_isolated() {
 }
 
 fn test_isolated_follower_leader_does_not_change<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.raft_store.prevote = true;
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v1");
@@ -255,26 +257,30 @@ fn test_isolated_follower_leader_does_not_change<T: Simulator>(cluster: &mut Clu
     let resp = cluster
         .call_command(region_status.clone(), Duration::from_secs(5))
         .unwrap();
-    let term = resp.get_header().get_current_term();
+    let start_term = resp.get_header().get_current_term();
+
     // Isolate peer5.
     cluster.partition(vec![1, 2, 3, 4], vec![5]);
     let election_timeout = cluster.cfg.raft_store.raft_base_tick_interval.0
         * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
     // Peer5 should not increase its term.
     thread::sleep(election_timeout * 2);
+
     // Now peer5 can send messages to others
     cluster.clear_send_filters();
     thread::sleep(election_timeout * 2);
     cluster.must_put(b"k1", b"v1");
+
     // Peer1 is still the leader.
     let leader = cluster.leader_of_region(1);
     assert_eq!(leader, Some(new_peer(1, 1)));
+
     // And the term is not changed.
     let resp = cluster
         .call_command(region_status, Duration::from_secs(5))
         .unwrap();
     let current_term = resp.get_header().get_current_term();
-    assert_eq!(term, current_term);
+    assert_eq!(start_term, current_term);
 }
 
 #[test]
