@@ -455,12 +455,19 @@ impl Peer {
                 );
                 return None;
             }
-            // There is no tasks in apply worker.
+            // There is no tasks in apply/localread worker.
             false
         } else {
             initialized
         };
         self.pending_remove = true;
+
+        // The read delegate of the peer must not continue to serve
+        // requests. We'd like to disable read explicitly.
+        //
+        // TODO: it may be unnecessary.
+        self.leader_lease.disconnect();
+
         Some(DestroyPeerJob {
             async_remove,
             initialized,
@@ -1038,6 +1045,11 @@ impl Peer {
                         split_to_be_updated = false;
 
                         // Disable read on the localreader for this region.
+                        //
+                        // Actually we dont need to disconnect here, because
+                        // peers of splitted region in other tikvs will not start
+                        // an election until an election timeout, which is longer
+                        //the max leader lease.
                         self.leader_lease.disconnect();
                     }
                     if merge_to_be_update && ctx.contains(ProposalContext::PREPARE_MERGE) {

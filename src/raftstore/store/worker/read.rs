@@ -218,7 +218,7 @@ impl Display for Task {
     }
 }
 
-fn server_busy(cmd: StoreMsg) {
+fn handle_busy(cmd: StoreMsg) {
     let mut err = errorpb::Error::new();
     err.set_message(RAFTSTORE_IS_BUSY.to_owned());
     let mut server_is_busy = errorpb::ServerIsBusy::new();
@@ -284,10 +284,10 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
             Ok(()) => (),
             Err(NotifyError::Full(cmd)) => {
                 self.metrics.rejected_by_channel_full += 1;
-                server_busy(cmd)
+                handle_busy(cmd)
             }
             Err(err) => {
-                error!("localreader redirect failed: {:?}", err);
+                panic!("localreader redirect failed: {:?}", err);
             }
         }
     }
