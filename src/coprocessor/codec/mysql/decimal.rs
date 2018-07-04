@@ -120,12 +120,13 @@ macro_rules! word_cnt {
         word_cnt!($len, u8)
     };
     ($len:expr, $t:ty) => {{
-        let len = ($len) as $t;
-        if len > (DIGITS_PER_WORD * WORD_BUF_LEN) as $t {
+        if $len <= 0 {
+            0 as $t
+        } else if $len as usize > (DIGITS_PER_WORD * WORD_BUF_LEN) as usize {
             // process overflow
             (WORD_BUF_LEN + 1) as $t
         } else {
-            (len + DIGITS_PER_WORD as $t - 1) / (DIGITS_PER_WORD as $t)
+            ($len as $t + DIGITS_PER_WORD as $t - 1) / (DIGITS_PER_WORD as $t)
         }
     }};
 }
