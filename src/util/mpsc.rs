@@ -113,13 +113,15 @@ impl<T> Receiver<T> {
 
     #[inline]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        if !self.state.is_sender_closed() {
-            return match self.receiver.try_recv() {
-                Some(t) => Ok(t),
-                None => Err(TryRecvError::Empty),
-            };
+        match self.receiver.try_recv() {
+            Some(t) => Ok(t),
+            None => {
+                if !self.state.is_sender_closed() {
+                    return Err(TryRecvError::Empty);
+                }
+                self.receiver.try_recv().ok_or(TryRecvError::Disconnected)
+            }
         }
-        Err(TryRecvError::Disconnected)
     }
 
     #[inline]
@@ -199,7 +201,11 @@ mod tests {
         assert_eq!(tx.try_send(2), Err(TrySendError::Disconnected(2)));
 
         let (tx, rx) = super::bounded::<u64>(10);
+        tx.send(2).unwrap();
+        tx.send(3).unwrap();
         drop(tx);
+        assert_eq!(rx.try_recv(), Ok(2));
+        assert_eq!(rx.recv(), Ok(3));
         assert_eq!(rx.recv(), Err(RecvError));
         assert_eq!(rx.try_recv(), Err(TryRecvError::Disconnected));
         assert_eq!(
