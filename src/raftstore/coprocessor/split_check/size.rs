@@ -146,9 +146,11 @@ mod tests {
     use tempdir::TempDir;
 
     use super::Checker;
-    use raftstore::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
+    use raftstore::coprocessor::{
+        Config, CoprocessorHost, KeyEntry, ObserverContext, SplitChecker,
+    };
     use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
-    use storage::ALL_CFS;
+    use storage::{ALL_CFS, CF_WRITE};
     use util::config::ReadableSize;
     use util::properties::SizePropertiesCollectorFactory;
     use util::rocksdb::{new_engine_opt, CFOptions};
@@ -284,12 +286,8 @@ mod tests {
         let mut checker = Checker::new(24, 24);
         let region = Region::default();
         let mut ctx = ObserverContext::new(&region);
-        loop {
-            let data = b"xxxx";
-            if checker.on_kv(&mut ctx, data, data.len() as u64) {
-                break;
-            }
-        }
+        let data = KeyEntry::new(b"xxxx".to_vec(), 0, 4, CF_WRITE);
+        while !checker.on_kv(&mut ctx, &data) {}
 
         assert!(checker.split_key().is_some());
     }

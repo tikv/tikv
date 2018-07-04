@@ -41,7 +41,7 @@ pub struct KeyEntry {
 }
 
 impl KeyEntry {
-    fn new(key: Vec<u8>, pos: usize, value_size: usize, cf: CfName) -> KeyEntry {
+    pub fn new(key: Vec<u8>, pos: usize, value_size: usize, cf: CfName) -> KeyEntry {
         KeyEntry {
             key,
             pos,
