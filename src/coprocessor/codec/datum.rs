@@ -870,7 +870,7 @@ impl<T: Write> DatumEncoder for T {}
 /// Get the approximate needed buffer size of values.
 ///
 /// This function ensures that encoded values must fit in the given buffer size.
-#[allow(match_same_arms)]
+#[cfg_attr(feature = "cargo-clippy", allow(match_some_arms))]
 pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
     values
         .iter()
@@ -925,7 +925,7 @@ pub fn encode_to(buf: &mut Vec<u8>, values: &[Datum], comparable: bool) -> Resul
 
 /// Split bytes array into two part: first one is a whole datum's encoded data,
 /// and the second part is the remaining data.
-#[allow(match_same_arms)]
+#[cfg_attr(feature = "cargo-clippy", allow(match_same_arms))]
 pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
     if buf.is_empty() {
         return Err(box_err!("{} is too short", escape(buf)));

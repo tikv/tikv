@@ -129,9 +129,9 @@ pub trait Snapshot: Send + Debug + Clone + Sized {
 
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
-    #[allow(needless_lifetimes)]
+    #[cfg_attr(feature = "cargo-clippy", allow(needless_lifetimes))]
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
-    #[allow(needless_lifetimes)]
+    #[cfg_attr(feature = "cargo-clippy", allow(needless_lifetimes))]
     fn iter_cf(
         &self,
         cf: CfName,
