@@ -135,7 +135,7 @@ fn bench_async_batch_snapshots(b: &mut test::Bencher) {
 
 // speed of light for batch_snapshot
 #[bench]
-#[allow(unit_arg)]
+#[cfg_attr(feature = "cargo-clippy", allow(unit_arg))]
 fn bench_async_batch_snapshots_noop(b: &mut test::Bencher) {
     b.iter(|| {
         let on_finished: BatchCallback<RegionSnapshot> = Box::new(move |results: Vec<_>| {
