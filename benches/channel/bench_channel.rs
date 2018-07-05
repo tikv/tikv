@@ -122,6 +122,33 @@ fn bench_util_channel(b: &mut Bencher) {
 }
 
 #[bench]
+fn bench_util_loose(b: &mut Bencher) {
+    let (mut tx, rx) = mpsc::loose_bounded(480000);
+
+    let t = thread::spawn(move || {
+        let mut n2: usize = 0;
+        loop {
+            let n = rx.recv().unwrap();
+            if n == 0 {
+                return n2;
+            }
+            n2 += 1;
+        }
+    });
+
+    let mut n1 = 0;
+    b.iter(|| {
+        n1 += 1;
+        while tx.try_send(1).is_err() {}
+    });
+
+    while tx.try_send(0).is_err() {}
+
+    let n2 = t.join().unwrap();
+    assert_eq!(n1, n2);
+}
+
+#[bench]
 fn bench_crossbeam_channel(b: &mut Bencher) {
     let (tx, rx) = crossbeam_channel::unbounded();
 
