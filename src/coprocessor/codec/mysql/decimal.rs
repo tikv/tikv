@@ -123,7 +123,7 @@ macro_rules! word_cnt {
         if $len > 0 && $len as usize > (DIGITS_PER_WORD * WORD_BUF_LEN) as usize {
             // process overflow
             (WORD_BUF_LEN + 1) as $t
-        } else if $len <= 0 && ($len as $t)>0 {
+        } else if $len <= 0 && ($len as $t) > 0 {
             // when $len is negative and $t is unsigned
             0 as $t
         } else {
