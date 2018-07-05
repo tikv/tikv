@@ -328,7 +328,7 @@ pub fn get_region_approximate_size_cf(
 }
 
 /// Get the approxmiate middle key of the region. The returned key maybe
-/// is timpstamped if transaction KV is used, and must start with "z".
+/// is timestamped if transaction KV is used, and must start with "z".
 pub fn get_region_approximate_middle_cf(
     db: &DB,
     cfname: &str,
