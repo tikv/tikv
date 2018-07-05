@@ -273,8 +273,7 @@ fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, Sub
         l_frac_word_cnt = cmp::max(0, l_end + 1 - l_stop as isize) as u8;
         // here r_end is the last nonzero index in r.word_buf, attention:it may in the range of (0,l_int_word_cnt)
         r_frac_word_cnt = cmp::max(0, r_end + 1 - r_stop as isize) as u8;
-        while l_idx as isize <= l_end
-            && r_idx as isize <= r_end
+        while l_idx as isize <= l_end && r_idx as isize <= r_end
             && lhs.word_buf[l_idx] == rhs.word_buf[r_idx]
         {
             l_idx += 1;
