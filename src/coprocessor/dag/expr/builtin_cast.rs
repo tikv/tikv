@@ -182,7 +182,7 @@ impl ScalarFunc {
 
     pub fn cast_json_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let val = val.cast_to_real();
+        let val = val.cast_to_real(ctx)?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, val)?))
     }
 
@@ -270,7 +270,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let val = val.cast_to_real();
+        let val = val.cast_to_real(ctx)?;
         let dec = Decimal::from_f64(val)?;
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
             .map(Some)
@@ -728,7 +728,7 @@ mod test {
     fn test_cast_as_int() {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
-        #[allow(inconsistent_digit_grouping)]
+        #[cfg_attr(feature = "cargo-clippy", allow(inconsistent_digit_grouping))]
         let time_int = 2012_12_12_12_00_23i64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
@@ -824,7 +824,7 @@ mod test {
     fn test_cast_as_real() {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
-        #[allow(inconsistent_digit_grouping)]
+        #[cfg_attr(feature = "cargo-clippy", allow(inconsistent_digit_grouping))]
         let int_t = 2012_12_12_12_00_23u64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![

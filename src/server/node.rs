@@ -44,11 +44,11 @@ pub fn create_raft_storage<S>(
     router: S,
     cfg: &StorageConfig,
     read_pool: ReadPool<storage::ReadPoolContext>,
-) -> Result<Storage>
+) -> Result<Storage<RaftKv<S>>>
 where
     S: RaftStoreRouter + 'static,
 {
-    let engine = Box::new(RaftKv::new(router));
+    let engine = RaftKv::new(router);
     let store = Storage::from_engine(engine, cfg, read_pool)?;
     Ok(store)
 }
@@ -126,7 +126,7 @@ where
         }
     }
 
-    #[allow(too_many_arguments)]
+    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     pub fn start<T>(
         &mut self,
         event_loop: EventLoop<Store<T, C>>,
@@ -317,7 +317,7 @@ where
         Err(box_err!("check cluster bootstrapped failed"))
     }
 
-    #[allow(too_many_arguments)]
+    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     fn start_store<T>(
         &mut self,
         mut event_loop: EventLoop<Store<T, C>>,

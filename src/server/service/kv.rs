@@ -36,19 +36,20 @@ use server::{Error, OnResponse};
 use storage::engine::Error as EngineError;
 use storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
 use storage::txn::Error as TxnError;
-use storage::{self, Key, Mutation, Options, Storage, Value};
+use storage::{self, Engine, Key, Mutation, Options, Storage, Value};
 use util::collections::HashMap;
 use util::future::paired_future_callback;
 use util::worker::Scheduler;
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
+const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 
 #[derive(Clone)]
-pub struct Service<T: RaftStoreRouter> {
+pub struct Service<T: RaftStoreRouter, E: Engine> {
     // For handling KV requests.
-    storage: Storage,
+    storage: Storage<E>,
     // For handling coprocessor requests.
-    end_point_scheduler: Scheduler<EndPointTask>,
+    end_point_scheduler: Scheduler<EndPointTask<E>>,
     // For handling raft messages.
     ch: T,
     // For handling snapshot.
@@ -57,15 +58,15 @@ pub struct Service<T: RaftStoreRouter> {
     stream_channel_size: usize,
 }
 
-impl<T: RaftStoreRouter> Service<T> {
+impl<T: RaftStoreRouter, E: Engine> Service<T, E> {
     pub fn new(
-        storage: Storage,
-        end_point_scheduler: Scheduler<EndPointTask>,
+        storage: Storage<E>,
+        end_point_scheduler: Scheduler<EndPointTask<E>>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         recursion_limit: u32,
         stream_channel_size: usize,
-    ) -> Service<T> {
+    ) -> Self {
         Service {
             storage,
             end_point_scheduler,
@@ -99,7 +100,7 @@ impl<T: RaftStoreRouter> Service<T> {
     }
 }
 
-impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
+impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E> {
     fn kv_get(&self, ctx: RpcContext, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_get.start_coarse_timer();
 
@@ -1173,6 +1174,13 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
             let mut err = RegionError::new();
             let mut server_is_busy_err = ServerIsBusy::new();
             server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
+            err.set_server_is_busy(server_is_busy_err);
+            Some(err)
+        }
+        Err(Error::GCWorkerTooBusy) => {
+            let mut err = RegionError::new();
+            let mut server_is_busy_err = ServerIsBusy::new();
+            server_is_busy_err.set_reason(GC_WORKER_IS_BUSY.to_owned());
             err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }

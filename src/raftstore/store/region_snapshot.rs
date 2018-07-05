@@ -45,13 +45,6 @@ impl RegionSnapshot {
         }
     }
 
-    pub fn clone(&self) -> RegionSnapshot {
-        RegionSnapshot {
-            snap: self.snap.clone(),
-            region: Arc::clone(&self.region),
-        }
-    }
-
     pub fn get_region(&self) -> &Region {
         &self.region
     }
@@ -125,6 +118,15 @@ impl RegionSnapshot {
 
     pub fn get_end_key(&self) -> &[u8] {
         self.region.get_end_key()
+    }
+}
+
+impl Clone for RegionSnapshot {
+    fn clone(&self) -> Self {
+        RegionSnapshot {
+            snap: self.snap.clone(),
+            region: Arc::clone(&self.region),
+        }
     }
 }
 
@@ -405,7 +407,7 @@ mod tests {
         assert!(v4.is_err());
     }
 
-    #[allow(type_complexity)]
+    #[cfg_attr(feature = "cargo-clippy", allow(type_complexity))]
     #[test]
     fn test_iterate() {
         let path = TempDir::new("test-raftstore").unwrap();
@@ -530,7 +532,7 @@ mod tests {
 
         let snap = RegionSnapshot::new(&store);
         let mut statistics = CFStatistics::default();
-        let mut iter = Cursor::new(Box::new(snap.iter(IterOption::default())), ScanMode::Mixed);
+        let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
         assert!(
             !iter
                 .reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics)
@@ -579,7 +581,7 @@ mod tests {
         region.mut_peers().push(Peer::new());
         let store = new_peer_storage(Arc::clone(&engine), Arc::clone(&raft_engine), &region);
         let snap = RegionSnapshot::new(&store);
-        let mut iter = Cursor::new(Box::new(snap.iter(IterOption::default())), ScanMode::Mixed);
+        let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
         assert!(
             !iter
                 .reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics)

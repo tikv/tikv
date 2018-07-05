@@ -33,7 +33,8 @@ use tipb::select::DAGRequest;
 use server::readpool::{self, ReadPool};
 use server::{Config, OnResponse};
 use storage::engine::Error as EngineError;
-use storage::{self, engine, Engine, Snapshot};
+use storage::engine::{PerfStatisticsDelta, PerfStatisticsInstant};
+use storage::{self, engine, Engine};
 use util::collections::HashMap;
 use util::futurepool;
 use util::time::{duration_to_sec, Instant};
@@ -58,9 +59,9 @@ const OUTDATED_ERROR_MSG: &str = "request outdated.";
 
 const ENDPOINT_IS_BUSY: &str = "endpoint is busy";
 
-pub struct Host {
-    engine: Box<Engine>,
-    sched: Scheduler<Task>,
+pub struct Host<E: Engine> {
+    engine: E,
+    sched: Scheduler<Task<E>>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
     pool: ReadPool<ReadPoolContext>,
@@ -74,13 +75,13 @@ pub struct Host {
     request_max_handle_duration: Duration,
 }
 
-impl Host {
+impl<E: Engine> Host<E> {
     pub fn new(
-        engine: Box<Engine>,
-        sched: Scheduler<Task>,
+        engine: E,
+        sched: Scheduler<Task<E>>,
         cfg: &Config,
         pool: ReadPool<ReadPoolContext>,
-    ) -> Host {
+    ) -> Self {
         // Use read pool's max task config
         let max_running_task_count = pool.get_max_tasks();
         Host {
@@ -106,7 +107,7 @@ impl Host {
         self.running_task_count.load(Ordering::Acquire)
     }
 
-    fn notify_failed<E: Into<Error> + Debug>(&mut self, e: E, reqs: Vec<RequestTask>) {
+    fn notify_failed<Err: Into<Error> + Debug>(&mut self, e: Err, reqs: Vec<RequestTask>) {
         debug!("failed to handle batch request: {:?}", e);
         let resp = err_multi_resp(e.into(), reqs.len(), &mut self.basic_local_metrics);
         for t in reqs {
@@ -115,12 +116,12 @@ impl Host {
     }
 
     #[inline]
-    fn notify_batch_failed<E: Into<Error> + Debug>(&mut self, e: E, batch_id: u64) {
+    fn notify_batch_failed<Err: Into<Error> + Debug>(&mut self, e: Err, batch_id: u64) {
         let reqs = self.reqs.remove(&batch_id).unwrap();
         self.notify_failed(e, reqs);
     }
 
-    fn handle_request(&mut self, snap: Box<Snapshot>, t: RequestTask) {
+    fn handle_request(&mut self, snap: E::Snap, t: RequestTask) {
         // Collect metrics into it before requests enter into execute pool.
         // Otherwize collect into thread local contexts.
         let metrics = &mut self.basic_local_metrics;
@@ -159,14 +160,14 @@ impl Host {
                 };
                 if !on_resp.is_streaming() {
                     let do_request = move |_| {
-                        tracker.record_wait();
+                        tracker.on_handle_start();
                         let mut resp = ctx.handle_request().unwrap_or_else(|e| {
                             let mut metrics = tracker.get_basic_metrics();
                             err_resp(e, &mut metrics)
                         });
                         let mut exec_metrics = ExecutorMetrics::default();
                         ctx.collect_metrics_into(&mut exec_metrics);
-                        tracker.record_handle(Some(&mut resp), exec_metrics);
+                        tracker.on_handle_finish(Some(&mut resp), exec_metrics);
                         on_resp.respond(resp);
                         future::ok::<_, ()>(())
                     };
@@ -178,14 +179,14 @@ impl Host {
                     if finished {
                         return None;
                     }
-                    tracker.record_wait();
+                    tracker.on_handle_start();
                     let (mut item, finished) = ctx.handle_streaming_request().unwrap_or_else(|e| {
                         let mut metrics = tracker.get_basic_metrics();
                         (Some(err_resp(e, &mut metrics)), true)
                     });
                     let mut exec_metrics = ExecutorMetrics::default();
                     ctx.collect_metrics_into(&mut exec_metrics);
-                    tracker.record_handle(item.as_mut(), exec_metrics);
+                    tracker.on_handle_finish(item.as_mut(), exec_metrics);
                     item.map(|resp| {
                         future::ok::<_, futures_mpsc::SendError<_>>((resp, (ctx, finished)))
                     })
@@ -195,14 +196,14 @@ impl Host {
             CopRequest::Analyze(analyze) => {
                 let mut ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx).unwrap();
                 let do_request = move |_| {
-                    tracker.record_wait();
+                    tracker.on_handle_start();
                     let mut resp = ctx.handle_request().unwrap_or_else(|e| {
                         let mut metrics = tracker.get_basic_metrics();
                         err_resp(e, &mut metrics)
                     });
                     let mut exec_metrics = ExecutorMetrics::default();
                     ctx.collect_metrics_into(&mut exec_metrics);
-                    tracker.record_handle(Some(&mut resp), exec_metrics);
+                    tracker.on_handle_finish(Some(&mut resp), exec_metrics);
                     on_resp.respond(resp);
                     future::ok::<_, ()>(())
                 };
@@ -211,14 +212,14 @@ impl Host {
             CopRequest::Checksum(checksum) => {
                 let mut ctx = ChecksumContext::new(checksum, ranges, snap, &req_ctx).unwrap();
                 let do_request = move |_| {
-                    tracker.record_wait();
+                    tracker.on_handle_start();
                     let mut resp = ctx.handle_request().unwrap_or_else(|e| {
                         let mut metrics = tracker.get_basic_metrics();
                         err_resp(e, &mut metrics)
                     });
                     let mut exec_metrics = ExecutorMetrics::default();
                     ctx.collect_metrics_into(&mut exec_metrics);
-                    tracker.record_handle(Some(&mut resp), exec_metrics);
+                    tracker.on_handle_finish(Some(&mut resp), exec_metrics);
                     on_resp.respond(resp);
                     future::ok::<_, ()>(())
                 };
@@ -227,7 +228,7 @@ impl Host {
         }
     }
 
-    fn handle_snapshot_result(&mut self, id: u64, snapshot: engine::Result<Box<Snapshot>>) {
+    fn handle_snapshot_result(&mut self, id: u64, snapshot: engine::Result<E::Snap>) {
         let snap = match snapshot {
             Ok(s) => s,
             Err(e) => return self.notify_batch_failed(e, id),
@@ -238,14 +239,14 @@ impl Host {
     }
 }
 
-pub enum Task {
+pub enum Task<E: Engine> {
     Request(RequestTask),
-    SnapRes(u64, engine::Result<Box<Snapshot>>),
-    BatchSnapRes(Vec<(u64, engine::Result<Box<Snapshot>>)>),
+    SnapRes(u64, engine::Result<E::Snap>),
+    BatchSnapRes(Vec<(u64, engine::Result<E::Snap>)>),
     RetryRequests(Vec<u64>),
 }
 
-impl Display for Task {
+impl<E: Engine> Display for Task<E> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
             Task::Request(ref req) => write!(f, "{}", req),
@@ -271,8 +272,10 @@ struct RequestTracker {
     record_scan_detail: bool,
 
     exec_metrics: ExecutorMetrics,
-    start: Instant, // The request start time.
+    perf_statistics_start: Option<PerfStatisticsInstant>, // The perf statistics when handle begins
+    start: Instant,                                       // The request start time.
     total_handle_time: f64,
+    total_perf_statistics: PerfStatisticsDelta, // Accumulated perf statistics
 
     // These 4 fields are for ExecDetails.
     wait_start: Option<Instant>,
@@ -307,8 +310,10 @@ impl RequestTracker {
         RefMut::map(ctx, |c| &mut c.basic_local_metrics)
     }
 
-    // This function will be only called in thread pool.
-    fn record_wait(&mut self) {
+    /// This function will be only called in thread pool.
+    /// In this function, we record the wait time, which is the time elapsed until this call.
+    /// We also record the initial perf_statistics.
+    fn on_handle_start(&mut self) {
         let stop_first_wait = self.wait_time.is_none();
         let wait_start = self.wait_start.take().unwrap();
         let now = Instant::now_coarse();
@@ -328,10 +333,18 @@ impl RequestTracker {
                 .with_label_values(&[self.scan_tag])
                 .observe(self.wait_time.unwrap());
         }
+
+        self.perf_statistics_start = Some(PerfStatisticsInstant::new());
     }
 
-    #[allow(useless_let_if_seq)]
-    fn record_handle(&mut self, resp: Option<&mut Response>, mut exec_metrics: ExecutorMetrics) {
+    /// Must pair with `on_handle_start` previously.
+    #[cfg_attr(feature = "cargo-clippy", allow(useless_let_if_seq))]
+    fn on_handle_finish(&mut self, resp: Option<&mut Response>, mut exec_metrics: ExecutorMetrics) {
+        // Record delta perf statistics
+        if let Some(perf_stats) = self.perf_statistics_start.take() {
+            self.total_perf_statistics += perf_stats.delta();
+        }
+
         let handle_start = self.handle_start.take().unwrap();
         let now = Instant::now_coarse();
         self.handle_time = Some(duration_to_sec(now - handle_start));
@@ -378,7 +391,7 @@ impl Drop for RequestTracker {
                 "[region {}] [slow-query] execute takes {:?}, wait takes {:?}, \
                  peer: {:?}, start_ts: {:?}, table_id: {:?}, \
                  scan_type: {} (desc: {:?}) \
-                 [keys: {}, hit: {}, ranges: {} ({:?})]",
+                 [keys: {}, hit: {}, ranges: {} ({:?}), perf: {:?}]",
                 self.region_id,
                 self.total_handle_time,
                 self.wait_time,
@@ -391,6 +404,7 @@ impl Drop for RequestTracker {
                 self.exec_metrics.cf_stats.total_processed(),
                 self.ranges_len,
                 self.first_range,
+                self.total_perf_statistics,
             );
         }
 
@@ -429,6 +443,32 @@ impl Drop for RequestTracker {
             .scan_keys
             .with_label_values(&[self.scan_tag])
             .observe(self.exec_metrics.cf_stats.total_op_count() as f64);
+
+        cop_ctx
+            .basic_local_metrics
+            .rocksdb_perf_stats
+            .with_label_values(&[self.scan_tag, "internal_key_skipped_count"])
+            .inc_by(self.total_perf_statistics.internal_key_skipped_count as i64);
+        cop_ctx
+            .basic_local_metrics
+            .rocksdb_perf_stats
+            .with_label_values(&[self.scan_tag, "internal_delete_skipped_count"])
+            .inc_by(self.total_perf_statistics.internal_delete_skipped_count as i64);
+        cop_ctx
+            .basic_local_metrics
+            .rocksdb_perf_stats
+            .with_label_values(&[self.scan_tag, "block_cache_hit_count"])
+            .inc_by(self.total_perf_statistics.block_cache_hit_count as i64);
+        cop_ctx
+            .basic_local_metrics
+            .rocksdb_perf_stats
+            .with_label_values(&[self.scan_tag, "block_read_count"])
+            .inc_by(self.total_perf_statistics.block_read_count as i64);
+        cop_ctx
+            .basic_local_metrics
+            .rocksdb_perf_stats
+            .with_label_values(&[self.scan_tag, "block_read_byte"])
+            .inc_by(self.total_perf_statistics.block_read_byte as i64);
 
         let exec_metrics = mem::replace(&mut self.exec_metrics, ExecutorMetrics::default());
         cop_ctx.collect(self.region_id, self.scan_tag, exec_metrics);
@@ -506,6 +546,8 @@ impl RequestTask {
             wait_time: None,
             handle_time: None,
             exec_metrics: ExecutorMetrics::default(),
+            perf_statistics_start: None,
+            total_perf_statistics: PerfStatisticsDelta::default(),
 
             region_id: req.get_context().get_region_id(),
             txn_start_ts: start_ts,
@@ -566,14 +608,14 @@ impl Display for RequestTask {
     }
 }
 
-impl Runnable<Task> for Host {
+impl<E: Engine> Runnable<Task<E>> for Host<E> {
     // TODO: limit pending reqs
-    fn run(&mut self, _: Task) {
+    fn run(&mut self, _: Task<E>) {
         panic!("Shouldn't call Host::run directly");
     }
 
-    #[allow(for_kv_map)]
-    fn run_batch(&mut self, tasks: &mut Vec<Task>) {
+    #[cfg_attr(feature = "cargo-clippy", allow(for_kv_map))]
+    fn run_batch(&mut self, tasks: &mut Vec<Task<E>>) {
         let mut grouped_reqs = map![];
         for task in tasks.drain(..) {
             match task {
@@ -631,7 +673,7 @@ impl Runnable<Task> for Host {
         let end_id = self.last_req_id;
 
         let sched = self.sched.clone();
-        let on_finished: engine::BatchCallback<Box<Snapshot>> = box move |results: Vec<_>| {
+        let on_finished: engine::BatchCallback<E::Snap> = box move |results: Vec<_>| {
             let mut ready = Vec::with_capacity(results.len());
             let mut retry = Vec::new();
             for (id, res) in (start_id..end_id + 1).zip(results) {
