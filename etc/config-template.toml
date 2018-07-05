@@ -91,7 +91,7 @@
 # scheduler-messages-per-tick = 1024
 
 # the number of slots in scheduler latches, concurrency control for write.
-# scheduler-concurrency = 102400
+# scheduler-concurrency = 2048000
 
 # scheduler's worker pool size, should increase it in heavy write cases,
 # also should less than total cpu cores.
