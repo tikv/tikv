@@ -591,66 +591,6 @@ fn process_read<E: Engine>(
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
-        // Collects garbage.
-        Command::Gc {
-            ref ctx,
-            safe_point,
-            ratio_threshold,
-            ref mut scan_key,
-            ..
-        } => {
-            let mut reader = MvccReader::new(
-                snapshot,
-                Some(ScanMode::Forward),
-                !ctx.get_not_fill_cache(),
-                None,
-                None,
-                ctx.get_isolation_level(),
-            );
-            // scan_key is used as start_key here,and Range start gc with scan_key=none.
-            let is_range_start_gc = scan_key.is_none();
-            // This is an optimization to skip gc before scanning all data.
-            let need_gc = if is_range_start_gc {
-                reader.need_gc(safe_point, ratio_threshold)
-            } else {
-                true
-            };
-            let res = if !need_gc {
-                sched_ctx.command_gc_skipped_counter.inc();
-                Ok(None)
-            } else {
-                reader
-                    .scan_keys(scan_key.take(), GC_BATCH_SIZE)
-                    .map_err(Error::from)
-                    .and_then(|(keys, next_start)| {
-                        sched_ctx
-                            .command_keyread_duration
-                            .with_label_values(&[tag])
-                            .observe(keys.len() as f64);
-                        if keys.is_empty() {
-                            // empty range
-                            if is_range_start_gc {
-                                sched_ctx.command_gc_empty_range_counter.inc();
-                            }
-                            Ok(None)
-                        } else {
-                            Ok(Some(Command::Gc {
-                                ctx: ctx.clone(),
-                                safe_point,
-                                ratio_threshold,
-                                scan_key: next_start,
-                                keys,
-                            }))
-                        }
-                    })
-            };
-            statistics.add(reader.get_statistics());
-            match res {
-                Ok(Some(cmd)) => ProcessResult::NextCommand { cmd },
-                Ok(None) => ProcessResult::Res,
-                Err(e) => ProcessResult::Failed { err: e.into() },
-            }
-        }
         Command::Pause { duration, .. } => {
             thread::sleep(Duration::from_millis(duration));
             ProcessResult::Res
@@ -857,66 +797,6 @@ fn process_write_impl<E: Engine>(
                 }
             };
             (pr, modifies, rows)
-        }
-        Command::Gc {
-            ref ctx,
-            safe_point,
-            ratio_threshold,
-            ref mut scan_key,
-            ref keys,
-        } => {
-            let mut scan_key = scan_key.take();
-            let mut txn = MvccTxn::new(
-                snapshot,
-                0,
-                Some(ScanMode::Forward),
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            );
-            let rows = keys.len();
-            for k in keys {
-                let gc_info = txn.gc(k, safe_point)?;
-
-                if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
-                    info!(
-                        "[region {}] GC found at least {} versions for key {}",
-                        ctx.get_region_id(),
-                        gc_info.found_versions,
-                        k
-                    );
-                }
-                // TODO: we may delete only part of the versions in a batch, which may not beyond
-                // the logging threshold `GC_LOG_DELETED_VERSION_THRESHOLD`.
-                if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
-                    info!(
-                        "[region {}] GC deleted {} versions for key {}",
-                        ctx.get_region_id(),
-                        gc_info.deleted_versions,
-                        k
-                    );
-                }
-
-                if txn.write_size() >= MAX_TXN_WRITE_SIZE {
-                    scan_key = Some(k.to_owned());
-                    break;
-                }
-            }
-
-            statistics.add(txn.get_statistics());
-            let pr = if scan_key.is_none() {
-                ProcessResult::Res
-            } else {
-                ProcessResult::NextCommand {
-                    cmd: Command::Gc {
-                        ctx: ctx.clone(),
-                        safe_point,
-                        ratio_threshold,
-                        scan_key: scan_key.take(),
-                        keys: vec![],
-                    },
-                }
-            };
-            (pr, txn.into_modifies(), rows)
         }
         _ => panic!("unsupported write command"),
     };
@@ -1556,13 +1436,6 @@ mod tests {
                 txn_status: temp_map.clone(),
                 scan_key: None,
                 key_locks: vec![],
-            },
-            Command::Gc {
-                ctx: Context::new(),
-                safe_point: 5,
-                ratio_threshold: 0.0,
-                scan_key: None,
-                keys: vec![make_key(b"k")],
             },
             Command::MvccByKey {
                 ctx: Context::new(),
