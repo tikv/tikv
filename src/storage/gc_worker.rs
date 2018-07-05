@@ -28,11 +28,11 @@ pub const GC_BATCH_SIZE: usize = 512;
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.
-pub const GC_LOG_FOUND_VERSION_THRESHOLD: usize = 30;
+const GC_LOG_FOUND_VERSION_THRESHOLD: usize = 30;
 
 /// After the GC delete versions of a key, output a message to the log if at least this many
 /// versions are deleted.
-pub const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
+const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
 
 pub const GC_MAX_PENDING_TASKS: usize = 2;
 const GC_SNAPSHOT_TIMEOUT_SECS: u64 = 10;
