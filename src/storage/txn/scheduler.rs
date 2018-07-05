@@ -39,7 +39,7 @@ use std::time::Duration;
 use std::u64;
 
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
-use prometheus::local::{LocalHistogramVec, LocalIntCounter};
+use prometheus::local::LocalHistogramVec;
 use prometheus::HistogramTimer;
 
 use storage::engine::{
@@ -53,7 +53,7 @@ use storage::{
     Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
     Statistics, StatisticsSummary, StorageCb,
 };
-use storage::{Key, KvPair, MvccInfo, Value, CMD_TAG_GC};
+use storage::{Key, KvPair, MvccInfo, Value};
 use util::collections::HashMap;
 use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
 use util::time::SlowTimer;
@@ -372,8 +372,6 @@ pub struct Scheduler<E: Engine> {
     // high priority commands will be delivered to this pool
     high_priority_pool: ThreadPool<SchedContext>,
 
-    has_gc_command: bool,
-
     // used to control write flow
     running_write_bytes: usize,
 }
@@ -431,7 +429,6 @@ impl<E: Engine> Scheduler<E> {
             high_priority_pool: ThreadPoolBuilder::with_default_factory(thd_name!(
                 "sched-high-pri-pool"
             )).build(),
-            has_gc_command: false,
             running_write_bytes: 0,
         }
     }
@@ -817,8 +814,6 @@ struct SchedContext {
     processing_read_duration: LocalHistogramVec,
     processing_write_duration: LocalHistogramVec,
     command_keyread_duration: LocalHistogramVec,
-    command_gc_skipped_counter: LocalIntCounter,
-    command_gc_empty_range_counter: LocalIntCounter,
 }
 
 impl Default for SchedContext {
@@ -828,8 +823,6 @@ impl Default for SchedContext {
             processing_read_duration: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
             processing_write_duration: SCHED_PROCESSING_WRITE_HISTOGRAM_VEC.local(),
             command_keyread_duration: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
-            command_gc_skipped_counter: KV_GC_SKIPPED_COUNTER.local(),
-            command_gc_empty_range_counter: KV_GC_EMPTY_RANGE_COUNTER.local(),
         }
     }
 }
@@ -855,8 +848,6 @@ impl ThreadContext for SchedContext {
         self.processing_read_duration.flush();
         self.processing_write_duration.flush();
         self.command_keyread_duration.flush();
-        self.command_gc_skipped_counter.flush();
-        self.command_gc_empty_range_counter.flush();
     }
 }
 
@@ -871,9 +862,6 @@ impl<E: Engine> Scheduler<E> {
         if ctx.lock.is_write_lock() {
             self.running_write_bytes += ctx.write_bytes;
         }
-        if ctx.tag == CMD_TAG_GC {
-            self.has_gc_command = true;
-        }
         let cid = ctx.cid;
         if self.cmd_ctxs.insert(cid, ctx).is_some() {
             panic!("command cid={} shouldn't exist", cid);
@@ -887,9 +875,6 @@ impl<E: Engine> Scheduler<E> {
         assert_eq!(ctx.cid, cid);
         if ctx.lock.is_write_lock() {
             self.running_write_bytes -= ctx.write_bytes;
-        }
-        if ctx.tag == CMD_TAG_GC {
-            self.has_gc_command = false;
         }
         SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as i64);
         SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as i64);
@@ -1009,19 +994,6 @@ impl<E: Engine> Scheduler<E> {
     fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
         // write flow control
         if cmd.need_flow_control() && self.too_busy() {
-            SCHED_TOO_BUSY_COUNTER_VEC
-                .with_label_values(&[cmd.tag()])
-                .inc();
-            execute_callback(
-                callback,
-                ProcessResult::Failed {
-                    err: StorageError::SchedTooBusy,
-                },
-            );
-            return;
-        }
-        // Allow 1 GC command at the same time.
-        if cmd.tag() == CMD_TAG_GC && self.has_gc_command {
             SCHED_TOO_BUSY_COUNTER_VEC
                 .with_label_values(&[cmd.tag()])
                 .inc();
