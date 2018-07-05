@@ -65,20 +65,10 @@ use super::Error;
 use super::Result;
 
 pub const CMD_BATCH_SIZE: usize = 256;
-// TODO: make it configurable.
-pub const GC_BATCH_SIZE: usize = 512;
 
 // To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
 // The write batch will be around 32KB if we scan 256 keys each time.
 pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;
-
-/// After the GC scan of a key, output a message to the log if there are at least this many
-/// versions of the key.
-pub const GC_LOG_FOUND_VERSION_THRESHOLD: usize = 30;
-
-/// After the GC delete versions of a key, output a message to the log if at least this many
-/// versions are deleted.
-pub const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
 
 /// Process result of a command.
 pub enum ProcessResult {
