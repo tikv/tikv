@@ -37,6 +37,7 @@ pub mod io_limiter;
 pub mod jemalloc;
 pub mod logger;
 pub mod metrics;
+pub mod mpsc;
 pub mod panic_hook;
 pub mod rocksdb;
 pub mod security;
