@@ -133,13 +133,6 @@ pub enum Command {
         scan_key: Option<Key>,
         key_locks: Vec<(Key, Lock)>,
     },
-    Gc {
-        ctx: Context,
-        safe_point: u64,
-        ratio_threshold: f64,
-        scan_key: Option<Key>,
-        keys: Vec<Key>,
-    },
     DeleteRange {
         ctx: Context,
         start_key: Key,
@@ -218,16 +211,6 @@ impl Display for Command {
                 start_key, limit, max_ts, ctx
             ),
             Command::ResolveLock { .. } => write!(f, "kv::resolve_lock"),
-            Command::Gc {
-                ref ctx,
-                safe_point,
-                ref scan_key,
-                ..
-            } => write!(
-                f,
-                "kv::command::gc scan {:?} @ {} | {:?}",
-                scan_key, safe_point, ctx
-            ),
             Command::DeleteRange {
                 ref ctx,
                 ref start_key,
@@ -271,7 +254,6 @@ impl Command {
             Command::MvccByKey { .. } |
             Command::MvccByStartTs { .. } => true,
             Command::ResolveLock { ref key_locks, .. } => key_locks.is_empty(),
-            Command::Gc { ref keys, .. } => keys.is_empty(),
             _ => false,
         }
     }
@@ -300,7 +282,6 @@ impl Command {
             Command::Rollback { .. } => "rollback",
             Command::ScanLock { .. } => "scan_lock",
             Command::ResolveLock { .. } => "resolve_lock",
-            Command::Gc { .. } => CMD_TAG_GC,
             Command::DeleteRange { .. } => "delete_range",
             Command::Pause { .. } => "pause",
             Command::MvccByKey { .. } => "key_mvcc",
@@ -316,7 +297,6 @@ impl Command {
             | Command::MvccByStartTs { start_ts, .. } => start_ts,
             Command::Commit { lock_ts, .. } => lock_ts,
             Command::ScanLock { max_ts, .. } => max_ts,
-            Command::Gc { safe_point, .. } => safe_point,
             Command::ResolveLock { .. }
             | Command::DeleteRange { .. }
             | Command::Pause { .. }
@@ -332,7 +312,6 @@ impl Command {
             | Command::Rollback { ref ctx, .. }
             | Command::ScanLock { ref ctx, .. }
             | Command::ResolveLock { ref ctx, .. }
-            | Command::Gc { ref ctx, .. }
             | Command::DeleteRange { ref ctx, .. }
             | Command::Pause { ref ctx, .. }
             | Command::MvccByKey { ref ctx, .. }
@@ -348,7 +327,6 @@ impl Command {
             | Command::Rollback { ref mut ctx, .. }
             | Command::ScanLock { ref mut ctx, .. }
             | Command::ResolveLock { ref mut ctx, .. }
-            | Command::Gc { ref mut ctx, .. }
             | Command::DeleteRange { ref mut ctx, .. }
             | Command::Pause { ref mut ctx, .. }
             | Command::MvccByKey { ref mut ctx, .. }
