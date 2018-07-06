@@ -508,10 +508,9 @@ impl Lease {
 
     pub fn disconnect(&mut self) {
         // Expire remote lease if there is any.
-        if let Some(ref r) = self.remote {
+        if let Some(r) = self.remote.take() {
             r.expire();
         }
-        self.remote.take();
     }
 
     pub fn remote(&mut self, term: u64) -> Option<RemoteLease> {

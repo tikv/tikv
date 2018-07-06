@@ -455,7 +455,7 @@ impl Peer {
                 );
                 return None;
             }
-            // There is no tasks in apply/localread worker.
+            // There is no tasks in apply/local read worker.
             false
         } else {
             initialized
