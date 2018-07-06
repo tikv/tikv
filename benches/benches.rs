@@ -13,6 +13,7 @@
 
 #![feature(test)]
 
+extern crate crossbeam_channel;
 extern crate kvproto;
 extern crate log;
 #[macro_use(slog_o, slog_kv)]
@@ -33,6 +34,7 @@ extern crate time;
 
 mod channel;
 mod coprocessor;
+mod raftkv;
 mod serialization;
 mod writebatch;
 

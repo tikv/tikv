@@ -24,10 +24,9 @@
 #![feature(proc_macro_gen)]
 #![feature(ascii_ctype)]
 #![recursion_limit = "200"]
-#![cfg_attr(not(feature = "cargo-clippy"), allow(unknown_lints))]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
-#![allow(nonminimal_bool)]
+#![cfg_attr(feature = "cargo-clippy", allow(nonminimal_bool))]
 
 extern crate alloc;
 extern crate backtrace;
@@ -36,6 +35,7 @@ extern crate bitflags;
 extern crate byteorder;
 extern crate chrono;
 extern crate crc;
+#[macro_use]
 extern crate crossbeam_channel;
 #[macro_use]
 extern crate fail;
