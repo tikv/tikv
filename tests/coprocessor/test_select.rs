@@ -17,7 +17,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::i64;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
-use std::time::Duration;
 use std::{cmp, mem};
 
 use kvproto::coprocessor::{KeyRange, Request, Response};
@@ -37,7 +36,6 @@ use tipb::expression::{ByItem, Expr, ExprType, ScalarFuncSig};
 use tipb::schema::{self, ColumnInfo};
 use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 
-use raftstore::util::MAX_LEADER_LEASE;
 use storage::sync_storage::SyncStorage;
 use storage::util::new_raft_engine;
 
@@ -907,12 +905,12 @@ fn test_select_after_lease() {
     ];
 
     let product = ProductTable::new();
-    let (_cluster, raft_engine, ctx) = new_raft_engine(1, "");
+    let (cluster, raft_engine, ctx) = new_raft_engine(1, "");
     let (_, mut end_point) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
 
     // Sleep until the leader lease is expired.
-    thread::sleep(Duration::from_millis(MAX_LEADER_LEASE));
+    thread::sleep(cluster.cfg.raft_store.raft_store_max_leader_lease.0);
     let req = DAGSelect::from(&product.table).build_with(ctx.clone(), &[0]);
     let mut resp = handle_select(&end_point, req);
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
