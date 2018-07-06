@@ -327,8 +327,12 @@ pub fn get_region_approximate_size_cf(
     Ok(size)
 }
 
-/// Get the approxmiate middle key of the region. The returned key maybe
-/// is timestamped if transaction KV is used, and must start with "z".
+/// Get the approxmiate middle key of the region. If we suppose the region
+/// is stored on disk as a plain file, "middle key" means the key whose
+/// position is in the middle of the file.
+///
+/// The returned key maybe is timestamped if transaction KV is used,
+/// and must start with "z".
 pub fn get_region_approximate_middle_cf(
     db: &DB,
     cfname: &str,
@@ -354,6 +358,8 @@ pub fn get_region_approximate_middle_cf(
     if keys.is_empty() {
         return Ok(None);
     }
+    // Calculate the position by (len-1)/2. So it's the left one
+    // of two middle positions if the number of keys is even.
     let middle = (keys.len() - 1) / 2;
     Ok(Some(keys.swap_remove(middle)))
 }
