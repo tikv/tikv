@@ -365,3 +365,58 @@ impl<'a> slog::ser::Serializer for Serializer<'a> {
         Ok(())
     }
 }
+
+#[test]
+fn test_log_format() {
+    use chrono::{TimeZone, Utc};
+    use slog::Logger;
+    use slog_term::PlainSyncDecorator;
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::str::from_utf8;
+
+    // Due to the requirements of `Logger::root*` on a writer with a 'static lifetime
+    // we need to make a Thread Local,
+    // and implement a custom writer.
+    thread_local! {
+        static BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+    }
+    struct TestWriter;
+    impl Write for TestWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            BUFFER.with(|buffer| buffer.borrow_mut().flush())
+        }
+    }
+
+    // Make the log
+    let decorator = PlainSyncDecorator::new(TestWriter);
+    let drain = TikvFormat::new(decorator).fuse();
+    let logger = Logger::root_typed(drain, slog_o!());
+    slog_crit!(logger, "test");
+
+    // Check the logged value.
+    BUFFER.with(|buffer| {
+        let buffer = buffer.borrow_mut();
+        let output = from_utf8(&*buffer).unwrap();
+
+        // This functions roughly as an assert to make sure that the log level and file name is logged.
+        let mut split_iter = output.split(" CRIT logger.rs:");
+        // The pre-split portion will contain a timestamp which we can check by parsing and ensuring it is valid.
+        let datetime = split_iter.next().unwrap();
+        assert!(Utc.datetime_from_str(datetime, TIMESTAMP_FORMAT).is_ok());
+        // The post-split portion will contain the line number of the file (which we validate is a number), and then the log message.
+        let line_and_message = split_iter.next().unwrap();
+        let mut split_iter = line_and_message.split(": ");
+        // Since the file will change, asserting the number exactly is unmaintainable.
+        split_iter
+            .next()
+            .and_then(|val| val.parse::<usize>().ok())
+            .unwrap();
+        // We do know the message though!
+        let message = split_iter.next().unwrap();
+        assert_eq!(message, "test\n");
+    });
+}
