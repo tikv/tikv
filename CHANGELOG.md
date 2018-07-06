@@ -2,6 +2,11 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [2.0.5]
+### Bug fixes
+* Fix the potential overflow issue in decimal operations
+* Fix the dirty read issue that might occur in the process of merge
+
 ## [2.0.4]
 ### Features
 * Add the RocksDB `PerfContext` interface for debugging
