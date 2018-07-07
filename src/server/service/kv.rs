@@ -42,6 +42,7 @@ use util::future::paired_future_callback;
 use util::worker::Scheduler;
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
+const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter + 'static, E: Engine> {
@@ -1173,6 +1174,13 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
             let mut err = RegionError::new();
             let mut server_is_busy_err = ServerIsBusy::new();
             server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
+            err.set_server_is_busy(server_is_busy_err);
+            Some(err)
+        }
+        Err(Error::GCWorkerTooBusy) => {
+            let mut err = RegionError::new();
+            let mut server_is_busy_err = ServerIsBusy::new();
+            server_is_busy_err.set_reason(GC_WORKER_IS_BUSY.to_owned());
             err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }
