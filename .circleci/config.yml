@@ -93,9 +93,6 @@ jobs:
             fi
           no_output_timeout: 1800s
       - run:
-          name: Clippy check
-          command: make clippy
-      - run:
           name: Building
           command: env SKIP_TESTS=true make trace_test
           no_output_timeout: 1800s
