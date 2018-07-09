@@ -18,11 +18,10 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{error, result};
-use util::collections::HashSet;
 
 use protobuf::{self, Message, RepeatedField};
 
-use kvproto::debugpb::{DB as DBType, MODULE};
+use kvproto::debugpb::{DB as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
@@ -40,6 +39,8 @@ use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerS
 use storage::mvcc::{Lock, LockType, Write, WriteType};
 use storage::types::{truncate_ts, Key};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use util::codec::bytes;
+use util::collections::HashSet;
 use util::config::ReadableSize;
 use util::escape;
 use util::properties::MvccProperties;
@@ -630,7 +631,33 @@ impl Debugger {
             mvcc_properties.add(&mvcc);
         }
 
-        let res = [
+        // Calculate region middle key based on default and write cf size.
+        // It's in encoded format, no timestamp padding and escaped to string.
+        let get_cf_size =
+            |cf: &str| raftstore_util::get_region_approximate_size_cf(db, cf, &region);
+
+        let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
+        let write_cf_size = box_try!(get_cf_size(CF_WRITE));
+
+        let middle_by_cf = if default_cf_size >= write_cf_size {
+            CF_DEFAULT
+        } else {
+            CF_WRITE
+        };
+
+        let middle_key = match box_try!(raftstore_util::get_region_approximate_middle_cf(
+            db,
+            middle_by_cf,
+            &region
+        )) {
+            Some(data_key) => {
+                let mut key = keys::origin_key(&data_key);
+                box_try!(bytes::decode_bytes(&mut key, false))
+            }
+            None => Vec::new(),
+        };
+
+        let mut res: Vec<(String, String)> = [
             ("num_files", collection.len() as u64),
             ("num_entries", num_entries),
             ("num_deletes", num_entries - mvcc_properties.num_versions),
@@ -643,6 +670,10 @@ impl Debugger {
         ].iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
+        res.push((
+            "middle_key_by_approximate_size".to_string(),
+            escape(&middle_key),
+        ));
         Ok(res)
     }
 }
