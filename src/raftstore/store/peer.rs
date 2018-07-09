@@ -462,12 +462,6 @@ impl Peer {
         };
         self.pending_remove = true;
 
-        // The read delegate of the peer must not continue to serve
-        // requests. We'd like to disable read explicitly.
-        //
-        // TODO: it may be unnecessary.
-        self.leader_lease.disconnect();
-
         Some(DestroyPeerJob {
             async_remove,
             initialized,
@@ -546,6 +540,9 @@ impl Peer {
     /// has been preserved in a durable device.
     pub fn set_region(&mut self, region: metapb::Region) {
         self.mut_store().set_region(region.clone());
+
+        // Disable read on the localreader for this region.
+        self.leader_lease.disconnect();
 
         let mut progress = ReadProgress::new();
         progress.set_region(region);
@@ -1043,14 +1040,6 @@ impl Peer {
                         // safe to renew its lease.
                         self.last_committed_split_idx = entry.index;
                         split_to_be_updated = false;
-
-                        // Disable read on the localreader for this region.
-                        //
-                        // Actually we dont need to disconnect here, because
-                        // peers of splitted region in other tikvs will not start
-                        // an election until an election timeout, which is longer
-                        //the max leader lease.
-                        self.leader_lease.disconnect();
                     }
                     if merge_to_be_update && ctx.contains(ProposalContext::PREPARE_MERGE) {
                         // We committed prepare merge, to prevent unsafe read index,
