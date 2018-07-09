@@ -183,7 +183,7 @@ fn need_compact(
         && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires
 }
 
-fn get_range_entries_and_versions(
+pub fn get_range_entries_and_versions(
     engine: &DB,
     cf: &CFHandle,
     start: &[u8],

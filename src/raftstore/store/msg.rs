@@ -21,7 +21,6 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 
 use raft::SnapshotStatus;
-use raftstore::store::util::RegionApproximateStat;
 use util::escape;
 use util::rocksdb::CompactedEvent;
 
@@ -170,10 +169,16 @@ pub enum Msg {
         hash: Vec<u8>,
     },
 
-    // For region stat
-    RegionApproximateStat {
+    // For region size
+    RegionApproximateSize {
         region_id: u64,
-        stat: RegionApproximateStat,
+        size: u64,
+    },
+
+    // For region keys in write cf
+    RegionApproximateWriteKeys {
+        region_id: u64,
+        write_keys: u64,
     },
 
     // Compaction finished event
@@ -215,13 +220,18 @@ impl fmt::Debug for Msg {
                 ref split_key,
                 ..
             } => write!(fmt, "Split region {} at key {:?}", region_id, split_key),
-            Msg::RegionApproximateStat {
+            Msg::RegionApproximateSize { region_id, size } => write!(
+                fmt,
+                "Region's approximate size [region_id: {}, size: {:?}]",
+                region_id, size
+            ),
+            Msg::RegionApproximateWriteKeys {
                 region_id,
-                ref stat,
+                write_keys,
             } => write!(
                 fmt,
-                "Region's approximate stat [region_id: {}, stat: {:?}]",
-                region_id, stat
+                "Region's approximate write keys [region_id: {}, write_keys: {:?}]",
+                region_id, write_keys
             ),
             Msg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),
             Msg::HalfSplitRegion { ref region_id, .. } => {

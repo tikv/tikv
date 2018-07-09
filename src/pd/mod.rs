@@ -24,7 +24,6 @@ pub use self::errors::{Error, Result};
 pub use self::pd::{Runner as PdRunner, Task as PdTask};
 pub use self::util::validate_endpoints;
 pub use self::util::RECONNECT_INTERVAL_SEC;
-use raftstore::store::util::RegionApproximateStat;
 
 use std::ops::Deref;
 
@@ -43,7 +42,8 @@ pub struct RegionStat {
     pub written_keys: u64,
     pub read_bytes: u64,
     pub read_keys: u64,
-    pub approximate_stat: RegionApproximateStat,
+    pub approximate_size: u64,
+    pub approximate_write_keys: u64,
     pub last_report_ts: u64,
 }
 
