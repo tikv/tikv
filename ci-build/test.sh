@@ -32,6 +32,8 @@ if [[ "$TRAVIS" = "true" ]]; then
 fi
 export RUSTFLAGS=-Dwarnings
 
+make clippy
+
 if [[ "$SKIP_TESTS" != "true" ]]; then
     make test 2>&1 | tee tests.out
 else
