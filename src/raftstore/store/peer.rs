@@ -20,9 +20,10 @@ use std::{cmp, mem, slice};
 
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
-use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
-                          RaftCmdResponse, Request, Response, TransferLeaderRequest,
-                          TransferLeaderResponse};
+use kvproto::raft_cmdpb::{
+    self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse, Request, Response,
+    TransferLeaderRequest, TransferLeaderResponse,
+};
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftMessage};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
@@ -31,14 +32,16 @@ use rocksdb::{WriteBatch, DB};
 use time::Timespec;
 
 use pd::{PdTask, INVALID_ID};
-use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
-           INVALID_INDEX, NO_LIMIT};
+use raft::{
+    self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
+    NO_LIMIT,
+};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::engine::{Peekable, Snapshot};
 use raftstore::store::util::RegionApproximateStat;
 use raftstore::store::worker::apply::ApplyMetrics;
-use raftstore::store::worker::{Apply, ApplyTask};
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
+use raftstore::store::worker::{Apply, ApplyTask};
 use raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
 use util::collections::{HashMap, HashSet};
@@ -175,8 +178,9 @@ impl<'a, T> ReadyContext<'a, T> {
 bitflags! {
     // TODO: maybe declare it as protobuf struct is better.
     pub struct ProposalContext: u8 {
-        const SYNC_LOG = 0b00000001;
-        const SPLIT    = 0b00000010;
+        const SYNC_LOG       = 0b00000001;
+        const SPLIT          = 0b00000010;
+        const PREPARE_MERGE  = 0b00000100;
     }
 }
 
@@ -205,16 +209,6 @@ pub struct ConsistencyState {
     // (computed_result_or_to_be_verified, index, hash)
     pub index: u64,
     pub hash: Vec<u8>,
-}
-
-enum RequestPolicy {
-    // Handle the read request directly without dispatch.
-    ReadLocal,
-    // Handle the read request via raft's SafeReadIndex mechanism.
-    ReadIndex,
-    ProposeNormal,
-    ProposeTransferLeader,
-    ProposeConfChange,
 }
 
 #[derive(Default, Clone)]
@@ -267,7 +261,10 @@ pub struct Peer {
     apply_scheduler: Scheduler<ApplyTask>,
 
     pub pending_remove: bool,
-    pub pending_merge: Option<MergeState>,
+
+    // The index of the latest committed prepare merge command.
+    last_committed_prepare_merge_idx: u64,
+    pub pending_merge_state: Option<MergeState>,
 
     marked_to_be_checked: bool,
 
@@ -365,6 +362,7 @@ impl Peer {
             check_quorum: true,
             tag: tag.clone(),
             skip_bcast_commit: true,
+            pre_vote: cfg.prevote,
             ..Default::default()
         };
 
@@ -389,7 +387,8 @@ impl Peer {
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
             marked_to_be_checked: false,
-            pending_merge: None,
+            pending_merge_state: None,
+            last_committed_prepare_merge_idx: 0,
             leader_missing_time: Some(Instant::now()),
             tag,
             last_applying_idx: applied_index,
@@ -474,7 +473,7 @@ impl Peer {
             &kv_wb,
             &region,
             PeerState::Tombstone,
-            self.pending_merge.clone(),
+            self.pending_merge_state.clone(),
         )?;
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
@@ -591,6 +590,8 @@ impl Peer {
             match msg_type {
                 MessageType::MsgAppend => metrics.append += 1,
                 MessageType::MsgAppendResponse => metrics.append_resp += 1,
+                MessageType::MsgRequestPreVote => metrics.prevote += 1,
+                MessageType::MsgRequestPreVoteResponse => metrics.prevote_resp += 1,
                 MessageType::MsgRequestVote => metrics.vote += 1,
                 MessageType::MsgRequestVoteResponse => metrics.vote_resp += 1,
                 MessageType::MsgSnapshot => metrics.snapshot += 1,
@@ -608,7 +609,17 @@ impl Peer {
 
                     metrics.timeout_now += 1;
                 }
-                _ => {}
+                // We do not care about these message types for metrics.
+                // Explicitly declare them so when we add new message types we are forced to
+                // decide.
+                MessageType::MsgHup
+                | MessageType::MsgBeat
+                | MessageType::MsgPropose
+                | MessageType::MsgUnreachable
+                | MessageType::MsgSnapStatus
+                | MessageType::MsgCheckQuorum
+                | MessageType::MsgReadIndex
+                | MessageType::MsgReadIndexResp => {}
             }
         }
         Ok(())
@@ -622,6 +633,11 @@ impl Peer {
         );
         if self.is_leader() && m.get_from() != INVALID_ID {
             self.peer_heartbeats.insert(m.get_from(), Instant::now());
+            // As the leader we know we are not missing.
+            self.leader_missing_time.take();
+        } else if m.get_from() == self.leader_id() {
+            // As another role know we're not missing.
+            self.leader_missing_time.take();
         }
         self.raft_group.step(m)?;
         Ok(())
@@ -677,7 +693,8 @@ impl Peer {
             if progress.matched < truncated_idx {
                 if let Some(p) = self.get_peer_from_cache(id) {
                     pending_peers.push(p);
-                    if !self.peers_start_pending_time
+                    if !self
+                        .peers_start_pending_time
                         .iter()
                         .any(|&(pid, _)| pid == id)
                     {
@@ -722,35 +739,31 @@ impl Peer {
     pub fn check_stale_state(&mut self) -> StaleState {
         let naive_peer = !self.is_initialized() || self.raft_group.raft.is_learner;
         // Updates the `leader_missing_time` according to the current state.
-        if self.leader_id() == raft::INVALID_ID {
-            if self.leader_missing_time.is_none() {
-                self.leader_missing_time = Some(Instant::now())
+        //
+        // If we are checking this it means we suspect the leader might be missing.
+        // Mark down the time when we are called, so we can check later if it's been longer than it
+        // should be.
+        match self.leader_missing_time {
+            None => {
+                self.leader_missing_time = Instant::now().into();
+                StaleState::Valid
             }
-        } else if !naive_peer {
-            // Reset leader_missing_time, if the peer has a leader and it is initialized.
-            // For an uninitialized peer and learner, the leader id is unreliable.
-            self.leader_missing_time = None
-        }
-
-        if self.leader_missing_time.is_none() {
-            // The peer has a leader.
-            return StaleState::Valid;
-        }
-
-        // The peer does not have a leader, checks whether it is stale.
-        let duration = self.leader_missing_time.unwrap().elapsed();
-        if duration >= self.cfg.max_leader_missing_duration.0 {
-            // Resets the `leader_missing_time` to avoid sending the same tasks to
-            // PD worker continuously during the leader missing timeout.
-            self.leader_missing_time = Some(Instant::now());
-            StaleState::ToValidate
-        } else if !naive_peer && duration >= self.cfg.abnormal_leader_missing_duration.0 {
-            // A peer is considered as in the leader missing state
-            // if it's initialized but is isolated from its leader or
-            // something bad happens that the raft group can not elect a leader.
-            StaleState::LeaderMissing
-        } else {
-            StaleState::Valid
+            Some(instant) if instant.elapsed() >= self.cfg.max_leader_missing_duration.0 => {
+                // Resets the `leader_missing_time` to avoid sending the same tasks to
+                // PD worker continuously during the leader missing timeout.
+                self.leader_missing_time = Instant::now().into();
+                StaleState::ToValidate
+            }
+            Some(instant)
+                if instant.elapsed() >= self.cfg.abnormal_leader_missing_duration.0
+                    && !naive_peer =>
+            {
+                // A peer is considered as in the leader missing state
+                // if it's initialized but is isolated from its leader or
+                // something bad happens that the raft group can not elect a leader.
+                StaleState::LeaderMissing
+            }
+            _ => StaleState::Valid,
         }
     }
 
@@ -797,16 +810,31 @@ impl Peer {
 
     #[inline]
     fn ready_to_handle_read(&self) -> bool {
+        // TODO: It may cause read index to wait a long time.
+
         // There may be some values that are not applied by this leader yet but the old leader,
         // if applied_index_term isn't equal to current term.
-        //
-        // There may be stale read if the old leader splits really slow,
-        // the new region may already elecetd a new leader while the old leader still think it
-        // owns the splitted range.
-
-        // TODO: It may cause read index waits a long time.
         self.get_store().applied_index_term == self.term()
-            && self.last_committed_split_idx <= self.get_store().applied_index()
+            // There may be stale read if the old leader splits really slow,
+            // the new region may already elected a new leader while
+            // the old leader still think it owns the splitted range.
+            && !self.is_splitting()
+            // There may be stale read if a target leader is in another store and
+            // applied commit merge, written new values, but the sibling peer in
+            // this store does not apply commit merge, so the leader is not ready
+            // to read, until the merge is rollbacked.
+            && !self.is_merging()
+    }
+
+    #[inline]
+    fn is_splitting(&self) -> bool {
+        self.last_committed_split_idx > self.get_store().applied_index()
+    }
+
+    #[inline]
+    fn is_merging(&self) -> bool {
+        self.last_committed_prepare_merge_idx > self.get_store().applied_index()
+            || self.pending_merge_state.is_some()
     }
 
     pub fn take_apply_proposals(&mut self) -> Option<RegionProposal> {
@@ -858,7 +886,8 @@ impl Peer {
             return;
         }
 
-        if !self.raft_group
+        if !self
+            .raft_group
             .has_ready_since(Some(self.last_applying_idx))
         {
             return;
@@ -911,7 +940,8 @@ impl Peer {
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
         if apply_snap_result.is_some() && self.peer.get_is_learner() {
             // The peer may change from learner to voter after snapshot applied.
-            let peer = self.region()
+            let peer = self
+                .region()
                 .get_peers()
                 .iter()
                 .find(|p| p.get_id() == self.peer.get_id())
@@ -962,6 +992,7 @@ impl Peer {
             // leader needs to update lease and last commited split index.
             let mut lease_to_be_updated = self.is_leader();
             let mut split_to_be_updated = self.is_leader();
+            let mut merge_to_be_update = self.is_leader();
             if !lease_to_be_updated {
                 // It's not leader anymore, we are safe to clear proposals. If it becomes leader
                 // again, the lease should be updated when election is finished, old proposals
@@ -979,13 +1010,28 @@ impl Peer {
                     }
                 }
 
-                // We only care about split commands that are committed
-                // in the current term.
-                if split_to_be_updated && entry.term == self.term() {
+                // We care about split/merge commands that are committed in the current term.
+                if entry.term == self.term() && (split_to_be_updated || merge_to_be_update) {
                     let ctx = ProposalContext::from_bytes(&entry.context);
-                    if ctx.contains(ProposalContext::SPLIT) {
+                    if split_to_be_updated && ctx.contains(ProposalContext::SPLIT) {
+                        // We dont need to suspect its lease because peers of new region that
+                        // in other store do not start election before theirs election timeout
+                        // which is longer than the max leader lease.
+                        // It's safe to read local within its current lease, however, it's not
+                        // safe to renew its lease.
                         self.last_committed_split_idx = entry.index;
                         split_to_be_updated = false;
+                    }
+                    if merge_to_be_update && ctx.contains(ProposalContext::PREPARE_MERGE) {
+                        // We committed prepare merge, to prevent unsafe read index,
+                        // we must record its index.
+                        self.last_committed_prepare_merge_idx = entry.get_index();
+                        // After prepare_mrege is committed, the leader can not know
+                        // when the target region merges majority of this region, also
+                        // it can not know when the target region writes new values.
+                        // To prevent unsafe local read, we suspect its leader lease.
+                        self.leader_lease.suspect(monotonic_raw_now());
+                        merge_to_be_update = false;
                     }
                 }
             }
@@ -1096,11 +1142,18 @@ impl Peer {
         if !self.is_leader() {
             return;
         }
-        if self.last_committed_split_idx > self.get_store().applied_index() {
+        if self.is_splitting() {
             // A splitting leader should not renew its lease.
             // Because we split regions asynchronous, the leader may read stale results
             // if splitting runs slow on the leader.
             debug!("{} prevents renew lease while splitting", self.tag);
+            return;
+        }
+        if self.is_merging() {
+            // A merging leader should not renew its lease.
+            // Because we merge regions asynchronous, the leader may read stale results
+            // if commit merge runs slow on sibling peers.
+            debug!("{} prevents renew lease while merging", self.tag);
             return;
         }
         self.leader_lease.renew(ts);
@@ -1155,7 +1208,8 @@ impl Peer {
 
         let mut is_conf_change = false;
 
-        let res = match self.get_handle_policy(&req) {
+        let policy = self.inspect(&req);
+        let res = match policy {
             Ok(RequestPolicy::ReadLocal) => {
                 self.read_local(req, cb, metrics);
                 return false;
@@ -1208,7 +1262,8 @@ impl Peer {
 
         // TODO: deny non-snapshot request.
 
-        match self.get_handle_policy(&req) {
+        let policy = self.inspect(&req);
+        match policy {
             Ok(RequestPolicy::ReadLocal) => {
                 metrics.local_read += 1;
                 Some(self.handle_read(req))
@@ -1231,73 +1286,6 @@ impl Peer {
         self.apply_proposals.push(p);
 
         self.proposals.push(meta);
-    }
-
-    fn get_handle_policy(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
-        if req.has_admin_request() {
-            if apply::get_change_peer_cmd(req).is_some() {
-                return Ok(RequestPolicy::ProposeConfChange);
-            }
-            if get_transfer_leader_cmd(req).is_some() {
-                return Ok(RequestPolicy::ProposeTransferLeader);
-            }
-            return Ok(RequestPolicy::ProposeNormal);
-        }
-
-        let mut is_read = false;
-        let mut is_write = false;
-        for r in req.get_requests() {
-            match r.get_cmd_type() {
-                CmdType::Get | CmdType::Snap => is_read = true,
-                CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSST => {
-                    is_write = true
-                }
-                CmdType::Prewrite | CmdType::Invalid => {
-                    return Err(box_err!(
-                        "invalid cmd type {:?}, message maybe currupted",
-                        r.get_cmd_type()
-                    ));
-                }
-            }
-
-            if is_read && is_write {
-                return Err(box_err!("read and write can't be mixed in one batch."));
-            }
-        }
-
-        if is_write {
-            return Ok(RequestPolicy::ProposeNormal);
-        }
-
-        if (req.has_header() && req.get_header().get_read_quorum())
-            || !self.raft_group.raft.in_lease()
-        {
-            return Ok(RequestPolicy::ReadIndex);
-        }
-
-        // If applied index's term is differ from current raft's term, leader transfer
-        // must happened, if read locally, we may read old value.
-        if self.get_store().applied_index_term != self.raft_group.raft.term {
-            // TODO: add it in queue directly.
-            return Ok(RequestPolicy::ReadIndex);
-        }
-
-        // Local read should be performed, if and only if leader is in lease.
-        // None for now.
-        match self.leader_lease.inspect(None) {
-            LeaseState::Valid => return Ok(RequestPolicy::ReadLocal),
-            LeaseState::Expired => {
-                debug!(
-                    "{} leader lease is expired: {:?}",
-                    self.tag, self.leader_lease
-                );
-                self.leader_lease.expire();
-            }
-            LeaseState::Suspect => (),
-        }
-
-        // Perform a consistent read to Raft quorum and try to renew the leader lease.
-        Ok(RequestPolicy::ReadIndex)
     }
 
     /// Count the number of the healthy nodes.
@@ -1348,7 +1336,8 @@ impl Peer {
             _ => {}
         }
 
-        if change_type == ConfChangeType::RemoveNode && !self.cfg.allow_remove_leader
+        if change_type == ConfChangeType::RemoveNode
+            && !self.cfg.allow_remove_leader
             && peer.get_id() == self.peer_id()
         {
             warn!(
@@ -1453,11 +1442,13 @@ impl Peer {
         });
 
         // See more in ready_to_handle_read().
-        if self.last_committed_split_idx > self.raft_group.get_store().applied_index() {
-            Err(box_err!("can not read due to split"))
-        } else {
-            Ok(())
+        if self.is_splitting() {
+            return Err(box_err!("can not read index due to split"));
         }
+        if self.is_merging() {
+            return Err(box_err!("can not read index due to merge"));
+        }
+        Ok(())
     }
 
     fn read_index(
@@ -1539,7 +1530,7 @@ impl Peer {
             .unwrap_or_default()
     }
 
-    fn pre_propose_merge(&self, req: &mut RaftCmdRequest) -> Result<()> {
+    fn pre_propose_prepare_merge(&self, req: &mut RaftCmdRequest) -> Result<()> {
         let last_index = self.raft_group.raft.raft_log.last_index();
         let min_progress = self.get_min_progress();
         let min_index = min_progress + 1;
@@ -1606,7 +1597,8 @@ impl Peer {
         }
 
         if req.get_admin_request().has_prepare_merge() {
-            self.pre_propose_merge(req)?
+            self.pre_propose_prepare_merge(req)?;
+            ctx.insert(ProposalContext::PREPARE_MERGE);
         }
 
         Ok(ctx)
@@ -1617,7 +1609,7 @@ impl Peer {
         mut req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
     ) -> Result<u64> {
-        if self.pending_merge.is_some()
+        if self.pending_merge_state.is_some()
             && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge
         {
             return Err(box_err!("peer in merging mode, can't do proposal."));
@@ -1689,7 +1681,7 @@ impl Peer {
         req: &RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
     ) -> Result<u64> {
-        if self.pending_merge.is_some() {
+        if self.pending_merge_state.is_some() {
             return Err(box_err!("peer in merging mode, can't do proposal."));
         }
         if self.raft_group.raft.pending_conf_index > self.get_store().applied_index() {
@@ -1875,6 +1867,108 @@ impl Peer {
     }
 }
 
+/// `RequestPolicy` decides how we handle a request.
+#[derive(Clone, PartialEq, Debug)]
+enum RequestPolicy {
+    // Handle the read request directly without dispatch.
+    ReadLocal,
+    // Handle the read request via raft's SafeReadIndex mechanism.
+    ReadIndex,
+    ProposeNormal,
+    ProposeTransferLeader,
+    ProposeConfChange,
+}
+
+/// `RequestInspector` makes `RequestPolicy` for requests.
+trait RequestInspector {
+    /// Has the current term been applied?
+    fn has_applied_to_current_term(&self) -> bool;
+    /// Inspects its lease.
+    fn inspect_lease(&mut self) -> LeaseState;
+
+    /// Inspect a request, return a policy that tells us how to
+    /// handle the request.
+    fn inspect(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
+        if req.has_admin_request() {
+            if apply::get_change_peer_cmd(req).is_some() {
+                return Ok(RequestPolicy::ProposeConfChange);
+            }
+            if get_transfer_leader_cmd(req).is_some() {
+                return Ok(RequestPolicy::ProposeTransferLeader);
+            }
+            return Ok(RequestPolicy::ProposeNormal);
+        }
+
+        let mut has_read = false;
+        let mut has_write = false;
+        for r in req.get_requests() {
+            match r.get_cmd_type() {
+                CmdType::Get | CmdType::Snap => has_read = true,
+                CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSST => {
+                    has_write = true
+                }
+                CmdType::Prewrite | CmdType::Invalid => {
+                    return Err(box_err!(
+                        "invalid cmd type {:?}, message maybe currupted",
+                        r.get_cmd_type()
+                    ));
+                }
+            }
+
+            if has_read && has_write {
+                return Err(box_err!("read and write can't be mixed in one batch."));
+            }
+        }
+
+        if has_write {
+            return Ok(RequestPolicy::ProposeNormal);
+        }
+
+        if req.get_header().get_read_quorum() {
+            return Ok(RequestPolicy::ReadIndex);
+        }
+
+        // If applied index's term is differ from current raft's term, leader transfer
+        // must happened, if read locally, we may read old value.
+        if !self.has_applied_to_current_term() {
+            return Ok(RequestPolicy::ReadIndex);
+        }
+
+        // Local read should be performed, if and only if leader is in lease.
+        // None for now.
+        match self.inspect_lease() {
+            LeaseState::Valid => Ok(RequestPolicy::ReadLocal),
+            LeaseState::Expired | LeaseState::Suspect => {
+                // Perform a consistent read to Raft quorum and try to renew the leader lease.
+                Ok(RequestPolicy::ReadIndex)
+            }
+        }
+    }
+}
+
+impl RequestInspector for Peer {
+    fn has_applied_to_current_term(&self) -> bool {
+        self.get_store().applied_index_term == self.term()
+    }
+
+    fn inspect_lease(&mut self) -> LeaseState {
+        if !self.raft_group.raft.in_lease() {
+            return LeaseState::Suspect;
+        }
+        // None means now.
+        let state = self.leader_lease.inspect(None);
+        if LeaseState::Expired == state {
+            debug!(
+                "{} leader lease is expired: {:?}",
+                self.tag, self.leader_lease
+            );
+            // The lease is expired, call `expire` explicitly.
+            self.leader_lease.expire();
+        }
+        state
+    }
+}
+
 #[derive(Debug)]
 struct ReadExecutor<'r, 'e, 't> {
     region: &'r metapb::Region,
@@ -2031,7 +2125,9 @@ mod tests {
         let tbl: Vec<&[ProposalContext]> = vec![
             &[ProposalContext::SPLIT],
             &[ProposalContext::SYNC_LOG],
+            &[ProposalContext::PREPARE_MERGE],
             &[ProposalContext::SPLIT, ProposalContext::SYNC_LOG],
+            &[ProposalContext::PREPARE_MERGE, ProposalContext::SYNC_LOG],
         ];
 
         for flags in tbl {
@@ -2046,6 +2142,111 @@ mod tests {
             for f in flags {
                 assert!(de.contains(*f), "{:?}", de);
             }
+        }
+    }
+
+    #[cfg_attr(feature = "cargo-clippy", allow(useless_vec))]
+    #[test]
+    fn test_request_inspector() {
+        struct DummyInspector {
+            applied_to_index_term: bool,
+            lease_state: LeaseState,
+        }
+        impl RequestInspector for DummyInspector {
+            fn has_applied_to_current_term(&self) -> bool {
+                self.applied_to_index_term
+            }
+            fn inspect_lease(&mut self) -> LeaseState {
+                self.lease_state.clone()
+            }
+        }
+
+        let mut table = vec![];
+
+        // Ok(_)
+        let mut req = RaftCmdRequest::new();
+        let mut admin_req = raft_cmdpb::AdminRequest::new();
+
+        req.set_admin_request(admin_req.clone());
+        table.push((req.clone(), RequestPolicy::ProposeNormal));
+
+        admin_req.set_change_peer(raft_cmdpb::ChangePeerRequest::new());
+        req.set_admin_request(admin_req.clone());
+        table.push((req.clone(), RequestPolicy::ProposeConfChange));
+        admin_req.clear_change_peer();
+
+        admin_req.set_transfer_leader(raft_cmdpb::TransferLeaderRequest::new());
+        req.set_admin_request(admin_req.clone());
+        table.push((req.clone(), RequestPolicy::ProposeTransferLeader));
+        admin_req.clear_transfer_leader();
+        req.clear_admin_request();
+
+        for (op, policy) in vec![
+            (CmdType::Get, RequestPolicy::ReadLocal),
+            (CmdType::Snap, RequestPolicy::ReadLocal),
+            (CmdType::Put, RequestPolicy::ProposeNormal),
+            (CmdType::Delete, RequestPolicy::ProposeNormal),
+            (CmdType::DeleteRange, RequestPolicy::ProposeNormal),
+            (CmdType::IngestSST, RequestPolicy::ProposeNormal),
+        ] {
+            let mut request = raft_cmdpb::Request::new();
+            request.set_cmd_type(op);
+            req.set_requests(vec![request].into());
+            table.push((req.clone(), policy));
+        }
+
+        for applied_to_index_term in vec![true, false] {
+            for lease_state in vec![LeaseState::Expired, LeaseState::Suspect, LeaseState::Valid] {
+                for (req, mut policy) in table.clone() {
+                    let mut inspector = DummyInspector {
+                        applied_to_index_term,
+                        lease_state,
+                    };
+                    // Leader can not read local as long as
+                    // it has not applied to its term or it does has a valid lease.
+                    if policy == RequestPolicy::ReadLocal
+                        && (!applied_to_index_term || LeaseState::Valid != inspector.lease_state)
+                    {
+                        policy = RequestPolicy::ReadIndex;
+                    }
+                    assert_eq!(inspector.inspect(&req).unwrap(), policy);
+                }
+            }
+        }
+
+        // Read quorum.
+        let mut request = raft_cmdpb::Request::new();
+        request.set_cmd_type(CmdType::Snap);
+        req.set_requests(vec![request].into());
+        req.mut_header().set_read_quorum(true);
+        let mut inspector = DummyInspector {
+            applied_to_index_term: true,
+            lease_state: LeaseState::Valid,
+        };
+        assert_eq!(inspector.inspect(&req).unwrap(), RequestPolicy::ReadIndex);
+        req.clear_header();
+
+        // Err(_)
+        let mut err_table = vec![];
+        for op in vec![CmdType::Prewrite, CmdType::Invalid] {
+            let mut request = raft_cmdpb::Request::new();
+            request.set_cmd_type(op);
+            req.set_requests(vec![request].into());
+            err_table.push(req.clone());
+        }
+        let mut snap = raft_cmdpb::Request::new();
+        snap.set_cmd_type(CmdType::Snap);
+        let mut put = raft_cmdpb::Request::new();
+        put.set_cmd_type(CmdType::Put);
+        req.set_requests(vec![snap, put].into());
+        err_table.push(req.clone());
+
+        for req in err_table {
+            let mut inspector = DummyInspector {
+                applied_to_index_term: true,
+                lease_state: LeaseState::Valid,
+            };
+            assert!(inspector.inspect(&req).is_err());
         }
     }
 }

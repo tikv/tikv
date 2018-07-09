@@ -12,16 +12,16 @@
 // limitations under the License.
 
 use std::borrow::Cow;
-use std::{str, i64, u64};
+use std::{i64, str, u64};
 
 use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
 use coprocessor::codec::mysql::decimal::RoundMode;
 use coprocessor::codec::mysql::{charset, types, Decimal, Duration, Json, Res, Time};
-use coprocessor::codec::{mysql, Datum, Error as CError};
+use coprocessor::codec::{mysql, Datum};
 
-use super::{Error, EvalContext, FnCall, Result};
+use super::{Error, EvalContext, Result, ScalarFunc};
 
-impl FnCall {
+impl ScalarFunc {
     pub fn cast_int_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
     }
@@ -87,18 +87,20 @@ impl FnCall {
 
         match res {
             Ok(v) => Ok(Some(v)),
-            Err(CError::Overflow(data, range)) => {
-                ctx.overflow_from_cast_str_as_int(&val, Error::overflow(&data, &range), is_negative)
+            Err(e) => if e.is_overflow() {
+                ctx.overflow_from_cast_str_as_int(&val, e, is_negative)
                     .map(Some)
-            }
-            Err(e) => Err(e.into()),
+            } else {
+                Err(e)
+            },
         }
     }
 
     pub fn cast_time_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
         let dec = val.to_decimal()?;
-        let dec = dec.round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
+        let dec = dec
+            .round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
             .unwrap();
         let res = dec.as_i64().unwrap();
         Ok(Some(res))
@@ -111,7 +113,8 @@ impl FnCall {
     ) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let dec = val.to_decimal()?;
-        let dec = dec.round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
+        let dec = dec
+            .round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
             .unwrap();
         let res = dec.as_i64().unwrap();
         Ok(Some(res))
@@ -129,10 +132,9 @@ impl FnCall {
             Ok(Some(self.produce_float_with_specified_tp(ctx, val as f64)?))
         } else {
             let uval = val as u64;
-            Ok(Some(self.produce_float_with_specified_tp(
-                ctx,
-                uval as f64,
-            )?))
+            Ok(Some(
+                self.produce_float_with_specified_tp(ctx, uval as f64)?,
+            ))
         }
     }
 
@@ -180,7 +182,7 @@ impl FnCall {
 
     pub fn cast_json_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let val = val.cast_to_real();
+        let val = val.cast_to_real(ctx)?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, val)?))
     }
 
@@ -232,7 +234,7 @@ impl FnCall {
             match Decimal::from_bytes(&val)? {
                 Res::Ok(d) => Cow::Owned(d),
                 Res::Truncated(d) | Res::Overflow(d) => {
-                    box_try!(ctx.handle_truncate(true));
+                    ctx.handle_truncate(true)?;
                     Cow::Owned(d)
                 }
             }
@@ -268,7 +270,7 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let val = val.cast_to_real();
+        let val = val.cast_to_real(ctx)?;
         let dec = Decimal::from_f64(val)?;
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
             .map(Some)
@@ -438,11 +440,12 @@ impl FnCall {
         // TODO: port NumberToDuration from tidb.
         match Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8) {
             Ok(dur) => Ok(Some(Cow::Owned(dur))),
-            Err(CError::Overflow(_, _)) => {
-                ctx.handle_overflow(Error::overflow("Duration", &format!("{}", val)))?;
+            Err(e) => if e.is_overflow() {
+                ctx.handle_overflow(e)?;
                 Ok(None)
-            }
-            Err(e) => Err(e.into()),
+            } else {
+                Err(e)
+            },
         }
     }
 
@@ -707,11 +710,11 @@ mod test {
 
     use chrono::{FixedOffset, Utc};
 
+    use coprocessor::codec::error::*;
     use coprocessor::codec::mysql::{self, charset, types, Decimal, Duration, Json, Time};
     use coprocessor::codec::{convert, Datum};
-    use coprocessor::dag::expr::test::{col_expr as base_col_expr, fncall_expr};
-    use coprocessor::dag::expr::{self, err, EvalConfig, EvalContext, Expression,
-                                 FLAG_IGNORE_TRUNCATE};
+    use coprocessor::dag::expr::test::{col_expr as base_col_expr, scalar_func_expr};
+    use coprocessor::dag::expr::{self, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
 
     pub fn col_expr(col_id: i64, tp: i32) -> Expr {
         let mut expr = base_col_expr(col_id);
@@ -725,7 +728,7 @@ mod test {
     fn test_cast_as_int() {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
-        #[allow(inconsistent_digit_grouping)]
+        #[cfg_attr(feature = "cargo-clippy", allow(inconsistent_digit_grouping))]
         let time_int = 2012_12_12_12_00_23i64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
@@ -804,7 +807,7 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, flag, col, expect) in cases {
             let col_expr = col_expr(0, i32::from(tp));
-            let mut exp = fncall_expr(sig, &[col_expr]);
+            let mut exp = scalar_func_expr(sig, &[col_expr]);
             if flag.is_some() {
                 exp.mut_field_type().set_flag(flag.unwrap() as u32);
             }
@@ -821,7 +824,7 @@ mod test {
     fn test_cast_as_real() {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
-        #[allow(inconsistent_digit_grouping)]
+        #[cfg_attr(feature = "cargo-clippy", allow(inconsistent_digit_grouping))]
         let int_t = 2012_12_12_12_00_23u64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
@@ -942,7 +945,7 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, flen, decimal, expect) in cases {
             let col_expr = col_expr(0, i32::from(tp));
-            let mut exp = fncall_expr(sig, &[col_expr]);
+            let mut exp = scalar_func_expr(sig, &[col_expr]);
             exp.mut_field_type().set_flen(flen as i32);
             exp.mut_field_type().set_decimal(decimal as i32);
             let e = Expression::build(&mut ctx, exp).unwrap();
@@ -1078,7 +1081,7 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, flen, decimal, expect) in cases {
             let col_expr = col_expr(0, i32::from(tp));
-            let mut exp = fncall_expr(sig, &[col_expr]);
+            let mut exp = scalar_func_expr(sig, &[col_expr]);
             exp.mut_field_type().set_flen(flen as i32);
             exp.mut_field_type().set_decimal(decimal as i32);
             let e = Expression::build(&mut ctx, exp).unwrap();
@@ -1231,7 +1234,7 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, charset, to_tp, col, flen, exp) in cases {
             let col_expr = col_expr(0, i32::from(tp));
-            let mut ex = fncall_expr(sig, &[col_expr]);
+            let mut ex = scalar_func_expr(sig, &[col_expr]);
             ex.mut_field_type().set_flen(flen as i32);
             ex.mut_field_type().set_decimal(convert::UNSPECIFIED_LENGTH);
             if to_tp.is_some() {
@@ -1409,7 +1412,7 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, to_fsp, to_tp, exp) in cases {
             let col_expr = col_expr(0, i32::from(tp));
-            let mut ex = fncall_expr(sig, &[col_expr]);
+            let mut ex = scalar_func_expr(sig, &[col_expr]);
             ex.mut_field_type().set_decimal(i32::from(to_fsp));
             ex.mut_field_type().set_tp(i32::from(to_tp));
             let e = Expression::build(&mut ctx, ex).unwrap();
@@ -1572,7 +1575,7 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, to_fsp, exp) in cases {
             let col_expr = col_expr(0, i32::from(tp));
-            let mut ex = fncall_expr(sig, &[col_expr]);
+            let mut ex = scalar_func_expr(sig, &[col_expr]);
             ex.mut_field_type().set_decimal(i32::from(to_fsp));
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval_duration(&mut ctx, col).unwrap();
@@ -1621,7 +1624,7 @@ mod test {
             if flag.is_some() {
                 col_expr.mut_field_type().set_flag(flag.unwrap() as u32);
             }
-            let ex = fncall_expr(ScalarFuncSig::CastIntAsJson, &[col_expr]);
+            let ex = scalar_func_expr(ScalarFuncSig::CastIntAsJson, &[col_expr]);
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
@@ -1641,7 +1644,7 @@ mod test {
         ];
         for (cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(types::DOUBLE));
-            let ex = fncall_expr(ScalarFuncSig::CastRealAsJson, &[col_expr]);
+            let ex = scalar_func_expr(ScalarFuncSig::CastRealAsJson, &[col_expr]);
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
@@ -1664,7 +1667,7 @@ mod test {
         ];
         for (cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(types::NEW_DECIMAL));
-            let ex = fncall_expr(ScalarFuncSig::CastDecimalAsJson, &[col_expr]);
+            let ex = scalar_func_expr(ScalarFuncSig::CastDecimalAsJson, &[col_expr]);
 
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
@@ -1695,7 +1698,7 @@ mod test {
         ];
         for (by_parse, cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(types::STRING));
-            let mut ex = fncall_expr(ScalarFuncSig::CastStringAsJson, &[col_expr]);
+            let mut ex = scalar_func_expr(ScalarFuncSig::CastStringAsJson, &[col_expr]);
             if by_parse {
                 let mut flag = ex.get_field_type().get_flag();
                 flag |= types::PARSE_TO_JSON_FLAG as u32;
@@ -1750,7 +1753,7 @@ mod test {
         ];
         for (tp, cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(tp));
-            let ex = fncall_expr(ScalarFuncSig::CastTimeAsJson, &[col_expr]);
+            let ex = scalar_func_expr(ScalarFuncSig::CastTimeAsJson, &[col_expr]);
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
@@ -1776,7 +1779,7 @@ mod test {
         ];
         for (cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(types::STRING));
-            let ex = fncall_expr(ScalarFuncSig::CastDurationAsJson, &[col_expr]);
+            let ex = scalar_func_expr(ScalarFuncSig::CastDurationAsJson, &[col_expr]);
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
@@ -1799,7 +1802,7 @@ mod test {
         ];
         for (cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(types::STRING));
-            let ex = fncall_expr(ScalarFuncSig::CastJsonAsJson, &[col_expr]);
+            let ex = scalar_func_expr(ScalarFuncSig::CastJsonAsJson, &[col_expr]);
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
@@ -1815,22 +1818,22 @@ mod test {
         let cases = vec![
             (
                 0,
-                vec![
-                    Datum::Dec(Decimal::from_f64(i64::MAX as f64 + 100.5).unwrap()),
-                ],
+                vec![Datum::Dec(
+                    Decimal::from_f64(i64::MAX as f64 + 100.5).unwrap(),
+                )],
                 i64::MAX,
             ),
             (
                 types::UNSIGNED_FLAG,
-                vec![
-                    Datum::Dec(Decimal::from_f64(u64::MAX as f64 + 100.5).unwrap()),
-                ],
+                vec![Datum::Dec(
+                    Decimal::from_f64(u64::MAX as f64 + 100.5).unwrap(),
+                )],
                 u64::MAX as i64,
             ),
         ];
         for (flag, cols, exp) in cases {
             let mut col_expr = col_expr(0, i32::from(types::NEW_DECIMAL));
-            let mut ex = fncall_expr(ScalarFuncSig::CastDecimalAsInt, &[col_expr]);
+            let mut ex = scalar_func_expr(ScalarFuncSig::CastDecimalAsInt, &[col_expr]);
             ex.mut_field_type().set_flag(flag as u32);
 
             // test with overflow as warning
@@ -1843,7 +1846,7 @@ mod test {
             assert_eq!(ctx.warnings.warning_cnt, 1);
             assert_eq!(
                 ctx.warnings.warnings[0].get_code(),
-                err::ERR_TRUNCATE_WRONG_VALUE
+                ERR_TRUNCATE_WRONG_VALUE
             );
 
             // test overflow as error
@@ -1874,7 +1877,7 @@ mod test {
 
         for (flag, cols, exp, warnings_cnt) in cases {
             let mut col_expr = col_expr(0, i32::from(types::STRING));
-            let mut ex = fncall_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
+            let mut ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
             ex.mut_field_type().set_flag(flag as u32);
 
             let mut ctx = EvalContext::new(Arc::new(EvalConfig::default()));
@@ -1883,7 +1886,7 @@ mod test {
             assert_eq!(res, exp);
             assert_eq!(ctx.warnings.warning_cnt, warnings_cnt);
             if warnings_cnt > 0 {
-                assert_eq!(ctx.warnings.warnings[0].get_code(), err::ERR_UNKNOWN);
+                assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_UNKNOWN);
             }
         }
 
@@ -1900,7 +1903,7 @@ mod test {
 
         for (cols, exp) in cases {
             let mut col_expr = col_expr(0, i32::from(types::STRING));
-            let ex = fncall_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
+            let ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
             // test with overflow as warning && in select stmt
             let mut ctx = EvalContext::new(Arc::new(
                 EvalConfig::new(
@@ -1914,7 +1917,7 @@ mod test {
             assert_eq!(ctx.warnings.warning_cnt, 1);
             assert_eq!(
                 ctx.warnings.warnings[0].get_code(),
-                err::ERR_TRUNCATE_WRONG_VALUE
+                ERR_TRUNCATE_WRONG_VALUE
             );
 
             // test overflow as error
@@ -1931,7 +1934,7 @@ mod test {
     //     let cols = vec![Datum::I64(3020400)];
 
     //     let col_expr = col_expr(0, i32::from(types::LONG_LONG));
-    //     let ex = fncall_expr(ScalarFuncSig::CastIntAsDuration, &[col_expr]);
+    //     let ex = scalar_func_expr(ScalarFuncSig::CastIntAsDuration, &[col_expr]);
 
     //     // test with overflow as warning
     //     let mut ctx = EvalContext::new(Arc::new(
@@ -1941,7 +1944,7 @@ mod test {
     //     let res = e.eval_duration(&mut ctx, &cols).unwrap();
     //     assert!(res.is_none());
     //     assert_eq!(ctx.warnings.warning_cnt, 1);
-    //     assert_eq!(ctx.warnings.warnings[0].get_code(), err::ERR_DATA_OUT_OF_RANGE);
+    //     assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
 
     //     // test overflow as error
     //     ctx = EvalContext::new(Arc::new(EvalConfig::default()));

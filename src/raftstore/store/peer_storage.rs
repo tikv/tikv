@@ -14,22 +14,23 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
 
 use kvproto::metapb::{self, Region};
-use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftLocalState,
-                             RaftSnapshotData, RegionLocalState};
+use kvproto::raft_serverpb::{
+    MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
+};
 use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 use rocksdb::{Writable, WriteBatch, DB};
 
-use raftstore::store::ProposalContext;
 use raftstore::store::util::conf_state_from_region;
+use raftstore::store::ProposalContext;
 use raftstore::{Error, Result};
 use storage::CF_RAFT;
 use util::worker::Scheduler;
@@ -1284,7 +1285,8 @@ pub fn do_snapshot(
     mgr.register(key.clone(), SnapEntry::Generating);
     defer!(mgr.deregister(&key, &SnapEntry::Generating));
 
-    let state: RegionLocalState = snap.get_msg_cf(CF_RAFT, &keys::region_state_key(key.region_id))
+    let state: RegionLocalState = snap
+        .get_msg_cf(CF_RAFT, &keys::region_state_key(key.region_id))
         .and_then(|res| match res {
             None => Err(box_err!("could not find region info")),
             Some(state) => Ok(state),

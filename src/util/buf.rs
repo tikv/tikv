@@ -67,7 +67,7 @@ impl PipeBuffer {
     }
 
     #[inline]
-    #[allow(len_zero)]
+    #[cfg_attr(feature = "cargo-clippy", allow(len_zero))]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -335,7 +335,8 @@ impl PartialEq for PipeBuffer {
             mem::swap(&mut l1, &mut l2);
             mem::swap(&mut r1, &mut r2);
         }
-        l1 == &l2[..l1.len()] && r1[..l2.len() - l1.len()] == l2[l1.len()..]
+        l1 == &l2[..l1.len()]
+            && r1[..l2.len() - l1.len()] == l2[l1.len()..]
             && &r1[l2.len() - l1.len()..] == r2
     }
 }

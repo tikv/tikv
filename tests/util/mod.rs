@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rand::{self, Rng, ThreadRng};
-use slog::{self, Drain, OwnedKVList, Record};
-use slog_async;
 use std::env;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
+
+use rand::{self, Rng, ThreadRng};
+use slog::{self, Drain, OwnedKVList, Record};
 use time;
 
 use tikv::util;
@@ -109,12 +109,20 @@ impl Drop for CaseTraceLogger {
 // A help function to initial logger.
 fn init_log() {
     let output = env::var("LOG_FILE").ok();
-    let level = logger::get_level_by_string(&env::var("LOG_LEVEL").unwrap_or_else(|_| "debug".to_owned()))
-        .unwrap();
+    let level = logger::get_level_by_string(
+        &env::var("LOG_LEVEL").unwrap_or_else(|_| "debug".to_owned()),
+    ).unwrap();
     let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
     // we don't mind set it multiple times.
     let drain = CaseTraceLogger { f: writer };
-    let drain = slog_async::Async::new(drain).build().fuse();
+    // CaseTraceLogger relies on test's thread name, however slog_async has
+    // its own thread, and the name is "".
+    // TODO: Enable the slog_async when the [Custom test frameworks][1] is mature,
+    //       and hook the slog_async logger to every test cases.
+    //
+    // [1]: https://github.com/rust-lang/rfcs/blob/master/text/2318-custom-test-frameworks.md
+    //
+    // let drain = slog_async::Async::new(drain).build().fuse();
     let logger = slog::Logger::root_typed(drain, slog_o!());
     let _ = logger::init_log_for_tikv_only(logger, level);
 }

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use coprocessor::dag::expr::{Error, Result};
+use coprocessor::codec::{Error, Result};
 
 // div_i64 divides i64 a with b, returns:
 // - an Error indicating overflow occurred or the divisor is 0
@@ -76,7 +76,7 @@ pub fn div_i64_with_u64(a: i64, b: u64) -> Result<u64> {
 
 #[cfg(test)]
 mod test {
-    use coprocessor::dag::expr::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
+    use coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
     use std::{i64, u64};
 
     macro_rules! do_test {

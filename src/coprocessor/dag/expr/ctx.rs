@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::{mem, i64, u64};
+use std::{i64, mem, u64};
 
 use super::{Error, Result};
 use chrono::FixedOffset;

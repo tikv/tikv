@@ -1,5 +1,6 @@
 log-level = "debug"
 log-file = "foo"
+log-rotation-timespan = "24h"
 [readpool.storage]
 high-concurrency = 1
 normal-concurrency = 3
@@ -62,6 +63,7 @@ job = "tikv_1"
 
 [raftstore]
 sync-log = false
+prevote = false
 raftdb-path = "/var"
 capacity = 123
 raft-base-tick-interval = "12s"
@@ -126,6 +128,7 @@ stats-dump-period = "12m"
 compaction-readahead-size = "1KB"
 info-log-max-size = "1KB"
 info-log-roll-time = "12s"
+info-log-keep-log-file-num = 1000
 info-log-dir = "/var"
 rate-bytes-per-sec = "1KB"
 bytes-per-sync = "1MB"
@@ -301,6 +304,7 @@ stats-dump-period = "12m"
 compaction-readahead-size = "1KB"
 info-log-max-size = "1KB"
 info-log-roll-time = "1s"
+info-log-keep-log-file-num = 1000
 info-log-dir = "/var"
 max-sub-compactions = 12
 writable-file-max-buffer-size = "12MB"
@@ -356,4 +360,8 @@ key-path = "invalid path"
 [import]
 import-dir = "/abc"
 num-threads = 123
+num-import-jobs = 123
+num-import-sst-jobs = 123
+max-prepare-duration = "12m"
+region-split-size = "123MB"
 stream-channel-window = 123

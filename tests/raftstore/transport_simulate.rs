@@ -15,8 +15,8 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 use tikv::raftstore::store::{Msg as StoreMsg, SignificantMsg, Transport};
 use tikv::raftstore::{Error, Result};
-use tikv::server::StoreAddrResolver;
 use tikv::server::transport::*;
+use tikv::server::StoreAddrResolver;
 use tikv::util::{transport, Either, HandyRwLock};
 
 use rand;
@@ -296,17 +296,13 @@ impl PartitionFilterFactory {
 impl FilterFactory for PartitionFilterFactory {
     fn generate(&self, node_id: u64) -> Vec<SendFilter> {
         if self.s1.contains(&node_id) {
-            return vec![
-                box PartitionFilter {
-                    node_ids: self.s2.clone(),
-                },
-            ];
+            return vec![box PartitionFilter {
+                node_ids: self.s2.clone(),
+            }];
         }
-        return vec![
-            box PartitionFilter {
-                node_ids: self.s1.clone(),
-            },
-        ];
+        return vec![box PartitionFilter {
+            node_ids: self.s1.clone(),
+        }];
     }
 }
 
@@ -325,11 +321,9 @@ impl FilterFactory for IsolationFilterFactory {
         if node_id == self.node_id {
             return vec![box DropPacketFilter { rate: 100 }];
         }
-        vec![
-            box PartitionFilter {
-                node_ids: vec![self.node_id],
-            },
-        ]
+        vec![box PartitionFilter {
+            node_ids: vec![self.node_id],
+        }]
     }
 }
 
@@ -378,7 +372,8 @@ impl Filter<RaftMessage> for RegionPacketFilter {
             if self.region_id == region_id
                 && (self.direction.is_send() && self.store_id == from_store_id
                     || self.direction.is_recv() && self.store_id == to_store_id)
-                && self.msg_type
+                && self
+                    .msg_type
                     .as_ref()
                     .map_or(true, |t| t == &m.get_message().get_msg_type())
             {
@@ -624,7 +619,8 @@ impl Filter<StoreMsg> for LeadingDuplicatedSnapshotFilter {
     }
 
     fn after(&self, res: Result<()>) -> Result<()> {
-        let dropped = self.dropped
+        let dropped = self
+            .dropped
             .compare_and_swap(true, false, Ordering::Relaxed);
         if res.is_err() && dropped {
             Ok(())

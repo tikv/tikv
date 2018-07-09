@@ -18,14 +18,14 @@ use super::sync_storage::SyncStorage;
 use super::util::new_raft_storage_with_store_count;
 use kvproto::kvrpcpb::Context;
 use raftstore::cluster::Cluster;
-use raftstore::server::ServerCluster;
 use raftstore::server::new_server_cluster;
+use raftstore::server::{ServerCluster, SimulateEngine};
 use raftstore::util::*;
 use tikv::storage::{self, make_key, Mutation};
-use tikv::storage::{engine, mvcc, txn, Key};
+use tikv::storage::{engine, mvcc, txn, Engine, Key};
 use tikv::util::HandyRwLock;
 
-fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage, Context) {
+fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage<SimulateEngine>, Context) {
     new_raft_storage_with_store_count(1, "")
 }
 
@@ -69,7 +69,7 @@ fn test_raft_storage() {
 
 #[test]
 fn test_raft_storage_get_after_lease() {
-    let (_cluster, storage, ctx) = new_raft_storage();
+    let (cluster, storage, ctx) = new_raft_storage();
     let key = b"key";
     let value = b"value";
     assert_eq!(
@@ -90,7 +90,7 @@ fn test_raft_storage_get_after_lease() {
     );
 
     // Sleep until the leader lease is expired.
-    thread::sleep(Duration::from_millis(MAX_LEADER_LEASE));
+    thread::sleep(cluster.cfg.raft_store.raft_store_max_leader_lease.0);
     assert_eq!(
         storage
             .raw_get(ctx.clone(), "".to_string(), key.to_vec())

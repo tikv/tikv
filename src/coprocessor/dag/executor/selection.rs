@@ -16,8 +16,8 @@ use std::sync::Arc;
 use tipb::executor::Selection;
 use tipb::schema::ColumnInfo;
 
-use coprocessor::Result;
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use coprocessor::Result;
 
 use super::{inflate_with_col_for_dag, Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
 
@@ -52,7 +52,7 @@ impl SelectionExecutor {
     }
 }
 
-#[allow(never_loop)]
+#[cfg_attr(feature = "cargo-clippy", allow(never_loop))]
 impl Executor for SelectionExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = self.src.next()? {

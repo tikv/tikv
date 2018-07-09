@@ -22,24 +22,31 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::usize;
 
-use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-              DBCompressionType, DBOptions, DBRecoveryMode};
+use rocksdb::{
+    BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
+    DBCompressionType, DBOptions, DBRecoveryMode,
+};
 use slog;
 use sys_info;
 
 use import::Config as ImportConfig;
 use pd::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
-use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::keys::region_raft_prefix_len;
-use server::Config as ServerConfig;
+use raftstore::store::Config as RaftstoreConfig;
 use server::readpool;
-use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
-              DEFAULT_ROCKSDB_SUB_DIR};
-use util::config::{self, compression_type_level_serde, ReadableDuration, ReadableSize, GB, KB, MB};
+use server::Config as ServerConfig;
+use storage::{
+    Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_ROCKSDB_SUB_DIR,
+};
+use util::config::{
+    self, compression_type_level_serde, ReadableDuration, ReadableSize, GB, KB, MB,
+};
 use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
-use util::rocksdb::{db_exist, CFOptions, EventListener, FixedPrefixSliceTransform,
-                    FixedSuffixSliceTransform, NoopSliceTransform};
+use util::rocksdb::{
+    db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
+    NoopSliceTransform,
+};
 use util::security::SecurityConfig;
 use util::time::duration_to_sec;
 
@@ -387,6 +394,7 @@ pub struct DbConfig {
     pub compaction_readahead_size: ReadableSize,
     pub info_log_max_size: ReadableSize,
     pub info_log_roll_time: ReadableDuration,
+    pub info_log_keep_log_file_num: u64,
     pub info_log_dir: String,
     pub rate_bytes_per_sec: ReadableSize,
     pub bytes_per_sync: ReadableSize,
@@ -416,8 +424,9 @@ impl Default for DbConfig {
             enable_statistics: true,
             stats_dump_period: ReadableDuration::minutes(10),
             compaction_readahead_size: ReadableSize::kb(0),
-            info_log_max_size: ReadableSize::kb(0),
+            info_log_max_size: ReadableSize::gb(1),
             info_log_roll_time: ReadableDuration::secs(0),
+            info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
             rate_bytes_per_sec: ReadableSize::kb(0),
             bytes_per_sync: ReadableSize::mb(1),
@@ -453,6 +462,7 @@ impl DbConfig {
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
+        opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
         if !self.info_log_dir.is_empty() {
             opts.create_info_log(&self.info_log_dir)
                 .unwrap_or_else(|e| {
@@ -569,6 +579,7 @@ pub struct RaftDbConfig {
     pub compaction_readahead_size: ReadableSize,
     pub info_log_max_size: ReadableSize,
     pub info_log_roll_time: ReadableDuration,
+    pub info_log_keep_log_file_num: u64,
     pub info_log_dir: String,
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
@@ -594,8 +605,9 @@ impl Default for RaftDbConfig {
             enable_statistics: true,
             stats_dump_period: ReadableDuration::minutes(10),
             compaction_readahead_size: ReadableSize::kb(0),
-            info_log_max_size: ReadableSize::kb(0),
+            info_log_max_size: ReadableSize::gb(1),
             info_log_roll_time: ReadableDuration::secs(0),
+            info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
             max_sub_compactions: 1,
             writable_file_max_buffer_size: ReadableSize::mb(1),
@@ -627,6 +639,7 @@ impl RaftDbConfig {
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
+        opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
         if !self.info_log_dir.is_empty() {
             opts.create_info_log(&self.info_log_dir)
                 .unwrap_or_else(|e| {
@@ -675,7 +688,10 @@ impl Default for MetricConfig {
 }
 
 pub mod log_level_serde {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::{Error, Unexpected}};
+    use serde::{
+        de::{Error, Unexpected},
+        Deserialize, Deserializer, Serialize, Serializer,
+    };
     use slog::Level;
     use util::logger::{get_level_by_string, get_string_by_level};
 
@@ -892,6 +908,7 @@ pub struct TiKvConfig {
     #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
     pub log_file: String,
+    pub log_rotation_timespan: ReadableDuration,
     pub readpool: ReadPoolConfig,
     pub server: ServerConfig,
     pub storage: StorageConfig,
@@ -911,6 +928,7 @@ impl Default for TiKvConfig {
         TiKvConfig {
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
+            log_rotation_timespan: ReadableDuration::hours(24),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
