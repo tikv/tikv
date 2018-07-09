@@ -94,13 +94,7 @@ jobs:
           no_output_timeout: 1800s
       - run:
           name: Clippy check
-          command: |
-            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
-              echo "Current branch is $CIRCLE_BRANCH, skip"
-            else
-              echo "Current branch is $CIRCLE_BRANCH, running clippy..."
-              make clippy
-            fi
+          command: make clippy
       - run:
           name: Building
           command: env SKIP_TESTS=true make trace_test
