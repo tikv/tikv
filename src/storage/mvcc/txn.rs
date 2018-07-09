@@ -36,6 +36,8 @@ pub struct MvccTxn<S: Snapshot> {
     start_ts: u64,
     writes: Vec<Modify>,
     write_size: usize,
+    // collapse continuous rollbacks.
+    collapse_rollback: bool,
 }
 
 impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
@@ -58,7 +60,13 @@ impl<S: Snapshot> MvccTxn<S> {
             start_ts,
             writes: vec![],
             write_size: 0,
+            collapse_rollback: true,
         }
+    }
+
+    pub fn collapse_rollback(mut self, collapse: bool) -> Self {
+        self.collapse_rollback = collapse;
+        self
     }
 
     pub fn into_modifies(self) -> Vec<Modify> {
@@ -129,6 +137,9 @@ impl<S: Snapshot> MvccTxn<S> {
         if !options.skip_constraint_check {
             if let Some((commit, _)) = self.reader.seek_write(key, u64::max_value())? {
                 // Abort on writes after our start timestamp ...
+                // If exists a commit version whose commit timestamp is larger or equal than
+                // current start timestamp, we should abort current prewrite, even if the commit
+                // type is Rollback.
                 if commit >= self.start_ts {
                     MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
                     return Err(Error::WriteConflict {
@@ -192,8 +203,8 @@ impl<S: Snapshot> MvccTxn<S> {
                 return match self.reader.get_txn_commit_info(key, self.start_ts)? {
                     Some((_, WriteType::Rollback)) | None => {
                         MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
-                        // TODO:None should not appear
-                        // Rollbacked by concurrent transaction.
+                        // None: related Rollback has been collapsed.
+                        // Rollback: rollback by concurrent transaction.
                         info!(
                             "txn conflict (lock not found), key:{}, start_ts:{}, commit_ts:{}",
                             key, self.start_ts, commit_ts
@@ -262,6 +273,19 @@ impl<S: Snapshot> MvccTxn<S> {
         let ts = self.start_ts;
         self.put_write(key, ts, write.to_bytes());
         self.unlock_key(key.clone());
+        if self.collapse_rollback {
+            self.collapse_prev_rollback(key)?;
+        }
+        Ok(())
+    }
+
+    fn collapse_prev_rollback(&mut self, key: &Key) -> Result<()> {
+        if let Some((commit_ts, write)) = self.reader.seek_write(key, u64::max_value())? {
+            assert!(commit_ts < self.start_ts);
+            if write.write_type == WriteType::Rollback {
+                self.delete_write(key, commit_ts);
+            }
+        }
         Ok(())
     }
 
@@ -785,6 +809,23 @@ mod tests {
         must_get_rc(&engine, key, 20, v1);
     }
 
+    #[test]
+    fn test_collapse_prev_rollback() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let (key, value) = (b"key", b"value");
+        let start_ts1 = 1;
+        let start_ts2 = 2;
+
+        must_prewrite_put(&engine, key, value, key, start_ts1);
+        must_rollback(&engine, key, start_ts1);
+        must_get_rollback_ts(&engine, key, start_ts1);
+
+        must_prewrite_put(&engine, key, value, key, start_ts2);
+        must_rollback(&engine, key, start_ts2);
+        must_get_rollback_ts(&engine, key, start_ts2);
+        must_get_rollback_ts_none(&engine, key, start_ts1);
+    }
+
     fn must_get<E: Engine>(engine: &E, key: &[u8], ts: u64, expect: &[u8]) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
@@ -994,6 +1035,28 @@ mod tests {
                 assert_eq!(write_type, WriteType::Rollback);
             }
         }
+    }
+
+    fn must_get_rollback_ts<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
+
+        let (ts, write_type) = reader
+            .get_txn_commit_info(&make_key(key), start_ts)
+            .unwrap()
+            .unwrap();
+        assert_eq!(ts, start_ts);
+        assert_eq!(write_type, WriteType::Rollback);
+    }
+
+    fn must_get_rollback_ts_none<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
+
+        let ret = reader
+            .get_txn_commit_info(&make_key(key), start_ts)
+            .unwrap();
+        assert_eq!(ret, None);
     }
 
     fn must_scan_keys<E: Engine>(
