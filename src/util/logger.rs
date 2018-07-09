@@ -225,7 +225,6 @@ impl<'a> io::Write for CountingWriter<'a> {
 struct Serializer<'a> {
     comma_needed: bool,
     decorator: &'a mut RecordDecorator,
-    stack: Vec<(String, String)>,
 }
 
 impl<'a> Serializer<'a> {
@@ -233,7 +232,6 @@ impl<'a> Serializer<'a> {
         Serializer {
             comma_needed,
             decorator,
-            stack: vec![],
         }
     }
 
@@ -246,30 +244,13 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn finish(mut self) -> io::Result<()> {
-        loop {
-            if let Some((k, v)) = self.stack.pop() {
-                self.maybe_print_comma()?;
-                self.decorator.start_key()?;
-                write!(self.decorator, "{}", k)?;
-                write!(self.decorator, ":")?;
-                self.decorator.start_whitespace()?;
-                write!(self.decorator, " ")?;
-                self.decorator.start_value()?;
-                write!(self.decorator, "{}", v)?;
-            } else {
-                return Ok(());
-            }
-        }
+    fn finish(self) -> io::Result<()> {
+        Ok(())
     }
 }
 
 impl<'a> Drop for Serializer<'a> {
-    fn drop(&mut self) {
-        if !self.stack.is_empty() {
-            panic!("stack not empty");
-        }
-    }
+    fn drop(&mut self) {}
 }
 
 macro_rules! s(
