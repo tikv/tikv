@@ -20,22 +20,13 @@
 #![feature(box_syntax)]
 #![feature(integer_atomics)]
 #![feature(entry_or_default)]
-#![cfg_attr(feature = "dev", feature(plugin))]
-#![cfg_attr(feature = "dev", plugin(clippy))]
-#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-#![recursion_limit = "200"]
+#![feature(proc_macro_non_items)]
+#![feature(proc_macro_gen)]
 #![feature(ascii_ctype)]
-#![allow(module_inception)]
-#![allow(should_implement_trait)]
-#![allow(large_enum_variant)]
-#![allow(needless_pass_by_value)]
-#![allow(unreadable_literal)]
-#![allow(new_without_default_derive)]
-#![allow(verbose_bit_mask)]
-#![allow(implicit_hasher)]
+#![recursion_limit = "200"]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
-#![allow(nonminimal_bool)]
+#![cfg_attr(feature = "cargo-clippy", allow(nonminimal_bool))]
 
 extern crate alloc;
 extern crate backtrace;
@@ -44,6 +35,7 @@ extern crate bitflags;
 extern crate byteorder;
 extern crate chrono;
 extern crate crc;
+#[macro_use]
 extern crate crossbeam_channel;
 #[macro_use]
 extern crate fail;
@@ -97,6 +89,8 @@ extern crate url;
 extern crate utime;
 extern crate uuid;
 extern crate zipf;
+#[macro_use]
+extern crate derive_more;
 
 #[macro_use]
 pub mod util;

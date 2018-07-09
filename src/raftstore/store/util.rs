@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::Bound::Excluded;
 use std::option::Option;
 use std::{fmt, u64};
 
@@ -326,6 +327,43 @@ pub fn get_region_approximate_size_cf(
     Ok(size)
 }
 
+/// Get the approxmiate middle key of the region. If we suppose the region
+/// is stored on disk as a plain file, "middle key" means the key whose
+/// position is in the middle of the file.
+///
+/// The returned key maybe is timestamped if transaction KV is used,
+/// and must start with "z".
+pub fn get_region_approximate_middle_cf(
+    db: &DB,
+    cfname: &str,
+    region: &metapb::Region,
+) -> Result<Option<Vec<u8>>> {
+    let cf = rocksdb_util::get_cf_handle(db, cfname)?;
+    let start = keys::enc_start_key(region);
+    let end = keys::enc_end_key(region);
+    let range = Range::new(&start, &end);
+    let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
+
+    let mut keys = Vec::new();
+    for (_, v) in &*collection {
+        let props = SizeProperties::decode(v.user_collected_properties())?;
+        keys.extend(
+            props
+                .index_handles
+                .range::<[u8], _>((Excluded(start.as_slice()), Excluded(end.as_slice())))
+                .map(|(k, _)| k.to_owned()),
+        );
+    }
+    keys.sort();
+    if keys.is_empty() {
+        return Ok(None);
+    }
+    // Calculate the position by (len-1)/2. So it's the left one
+    // of two middle positions if the number of keys is even.
+    let middle = (keys.len() - 1) / 2;
+    Ok(Some(keys.swap_remove(middle)))
+}
+
 pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u64> {
     let mut size = 0;
     for cfname in LARGE_CFS {
@@ -425,7 +463,7 @@ pub struct Lease {
     max_lease: Duration,
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LeaseState {
     /// The lease is suspicious, may be invalid.
     Suspect,
@@ -544,8 +582,7 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
 
 #[cfg(test)]
 mod tests {
-    use std::process;
-    use std::thread;
+    use std::{iter, process, thread};
 
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::AdminRequest;
@@ -558,6 +595,7 @@ mod tests {
     use raftstore::store::peer_storage;
     use storage::mvcc::{Write, WriteType};
     use storage::{Key, ALL_CFS, CF_DEFAULT};
+    use util::escape;
     use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
     use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
     use util::time::{monotonic_now, monotonic_raw_now};
@@ -1173,5 +1211,43 @@ mod tests {
             check_region_epoch(&req, &region, false).unwrap_err();
             check_region_epoch(&req, &region, true).unwrap_err();
         }
+    }
+
+    #[test]
+    fn test_get_region_approximate_middle_cf() {
+        let tmp = TempDir::new("test_raftstore_util").unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_level_zero_file_num_compaction_trigger(10);
+        let f = Box::new(SizePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
+        let cfs_opts = LARGE_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .collect();
+        let engine = rocksdb_util::new_engine_opt(path, db_opts, cfs_opts).unwrap();
+
+        let cf_handle = engine.cf_handle(CF_DEFAULT).unwrap();
+        let mut big_value = Vec::with_capacity(256);
+        big_value.extend(iter::repeat(b'v').take(256));
+        for i in 0..100 {
+            let k = format!("key_{:03}", i).into_bytes();
+            let k = keys::data_key(Key::from_raw(&k).encoded());
+            engine.put_cf(cf_handle, &k, &big_value).unwrap();
+            // Flush for every key so that we can know the exact middle key.
+            engine.flush_cf(cf_handle, true).unwrap();
+        }
+
+        let region = make_region(1, vec![], vec![]);
+        let middle_key = get_region_approximate_middle_cf(&engine, CF_DEFAULT, &region)
+            .unwrap()
+            .unwrap();
+
+        let middle_key = Key::from_encoded(keys::origin_key(&middle_key).to_owned())
+            .raw()
+            .unwrap();
+        assert_eq!(escape(&middle_key), "key_049");
     }
 }

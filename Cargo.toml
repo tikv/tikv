@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "2.1.0-alpha.1"
+version = "2.1.0-beta"
 keywords = ["KV", "distributed-systems", "raft"]
 build = "build.rs"
 
@@ -9,7 +9,6 @@ time = "0.1"
 
 [features]
 default = []
-dev = ["clippy"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
 mem-profiling = ["jemallocator"]
@@ -50,7 +49,6 @@ toml = "0.4"
 libc = "0.2"
 crc = "1.2"
 fs2 = "0.4"
-clippy = {version = "*", optional = true}
 protobuf = "~2.0"
 nix = "0.9.0"
 utime = "0.2"
@@ -78,8 +76,9 @@ fail = "0.2"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
 grpcio = { version = "0.3", features = [ "secure" ] }
 raft = "0.3"
-crossbeam-channel = { version = "0.1", features = [ "nightly" ] }
+crossbeam-channel = "0.2"
 fxhash = "0.2"
+derive_more = "0.11.0"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.4"
@@ -102,7 +101,7 @@ default-features = false
 features = ["nightly", "push", "process"]
 
 [dependencies.prometheus-static-metric]
-version = "0.1.2"
+version = "0.1.4"
 
 [dependencies.jemallocator]
 git = "https://github.com/busyjay/jemallocator.git"

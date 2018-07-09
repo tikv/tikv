@@ -12,6 +12,11 @@
 # file to store log, write to stderr if it's empty.
 # log-file = ""
 
+# timespan between rotating the log files.
+# Once this timespan passes the existing log file will have a timestamp appended to its name,
+# and a new file will be created.
+# log-rotation-timespan = "24h"
+
 [readpool.storage]
 # size of thread pool for high-priority operations
 # high-concurrency = 4
@@ -90,7 +95,7 @@
 # scheduler-messages-per-tick = 1024
 
 # the number of slots in scheduler latches, concurrency control for write.
-# scheduler-concurrency = 102400
+# scheduler-concurrency = 2048000
 
 # scheduler's worker pool size, should increase it in heavy write cases,
 # also should less than total cpu cores.
@@ -115,6 +120,9 @@
 [raftstore]
 # true (default value) for high reliability, this can prevent data loss when power failure.
 # sync-log = true
+
+# minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
+# prevote = false
 
 # set the path to raftdb directory, default value is data-dir/raft
 # raftdb-path = ""
@@ -299,6 +307,30 @@
 # Allows OS to incrementally sync WAL to disk while it is being written.
 # wal-bytes-per-sync = "0KB"
 
+# Specify the maximal size of the Rocksdb info log file. If the log file
+# is larger than `max_log_file_size`, a new info log file will be created.
+# If max_log_file_size == 0, all logs will be written to one log file.
+# Default: 1GB
+# info-log-max-size = "1GB"
+
+# Time for the Rocksdb info log file to roll (in seconds).
+# If specified with non-zero value, log file will be rolled
+# if it has been active longer than `log_file_time_to_roll`.
+# Default: 0 (disabled)
+# info-log-roll-time = "0"
+
+# Maximal Rocksdb info log files to be kept.
+# Default: 10
+# info-log-keep-log-file-num = 10
+
+# This specifies the Rocksdb info LOG dir.
+# If it is empty, the log files will be in the same dir as data.
+# If it is non empty, the log files will be in the specified dir,
+# and the db data dir's absolute path will be used as the log file
+# name's prefix.
+# Default: empty
+# info-log-dir = ""
+
 # Column Family default used to store actual data of the database.
 [rocksdb.defaultcf]
 # compression method (if any) is used to compress a block.
@@ -442,6 +474,11 @@
 # bytes-per-sync = "0MB"
 # wal-bytes-per-sync = "0KB"
 
+# info-log-max-size = "1GB"
+# info-log-roll-time = "0"
+# info-log-keep-log-file-num = 10
+# info-log-dir = ""
+
 [raftdb.defaultcf]
 # compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
 # block-size = "64KB"
@@ -469,8 +506,6 @@
 # key-path = ""
 
 [import]
-# the directory to store importing kv data.
-# import-dir = "/tmp/tikv/import"
 # number of threads to handle RPC requests.
 # num-threads = 8
 # stream channel window size, stream will be blocked on channel full.

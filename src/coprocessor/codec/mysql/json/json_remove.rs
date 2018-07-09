@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use super::super::Result;
-use super::Json;
 use super::path_expr::{PathExpression, PathLeg};
+use super::Json;
 
 impl Json {
     // Remove elements from Json,

@@ -31,13 +31,13 @@ const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 // RocksDB, so don't set REVERSE_SEEK_BOUND too small.
 const REVERSE_SEEK_BOUND: u64 = 32;
 
-pub struct MvccReader {
-    snapshot: Box<Snapshot>,
+pub struct MvccReader<S: Snapshot> {
+    snapshot: S,
     statistics: Statistics,
     // cursors are used for speeding up scans.
-    data_cursor: Option<Cursor>,
-    lock_cursor: Option<Cursor>,
-    write_cursor: Option<Cursor>,
+    data_cursor: Option<Cursor<S::Iter>>,
+    lock_cursor: Option<Cursor<S::Iter>>,
+    write_cursor: Option<Cursor<S::Iter>>,
 
     scan_mode: Option<ScanMode>,
     key_only: bool,
@@ -48,16 +48,16 @@ pub struct MvccReader {
     isolation_level: IsolationLevel,
 }
 
-impl MvccReader {
+impl<S: Snapshot> MvccReader<S> {
     pub fn new(
-        snapshot: Box<Snapshot>,
+        snapshot: S,
         scan_mode: Option<ScanMode>,
         fill_cache: bool,
         lower_bound: Option<Vec<u8>>,
         upper_bound: Option<Vec<u8>>,
         isolation_level: IsolationLevel,
-    ) -> MvccReader {
-        MvccReader {
+    ) -> Self {
+        Self {
             snapshot,
             statistics: Statistics::default(),
             data_cursor: None,
@@ -117,7 +117,8 @@ impl MvccReader {
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         if self.scan_mode.is_some() && self.lock_cursor.is_none() {
             let iter_opt = IterOption::new(None, None, true);
-            let iter = self.snapshot
+            let iter = self
+                .snapshot
                 .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
             self.lock_cursor = Some(iter);
         }
@@ -167,7 +168,8 @@ impl MvccReader {
         if self.scan_mode.is_some() {
             if self.write_cursor.is_none() {
                 let iter_opt = IterOption::new(None, None, self.fill_cache);
-                let iter = self.snapshot
+                let iter = self
+                    .snapshot
                     .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false))?;
                 self.write_cursor = Some(iter);
             }
@@ -291,7 +293,8 @@ impl MvccReader {
                 self.upper_bound.as_ref().cloned(),
                 self.fill_cache,
             );
-            let iter = self.snapshot
+            let iter = self
+                .snapshot
                 .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))?;
             self.write_cursor = Some(iter);
         }
@@ -305,7 +308,8 @@ impl MvccReader {
                 self.upper_bound.as_ref().cloned(),
                 true,
             );
-            let iter = self.snapshot
+            let iter = self
+                .snapshot
                 .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
             self.lock_cursor = Some(iter);
         }
@@ -322,7 +326,9 @@ impl MvccReader {
 
         while ok {
             if Write::parse(cursor.value())?.start_ts == ts {
-                return Ok(Some(Key::from_encoded(cursor.key().to_vec()).truncate_ts()?));
+                return Ok(Some(
+                    Key::from_encoded(cursor.key().to_vec()).truncate_ts()?,
+                ));
             }
             ok = cursor.next(&mut self.statistics.write);
         }
@@ -491,7 +497,8 @@ impl MvccReader {
         // After several prev, we still not get the latest version for the specified ts,
         // use seek to locate the latest version.
         let key = user_key.append_ts(ts);
-        let valid = self.write_cursor
+        let valid = self
+            .write_cursor
             .as_mut()
             .unwrap()
             .internal_seek(&key, &mut self.statistics.write)?;
@@ -550,7 +557,7 @@ impl MvccReader {
         }
     }
 
-    #[allow(type_complexity)]
+    #[cfg_attr(feature = "cargo-clippy", allow(type_complexity))]
     pub fn scan_lock<F>(
         &mut self,
         start: Option<Key>,
@@ -698,8 +705,8 @@ impl MvccReader {
 mod tests {
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
-    use raftstore::store::RegionSnapshot;
     use raftstore::store::keys;
+    use raftstore::store::RegionSnapshot;
     use rocksdb::{self, Writable, WriteBatch, DB};
     use std::sync::Arc;
     use std::u64;
@@ -745,7 +752,7 @@ mod tests {
 
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: u64) {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(Box::new(snap), start_ts, None, IsolationLevel::SI, true);
+            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true);
             txn.prewrite(m, pk, &Options::default()).unwrap();
             self.write(txn.into_modifies());
         }
@@ -753,7 +760,7 @@ mod tests {
         fn commit(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
             let k = make_key(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(Box::new(snap), start_ts, None, IsolationLevel::SI, true);
+            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true);
             txn.commit(&k, commit_ts).unwrap();
             self.write(txn.into_modifies());
         }
@@ -761,7 +768,7 @@ mod tests {
         fn rollback(&mut self, pk: &[u8], start_ts: u64) {
             let k = make_key(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(Box::new(snap), start_ts, None, IsolationLevel::SI, true);
+            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true);
             txn.rollback(&k).unwrap();
             self.write(txn.into_modifies());
         }
@@ -770,8 +777,7 @@ mod tests {
             let k = make_key(pk);
             loop {
                 let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-                let mut txn =
-                    MvccTxn::new(Box::new(snap), safe_point, None, IsolationLevel::SI, true);
+                let mut txn = MvccTxn::new(snap, safe_point, None, IsolationLevel::SI, true);
                 txn.gc(&k, safe_point).unwrap();
                 let modifies = txn.into_modifies();
                 if modifies.is_empty() {
@@ -858,7 +864,7 @@ mod tests {
         need_gc: bool,
     ) -> Option<MvccProperties> {
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let reader = MvccReader::new(Box::new(snap), None, false, None, None, IsolationLevel::SI);
+        let reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
         assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
         reader.get_mvcc_properties(safe_point)
     }
@@ -886,7 +892,6 @@ mod tests {
         assert!(check_need_gc(Arc::clone(&db), region.clone(), 10, true).is_none());
     }
 
-    #[allow(cyclomatic_complexity)]
     fn test_with_properties(path: &str, region: &Region) {
         let db = open_db(path, true);
         let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
@@ -996,7 +1001,7 @@ mod tests {
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let mut reader = MvccReader::new(
-            Box::new(snap),
+            snap,
             Some(ScanMode::Backward),
             false,
             None,
@@ -1096,7 +1101,7 @@ mod tests {
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let mut reader = MvccReader::new(
-            Box::new(snap),
+            snap,
             Some(ScanMode::Backward),
             false,
             None,

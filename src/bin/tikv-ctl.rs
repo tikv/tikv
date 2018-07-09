@@ -11,14 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(plugin)]
-#![cfg_attr(feature = "dev", plugin(clippy))]
-#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-#![allow(needless_pass_by_value)]
-#![allow(cyclomatic_complexity)]
-
 #[macro_use]
 extern crate clap;
+extern crate chrono;
 extern crate futures;
 extern crate grpcio;
 extern crate kvproto;
@@ -45,19 +40,20 @@ use grpcio::{ChannelBuilder, Environment};
 use protobuf::Message;
 use protobuf::RepeatedField;
 
-use kvproto::debugpb::DB as DBType;
-use kvproto::debugpb::*;
+use kvproto::debugpb::{DB as DBType, *};
 use kvproto::debugpb_grpc::DebugClient;
-use kvproto::kvrpcpb::MvccInfo;
+use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
+use kvproto::tikvpb_grpc::TikvClient;
 use raft::eraftpb::{ConfChange, Entry, EntryType};
+
 use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::raftstore::store::{keys, Engines};
 use tikv::server::debug::{Debugger, RegionInfo};
-use tikv::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::util::rocksdb as rocksdb_util;
 use tikv::util::security::{SecurityConfig, SecurityManager};
 use tikv::util::{escape, unescape};
@@ -110,7 +106,10 @@ fn new_debug_executor(
         }
         (Some(remote), None) => {
             let env = Arc::new(Environment::new(1));
-            let cb = ChannelBuilder::new(env);
+            let cb = ChannelBuilder::new(env)
+                .max_receive_message_len(1 << 30) // 1G.
+                .max_send_message_len(1 << 30);
+
             let channel = mgr.connect(cb, remote);
             let client = DebugClient::new(channel);
             Box::new(client) as Box<DebugExecutor>
@@ -557,7 +556,8 @@ impl DebugExecutor for DebugClient {
     fn get_region_info(&self, region: u64) -> RegionInfo {
         let mut req = RegionInfoRequest::new();
         req.set_region_id(region);
-        let mut resp = self.region_info(&req)
+        let mut resp = self
+            .region_info(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::region_info", e));
 
         let mut region_info = RegionInfo::default();
@@ -617,7 +617,8 @@ impl DebugExecutor for DebugClient {
         if tags.len() == 1 && tags[0] == METRICS_PROMETHEUS {
             req.set_all(false);
         }
-        let mut resp = self.get_metrics(&req)
+        let mut resp = self
+            .get_metrics(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::metrics", e));
         for tag in tags {
             println!("tag:{}", tag);
@@ -675,7 +676,8 @@ impl DebugExecutor for DebugClient {
     fn dump_region_properties(&self, region_id: u64) {
         let mut req = GetRegionPropertiesRequest::new();
         req.set_region_id(region_id);
-        let resp = self.get_region_properties(&req)
+        let resp = self
+            .get_region_properties(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_region_properties", e));
         for prop in resp.get_props() {
             println!("{}: {}", prop.get_name(), prop.get_value());
@@ -720,7 +722,8 @@ impl DebugExecutor for Debugger {
         to: Vec<u8>,
         limit: u64,
     ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
-        let iter = self.scan_mvcc(&from, &to, limit)
+        let iter = self
+            .scan_mvcc(&from, &to, limit)
             .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
         #[allow(deprecated)]
         let stream = stream::iter(iter).map_err(|e| e.to_string());
@@ -733,7 +736,8 @@ impl DebugExecutor for Debugger {
     }
 
     fn set_region_tombstone(&self, regions: Vec<Region>) {
-        let ret = self.set_region_tombstone(regions)
+        let ret = self
+            .set_region_tombstone(regions)
             .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e));
         if ret.is_empty() {
             println!("success!");
@@ -745,7 +749,8 @@ impl DebugExecutor for Debugger {
     }
 
     fn recover_regions(&self, regions: Vec<Region>) {
-        let ret = self.recover_regions(regions)
+        let ret = self
+            .recover_regions(regions)
             .unwrap_or_else(|e| perror_and_exit("Debugger::recover regions", e));
         if ret.is_empty() {
             println!("success!");
@@ -757,7 +762,8 @@ impl DebugExecutor for Debugger {
     }
 
     fn print_bad_regions(&self) {
-        let bad_regions = self.bad_regions()
+        let bad_regions = self
+            .bad_regions()
             .unwrap_or_else(|e| perror_and_exit("Debugger::bad_regions", e));
         if !bad_regions.is_empty() {
             for (region_id, error) in bad_regions {
@@ -832,7 +838,8 @@ impl DebugExecutor for Debugger {
     }
 
     fn dump_region_properties(&self, region_id: u64) {
-        let props = self.get_region_properties(region_id)
+        let props = self
+            .get_region_properties(region_id)
             .unwrap_or_else(|e| perror_and_exit("Debugger::get_region_properties", e));
         for (name, value) in props {
             println!("{}: {}", name, value);
@@ -840,7 +847,6 @@ impl DebugExecutor for Debugger {
     }
 }
 
-#[allow(cyclomatic_complexity)]
 fn main() {
     let raw_key_hint: &'static str = "raw key (generally starts with \"z\") in escaped form";
 
@@ -849,30 +855,24 @@ fn main() {
         .about("Distributed transactional key value database powered by Rust and Raft")
         .arg(
             Arg::with_name("db")
-                .required(true)
-                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex"])
                 .long("db")
                 .takes_value(true)
                 .help("set rocksdb path"),
         )
         .arg(
             Arg::with_name("raftdb")
-                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex"])
                 .long("raftdb")
                 .takes_value(true)
                 .help("set raft rocksdb path"),
         )
         .arg(
             Arg::with_name("config")
-                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex"])
                 .long("config")
                 .takes_value(true)
                 .help("set config for rocksdb"),
         )
         .arg(
             Arg::with_name("host")
-                .required(true)
-                .conflicts_with_all(&["db", "pd", "raftdb", "hex-to-escaped", "escaped-to-hex", "config"])
                 .long("host")
                 .takes_value(true)
                 .help("set remote host"),
@@ -913,10 +913,22 @@ fn main() {
                 .help("convert escaped key to hex key"),
         )
         .arg(
+            Arg::with_name("decode")
+                .conflicts_with_all(&["hex-to-escaped", "escaped-to-hex"])
+                .long("decode")
+                .takes_value(true)
+                .help("decode a key in escaped format"),
+        )
+        .arg(
+            Arg::with_name("encode")
+                .conflicts_with_all(&["hex-to-escaped", "escaped-to-hex"])
+                .long("encode")
+                .takes_value(true)
+                .help("encode a key in escaped format"),
+            )
+        .arg(
             Arg::with_name("pd")
-                .required(true)
                 .long("pd")
-                .conflicts_with_all(&["db", "raftdb", "host", "hex-to-escaped", "escaped-to-hex", "config"])
                 .takes_value(true)
                 .help("pd address"),
         )
@@ -1398,41 +1410,76 @@ fn main() {
                         .takes_value(true)
                         .help("the target region id"),
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("split-region")
+                .about("split the region")
+                .arg(
+                    Arg::with_name("region")
+                        .short("r")
+                        .required(true)
+                        .takes_value(true)
+                        .help("the target region id")
+                )
+                .arg(
+                    Arg::with_name("key")
+                        .short("k")
+                        .required(true)
+                        .takes_value(true)
+                        .help("the key to split it, in unecoded escaped format")
+                ),
         );
 
     let matches = app.clone().get_matches();
 
-    let hex_key = matches.value_of("hex-to-escaped");
-    let escaped_key = matches.value_of("escaped-to-hex");
-    match (hex_key, escaped_key) {
-        (Some(hex), None) => {
-            println!("{}", escape(&from_hex(hex).unwrap()));
-            return;
-        }
-        (None, Some(escaped)) => {
-            println!("{}", &unescape(escaped).to_hex().to_uppercase());
-            return;
-        }
-        (None, None) => {}
-        _ => unreachable!(),
-    };
+    // Deal with arguments about key utils.
+    if let Some(hex) = matches.value_of("hex-to-escaped") {
+        println!("{}", escape(&from_hex(hex).unwrap()));
+        return;
+    } else if let Some(escaped) = matches.value_of("escaped-to-hex") {
+        println!("{}", &unescape(escaped).to_hex().to_uppercase());
+        return;
+    } else if let Some(encoded) = matches.value_of("decode") {
+        match Key::from_encoded(unescape(encoded)).raw() {
+            Ok(k) => println!("{}", escape(&k)),
+            Err(e) => eprintln!("decode meets error: {}", e),
+        };
+        return;
+    } else if let Some(decoded) = matches.value_of("encode") {
+        println!("{}", Key::from_raw(&unescape(decoded)));
+        return;
+    }
 
     let mgr = new_security_mgr(&matches);
 
+    // Deal with subcommand dump-snap-meta.
     if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
         let path = matches.value_of("file").unwrap();
         return dump_snap_meta_file(path);
-    } else if let Some(sub_cmd) = matches.subcommand_matches("compact-cluster") {
-        let pd = matches.value_of("pd").unwrap();
-        let db = sub_cmd.value_of("db").unwrap();
-        let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
-        let cfs = Vec::from_iter(sub_cmd.values_of("cf").unwrap());
-        let from_key = sub_cmd.value_of("from").map(|k| unescape(k));
-        let to_key = sub_cmd.value_of("to").map(|k| unescape(k));
-        let threads = value_t_or_exit!(sub_cmd.value_of("threads"), u32);
-        return compact_whole_cluster(pd, db_type, cfs, from_key, to_key, threads, mgr);
     }
 
+    // Deal with all subcommands needs PD.
+    if let Some(pd) = matches.value_of("pd") {
+        if let Some(matches) = matches.subcommand_matches("compact-cluster") {
+            let db = matches.value_of("db").unwrap();
+            let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
+            let cfs = Vec::from_iter(matches.values_of("cf").unwrap());
+            let from_key = matches.value_of("from").map(|k| unescape(k));
+            let to_key = matches.value_of("to").map(|k| unescape(k));
+            let threads = value_t_or_exit!(matches.value_of("threads"), u32);
+            return compact_whole_cluster(pd, db_type, cfs, from_key, to_key, threads, mgr);
+        }
+        if let Some(matches) = matches.subcommand_matches("split-region") {
+            let region_id = value_t_or_exit!(matches.value_of("region"), u64);
+            let key = unescape(matches.value_of("key").unwrap());
+            return split_region(pd, region_id, key, mgr);
+        }
+
+        let _ = app.print_help();
+        return;
+    }
+
+    // Deal with all subcommands about db or host.
     let db = matches.value_of("db");
     let raft_db = matches.value_of("raftdb");
     let host = matches.value_of("host");
@@ -1656,6 +1703,60 @@ fn dump_snap_meta_file(path: &str) {
             cf_file.cf, cf_file.size, cf_file.checksum
         );
     }
+}
+
+fn get_pd_rpc_client(pd: &str, mgr: Arc<SecurityManager>) -> RpcClient {
+    let mut cfg = PdConfig::default();
+    cfg.endpoints.push(pd.to_owned());
+    cfg.validate().unwrap();
+    RpcClient::new(&cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
+}
+
+fn split_region(pd: &str, region_id: u64, key: Vec<u8>, mgr: Arc<SecurityManager>) {
+    let pd_client = get_pd_rpc_client(pd, Arc::clone(&mgr));
+
+    let region = pd_client
+        .get_region_by_id(region_id)
+        .wait()
+        .expect("get_region_by_id should success")
+        .expect("must have the region");
+
+    let leader = pd_client
+        .get_region_info(region.get_start_key())
+        .expect("get_region_info should success")
+        .leader
+        .expect("region must have leader");
+
+    let store = pd_client
+        .get_store(leader.get_store_id())
+        .expect("get_store should success");
+
+    let tikv_client = {
+        let cb = ChannelBuilder::new(Arc::new(Environment::new(1)));
+        let channel = mgr.connect(cb, store.get_address());
+        TikvClient::new(channel)
+    };
+
+    let mut req = SplitRegionRequest::new();
+    req.mut_context().set_region_id(region_id);
+    req.mut_context()
+        .set_region_epoch(region.get_region_epoch().clone());
+    req.set_split_key(key.clone());
+
+    let resp = tikv_client
+        .split_region(&req)
+        .expect("split_region should success");
+    if resp.has_region_error() {
+        eprintln!("split_region internal error: {:?}", resp.get_region_error());
+        return;
+    }
+
+    println!(
+        "split region {} success, left: {}, right: {}",
+        region_id,
+        resp.get_left().get_id(),
+        resp.get_right().get_id(),
+    );
 }
 
 fn compact_whole_cluster(

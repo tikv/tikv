@@ -43,11 +43,12 @@ impl SplitChecker for Checker {
         if self.current_size > self.split_size && self.split_key.is_none() {
             self.split_key = Some(key.to_vec());
         }
-        self.current_size >= self.max_size
+        // should consider max_size may equal to split_size
+        self.current_size > self.max_size
     }
 
     fn split_key(&mut self) -> Option<Vec<u8>> {
-        if self.current_size >= self.max_size {
+        if self.current_size > self.max_size {
             self.split_key.take()
         } else {
             None
@@ -137,8 +138,8 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::sync::mpsc;
+    use std::sync::Arc;
 
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
@@ -146,6 +147,8 @@ mod tests {
     use rocksdb::{ColumnFamilyOptions, DBOptions};
     use tempdir::TempDir;
 
+    use super::Checker;
+    use raftstore::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
     use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
     use storage::ALL_CFS;
     use util::config::ReadableSize;
@@ -153,8 +156,6 @@ mod tests {
     use util::rocksdb::{new_engine_opt, CFOptions};
     use util::transport::RetryableSendCh;
     use util::worker::Runnable;
-
-    use raftstore::coprocessor::{Config, CoprocessorHost};
 
     #[test]
     fn test_split_check() {
@@ -275,5 +276,20 @@ mod tests {
         drop(rx);
         // It should be safe even the result can't be sent back.
         runnable.run(SplitCheckTask::new(region, true));
+    }
+
+    #[test]
+    fn test_checker_with_same_max_and_split_size() {
+        let mut checker = Checker::new(24, 24);
+        let region = Region::default();
+        let mut ctx = ObserverContext::new(&region);
+        loop {
+            let data = b"xxxx";
+            if checker.on_kv(&mut ctx, data, data.len() as u64) {
+                break;
+            }
+        }
+
+        assert!(checker.split_key().is_some());
     }
 }

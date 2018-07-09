@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use self::gc_worker::GCWorker;
 use self::metrics::*;
 use self::mvcc::Lock;
 use self::txn::CMD_BATCH_SIZE;
@@ -32,6 +33,7 @@ use util::worker::{self, Builder, Worker};
 
 pub mod config;
 pub mod engine;
+pub mod gc_worker;
 mod metrics;
 pub mod mvcc;
 mod readpool_context;
@@ -40,9 +42,10 @@ pub mod types;
 
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::engine::raftkv::RaftKv;
-pub use self::engine::{new_local_engine, CFStatistics, Cursor, Engine, Error as EngineError,
-                       FlowStatistics, Iterator, Modify, ScanMode, Snapshot, Statistics,
-                       StatisticsSummary, TEMP_DIR};
+pub use self::engine::{
+    new_local_engine, CFStatistics, Cursor, Engine, Error as EngineError, FlowStatistics, Iterator,
+    Modify, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary, TEMP_DIR,
+};
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
 pub use self::types::{make_key, Key, KvPair, MvccInfo, Value};
@@ -73,7 +76,7 @@ pub enum Mutation {
     Lock(Key),
 }
 
-#[allow(match_same_arms)]
+#[cfg_attr(feature = "cargo-clippy", allow(match_same_arms))]
 impl Mutation {
     pub fn key(&self) -> &Key {
         match *self {
@@ -129,13 +132,6 @@ pub enum Command {
         txn_status: HashMap<u64, u64>,
         scan_key: Option<Key>,
         key_locks: Vec<(Key, Lock)>,
-    },
-    Gc {
-        ctx: Context,
-        safe_point: u64,
-        ratio_threshold: f64,
-        scan_key: Option<Key>,
-        keys: Vec<Key>,
     },
     DeleteRange {
         ctx: Context,
@@ -215,16 +211,6 @@ impl Display for Command {
                 start_key, limit, max_ts, ctx
             ),
             Command::ResolveLock { .. } => write!(f, "kv::resolve_lock"),
-            Command::Gc {
-                ref ctx,
-                safe_point,
-                ref scan_key,
-                ..
-            } => write!(
-                f,
-                "kv::command::gc scan {:?} @ {} | {:?}",
-                scan_key, safe_point, ctx
-            ),
             Command::DeleteRange {
                 ref ctx,
                 ref start_key,
@@ -268,7 +254,6 @@ impl Command {
             Command::MvccByKey { .. } |
             Command::MvccByStartTs { .. } => true,
             Command::ResolveLock { ref key_locks, .. } => key_locks.is_empty(),
-            Command::Gc { ref keys, .. } => keys.is_empty(),
             _ => false,
         }
     }
@@ -297,7 +282,6 @@ impl Command {
             Command::Rollback { .. } => "rollback",
             Command::ScanLock { .. } => "scan_lock",
             Command::ResolveLock { .. } => "resolve_lock",
-            Command::Gc { .. } => CMD_TAG_GC,
             Command::DeleteRange { .. } => "delete_range",
             Command::Pause { .. } => "pause",
             Command::MvccByKey { .. } => "key_mvcc",
@@ -313,7 +297,6 @@ impl Command {
             | Command::MvccByStartTs { start_ts, .. } => start_ts,
             Command::Commit { lock_ts, .. } => lock_ts,
             Command::ScanLock { max_ts, .. } => max_ts,
-            Command::Gc { safe_point, .. } => safe_point,
             Command::ResolveLock { .. }
             | Command::DeleteRange { .. }
             | Command::Pause { .. }
@@ -329,7 +312,6 @@ impl Command {
             | Command::Rollback { ref ctx, .. }
             | Command::ScanLock { ref ctx, .. }
             | Command::ResolveLock { ref ctx, .. }
-            | Command::Gc { ref ctx, .. }
             | Command::DeleteRange { ref ctx, .. }
             | Command::Pause { ref ctx, .. }
             | Command::MvccByKey { ref ctx, .. }
@@ -345,7 +327,6 @@ impl Command {
             | Command::Rollback { ref mut ctx, .. }
             | Command::ScanLock { ref mut ctx, .. }
             | Command::ResolveLock { ref mut ctx, .. }
-            | Command::Gc { ref mut ctx, .. }
             | Command::DeleteRange { ref mut ctx, .. }
             | Command::Pause { ref mut ctx, .. }
             | Command::MvccByKey { ref mut ctx, .. }
@@ -409,26 +390,33 @@ impl Options {
 }
 
 #[derive(Clone)]
-pub struct Storage {
-    engine: Box<Engine>,
+pub struct Storage<E: Engine> {
+    engine: E,
 
     // to schedule the execution of storage commands
-    worker: Arc<Mutex<Worker<Msg>>>,
-    worker_scheduler: worker::Scheduler<Msg>,
+    worker: Arc<Mutex<Worker<Msg<E>>>>,
+    worker_scheduler: worker::Scheduler<Msg<E>>,
 
     read_pool: ReadPool<ReadPoolContext>,
+    gc_worker: GCWorker<E>,
 
     // Storage configurations.
-    gc_ratio_threshold: f64,
     max_key_size: usize,
 }
 
-impl Storage {
+impl Storage<RocksEngine> {
+    pub fn new(config: &Config, read_pool: ReadPool<ReadPoolContext>) -> Result<Self> {
+        let engine = engine::new_local_engine(&config.data_dir, ALL_CFS)?;
+        Storage::from_engine(engine, config, read_pool)
+    }
+}
+
+impl<E: Engine> Storage<E> {
     pub fn from_engine(
-        engine: Box<Engine>,
+        engine: E,
         config: &Config,
         read_pool: ReadPool<ReadPoolContext>,
-    ) -> Result<Storage> {
+    ) -> Result<Self> {
         info!("storage {:?} started.", engine);
 
         let worker = Arc::new(Mutex::new(
@@ -438,19 +426,15 @@ impl Storage {
                 .create(),
         ));
         let worker_scheduler = worker.lock().unwrap().scheduler();
+        let gc_worker = GCWorker::new(engine.clone(), config.gc_ratio_threshold);
         Ok(Storage {
-            read_pool,
             engine,
             worker,
             worker_scheduler,
-            gc_ratio_threshold: config.gc_ratio_threshold,
+            read_pool,
+            gc_worker,
             max_key_size: config.max_key_size,
         })
-    }
-
-    pub fn new(config: &Config, read_pool: ReadPool<ReadPoolContext>) -> Result<Storage> {
-        let engine = engine::new_local_engine(&config.data_dir, ALL_CFS)?;
-        Storage::from_engine(engine, config, read_pool)
     }
 
     pub fn start(&mut self, config: &Config) -> Result<()> {
@@ -466,6 +450,7 @@ impl Storage {
             sched_pending_write_threshold,
         );
         worker.start(scheduler)?;
+        self.gc_worker.start()?;
         Ok(())
     }
 
@@ -481,11 +466,13 @@ impl Storage {
             return Err(box_err!("failed to join sched_handle, err:{:?}", e));
         }
 
+        self.gc_worker.stop()?;
+
         info!("storage {:?} closed.", self.engine);
         Ok(())
     }
 
-    pub fn get_engine(&self) -> Box<Engine> {
+    pub fn get_engine(&self) -> E {
         self.engine.clone()
     }
 
@@ -495,10 +482,7 @@ impl Storage {
         Ok(())
     }
 
-    fn async_snapshot(
-        engine: Box<Engine>,
-        ctx: &Context,
-    ) -> impl Future<Item = Box<Snapshot + 'static>, Error = Error> {
+    fn async_snapshot(engine: E, ctx: &Context) -> impl Future<Item = E::Snap, Error = Error> {
         let (callback, future) = util::future::paired_future_callback();
         let val = engine.async_snapshot(ctx, callback);
 
@@ -529,7 +513,7 @@ impl Storage {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: Box<Snapshot>| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
@@ -584,7 +568,7 @@ impl Storage {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: Box<Snapshot>| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
@@ -654,7 +638,7 @@ impl Storage {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: Box<Snapshot>| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
@@ -863,16 +847,10 @@ impl Storage {
     }
 
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
-        let cmd = Command::Gc {
-            ctx,
-            safe_point,
-            ratio_threshold: self.gc_ratio_threshold,
-            scan_key: None,
-            keys: vec![],
-        };
-        let tag = cmd.tag();
-        self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        self.gc_worker.async_gc(ctx, safe_point, callback)?;
+        KV_COMMAND_COUNTER_VEC
+            .with_label_values(&[CMD_TAG_GC])
+            .inc();
         Ok(())
     }
 
@@ -894,10 +872,10 @@ impl Storage {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: Box<Snapshot>| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-                    let cf = Storage::rawkv_cf(cf)?;
+                    let cf = Self::rawkv_cf(cf)?;
                     // no scan_count for this kind of op.
 
                     let key_len = key.len();
@@ -946,13 +924,14 @@ impl Storage {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: Box<Snapshot>| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-                    let cf = Storage::rawkv_cf(cf)?;
+                    let cf = Self::rawkv_cf(cf)?;
                     // no scan_count for this kind of op.
                     let mut stats = Statistics::default();
-                    let result: Vec<Result<KvPair>> = keys.iter()
+                    let result: Vec<Result<KvPair>> = keys
+                        .iter()
                         .map(|k| (k, snapshot.get_cf(cf, k)))
                         .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
                         .into_iter()
@@ -995,9 +974,11 @@ impl Storage {
         }
         self.engine.async_write(
             &ctx,
-            vec![
-                Modify::Put(Storage::rawkv_cf(cf)?, Key::from_encoded(key), value),
-            ],
+            vec![Modify::Put(
+                Self::rawkv_cf(cf)?,
+                Key::from_encoded(key),
+                value,
+            )],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&["raw_put"]).inc();
@@ -1011,7 +992,7 @@ impl Storage {
         pairs: Vec<KvPair>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cf = Storage::rawkv_cf(cf)?;
+        let cf = Self::rawkv_cf(cf)?;
         for &(ref key, _) in &pairs {
             if key.len() > self.max_key_size {
                 callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
@@ -1045,9 +1026,7 @@ impl Storage {
         }
         self.engine.async_write(
             &ctx,
-            vec![
-                Modify::Delete(Storage::rawkv_cf(cf)?, Key::from_encoded(key)),
-            ],
+            vec![Modify::Delete(Self::rawkv_cf(cf)?, Key::from_encoded(key))],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
         KV_COMMAND_COUNTER_VEC
@@ -1074,13 +1053,11 @@ impl Storage {
 
         self.engine.async_write(
             &ctx,
-            vec![
-                Modify::DeleteRange(
-                    Storage::rawkv_cf(cf)?,
-                    Key::from_encoded(start_key),
-                    Key::from_encoded(end_key),
-                ),
-            ],
+            vec![Modify::DeleteRange(
+                Self::rawkv_cf(cf)?,
+                Key::from_encoded(start_key),
+                Key::from_encoded(end_key),
+            )],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
         KV_COMMAND_COUNTER_VEC
@@ -1096,14 +1073,15 @@ impl Storage {
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cf = Storage::rawkv_cf(cf)?;
+        let cf = Self::rawkv_cf(cf)?;
         for key in &keys {
             if key.len() > self.max_key_size {
                 callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
                 return Ok(());
             }
         }
-        let requests = keys.into_iter()
+        let requests = keys
+            .into_iter()
             .map(|k| Modify::Delete(cf, Key::from_encoded(k)))
             .collect();
         self.engine
@@ -1117,7 +1095,7 @@ impl Storage {
     }
 
     fn raw_scan(
-        snapshot: &Snapshot,
+        snapshot: &E::Snap,
         cf: String,
         start_key: &Key,
         end_key: Option<Key>,
@@ -1129,7 +1107,7 @@ impl Storage {
         if let Some(end) = end_key {
             option.set_upper_bound(end.encoded().clone());
         }
-        let mut cursor = snapshot.iter_cf(Storage::rawkv_cf(cf)?, option, ScanMode::Forward)?;
+        let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
         if !cursor.seek(start_key, &mut stats.data)? {
             return Ok(vec![]);
         }
@@ -1168,13 +1146,13 @@ impl Storage {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: Box<Snapshot>| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
                     let mut statistics = Statistics::default();
-                    let result = Storage::raw_scan(
-                        snapshot.as_ref(),
+                    let result = Self::raw_scan(
+                        &snapshot,
                         cf,
                         &Key::from_encoded(key),
                         None,
@@ -1261,7 +1239,7 @@ impl Storage {
             };
 
             Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: Box<Snapshot>| {
+                .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
@@ -1283,8 +1261,8 @@ impl Storage {
                         } else {
                             Some(Key::from_encoded(end_key))
                         };
-                        let pairs = Storage::raw_scan(
-                            snapshot.as_ref(),
+                        let pairs = Self::raw_scan(
+                            &snapshot,
                             cf.clone(),
                             &start_key,
                             end_key,
@@ -1384,6 +1362,9 @@ quick_error! {
         SchedTooBusy {
             description("scheduler is too busy")
         }
+        GCWorkerTooBusy {
+            description("gc worker is too busy")
+        }
         KeyTooLarge(size: usize, limit: usize) {
             description("max key size exceeded")
             display("max key size exceeded, size: {}, limit: {}", size, limit)
@@ -1397,26 +1378,66 @@ quick_error! {
 
 pub type Result<T> = ::std::result::Result<T, Error>;
 
-pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
-    if header.has_not_leader() {
-        "not_leader"
-    } else if header.has_region_not_found() {
-        "region_not_found"
-    } else if header.has_key_not_in_region() {
-        "key_not_in_region"
-    } else if header.has_stale_epoch() {
-        "stale_epoch"
-    } else if header.has_server_is_busy() {
-        "server_is_busy"
-    } else if header.has_stale_command() {
-        "stale_command"
-    } else if header.has_store_not_match() {
-        "store_not_match"
-    } else if header.has_raft_entry_too_large() {
-        "raft_entry_too_large"
-    } else {
-        "other"
+pub enum ErrorHeaderKind {
+    NotLeader,
+    RegionNotFound,
+    KeyNotInRegion,
+    StaleEpoch,
+    ServerIsBusy,
+    StaleCommand,
+    StoreNotMatch,
+    RaftEntryTooLarge,
+    Other,
+}
+
+impl ErrorHeaderKind {
+    /// TODO: This function is only used for bridging existing & legacy metric tags.
+    /// It should be removed once Coprocessor starts using new static metrics.
+    pub fn get_str(&self) -> &'static str {
+        match *self {
+            ErrorHeaderKind::NotLeader => "not_leader",
+            ErrorHeaderKind::RegionNotFound => "region_not_found",
+            ErrorHeaderKind::KeyNotInRegion => "key_not_in_region",
+            ErrorHeaderKind::StaleEpoch => "stale_epoch",
+            ErrorHeaderKind::ServerIsBusy => "server_is_busy",
+            ErrorHeaderKind::StaleCommand => "stale_command",
+            ErrorHeaderKind::StoreNotMatch => "store_not_match",
+            ErrorHeaderKind::RaftEntryTooLarge => "raft_entry_too_large",
+            ErrorHeaderKind::Other => "other",
+        }
     }
+}
+
+impl Display for ErrorHeaderKind {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", self.get_str())
+    }
+}
+
+pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
+    if header.has_not_leader() {
+        ErrorHeaderKind::NotLeader
+    } else if header.has_region_not_found() {
+        ErrorHeaderKind::RegionNotFound
+    } else if header.has_key_not_in_region() {
+        ErrorHeaderKind::KeyNotInRegion
+    } else if header.has_stale_epoch() {
+        ErrorHeaderKind::StaleEpoch
+    } else if header.has_server_is_busy() {
+        ErrorHeaderKind::ServerIsBusy
+    } else if header.has_stale_command() {
+        ErrorHeaderKind::StaleCommand
+    } else if header.has_store_not_match() {
+        ErrorHeaderKind::StoreNotMatch
+    } else if header.has_raft_entry_too_large() {
+        ErrorHeaderKind::RaftEntryTooLarge
+    } else {
+        ErrorHeaderKind::Other
+    }
+}
+
+pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
+    get_error_kind_from_header(header).get_str()
 }
 
 #[cfg(test)]

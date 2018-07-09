@@ -91,7 +91,8 @@ pub fn set_exit_hook(panic_abort: bool) {
             };
             let thread = thread::current();
             let name = thread.name().unwrap_or("<unnamed>");
-            let loc = info.location()
+            let loc = info
+                .location()
                 .map(|l| format!("{}:{}", l.file(), l.line()));
             let bt = Backtrace::new();
             error!(

@@ -2,6 +2,30 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [2.1.0-beta]
+### Features
+* Upgrade Rust to the `nightly-2018-06-14` version
+* Provide a `Raft PreVote` configuration to avoid leader reelection generated when network recovers after network isolation
+* Add a metric to display the number of files and `ingest` related information in each layer of RocksDB
+* Print `key` with too many versions when GC works
+### Performance
+* Use `static metric` to optimize multi-label metric performance (YCSB `raw get` is improved by 3%)
+* Remove `box` in multiple modules and use patterns to improve the operating performance (YCSB `raw get` is improved by 3%)
+* Use `asynchronous log` to improve the performance of writing logs
+* Add a metric to collect the thread status
+* Decease memory copy times by decreasing `box` used in the application to improve the performance
+
+## [2.0.4]
+### Features
+* Add the RocksDB `PerfContext` interface for debugging
+* Add the `region-properties` command for `tikv-ctl`
+### Improvements
+* Make GC record the log when GC encounters many versions of data
+* Remove the `import-mode` parameter
+### Bug Fixes
+* Fix the issue that `reverse-seek` is slow when many RocksDB tombstones exist
+* Fix the crash issue caused by `do_sub`
+
 ## [2.0.3]
 ### Bug Fixes
 * Correct wrong peer meta for learners

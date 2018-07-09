@@ -16,7 +16,7 @@ use std::cmp::Ordering;
 use std::i64;
 use std::slice::Iter;
 
-use super::{Error, EvalContext, FnCall, Result};
+use super::{Error, EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
 use coprocessor::codec::{datum, mysql, Datum};
 use coprocessor::dag::expr::Expression;
@@ -34,7 +34,7 @@ pub enum CmpOp {
     NullEQ,
 }
 
-impl FnCall {
+impl ScalarFunc {
     pub fn compare_int(
         &self,
         ctx: &mut EvalContext,
@@ -276,7 +276,7 @@ fn cmp_i64_with_unsigned_flag(
     }
 }
 
-fn do_coalesce<'a, F, T>(expr: &'a FnCall, mut f: F) -> Result<Option<T>>
+fn do_coalesce<'a, F, T>(expr: &'a ScalarFunc, mut f: F) -> Result<Option<T>>
 where
     F: FnMut(&'a Expression) -> Result<Option<T>>,
 {
@@ -289,7 +289,7 @@ where
     Ok(None)
 }
 
-fn do_in<'a, T, E, F>(expr: &'a FnCall, mut f: F, get_order: E) -> Result<Option<i64>>
+fn do_in<'a, T, E, F>(expr: &'a ScalarFunc, mut f: F, get_order: E) -> Result<Option<i64>>
 where
     F: FnMut(&'a Expression) -> Result<Option<T>>,
     E: Fn(&T, &T) -> Result<Ordering>,
@@ -383,9 +383,9 @@ fn like(target: &[u8], pattern: &[u8], escape: u32, recurse_level: usize) -> Res
 #[cfg(test)]
 mod test {
     use super::*;
-    use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-    use coprocessor::dag::expr::test::{col_expr, datum_expr, fncall_expr};
+    use coprocessor::codec::Datum;
+    use coprocessor::dag::expr::test::{col_expr, datum_expr, scalar_func_expr};
     use coprocessor::dag::expr::{EvalContext, Expression};
     use protobuf::RepeatedField;
     use std::{i64, u64};
@@ -667,7 +667,7 @@ mod test {
             let target = datum_expr(Datum::Bytes(target_str.as_bytes().to_vec()));
             let pattern = datum_expr(Datum::Bytes(pattern_str.as_bytes().to_vec()));
             let escape = datum_expr(Datum::I64(escape as i64));
-            let op = fncall_expr(ScalarFuncSig::LikeSig, &[target, pattern, escape]);
+            let op = scalar_func_expr(ScalarFuncSig::LikeSig, &[target, pattern, escape]);
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::from(exp);
