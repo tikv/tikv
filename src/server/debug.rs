@@ -13,7 +13,7 @@
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::iter::{FromIterator, IntoIterator};
+use std::iter::FromIterator;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -23,12 +23,12 @@ use protobuf::{self, Message, RepeatedField};
 
 use kvproto::debugpb::{DB as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
-use kvproto::metapb::{Peer, Region};
+use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::Entry;
 use rocksdb::{Kv, SeekKey, Writable, WriteBatch, WriteOptions, DB};
 
-use raft::{self, quorum, RawNode};
+use raft::{self, RawNode};
 use raftstore::store::engine::{IterOption, Mutable};
 use raftstore::store::util as raftstore_util;
 use raftstore::store::{
@@ -396,7 +396,6 @@ impl Debugger {
         &self,
         store_ids: Vec<u64>,
         region_ids: Option<Vec<u64>>,
-        force: bool,
     ) -> Result<()> {
         let store_id = self.get_store_id()?;
         if store_ids.iter().any(|&s| s == store_id) {
@@ -406,10 +405,6 @@ impl Debugger {
         let wb = WriteBatch::new();
         let handle = box_try!(get_cf_handle(self.engines.kv_engine.as_ref(), CF_RAFT));
         let store_ids = HashSet::<u64>::from_iter(store_ids);
-
-        fn count_voters<'a, T: IntoIterator<Item = &'a Peer>>(peers: T) -> usize {
-            peers.into_iter().filter(|p| !p.get_is_learner()).count()
-        }
 
         {
             let remove_stores = |key: &[u8], value: &[u8]| {
@@ -423,44 +418,21 @@ impl Debugger {
                 if region_state.get_state() == PeerState::Tombstone {
                     return Ok(());
                 }
+
+                let mut new_peers = region_state.get_region().get_peers().to_owned();
+                new_peers.retain(|peer| !store_ids.contains(&peer.get_store_id()));
+
                 let region_id = region_state.get_region().get_id();
-
-                let old_peers = region_state.mut_region().take_peers().into_vec();
-                let old_voters_len = count_voters(&old_peers);
-
-                let mut survivor_peers = old_peers.clone();
-                survivor_peers.retain(|p| !store_ids.contains(&p.get_store_id()));
-                let survivor_voters_len = count_voters(&survivor_peers);
-
-                if survivor_voters_len >= quorum(old_voters_len) {
-                    info!("region {} can still elect a quorum, skip it", region_id);
-                    return Ok(());
-                }
-
-                let should_remove = old_voters_len - 2 * survivor_voters_len + 1;
-                let want_remove = old_voters_len - survivor_voters_len;
-                if !force
-                    && should_remove < want_remove
-                    && survivor_voters_len + quorum(old_voters_len) > old_voters_len
-                {
-                    info!(
-                        "region {} want to remove {} voters, but {} is enough",
-                        region_id, want_remove, should_remove
-                    );
-                    return Err(box_err!("could be more safe"));
-                }
-
+                let old_peers = region_state.mut_region().take_peers();
                 info!(
                     "region {} change peers from {:?}, to {:?}",
-                    region_id, old_peers, survivor_peers,
+                    region_id, old_peers, new_peers
                 );
-
                 // We need to leave epoch untouched to avoid inconsistency.
                 region_state
                     .mut_region()
-                    .set_peers(RepeatedField::from_vec(survivor_peers));
+                    .set_peers(RepeatedField::from_vec(new_peers));
                 box_try!(wb.put_msg_cf(handle, key, &region_state));
-
                 Ok(())
             };
 
@@ -1550,7 +1522,7 @@ mod tests {
 
         // Only remove specified stores from region 1.
         debugger
-            .remove_failed_stores(vec![13, 14, 21, 23], Some(vec![1]), true)
+            .remove_failed_stores(vec![13, 14, 21, 23], Some(vec![1]))
             .unwrap();
 
         // 13 and 14 should be removed from region 1.
@@ -1559,40 +1531,14 @@ mod tests {
         assert_eq!(get_region_stores(engine, 2), &[21, 22, 23]);
 
         // Remove specified stores from all regions.
-        debugger
-            .remove_failed_stores(vec![11, 23], None, true)
-            .unwrap();
+        debugger.remove_failed_stores(vec![11, 23], None).unwrap();
 
-        // 11 should be removed from region 1.
         assert_eq!(get_region_stores(engine, 1), &[12]);
-
-        // 23 shouldn't be removed from region 2 because there's still a quorom.
-        assert_eq!(get_region_stores(engine, 2), &[21, 22, 23]);
+        assert_eq!(get_region_stores(engine, 2), &[21, 22]);
 
         // Should fail when the store itself is in the failed list.
         init_region_state(engine, 3, &[100, 31, 32, 33]);
-        debugger
-            .remove_failed_stores(vec![100], None, true)
-            .unwrap_err();
-
-        // Cases for remove failed stores without force option.
-        debugger.set_store_id(16);
-        init_region_state(engine, 4, &[11, 12, 13, 14, 15, 16]);
-        for (failed, rest) in vec![
-            (vec![11], Some(vec![11, 12, 13, 14, 15, 16])),
-            (vec![11, 12], Some(vec![11, 12, 13, 14, 15, 16])),
-            (vec![11, 12, 13], None),
-            (vec![11, 12, 13, 14], Some(vec![15, 16])),
-            (vec![11, 12, 13, 14, 15], Some(vec![16])),
-        ] {
-            let result = debugger.remove_failed_stores(failed, Some(vec![4]), false);
-            if let Some(expected) = rest {
-                assert!(result.is_ok());
-                assert_eq!(get_region_stores(engine, 4), expected);
-            } else {
-                assert!(result.is_err());
-            }
-        }
+        debugger.remove_failed_stores(vec![100], None).unwrap_err();
     }
 
     #[test]
