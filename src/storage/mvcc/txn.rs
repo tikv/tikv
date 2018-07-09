@@ -137,7 +137,7 @@ impl<S: Snapshot> MvccTxn<S> {
         if !options.skip_constraint_check {
             if let Some((commit, _)) = self.reader.seek_write(key, u64::max_value())? {
                 // Abort on writes after our start timestamp ...
-                // If exists a commit version whose commit timestamp is larger or equal than
+                // If exists a commit version whose commit timestamp is larger than or equal to
                 // current start timestamp, we should abort current prewrite, even if the commit
                 // type is Rollback.
                 if commit >= self.start_ts {
