@@ -2157,7 +2157,7 @@ mod tests {
                 self.applied_to_index_term
             }
             fn inspect_lease(&mut self) -> LeaseState {
-                self.lease_state.clone()
+                self.lease_state
             }
         }
 
