@@ -48,19 +48,19 @@ impl<S: Snapshot + 'static> DAGContext<S> {
         req_ctx: ReqContext,
         batch_row_limit: usize,
     ) -> Result<Self> {
-        let mut eval_cfg = {
-            let time_zone_name = if req.has_time_zone_name() {
-                Some(req.get_time_zone_name())
-            } else {
-                None
-            };
-            let time_zone_offset = req.get_time_zone_offset();
-            box_try!(EvalConfig::new(
-                time_zone_name,
-                time_zone_offset,
-                req.get_flags()
-            ))
-        };
+        let mut eval_cfg = box_try!(EvalConfig::new(req.get_flags()));
+
+        // We respect time zone name first, then offset.
+        if req.has_time_zone_name() {
+            box_try!(eval_cfg.set_time_zone_by_name(req.get_time_zone_name()));
+        } else if req.has_time_zone_offset() {
+            box_try!(eval_cfg.set_time_zone_by_offset(req.get_time_zone_offset()));
+        } else {
+            // This should be not reachable by design. However we still provide a default
+            // value, which is local.
+            box_try!(eval_cfg.set_time_zone_by_name("SYSTEM"));
+        }
+
         if req.has_max_warning_count() {
             eval_cfg.set_max_warning_cnt(req.get_max_warning_count() as usize);
         }

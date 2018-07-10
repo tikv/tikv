@@ -1657,7 +1657,7 @@ mod test {
             (Datum::Dec(0u64.into()), Some(false)),
         ];
 
-        let cfg = EvalConfig::new(None, 0, FLAG_IGNORE_TRUNCATE).unwrap();
+        let cfg = EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap();
         let mut ctx = EvalContext::new(Arc::new(cfg));
 
         for (d, b) in tests {
@@ -1837,7 +1837,7 @@ mod test {
             ),
         ];
 
-        let cfg = EvalConfig::new(None, 0, FLAG_IGNORE_TRUNCATE).unwrap();
+        let cfg = EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap();
         let mut ctx = EvalContext::new(Arc::new(cfg));
         for (d, exp) in tests {
             let got = d.into_f64(&mut ctx).unwrap();

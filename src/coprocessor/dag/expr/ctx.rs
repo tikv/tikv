@@ -50,7 +50,11 @@ pub const MODE_ERROR_FOR_DIVISION_BY_ZERO: u64 = 27;
 const DEFAULT_MAX_WARNING_CNT: usize = 64;
 #[derive(Debug)]
 pub struct EvalConfig {
-    /// timezone to use when parse/calculate time.
+    /// Timezone to use when parse or calculate time.
+    ///
+    /// By default, the time zone is UTC. Note, when `EvalConfig` is built in `dag.rs`, this
+    /// behavior is overridden to fallback to local time zone (if not provided in requests),
+    /// instead of UTC.
     pub tz: Tz,
     pub ignore_truncate: bool,
     pub truncate_as_warning: bool,
@@ -68,25 +72,14 @@ pub struct EvalConfig {
 
 impl Default for EvalConfig {
     fn default() -> EvalConfig {
-        EvalConfig::new(None, 0, 0).unwrap()
+        EvalConfig::new(0).unwrap()
     }
 }
 
 impl EvalConfig {
-    pub fn new(tz_name: Option<&str>, tz_offset: i64, flags: u64) -> Result<EvalConfig> {
-        // We respect time zone name first, then offset.
-        let tz_result = match tz_name {
-            Some(name) => Tz::from_tz_name(name),
-            None => Tz::from_offset(tz_offset),
-        };
-        let tz = match tz_result {
-            Some(tz) => tz,
-            // Error should never happen, however we still returns an error here.
-            None => return Err(Error::invalid_timezone()),
-        };
-
+    pub fn new(flags: u64) -> Result<EvalConfig> {
         let e = EvalConfig {
-            tz,
+            tz: Tz::utc(),
             ignore_truncate: (flags & FLAG_IGNORE_TRUNCATE) > 0,
             truncate_as_warning: (flags & FLAG_TRUNCATE_AS_WARNING) > 0,
             overflow_as_warning: (flags & FLAG_OVERFLOW_AS_WARNING) > 0,
@@ -101,6 +94,24 @@ impl EvalConfig {
         };
 
         Ok(e)
+    }
+
+    pub fn set_time_zone_by_name(&mut self, tz_name: &str) -> Result<()> {
+        let tz = Tz::from_tz_name(tz_name);
+        if tz.is_none() {
+            return Err(Error::invalid_timezone());
+        }
+        self.tz = tz.unwrap();
+        Ok(())
+    }
+
+    pub fn set_time_zone_by_offset(&mut self, offset_sec: i64) -> Result<()> {
+        let tz = Tz::from_offset(offset_sec);
+        if tz.is_none() {
+            return Err(Error::invalid_timezone());
+        }
+        self.tz = tz.unwrap();
+        Ok(())
     }
 
     pub fn set_max_warning_cnt(&mut self, max_warning_cnt: usize) {
@@ -262,22 +273,19 @@ mod test {
     #[test]
     fn test_handle_truncate() {
         // ignore_truncate = false, truncate_as_warning = false
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(None, 0, 0).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0).unwrap()));
         assert!(ctx.handle_truncate(false).is_ok());
         assert!(ctx.handle_truncate(true).is_err());
         assert!(ctx.take_warnings().warnings.is_empty());
         // ignore_truncate = false;
-        let mut ctx = EvalContext::new(Arc::new(
-            EvalConfig::new(None, 0, FLAG_IGNORE_TRUNCATE).unwrap(),
-        ));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
         assert!(ctx.handle_truncate(false).is_ok());
         assert!(ctx.handle_truncate(true).is_ok());
         assert!(ctx.take_warnings().warnings.is_empty());
 
         // ignore_truncate = false, truncate_as_warning = true
-        let mut ctx = EvalContext::new(Arc::new(
-            EvalConfig::new(None, 0, FLAG_TRUNCATE_AS_WARNING).unwrap(),
-        ));
+        let mut ctx =
+            EvalContext::new(Arc::new(EvalConfig::new(FLAG_TRUNCATE_AS_WARNING).unwrap()));
         assert!(ctx.handle_truncate(false).is_ok());
         assert!(ctx.handle_truncate(true).is_ok());
         assert!(!ctx.take_warnings().warnings.is_empty());
@@ -285,7 +293,7 @@ mod test {
 
     #[test]
     fn test_max_warning_cnt() {
-        let eval_cfg = Arc::new(EvalConfig::new(None, 0, FLAG_TRUNCATE_AS_WARNING).unwrap());
+        let eval_cfg = Arc::new(EvalConfig::new(FLAG_TRUNCATE_AS_WARNING).unwrap());
         let mut ctx = EvalContext::new(Arc::clone(&eval_cfg));
         assert!(ctx.handle_truncate(true).is_ok());
         assert!(ctx.handle_truncate(true).is_ok());
@@ -334,7 +342,7 @@ mod test {
             ), //warning
         ];
         for (flag, sql_mode, strict_sql_mode, is_ok, is_empty) in cases {
-            let mut cfg = EvalConfig::new(None, 0, flag).unwrap();
+            let mut cfg = EvalConfig::new(flag).unwrap();
             cfg.set_sql_mode(sql_mode);
             cfg.set_strict_sql_mode(strict_sql_mode);
             let mut ctx = EvalContext::new(Arc::new(cfg));
