@@ -28,6 +28,7 @@ pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 pub struct GcInfo {
     pub found_versions: usize,
     pub deleted_versions: usize,
+    pub is_completed: bool,
 }
 
 pub struct MvccTxn<S: Snapshot> {
@@ -270,6 +271,7 @@ impl<S: Snapshot> MvccTxn<S> {
         let mut found_versions = 0;
         let mut deleted_versions = 0;
         let mut latest_delete = None;
+        let mut is_completed = true;
         while let Some((commit, write)) = self.reader.seek_write(key, ts)? {
             ts = commit - 1;
             found_versions += 1;
@@ -277,6 +279,7 @@ impl<S: Snapshot> MvccTxn<S> {
             if self.write_size >= MAX_TXN_WRITE_SIZE {
                 // Cannot remove latest delete when we haven't iterate all versions.
                 latest_delete = None;
+                is_completed = false;
                 break;
             }
 
@@ -325,6 +328,7 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(GcInfo {
             found_versions,
             deleted_versions,
+            is_completed,
         })
     }
 }

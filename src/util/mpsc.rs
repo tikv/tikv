@@ -211,7 +211,7 @@ impl<T> Stream for Receiver<T> {
     }
 }
 
-const CHECK_INTERVAL: usize = 16;
+const CHECK_INTERVAL: usize = 8;
 
 /// A sender of channel that limits the maximun pending messages count loosely.
 pub struct LooseBoundedSender<T> {
@@ -244,6 +244,7 @@ impl<T> LooseBoundedSender<T> {
 }
 
 impl<T> Clone for LooseBoundedSender<T> {
+    #[inline]
     fn clone(&self) -> LooseBoundedSender<T> {
         LooseBoundedSender {
             sender: self.sender.clone(),
@@ -292,7 +293,7 @@ mod tests {
             rx.recv_timeout(Duration::from_millis(100)),
             Err(RecvTimeoutError::Timeout)
         );
-        assert!((timer.elapsed().subsec_nanos() as i64 - 100_000_000).abs() < 1_000_000);
+        assert!((i64::from(timer.elapsed().subsec_nanos()) - 100_000_000).abs() < 1_000_000);
 
         drop(rx);
         assert_eq!(tx.send(2), Err(SendError(2)));
@@ -300,8 +301,10 @@ mod tests {
 
         let (tx, rx) = super::bounded::<u64>(10);
         tx.send(2).unwrap();
+        tx.send(3).unwrap();
         drop(tx);
-        assert_eq!(rx.recv(), Ok(2));
+        assert_eq!(rx.try_recv(), Ok(2));
+        assert_eq!(rx.recv(), Ok(3));
         assert_eq!(rx.recv(), Err(RecvError));
         assert_eq!(rx.try_recv(), Err(TryRecvError::Disconnected));
         assert_eq!(
@@ -319,7 +322,7 @@ mod tests {
         });
         let timer = Instant::now();
         assert_eq!(rx1.recv(), Ok(10));
-        assert!((timer.elapsed().subsec_nanos() as i64 - 100_000_000).abs() < 1_000_000);
+        assert!((i64::from(timer.elapsed().subsec_nanos()) - 100_000_000).abs() < 1_000_000);
         let timer = Instant::now();
         tx2.send(2).unwrap();
         assert!(timer.elapsed() > Duration::from_millis(50));
@@ -339,7 +342,7 @@ mod tests {
             rx.recv_timeout(Duration::from_millis(100)),
             Err(RecvTimeoutError::Timeout)
         );
-        assert!((timer.elapsed().subsec_nanos() as i64 - 100_000_000).abs() < 1_000_000);
+        assert!((i64::from(timer.elapsed().subsec_nanos()) - 100_000_000).abs() < 1_000_000);
 
         drop(rx);
         assert_eq!(tx.send(2), Err(SendError(2)));
@@ -361,7 +364,7 @@ mod tests {
         });
         let timer = Instant::now();
         assert_eq!(rx.recv(), Ok(10));
-        assert!((timer.elapsed().subsec_nanos() as i64 - 100_000_000).abs() < 1_000_000);
+        assert!((i64::from(timer.elapsed().subsec_nanos()) - 100_000_000).abs() < 1_000_000);
     }
 
     #[test]
@@ -396,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn test_approximate() {
+    fn test_loose() {
         let (mut tx, rx) = super::loose_bounded(10);
         tx.try_send(1).unwrap();
         for i in 2..11 {
@@ -423,7 +426,7 @@ mod tests {
             rx.recv_timeout(Duration::from_millis(100)),
             Err(RecvTimeoutError::Timeout)
         );
-        assert!((timer.elapsed().subsec_nanos() as i64 - 100_000_000).abs() < 1_000_000);
+        assert!((i64::from(timer.elapsed().subsec_nanos()) - 100_000_000).abs() < 1_000_000);
 
         tx.force_send(1).unwrap();
         drop(rx);
@@ -451,6 +454,6 @@ mod tests {
         });
         let timer = Instant::now();
         assert_eq!(rx.recv(), Ok(10));
-        assert!((timer.elapsed().subsec_nanos() as i64 - 100_000_000).abs() < 1_000_000);
+        assert!((i64::from(timer.elapsed().subsec_nanos()) - 100_000_000).abs() < 1_000_000);
     }
 }
