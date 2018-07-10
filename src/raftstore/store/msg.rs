@@ -41,7 +41,7 @@ pub struct WriteResponse {
 
 #[derive(Debug)]
 pub enum SeekRegionResult {
-    Some {
+    Found {
         local_peer: metapb::Peer,
         region: metapb::Region,
     },

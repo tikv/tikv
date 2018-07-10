@@ -64,7 +64,7 @@ fn test_seek_region() {
         loop {
             let res = engine.seek_region(&key, box |_| true, 100).unwrap();
             match res {
-                SeekRegionResult::Some { local_peer, region } => {
+                SeekRegionResult::Found { local_peer, region } => {
                     assert_eq!(local_peer.get_store_id(), node_id);
                     key = region.get_end_key().to_vec();
                     sought_regions.push(region);
@@ -78,7 +78,7 @@ fn test_seek_region() {
         // Test end_key is exclusive
         let res = engine.seek_region(b"k1", box |_| true, 100).unwrap();
         match res {
-            SeekRegionResult::Some { local_peer, region } => {
+            SeekRegionResult::Found { local_peer, region } => {
                 assert_eq!(local_peer.get_store_id(), node_id);
                 assert_eq!(region, regions[1]);
             }
@@ -90,7 +90,7 @@ fn test_seek_region() {
             .seek_region(b"\x00", box |p| p.region().get_end_key() == b"k9", 5)
             .unwrap();
         match res {
-            SeekRegionResult::Some { local_peer, region } => {
+            SeekRegionResult::Found { local_peer, region } => {
                 assert_eq!(local_peer.get_store_id(), node_id);
                 assert_eq!(region, regions[4]);
             }
@@ -127,7 +127,7 @@ fn test_seek_region() {
             .seek_region(b"\x00", box |p| p.region().get_end_key().is_empty(), 6)
             .unwrap();
         match res {
-            SeekRegionResult::Some { local_peer, region } => {
+            SeekRegionResult::Found { local_peer, region } => {
                 assert_eq!(local_peer.get_store_id(), node_id);
                 assert_eq!(region, regions[5]);
             }

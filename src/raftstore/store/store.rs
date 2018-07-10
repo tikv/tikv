@@ -3160,7 +3160,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for (end_key, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
             let peer = &self.region_peers[region_id];
             if filter(peer) {
-                callback(SeekRegionResult::Some {
+                callback(SeekRegionResult::Found {
                     local_peer: peer.peer.clone(),
                     region: peer.region().clone(),
                 });
@@ -3168,7 +3168,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             limit -= 1;
-
             if limit == 0 {
                 // `origin_key` does not handle `DATA_MAX_KEY`, but we can return `Ended` rather
                 // than `LimitExceeded`.

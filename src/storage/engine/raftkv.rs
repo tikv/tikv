@@ -478,7 +478,7 @@ impl<S: RaftStoreRouter> RegionInfoSource for RaftKv<S> {
         let (tx, rx) = mpsc::channel();
         let callback = box move |result| {
             tx.send(result).unwrap_or_else(|e| {
-                error!(
+                fatal!(
                     "raftstore failed to send seek_local_region result back to raft router: {:?}",
                     e
                 );
