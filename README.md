@@ -39,6 +39,10 @@ TiKV has the following key features:
 
 When a node starts, the metadata of the Node, Store and Region are recorded into PD. The status of each Region and Store is reported to PD regularly.
 
+## TiKV Roadmap
+
+Read the [Roadmap](docs/ROADMAP.md).
+
 ## Try TiKV
 
 TiKV is a component of the [TiDB project](https://github.com/pingcap/tidb). To run TiKV you must build and run it with PD, which is used to manage the cluster. You can use TiKV together with TiDB. You can also use TiKV separately.
