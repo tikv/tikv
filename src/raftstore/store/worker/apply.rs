@@ -61,7 +61,6 @@ use super::metrics::*;
 const WRITE_BATCH_MAX_KEYS: usize = 128;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 
-const APPLY_POOL_SIZE: usize = 4;
 const STACK_SIZE: usize = 10 * 1024 * 1024;
 
 pub struct PendingCmd {
@@ -2262,10 +2261,11 @@ impl Runner {
         notifier: Sender<TaskRes>,
         sync_log: bool,
         use_delete_range: bool,
+        apply_pool_size: usize,
         apply_scheduler: Scheduler<Task>,
     ) -> Runner {
         let apply_pool = FuturePool::new(
-            APPLY_POOL_SIZE,
+            apply_pool_size,
             STACK_SIZE,
             "apply-pool",
             Duration::from_secs(1),
@@ -2634,7 +2634,7 @@ mod tests {
         apply_scheduler: Scheduler<Task>,
     ) -> Runner {
         let apply_pool = FuturePool::new(
-            APPLY_POOL_SIZE,
+            4,
             STACK_SIZE,
             "apply-pool",
             Duration::from_secs(1),

@@ -116,6 +116,8 @@ pub struct Config {
 
     pub cleanup_import_sst_interval: ReadableDuration,
 
+    pub apply_pool_size: usize,
+
     /// Maximum size of every local read task batch.
     pub local_read_batch_size: u64,
 
@@ -181,6 +183,7 @@ impl Default for Config {
             merge_check_tick_interval: ReadableDuration::secs(10),
             use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
+            apply_pool_size: 4,
             local_read_batch_size: 1024,
 
             // They are preserved for compatibility check.

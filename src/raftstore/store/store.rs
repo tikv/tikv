@@ -589,6 +589,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             tx,
             self.cfg.sync_log,
             self.cfg.use_delete_range,
+            self.cfg.apply_pool_size,
             self.apply_scheduler(),
         );
         self.apply_res_receiver = Some(rx);
