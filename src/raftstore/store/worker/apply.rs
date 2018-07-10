@@ -546,7 +546,6 @@ impl ApplyDelegate {
             return;
         }
         apply_ctx.prepare_for(self);
-        apply_ctx.committed_count += committed_entries.len();
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
@@ -2049,7 +2048,7 @@ impl Runner {
         let t = SlowTimer::new();
 
         let mut merged_regions: Vec<u64> = vec![];
-        let mut apply_res: Vec<ApplyRes> = vec![];
+        let mut apply_res: Vec<ApplyRes> = Vec::with_capacity(applys.len());
         let mut committed_count = 0;
         for apply in applys {
             if apply.entries.is_empty() || merged_regions.contains(&apply.region_id) {
@@ -2075,7 +2074,7 @@ impl Runner {
                 delegate.handle_raft_committed_entries(&mut ctx, apply.entries);
 
                 // Write to engine
-                // raftsotre.sync-log = true means we need prevent data loss when power failure.
+                // raftstore.sync-log = true means we need prevent data loss when power failure.
                 // take raft log gc for example, we write kv WAL first, then write raft WAL,
                 // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
                 // so we use sync-log flag here.
