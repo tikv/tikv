@@ -29,7 +29,7 @@ use super::metrics::*;
 use pd::{PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
 use raftstore::store::store::StoreInfo;
-use raftstore::store::util::{is_epoch_stale, RegionApproximateStat};
+use raftstore::store::util::{self, is_epoch_stale, RegionApproximateStat};
 use raftstore::store::Callback;
 use raftstore::store::Msg;
 use storage::FlowStatistics;
@@ -57,7 +57,8 @@ pub enum Task {
         pending_peers: Vec<metapb::Peer>,
         written_bytes: u64,
         written_keys: u64,
-        approximate_stat: Option<RegionApproximateStat>,
+        approximate_size: Option<u64>,
+        approximate_rows: Option<u64>,
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
@@ -544,11 +545,17 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 pending_peers,
                 written_bytes,
                 written_keys,
-                approximate_stat,
+                approximate_size,
+                approximate_rows,
             } => {
-                let approximate_stat = match approximate_stat {
-                    Some(stat) => stat,
-                    None => RegionApproximateStat::new(&self.db, &region).unwrap_or_default(),
+                let mut approximate_stat = RegionApproximateStat::default();
+                approximate_stat.size = match approximate_size {
+                    Some(size) => size,
+                    None => util::get_region_approximate_size(&self.db, &region).unwrap_or(0),
+                };
+                approximate_stat.rows = match approximate_rows {
+                    Some(rows) => rows,
+                    None => util::get_region_approximate_rows(&self.db, &region).unwrap_or(0),
                 };
                 let (
                     read_bytes_delta,

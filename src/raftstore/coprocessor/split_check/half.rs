@@ -15,7 +15,7 @@ use rocksdb::DB;
 
 use util::config::ReadableSize;
 
-use super::super::{Coprocessor, ObserverContext, SplitCheckObserver, SplitChecker};
+use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
 
 const BUCKET_NUMBER_LIMIT: usize = 1024;
@@ -38,12 +38,12 @@ impl Checker {
 }
 
 impl SplitChecker for Checker {
-    fn on_kv(&mut self, _: &mut ObserverContext, key: &[u8], value_size: u64) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext, row: &KeyEntry) -> bool {
         if self.buckets.is_empty() || self.cur_bucket_size >= self.each_bucket_size {
-            self.buckets.push(key.to_vec());
+            self.buckets.push(row.key().to_vec());
             self.cur_bucket_size = 0;
         }
-        self.cur_bucket_size += key.len() as u64 + value_size;
+        self.cur_bucket_size += row.entry_size() as u64;
         false
     }
 
@@ -155,7 +155,8 @@ mod tests {
                     assert_eq!(split_key, b"0006");
                     break;
                 }
-                Ok(Msg::RegionApproximateStat { region_id, .. }) => {
+                Ok(Msg::RegionApproximateSize { region_id, .. })
+                | Ok(Msg::RegionApproximateRows { region_id, .. }) => {
                     assert_eq!(region_id, region.get_id());
                     continue;
                 }

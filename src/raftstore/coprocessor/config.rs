@@ -27,10 +27,16 @@ pub struct Config {
     /// be region_split_size (or a little bit smaller).
     pub region_max_size: ReadableSize,
     pub region_split_size: ReadableSize,
+    /// When the number of rows in region [a, b) meets region_max_rows, it will be split
+    /// into two region into [a, c), [c, b). And the rows of [a, c) will
+    /// be region_split_rows (or a little bit smaller).
+    pub region_max_rows: u64,
+    pub region_split_rows: u64,
 }
 
 /// Default region split size.
 pub const SPLIT_SIZE_MB: u64 = 96;
+pub const SPLIT_ROWS: u64 = 960000;
 
 impl Default for Config {
     fn default() -> Config {
@@ -39,6 +45,8 @@ impl Default for Config {
             split_region_on_table: true,
             region_split_size: split_size,
             region_max_size: split_size / 2 * 3,
+            region_split_rows: SPLIT_ROWS,
+            region_max_rows: SPLIT_ROWS / 2 * 3,
         }
     }
 }
@@ -50,6 +58,14 @@ impl Config {
                 "region max size {} must >= split size {}",
                 self.region_max_size.0,
                 self.region_split_size.0
+            ));
+        }
+
+        if self.region_max_rows < self.region_split_rows {
+            return Err(box_err!(
+                "region max rows {} must >= split rows {}",
+                self.region_max_rows,
+                self.region_split_rows
             ));
         }
 
@@ -69,6 +85,11 @@ mod tests {
         cfg = Config::default();
         cfg.region_max_size = ReadableSize(10);
         cfg.region_split_size = ReadableSize(20);
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::default();
+        cfg.region_max_rows = 10;
+        cfg.region_split_rows = 20;
         assert!(cfg.validate().is_err());
     }
 }

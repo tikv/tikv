@@ -41,7 +41,6 @@ use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use pd::{PdClient, PdRunner, PdTask};
 use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::util::RegionApproximateStat;
 use raftstore::{Error, Result};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::collections::{HashMap, HashSet};
@@ -2349,7 +2348,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // work even if we change the region max size.
             // If peer says should update approximate size, update region
             // size and check whether the region should split.
-            if peer.approximate_stat.is_some()
+            if peer.approximate_size.is_some()
+                && peer.approximate_rows.is_some()
                 && peer.compaction_declined_bytes < self.cfg.region_split_check_diff.0
                 && peer.size_diff_hint < self.cfg.region_split_check_diff.0
             {
@@ -2520,18 +2520,32 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
-    fn on_approximate_region_stat(&mut self, region_id: u64, stat: RegionApproximateStat) {
+    fn on_approximate_region_size(&mut self, region_id: u64, size: u64) {
         let peer = match self.region_peers.get_mut(&region_id) {
             Some(peer) => peer,
             None => {
                 warn!(
-                    "[region {}] receive stale approximate stat {:?}",
-                    region_id, stat,
+                    "[region {}] receive stale approximate size {:?}",
+                    region_id, size,
                 );
                 return;
             }
         };
-        peer.approximate_stat = Some(stat);
+        peer.approximate_size = Some(size);
+    }
+
+    fn on_approximate_region_rows(&mut self, region_id: u64, rows: u64) {
+        let peer = match self.region_peers.get_mut(&region_id) {
+            Some(peer) => peer,
+            None => {
+                warn!(
+                    "[region {}] receive stale approximate rows {:?}",
+                    region_id, rows,
+                );
+                return;
+            }
+        };
+        peer.approximate_rows = Some(rows);
     }
 
     fn on_schedule_half_split_region(
@@ -3264,8 +3278,11 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 );
                 self.on_prepare_split_region(region_id, region_epoch, split_key, callback);
             }
-            Msg::RegionApproximateStat { region_id, stat } => {
-                self.on_approximate_region_stat(region_id, stat)
+            Msg::RegionApproximateSize { region_id, size } => {
+                self.on_approximate_region_size(region_id, size)
+            }
+            Msg::RegionApproximateRows { region_id, rows } => {
+                self.on_approximate_region_rows(region_id, rows)
             }
             Msg::CompactedEvent(event) => self.on_compaction_finished(event),
             Msg::HalfSplitRegion {
