@@ -175,10 +175,10 @@ pub enum Msg {
         size: u64,
     },
 
-    // For region keys in write cf
-    RegionApproximateWriteKeys {
+    // For region keys
+    RegionApproximateKeys {
         region_id: u64,
-        write_keys: u64,
+        keys: u64,
     },
 
     // Compaction finished event
@@ -225,13 +225,10 @@ impl fmt::Debug for Msg {
                 "Region's approximate size [region_id: {}, size: {:?}]",
                 region_id, size
             ),
-            Msg::RegionApproximateWriteKeys {
-                region_id,
-                write_keys,
-            } => write!(
+            Msg::RegionApproximateKeys { region_id, keys } => write!(
                 fmt,
-                "Region's approximate write keys [region_id: {}, write_keys: {:?}]",
-                region_id, write_keys
+                "Region's approximate keys [region_id: {}, keys: {:?}]",
+                region_id, keys
             ),
             Msg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),
             Msg::HalfSplitRegion { ref region_id, .. } => {

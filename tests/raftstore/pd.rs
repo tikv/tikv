@@ -212,7 +212,7 @@ struct Cluster {
     regions: BTreeMap<Key, metapb::Region>,
     region_id_keys: HashMap<u64, Key>,
     region_approximate_size: HashMap<u64, u64>,
-    region_approximate_write_keys: HashMap<u64, u64>, //TODO
+    region_approximate_keys: HashMap<u64, u64>,
     base_id: AtomicUsize,
 
     store_stats: HashMap<u64, pdpb::StoreStats>,
@@ -241,7 +241,7 @@ impl Cluster {
             regions: BTreeMap::new(),
             region_id_keys: HashMap::default(),
             region_approximate_size: HashMap::default(),
-            region_approximate_write_keys: HashMap::default(),
+            region_approximate_keys: HashMap::default(),
             base_id: AtomicUsize::new(1000),
             store_stats: HashMap::default(),
             split_count: 0,
@@ -574,8 +574,8 @@ impl Cluster {
 
         self.region_approximate_size
             .insert(region.get_id(), region_stat.approximate_size);
-        self.region_approximate_write_keys
-            .insert(region.get_id(), region_stat.approximate_write_keys);
+        self.region_approximate_keys
+            .insert(region.get_id(), region_stat.approximate_keys);
 
         self.handle_heartbeat_version(region.clone())?;
         self.handle_heartbeat_conf_ver(region, leader)

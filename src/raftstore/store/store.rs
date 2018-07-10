@@ -2533,18 +2533,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         peer.approximate_size = Some(size);
     }
 
-    fn on_approximate_region_write_keys(&mut self, region_id: u64, write_keys: u64) {
+    fn on_approximate_region_keys(&mut self, region_id: u64, keys: u64) {
         let peer = match self.region_peers.get_mut(&region_id) {
             Some(peer) => peer,
             None => {
                 warn!(
-                    "[region {}] receive stale approximate write keys {:?}",
-                    region_id, write_keys,
+                    "[region {}] receive stale approximate keys {:?}",
+                    region_id, keys,
                 );
                 return;
             }
         };
-        peer.approximate_write_keys = Some(write_keys);
+        peer.approximate_keys = Some(keys);
     }
 
     fn on_schedule_half_split_region(
@@ -3280,10 +3280,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::RegionApproximateSize { region_id, size } => {
                 self.on_approximate_region_size(region_id, size)
             }
-            Msg::RegionApproximateWriteKeys {
-                region_id,
-                write_keys,
-            } => self.on_approximate_region_write_keys(region_id, write_keys),
+            Msg::RegionApproximateKeys { region_id, keys } => {
+                self.on_approximate_region_keys(region_id, keys)
+            }
             Msg::CompactedEvent(event) => self.on_compaction_finished(event),
             Msg::HalfSplitRegion {
                 region_id,

@@ -30,7 +30,7 @@ use pd::{PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
 use raftstore::store::store::StoreInfo;
 use raftstore::store::util::{
-    get_region_approximate_size, get_region_approximate_write_keys, is_epoch_stale,
+    get_region_approximate_keys, get_region_approximate_size, is_epoch_stale,
 };
 use raftstore::store::Callback;
 use raftstore::store::Msg;
@@ -60,7 +60,7 @@ pub enum Task {
         written_bytes: u64,
         written_keys: u64,
         approximate_size: Option<u64>,
-        approximate_write_keys: Option<u64>,
+        approximate_keys: Option<u64>,
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
@@ -548,13 +548,13 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 written_bytes,
                 written_keys,
                 approximate_size,
-                approximate_write_keys,
+                approximate_keys,
             } => {
                 let approximate_size = approximate_size.unwrap_or_else(|| {
                     get_region_approximate_size(&self.db, &region).unwrap_or_default()
                 });
-                let approximate_write_keys = approximate_write_keys.unwrap_or_else(|| {
-                    get_region_approximate_write_keys(&self.db, &region).unwrap_or_default()
+                let approximate_keys = approximate_keys.unwrap_or_else(|| {
+                    get_region_approximate_keys(&self.db, &region).unwrap_or_default()
                 });
                 let (
                     read_bytes_delta,
@@ -597,7 +597,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                         read_bytes: read_bytes_delta,
                         read_keys: read_keys_delta,
                         approximate_size,
-                        approximate_write_keys,
+                        approximate_keys,
                         last_report_ts,
                     },
                 )

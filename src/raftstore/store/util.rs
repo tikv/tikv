@@ -373,8 +373,8 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
     Ok(size)
 }
 
-/// Get the approximate number of keys in write cf in the region.
-pub fn get_region_approximate_write_keys(db: &DB, region: &metapb::Region) -> Result<u64> {
+/// Get the approximate number of keys in the region.
+pub fn get_region_approximate_keys(db: &DB, region: &metapb::Region) -> Result<u64> {
     let cf = rocksdb_util::get_cf_handle(db, CF_WRITE)?;
     let start = keys::enc_start_key(region);
     let end = keys::enc_end_key(region);
@@ -777,7 +777,7 @@ mod tests {
     }
 
     #[test]
-    fn test_region_approximate_write_keys() {
+    fn test_region_approximate_keys() {
         let path = TempDir::new("_test_raftstore_region_approximate_stats").expect("");
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
@@ -806,8 +806,8 @@ mod tests {
         }
 
         let region = make_region(1, vec![], vec![]);
-        let region_write_keys = get_region_approximate_write_keys(&db, &region).unwrap();
-        assert_eq!(region_write_keys, cases.len() as u64);
+        let region_keys = get_region_approximate_keys(&db, &region).unwrap();
+        assert_eq!(region_keys, cases.len() as u64);
     }
 
     #[test]
