@@ -30,11 +30,11 @@ TiKV has the following key features:
 
 ## TiKV Adopters
 
-You can view the list of [TiKV Adopters](docs/adopters.md)
+You can view the list of [TiKV Adopters](docs/adopters.md).
 
 ## TiKV Roadmap
 
-You can see the [TiKV Roadmap](docs/ROADMAP.md)
+You can see the [TiKV Roadmap](docs/ROADMAP.md).
 
 ## TiKV software stack
 
