@@ -28,4 +28,8 @@ This document defines the roadmap for TiKV development.
     - [x] Import distributed data
     - [ ] Export distributed data
     - [ ] Disaster Recovery
+    - [ ] TiKV client (Rust crate)
 - [ ] Flow control and degradation
+- [ ] Client
+    - [ ] TiKV client (Rust crate)
+   
