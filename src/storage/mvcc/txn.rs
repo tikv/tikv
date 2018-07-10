@@ -822,6 +822,7 @@ mod tests {
 
         must_prewrite_put(&engine, key, value, key, start_ts2);
         must_rollback(&engine, key, start_ts2);
+        must_get_none(&engine, key, start_ts2);
         must_get_rollback_ts(&engine, key, start_ts2);
         must_get_rollback_ts_none(&engine, key, start_ts1);
     }
