@@ -14,15 +14,23 @@
 use std::fmt;
 use std::str::FromStr;
 
-use chrono::{FixedOffset, LocalResult, NaiveDate, NaiveDateTime, Offset, TimeZone};
+use chrono::*;
 use chrono_tz;
 
-/// A time zone represented by either offset (i.e. +8) or name (i.e. Asia/Shanghai).
-/// In this way, we can eliminate a `Box` while not introducing extra type parameter.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// A time zone represented by either offset (i.e. +8) or name (i.e. Asia/Shanghai). In addition,
+/// local time zone is also valid.
+#[derive(Clone, Copy)]
 pub enum Tz {
+    /// A time zone specified by offset seconds.
     Offset(FixedOffset),
+
+    /// A time zone specified by name (in IANA database).
     Name(chrono_tz::Tz),
+
+    /// A local time zone.
+    Local(Local),
+    // chrono also has a offset kind `chrono::offset::Utc`, but we only use UTC in tests,
+    // so we don't introduce an extra enum item for it.
 }
 
 impl Tz {
@@ -31,14 +39,24 @@ impl Tz {
         FixedOffset::east_opt(secs as i32).map(Tz::Offset)
     }
 
-    /// Constructs a time zone from the name.
+    /// Constructs a time zone from the name. If the specified time zone name is `system`,
+    /// a local time zone will be constructed.
     pub fn from_tz_name(name: &str) -> Option<Self> {
-        chrono_tz::Tz::from_str(name).ok().map(Tz::Name)
+        if name.to_lowercase() == "system" {
+            Some(Tz::local())
+        } else {
+            chrono_tz::Tz::from_str(name).ok().map(Tz::Name)
+        }
     }
 
     /// Constructs a UTC time zone.
     pub fn utc() -> Self {
         Tz::Name(chrono_tz::UTC)
+    }
+
+    /// Constructs a local time zone.
+    pub fn local() -> Self {
+        Tz::Local(Local)
     }
 }
 
@@ -46,7 +64,8 @@ impl fmt::Debug for Tz {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Tz::Offset(ref offset) => fmt::Debug::fmt(offset, f),
-            Tz::Name(ref tz) => fmt::Debug::fmt(tz, f),
+            Tz::Name(ref offset) => fmt::Debug::fmt(offset, f),
+            Tz::Local(ref offset) => fmt::Debug::fmt(offset, f),
         }
     }
 }
@@ -62,6 +81,7 @@ impl TimeZone for Tz {
 
     fn from_offset(offset: &Self::Offset) -> Self {
         match *offset {
+            TzOffset::Local(ref offset) => Tz::Local(Local::from_offset(offset)),
             TzOffset::Fixed(ref offset) => Tz::Offset(FixedOffset::from_offset(offset)),
             TzOffset::NonFixed(ref offset) => Tz::Name(chrono_tz::Tz::from_offset(offset)),
         }
@@ -69,39 +89,113 @@ impl TimeZone for Tz {
 
     fn offset_from_local_date(&self, local: &NaiveDate) -> LocalResult<Self::Offset> {
         match *self {
+            Tz::Local(ref offset) => offset.offset_from_local_date(local).map(TzOffset::Local),
             Tz::Offset(ref offset) => offset.offset_from_local_date(local).map(TzOffset::Fixed),
-            Tz::Name(ref tz) => tz.offset_from_local_date(local).map(TzOffset::NonFixed),
+            Tz::Name(ref offset) => offset.offset_from_local_date(local).map(TzOffset::NonFixed),
         }
     }
 
     fn offset_from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<Self::Offset> {
         match *self {
+            Tz::Local(ref offset) => offset
+                .offset_from_local_datetime(local)
+                .map(TzOffset::Local),
             Tz::Offset(ref offset) => offset
                 .offset_from_local_datetime(local)
                 .map(TzOffset::Fixed),
-            Tz::Name(ref tz) => tz.offset_from_local_datetime(local).map(TzOffset::NonFixed),
+            Tz::Name(ref offset) => offset
+                .offset_from_local_datetime(local)
+                .map(TzOffset::NonFixed),
         }
     }
 
     fn offset_from_utc_date(&self, utc: &NaiveDate) -> Self::Offset {
         match *self {
+            Tz::Local(ref offset) => TzOffset::Local(offset.offset_from_utc_date(utc)),
             Tz::Offset(ref offset) => TzOffset::Fixed(offset.offset_from_utc_date(utc)),
-            Tz::Name(ref tz) => TzOffset::NonFixed(tz.offset_from_utc_date(utc)),
+            Tz::Name(ref offset) => TzOffset::NonFixed(offset.offset_from_utc_date(utc)),
         }
     }
 
     fn offset_from_utc_datetime(&self, utc: &NaiveDateTime) -> Self::Offset {
         match *self {
+            Tz::Local(ref offset) => TzOffset::Local(offset.offset_from_utc_datetime(utc)),
             Tz::Offset(ref offset) => TzOffset::Fixed(offset.offset_from_utc_datetime(utc)),
-            Tz::Name(ref tz) => TzOffset::NonFixed(tz.offset_from_utc_datetime(utc)),
+            Tz::Name(ref offset) => TzOffset::NonFixed(offset.offset_from_utc_datetime(utc)),
+        }
+    }
+
+    fn from_local_date(&self, local: &NaiveDate) -> LocalResult<Date<Self>> {
+        match *self {
+            Tz::Local(ref offset) => offset
+                .from_local_date(local)
+                .map(|t| Date::from_utc(t.naive_utc(), TzOffset::Local(*t.offset()))),
+            Tz::Offset(ref offset) => offset
+                .from_local_date(local)
+                .map(|t| Date::from_utc(t.naive_utc(), TzOffset::Fixed(*t.offset()))),
+            Tz::Name(ref offset) => offset
+                .from_local_date(local)
+                .map(|t| Date::from_utc(t.naive_utc(), TzOffset::NonFixed(*t.offset()))),
+        }
+    }
+
+    fn from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<DateTime<Self>> {
+        match *self {
+            Tz::Local(ref offset) => offset
+                .from_local_datetime(local)
+                .map(|t| DateTime::from_utc(t.naive_utc(), TzOffset::Local(*t.offset()))),
+            Tz::Offset(ref offset) => offset
+                .from_local_datetime(local)
+                .map(|t| DateTime::from_utc(t.naive_utc(), TzOffset::Fixed(*t.offset()))),
+            Tz::Name(ref offset) => offset
+                .from_local_datetime(local)
+                .map(|t| DateTime::from_utc(t.naive_utc(), TzOffset::NonFixed(*t.offset()))),
+        }
+    }
+
+    fn from_utc_date(&self, utc: &NaiveDate) -> Date<Self> {
+        match *self {
+            Tz::Local(ref offset) => {
+                let t = offset.from_utc_date(utc);
+                Date::from_utc(t.naive_utc(), TzOffset::Local(*t.offset()))
+            }
+            Tz::Offset(ref offset) => {
+                let t = offset.from_utc_date(utc);
+                Date::from_utc(t.naive_utc(), TzOffset::Fixed(*t.offset()))
+            }
+            Tz::Name(ref offset) => {
+                let t = offset.from_utc_date(utc);
+                Date::from_utc(t.naive_utc(), TzOffset::NonFixed(*t.offset()))
+            }
+        }
+    }
+
+    fn from_utc_datetime(&self, utc: &NaiveDateTime) -> DateTime<Self> {
+        match *self {
+            Tz::Local(ref offset) => {
+                let t = offset.from_utc_datetime(utc);
+                DateTime::from_utc(t.naive_utc(), TzOffset::Local(*t.offset()))
+            }
+            Tz::Offset(ref offset) => {
+                let t = offset.from_utc_datetime(utc);
+                DateTime::from_utc(t.naive_utc(), TzOffset::Fixed(*t.offset()))
+            }
+            Tz::Name(ref offset) => {
+                let t = offset.from_utc_datetime(utc);
+                DateTime::from_utc(t.naive_utc(), TzOffset::NonFixed(*t.offset()))
+            }
         }
     }
 }
 
-/// A time zone offset. It is fixed if the time zone is specified by fixed offset,
-/// or not if specified by name.
+/// A time zone offset, corresponding to the [`Tz`].
+///
+/// `Tz::Local` -> `TzOffset::Local`
+/// `Tz::Offset` -> `TzOffset::Fixed`
+/// `Tz::Name` -> `TzOffset::NonFixed`
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum TzOffset {
+    Local(FixedOffset),
     Fixed(FixedOffset),
     NonFixed(<chrono_tz::Tz as TimeZone>::Offset),
 }
@@ -109,6 +203,7 @@ pub enum TzOffset {
 impl Offset for TzOffset {
     fn fix(&self) -> FixedOffset {
         match *self {
+            TzOffset::Local(ref offset) => offset.fix(),
             TzOffset::Fixed(ref offset) => offset.fix(),
             TzOffset::NonFixed(ref offset) => offset.fix(),
         }
@@ -118,6 +213,7 @@ impl Offset for TzOffset {
 impl fmt::Debug for TzOffset {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
+            TzOffset::Local(ref offset) => fmt::Debug::fmt(offset, f),
             TzOffset::Fixed(ref offset) => fmt::Debug::fmt(offset, f),
             TzOffset::NonFixed(ref offset) => fmt::Debug::fmt(offset, f),
         }

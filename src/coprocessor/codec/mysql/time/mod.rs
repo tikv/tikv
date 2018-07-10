@@ -712,7 +712,7 @@ mod test {
 
     use std::cmp::Ordering;
 
-    use chrono::Duration;
+    use chrono::{Duration, Local};
 
     use coprocessor::codec::mysql::{Duration as MyDuration, MAX_FSP, UN_SPECIFIED_FSP};
 
@@ -728,13 +728,14 @@ mod test {
         }
 
         // test some time zone name without DST
-        for (name, offset) in vec![
+        let tz_table = vec![
             ("Etc/GMT+11", -39600),
             ("Etc/GMT0", 0),
             ("Etc/GMT-5", 18000),
             ("UTC", 0),
             ("Universal", 0),
-        ] {
+        ];
+        for (name, offset) in tz_table {
             let tz = Tz::from_tz_name(name).unwrap();
             f(tz, offset)
         }
@@ -821,15 +822,23 @@ mod test {
 
     #[test]
     fn test_parse_datetime_dst() {
+        // Ambiguous date times are commented out.
+        // See https://github.com/chronotope/chrono-tz/issues/23
+
         let ok_tables = vec![
             ("Asia/Shanghai", "1988-04-09 23:59:59", 576604799),
             ("Asia/Shanghai", "1988-04-10 01:00:00", 576604800),
+            ("Asia/Shanghai", "1988-09-11 00:00:00", 589910400),
+            ("Asia/Shanghai", "1988-09-11 00:00:01", 589910401),
+            // ("Asia/Shanghai", "1988-09-10 23:59:59", 589906799), // ambiguous
+            // ("Asia/Shanghai", "1988-09-10 23:00:00", 589903200), // ambiguous
+            ("Asia/Shanghai", "1988-09-10 22:59:59", 589903199),
             ("Asia/Shanghai", "2015-01-02 23:59:59", 1420214399),
             ("America/Los_Angeles", "1919-03-30 01:59:59", -1601820001),
             ("America/Los_Angeles", "1919-03-30 03:00:00", -1601820000),
             ("America/Los_Angeles", "2011-03-13 01:59:59", 1300010399),
             ("America/Los_Angeles", "2011-03-13 03:00:00", 1300010400),
-            ("America/Los_Angeles", "2011-11-06 01:59:59", 1320569999),
+            // ("America/Los_Angeles", "2011-11-06 01:59:59", 1320569999), // ambiguous
             ("America/Los_Angeles", "2011-11-06 02:00:00", 1320573600),
             ("America/Toronto", "2013-11-18 11:55:00", 1384793700),
         ];
@@ -855,6 +864,49 @@ mod test {
         for (tz_name, time_str) in fail_tables {
             let tz = Tz::from_tz_name(tz_name).unwrap();
             assert!(Time::parse_datetime(time_str, UN_SPECIFIED_FSP, &tz).is_err());
+        }
+    }
+
+    #[test]
+    #[cfg_attr(feature = "cargo-clippy", allow(zero_prefixed_literal))]
+    fn test_parse_datetime_system_timezone() {
+        // Basically, we check whether the parse result is the same when construcing using local.
+        let tables = vec![
+            (1988, 04, 09, 23, 59, 59),
+            (1988, 04, 10, 01, 00, 00),
+            (1988, 09, 11, 00, 00, 00),
+            (1988, 09, 11, 00, 00, 01),
+            (1988, 09, 10, 23, 59, 59),
+            (1988, 09, 10, 23, 00, 00),
+            (1988, 09, 10, 22, 59, 59),
+            (2015, 01, 02, 23, 59, 59),
+            (1919, 03, 30, 01, 59, 59),
+            (1919, 03, 30, 03, 00, 00),
+            (1988, 04, 10, 00, 00, 00),
+            (1988, 04, 10, 00, 59, 59),
+        ];
+        // These are supposed to be local time zones
+        let local_tzs = vec![
+            Tz::from_tz_name("SYSTEM").unwrap(),
+            Tz::from_tz_name("system").unwrap(),
+            Tz::from_tz_name("System").unwrap(),
+            Tz::local(),
+        ];
+        for (year, month, day, hour, minute, second) in tables {
+            for tz in &local_tzs {
+                // Some Date time listed in the test case may be invalid in the current time zone,
+                // so we need to check it first.
+                let local_time = Local
+                    .ymd_opt(year, month, day)
+                    .and_hms_opt(hour, minute, second)
+                    .earliest();
+                if let Some(local_time) = local_time {
+                    let time_str =
+                        format!("{}-{}-{} {}:{}:{}", year, month, day, hour, minute, second);
+                    let t = Time::parse_datetime(&time_str, UN_SPECIFIED_FSP, &tz).unwrap();
+                    assert_eq!(t.time, local_time);
+                }
+            }
         }
     }
 
