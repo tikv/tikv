@@ -41,7 +41,7 @@ When a node starts, the metadata of the Node, Store and Region are recorded into
 
 ## TiKV Roadmap
 
-Read the [Roadmap](ROADMAP.md).
+Read the [Roadmap](docs/ROADMAP.md).
 
 ## Try TiKV
 
