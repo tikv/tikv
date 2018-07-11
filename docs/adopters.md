@@ -16,10 +16,10 @@ This is a list of TiKV adopters in various industries.
 |[Ele.me](https://en.wikipedia.org/wiki/Ele.me)|Food Delivery|[English](https://www.pingcap.com/blog/use-case-tidb-in-eleme/); [Chinese](https://www.pingcap.com/cases-cn/user-case-eleme-1/)|
 |[LY.com](https://www.crunchbase.com/organization/ly-com)|Travel|[Chinese](https://www.pingcap.com/cases-cn/user-case-tongcheng/)||
 |[Qunar.com](https://www.crunchbase.com/organization/qunar-com)|Travel|[Chinese](https://www.pingcap.com/cases-cn/user-case-qunar/)|
-|[Hulu](https://www.hulu.com/welcome?orig_referrer=https%3A%2F%2Fwww.google.com%2F)|Entertainment|||
+|[Hulu](https://www.hulu.com)|Entertainment|||
 |[VIPKID](https://en.wikipedia.org/wiki/VIPKID)|EdTech|||
 |[Lenovo](https://en.wikipedia.org/wiki/Lenovo)|Enterprise Technology|||
-|[Bank of Beijing ](https://en.wikipedia.org/wiki/Bank_of_China)|Banking|||
+|[Bank of Beijing](https://en.wikipedia.org/wiki/Bank_of_Beijing)|Banking|||
 |[Industrial and Commercial Bank of China](https://en.wikipedia.org/wiki/Industrial_and_Commercial_Bank_of_China)|Banking|||
 |[iQiyi](https://en.wikipedia.org/wiki/IQiyi)|Media and Entertainment|||
 |[Yimian Data](https://www.crunchbase.com/organization/yimian-data)|Big Data|[Chinese](https://www.pingcap.com/cases-cn/user-case-yimian)|||
@@ -38,11 +38,11 @@ This is a list of TiKV adopters in various industries.
 |[Hoodinn](https://www.crunchbase.com/organization/hoodinn)|Gaming|||
 |[Ping++](https://www.crunchbase.com/organization/ping-5)|Mobile Payment|[Chinese](https://pingcap.com/cases-cn/user-case-ping++/)||
 |[Hainan eKing Technology](https://www.crunchbase.com/organization/hainan-eking-technology)|Enterprise Technology|[Chinese](https://pingcap.com/cases-cn/user-case-ekingtech/)||
-|LianLian Tech|Mobile Payment|||
+|[LianLian Tech](http://www.10030.com.cn/web/)|Mobile Payment|||
 |[Tongdun Technology](https://www.crunchbase.com/organization/tongdun-technology)|FinTech|||
 |[Wacai](https://www.crunchbase.com/organization/wacai)|FinTech|||
-|Tree Finance|FinTech|||
-|2Dfire.com|FoodTech|[Chinese](https://www.pingcap.com/cases-cn/user-case-erweihuo/)||
+|[Tree Finance](https://www.treefinance.com.cn/)|FinTech|||
+|[2Dfire.com](http://www.2dfire.com/)|FoodTech|[Chinese](https://www.pingcap.com/cases-cn/user-case-erweihuo/)||
 |[Happigo.com](https://www.crunchbase.com/organization/happigo-com)|E-commerce|||
 |[Mashang Consumer Finance](https://www.crunchbase.com/organization/ms-finance)|FinTech|||
 |[Tencent OMG](https://en.wikipedia.org/wiki/Tencent)|Media|||
@@ -55,12 +55,12 @@ This is a list of TiKV adopters in various industries.
 |[Acewill](https://www.crunchbase.com/organization/acewill)|FoodTech|||
 |[Keruyun ](https://www.crunchbase.com/organization/keruyun-technology-beijing-co-ltd)|SaaS|[Chinese](https://pingcap.com/cases-cn/user-case-keruyun/)||
 |[Youju Tech](https://www.ujuz.cn/)|E-Commerce|||
-|[Maizhuo](https://www.crunchbase.com/organization/maizhuo)|E-Commerce|||
+|[Maizuo](https://www.crunchbase.com/organization/maizhuo)|E-Commerce|||
 |[Mogujie](https://www.crunchbase.com/organization/mogujie)|E-Commerce|||
 |[Zhuan Zhuan](https://www.crunchbase.com/organization/zhuan-zhuan)|Online Marketplace|[Chinese](https://pingcap.com/cases-cn/user-case-zhuanzhuan/)||
 |[Shuangchuang Huipu](http://scphjt.com/)|FinTech|||
 |[Meizu](https://en.wikipedia.org/wiki/Meizu)|Media||
-|[Seagroup](https://sea-group.org/?lang=en)|Gaming|||
+|[SEA group](https://sea-group.org/?lang=en)|Gaming|||
 |[Sogou](https://en.wikipedia.org/wiki/Sogou)|MediaTech|||
 |[Chunyu Yisheng](https://www.crunchbase.com/organization/chunyu)|HealthTech|||
 |[Meituan](https://en.wikipedia.org/wiki/Meituan-Dianping)|Food Delivery|||
