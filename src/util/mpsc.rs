@@ -196,7 +196,7 @@ impl<T> Stream for Receiver<T> {
 
     fn poll(&mut self) -> Poll<Option<T>, ()> {
         match self.try_recv() {
-            Ok(t) => Ok(Async::Ready(Some(t))),
+            Ok(m) => Ok(Async::Ready(Some(m))),
             Err(TryRecvError::Empty) => {
                 let t = self.state.recv_task.swap(task::current(), Ordering::AcqRel);
                 if t.is_some() {
