@@ -47,8 +47,8 @@ impl LockType {
         }
     }
 
-    fn to_u8(&self) -> u8 {
-        match *self {
+    fn to_u8(self) -> u8 {
+        match self {
             LockType::Put => FLAG_PUT,
             LockType::Delete => FLAG_DELETE,
             LockType::Lock => FLAG_LOCK,

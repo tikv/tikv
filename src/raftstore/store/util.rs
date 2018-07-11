@@ -102,8 +102,8 @@ const STR_CONF_CHANGE_ADD_NODE: &str = "AddNode";
 const STR_CONF_CHANGE_REMOVE_NODE: &str = "RemoveNode";
 const STR_CONF_CHANGE_ADDLEARNER_NODE: &str = "AddLearner";
 
-pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str {
-    match *conf_type {
+pub fn conf_change_type_str(conf_type: eraftpb::ConfChangeType) -> &'static str {
+    match conf_type {
         ConfChangeType::AddNode => STR_CONF_CHANGE_ADD_NODE,
         ConfChangeType::RemoveNode => STR_CONF_CHANGE_REMOVE_NODE,
         ConfChangeType::AddLearnerNode => STR_CONF_CHANGE_ADDLEARNER_NODE,
@@ -755,11 +755,11 @@ mod tests {
     #[test]
     fn test_conf_change_type_str() {
         assert_eq!(
-            conf_change_type_str(&ConfChangeType::AddNode),
+            conf_change_type_str(ConfChangeType::AddNode),
             STR_CONF_CHANGE_ADD_NODE
         );
         assert_eq!(
-            conf_change_type_str(&ConfChangeType::RemoveNode),
+            conf_change_type_str(ConfChangeType::RemoveNode),
             STR_CONF_CHANGE_REMOVE_NODE
         );
     }
