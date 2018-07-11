@@ -476,7 +476,8 @@ impl<T: PdClient> Runner<T> {
 
                     let split_region = resp.take_split_region();
                     info!("[region {}] try to split {:?}", region_id, epoch);
-                    let msg = Msg::new_half_split_region(region_id, epoch, split_region.get_policy());
+                    let msg =
+                        Msg::new_half_split_region(region_id, epoch, split_region.get_policy());
                     if let Err(e) = ch.try_send(msg) {
                         error!("[region {}] send halfsplit request err {:?}", region_id, e);
                     }
