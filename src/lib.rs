@@ -70,7 +70,16 @@ extern crate serde_derive;
 extern crate serde_json;
 #[cfg_attr(not(test), macro_use(slog_o, slog_kv))]
 #[cfg_attr(
-    test, macro_use(slog_o, slog_kv, slog_crit, slog_log, slog_record, slog_b, slog_record_static)
+    test,
+    macro_use(
+        slog_o,
+        slog_kv,
+        slog_crit,
+        slog_log,
+        slog_record,
+        slog_b,
+        slog_record_static
+    )
 )]
 extern crate slog;
 extern crate slog_async;
