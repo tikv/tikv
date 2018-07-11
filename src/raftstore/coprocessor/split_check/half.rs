@@ -91,16 +91,20 @@ impl SplitCheckObserver for HalfCheckObserver {
 mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
+    use std::iter;
 
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
+    use kvproto::pdpb::CheckPolicy;
     use rocksdb::Writable;
     use rocksdb::{ColumnFamilyOptions, DBOptions};
     use tempdir::TempDir;
 
     use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
-    use storage::ALL_CFS;
+    use storage::{Key, CF_DEFAULT, ALL_CFS};
     use util::config::ReadableSize;
+    use util::escape;
+    use util::properties::SizePropertiesCollectorFactory;
     use util::rocksdb::{new_engine_opt, CFOptions};
     use util::transport::RetryableSendCh;
     use util::worker::Runnable;
@@ -115,7 +119,13 @@ mod tests {
         let db_opts = DBOptions::new();
         let cfs_opts = ALL_CFS
             .iter()
-            .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
+            .map(|cf| {
+                let mut cf_opts = ColumnFamilyOptions::new();
+                cf_opts.set_level_zero_file_num_compaction_trigger(10);
+                let f = Box::new(SizePropertiesCollectorFactory::default());
+                cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
+                CFOptions::new(cf, cf_opts)
+            })
             .collect();
         let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
@@ -135,32 +145,45 @@ mod tests {
             Arc::new(CoprocessorHost::new(cfg, ch.clone())),
         );
 
-        // so split key will be z0006
-        for i in 0..12 {
-            let s = keys::data_key(format!("{:04}", i).as_bytes());
-            engine.put(&s, &s).unwrap();
+        let cf_handle = engine.cf_handle(CF_DEFAULT).unwrap();
+        let mut big_value = Vec::with_capacity(256);
+        big_value.extend(iter::repeat(b'v').take(256));
+        for i in 0..100 {
+            let k = format!("key_{:03}", i).into_bytes();
+            let k = keys::data_key(Key::from_raw(&k).encoded());
+            engine.put_cf(cf_handle, &k, &big_value).unwrap();
+            // Flush for every key so that we can know the exact middle key.
+            engine.flush_cf(cf_handle, true).unwrap();
         }
 
-        runnable.run(SplitCheckTask::new(region.clone(), false));
-        loop {
-            match rx.try_recv() {
-                Ok(Msg::SplitRegion {
-                    region_id,
-                    region_epoch,
-                    split_key,
-                    ..
-                }) => {
-                    assert_eq!(region_id, region.get_id());
-                    assert_eq!(&region_epoch, region.get_region_epoch());
-                    assert_eq!(split_key, b"0006");
-                    break;
+        let check = || {
+            loop {
+                match rx.try_recv() {
+                    Ok(Msg::SplitRegion {
+                        region_id,
+                        region_epoch,
+                        split_key,
+                        ..
+                    }) => {
+                        assert_eq!(region_id, region.get_id());
+                        assert_eq!(&region_epoch, region.get_region_epoch());
+                        let split_key = Key::from_encoded(keys::origin_key(&split_key).to_owned())
+                        .raw()
+                        .unwrap();
+                        assert_eq!(escape(&split_key), "key_049");
+                        break;
+                    } 
+                    Ok(Msg::RegionApproximateStat { region_id, .. }) => {
+                        assert_eq!(region_id, region.get_id());
+                        continue;
+                    }
+                    others => panic!("expect split check result, but got {:?}", others),
                 }
-                Ok(Msg::RegionApproximateStat { region_id, .. }) => {
-                    assert_eq!(region_id, region.get_id());
-                    continue;
-                }
-                others => panic!("expect split check result, but got {:?}", others),
             }
-        }
+        };
+        runnable.run(SplitCheckTask::new(region.clone(), false, CheckPolicy::SCAN));
+        check();     
+        runnable.run(SplitCheckTask::new(region.clone(), false, CheckPolicy::APPROXIMATE));
+        check();
     }
 }

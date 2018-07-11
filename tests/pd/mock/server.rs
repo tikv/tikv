@@ -310,4 +310,22 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     ) {
         hijack_unary(self, ctx, sink, |c| c.scatter_region(&req))
     }
+
+    fn get_gc_safe_point(
+       &self,
+       _ctx: RpcContext,
+       _req: GetGCSafePointRequest,
+       _sink: UnarySink<GetGCSafePointResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn update_gc_safe_point(
+        &self,
+        _ctx: RpcContext,
+        _req: UpdateGCSafePointRequest,
+        _sink: UnarySink<UpdateGCSafePointResponse>,
+    ) {
+        unimplemented!()
+    }
 }
