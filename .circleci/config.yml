@@ -35,7 +35,7 @@ jobs:
           # Actually master does not need to download the cache. However we cannot make conditions here.
           name: Downloading ~/.cargo and ~/.local Cache from master
           keys:
-            - v3-cargo-master
+            - v3-cargo-master-{{ checksum "rust-toolchain" }}
       - run:
           name: Restoring ~/.cargo and ~/.local Cache (non-master branch only)
           command: |
@@ -81,7 +81,7 @@ jobs:
           # Actually master does not need to download the cache. However we cannot make conditions here.
           name: Downloading ./target Cache from master
           keys:
-            - v3-target-master
+            - v3-target-master-{{ checksum "rust-toolchain" }}
       - run:
           name: Restoring ./target Cache (non-master branch only)
           command: |
@@ -111,7 +111,7 @@ jobs:
       - save_cache:
           # This will be triggered for non-master as well. However the cache content is empty so it doesn't matter.
           name: Uploading ~/.cargo and ~/.local Cache (master branch only)
-          key: v3-cargo-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
+          key: v3-cargo-{{ .Branch }}-{{ checksum "rust-toolchain" }}-{{ .Environment.CIRCLE_SHA1 }}
           paths:
             - ~/tikv_cache_cargo
       - run:
@@ -129,7 +129,7 @@ jobs:
       - save_cache:
           # This will be triggered for non-master as well. However the cache content is empty so it doesn't matter.
           name: Uploading ./target Cache (master branch only)
-          key: v3-target-{{ .Branch }}-{{ .Environment.CIRCLE_SHA1 }}
+          key: v3-target-{{ .Branch }}-{{ checksum "rust-toolchain" }}-{{ .Environment.CIRCLE_SHA1 }}
           paths:
             - ~/tikv_cache_build
       - run:
