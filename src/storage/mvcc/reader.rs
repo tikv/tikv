@@ -718,8 +718,8 @@ mod tests {
     use std::sync::Arc;
     use std::u64;
     use storage::engine::{Modify, ScanMode};
-    use storage::mvcc::{MvccReader, MvccTxn};
     use storage::mvcc::write::WriteType;
+    use storage::mvcc::{MvccReader, MvccTxn};
     use storage::{make_key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempdir::TempDir;
     use util::properties::{MvccProperties, MvccPropertiesCollectorFactory};
@@ -1239,14 +1239,7 @@ mod tests {
         engine.commit(k, 35, 40);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(
-            snap,
-            None,
-            false,
-            None,
-            None,
-            IsolationLevel::SI,
-        );
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
 
         // Let's assume `40_35 PUT` means a commit version with start ts is 35 and commit ts
         // is 40.
