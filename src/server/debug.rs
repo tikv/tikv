@@ -39,7 +39,6 @@ use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerS
 use storage::mvcc::{Lock, LockType, Write, WriteType};
 use storage::types::{truncate_ts, Key};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use util::codec::bytes;
 use util::collections::HashSet;
 use util::config::ReadableSize;
 use util::escape;
@@ -631,31 +630,7 @@ impl Debugger {
             mvcc_properties.add(&mvcc);
         }
 
-        // Calculate region middle key based on default and write cf size.
-        // It's in encoded format, no timestamp padding and escaped to string.
-        let get_cf_size =
-            |cf: &str| raftstore_util::get_region_approximate_size_cf(db, cf, &region);
-
-        let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
-        let write_cf_size = box_try!(get_cf_size(CF_WRITE));
-
-        let middle_by_cf = if default_cf_size >= write_cf_size {
-            CF_DEFAULT
-        } else {
-            CF_WRITE
-        };
-
-        let middle_key = match box_try!(raftstore_util::get_region_approximate_middle_cf(
-            db,
-            middle_by_cf,
-            &region
-        )) {
-            Some(data_key) => {
-                let mut key = keys::origin_key(&data_key);
-                box_try!(bytes::decode_bytes(&mut key, false))
-            }
-            None => Vec::new(),
-        };
+        let middle_key = box_try!(raftstore_util::get_region_approximate_middle(db, region));
 
         let mut res: Vec<(String, String)> = [
             ("num_files", collection.len() as u64),

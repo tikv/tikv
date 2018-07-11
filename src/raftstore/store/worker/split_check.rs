@@ -18,11 +18,13 @@ use std::sync::Arc;
 
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
+use kvproto::pdpb::CheckPolicy;
 use rocksdb::{DBIterator, DB};
 
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::engine::{IterOption, Iterable};
 use raftstore::store::{keys, Callback, Msg};
+use raftstore::store::util as raftstore_util;
 use raftstore::Result;
 use storage::{CfName, LARGE_CFS};
 use util::escape;
@@ -121,11 +123,12 @@ impl<'a> MergedIterator<'a> {
 pub struct Task {
     region: Region,
     auto_split: bool,
+    policy: CheckPolicy,
 }
 
 impl Task {
-    pub fn new(region: Region, auto_split: bool) -> Task {
-        Task { region, auto_split }
+    pub fn new(region: Region, auto_split: bool, policy: CheckPolicy) -> Task {
+        Task { region, auto_split, policy }
     }
 }
 
@@ -161,14 +164,6 @@ impl<C: Sender<Msg>> Runner<C> {
 
     fn check_split(&mut self, task: Task) {
         let region = &task.region;
-        let mut host =
-            self.coprocessor
-                .new_split_checker_host(region, &self.engine, task.auto_split);
-        if host.skip() {
-            debug!("[region {}] skip split check", region.get_id());
-            return;
-        }
-
         let region_id = region.get_id();
         let start_key = keys::enc_start_key(region);
         let end_key = keys::enc_end_key(region);
@@ -180,23 +175,43 @@ impl<C: Sender<Msg>> Runner<C> {
         );
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
-        let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
-        let res = MergedIterator::new(self.engine.as_ref(), LARGE_CFS, &start_key, &end_key, false)
-            .map(|mut iter| {
-                while let Some(e) = iter.next() {
-                    if host.on_kv(region, e.key.as_ref().unwrap(), e.value_size as u64) {
-                        break;
-                    }
+        let split_key = match task.policy {
+            CheckPolicy::SCAN => {
+                let mut host =
+                self.coprocessor
+                    .new_split_checker_host(region, &self.engine, task.auto_split);
+                if host.skip() {
+                    debug!("[region {}] skip split check", region.get_id());
+                    return;
                 }
-            });
-        timer.observe_duration();
 
-        if let Err(e) = res {
-            error!("[region {}] failed to scan split key: {}", region_id, e);
-            return;
-        }
+                let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
+                let res = MergedIterator::new(self.engine.as_ref(), LARGE_CFS, &start_key, &end_key, false)
+                    .map(|mut iter| {
+                        while let Some(e) = iter.next() {
+                            if host.on_kv(region, e.key.as_ref().unwrap(), e.value_size as u64) {
+                                break;
+                            }
+                        }
+                    });
+                timer.observe_duration();
 
-        let split_key = host.split_key();
+                if let Err(e) = res {
+                    error!("[region {}] failed to scan split key: {}", region_id, e);
+                    return;
+                }
+
+                host.split_key()
+            }
+            CheckPolicy::APPROXIMATE => {
+                let res = raftstore_util::get_region_approximate_middle(&self.engine, region);
+                if let Err(e) = res {
+                    debug!("[region {}] failed to get approxiamte split key: {}", region_id, e);
+                    return;
+                }
+                res.ok()
+            }
+        };
 
         if let Some(key) = split_key {
             let region_epoch = region.get_region_epoch().clone();

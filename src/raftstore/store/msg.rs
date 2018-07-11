@@ -17,6 +17,7 @@ use std::time::Instant;
 
 use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::RegionEpoch;
+use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 
@@ -181,6 +182,7 @@ pub enum Msg {
     HalfSplitRegion {
         region_id: u64,
         region_epoch: RegionEpoch,
+        policy: CheckPolicy,
     },
     MergeFail {
         region_id: u64,
@@ -253,10 +255,11 @@ impl Msg {
         }
     }
 
-    pub fn new_half_split_region(region_id: u64, region_epoch: RegionEpoch) -> Msg {
+    pub fn new_half_split_region(region_id: u64, region_epoch: RegionEpoch, policy: CheckPolicy) -> Msg {
         Msg::HalfSplitRegion {
             region_id,
             region_epoch,
+            policy,
         }
     }
 }
