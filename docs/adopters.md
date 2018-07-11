@@ -3,7 +3,7 @@ title: TiKV Adopters
 category: adopters
 ---
 
-# Tikv Adopters
+# TiKV Adopters
 
 This is a list of TiDB adopters in various industries.
 
