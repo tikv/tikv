@@ -27,12 +27,12 @@ use time::{Duration, Timespec};
 
 use storage::{Key, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
 use util::properties::SizeProperties;
+use util::rocksdb::stats::get_range_entries_and_versions;
 use util::time::monotonic_raw_now;
 use util::{rocksdb as rocksdb_util, Either};
 
 use super::engine::{IterOption, Iterable};
 use super::peer_storage;
-use super::worker::get_range_entries_and_versions;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
     region

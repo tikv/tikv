@@ -16,12 +16,12 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
-use rocksdb::{CFHandle, Range, DB};
+use rocksdb::DB;
 use storage::CF_WRITE;
 use util::escape;
-use util::properties::MvccProperties;
 use util::rocksdb;
 use util::rocksdb::compact_range;
+use util::rocksdb::stats::get_range_entries_and_versions;
 use util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
@@ -183,37 +183,6 @@ fn need_compact(
         && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires
 }
 
-pub fn get_range_entries_and_versions(
-    engine: &DB,
-    cf: &CFHandle,
-    start: &[u8],
-    end: &[u8],
-) -> Option<(u64, u64)> {
-    let range = Range::new(start, end);
-    let collection = match engine.get_properties_of_tables_in_range(cf, &[range]) {
-        Ok(v) => v,
-        Err(_) => return None,
-    };
-
-    if collection.is_empty() {
-        return None;
-    }
-
-    // Aggregate total MVCC properties and total number entries.
-    let mut props = MvccProperties::new();
-    let mut num_entries = 0;
-    for (_, v) in &*collection {
-        let mvcc = match MvccProperties::decode(v.user_collected_properties()) {
-            Ok(v) => v,
-            Err(_) => return None,
-        };
-        num_entries += v.num_entries();
-        props.add(&mvcc);
-    }
-
-    Some((num_entries, props.num_versions))
-}
-
 fn collect_ranges_need_compact(
     engine: &DB,
     ranges: Vec<Key>,
@@ -278,6 +247,7 @@ mod test {
     use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use util::properties::MvccPropertiesCollectorFactory;
     use util::rocksdb::new_engine;
+    use util::rocksdb::stats::get_range_entries_and_versions;
     use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
 
     use super::*;

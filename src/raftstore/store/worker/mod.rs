@@ -58,9 +58,7 @@ pub use self::apply::{
     Task as ApplyTask, TaskRes as ApplyTaskRes,
 };
 pub use self::cleanup_sst::{Runner as CleanupSSTRunner, Task as CleanupSSTTask};
-pub use self::compact::{
-    get_range_entries_and_versions, Runner as CompactRunner, Task as CompactTask,
-};
+pub use self::compact::{Runner as CompactRunner, Task as CompactTask};
 pub use self::consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask};
 pub use self::raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask};
 pub use self::region::{Runner as RegionRunner, Task as RegionTask, STALE_PEER_CHECK_INTERVAL};
