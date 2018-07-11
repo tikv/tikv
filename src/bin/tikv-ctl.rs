@@ -1242,11 +1242,12 @@ fn main() {
                                 .use_delimiter(true)
                                 .require_delimiter(true)
                                 .value_delimiter(",")
-                                .help("failed store id list"),
+                                .help("stores to be removed"),
                         )
                         .arg(
                             Arg::with_name("regions")
-                                .required_unless("for-all-regions")
+                                .required_unless("all-regions")
+                                .conflicts_with("all-regions")
                                 .takes_value(true)
                                 .short("r")
                                 .multiple(true)
@@ -1256,9 +1257,10 @@ fn main() {
                                 .help("only for these regions"),
                         )
                         .arg(
-                            Arg::with_name("for-all-regions")
+                            Arg::with_name("all-regions")
                                 .required_unless("regions")
-                                .long("for-all-regions")
+                                .conflicts_with("regions")
+                                .long("all-regions")
                                 .takes_value(false)
                                 .help("do the command for all regions"),
                         )
