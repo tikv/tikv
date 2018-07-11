@@ -261,6 +261,12 @@ impl<S: Snapshot> MvccTxn<S> {
                     }
                     None => {
                         let ts = self.start_ts;
+
+                        // collapse previous rollback if exist.
+                        if self.collapse_rollback {
+                            self.collapse_prev_rollback(key)?;
+                        }
+
                         // insert a Rollback to WriteCF when receives Rollback before Prewrite
                         let write = Write::new(WriteType::Rollback, ts, None);
                         self.put_write(key, ts, write.to_bytes());
@@ -280,8 +286,7 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     fn collapse_prev_rollback(&mut self, key: &Key) -> Result<()> {
-        if let Some((commit_ts, write)) = self.reader.seek_write(key, u64::max_value())? {
-            assert!(commit_ts < self.start_ts);
+        if let Some((commit_ts, write)) = self.reader.seek_write(key, self.start_ts)? {
             if write.write_type == WriteType::Rollback {
                 self.delete_write(key, commit_ts);
             }
@@ -813,18 +818,26 @@ mod tests {
     fn test_collapse_prev_rollback() {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
         let (key, value) = (b"key", b"value");
-        let start_ts1 = 1;
-        let start_ts2 = 2;
 
-        must_prewrite_put(&engine, key, value, key, start_ts1);
-        must_rollback(&engine, key, start_ts1);
-        must_get_rollback_ts(&engine, key, start_ts1);
+        // Add a Rollback whose start ts is 1.
+        must_prewrite_put(&engine, key, value, key, 1);
+        must_rollback(&engine, key, 1);
+        must_get_rollback_ts(&engine, key, 1);
 
-        must_prewrite_put(&engine, key, value, key, start_ts2);
-        must_rollback(&engine, key, start_ts2);
-        must_get_none(&engine, key, start_ts2);
-        must_get_rollback_ts(&engine, key, start_ts2);
-        must_get_rollback_ts_none(&engine, key, start_ts1);
+        // Add a Rollback whose start ts is 2, the previous Rollback whose
+        // start ts is 1 will be collapsed.
+        must_prewrite_put(&engine, key, value, key, 2);
+        must_rollback(&engine, key, 2);
+        must_get_none(&engine, key, 2);
+        must_get_rollback_ts(&engine, key, 2);
+        must_get_rollback_ts_none(&engine, key, 1);
+
+        // Rollback arrive before Prewrite, it will collapse the
+        // previous rollback whose start ts is 2.
+        must_rollback(&engine, key, 3);
+        must_get_none(&engine, key, 3);
+        must_get_rollback_ts(&engine, key, 3);
+        must_get_rollback_ts_none(&engine, key, 2);
     }
 
     fn must_get<E: Engine>(engine: &E, key: &[u8], ts: u64, expect: &[u8]) {
