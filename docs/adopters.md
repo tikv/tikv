@@ -5,7 +5,7 @@ category: adopters
 
 # TiKV Adopters
 
-This is a list of TiDB adopters in various industries.
+This is a list of TiKV adopters in various industries.
 
 |Company| Industry| Success Story| 
 | --- | --- | --- |
