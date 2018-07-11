@@ -93,7 +93,8 @@ bench:
 pre-format:
 	@# unset first in case of any previous overrides
 	@if rustup override list | grep `pwd` > /dev/null; then rustup override unset; fi
-	@rustfmt --version &>/dev/null || rustup component add rustfmt-preview
+	@rustup 2>/dev/null || true
+	@rustup component list | grep 'rustfmt-preview.*installed' &>/dev/null || rustup component add rustfmt-preview
 
 format: pre-format
 	@cargo fmt --all -- --check >/dev/null || \
