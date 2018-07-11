@@ -136,7 +136,7 @@ impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
-            "Split Check Task for {}, auto_split: {:?}",
+        "Split Check Task for {}, auto_split: {:?}",
             self.region.get_id(),
             self.auto_split
         )
@@ -209,7 +209,7 @@ impl<C: Sender<Msg>> Runner<C> {
                     debug!("[region {}] failed to get approxiamte split key: {}", region_id, e);
                     return;
                 }
-                res.ok()
+                res.unwrap()
             }
         };
 

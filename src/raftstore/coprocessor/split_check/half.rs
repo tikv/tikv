@@ -121,7 +121,6 @@ mod tests {
             .iter()
             .map(|cf| {
                 let mut cf_opts = ColumnFamilyOptions::new();
-                cf_opts.set_level_zero_file_num_compaction_trigger(10);
                 let f = Box::new(SizePropertiesCollectorFactory::default());
                 cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
                 CFOptions::new(cf, cf_opts)
@@ -134,7 +133,7 @@ mod tests {
         region.mut_peers().push(Peer::new());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
-
+           
         let (tx, rx) = mpsc::sync_channel(100);
         let ch = RetryableSendCh::new(tx, "test-split");
         let mut cfg = Config::default();
@@ -145,13 +144,12 @@ mod tests {
             Arc::new(CoprocessorHost::new(cfg, ch.clone())),
         );
 
+        // so split key will be z0005
         let cf_handle = engine.cf_handle(CF_DEFAULT).unwrap();
-        let mut big_value = Vec::with_capacity(256);
-        big_value.extend(iter::repeat(b'v').take(256));
-        for i in 0..100 {
-            let k = format!("key_{:03}", i).into_bytes();
+        for i in 0..11 {
+            let k = format!("{:04}", i).into_bytes();
             let k = keys::data_key(Key::from_raw(&k).encoded());
-            engine.put_cf(cf_handle, &k, &big_value).unwrap();
+            engine.put_cf(cf_handle, &k, &k).unwrap();
             // Flush for every key so that we can know the exact middle key.
             engine.flush_cf(cf_handle, true).unwrap();
         }
@@ -167,10 +165,10 @@ mod tests {
                     }) => {
                         assert_eq!(region_id, region.get_id());
                         assert_eq!(&region_epoch, region.get_region_epoch());
-                        let split_key = Key::from_encoded(keys::origin_key(&split_key).to_owned())
+                        let split_key = Key::from_encoded(split_key)
                         .raw()
                         .unwrap();
-                        assert_eq!(escape(&split_key), "key_049");
+                        assert_eq!(escape(&split_key), "0005");
                         break;
                     } 
                     Ok(Msg::RegionApproximateStat { region_id, .. }) => {

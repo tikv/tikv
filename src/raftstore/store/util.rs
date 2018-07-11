@@ -29,7 +29,6 @@ use storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
 use util::properties::{RowsProperties, SizeProperties};
 use util::time::monotonic_raw_now;
 use util::{rocksdb as rocksdb_util, Either};
-use util::codec::bytes;
 
 use super::engine::{IterOption, Iterable};
 use super::peer_storage;
@@ -389,9 +388,7 @@ pub fn get_region_approximate_rows(db: &DB, region: &metapb::Region) -> Result<u
 }
 
 /// Get region approximate middle key based on default and write cf size.
-///
-/// The key is in encoded format, no timestamp padding and escaped to string.
-pub fn get_region_approximate_middle(db: &DB, region: &metapb::Region) -> Result<Vec<u8>> {
+pub fn get_region_approximate_middle(db: &DB, region: &metapb::Region) -> Result<Option<Vec<u8>>> {
     let get_cf_size =
         |cf: &str| get_region_approximate_size_cf(db, cf, &region);
 
@@ -404,18 +401,11 @@ pub fn get_region_approximate_middle(db: &DB, region: &metapb::Region) -> Result
         CF_WRITE
     };
 
-    let middle_key = match box_try!(get_region_approximate_middle_cf(
+    get_region_approximate_middle_cf(
         db,
         middle_by_cf,
         &region
-    )) {
-        Some(data_key) => {
-            let mut key = keys::origin_key(&data_key);
-            box_try!(bytes::decode_bytes(&mut key, false))
-        }
-        None => Vec::new(),
-    };
-    Ok(middle_key)
+    )
 }
 
 #[derive(Debug, Default, Clone)]
