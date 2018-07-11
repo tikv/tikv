@@ -58,7 +58,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static, 
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S, E> {
-    #[allow(too_many_arguments)]
+    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     pub fn new(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,

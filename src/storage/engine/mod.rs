@@ -29,9 +29,12 @@ use config;
 use util::rocksdb::CFOptions;
 
 mod metrics;
+mod perf_context;
 pub mod raftkv;
 mod rocksdb;
 use super::super::raftstore::store::engine::IterOption;
+
+pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 
 // only used for rocksdb without persistent.
 pub const TEMP_DIR: &str = "";
@@ -127,9 +130,9 @@ pub trait Snapshot: Send + Debug + Clone + Sized {
 
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
-    #[allow(needless_lifetimes)]
+    #[cfg_attr(feature = "cargo-clippy", allow(needless_lifetimes))]
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
-    #[allow(needless_lifetimes)]
+    #[cfg_attr(feature = "cargo-clippy", allow(needless_lifetimes))]
     fn iter_cf(
         &self,
         cf: CfName,
@@ -1041,5 +1044,68 @@ mod tests {
         engine
             .async_batch_snapshot(vec![], on_finished)
             .unwrap_err();
+    }
+
+    #[test]
+    fn test_statistics() {
+        let dir = TempDir::new("rocksdb_statistics_test").unwrap();
+        let engine = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
+
+        must_put(&engine, b"foo", b"bar1");
+        must_put(&engine, b"foo2", b"bar2");
+        must_put(&engine, b"foo3", b"bar3"); // deleted
+        must_put(&engine, b"foo4", b"bar4");
+        must_put(&engine, b"foo42", b"bar42"); // deleted
+        must_put(&engine, b"foo5", b"bar5"); // deleted
+        must_put(&engine, b"foo6", b"bar6");
+        must_delete(&engine, b"foo3");
+        must_delete(&engine, b"foo42");
+        must_delete(&engine, b"foo5");
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut iter = snapshot
+            .iter(IterOption::default(), ScanMode::Forward)
+            .unwrap();
+
+        let perf_statistics = PerfStatisticsInstant::new();
+        let mut statistics = CFStatistics::default();
+        iter.seek(&make_key(b"foo30"), &mut statistics).unwrap();
+
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"foo4"));
+        assert_eq!(iter.value(), b"bar4");
+        assert_eq!(statistics.seek, 1);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
+
+        let perf_statistics = PerfStatisticsInstant::new();
+        let mut statistics = CFStatistics::default();
+        iter.near_seek(&make_key(b"foo55"), &mut statistics)
+            .unwrap();
+
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"foo6"));
+        assert_eq!(iter.value(), b"bar6");
+        assert_eq!(statistics.seek, 0);
+        assert_eq!(statistics.next, 1);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
+
+        let perf_statistics = PerfStatisticsInstant::new();
+        let mut statistics = CFStatistics::default();
+        iter.prev(&mut statistics);
+
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"foo4"));
+        assert_eq!(iter.value(), b"bar4");
+        assert_eq!(statistics.prev, 1);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
+
+        iter.prev(&mut statistics);
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"foo2"));
+        assert_eq!(iter.value(), b"bar2");
+        assert_eq!(statistics.prev, 2);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
+
+        iter.prev(&mut statistics);
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"foo"));
+        assert_eq!(iter.value(), b"bar1");
+        assert_eq!(statistics.prev, 3);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
     }
 }

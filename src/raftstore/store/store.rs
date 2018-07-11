@@ -210,7 +210,7 @@ where
 }
 
 impl<T: Transport, C: PdClient> Store<T, C> {
-    #[allow(too_many_arguments)]
+    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     pub fn new(
         ch: StoreChannel,
         meta: metapb::Store,
@@ -2197,7 +2197,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
-    #[allow(if_same_then_else)]
+    #[cfg_attr(feature = "cargo-clippy", allow(if_same_then_else))]
     fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let mut total_gc_logs = 0;
 
