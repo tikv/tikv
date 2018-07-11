@@ -25,7 +25,6 @@ use rand::{self, ThreadRng};
 
 #[macro_use]
 pub mod macros;
-pub mod buf;
 pub mod codec;
 pub mod collections;
 pub mod config;

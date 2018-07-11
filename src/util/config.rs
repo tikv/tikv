@@ -260,7 +260,7 @@ impl ReadableSize {
         ReadableSize(count * GB)
     }
 
-    pub fn as_mb(&self) -> u64 {
+    pub fn as_mb(self) -> u64 {
         self.0 / MB
     }
 }

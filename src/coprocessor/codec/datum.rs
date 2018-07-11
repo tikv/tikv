@@ -196,7 +196,7 @@ impl Datum {
             }
             Datum::Time(ref t) => {
                 let s = str::from_utf8(bs)?;
-                let t2 = Time::parse_datetime(s, DEFAULT_FSP, &ctx.cfg.tz)?;
+                let t2 = Time::parse_datetime(s, DEFAULT_FSP, ctx.cfg.tz)?;
                 Ok(t.cmp(&t2))
             }
             Datum::Dur(ref d) => {
@@ -240,7 +240,7 @@ impl Datum {
         match *self {
             Datum::Bytes(ref bs) => {
                 let s = str::from_utf8(bs)?;
-                let t = Time::parse_datetime(s, DEFAULT_FSP, &ctx.cfg.tz)?;
+                let t = Time::parse_datetime(s, DEFAULT_FSP, ctx.cfg.tz)?;
                 Ok(t.cmp(time))
             }
             Datum::Time(ref t) => Ok(t.cmp(time)),
@@ -870,7 +870,6 @@ impl<T: Write> DatumEncoder for T {}
 /// Get the approximate needed buffer size of values.
 ///
 /// This function ensures that encoded values must fit in the given buffer size.
-#[cfg_attr(feature = "cargo-clippy", allow(match_some_arms))]
 pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
     values
         .iter()
@@ -1813,7 +1812,7 @@ mod test {
         let tests = vec![
             (Datum::I64(1), f64::from(1)),
             (Datum::U64(1), f64::from(1)),
-            (Datum::F64(3.3), f64::from(3.3)),
+            (Datum::F64(3.3), 3.3),
             (Datum::Bytes(b"Hello,world".to_vec()), f64::from(0)),
             (Datum::Bytes(b"123".to_vec()), f64::from(123)),
             (
@@ -1830,7 +1829,7 @@ mod test {
             ),
             (
                 Datum::Dec(Decimal::from_bytes(b"11.2").unwrap().unwrap()),
-                f64::from(11.2),
+                11.2,
             ),
             (
                 Datum::Json(Json::from_str(r#"false"#).unwrap()),

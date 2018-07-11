@@ -185,7 +185,7 @@ bitflags! {
 }
 
 impl ProposalContext {
-    pub fn to_vec(&self) -> Vec<u8> {
+    pub fn to_vec(self) -> Vec<u8> {
         if self.is_empty() {
             return vec![];
         }
@@ -2157,7 +2157,7 @@ mod tests {
                 self.applied_to_index_term
             }
             fn inspect_lease(&mut self) -> LeaseState {
-                self.lease_state.clone()
+                self.lease_state
             }
         }
 

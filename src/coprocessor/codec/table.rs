@@ -212,7 +212,7 @@ fn unflatten(ctx: &mut EvalContext, datum: Datum, col: &ColumnInfo) -> Result<Da
         types::FLOAT => Ok(Datum::F64(f64::from(datum.f64() as f32))),
         types::DATE | types::DATETIME | types::TIMESTAMP => {
             let fsp = col.get_decimal() as i8;
-            let t = Time::from_packed_u64(datum.u64(), col.get_tp() as u8, fsp, &ctx.cfg.tz)?;
+            let t = Time::from_packed_u64(datum.u64(), col.get_tp() as u8, fsp, ctx.cfg.tz)?;
             Ok(Datum::Time(t))
         }
         types::DURATION => Duration::from_nanos(datum.i64(), 0).map(Datum::Dur),
