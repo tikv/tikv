@@ -8,7 +8,7 @@ category: adopters
 This is a list of TiKV adopters in various industries.
 
 | Company | Industry | Success Story | 
-| --- | --- | --- |
+| :--- | :--- | :--- |
 |[Mobike](https://en.wikipedia.org/wiki/Mobike)|Ridesharing|[English](https://www.pingcap.com/blog/Use-Case-TiDB-in-Mobike/); [Chinese](https://www.pingcap.com/cases-cn/user-case-mobike/)|
 |[Jinri Toutiao](https://en.wikipedia.org/wiki/Toutiao)|Mobile News Platform|[Chinese](https://www.pingcap.com/cases-cn/user-case-toutiao/)|
 |[Yiguo.com](https://www.crunchbase.com/organization/shanghai-yiguo-electron-business)|E-commerce|[English](https://www.datanami.com/2018/02/22/hybrid-database-capturing-perishable-insights-yiguo/); [Chinese](https://www.pingcap.com/cases-cn/user-case-yiguo)|
