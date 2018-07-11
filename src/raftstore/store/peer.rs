@@ -185,7 +185,7 @@ bitflags! {
 }
 
 impl ProposalContext {
-    pub fn to_vec(&self) -> Vec<u8> {
+    pub fn to_vec(self) -> Vec<u8> {
         if self.is_empty() {
             return vec![];
         }

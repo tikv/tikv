@@ -963,7 +963,7 @@ impl ApplyDelegate {
         info!(
             "{} exec ConfChange {:?}, epoch: {:?}",
             self.tag,
-            util::conf_change_type_str(&change_type),
+            util::conf_change_type_str(change_type),
             region.get_region_epoch()
         );
 

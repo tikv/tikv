@@ -211,7 +211,7 @@ impl<T> Stream for Receiver<T> {
     }
 }
 
-const CHECK_INTERVAL: usize = 16;
+const CHECK_INTERVAL: usize = 8;
 
 /// A sender of channel that limits the maximun pending messages count loosely.
 pub struct LooseBoundedSender<T> {
@@ -244,6 +244,7 @@ impl<T> LooseBoundedSender<T> {
 }
 
 impl<T> Clone for LooseBoundedSender<T> {
+    #[inline]
     fn clone(&self) -> LooseBoundedSender<T> {
         LooseBoundedSender {
             sender: self.sender.clone(),
@@ -398,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn test_approximate() {
+    fn test_loose() {
         let (mut tx, rx) = super::loose_bounded(10);
         tx.try_send(1).unwrap();
         for i in 2..11 {
