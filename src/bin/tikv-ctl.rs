@@ -1233,26 +1233,36 @@ fn main() {
                 .about("unsafe recover the cluster when majority replicas are failed")
                 .subcommand(
                     SubCommand::with_name("remove-fail-stores")
-                    .arg(
-                        Arg::with_name("stores")
-                            .required(true)
-                            .short("s")
-                            .takes_value(true)
-                            .multiple(true)
-                            .use_delimiter(true)
-                            .require_delimiter(true)
-                            .value_delimiter(",")
-                            .help("failed store id list"),
-                    )
-                    .arg(
-                        Arg::with_name("regions")
-                            .takes_value(true)
-                            .short("r")
-                            .multiple(true)
-                            .use_delimiter(true)
-                            .require_delimiter(true)
-                            .value_delimiter(",")
-                            .help("only for these regions"),
+                        .arg(
+                            Arg::with_name("stores")
+                                .required(true)
+                                .short("s")
+                                .takes_value(true)
+                                .multiple(true)
+                                .use_delimiter(true)
+                                .require_delimiter(true)
+                                .value_delimiter(",")
+                                .help("stores to be removed"),
+                        )
+                        .arg(
+                            Arg::with_name("regions")
+                                .required_unless("all-regions")
+                                .conflicts_with("all-regions")
+                                .takes_value(true)
+                                .short("r")
+                                .multiple(true)
+                                .use_delimiter(true)
+                                .require_delimiter(true)
+                                .value_delimiter(",")
+                                .help("only for these regions"),
+                        )
+                        .arg(
+                            Arg::with_name("all-regions")
+                                .required_unless("regions")
+                                .conflicts_with("regions")
+                                .long("all-regions")
+                                .takes_value(false)
+                                .help("do the command for all regions"),
                         )
                 ),
         )
@@ -1581,17 +1591,13 @@ fn main() {
         debug_executor.recover_regions_mvcc(mgr, &cfg, regions);
     } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
         if let Some(matches) = matches.subcommand_matches("remove-fail-stores") {
+            let store_ids = values_t!(matches, "stores", u64).expect("parse stores fail");
             let region_ids = matches.values_of("regions").map(|ids| {
                 ids.map(|r| r.parse())
                     .collect::<Result<Vec<_>, _>>()
                     .expect("parse regions fail")
             });
-            let stores = matches.values_of("stores").unwrap();
-
-            match stores.map(|s| s.parse()).collect::<Result<Vec<u64>, _>>() {
-                Ok(store_ids) => debug_executor.remove_fail_stores(store_ids, region_ids),
-                Err(e) => perror_and_exit("parse store id list", e),
-            }
+            debug_executor.remove_fail_stores(store_ids, region_ids);
         } else {
             eprintln!("{}", matches.usage());
         }
