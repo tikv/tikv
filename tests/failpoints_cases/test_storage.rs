@@ -28,8 +28,8 @@ use tikv::util::worker::FutureWorker;
 #[test]
 fn test_storage_1gc() {
     let _guard = ::setup();
-    let snapshot_fp = "raftkv_async_snapshot_finish";
-    let batch_snapshot_fp = "raftkv_async_batch_snapshot_finish";
+    let snapshot_fp = "raftkv_async_snapshot";
+    let batch_snapshot_fp = "raftkv_async_batch_snapshot";
     let (_cluster, engine, ctx) = new_raft_engine(3, "");
     let pd_worker = FutureWorker::new("test future worker");
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
