@@ -631,10 +631,8 @@ impl Debugger {
             mvcc_properties.add(&mvcc);
         }
 
-        let middle_key = match box_try!(raftstore_util::get_region_approximate_middle(
-            db,
-            &region
-        )) {
+        let middle_key = match box_try!(raftstore_util::get_region_approximate_middle(db, &region))
+        {
             Some(data_key) => {
                 let mut key = keys::origin_key(&data_key);
                 box_try!(bytes::decode_bytes(&mut key, false))

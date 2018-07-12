@@ -377,15 +377,14 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
 pub fn get_region_approximate_keys(db: &DB, region: &metapb::Region) -> Result<u64> {
     let cf = rocksdb_util::get_cf_handle(db, CF_WRITE)?;
     let start = keys::enc_start_key(region);
-    let end = keys::enc_end_key(region);  
+    let end = keys::enc_end_key(region);
     let (_, keys) = get_range_entries_and_versions(db, cf, &start, &end).unwrap_or_default();
     Ok(keys)
 }
 
 /// Get region approximate middle key based on default and write cf size.
 pub fn get_region_approximate_middle(db: &DB, region: &metapb::Region) -> Result<Option<Vec<u8>>> {
-    let get_cf_size =
-        |cf: &str| get_region_approximate_size_cf(db, cf, &region);
+    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region);
 
     let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
     let write_cf_size = box_try!(get_cf_size(CF_WRITE));
@@ -396,11 +395,7 @@ pub fn get_region_approximate_middle(db: &DB, region: &metapb::Region) -> Result
         CF_WRITE
     };
 
-    get_region_approximate_middle_cf(
-        db,
-        middle_by_cf,
-        &region
-    )
+    get_region_approximate_middle_cf(db, middle_by_cf, &region)
 }
 
 /// Check if replicas of two regions are on the same stores.

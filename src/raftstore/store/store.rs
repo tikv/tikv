@@ -28,7 +28,7 @@ use rocksdb::{CompactionJobInfo, WriteBatch, DB};
 
 use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb;
-use kvproto::pdpb::{StoreStats, CheckPolicy};
+use kvproto::pdpb::{CheckPolicy, StoreStats};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse, StatusCmdType, StatusResponse,
 };

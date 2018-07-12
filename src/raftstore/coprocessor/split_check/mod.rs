@@ -17,9 +17,9 @@ mod table;
 
 use rocksdb::DB;
 
-use kvproto::metapb::Region;
 use super::error::Result;
 use super::{ObserverContext, SplitChecker};
+use kvproto::metapb::Region;
 
 pub use self::half::HalfCheckObserver;
 pub use self::size::SizeCheckObserver;
@@ -69,7 +69,11 @@ impl Host {
             .next()
     }
 
-    pub fn approximate_split_key(mut self, region: &Region, engine: &DB) -> Result<Option<Vec<u8>>> {
+    pub fn approximate_split_key(
+        mut self,
+        region: &Region,
+        engine: &DB,
+    ) -> Result<Option<Vec<u8>>> {
         for checker in &mut self.checkers {
             match box_try!(checker.approximate_split_key(region, engine)) {
                 Some(split_key) => return Ok(Some(split_key)),

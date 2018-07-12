@@ -127,7 +127,11 @@ pub struct Task {
 
 impl Task {
     pub fn new(region: Region, auto_split: bool, policy: CheckPolicy) -> Task {
-        Task { region, auto_split, policy }
+        Task {
+            region,
+            auto_split,
+            policy,
+        }
     }
 }
 
@@ -173,7 +177,7 @@ impl<C: Sender<Msg>> Runner<C> {
             escape(&end_key)
         );
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
-        
+
         let mut host =
             self.coprocessor
                 .new_split_checker_host(region, &self.engine, task.auto_split);
@@ -185,14 +189,19 @@ impl<C: Sender<Msg>> Runner<C> {
         let split_key = match task.policy {
             CheckPolicy::SCAN => {
                 let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
-                let res = MergedIterator::new(self.engine.as_ref(), LARGE_CFS, &start_key, &end_key, false)
-                    .map(|mut iter| {
-                        while let Some(e) = iter.next() {
-                            if host.on_kv(region, e.key.as_ref().unwrap(), e.value_size as u64) {
-                                break;
-                            }
+                let res = MergedIterator::new(
+                    self.engine.as_ref(),
+                    LARGE_CFS,
+                    &start_key,
+                    &end_key,
+                    false,
+                ).map(|mut iter| {
+                    while let Some(e) = iter.next() {
+                        if host.on_kv(region, e.key.as_ref().unwrap(), e.value_size as u64) {
+                            break;
                         }
-                    });
+                    }
+                });
                 timer.observe_duration();
 
                 if let Err(e) = res {
@@ -205,7 +214,10 @@ impl<C: Sender<Msg>> Runner<C> {
             CheckPolicy::APPROXIMATE => {
                 let res = host.approximate_split_key(region, &self.engine);
                 if let Err(e) = res {
-                    error!("[region {}] failed to get approxiamte split key: {}", region_id, e);
+                    error!(
+                        "[region {}] failed to get approxiamte split key: {}",
+                        region_id, e
+                    );
                     return;
                 }
                 res.unwrap()

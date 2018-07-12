@@ -15,11 +15,11 @@ use rocksdb::DB;
 
 use util::config::ReadableSize;
 
+use super::super::error::Result;
+use super::super::{Coprocessor, ObserverContext, SplitCheckObserver, SplitChecker};
+use super::Host;
 use kvproto::metapb::Region;
 use raftstore::store::util as raftstore_util;
-use super::super::{Coprocessor, ObserverContext, SplitCheckObserver, SplitChecker};
-use super::super::error::Result;
-use super::Host;
 
 const BUCKET_NUMBER_LIMIT: usize = 1024;
 const BUCKET_SIZE_LIMIT_MB: u64 = 512;
@@ -60,7 +60,9 @@ impl SplitChecker for Checker {
     }
 
     fn approximate_split_key(&self, region: &Region, engine: &DB) -> Result<Option<Vec<u8>>> {
-        Ok(box_try!(raftstore_util::get_region_approximate_middle(engine, region)))
+        Ok(box_try!(raftstore_util::get_region_approximate_middle(
+            engine, region
+        )))
     }
 }
 
@@ -107,7 +109,7 @@ mod tests {
     use tempdir::TempDir;
 
     use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
-    use storage::{Key, CF_DEFAULT, ALL_CFS};
+    use storage::{Key, ALL_CFS, CF_DEFAULT};
     use util::config::ReadableSize;
     use util::escape;
     use util::properties::SizePropertiesCollectorFactory;
@@ -139,7 +141,7 @@ mod tests {
         region.mut_peers().push(Peer::new());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
-           
+
         let (tx, rx) = mpsc::sync_channel(100);
         let ch = RetryableSendCh::new(tx, "test-split");
         let mut cfg = Config::default();
@@ -160,34 +162,38 @@ mod tests {
             engine.flush_cf(cf_handle, true).unwrap();
         }
 
-        let check = || {
-            loop {
-                match rx.try_recv() {
-                    Ok(Msg::SplitRegion {
-                        region_id,
-                        region_epoch,
-                        split_key,
-                        ..
-                    }) => {
-                        assert_eq!(region_id, region.get_id());
-                        assert_eq!(&region_epoch, region.get_region_epoch());
-                        let split_key = Key::from_encoded(split_key)
-                        .raw()
-                        .unwrap();
-                        assert_eq!(escape(&split_key), "0005");
-                        break;
-                    } 
-                    Ok(Msg::RegionApproximateSize { region_id, .. }) => {
-                        assert_eq!(region_id, region.get_id());
-                        continue;
-                    }
-                    others => panic!("expect split check result, but got {:?}", others),
+        let check = || loop {
+            match rx.try_recv() {
+                Ok(Msg::SplitRegion {
+                    region_id,
+                    region_epoch,
+                    split_key,
+                    ..
+                }) => {
+                    assert_eq!(region_id, region.get_id());
+                    assert_eq!(&region_epoch, region.get_region_epoch());
+                    let split_key = Key::from_encoded(split_key).raw().unwrap();
+                    assert_eq!(escape(&split_key), "0005");
+                    break;
                 }
+                Ok(Msg::RegionApproximateSize { region_id, .. }) => {
+                    assert_eq!(region_id, region.get_id());
+                    continue;
+                }
+                others => panic!("expect split check result, but got {:?}", others),
             }
         };
-        runnable.run(SplitCheckTask::new(region.clone(), false, CheckPolicy::SCAN));
-        check();     
-        runnable.run(SplitCheckTask::new(region.clone(), false, CheckPolicy::APPROXIMATE));
+        runnable.run(SplitCheckTask::new(
+            region.clone(),
+            false,
+            CheckPolicy::SCAN,
+        ));
+        check();
+        runnable.run(SplitCheckTask::new(
+            region.clone(),
+            false,
+            CheckPolicy::APPROXIMATE,
+        ));
         check();
     }
 }

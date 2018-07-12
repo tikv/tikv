@@ -262,7 +262,11 @@ impl Msg {
         }
     }
 
-    pub fn new_half_split_region(region_id: u64, region_epoch: RegionEpoch, policy: CheckPolicy) -> Msg {
+    pub fn new_half_split_region(
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        policy: CheckPolicy,
+    ) -> Msg {
         Msg::HalfSplitRegion {
             region_id,
             region_epoch,
