@@ -351,7 +351,7 @@ mod tests {
             rx.recv_timeout(Duration::from_millis(100)),
             Err(RecvTimeoutError::Timeout)
         );
-        assert!((timer.elapsed().subsec_nanos() as i64 - 100_000_000).abs() < 1_000_000);
+        assert!((i64::from(timer.elapsed().subsec_nanos()) - 100_000_000).abs() < 1_000_000);
 
         tx.force_send(1).unwrap();
         drop(rx);
@@ -379,6 +379,6 @@ mod tests {
         });
         let timer = Instant::now();
         assert_eq!(rx.recv(), Ok(10));
-        assert!((timer.elapsed().subsec_nanos() as i64 - 100_000_000).abs() < 1_000_000);
+        assert!((i64::from(timer.elapsed().subsec_nanos()) - 100_000_000).abs() < 1_000_000);
     }
 }
