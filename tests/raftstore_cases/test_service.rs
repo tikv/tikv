@@ -19,7 +19,7 @@ use tikv::storage::mvcc::{Lock, LockType};
 use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT};
 use tikv::util::HandyRwLock;
 
-use futures::{future, Future, Sink, Stream};
+use futures::{future, Future, Stream};
 use grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
 use kvproto::coprocessor::*;
 use kvproto::debugpb_grpc::DebugClient;
