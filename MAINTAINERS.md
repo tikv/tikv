@@ -1,5 +1,12 @@
-Maintainers of this repository and their focus areas:
+# Maintainers
 
-    Siddon Tang, tl@pingcap.com; @SiddonTang: Project Lead, Raft, Coprocessor, Transaction, Storage, Roadmap
-    Jay Li, jay@pingcap.com; @BusyJay: Raft, Coprocessor
-    Jinpeng Zhang, zhangjinpeng@pingcap.com; @zhangjinpeng1987: Storage, Transaction
+This file lists who are the core maintainers of the TiKV project. 
+
+# Project Lead
+
+* [Siddon Tang](https://github.com/siddontang); tl@pingcap.com
+
+# Other Core Maintainers
+
+* [Jay Li](https://github.com/busyjay); jay@pingcap.com; Focus Areas: Raft, Coprocessor
+* [Jinpeng Zhang](https://github.com/zhangjinpeng1987); zhangjinpeng@pingcap.com; Focus Areas: Storage, Transaction
