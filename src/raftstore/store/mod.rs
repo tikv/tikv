@@ -54,6 +54,7 @@ pub use self::store::{
     create_event_loop, new_compaction_listener, Engines, Store, StoreChannel, StoreStat,
 };
 pub use self::transport::Transport;
+pub use self::worker::KeyEntry;
 
 // Only used in tests
 #[cfg(test)]

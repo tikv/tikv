@@ -16,7 +16,7 @@ use rocksdb::DB;
 use util::transport::{RetryableSendCh, Sender};
 
 use super::super::metrics::*;
-use super::super::{Coprocessor, ObserverContext, SplitCheckObserver, SplitChecker};
+use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
 
 pub struct Checker {
@@ -38,10 +38,10 @@ impl Checker {
 }
 
 impl SplitChecker for Checker {
-    fn on_kv(&mut self, _: &mut ObserverContext, key: &[u8], value_size: u64) -> bool {
-        self.current_size += key.len() as u64 + value_size;
+    fn on_kv(&mut self, _: &mut ObserverContext, entry: &KeyEntry) -> bool {
+        self.current_size += entry.entry_size() as u64;
         if self.current_size > self.split_size && self.split_key.is_none() {
-            self.split_key = Some(key.to_vec());
+            self.split_key = Some(entry.key().to_vec());
         }
         // should consider max_size may equal to split_size
         self.current_size > self.max_size
@@ -147,8 +147,8 @@ mod tests {
 
     use super::Checker;
     use raftstore::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
-    use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
-    use storage::ALL_CFS;
+    use raftstore::store::{keys, KeyEntry, Msg, SplitCheckRunner, SplitCheckTask};
+    use storage::{ALL_CFS, CF_WRITE};
     use util::config::ReadableSize;
     use util::properties::SizePropertiesCollectorFactory;
     use util::rocksdb::{new_engine_opt, CFOptions};
@@ -215,24 +215,25 @@ mod tests {
         engine.flush(true).unwrap();
 
         runnable.run(SplitCheckTask::new(region.clone(), true));
-        match rx.try_recv() {
-            Ok(Msg::RegionApproximateSize { region_id, .. }) => {
-                assert_eq!(region_id, region.get_id());
+        loop {
+            match rx.try_recv() {
+                Ok(Msg::RegionApproximateSize { region_id, .. })
+                | Ok(Msg::RegionApproximateKeys { region_id, .. }) => {
+                    assert_eq!(region_id, region.get_id());
+                }
+                Ok(Msg::SplitRegion {
+                    region_id,
+                    region_epoch,
+                    split_key,
+                    ..
+                }) => {
+                    assert_eq!(region_id, region.get_id());
+                    assert_eq!(&region_epoch, region.get_region_epoch());
+                    assert_eq!(split_key, b"0006");
+                    break;
+                }
+                others => panic!("expect split check result, but got {:?}", others),
             }
-            others => panic!("expect approximate region size, but got {:?}", others),
-        }
-        match rx.try_recv() {
-            Ok(Msg::SplitRegion {
-                region_id,
-                region_epoch,
-                split_key,
-                ..
-            }) => {
-                assert_eq!(region_id, region.get_id());
-                assert_eq!(&region_epoch, region.get_region_epoch());
-                assert_eq!(split_key, b"0006");
-            }
-            others => panic!("expect split check result, but got {:?}", others),
         }
 
         // So split key will be z0003
@@ -249,24 +250,25 @@ mod tests {
         }
 
         runnable.run(SplitCheckTask::new(region.clone(), true));
-        match rx.try_recv() {
-            Ok(Msg::RegionApproximateSize { region_id, .. }) => {
-                assert_eq!(region_id, region.get_id());
+        loop {
+            match rx.try_recv() {
+                Ok(Msg::RegionApproximateSize { region_id, .. })
+                | Ok(Msg::RegionApproximateKeys { region_id, .. }) => {
+                    assert_eq!(region_id, region.get_id());
+                }
+                Ok(Msg::SplitRegion {
+                    region_id,
+                    region_epoch,
+                    split_key,
+                    ..
+                }) => {
+                    assert_eq!(region_id, region.get_id());
+                    assert_eq!(&region_epoch, region.get_region_epoch());
+                    assert_eq!(split_key, b"0003");
+                    break;
+                }
+                others => panic!("expect split check result, but got {:?}", others),
             }
-            others => panic!("expect approximate region size, but got {:?}", others),
-        }
-        match rx.try_recv() {
-            Ok(Msg::SplitRegion {
-                region_id,
-                region_epoch,
-                split_key,
-                ..
-            }) => {
-                assert_eq!(region_id, region.get_id());
-                assert_eq!(&region_epoch, region.get_region_epoch());
-                assert_eq!(split_key, b"0003");
-            }
-            others => panic!("expect split check result, but got {:?}", others),
         }
 
         drop(rx);
@@ -280,8 +282,8 @@ mod tests {
         let region = Region::default();
         let mut ctx = ObserverContext::new(&region);
         loop {
-            let data = b"xxxx";
-            if checker.on_kv(&mut ctx, data, data.len() as u64) {
+            let data = KeyEntry::new(b"xxxx".to_vec(), 0, 4, CF_WRITE);
+            if checker.on_kv(&mut ctx, &data) {
                 break;
             }
         }

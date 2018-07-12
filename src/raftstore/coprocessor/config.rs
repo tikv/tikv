@@ -27,10 +27,17 @@ pub struct Config {
     /// be region_split_size (or a little bit smaller).
     pub region_max_size: ReadableSize,
     pub region_split_size: ReadableSize,
+    /// When the number of keys in region [a,b) meets the region_max_rows,
+    /// it will be split into two regions [a,c),[c,b). And the keys of [a,c)
+    /// will be region_split_keys(or a little bit smaller).
+    pub region_max_keys: u64,
+    pub region_split_keys: u64,
 }
 
 /// Default region split size.
 pub const SPLIT_SIZE_MB: u64 = 96;
+/// Default region split keys.
+pub const SPLIT_KEYS: u64 = 960000;
 
 impl Default for Config {
     fn default() -> Config {
@@ -39,6 +46,8 @@ impl Default for Config {
             split_region_on_table: true,
             region_split_size: split_size,
             region_max_size: split_size / 2 * 3,
+            region_split_keys: SPLIT_KEYS,
+            region_max_keys: SPLIT_KEYS / 2 * 3,
         }
     }
 }
@@ -52,7 +61,13 @@ impl Config {
                 self.region_split_size.0
             ));
         }
-
+        if self.region_max_keys < self.region_split_keys {
+            return Err(box_err!(
+                "region max keys {} must >= split keys {}",
+                self.region_max_keys,
+                self.region_split_keys
+            ));
+        }
         Ok(())
     }
 }
@@ -69,6 +84,11 @@ mod tests {
         cfg = Config::default();
         cfg.region_max_size = ReadableSize(10);
         cfg.region_split_size = ReadableSize(20);
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::default();
+        cfg.region_max_keys = 10;
+        cfg.region_split_keys = 20;
         assert!(cfg.validate().is_err());
     }
 }

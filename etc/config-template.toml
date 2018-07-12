@@ -209,7 +209,11 @@
 # bit smaller.
 # region-max-size = "144MB"
 # region-split-size = "96MB"
-
+# When the region's keys exceeds region-max-keys, we will split the region
+# into two which the left region's keys will be region-split-keys or a little
+# bit smaller.
+# region-max-keys = 1440000
+# region-split-keys = 960000
 [rocksdb]
 # Maximum number of concurrent background jobs (compactions and flushes)
 # max-background-jobs = 8

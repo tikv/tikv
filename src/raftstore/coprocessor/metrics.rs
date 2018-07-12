@@ -19,4 +19,9 @@ lazy_static! {
         "Bucketed histogram of approximate region size.",
         exponential_buckets(4096.0, 2.0, 20).unwrap()
     ).unwrap();
+    pub static ref REGION_KEYS_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_raftstore_region_keys",
+        "Bucketed histogram of approximate region keys.",
+        exponential_buckets(1.0, 2.0, 30).unwrap()
+    ).unwrap();
 }
