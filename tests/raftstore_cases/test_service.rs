@@ -466,21 +466,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     assert!(del_resp.error.is_empty());
 }
 
-#[test]
-fn test_raft() {
-    let (_cluster, client, _) = must_new_cluster_and_kv_client();
-
-    // Raft commands
-    let (sink, _) = client.raft().unwrap();
-    sink.send((RaftMessage::new(), Default::default()))
-        .wait()
-        .unwrap();
-
-    let (sink, _) = client.snapshot().unwrap();
-    let mut chunk = SnapshotChunk::new();
-    chunk.set_message(RaftMessage::new());
-    sink.send((chunk, Default::default())).wait().unwrap();
-}
+// raft related RPC is tested as parts of test_snapshot.rs, so skip here.
 
 #[test]
 fn test_coprocessor() {
