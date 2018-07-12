@@ -22,7 +22,7 @@ use super::server::new_server_cluster;
 
 fn flush<T: Simulator>(cluster: &mut Cluster<T>) {
     for engines in cluster.engines.values() {
-        engines.kv_engine.flush(true).unwrap();
+        engines.kv.flush(true).unwrap();
     }
 }
 

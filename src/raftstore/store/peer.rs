@@ -42,7 +42,7 @@ use raftstore::store::util::RegionApproximateStat;
 use raftstore::store::worker::apply::ApplyMetrics;
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
 use raftstore::store::worker::{Apply, ApplyTask};
-use raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
+use raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
 use util::collections::{HashMap, HashSet};
 use util::time::{duration_to_sec, monotonic_raw_now};
@@ -218,8 +218,7 @@ pub struct PeerStat {
 }
 
 pub struct Peer {
-    kv_engine: Arc<DB>,
-    raft_engine: Arc<DB>,
+    engines: Engines,
     cfg: Rc<Config>,
     peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
     pub peer: metapb::Peer,
@@ -339,8 +338,7 @@ impl Peer {
         let tag = format!("[region {}] {}", region.get_id(), peer.get_id());
 
         let ps = PeerStorage::new(
-            store.kv_engine(),
-            store.raft_engine(),
+            store.engines(),
             region,
             sched,
             tag.clone(),
@@ -368,8 +366,7 @@ impl Peer {
 
         let raft_group = RawNode::new(&raft_cfg, ps, vec![])?;
         let mut peer = Peer {
-            kv_engine: store.kv_engine(),
-            raft_engine: store.raft_engine(),
+            engines: store.engines(),
             peer,
             region_id: region.get_id(),
             raft_group,
@@ -469,7 +466,7 @@ impl Peer {
         let raft_wb = WriteBatch::new();
         self.mut_store().clear_meta(&kv_wb, &raft_wb)?;
         write_peer_state(
-            &self.kv_engine,
+            &self.engines.kv,
             &kv_wb,
             &region,
             PeerState::Tombstone,
@@ -478,8 +475,8 @@ impl Peer {
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(self.cfg.sync_log);
-        self.kv_engine.write_opt(kv_wb, &write_opts)?;
-        self.raft_engine.write_opt(raft_wb, &write_opts)?;
+        self.engines.kv.write_opt(kv_wb, &write_opts)?;
+        self.engines.raft.write_opt(raft_wb, &write_opts)?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
@@ -508,12 +505,8 @@ impl Peer {
         self.get_store().is_initialized()
     }
 
-    pub fn kv_engine(&self) -> Arc<DB> {
-        Arc::clone(&self.kv_engine)
-    }
-
-    pub fn raft_engine(&self) -> Arc<DB> {
-        Arc::clone(&self.raft_engine)
+    pub fn engines(&self) -> Engines {
+        self.engines.clone()
     }
 
     #[inline]
@@ -1727,7 +1720,7 @@ impl Peer {
     }
 
     fn handle_read(&mut self, req: RaftCmdRequest) -> ReadResponse {
-        let mut resp = ReadExecutor::new(self.region(), &self.kv_engine, &self.tag)
+        let mut resp = ReadExecutor::new(self.region(), &self.engines.kv, &self.tag)
             .execute(&req)
             .unwrap_or_else(|e| {
                 match e {
