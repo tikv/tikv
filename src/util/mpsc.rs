@@ -293,7 +293,8 @@ mod tests {
             rx.recv_timeout(Duration::from_millis(100)),
             Err(RecvTimeoutError::Timeout)
         );
-        assert!((i64::from(timer.elapsed().subsec_nanos()) - 100_000_000).abs() < 1_000_000);
+        let elapsed = timer.elapsed();
+        assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
 
         drop(rx);
         assert_eq!(tx.send(2), Err(SendError(2)));
@@ -322,10 +323,12 @@ mod tests {
         });
         let timer = Instant::now();
         assert_eq!(rx1.recv(), Ok(10));
-        assert!((i64::from(timer.elapsed().subsec_nanos()) - 100_000_000).abs() < 1_000_000);
+        let elapsed = timer.elapsed();
+        assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
         let timer = Instant::now();
         tx2.send(2).unwrap();
-        assert!(timer.elapsed() > Duration::from_millis(50));
+        let elapsed = timer.elapsed();
+        assert!(elapsed >= Duration::from_millis(50), "{:?}", elapsed);
     }
 
     #[test]
@@ -342,7 +345,8 @@ mod tests {
             rx.recv_timeout(Duration::from_millis(100)),
             Err(RecvTimeoutError::Timeout)
         );
-        assert!((i64::from(timer.elapsed().subsec_nanos()) - 100_000_000).abs() < 1_000_000);
+        let elapsed = timer.elapsed();
+        assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
 
         drop(rx);
         assert_eq!(tx.send(2), Err(SendError(2)));
@@ -364,7 +368,8 @@ mod tests {
         });
         let timer = Instant::now();
         assert_eq!(rx.recv(), Ok(10));
-        assert!((i64::from(timer.elapsed().subsec_nanos()) - 100_000_000).abs() < 1_000_000);
+        let elapsed = timer.elapsed();
+        assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
     }
 
     #[test]
@@ -426,7 +431,8 @@ mod tests {
             rx.recv_timeout(Duration::from_millis(100)),
             Err(RecvTimeoutError::Timeout)
         );
-        assert!((i64::from(timer.elapsed().subsec_nanos()) - 100_000_000).abs() < 1_000_000);
+        let elapsed = timer.elapsed();
+        assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
 
         tx.force_send(1).unwrap();
         drop(rx);
@@ -454,6 +460,7 @@ mod tests {
         });
         let timer = Instant::now();
         assert_eq!(rx.recv(), Ok(10));
-        assert!((i64::from(timer.elapsed().subsec_nanos()) - 100_000_000).abs() < 1_000_000);
+        let elapsed = timer.elapsed();
+        assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
     }
 }
