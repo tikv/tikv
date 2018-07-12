@@ -15,7 +15,10 @@ use rocksdb::DB;
 
 use util::config::ReadableSize;
 
+use kvproto::metapb::Region;
+use raftstore::store::util as raftstore_util;
 use super::super::{Coprocessor, ObserverContext, SplitCheckObserver, SplitChecker};
+use super::super::error::Result;
 use super::Host;
 
 const BUCKET_NUMBER_LIMIT: usize = 1024;
@@ -55,6 +58,10 @@ impl SplitChecker for Checker {
             Some(self.buckets.swap_remove(mid))
         }
     }
+
+    fn approximate_split_key(&self, region: &Region, engine: &DB) -> Result<Option<Vec<u8>>> {
+        Ok(box_try!(raftstore_util::get_region_approximate_middle(engine, region)))
+    }
 }
 
 pub struct HalfCheckObserver {
@@ -91,7 +98,6 @@ impl SplitCheckObserver for HalfCheckObserver {
 mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
-    use std::iter;
 
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;

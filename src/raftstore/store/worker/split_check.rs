@@ -24,7 +24,6 @@ use rocksdb::{DBIterator, DB};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::engine::{IterOption, Iterable};
 use raftstore::store::{keys, Callback, Msg};
-use raftstore::store::util as raftstore_util;
 use raftstore::Result;
 use storage::{CfName, LARGE_CFS};
 use util::escape;
@@ -136,7 +135,7 @@ impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
-        "Split Check Task for {}, auto_split: {:?}",
+            "Split Check Task for {}, auto_split: {:?}",
             self.region.get_id(),
             self.auto_split
         )
@@ -174,17 +173,17 @@ impl<C: Sender<Msg>> Runner<C> {
             escape(&end_key)
         );
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
+        
+        let mut host =
+            self.coprocessor
+                .new_split_checker_host(region, &self.engine, task.auto_split);
+        if host.skip() {
+            debug!("[region {}] skip split check", region.get_id());
+            return;
+        }
 
         let split_key = match task.policy {
             CheckPolicy::SCAN => {
-                let mut host =
-                self.coprocessor
-                    .new_split_checker_host(region, &self.engine, task.auto_split);
-                if host.skip() {
-                    debug!("[region {}] skip split check", region.get_id());
-                    return;
-                }
-
                 let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
                 let res = MergedIterator::new(self.engine.as_ref(), LARGE_CFS, &start_key, &end_key, false)
                     .map(|mut iter| {
@@ -204,9 +203,9 @@ impl<C: Sender<Msg>> Runner<C> {
                 host.split_key()
             }
             CheckPolicy::APPROXIMATE => {
-                let res = raftstore_util::get_region_approximate_middle(&self.engine, region);
+                let res = host.approximate_split_key(region, &self.engine);
                 if let Err(e) = res {
-                    debug!("[region {}] failed to get approxiamte split key: {}", region_id, e);
+                    error!("[region {}] failed to get approxiamte split key: {}", region_id, e);
                     return;
                 }
                 res.unwrap()
