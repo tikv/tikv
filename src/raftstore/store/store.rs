@@ -12,10 +12,8 @@
 // limitations under the License.
 
 use protobuf::{self, Message, RepeatedField};
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
-use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -62,7 +60,7 @@ use super::local_metrics::RaftMetrics;
 use super::metrics::*;
 use super::msg::{Callback, ReadResponse};
 use super::peer::{ConsistencyState, Peer, ReadyContext, StaleState};
-use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
+use super::peer_storage::{self, ApplySnapResult};
 use super::transport::Transport;
 use super::worker::apply::{ApplyMetrics, ApplyRes, ChangePeer, ExecResult};
 use super::worker::{
@@ -120,7 +118,7 @@ pub struct StoreInfo {
 }
 
 pub struct Store<T, C: 'static> {
-    cfg: Rc<Config>,
+    cfg: Arc<Config>,
     engines: Engines,
     store: metapb::Store,
     sendch: SendCh<Msg>,
@@ -162,7 +160,6 @@ pub struct Store<T, C: 'static> {
     snap_mgr: SnapManager,
 
     raft_metrics: RaftMetrics,
-    pub entry_cache_metries: Rc<RefCell<CacheQueryStats>>,
 
     tag: String,
 
@@ -214,7 +211,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .register_admin_observer(100, box SplitObserver);
 
         let mut s = Store {
-            cfg: Rc::new(cfg),
+            cfg: Arc::new(cfg),
             store: meta,
             engines,
             sendch,
@@ -241,7 +238,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             importer,
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
-            entry_cache_metries: Rc::new(RefCell::new(CacheQueryStats::default())),
             pending_votes: RingQueue::with_capacity(PENDING_VOTES_CAP),
             tag,
             start_time: time::get_time(),
@@ -448,8 +444,8 @@ impl<T, C> Store<T, C> {
         &self.region_peers
     }
 
-    pub fn config(&self) -> Rc<Config> {
-        Rc::clone(&self.cfg)
+    pub fn config(&self) -> Arc<Config> {
+        Arc::clone(&self.cfg)
     }
 
     fn poll_significant_msg(&mut self) {
@@ -647,7 +643,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         timer.observe_duration();
 
         self.raft_metrics.flush();
-        self.entry_cache_metries.borrow_mut().flush();
 
         self.register_raft_base_tick(event_loop);
     }

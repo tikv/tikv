@@ -13,7 +13,6 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, mem, slice};
@@ -219,7 +218,7 @@ pub struct PeerStat {
 
 pub struct Peer {
     engines: Engines,
-    cfg: Rc<Config>,
+    cfg: Arc<Config>,
     peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
     pub peer: metapb::Peer,
     region_id: u64,
@@ -337,13 +336,7 @@ impl Peer {
         let sched = store.snap_scheduler();
         let tag = format!("[region {}] {}", region.get_id(), peer.get_id());
 
-        let ps = PeerStorage::new(
-            store.engines(),
-            region,
-            sched,
-            tag.clone(),
-            Rc::clone(&store.entry_cache_metries),
-        )?;
+        let ps = PeerStorage::new(store.engines(), region, sched, tag.clone())?;
 
         let applied_index = ps.applied_index();
 
