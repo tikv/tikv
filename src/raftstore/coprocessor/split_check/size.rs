@@ -82,8 +82,8 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
     fn add_checker(&self, ctx: &mut ObserverContext, host: &mut Host, engine: &DB) {
         let region = ctx.region();
         let region_id = region.get_id();
-        let region_stat = match util::RegionApproximateStat::new(engine, region) {
-            Ok(stat) => stat,
+        let region_size = match util::get_region_approximate_size(engine, region) {
+            Ok(size) => size,
             Err(e) => {
                 warn!(
                     "[region {}] failed to get approximate stat: {}",
@@ -98,11 +98,9 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
             }
         };
 
-        let region_size = region_stat.size;
-
-        let res = Msg::RegionApproximateStat {
+        let res = Msg::RegionApproximateSize {
             region_id,
-            stat: region_stat,
+            size: region_size,
         };
         if let Err(e) = self.ch.try_send(res) {
             warn!(
@@ -153,7 +151,7 @@ mod tests {
     use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
     use storage::ALL_CFS;
     use util::config::ReadableSize;
-    use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
+    use util::properties::SizePropertiesCollectorFactory;
     use util::rocksdb::{new_engine_opt, CFOptions};
     use util::transport::RetryableSendCh;
     use util::worker::Runnable;
@@ -166,8 +164,6 @@ mod tests {
         let mut cf_opts = ColumnFamilyOptions::new();
         let f = Box::new(SizePropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
-        let f = Box::new(MvccPropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
 
         let cfs_opts = ALL_CFS
             .iter()
@@ -204,7 +200,7 @@ mod tests {
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         // size has not reached the max_size 100 yet.
         match rx.try_recv() {
-            Ok(Msg::RegionApproximateStat { region_id, .. }) => {
+            Ok(Msg::RegionApproximateSize { region_id, .. }) => {
                 assert_eq!(region_id, region.get_id());
             }
             others => panic!("expect recv empty, but got {:?}", others),
@@ -221,7 +217,7 @@ mod tests {
 
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         match rx.try_recv() {
-            Ok(Msg::RegionApproximateStat { region_id, .. }) => {
+            Ok(Msg::RegionApproximateSize { region_id, .. }) => {
                 assert_eq!(region_id, region.get_id());
             }
             others => panic!("expect approximate region size, but got {:?}", others),
@@ -255,7 +251,7 @@ mod tests {
 
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         match rx.try_recv() {
-            Ok(Msg::RegionApproximateStat { region_id, .. }) => {
+            Ok(Msg::RegionApproximateSize { region_id, .. }) => {
                 assert_eq!(region_id, region.get_id());
             }
             others => panic!("expect approximate region size, but got {:?}", others),

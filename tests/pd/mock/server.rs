@@ -312,10 +312,10 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     }
 
     fn get_gc_safe_point(
-       &self,
-       _ctx: RpcContext,
-       _req: GetGCSafePointRequest,
-       _sink: UnarySink<GetGCSafePointResponse>,
+        &self,
+        _ctx: RpcContext,
+        _req: GetGCSafePointRequest,
+        _sink: UnarySink<GetGCSafePointResponse>,
     ) {
         unimplemented!()
     }
