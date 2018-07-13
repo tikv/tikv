@@ -768,8 +768,8 @@ mod tests {
         fn rollback(&mut self, pk: &[u8], start_ts: u64) {
             let k = make_key(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true)
-                .collapse_rollback(false);
+            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true);
+            txn.collapse_rollback(false);
             txn.rollback(&k).unwrap();
             self.write(txn.into_modifies());
         }

@@ -64,9 +64,8 @@ impl<S: Snapshot> MvccTxn<S> {
         }
     }
 
-    pub fn collapse_rollback(mut self, collapse: bool) -> Self {
+    pub fn collapse_rollback(&mut self, collapse: bool) {
         self.collapse_rollback = collapse;
-        self
     }
 
     pub fn into_modifies(self) -> Vec<Modify> {
