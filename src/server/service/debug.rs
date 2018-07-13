@@ -319,6 +319,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
         let debugger = self.debugger.clone();
         let f = self.pool.spawn_fn(move || {
             let mut resp = GetMetricsResponse::new();
+            resp.set_store_id(debugger.get_store_id()?);
             resp.set_prometheus(metrics::dump());
             if req.get_all() {
                 let engines = debugger.get_engine();
