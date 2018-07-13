@@ -13,6 +13,7 @@
 
 use std::collections::Bound::Excluded;
 use std::option::Option;
+use std::sync::Arc;
 use std::{fmt, u64};
 
 use kvproto::metapb;
@@ -557,6 +558,21 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
         }
     }
     conf_state
+}
+
+#[derive(Clone, Debug)]
+pub struct Engines {
+    pub kv: Arc<DB>,
+    pub raft: Arc<DB>,
+}
+
+impl Engines {
+    pub fn new(kv_engine: Arc<DB>, raft_engine: Arc<DB>) -> Engines {
+        Engines {
+            kv: kv_engine,
+            raft: raft_engine,
+        }
+    }
 }
 
 #[cfg(test)]
