@@ -61,19 +61,19 @@ const MONTH_NAMES_ABBR: &[&str] = &[
 ];
 
 #[inline]
-fn zero_time(tz: &Tz) -> DateTime<Tz> {
+fn zero_time(tz: Tz) -> DateTime<Tz> {
     tz.timestamp(ZERO_TIMESTAMP, 0)
 }
 
 #[inline]
-fn zero_datetime(tz: &Tz) -> Time {
+fn zero_datetime(tz: Tz) -> Time {
     Time::new(zero_time(tz), mysql::types::DATETIME, mysql::DEFAULT_FSP).unwrap()
 }
 
 #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
 #[inline]
 fn ymd_hms_nanos<T: TimeZone>(
-    tz: &T,
+    tz: T,
     year: i32,
     month: u32,
     day: u32,
@@ -230,10 +230,10 @@ impl Time {
     }
 
     pub fn parse_utc_datetime(s: &str, fsp: i8) -> Result<Time> {
-        Time::parse_datetime(s, fsp, &Tz::utc())
+        Time::parse_datetime(s, fsp, Tz::utc())
     }
 
-    pub fn parse_datetime(s: &str, fsp: i8, tz: &Tz) -> Result<Time> {
+    pub fn parse_datetime(s: &str, fsp: i8, tz: Tz) -> Result<Time> {
         let fsp = mysql::check_fsp(fsp)?;
         let mut frac_str = "";
         let mut need_adjust = false;
@@ -317,7 +317,7 @@ impl Time {
     /// Get time from packed u64. When `tp` is `TIMESTAMP`, the packed time should
     /// be a UTC time; otherwise the packed time should be in the same timezone as `tz`
     /// specified.
-    pub fn from_packed_u64(u: u64, tp: u8, fsp: i8, tz: &Tz) -> Result<Time> {
+    pub fn from_packed_u64(u: u64, tp: u8, fsp: i8, tz: Tz) -> Result<Time> {
         if u == 0 {
             return Time::new(zero_time(tz), tp, fsp);
         }
@@ -334,7 +334,7 @@ impl Time {
         let hour = (hms >> 12) as u32;
         let nanosec = ((u & ((1 << 24) - 1)) * 1000) as u32;
         let t = if tp == mysql::types::TIMESTAMP {
-            let t = ymd_hms_nanos(&Utc, year, month, day, hour, minute, second, nanosec)?;
+            let t = ymd_hms_nanos(Utc, year, month, day, hour, minute, second, nanosec)?;
             tz.from_utc_datetime(&t.naive_utc())
         } else {
             ymd_hms_nanos(tz, year, month, day, hour, minute, second, nanosec)?
@@ -342,10 +342,10 @@ impl Time {
         Time::new(t, tp, fsp as i8)
     }
 
-    pub fn from_duration(tz: &Tz, tp: u8, d: &MyDuration) -> Result<Time> {
+    pub fn from_duration(tz: Tz, tp: u8, d: &MyDuration) -> Result<Time> {
         let dur = Duration::nanoseconds(d.to_nanos());
         let t = Utc::now()
-            .with_timezone(tz)
+            .with_timezone(&tz)
             .date()
             .and_hms(0, 0, 0) // TODO: might panic!
             .checked_add_signed(dur);
@@ -685,14 +685,14 @@ impl Time {
             && second == 0
             && nanoseconds == 0
         {
-            return Ok(zero_datetime(&tz));
+            return Ok(zero_datetime(tz));
         }
         let t = if tp == mysql::types::TIMESTAMP {
-            let t = ymd_hms_nanos(&Utc, year, month, day, hour, minute, second, nanoseconds)?;
+            let t = ymd_hms_nanos(Utc, year, month, day, hour, minute, second, nanoseconds)?;
             tz.from_utc_datetime(&t.naive_utc())
         } else {
             ymd_hms_nanos(
-                &Tz::utc(),
+                Tz::utc(),
                 year,
                 month,
                 day,
@@ -791,7 +791,7 @@ mod test {
             assert_eq!(format!("{}", utc_t), exp);
 
             for_each_tz(move |tz, offset| {
-                let t = Time::parse_datetime(input, fsp, &tz).unwrap();
+                let t = Time::parse_datetime(input, fsp, tz).unwrap();
                 if utc_t.is_zero() {
                     assert_eq!(t, utc_t);
                 } else {
@@ -816,7 +816,7 @@ mod test {
 
         for t in fail_tbl {
             let tz = Tz::utc();
-            assert!(Time::parse_datetime(t, 0, &tz).is_err(), t);
+            assert!(Time::parse_datetime(t, 0, tz).is_err(), t);
         }
     }
 
@@ -923,15 +923,15 @@ mod test {
         ];
         for (s, fsp) in cases {
             for_each_tz(move |tz, offset| {
-                let t = Time::parse_datetime(s, fsp, &tz).unwrap();
+                let t = Time::parse_datetime(s, fsp, tz).unwrap();
                 let packed = t.to_packed_u64();
                 let reverted_datetime =
-                    Time::from_packed_u64(packed, mysql::types::DATETIME, fsp, &tz).unwrap();
+                    Time::from_packed_u64(packed, mysql::types::DATETIME, fsp, tz).unwrap();
                 assert_eq!(reverted_datetime, t);
                 assert_eq!(reverted_datetime.to_packed_u64(), packed);
 
                 let reverted_timestamp =
-                    Time::from_packed_u64(packed, mysql::types::TIMESTAMP, fsp, &tz).unwrap();
+                    Time::from_packed_u64(packed, mysql::types::TIMESTAMP, fsp, tz).unwrap();
                 assert_eq!(
                     reverted_timestamp.time,
                     reverted_datetime.time + Duration::seconds(offset)
@@ -982,11 +982,11 @@ mod test {
 
         for (t_str, fsp, datetime_dec, date_dec) in cases {
             for_each_tz(move |tz, _offset| {
-                let mut t = Time::parse_datetime(t_str, fsp, &tz).unwrap();
+                let mut t = Time::parse_datetime(t_str, fsp, tz).unwrap();
                 let mut res = format!("{}", t.to_decimal().unwrap());
                 assert_eq!(res, datetime_dec);
 
-                t = Time::parse_datetime(t_str, 0, &tz).unwrap();
+                t = Time::parse_datetime(t_str, 0, tz).unwrap();
                 t.tp = mysql::types::DATE;
                 res = format!("{}", t.to_decimal().unwrap());
                 assert_eq!(res, date_dec);
@@ -1022,8 +1022,8 @@ mod test {
 
         for (l, r, exp) in cases {
             for_each_tz(move |tz, _offset| {
-                let l_t = Time::parse_datetime(l, MAX_FSP, &tz).unwrap();
-                let r_t = Time::parse_datetime(r, MAX_FSP, &tz).unwrap();
+                let l_t = Time::parse_datetime(l, MAX_FSP, tz).unwrap();
+                let r_t = Time::parse_datetime(r, MAX_FSP, tz).unwrap();
                 assert_eq!(exp, l_t.cmp(&r_t));
             });
         }
@@ -1134,9 +1134,9 @@ mod test {
             );
 
             for_each_tz(move |tz, offset| {
-                let mut t = Time::parse_datetime(input, UN_SPECIFIED_FSP, &tz).unwrap();
+                let mut t = Time::parse_datetime(input, UN_SPECIFIED_FSP, tz).unwrap();
                 t.round_frac(fsp).unwrap();
-                let expect = Time::parse_datetime(exp, UN_SPECIFIED_FSP, &tz).unwrap();
+                let expect = Time::parse_datetime(exp, UN_SPECIFIED_FSP, tz).unwrap();
                 assert_eq!(
                     t, expect,
                     "tz:{:?},input:{:?}, exp:{:?}, utc_t:{:?}, expect:{:?}",
@@ -1170,7 +1170,7 @@ mod test {
         let tz = Tz::utc();
         for s in cases {
             let d = MyDuration::parse(s.as_bytes(), MAX_FSP).unwrap();
-            let get = Time::from_duration(&tz, mysql::types::DATETIME, &d).unwrap();
+            let get = Time::from_duration(tz, mysql::types::DATETIME, &d).unwrap();
             let get_today = get
                 .time
                 .checked_sub_signed(Duration::nanoseconds(d.to_nanos()))

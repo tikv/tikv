@@ -26,7 +26,8 @@ use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
 use storage::{Key, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
-use util::properties::{RowsProperties, SizeProperties};
+use util::properties::SizeProperties;
+use util::rocksdb::stats::get_range_entries_and_versions;
 use util::time::monotonic_raw_now;
 use util::{rocksdb as rocksdb_util, Either};
 
@@ -102,8 +103,8 @@ const STR_CONF_CHANGE_ADD_NODE: &str = "AddNode";
 const STR_CONF_CHANGE_REMOVE_NODE: &str = "RemoveNode";
 const STR_CONF_CHANGE_ADDLEARNER_NODE: &str = "AddLearner";
 
-pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str {
-    match *conf_type {
+pub fn conf_change_type_str(conf_type: eraftpb::ConfChangeType) -> &'static str {
+    match conf_type {
         ConfChangeType::AddNode => STR_CONF_CHANGE_ADD_NODE,
         ConfChangeType::RemoveNode => STR_CONF_CHANGE_REMOVE_NODE,
         ConfChangeType::AddLearnerNode => STR_CONF_CHANGE_ADDLEARNER_NODE,
@@ -372,35 +373,13 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
     Ok(size)
 }
 
-/// Get the approximate number of records in the region.
-pub fn get_region_approximate_rows(db: &DB, region: &metapb::Region) -> Result<u64> {
+/// Get the approximate number of keys in the region.
+pub fn get_region_approximate_keys(db: &DB, region: &metapb::Region) -> Result<u64> {
     let cf = rocksdb_util::get_cf_handle(db, CF_WRITE)?;
     let start = keys::enc_start_key(region);
     let end = keys::enc_end_key(region);
-    let range = Range::new(&start, &end);
-    let (mut rows, _) = db.get_approximate_memtable_stats_cf(cf, &range);
-    let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
-    for (_, v) in &*collection {
-        let props = RowsProperties::decode(v.user_collected_properties())?;
-        rows += props.get_approximate_rows_in_range(&start, &end);
-    }
-    Ok(rows)
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct RegionApproximateStat {
-    /// the approximate number of records in the region.
-    pub rows: u64,
-    /// the approximate size of the region.
-    pub size: u64,
-}
-
-impl RegionApproximateStat {
-    pub fn new(db: &DB, region: &metapb::Region) -> Result<RegionApproximateStat> {
-        let rows = get_region_approximate_rows(db, region)?;
-        let size = get_region_approximate_size(db, region)?;
-        Ok(RegionApproximateStat { rows, size })
-    }
+    let (_, keys) = get_range_entries_and_versions(db, cf, &start, &end).unwrap_or_default();
+    Ok(keys)
 }
 
 /// Check if replicas of two regions are on the same stores.
@@ -755,11 +734,11 @@ mod tests {
     #[test]
     fn test_conf_change_type_str() {
         assert_eq!(
-            conf_change_type_str(&ConfChangeType::AddNode),
+            conf_change_type_str(ConfChangeType::AddNode),
             STR_CONF_CHANGE_ADD_NODE
         );
         assert_eq!(
-            conf_change_type_str(&ConfChangeType::RemoveNode),
+            conf_change_type_str(ConfChangeType::RemoveNode),
             STR_CONF_CHANGE_REMOVE_NODE
         );
     }
@@ -798,14 +777,12 @@ mod tests {
     }
 
     #[test]
-    fn test_region_approximate_stats() {
+    fn test_region_approximate_keys() {
         let path = TempDir::new("_test_raftstore_region_approximate_stats").expect("");
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let f = Box::new(SizePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
         let f = Box::new(MvccPropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
         let cfs_opts = LARGE_CFS
@@ -815,35 +792,22 @@ mod tests {
         let db = rocksdb_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
-        let mut write_cf_size = 0;
-        let mut default_cf_size = 0;
         for &(key, vlen) in &cases {
             let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(2).encoded());
             let write_v = Write::new(WriteType::Put, 0, None).to_bytes();
             let write_cf = db.cf_handle(CF_WRITE).unwrap();
             db.put_cf(write_cf, &key, &write_v).unwrap();
             db.flush_cf(write_cf, true).unwrap();
-            write_cf_size += key.len() + write_v.len();
 
             let default_v = vec![0; vlen as usize];
             let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
             db.put_cf(default_cf, &key, &default_v).unwrap();
             db.flush_cf(default_cf, true).unwrap();
-
-            default_cf_size += key.len() + default_v.len();
         }
 
         let region = make_region(1, vec![], vec![]);
-        let region_stat = RegionApproximateStat::new(&db, &region).unwrap();
-        assert_eq!(region_stat.size, (write_cf_size + default_cf_size) as u64);
-        // The number of records in region is the number of records in write cf.
-        assert_eq!(region_stat.rows, cases.len() as u64);
-
-        let size = get_region_approximate_size_cf(&db, CF_DEFAULT, &region).unwrap();
-        assert_eq!(size, default_cf_size as u64);
-
-        let size = get_region_approximate_size_cf(&db, CF_WRITE, &region).unwrap();
-        assert_eq!(size, write_cf_size as u64);
+        let region_keys = get_region_approximate_keys(&db, &region).unwrap();
+        assert_eq!(region_keys, cases.len() as u64);
     }
 
     #[test]
