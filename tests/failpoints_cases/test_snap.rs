@@ -50,26 +50,21 @@ fn test_overlap_cleanup() {
     fail::cfg(gen_snapshot_fp, "pause").unwrap();
     pd_client.must_add_peer(region_id, new_peer(3, 3));
     cluster.must_put(b"k3", b"v3");
+
     let region1 = cluster.get_region(b"k1");
     cluster.must_split(&region1, b"k2");
     // Wait till the snapshot of split region is applied, whose range is ["", "k2").
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
     // Resume the fail point and pause it again. So only the paused snapshot is generated.
     // And the paused snapshot's range is ["", ""), hence overlap.
     fail::cfg(gen_snapshot_fp, "pause").unwrap();
     // Wait a little bit for the message being sent out.
     thread::sleep(Duration::from_secs(1));
-    // Overlap snapshot should be deleted.
-    let snap_dir = cluster.get_snap_dir(3);
-    for p in fs::read_dir(&snap_dir).unwrap() {
-        let name = p.unwrap().file_name().into_string().unwrap();
-        let mut parts = name.split('_');
-        parts.next();
-        if parts.next().unwrap() == "1" {
-            panic!("snapshot of region 1 should be deleted.");
-        }
-    }
+    must_get_none(&cluster.get_engine(3), b"k3");
+
     fail::remove(gen_snapshot_fp);
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
 }
 
 // When resolving remote address, all messages will be dropped and
@@ -150,63 +145,4 @@ fn test_server_snapshot_on_resolve_failure() {
 
     // Clean up.
     fail::remove(on_resolve_fp);
-}
-
-#[test]
-fn test_generate_snapshot() {
-    let _guard = ::setup();
-
-    let mut cluster = new_server_cluster(1, 5);
-    configure_for_snapshot(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-
-    cluster.run();
-    cluster.stop_node(4);
-    cluster.stop_node(5);
-    (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
-    // Sleep for a while to ensure all logs are compacted.
-    thread::sleep(Duration::from_millis(100));
-
-    fail::cfg("snapshot_delete_after_send", "pause").unwrap();
-
-    // Let store 4 inform leader to generate a snapshot.
-    cluster.run_node(4);
-    must_get_equal(&cluster.get_engine(4), b"k2", b"v2");
-
-    fail::cfg("snapshot_enter_do_build", "pause").unwrap();
-    cluster.run_node(5);
-    thread::sleep(Duration::from_millis(100));
-
-    fail::cfg("snapshot_delete_after_send", "off").unwrap();
-    must_empty_dir(cluster.get_snap_dir(1));
-
-    // The task is droped so that we can't get the snapshot on store 5.
-    fail::cfg("snapshot_enter_do_build", "pause").unwrap();
-    must_get_none(&cluster.get_engine(5), b"k2");
-
-    fail::cfg("snapshot_enter_do_build", "off").unwrap();
-    must_get_equal(&cluster.get_engine(5), b"k2", b"v2");
-
-    fail::remove("snapshot_enter_do_build");
-    fail::remove("snapshot_delete_after_send");
-}
-
-fn must_empty_dir(path: String) {
-    for _ in 0..500 {
-        thread::sleep(Duration::from_millis(10));
-        if fs::read_dir(&path).unwrap().count() == 0 {
-            return;
-        }
-    }
-
-    let entries = fs::read_dir(&path)
-        .and_then(|dir| dir.collect::<io::Result<Vec<_>>>())
-        .unwrap();
-    if !entries.is_empty() {
-        panic!(
-            "the directory {:?} should be empty, but has entries: {:?}",
-            path, entries
-        );
-    }
 }

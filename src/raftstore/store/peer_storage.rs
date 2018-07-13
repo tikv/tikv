@@ -14,7 +14,7 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 use std::time::Instant;
@@ -41,7 +41,7 @@ use super::keys::{self, enc_end_key, enc_start_key};
 use super::metrics::*;
 use super::peer::ReadyContext;
 use super::worker::RegionTask;
-use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
+use super::{SnapKey, SnapManager};
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -54,34 +54,10 @@ const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 const MAX_CACHE_CAPACITY: usize = 1024 - 1;
 const SHRINK_CACHE_CAPACITY: usize = 64;
 
-pub const JOB_STATUS_PENDING: usize = 0;
-pub const JOB_STATUS_RUNNING: usize = 1;
-pub const JOB_STATUS_CANCELLING: usize = 2;
-pub const JOB_STATUS_CANCELLED: usize = 3;
-pub const JOB_STATUS_FINISHED: usize = 4;
-pub const JOB_STATUS_FAILED: usize = 5;
-
-#[derive(Debug)]
-pub enum SnapState {
-    Relax,
-    Generating(Receiver<Snapshot>),
-    Applying(Arc<AtomicUsize>),
-    ApplyAborted,
-}
-
-impl PartialEq for SnapState {
-    fn eq(&self, other: &SnapState) -> bool {
-        match (self, other) {
-            (&SnapState::Relax, &SnapState::Relax)
-            | (&SnapState::ApplyAborted, &SnapState::ApplyAborted)
-            | (&SnapState::Generating(_), &SnapState::Generating(_)) => true,
-            (&SnapState::Applying(ref b1), &SnapState::Applying(ref b2)) => {
-                b1.load(Ordering::Relaxed) == b2.load(Ordering::Relaxed)
-            }
-            _ => false,
-        }
-    }
-}
+pub const APPLY_STATUS_RELAX: usize = 0;
+pub const APPLY_STATUS_PENDING: usize = 1;
+pub const APPLY_STATUS_RUNNING: usize = 2;
+pub const APPLY_STATUS_CANCELED: usize = 3;
 
 // Discard all log entries prior to compact_index. We must guarantee
 // that the compact_index is not greater than applied index.
@@ -252,18 +228,32 @@ impl CacheQueryStats {
     }
 }
 
+#[derive(Debug)]
+pub struct SnapStaleNotifier {
+    pub compacted_term: AtomicU64,
+    pub compacted_idx: AtomicU64,
+    pub apply_canceled: AtomicBool,
+}
+
+#[derive(Debug, Default)]
+struct GeneratingState {
+    receiver: Option<Receiver<Snapshot>>,
+    tried_count: usize,
+}
+
 pub struct PeerStorage {
     pub engines: Engines,
 
     region: metapb::Region,
-    pub raft_state: RaftLocalState,
-    pub apply_state: RaftApplyState,
-    pub applied_index_term: u64,
-    pub last_term: u64,
+    raft_state: RaftLocalState,
+    apply_state: RaftApplyState,
+    applied_index_term: u64,
+    last_term: u64,
 
-    snap_state: RefCell<SnapState>,
+    snap_generating_state: RefCell<GeneratingState>,
+    snap_applying_state: Arc<AtomicUsize>,
+    snap_stale_notifier: Arc<SnapStaleNotifier>,
     region_sched: Scheduler<RegionTask>,
-    snap_tried_cnt: RefCell<usize>,
 
     cache: EntryCache,
     stats: Rc<RefCell<CacheQueryStats>>,
@@ -476,14 +466,21 @@ impl PeerStorage {
         }
         let last_term = init_last_term(&engines.raft, region, &raft_state, &apply_state)?;
 
+        let snap_stale_notifier = SnapStaleNotifier {
+            compacted_term: AtomicU64::new(apply_state.get_truncated_state().get_term()),
+            compacted_idx: AtomicU64::new(apply_state.get_truncated_state().get_index()),
+            apply_canceled: AtomicBool::new(false),
+        };
+
         Ok(PeerStorage {
             engines,
             region: region.clone(),
             raft_state,
             apply_state,
-            snap_state: RefCell::new(SnapState::Relax),
+            snap_generating_state: RefCell::new(GeneratingState::default()),
+            snap_applying_state: Arc::new(AtomicUsize::new(0)),
+            snap_stale_notifier: Arc::new(snap_stale_notifier),
             region_sched,
-            snap_tried_cnt: RefCell::new(0),
             tag,
             applied_index_term: RAFT_INIT_LOG_TERM,
             last_term,
@@ -611,6 +608,28 @@ impl PeerStorage {
     }
 
     #[inline]
+    pub fn set_applied_state(&mut self, apply_state: RaftApplyState, applied_index_term: u64) {
+        self.apply_state = apply_state;
+        self.applied_index_term = applied_index_term;
+        self.snap_stale_notifier
+            .compacted_term
+            .store(self.truncated_term(), Ordering::Relaxed);
+        self.snap_stale_notifier
+            .compacted_idx
+            .store(self.truncated_index(), Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn apply_state(&self) -> &RaftApplyState {
+        &self.apply_state
+    }
+
+    #[inline]
+    pub fn applied_index_term(&self) -> u64 {
+        self.applied_index_term
+    }
+
+    #[inline]
     pub fn committed_index(&self) -> u64 {
         self.raft_state.get_hard_state().get_commit()
     }
@@ -681,69 +700,56 @@ impl PeerStorage {
     }
 
     pub fn snapshot(&self) -> raft::Result<Snapshot> {
-        let mut snap_state = self.snap_state.borrow_mut();
-        let mut tried_cnt = self.snap_tried_cnt.borrow_mut();
-
-        let (mut tried, mut snap) = (false, None);
-        if let SnapState::Generating(ref recv) = *snap_state {
-            tried = true;
-            match recv.try_recv() {
-                Err(TryRecvError::Disconnected) => {}
-                Err(TryRecvError::Empty) => {
-                    return Err(raft::Error::Store(
-                        raft::StorageError::SnapshotTemporarilyUnavailable,
-                    ));
-                }
-                Ok(s) => snap = Some(s),
-            }
-        }
-
-        if tried {
-            *snap_state = SnapState::Relax;
-            match snap {
-                Some(s) => {
-                    *tried_cnt = 0;
+        let mut snap_generating_state = self.snap_generating_state.borrow_mut();
+        if let Some(receiver) = snap_generating_state.receiver.take() {
+            match receiver.try_recv() {
+                Ok(s) => {
+                    snap_generating_state.tried_count = 0;
                     if self.validate_snap(&s) {
                         return Ok(s);
                     }
                 }
-                None => {
+                Err(TryRecvError::Empty) => {
+                    snap_generating_state.receiver = Some(receiver);
+                    return Err(raft::Error::Store(
+                        raft::StorageError::SnapshotTemporarilyUnavailable,
+                    ));
+                }
+                Err(TryRecvError::Disconnected) => {
                     warn!(
                         "{} snapshot generating failed at {} try time",
-                        self.tag, *tried_cnt
+                        self.tag, snap_generating_state.tried_count
                     );
                 }
             }
         }
 
-        if SnapState::Relax != *snap_state {
-            panic!("{} unexpected state: {:?}", self.tag, *snap_state);
-        }
-
-        if *tried_cnt >= MAX_SNAP_TRY_CNT {
-            let cnt = *tried_cnt;
-            *tried_cnt = 0;
+        // For the receiver is closed or the received snapshot is invalid.
+        if snap_generating_state.tried_count >= MAX_SNAP_TRY_CNT {
+            let count = snap_generating_state.tried_count;
+            snap_generating_state.tried_count = 0;
             return Err(raft::Error::Store(box_err!(
                 "failed to get snapshot after {} times",
-                cnt
+                count
             )));
         }
 
         info!("{} requesting snapshot...", self.tag);
-        *tried_cnt += 1;
+        snap_generating_state.tried_count += 1;
         let (tx, rx) = mpsc::sync_channel(1);
-        *snap_state = SnapState::Generating(rx);
+        snap_generating_state.receiver = Some(rx);
 
         let task = RegionTask::Gen {
             region_id: self.get_region_id(),
+            snap_stale_notifier: self.snap_stale_notifier.clone(),
             notifier: tx,
         };
+
         if let Err(e) = self.region_sched.schedule(task) {
             error!(
                 "{} failed to schedule task snap generation: {:?}",
                 self.tag, e
             );
-            // update the status next time the function is called, also backoff for retry.
         }
         Err(raft::Error::Store(
             raft::StorageError::SnapshotTemporarilyUnavailable,
@@ -920,84 +926,22 @@ impl PeerStorage {
     /// Check whether the storage has finished applying snapshot.
     #[inline]
     pub fn is_applying_snapshot(&self) -> bool {
-        match *self.snap_state.borrow() {
-            SnapState::Applying(_) => true,
-            _ => false,
-        }
-    }
-
-    /// Check if the storage is applying a snapshot.
-    #[inline]
-    pub fn check_applying_snap(&mut self) -> bool {
-        let new_state = match *self.snap_state.borrow() {
-            SnapState::Applying(ref status) => {
-                let s = status.load(Ordering::Relaxed);
-                if s == JOB_STATUS_FINISHED {
-                    SnapState::Relax
-                } else if s == JOB_STATUS_CANCELLED {
-                    SnapState::ApplyAborted
-                } else if s == JOB_STATUS_FAILED {
-                    // TODO: cleanup region and treat it as tombstone.
-                    panic!("{} applying snapshot failed", self.tag);
-                } else {
-                    return true;
-                }
-            }
-            _ => return false,
-        };
-        *self.snap_state.borrow_mut() = new_state;
-        false
-    }
-
-    #[inline]
-    pub fn is_canceling_snap(&self) -> bool {
-        match *self.snap_state.borrow() {
-            SnapState::Applying(ref status) => {
-                status.load(Ordering::Relaxed) == JOB_STATUS_CANCELLING
-            }
-            _ => false,
-        }
+        self.snap_applying_state.load(Ordering::SeqCst) != APPLY_STATUS_RELAX
     }
 
     /// Cancel applying snapshot, return true if the job can be considered not be run again.
     pub fn cancel_applying_snap(&mut self) -> bool {
-        let is_cancelled = match *self.snap_state.borrow() {
-            SnapState::Applying(ref status) => if status.compare_and_swap(
-                JOB_STATUS_PENDING,
-                JOB_STATUS_CANCELLING,
-                Ordering::SeqCst,
-            ) == JOB_STATUS_PENDING
-            {
-                true
-            } else if status.compare_and_swap(
-                JOB_STATUS_RUNNING,
-                JOB_STATUS_CANCELLING,
-                Ordering::SeqCst,
-            ) == JOB_STATUS_RUNNING
-            {
-                return false;
-            } else {
-                false
-            },
-            _ => return false,
-        };
-        if is_cancelled {
-            *self.snap_state.borrow_mut() = SnapState::ApplyAborted;
-            return true;
-        }
-        // now status can only be JOB_STATUS_CANCELLING, JOB_STATUS_CANCELLED,
-        // JOB_STATUS_FAILED and JOB_STATUS_FINISHED.
-        !self.check_applying_snap()
-    }
-
-    #[inline]
-    pub fn set_snap_state(&mut self, state: SnapState) {
-        *self.snap_state.borrow_mut() = state
-    }
-
-    #[inline]
-    pub fn is_snap_state(&self, state: SnapState) -> bool {
-        *self.snap_state.borrow() == state
+        // The status may be PENDING, RUNNING or RELAX. Return true only
+        // when it's still PENDING.
+        let origin_state = self.snap_applying_state.compare_and_swap(
+            APPLY_STATUS_PENDING,
+            APPLY_STATUS_CANCELED,
+            Ordering::SeqCst,
+        );
+        self.snap_stale_notifier
+            .apply_canceled
+            .store(true, Ordering::SeqCst);
+        origin_state == APPLY_STATUS_PENDING || origin_state == APPLY_STATUS_CANCELED
     }
 
     pub fn get_region_id(&self) -> u64 {
@@ -1005,12 +949,18 @@ impl PeerStorage {
     }
 
     pub fn schedule_applying_snapshot(&mut self) {
-        let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
-        self.set_snap_state(SnapState::Applying(Arc::clone(&status)));
+        self.snap_applying_state
+            .store(APPLY_STATUS_PENDING, Ordering::SeqCst);
+        self.snap_stale_notifier
+            .apply_canceled
+            .store(false, Ordering::SeqCst);
+
         let task = RegionTask::Apply {
             region_id: self.get_region_id(),
-            status,
+            snap_stale_notifier: Arc::clone(&self.snap_stale_notifier),
+            snap_applying_state: Arc::clone(&self.snap_applying_state),
         };
+
         // TODO: gracefully remove region instead.
         self.region_sched
             .schedule(task)
@@ -1246,8 +1196,9 @@ pub fn clear_meta(
 pub fn do_snapshot(
     mgr: SnapManager,
     raft_db: &DB,
-    snap: &DbSnapshot,
+    snap: DbSnapshot,
     region_id: u64,
+    snap_stale_notifier: Arc<SnapStaleNotifier>,
 ) -> raft::Result<Snapshot> {
     debug!("[region {}] begin to generate a snapshot", region_id);
 
@@ -1277,13 +1228,8 @@ pub fn do_snapshot(
         }
     };
 
-    let key = SnapKey::new(region_id, term, idx);
-
-    mgr.register(key.clone(), SnapEntry::Generating);
-    defer!(mgr.deregister(&key, &SnapEntry::Generating));
-
-    let state: RegionLocalState = snap
-        .get_msg_cf(CF_RAFT, &keys::region_state_key(key.region_id))
+    let mut state: RegionLocalState = snap
+        .get_msg_cf(CF_RAFT, &keys::region_state_key(region_id))
         .and_then(|res| match res {
             None => Err(box_err!("could not find region info")),
             Some(state) => Ok(state),
@@ -1296,35 +1242,25 @@ pub fn do_snapshot(
         )));
     }
 
-    let mut snapshot = Snapshot::new();
-
     // Set snapshot metadata.
-    snapshot.mut_metadata().set_index(key.idx);
-    snapshot.mut_metadata().set_term(key.term);
-
+    let mut snapshot = Snapshot::new();
     let conf_state = conf_state_from_region(state.get_region());
     snapshot.mut_metadata().set_conf_state(conf_state);
+    snapshot.mut_metadata().set_term(term);
+    snapshot.mut_metadata().set_index(idx);
 
-    let mut s = mgr.get_snapshot_for_building(&key, snap)?;
-    // Set snapshot data.
-    let mut snap_data = RaftSnapshotData::new();
-    snap_data.set_region(state.get_region().clone());
-    let mut stat = SnapshotStatistics::new();
-    s.build(
-        snap,
-        state.get_region(),
-        &mut snap_data,
-        &mut stat,
-        Box::new(mgr.clone()),
-    )?;
-    let mut v = vec![];
-    snap_data.write_to_vec(&mut v)?;
-    snapshot.set_data(v);
+    let key = SnapKey::new(region_id, term, idx);
 
-    SNAPSHOT_KV_COUNT_HISTOGRAM.observe(stat.kv_count as f64);
-    SNAPSHOT_SIZE_HISTOGRAM.observe(stat.size as f64);
-
-    Ok(snapshot)
+    match mgr.build_snapshot(key, state.take_region(), snap, snap_stale_notifier) {
+        Some(Ok(snap_data)) => {
+            snap_data.write_to_vec(snapshot.mut_data())?;
+            Ok(snapshot)
+        }
+        Some(Err(e)) => Err(raft::Error::from(e)),
+        None => Err(RaftError::Store(
+            StorageError::SnapshotTemporarilyUnavailable,
+        )),
+    }
 }
 
 // When we bootstrap the region we must call this to initialize region local state first.
@@ -1717,12 +1653,14 @@ mod test {
         let snap = s.snapshot();
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
-        assert_eq!(*s.snap_tried_cnt.borrow(), 1);
+        assert_eq!(s.snap_generating_state.borrow().tried_count, 1);
 
-        let snap = match *s.snap_state.borrow() {
-            SnapState::Generating(ref rx) => rx.recv_timeout(Duration::from_secs(3)).unwrap(),
-            ref s => panic!("unexpected state: {:?}", s),
+        let snap = {
+            let gen_state = s.snap_generating_state.borrow();
+            let r = gen_state.receiver.as_ref().unwrap();
+            r.recv_timeout(Duration::from_secs(3)).unwrap()
         };
+
         assert_eq!(snap.get_metadata().get_index(), 5);
         assert_eq!(snap.get_metadata().get_term(), 5);
         assert!(!snap.get_data().is_empty());
@@ -1733,14 +1671,14 @@ mod test {
         assert_eq!(data.get_region().get_peers().len(), 1);
 
         let (tx, rx) = channel();
-        s.set_snap_state(SnapState::Generating(rx));
+        s.snap_generating_state.borrow_mut().receiver = Some(rx);
         // Empty channel should cause snapshot call to wait.
         assert_eq!(s.snapshot().unwrap_err(), unavailable);
-        assert_eq!(*s.snap_tried_cnt.borrow(), 1);
+        assert_eq!(s.snap_generating_state.borrow().tried_count, 1);
 
         tx.send(snap.clone()).unwrap();
         assert_eq!(s.snapshot(), Ok(snap.clone()));
-        assert_eq!(*s.snap_tried_cnt.borrow(), 0);
+        assert_eq!(s.snap_generating_state.borrow().tried_count, 0);
 
         let mut ctx = InvokeContext::new(&s);
         let mut kv_wb = WriteBatch::new();
@@ -1771,33 +1709,34 @@ mod test {
         ctx.save_apply_state_to(&s.engines.kv, &mut kv_wb).unwrap();
         s.engines.kv.write(kv_wb).unwrap();
         s.apply_state = ctx.apply_state;
+
         let (tx, rx) = channel();
         tx.send(snap.clone()).unwrap();
-        s.set_snap_state(SnapState::Generating(rx));
-        *s.snap_tried_cnt.borrow_mut() = 1;
+        s.snap_generating_state.borrow_mut().receiver = Some(rx);
+        s.snap_generating_state.borrow_mut().tried_count = 1;
         // stale snapshot should be abandoned.
         assert_eq!(s.snapshot().unwrap_err(), unavailable);
-        assert_eq!(*s.snap_tried_cnt.borrow(), 1);
+        assert_eq!(s.snap_generating_state.borrow().tried_count, 1);
 
-        match *s.snap_state.borrow() {
-            SnapState::Generating(ref rx) => {
-                rx.recv_timeout(Duration::from_secs(3)).unwrap();
-                worker.stop().unwrap().join().unwrap();
-                match rx.recv_timeout(Duration::from_secs(3)) {
-                    Err(RecvTimeoutError::Disconnected) => {}
-                    res => panic!("unexpected result: {:?}", res),
-                }
+        {
+            let gen_state = s.snap_generating_state.borrow();
+            let rx = gen_state.receiver.as_ref().unwrap();
+            rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            worker.stop().unwrap().join().unwrap();
+            match rx.recv_timeout(Duration::from_secs(3)) {
+                Err(RecvTimeoutError::Disconnected) => {}
+                res => panic!("unexpected result: {:?}", res),
             }
-            ref s => panic!("unexpected state {:?}", s),
         }
+
         // Disconnected channel should trigger another try.
         assert_eq!(s.snapshot().unwrap_err(), unavailable);
-        assert_eq!(*s.snap_tried_cnt.borrow(), 2);
+        assert_eq!(s.snap_generating_state.borrow().tried_count, 2);
 
         for cnt in 2..super::MAX_SNAP_TRY_CNT {
             // Scheduled job failed should trigger .
             assert_eq!(s.snapshot().unwrap_err(), unavailable);
-            assert_eq!(*s.snap_tried_cnt.borrow(), cnt + 1);
+            assert_eq!(s.snap_generating_state.borrow().tried_count, cnt + 1);
         }
 
         // When retry too many times, it should report a different error.
@@ -2010,9 +1949,10 @@ mod test {
         );
         worker.start(runner).unwrap();
         assert!(s1.snapshot().is_err());
-        let snap1 = match *s1.snap_state.borrow() {
-            SnapState::Generating(ref rx) => rx.recv_timeout(Duration::from_secs(3)).unwrap(),
-            ref s => panic!("unexpected state: {:?}", s),
+        let snap1 = {
+            let gen_state = s1.snap_generating_state.borrow();
+            let rx = gen_state.receiver.as_ref().unwrap();
+            rx.recv_timeout(Duration::from_secs(3)).unwrap()
         };
         assert_eq!(s1.truncated_index(), 3);
         assert_eq!(s1.truncated_term(), 3);
@@ -2060,91 +2000,22 @@ mod test {
         let mut s = new_storage(sched, &td);
 
         // PENDING can be canceled directly.
-        s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
-            JOB_STATUS_PENDING,
-        ))));
+        s.snap_applying_state = Arc::new(AtomicUsize::new(APPLY_STATUS_PENDING));
         assert!(s.cancel_applying_snap());
-        assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
+        let applying_state = s.snap_applying_state.load(Ordering::SeqCst);
+        assert_eq!(applying_state, APPLY_STATUS_CANCELED);
 
         // RUNNING can't be canceled directly.
-        s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
-            JOB_STATUS_RUNNING,
-        ))));
+        s.snap_applying_state = Arc::new(AtomicUsize::new(APPLY_STATUS_RUNNING));
         assert!(!s.cancel_applying_snap());
-        assert_eq!(
-            *s.snap_state.borrow(),
-            SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_CANCELLING)))
-        );
-        // CANCEL can't be canceled again.
-        assert!(!s.cancel_applying_snap());
+        let applying_state = s.snap_applying_state.load(Ordering::SeqCst);
+        assert_eq!(applying_state, APPLY_STATUS_RUNNING);
 
-        s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
-            JOB_STATUS_CANCELLED,
-        ))));
-        // canceled snapshot can be cancel directly.
+        // CANCELED can be canceled directly.
+        s.snap_applying_state = Arc::new(AtomicUsize::new(APPLY_STATUS_CANCELED));
         assert!(s.cancel_applying_snap());
-        assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
-
-        s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
-            JOB_STATUS_FINISHED,
-        ))));
-        assert!(s.cancel_applying_snap());
-        assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
-
-        s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
-            JOB_STATUS_FAILED,
-        ))));
-        let res = recover_safe!(|| s.cancel_applying_snap());
-        assert!(res.is_err());
-    }
-
-    #[test]
-    fn test_try_finish_snapshot() {
-        let td = TempDir::new("tikv-store-test").unwrap();
-        let worker = Worker::new("snap_manager");
-        let sched = worker.scheduler();
-        let mut s = new_storage(sched, &td);
-
-        // PENDING can be finished.
-        let mut snap_state = SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_PENDING)));
-        s.snap_state = RefCell::new(snap_state);
-        assert!(s.check_applying_snap());
-        assert_eq!(
-            *s.snap_state.borrow(),
-            SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_PENDING)))
-        );
-
-        // RUNNING can't be finished.
-        snap_state = SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)));
-        s.snap_state = RefCell::new(snap_state);
-        assert!(s.check_applying_snap());
-        assert_eq!(
-            *s.snap_state.borrow(),
-            SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)))
-        );
-
-        snap_state = SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_CANCELLED)));
-        s.snap_state = RefCell::new(snap_state);
-        assert!(!s.check_applying_snap());
-        assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
-        // ApplyAborted is not applying snapshot.
-        assert!(!s.check_applying_snap());
-        assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
-
-        s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
-            JOB_STATUS_FINISHED,
-        ))));
-        assert!(!s.check_applying_snap());
-        assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
-        // Relax is not applying snapshot.
-        assert!(!s.check_applying_snap());
-        assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
-
-        s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
-            JOB_STATUS_FAILED,
-        ))));
-        let res = recover_safe!(|| s.check_applying_snap());
-        assert!(res.is_err());
+        let applying_state = s.snap_applying_state.load(Ordering::SeqCst);
+        assert_eq!(applying_state, APPLY_STATUS_CANCELED);
     }
 
     #[test]

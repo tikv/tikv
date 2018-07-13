@@ -166,6 +166,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let snap_mgr = SnapManagerBuilder::default()
         .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0)
         .max_total_size(cfg.server.snap_max_total_size.0)
+        .gc_timeout(cfg.raft_store.snap_gc_timeout.clone().into())
         .build(
             snap_path.as_path().to_str().unwrap().to_owned(),
             Some(store_sendch),

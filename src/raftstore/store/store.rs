@@ -69,7 +69,7 @@ use super::worker::{
     CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
     RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask, STALE_PEER_CHECK_INTERVAL,
 };
-use super::{util, Engines, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
+use super::{util, Engines, Msg, SignificantMsg, SnapKey, SnapManager, Tick};
 use import::SSTImporter;
 
 type Key = Vec<u8>;
@@ -804,13 +804,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
-        if let Some(key) = self.check_snapshot(&msg)? {
+        if self.check_snapshot(&msg)?.is_some() {
             // If the snapshot file is not used again, then it's OK to
             // delete them here. If the snapshot file will be reused when
             // receiving, then it will fail to pass the check again, so
             // missing snapshot files should not be noticed.
-            let s = self.snap_mgr.get_snapshot_for_applying(&key)?;
-            self.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
             return Ok(());
         }
 
@@ -1207,8 +1205,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return Ok(Some(key));
             }
         }
-        // check if snapshot file exists.
-        self.snap_mgr.get_snapshot_for_applying(&key)?;
 
         self.pending_snapshot_regions.push(snap_region);
         self.pending_cross_snap.remove(&region_id);
@@ -2609,17 +2605,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .with_label_values(&["receiving"])
             .set(snap_stats.receiving_count as i64);
 
-        let mut apply_snapshot_count = 0;
-        for peer in self.region_peers.values_mut() {
-            if peer.mut_store().check_applying_snap() {
-                apply_snapshot_count += 1;
-            }
-        }
+        let apply_snapshot_count = self
+            .region_peers
+            .values()
+            .filter(|p| p.get_store().is_applying_snapshot())
+            .count();
 
         stats.set_applying_snap_count(apply_snapshot_count as u32);
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
             .with_label_values(&["applying"])
-            .set(apply_snapshot_count);
+            .set(apply_snapshot_count as i64);
 
         stats.set_start_time(self.start_time.sec as u32);
 
@@ -2655,69 +2650,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_pd_store_heartbeat_tick(event_loop);
     }
 
-    fn handle_snap_mgr_gc(&mut self) -> Result<()> {
-        let snap_keys = self.snap_mgr.list_idle_snap()?;
-        if snap_keys.is_empty() {
-            return Ok(());
-        }
-        let (mut last_region_id, mut compacted_idx, mut compacted_term) = (0, u64::MAX, u64::MAX);
-        let mut is_applying_snap = false;
-        for (key, is_sending) in snap_keys {
-            if last_region_id != key.region_id {
-                last_region_id = key.region_id;
-                match self.region_peers.get(&key.region_id) {
-                    None => {
-                        // region is deleted
-                        compacted_idx = u64::MAX;
-                        compacted_term = u64::MAX;
-                        is_applying_snap = false;
-                    }
-                    Some(peer) => {
-                        let s = peer.get_store();
-                        compacted_idx = s.truncated_index();
-                        compacted_term = s.truncated_term();
-                        is_applying_snap = s.is_applying_snapshot();
-                    }
-                };
-            }
-
-            if is_sending {
-                let s = self.snap_mgr.get_snapshot_for_sending(&key)?;
-                if key.term < compacted_term || key.idx < compacted_idx {
-                    info!(
-                        "[region {}] snap file {} has been compacted, delete.",
-                        key.region_id, key
-                    );
-                    self.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
-                } else if let Ok(meta) = s.meta() {
-                    let modified = box_try!(meta.modified());
-                    if let Ok(elapsed) = modified.elapsed() {
-                        if elapsed > self.cfg.snap_gc_timeout.0 {
-                            info!(
-                                "[region {}] snap file {} has been expired, delete.",
-                                key.region_id, key
-                            );
-                            self.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
-                        }
-                    }
-                }
-            } else if key.term <= compacted_term
-                && (key.idx < compacted_idx || key.idx == compacted_idx && !is_applying_snap)
-            {
-                info!(
-                    "[region {}] snap file {} has been applied, delete.",
-                    key.region_id, key
-                );
-                let a = self.snap_mgr.get_snapshot_for_applying(&key)?;
-                self.snap_mgr.delete_snapshot(&key, a.as_ref(), false);
-            }
-        }
-        Ok(())
-    }
-
     fn on_snap_mgr_gc(&mut self, event_loop: &mut EventLoop<Self>) {
-        if let Err(e) = self.handle_snap_mgr_gc() {
-            error!("{} failed to gc snap manager: {:?}", self.tag, e);
+        if let Err(e) = self.region_worker.scheduler().schedule(RegionTask::Gc) {
+            error!("{} failed to send gc snap manager task: {:?}", self.tag, e);
         }
         self.register_snap_mgr_gc_tick(event_loop);
     }

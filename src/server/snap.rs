@@ -13,6 +13,7 @@
 
 use std::boxed::FnBox;
 use std::fmt::{self, Display, Formatter};
+use std::io::prelude::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -27,10 +28,9 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb_grpc::TikvClient;
 
-use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
+use raftstore::store::{SnapKey, SnapManager, SnapshotReceiver, SnapshotSender};
 use util::security::SecurityManager;
 use util::worker::Runnable;
-use util::DeferContext;
 
 use super::metrics::*;
 use super::transport::RaftStoreRouter;
@@ -65,7 +65,7 @@ impl Display for Task {
 
 struct SnapChunk {
     first: Option<SnapshotChunk>,
-    snap: Box<Snapshot>,
+    snap: SnapshotSender,
     remain_bytes: usize,
 }
 
@@ -129,17 +129,8 @@ fn send_snap(
         SnapKey::from_snap(snap)?
     };
 
-    mgr.register(key.clone(), SnapEntry::Sending);
-    let deregister = {
-        let (mgr, key) = (mgr.clone(), key.clone());
-        DeferContext::new(move || mgr.deregister(&key, &SnapEntry::Sending))
-    };
-
-    let s = box_try!(mgr.get_snapshot_for_sending(&key));
-    if !s.exists() {
-        return Err(box_err!("missing snap file: {:?}", s.path()));
-    }
-    let total_size = s.total_size()?;
+    let s = box_try!(mgr.get_snapshot_sender(key));
+    let total_size = s.total_size();
 
     let chunks = {
         let mut first_chunk = SnapshotChunk::new();
@@ -163,15 +154,12 @@ fn send_snap(
     let (sink, receiver) = client.snapshot()?;
 
     let send = chunks.forward(sink).map_err(Error::from);
-    let send = send
-        .and_then(|(s, _)| receiver.map_err(Error::from).map(|_| s))
+    let future = send
+        .and_then(|_| receiver.map_err(Error::from))
         .then(move |result| {
             send_timer.observe_duration();
-            drop(deregister);
             drop(client);
-            result.map(|s| {
-                fail_point!("snapshot_delete_after_send");
-                s.snap.delete();
+            result.map(|_| {
                 // TODO: improve it after rustc resolves the bug.
                 // Call `info` in the closure directly will cause rustc
                 // panic with `Cannot create local mono-item for DefId`.
@@ -182,12 +170,12 @@ fn send_snap(
                 }
             })
         });
-    Ok(send)
+    Ok(future)
 }
 
 struct RecvSnapContext {
     key: SnapKey,
-    file: Option<Box<Snapshot>>,
+    file: Option<SnapshotReceiver>,
     raft_msg: RaftMessage,
 }
 
@@ -207,18 +195,7 @@ impl RecvSnapContext {
 
         let snap = {
             let data = meta.get_message().get_snapshot().get_data();
-            let s = match snap_mgr.get_snapshot_for_receiving(&key, data) {
-                Ok(s) => s,
-                Err(e) => return Err(box_err!("{} failed to create snapshot file: {:?}", key, e)),
-            };
-
-            if s.exists() {
-                let p = s.path();
-                info!("{} snapshot file {} already exists, skip receiving", key, p);
-                None
-            } else {
-                Some(s)
-            }
+            snap_mgr.get_snapshot_receiver(key, data)?
         };
 
         Ok(RecvSnapContext {
@@ -231,14 +208,12 @@ impl RecvSnapContext {
     fn finish<R: RaftStoreRouter>(self, raft_router: R) -> Result<()> {
         let key = self.key;
         if let Some(mut file) = self.file {
-            info!("{} saving snapshot file {}", key, file.path());
-            if let Err(e) = file.save() {
-                let path = file.path();
-                let e = box_err!("{} failed to save snapshot file {}: {:?}", key, path, e);
-                return Err(e);
-            }
+            info!("{} saving received snapshot file", key);
+            file.save()?;
         }
+        info!("{} sending raft snapshot to raftstore", key);
         if let Err(e) = raft_router.send_raft_msg(self.raft_msg) {
+            error!("{} send raft snapshot to raftstore fail: {}", key, e);
             return Err(box_err!("{} failed to send snapshot to raft: {}", key, e));
         }
         Ok(())
@@ -259,13 +234,9 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
                 Ok(context) => context,
                 Err(e) => return box future::err(e),
             };
-
             if context.file.is_none() {
                 return box future::result(context.finish(raft_router));
             }
-
-            let context_key = context.key.clone();
-            snap_mgr.register(context.key.clone(), SnapEntry::Receiving);
 
             let recv_chunks = chunks.fold(context, |mut context, mut chunk| -> Result<_> {
                 let data = chunk.take_data();
@@ -274,19 +245,12 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
                 }
                 if let Err(e) = context.file.as_mut().unwrap().write_all(&data) {
                     let key = &context.key;
-                    let path = context.file.as_mut().unwrap().path();
-                    let e = box_err!("{} failed to write snapshot file {}: {}", key, path, e);
+                    let e = box_err!("{} failed to receive snapshot: {}", key, e);
                     return Err(e);
                 }
                 Ok(context)
             });
-
-            box recv_chunks
-                .and_then(move |context| context.finish(raft_router))
-                .then(move |r| {
-                    snap_mgr.deregister(&context_key, &SnapEntry::Receiving);
-                    r
-                })
+            box recv_chunks.and_then(move |context| context.finish(raft_router))
         },
     );
     f.and_then(move |_| sink.success(Done::new()).map_err(Error::from))

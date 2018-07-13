@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::io;
 use std::ops::Deref;
 use std::path::Path;
 use std::sync::{mpsc, Arc, RwLock};
@@ -78,33 +79,21 @@ impl Channel<RaftMessage> for ChannelTransport {
         if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
             let snap = msg.get_message().get_snapshot();
             let key = SnapKey::from_snap(snap).unwrap();
-            let from = match self.rl().snap_paths.get(&from_store) {
-                Some(p) => {
-                    p.0.register(key.clone(), SnapEntry::Sending);
-                    p.0.get_snapshot_for_sending(&key).unwrap()
-                }
+            let mut from = match self.rl().snap_paths.get(&from_store) {
+                Some(p) => p.0.get_snapshot_sender(key).unwrap(),
                 None => return Err(box_err!("missing temp dir for store {}", from_store)),
             };
             let to = match self.rl().snap_paths.get(&to_store) {
                 Some(p) => {
-                    p.0.register(key.clone(), SnapEntry::Receiving);
                     let data = msg.get_message().get_snapshot().get_data();
-                    p.0.get_snapshot_for_receiving(&key, data).unwrap()
+                    p.0.get_snapshot_receiver(key, data).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", to_store)),
             };
-
-            defer!({
-                let core = self.rl();
-                core.snap_paths[&from_store]
-                    .0
-                    .deregister(&key, &SnapEntry::Sending);
-                core.snap_paths[&to_store]
-                    .0
-                    .deregister(&key, &SnapEntry::Receiving);
-            });
-
-            copy_snapshot(from, to)?;
+            if let Some(mut to) = to {
+                io::copy(&mut from, &mut to)?;
+                to.save()?;
+            }
         }
 
         match self.core.rl().routers.get(&to_store) {

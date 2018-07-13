@@ -809,7 +809,7 @@ impl Peer {
 
         // There may be some values that are not applied by this leader yet but the old leader,
         // if applied_index_term isn't equal to current term.
-        self.get_store().applied_index_term == self.term()
+        self.get_store().applied_index_term() == self.term()
             // There may be stale read if the old leader splits really slow,
             // the new region may already elected a new leader while
             // the old leader still think it owns the splitted range.
@@ -851,7 +851,7 @@ impl Peer {
         if self.pending_remove {
             return;
         }
-        if self.mut_store().check_applying_snap() {
+        if self.mut_store().is_applying_snapshot() {
             // If we continue to handle all the messages, it may cause too many messages because
             // leader will send all the remaining messages to this follower, which can lead
             // to full message queue under high load.
@@ -1101,8 +1101,8 @@ impl Peer {
             self.raft_group
                 .advance_apply(apply_state.get_applied_index());
         }
-        self.mut_store().apply_state = apply_state;
-        self.mut_store().applied_index_term = applied_index_term;
+        self.mut_store()
+            .set_applied_state(apply_state, applied_index_term);
         self.peer_stat.written_keys += apply_metrics.written_keys;
         self.peer_stat.written_bytes += apply_metrics.written_bytes;
         self.delete_keys_hint += apply_metrics.delete_keys_hint;
@@ -1944,7 +1944,7 @@ trait RequestInspector {
 
 impl RequestInspector for Peer {
     fn has_applied_to_current_term(&self) -> bool {
-        self.get_store().applied_index_term == self.term()
+        self.get_store().applied_index_term() == self.term()
     }
 
     fn inspect_lease(&mut self) -> LeaseState {

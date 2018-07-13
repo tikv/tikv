@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
@@ -23,21 +23,16 @@ use raft::eraftpb::Snapshot as RaftSnapshot;
 use rocksdb::{Writable, WriteBatch};
 
 use raftstore::store::engine::{Mutable, Snapshot};
-use raftstore::store::peer_storage::{
-    JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
-    JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
-};
-use raftstore::store::snap::{Error, Result};
+use raftstore::store::peer_storage::*;
+use raftstore::store::snap::{ApplyOptions, SnapError};
 use raftstore::store::util::Engines;
-use raftstore::store::{
-    self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey, SnapManager,
-};
+use raftstore::store::{self, keys, Peekable, SnapKey, SnapManager};
+use raftstore::{Error as RaftStoreError, Result};
 use storage::CF_RAFT;
 use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
-use util::time;
 use util::timer::Timer;
 use util::worker::{Runnable, RunnableWithTimer};
-use util::{escape, rocksdb};
+use util::{escape, rocksdb, time};
 
 use super::super::util;
 use super::metrics::*;
@@ -54,11 +49,13 @@ pub const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // milliseconds
 pub enum Task {
     Gen {
         region_id: u64,
+        snap_stale_notifier: Arc<SnapStaleNotifier>,
         notifier: SyncSender<RaftSnapshot>,
     },
     Apply {
         region_id: u64,
-        status: Arc<AtomicUsize>,
+        snap_stale_notifier: Arc<SnapStaleNotifier>,
+        snap_applying_state: Arc<AtomicUsize>,
     },
     /// Destroy data between [start_key, end_key).
     ///
@@ -68,6 +65,8 @@ pub enum Task {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
     },
+    /// Gc stale snapshots.
+    Gc,
 }
 
 impl Task {
@@ -96,6 +95,7 @@ impl Display for Task {
                 escape(start_key),
                 escape(end_key)
             ),
+            Task::Gc => write!(f, "Snap gc"),
         }
     }
 }
@@ -211,11 +211,16 @@ struct SnapContext {
     mgr: SnapManager,
     use_delete_range: bool,
     clean_stale_peer_delay: Duration,
-    pending_delete_ranges: PendingDeleteRanges,
+    pending_delete_ranges: Arc<Mutex<PendingDeleteRanges>>,
 }
 
 impl SnapContext {
-    fn generate_snap(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) -> Result<()> {
+    fn generate_snap(
+        &self,
+        region_id: u64,
+        snap_stale_notifier: Arc<SnapStaleNotifier>,
+        notifier: SyncSender<RaftSnapshot>,
+    ) -> Result<()> {
         // do we need to check leader here?
         let raft_engine = Arc::clone(&self.engines.raft);
         let raw_snap = Snapshot::new(Arc::clone(&self.engines.kv));
@@ -223,9 +228,11 @@ impl SnapContext {
         let snap = box_try!(store::do_snapshot(
             self.mgr.clone(),
             &raft_engine,
-            &raw_snap,
-            region_id
+            raw_snap,
+            region_id,
+            snap_stale_notifier
         ));
+
         // Only enable the fail point when the region id is equal to 1, which is
         // the id of bootstrapped region in tests.
         fail_point!("region_gen_snap", region_id == 1, |_| Ok(()));
@@ -239,14 +246,19 @@ impl SnapContext {
         Ok(())
     }
 
-    fn handle_gen(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) {
+    fn handle_gen(
+        &self,
+        region_id: u64,
+        snap_stale_notifier: Arc<SnapStaleNotifier>,
+        notifier: SyncSender<RaftSnapshot>,
+    ) {
         SNAP_COUNTER_VEC
             .with_label_values(&["generate", "all"])
             .inc();
         let gen_histogram = SNAP_HISTOGRAM.with_label_values(&["generate"]);
         let timer = gen_histogram.start_coarse_timer();
 
-        if let Err(e) = self.generate_snap(region_id, notifier) {
+        if let Err(e) = self.generate_snap(region_id, snap_stale_notifier, notifier) {
             error!("[region {}] failed to generate snap: {:?}!!!", region_id, e);
             return;
         }
@@ -257,10 +269,14 @@ impl SnapContext {
         timer.observe_duration();
     }
 
-    fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
+    fn apply_snap(
+        &self,
+        region_id: u64,
+        snap_stale_notifier: Arc<SnapStaleNotifier>,
+    ) -> Result<()> {
         info!("[region {}] begin apply snap data", region_id);
         fail_point!("region_apply_snap");
-        check_abort(&abort)?;
+
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState =
             match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &region_key)) {
@@ -277,7 +293,6 @@ impl SnapContext {
         let region = region_state.get_region().clone();
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
-        check_abort(&abort)?;
         self.cleanup_overlap_ranges(&start_key, &end_key);
         box_try!(util::delete_all_in_range(
             &self.engines.kv,
@@ -285,7 +300,6 @@ impl SnapContext {
             &end_key,
             self.use_delete_range
         ));
-        check_abort(&abort)?;
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
@@ -298,26 +312,20 @@ impl SnapContext {
                     ))
                 }
             };
+
+        let timer = Instant::now();
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
-        let snap_key = SnapKey::new(region_id, term, idx);
-        self.mgr.register(snap_key.clone(), SnapEntry::Applying);
-        defer!({
-            self.mgr.deregister(&snap_key, &SnapEntry::Applying);
-        });
-        let mut s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
-        if !s.exists() {
-            return Err(box_err!("missing snapshot file {}", s.path()));
-        }
-        check_abort(&abort)?;
-        let timer = Instant::now();
-        let options = ApplyOptions {
-            db: Arc::clone(&self.engines.kv),
-            region: region.clone(),
-            abort: Arc::clone(&abort),
-            write_batch_size: self.batch_size,
-        };
-        s.apply(options)?;
+
+        self.mgr.apply_snapshot(
+            SnapKey::new(region_id, term, idx),
+            ApplyOptions {
+                db: Arc::clone(&self.engines.kv),
+                region,
+                write_batch_size: self.batch_size,
+            },
+            snap_stale_notifier,
+        )?;
 
         let wb = WriteBatch::new();
         region_state.set_state(PeerState::Normal);
@@ -327,6 +335,7 @@ impl SnapContext {
         self.engines.kv.write(wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
+
         info!(
             "[region {}] apply new data takes {:?}",
             region_id,
@@ -335,41 +344,49 @@ impl SnapContext {
         Ok(())
     }
 
-    fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
-        status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
-        SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
-        let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
-        let timer = apply_histogram.start_coarse_timer();
+    fn handle_apply(
+        &self,
+        region_id: u64,
+        snap_stale_notifier: Arc<SnapStaleNotifier>,
+        snap_applying_state: Arc<AtomicUsize>,
+    ) {
+        let origin_state = snap_applying_state.compare_and_swap(
+            APPLY_STATUS_PENDING,
+            APPLY_STATUS_RUNNING,
+            Ordering::SeqCst,
+        );
+        if origin_state == APPLY_STATUS_CANCELED {
+            info!(
+                "applying snapshot for region {} is canceled before running",
+                region_id
+            );
+            snap_applying_state.store(APPLY_STATUS_RELAX, Ordering::SeqCst);
+            return;
+        }
 
-        match self.apply_snap(region_id, Arc::clone(&status)) {
-            Ok(()) => {
-                status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
-                SNAP_COUNTER_VEC
-                    .with_label_values(&["apply", "success"])
-                    .inc();
-            }
-            Err(Error::Abort) => {
+        SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
+        let timer = SNAP_HISTOGRAM
+            .with_label_values(&["apply"])
+            .start_coarse_timer();
+
+        let counter = match self.apply_snap(region_id, snap_stale_notifier) {
+            Ok(()) => SNAP_COUNTER_VEC.with_label_values(&["apply", "success"]),
+            Err(RaftStoreError::Snapshot(SnapError::Abort)) => {
                 warn!("applying snapshot for region {} is aborted.", region_id);
-                assert_eq!(
-                    status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst),
-                    JOB_STATUS_CANCELLING
-                );
-                SNAP_COUNTER_VEC
-                    .with_label_values(&["apply", "abort"])
-                    .inc();
+                SNAP_COUNTER_VEC.with_label_values(&["apply", "abort"])
             }
             Err(e) => {
                 error!("failed to apply snap: {:?}!!!", e);
-                status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
-                SNAP_COUNTER_VEC.with_label_values(&["apply", "fail"]).inc();
+                SNAP_COUNTER_VEC.with_label_values(&["apply", "fail"])
             }
-        }
-
+        };
+        counter.inc();
+        snap_applying_state.store(APPLY_STATUS_RELAX, Ordering::SeqCst);
         timer.observe_duration();
     }
 
     fn cleanup_range(
-        &mut self,
+        &self,
         region_id: u64,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
@@ -411,9 +428,11 @@ impl SnapContext {
         }
     }
 
-    fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) {
+    fn cleanup_overlap_ranges(&self, start_key: &[u8], end_key: &[u8]) {
         let overlap_ranges = self
             .pending_delete_ranges
+            .lock()
+            .unwrap()
             .drain_overlap_ranges(start_key, end_key);
         for (region_id, s_key, e_key) in overlap_ranges {
             self.cleanup_range(region_id, s_key, e_key, false /* use_delete_files */);
@@ -440,15 +459,20 @@ impl SnapContext {
         );
         let timeout = time::Instant::now() + self.clean_stale_peer_delay;
         self.pending_delete_ranges
+            .lock()
+            .unwrap()
             .insert(region_id, start_key, end_key, timeout);
         true
     }
 
     fn clean_timeout_ranges(&mut self) {
-        STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
+        let mut pending_delete_ranges = self.pending_delete_ranges.lock().unwrap();
+        STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(pending_delete_ranges.len() as f64);
 
         let now = time::Instant::now();
-        let mut timeout_ranges = self.pending_delete_ranges.drain_timeout_ranges(now);
+        let mut timeout_ranges = pending_delete_ranges.drain_timeout_ranges(now);
+        drop(pending_delete_ranges);
+
         for (region_id, start_key, end_key) in timeout_ranges.drain(..) {
             self.cleanup_range(
                 region_id, start_key, end_key, true, /* use_delete_files */
@@ -480,7 +504,7 @@ impl Runner {
                 batch_size,
                 use_delete_range,
                 clean_stale_peer_delay,
-                pending_delete_ranges: PendingDeleteRanges::default(),
+                pending_delete_ranges: Arc::new(Mutex::new(PendingDeleteRanges::default())),
             },
         }
     }
@@ -491,15 +515,25 @@ impl Runnable<Task> for Runner {
         match task {
             Task::Gen {
                 region_id,
+                snap_stale_notifier,
                 notifier,
             } => {
                 // It is safe for now to handle generating and applying snapshot concurrently,
                 // but it may not when merge is implemented.
                 let ctx = self.ctx.clone();
                 self.pool
-                    .execute(move |_| ctx.handle_gen(region_id, notifier))
+                    .execute(move |_| ctx.handle_gen(region_id, snap_stale_notifier, notifier));
             }
-            Task::Apply { region_id, status } => self.ctx.handle_apply(region_id, status),
+            Task::Apply {
+                region_id,
+                snap_stale_notifier,
+                snap_applying_state,
+            } => {
+                let ctx = self.ctx.clone();
+                self.pool.execute(move |_| {
+                    ctx.handle_apply(region_id, snap_stale_notifier, snap_applying_state)
+                });
+            }
             Task::Destroy {
                 region_id,
                 start_key,
@@ -516,6 +550,14 @@ impl Runnable<Task> for Runner {
                         region_id, start_key, end_key, false, /* use_delete_files */
                     );
                 }
+            }
+            Task::Gc => {
+                let snap_mgr = self.ctx.mgr.clone();
+                self.pool.execute(move |_| {
+                    if let Err(e) = snap_mgr.gc_snapshots() {
+                        error!("fail to gc snapshot manager: {}", e);
+                    }
+                });
             }
         }
     }
