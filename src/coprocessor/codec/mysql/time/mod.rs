@@ -903,7 +903,7 @@ mod test {
                 if let Some(local_time) = local_time {
                     let time_str =
                         format!("{}-{}-{} {}:{}:{}", year, month, day, hour, minute, second);
-                    let t = Time::parse_datetime(&time_str, UN_SPECIFIED_FSP, &tz).unwrap();
+                    let t = Time::parse_datetime(&time_str, UN_SPECIFIED_FSP, *tz).unwrap();
                     assert_eq!(t.time, local_time);
                 }
             }

@@ -56,9 +56,8 @@ impl<S: Snapshot + 'static> DAGContext<S> {
         } else if req.has_time_zone_offset() {
             box_try!(eval_cfg.set_time_zone_by_offset(req.get_time_zone_offset()));
         } else {
-            // This should be not reachable by design. However we still provide a default
-            // value, which is local.
-            box_try!(eval_cfg.set_time_zone_by_name("SYSTEM"));
+            // This should not be reachable. However we will not panic here in case
+            // of compatibility issues.
         }
 
         if req.has_max_warning_count() {

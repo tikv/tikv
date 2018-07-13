@@ -52,9 +52,7 @@ const DEFAULT_MAX_WARNING_CNT: usize = 64;
 pub struct EvalConfig {
     /// Timezone to use when parse or calculate time.
     ///
-    /// By default, the time zone is UTC. Note, when `EvalConfig` is built in `dag.rs`, this
-    /// behavior is overridden to fallback to local time zone (if not provided in requests),
-    /// instead of UTC.
+    /// By default, the time zone is UTC.
     pub tz: Tz,
     pub ignore_truncate: bool,
     pub truncate_as_warning: bool,
