@@ -26,7 +26,7 @@ use kvproto::raft_serverpb::*;
 use raft::eraftpb::Entry;
 use rocksdb::{Kv, SeekKey, Writable, WriteBatch, WriteOptions, DB};
 
-use raft::{self, quorum, RawNode};
+use raft::{self, RawNode};
 use raftstore::store::engine::{IterOption, Mutable};
 use raftstore::store::util as raftstore_util;
 use raftstore::store::{
@@ -413,22 +413,18 @@ impl Debugger {
 
                 let mut new_peers = region_state.get_region().get_peers().to_owned();
                 new_peers.retain(|peer| !store_ids.contains(&peer.get_store_id()));
-                let new_peers_len = new_peers.len();
-                let old_peers_len = region_state.get_region().get_peers().len();
 
-                if new_peers_len < quorum(old_peers_len) {
-                    let region_id = region_state.get_region().get_id();
-                    let old_peers = region_state.mut_region().take_peers();
-                    info!(
-                        "region {} change peers from {:?}, to {:?}",
-                        region_id, old_peers, new_peers
-                    );
-                    // We need to leave epoch untouched to avoid inconsistency.
-                    region_state
-                        .mut_region()
-                        .set_peers(RepeatedField::from_vec(new_peers));
-                    box_try!(wb.put_msg_cf(handle, key, &region_state));
-                }
+                let region_id = region_state.get_region().get_id();
+                let old_peers = region_state.mut_region().take_peers();
+                info!(
+                    "region {} change peers from {:?}, to {:?}",
+                    region_id, old_peers, new_peers
+                );
+                // We need to leave epoch untouched to avoid inconsistency.
+                region_state
+                    .mut_region()
+                    .set_peers(RepeatedField::from_vec(new_peers));
+                box_try!(wb.put_msg_cf(handle, key, &region_state));
                 Ok(())
             };
 
@@ -1502,9 +1498,18 @@ mod tests {
         debugger.set_store_id(100);
         let engine = debugger.engines.kv.as_ref();
 
+        let get_region_stores = |engine: &DB, region_id: u64| {
+            get_region_state(engine, region_id)
+                .get_region()
+                .get_peers()
+                .iter()
+                .map(|p| p.get_store_id())
+                .collect::<Vec<_>>()
+        };
+
         // region 1 with peers at stores 11, 12, 13 and 14.
         init_region_state(engine, 1, &[11, 12, 13, 14]);
-        // region 2 with peers at stores 21, 22, 23.
+        // region 2 with peers at stores 21, 22 and 23.
         init_region_state(engine, 2, &[21, 22, 23]);
 
         // Only remove specified stores from region 1.
@@ -1513,26 +1518,19 @@ mod tests {
             .unwrap();
 
         // 13 and 14 should be removed from region 1.
-        let region_state = get_region_state(engine, 1);
-        assert_eq!(region_state.get_region().get_peers().len(), 2);
+        assert_eq!(get_region_stores(engine, 1), &[11, 12]);
         // 21 and 23 shouldn't be removed from region 2.
-        let region_state = get_region_state(engine, 2);
-        assert_eq!(region_state.get_region().get_peers().len(), 3);
+        assert_eq!(get_region_stores(engine, 2), &[21, 22, 23]);
 
         // Remove specified stores from all regions.
         debugger.remove_failed_stores(vec![11, 23], None).unwrap();
 
-        // 11 should be removed from region 1.
-        let region_state = get_region_state(engine, 1);
-        assert_eq!(region_state.get_region().get_peers().len(), 1);
-
-        // 23 shouldn't be removed from region 2 because there's still a quorom.
-        let region_state = get_region_state(engine, 2);
-        assert_eq!(region_state.get_region().get_peers().len(), 3);
+        assert_eq!(get_region_stores(engine, 1), &[12]);
+        assert_eq!(get_region_stores(engine, 2), &[21, 22]);
 
         // Should fail when the store itself is in the failed list.
         init_region_state(engine, 3, &[100, 31, 32, 33]);
-        assert!(debugger.remove_failed_stores(vec![100], None).is_err());
+        debugger.remove_failed_stores(vec![100], None).unwrap_err();
     }
 
     #[test]
