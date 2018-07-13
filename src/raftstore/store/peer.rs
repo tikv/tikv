@@ -52,7 +52,7 @@ use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftMetrics, RaftProposeMetrics, RaftReadyMetrics};
 use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
-use super::store::{DestroyPeerJob, Store};
+use super::store::{DestroyPeerJob, StoreMeta};
 use super::transport::Transport;
 use super::util::{self, check_region_epoch, Lease, LeaseState};
 
@@ -280,7 +280,7 @@ impl Peer {
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
     // for this store.
-    pub fn create<T, C>(store: &mut Store<T, C>, region: &metapb::Region) -> Result<Peer> {
+    pub fn create<S: StoreMeta>(store: &S, region: &metapb::Region) -> Result<Peer> {
         let store_id = store.store_id();
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
@@ -304,11 +304,7 @@ impl Peer {
     // The peer can be created from another node with raft membership changes, and we only
     // know the region_id and peer_id when creating this replicated peer, the region info
     // will be retrieved later after applying snapshot.
-    pub fn replicate<T, C>(
-        store: &mut Store<T, C>,
-        region_id: u64,
-        peer: metapb::Peer,
-    ) -> Result<Peer> {
+    pub fn replicate<S: StoreMeta>(store: &S, region_id: u64, peer: metapb::Peer) -> Result<Peer> {
         // We will remove tombstone key when apply snapshot
         info!(
             "[region {}] replicate peer with id {}",
@@ -321,11 +317,7 @@ impl Peer {
         Peer::new(store, &region, peer)
     }
 
-    fn new<T, C>(
-        store: &mut Store<T, C>,
-        region: &metapb::Region,
-        peer: metapb::Peer,
-    ) -> Result<Peer> {
+    fn new<S: StoreMeta>(store: &S, region: &metapb::Region, peer: metapb::Peer) -> Result<Peer> {
         if peer.get_id() == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
         }
@@ -369,7 +361,7 @@ impl Peer {
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
-            coprocessor_host: Arc::clone(&store.coprocessor_host),
+            coprocessor_host: store.coprocessor_host(),
             size_diff_hint: 0,
             delete_keys_hint: 0,
             approximate_stat: None,
@@ -2039,6 +2031,36 @@ impl<'r, 'e, 't> ReadExecutor<'r, 'e, 't> {
             None
         };
         Ok(ReadResponse { response, snapshot })
+    }
+}
+
+trait AssertSend: Send {}
+
+impl AssertSend for Peer {}
+
+use raftstore::store::Msg;
+use util::mpsc::{self, LooseBoundedSender, Receiver};
+
+pub struct PeerHolder {
+    peer: Peer,
+    receiver: Receiver<Msg>,
+}
+
+impl PeerHolder {
+    pub fn new(peer: Peer) -> (LooseBoundedSender<Msg>, PeerHolder) {
+        let (sender, receiver) = mpsc::loose_bounded(4096);
+        (sender, PeerHolder { peer, receiver })
+    }
+}
+
+use futures::{Future, Poll};
+
+impl Future for PeerHolder {
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<(), ()> {
+        unimplemented!()
     }
 }
 

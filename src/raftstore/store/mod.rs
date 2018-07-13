@@ -17,6 +17,7 @@ pub mod config;
 pub mod engine;
 pub mod keys;
 pub mod msg;
+pub mod router;
 pub mod store;
 pub mod transport;
 pub mod util;
@@ -50,7 +51,9 @@ pub use self::snap::{
     check_abort, copy_snapshot, ApplyOptions, Error as SnapError, SnapEntry, SnapKey, SnapManager,
     SnapManagerBuilder, Snapshot, SnapshotDeleter, SnapshotStatistics,
 };
-pub use self::store::{create_event_loop, new_compaction_listener, Store, StoreChannel, StoreStat};
+pub use self::store::{
+    create_event_loop, new_compaction_listener, Store, StoreChannel, StoreMeta, StoreStat,
+};
 pub use self::transport::Transport;
 pub use self::util::Engines;
 

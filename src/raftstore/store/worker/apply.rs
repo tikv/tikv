@@ -48,7 +48,7 @@ use raftstore::store::peer_storage::{
     self, compact_raft_log, write_initial_apply_state, write_peer_state,
 };
 use raftstore::store::util::check_region_epoch;
-use raftstore::store::{cmd_resp, keys, util, Engines, Store};
+use raftstore::store::{cmd_resp, keys, util, Engines, StoreMeta};
 use raftstore::{Error, Result};
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::collections::HashMap;
@@ -2045,22 +2045,17 @@ pub struct Runner {
 }
 
 impl Runner {
-    pub fn new<T, C>(
-        store: &Store<T, C>,
+    pub fn new<M: StoreMeta>(
+        store: &M,
         notifier: Sender<TaskRes>,
         sync_log: bool,
         use_delete_range: bool,
     ) -> Runner {
-        let mut delegates =
-            HashMap::with_capacity_and_hasher(store.get_peers().len(), Default::default());
-        for (&region_id, p) in store.get_peers() {
-            delegates.insert(region_id, Some(ApplyDelegate::from_peer(p)));
-        }
         Runner {
             engines: store.engines(),
-            host: Arc::clone(&store.coprocessor_host),
-            importer: Arc::clone(&store.importer),
-            delegates,
+            host: store.coprocessor_host(),
+            importer: store.importer(),
+            delegates: HashMap::default(),
             notifier,
             sync_log,
             use_delete_range,

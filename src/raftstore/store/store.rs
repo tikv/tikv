@@ -155,7 +155,7 @@ pub struct Store<T, C: 'static> {
 
     pub coprocessor_host: Arc<CoprocessorHost>,
 
-    pub importer: Arc<SSTImporter>,
+    importer: Arc<SSTImporter>,
 
     snap_mgr: SnapManager,
 
@@ -359,6 +359,46 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 }
 
+pub trait StoreMeta {
+    fn engines(&self) -> Engines;
+    fn snap_scheduler(&self) -> Scheduler<RegionTask>;
+    fn apply_scheduler(&self) -> Scheduler<ApplyTask>;
+    fn store_id(&self) -> u64;
+    fn config(&self) -> Arc<Config>;
+    fn coprocessor_host(&self) -> Arc<CoprocessorHost>;
+    fn importer(&self) -> Arc<SSTImporter>;
+}
+
+impl<T, C> StoreMeta for Store<T, C> {
+    fn snap_scheduler(&self) -> Scheduler<RegionTask> {
+        self.region_worker.scheduler()
+    }
+
+    fn apply_scheduler(&self) -> Scheduler<ApplyTask> {
+        self.apply_worker.scheduler()
+    }
+
+    fn engines(&self) -> Engines {
+        self.engines.clone()
+    }
+
+    fn store_id(&self) -> u64 {
+        self.store.get_id()
+    }
+
+    fn config(&self) -> Arc<Config> {
+        Arc::clone(&self.cfg)
+    }
+
+    fn coprocessor_host(&self) -> Arc<CoprocessorHost> {
+        Arc::clone(&self.coprocessor_host)
+    }
+
+    fn importer(&self) -> Arc<SSTImporter> {
+        Arc::clone(&self.importer)
+    }
+}
+
 impl<T, C> Store<T, C> {
     fn clear_stale_meta(
         &mut self,
@@ -416,18 +456,6 @@ impl<T, C> Store<T, C> {
         self.snap_mgr.clone()
     }
 
-    pub fn snap_scheduler(&self) -> Scheduler<RegionTask> {
-        self.region_worker.scheduler()
-    }
-
-    pub fn apply_scheduler(&self) -> Scheduler<ApplyTask> {
-        self.apply_worker.scheduler()
-    }
-
-    pub fn engines(&self) -> Engines {
-        self.engines.clone()
-    }
-
     pub fn kv_engine(&self) -> Arc<DB> {
         Arc::clone(&self.engines.kv)
     }
@@ -436,16 +464,8 @@ impl<T, C> Store<T, C> {
         Arc::clone(&self.engines.raft)
     }
 
-    pub fn store_id(&self) -> u64 {
-        self.store.get_id()
-    }
-
     pub fn get_peers(&self) -> &HashMap<u64, Peer> {
         &self.region_peers
-    }
-
-    pub fn config(&self) -> Arc<Config> {
-        Arc::clone(&self.cfg)
     }
 
     fn poll_significant_msg(&mut self) {
@@ -571,6 +591,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let apply_runner = ApplyRunner::new(self, tx, self.cfg.sync_log, self.cfg.use_delete_range);
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
+        for p in self.get_peers().values() {
+            self.apply_worker.schedule(ApplyTask::register(p)).unwrap();
+        }
 
         if let Err(e) = util_sys::pri::set_priority(util_sys::HIGH_PRI) {
             warn!("set priority for raftstore failed, error: {:?}", e);
