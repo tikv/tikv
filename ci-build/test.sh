@@ -32,7 +32,7 @@ if [[ "$TRAVIS" = "true" ]]; then
 fi
 export RUSTFLAGS=-Dwarnings
 
-make clippy
+make clippy || panic "\e[35mplease fix the errors!!!\e[0m"
 
 if [[ "$SKIP_TESTS" != "true" ]]; then
     make test 2>&1 | tee tests.out

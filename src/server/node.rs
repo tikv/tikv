@@ -192,9 +192,7 @@ where
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
     fn check_store(&self, engines: &Engines) -> Result<u64> {
-        let res = engines
-            .kv_engine
-            .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
+        let res = engines.kv.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
         if res.is_none() {
             return Ok(INVALID_ID);
         }
@@ -254,7 +252,7 @@ where
 
     fn check_prepare_bootstrap_cluster(&self, engines: &Engines) -> Result<()> {
         let res = engines
-            .kv_engine
+            .kv
             .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)?;
         if res.is_none() {
             return Ok(());
