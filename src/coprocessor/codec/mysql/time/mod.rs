@@ -845,7 +845,7 @@ mod test {
 
         for (tz_name, time_str, utc_timestamp) in ok_tables {
             let tz = Tz::from_tz_name(tz_name).unwrap();
-            let t = Time::parse_datetime(time_str, UN_SPECIFIED_FSP, &tz).unwrap();
+            let t = Time::parse_datetime(time_str, UN_SPECIFIED_FSP, tz).unwrap();
             assert_eq!(t.time.timestamp(), utc_timestamp);
         }
 
@@ -863,7 +863,7 @@ mod test {
 
         for (tz_name, time_str) in fail_tables {
             let tz = Tz::from_tz_name(tz_name).unwrap();
-            assert!(Time::parse_datetime(time_str, UN_SPECIFIED_FSP, &tz).is_err());
+            assert!(Time::parse_datetime(time_str, UN_SPECIFIED_FSP, tz).is_err());
         }
     }
 
