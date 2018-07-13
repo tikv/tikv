@@ -48,7 +48,7 @@ use raftstore::store::peer_storage::{
     self, compact_raft_log, write_initial_apply_state, write_peer_state,
 };
 use raftstore::store::util::check_region_epoch;
-use raftstore::store::{cmd_resp, keys, util, Store};
+use raftstore::store::{cmd_resp, keys, util, Engines, Store};
 use raftstore::{Error, Result};
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::collections::HashMap;
@@ -323,7 +323,7 @@ impl<'a> ApplyContextCore<'a> {
     fn commit_opt(&mut self, delegate: &mut ApplyDelegate, persistent: bool) {
         delegate.update_metrics(self);
         if persistent {
-            self.write_to_db(&delegate.engine);
+            self.write_to_db(&delegate.engines.kv);
             self.prepare_for(delegate);
         }
         self.wb_last_bytes = self.wb().data_size() as u64;
@@ -499,8 +499,7 @@ pub struct ApplyDelegate {
     id: u64,
     // peer_tag, "[region region_id] peer_id"
     tag: String,
-    engine: Arc<DB>,
-    raft_engine: Arc<DB>,
+    engines: Engines,
     region: Region,
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
@@ -521,15 +520,14 @@ pub struct ApplyDelegate {
 impl ApplyDelegate {
     fn from_peer(peer: &Peer) -> ApplyDelegate {
         let reg = Registration::new(peer);
-        ApplyDelegate::from_registration(peer.kv_engine(), peer.raft_engine(), reg)
+        ApplyDelegate::from_registration(peer.engines(), reg)
     }
 
-    fn from_registration(db: Arc<DB>, raft_db: Arc<DB>, reg: Registration) -> ApplyDelegate {
+    fn from_registration(engines: Engines, reg: Registration) -> ApplyDelegate {
         ApplyDelegate {
             id: reg.id,
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
-            engine: db,
-            raft_engine: raft_db,
+            engines,
             region: reg.region,
             pending_remove: false,
             apply_state: reg.apply_state,
@@ -600,7 +598,7 @@ impl ApplyDelegate {
     }
 
     fn write_apply_state(&self, wb: &WriteBatch) {
-        rocksdb::get_cf_handle(&self.engine, CF_RAFT)
+        rocksdb::get_cf_handle(&self.engines.kv, CF_RAFT)
             .map_err(From::from)
             .and_then(|handle| {
                 wb.put_msg_cf(
@@ -1085,7 +1083,7 @@ impl ApplyDelegate {
         } else {
             PeerState::Normal
         };
-        if let Err(e) = write_peer_state(&self.engine, ctx.wb_mut(), &region, state, None) {
+        if let Err(e) = write_peer_state(&self.engines.kv, ctx.wb_mut(), &region, state, None) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
@@ -1174,18 +1172,23 @@ impl ApplyDelegate {
         let region_ver = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_ver);
         new_region.mut_region_epoch().set_version(region_ver);
-        write_peer_state(&self.engine, ctx.wb_mut(), &region, PeerState::Normal, None)
+        write_peer_state(
+            &self.engines.kv,
+            ctx.wb_mut(),
+            &region,
+            PeerState::Normal,
+            None,
+        ).and_then(|_| {
+            write_peer_state(
+                &self.engines.kv,
+                ctx.wb_mut(),
+                &new_region,
+                PeerState::Normal,
+                None,
+            )
+        })
             .and_then(|_| {
-                write_peer_state(
-                    &self.engine,
-                    ctx.wb_mut(),
-                    &new_region,
-                    PeerState::Normal,
-                    None,
-                )
-            })
-            .and_then(|_| {
-                write_initial_apply_state(&self.engine, ctx.wb_mut(), new_region.get_id())
+                write_initial_apply_state(&self.engines.kv, ctx.wb_mut(), new_region.get_id())
             })
             .unwrap_or_else(|e| {
                 panic!(
@@ -1264,7 +1267,7 @@ impl ApplyDelegate {
         merging_state.set_target(prepare_merge.get_target().to_owned());
         merging_state.set_commit(exec_ctx.index);
         write_peer_state(
-            &self.engine,
+            &self.engines.kv,
             ctx.wb(),
             &region,
             PeerState::Merging,
@@ -1306,7 +1309,7 @@ impl ApplyDelegate {
         let source_region = merge.get_source();
         let mut entries = Vec::with_capacity((last_index - first_index) as usize);
         peer_storage::fetch_entries_to(
-            &self.raft_engine,
+            &self.engines.raft,
             source_region.get_id(),
             first_index,
             exist_first_index,
@@ -1334,13 +1337,14 @@ impl ApplyDelegate {
     ) {
         let region_id = exist_region.get_id();
         let apply_state_key = keys::apply_state_key(region_id);
-        let apply_state: RaftApplyState = match self.engine.get_msg_cf(CF_RAFT, &apply_state_key) {
-            Ok(Some(s)) => s,
-            e => panic!(
-                "{} failed to get apply state of {:?}: {:?}",
-                self.tag, exist_region, e
-            ),
-        };
+        let apply_state: RaftApplyState =
+            match self.engines.kv.get_msg_cf(CF_RAFT, &apply_state_key) {
+                Ok(Some(s)) => s,
+                e => panic!(
+                    "{} failed to get apply state of {:?}: {:?}",
+                    self.tag, exist_region, e
+                ),
+            };
         let apply_index = apply_state.get_applied_index();
         if apply_index >= merge.get_commit() {
             return;
@@ -1390,7 +1394,7 @@ impl ApplyDelegate {
         let merge = req.get_commit_merge();
         let source_region = merge.get_source();
         let region_state_key = keys::region_state_key(source_region.get_id());
-        let state: RegionLocalState = match self.engine.get_msg_cf(CF_RAFT, &region_state_key) {
+        let state: RegionLocalState = match self.engines.kv.get_msg_cf(CF_RAFT, &region_state_key) {
             Ok(Some(s)) => s,
             e => panic!(
                 "{} failed to get regions state of {:?}: {:?}",
@@ -1424,13 +1428,13 @@ impl ApplyDelegate {
         } else {
             region.set_start_key(source_region.get_start_key().to_vec());
         }
-        write_peer_state(&self.engine, ctx.wb(), &region, PeerState::Normal, None)
+        write_peer_state(&self.engines.kv, ctx.wb(), &region, PeerState::Normal, None)
             .and_then(|_| {
                 // TODO: maybe all information needs to be filled?
                 let mut merging_state = MergeState::new();
                 merging_state.set_target(self.region.clone());
                 write_peer_state(
-                    &self.engine,
+                    &self.engines.kv,
                     ctx.wb(),
                     source_region,
                     PeerState::Tombstone,
@@ -1467,7 +1471,7 @@ impl ApplyDelegate {
             .with_label_values(&["rollback_merge", "all"])
             .inc();
         let region_state_key = keys::region_state_key(self.region_id());
-        let state: RegionLocalState = match self.engine.get_msg_cf(CF_RAFT, &region_state_key) {
+        let state: RegionLocalState = match self.engines.kv.get_msg_cf(CF_RAFT, &region_state_key) {
             Ok(Some(s)) => s,
             e => panic!("{} failed to get regions state: {:?}", self.tag, e),
         };
@@ -1483,14 +1487,13 @@ impl ApplyDelegate {
         let version = region.get_region_epoch().get_version();
         // Update version to avoid duplicated rollback requests.
         region.mut_region_epoch().set_version(version + 1);
-        write_peer_state(&self.engine, ctx.wb(), &region, PeerState::Normal, None).unwrap_or_else(
-            |e| {
+        write_peer_state(&self.engines.kv, ctx.wb(), &region, PeerState::Normal, None)
+            .unwrap_or_else(|e| {
                 panic!(
                     "{} failed to rollback merge {:?}: {:?}",
                     self.tag, rollback, e
                 )
-            },
-        );
+            });
 
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["rollback_merge", "success"])
@@ -1640,7 +1643,7 @@ impl ApplyDelegate {
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
             }
             // TODO: check whether cf exists or not.
-            rocksdb::get_cf_handle(&self.engine, cf)
+            rocksdb::get_cf_handle(&self.engines.kv, cf)
                 .and_then(|handle| ctx.wb().put_cf(handle, &key, value))
                 .unwrap_or_else(|e| {
                     panic!(
@@ -1678,7 +1681,7 @@ impl ApplyDelegate {
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
-            rocksdb::get_cf_handle(&self.engine, cf)
+            rocksdb::get_cf_handle(&self.engines.kv, cf)
                 .and_then(|handle| ctx.wb().delete_cf(handle, &key))
                 .unwrap_or_else(|e| {
                     panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
@@ -1731,12 +1734,13 @@ impl ApplyDelegate {
         if ALL_CFS.iter().find(|x| **x == cf).is_none() {
             return Err(box_err!("invalid delete range command, cf: {:?}", cf));
         }
-        let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
+        let handle = rocksdb::get_cf_handle(&self.engines.kv, cf).unwrap();
 
         let start_key = keys::data_key(s_key);
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
-        self.engine
+        self.engines
+            .kv
             .delete_files_in_range_cf(handle, &start_key, &end_key, /* include_end */ false)
             .unwrap_or_else(|e| {
                 panic!(
@@ -1752,17 +1756,22 @@ impl ApplyDelegate {
         // If it's not CF_LOCK and use_delete_range is false, skip this step to speed up (#3034)
         // TODO: Remove the `if` line after apply pool is implemented
         if cf == CF_LOCK || use_delete_range {
-            util::delete_all_in_range_cf(&self.engine, cf, &start_key, &end_key, use_delete_range)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                        self.tag,
-                        escape(&start_key),
-                        escape(&end_key),
-                        cf,
-                        e
-                    );
-                });
+            util::delete_all_in_range_cf(
+                &self.engines.kv,
+                cf,
+                &start_key,
+                &end_key,
+                use_delete_range,
+            ).unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
+                    self.tag,
+                    escape(&start_key),
+                    escape(&end_key),
+                    cf,
+                    e
+                );
+            });
         }
 
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
@@ -1785,11 +1794,13 @@ impl ApplyDelegate {
             return Err(e);
         }
 
-        ctx.importer.ingest(sst, &self.engine).unwrap_or_else(|e| {
-            // If this failed, it means that the file is corrupted or something
-            // is wrong with the engine, but we can do nothing about that.
-            panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
-        });
+        ctx.importer
+            .ingest(sst, &self.engines.kv)
+            .unwrap_or_else(|e| {
+                // If this failed, it means that the file is corrupted or something
+                // is wrong with the engine, but we can do nothing about that.
+                panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
+            });
 
         ssts.push(sst.clone());
         Ok(Response::new())
@@ -1857,7 +1868,7 @@ impl ApplyDelegate {
                 // open files in rocksdb.
                 // TODO: figure out another way to do consistency check without snapshot
                 // or short life snapshot.
-                snap: Snapshot::new(Arc::clone(&self.engine)),
+                snap: Snapshot::new(Arc::clone(&self.engines.kv)),
             }),
         ))
     }
@@ -2023,8 +2034,7 @@ pub enum TaskRes {
 
 // TODO: use threadpool to do task concurrently
 pub struct Runner {
-    db: Arc<DB>,
-    raft_db: Arc<DB>,
+    engines: Engines,
     host: Arc<CoprocessorHost>,
     importer: Arc<SSTImporter>,
     delegates: HashMap<u64, Option<ApplyDelegate>>,
@@ -2047,8 +2057,7 @@ impl Runner {
             delegates.insert(region_id, Some(ApplyDelegate::from_peer(p)));
         }
         Runner {
-            db: store.kv_engine(),
-            raft_db: store.raft_engine(),
+            engines: store.engines(),
             host: Arc::clone(&store.coprocessor_host),
             importer: Arc::clone(&store.importer),
             delegates,
@@ -2098,7 +2107,7 @@ impl Runner {
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
-        core.write_to_db(&self.db);
+        core.write_to_db(&self.engines.kv);
 
         for region_id in core.merged_regions.drain(..) {
             if let Some(mut e) = self.delegates.remove(&region_id) {
@@ -2158,8 +2167,7 @@ impl Runner {
         let peer_id = s.id;
         let region_id = s.region.get_id();
         let term = s.term;
-        let delegate =
-            ApplyDelegate::from_registration(Arc::clone(&self.db), Arc::clone(&self.raft_db), s);
+        let delegate = ApplyDelegate::from_registration(self.engines.clone(), s);
         info!(
             "{} register to apply delegates at term {}",
             delegate.tag, delegate.term
@@ -2220,14 +2228,14 @@ mod tests {
     use protobuf::Message;
     use raftstore::coprocessor::*;
     use raftstore::store::msg::WriteResponse;
-    use rocksdb::{Writable, WriteBatch, DB};
+    use rocksdb::{Writable, WriteBatch};
     use tempdir::TempDir;
 
     use super::*;
     use import::test_helpers::*;
     use util::collections::HashMap;
 
-    pub fn create_tmp_engine(path: &str) -> (TempDir, Arc<DB>, Arc<DB>) {
+    pub fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
         let path = TempDir::new(path).unwrap();
         let db = Arc::new(
             rocksdb::new_engine(path.path().join("db").to_str().unwrap(), ALL_CFS, None).unwrap(),
@@ -2235,7 +2243,7 @@ mod tests {
         let raft_db = Arc::new(
             rocksdb::new_engine(path.path().join("raft").to_str().unwrap(), &[], None).unwrap(),
         );
-        (path, db, raft_db)
+        (path, Engines::new(db, raft_db))
     }
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
@@ -2245,15 +2253,13 @@ mod tests {
     }
 
     fn new_runner(
-        db: Arc<DB>,
-        raft_db: Arc<DB>,
+        engines: Engines,
         host: Arc<CoprocessorHost>,
         importer: Arc<SSTImporter>,
         tx: Sender<TaskRes>,
     ) -> Runner {
         Runner {
-            db,
-            raft_db,
+            engines,
             host,
             importer,
             delegates: HashMap::default(),
@@ -2314,12 +2320,11 @@ mod tests {
     #[test]
     fn test_basic_flow() {
         let (tx, rx) = mpsc::channel();
-        let (_tmp, db, raft_db) = create_tmp_engine("apply-basic");
+        let (_tmp, engines) = create_tmp_engine("apply-basic");
         let host = Arc::new(CoprocessorHost::default());
         let (_dir, importer) = create_tmp_importer("apply-basic");
         let mut runner = new_runner(
-            Arc::clone(&db),
-            raft_db,
+            engines.clone(),
             Arc::clone(&host),
             Arc::clone(&importer),
             tx,
@@ -2419,7 +2424,7 @@ mod tests {
         assert_eq!(runner.delegates[&2].as_ref().unwrap().term, reg.term);
 
         let apply_state_key = keys::apply_state_key(2);
-        assert!(db.get(&apply_state_key).unwrap().is_none());
+        assert!(engines.kv.get(&apply_state_key).unwrap().is_none());
         runner.run(Task::applies(vec![Apply::new(
             2,
             11,
@@ -2442,8 +2447,11 @@ mod tests {
             assert_eq!(delegate.term, 11);
             assert_eq!(delegate.applied_index_term, 5);
             assert_eq!(delegate.apply_state.get_applied_index(), 4);
-            let apply_state: RaftApplyState =
-                db.get_msg_cf(CF_RAFT, &apply_state_key).unwrap().unwrap();
+            let apply_state: RaftApplyState = engines
+                .kv
+                .get_msg_cf(CF_RAFT, &apply_state_key)
+                .unwrap()
+                .unwrap();
             assert_eq!(apply_state, delegate.apply_state);
         }
 
@@ -2596,12 +2604,12 @@ mod tests {
 
     #[test]
     fn test_handle_raft_committed_entries() {
-        let (_path, db, raft_db) = create_tmp_engine("test-delegate");
+        let (_path, engines) = create_tmp_engine("test-delegate");
         let (import_dir, importer) = create_tmp_importer("test-delegate");
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let mut delegate = ApplyDelegate::from_registration(Arc::clone(&db), raft_db, reg);
+        let mut delegate = ApplyDelegate::from_registration(engines.clone(), reg);
         let mut delegates = HashMap::default();
         let (tx, rx) = mpsc::channel();
 
@@ -2619,7 +2627,7 @@ mod tests {
         let mut core = ApplyContextCore::new(&host, &importer).use_delete_range(true);
         let mut apply_ctx = ApplyContext::new(&mut core, &mut delegates);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.write_to_db(&db);
+        apply_ctx.write_to_db(&engines.kv);
         assert!(apply_ctx.core.apply_res.last().unwrap().exec_res.is_empty());
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
@@ -2627,9 +2635,9 @@ mod tests {
         let dk_k1 = keys::data_key(b"k1");
         let dk_k2 = keys::data_key(b"k2");
         let dk_k3 = keys::data_key(b"k3");
-        assert_eq!(db.get(&dk_k1).unwrap().unwrap(), b"v1");
-        assert_eq!(db.get(&dk_k2).unwrap().unwrap(), b"v1");
-        assert_eq!(db.get(&dk_k3).unwrap().unwrap(), b"v1");
+        assert_eq!(engines.kv.get(&dk_k1).unwrap().unwrap(), b"v1");
+        assert_eq!(engines.kv.get(&dk_k2).unwrap().unwrap(), b"v1");
+        assert_eq!(engines.kv.get(&dk_k3).unwrap().unwrap(), b"v1");
         assert_eq!(delegate.applied_index_term, 1);
         assert_eq!(delegate.apply_state.get_applied_index(), 1);
 
@@ -2642,9 +2650,12 @@ mod tests {
             .epoch(1, 3)
             .build();
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.write_to_db(&db);
-        let lock_handle = db.cf_handle(CF_LOCK).unwrap();
-        assert_eq!(db.get_cf(lock_handle, &dk_k1).unwrap().unwrap(), b"v1");
+        apply_ctx.write_to_db(&engines.kv);
+        let lock_handle = engines.kv.cf_handle(CF_LOCK).unwrap();
+        assert_eq!(
+            engines.kv.get_cf(lock_handle, &dk_k1).unwrap().unwrap(),
+            b"v1"
+        );
         assert_eq!(
             delegate.metrics.lock_cf_written_bytes,
             lock_written_bytes + 5
@@ -2661,7 +2672,7 @@ mod tests {
             .capture_resp(&mut delegate, tx.clone())
             .build();
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.write_to_db(&db);
+        apply_ctx.write_to_db(&engines.kv);
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_stale_epoch());
         assert_eq!(delegate.applied_index_term, 2);
@@ -2674,13 +2685,13 @@ mod tests {
             .capture_resp(&mut delegate, tx.clone())
             .build();
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.write_to_db(&db);
+        apply_ctx.write_to_db(&engines.kv);
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         assert_eq!(delegate.applied_index_term, 2);
         assert_eq!(delegate.apply_state.get_applied_index(), 4);
         // a writebatch should be atomic.
-        assert_eq!(db.get(&dk_k3).unwrap().unwrap(), b"v1");
+        assert_eq!(engines.kv.get(&dk_k3).unwrap().unwrap(), b"v1");
 
         EntryBuilder::new(5, 2)
             .capture_resp(&mut delegate, tx.clone())
@@ -2696,13 +2707,13 @@ mod tests {
         let delete_keys_hint = delegate.metrics.delete_keys_hint;
         let size_diff_hint = delegate.metrics.size_diff_hint;
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.write_to_db(&db);
+        apply_ctx.write_to_db(&engines.kv);
         let resp = rx.try_recv().unwrap();
         // stale command should be cleared.
         assert!(resp.get_header().get_error().has_stale_command());
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
-        assert!(db.get(&dk_k1).unwrap().is_none());
+        assert!(engines.kv.get(&dk_k1).unwrap().is_none());
         assert_eq!(
             delegate.metrics.lock_cf_written_bytes,
             lock_written_bytes + 3
@@ -2716,7 +2727,7 @@ mod tests {
             .capture_resp(&mut delegate, tx.clone())
             .build();
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_entry]);
-        apply_ctx.write_to_db(&db);
+        apply_ctx.write_to_db(&engines.kv);
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
 
@@ -2726,10 +2737,10 @@ mod tests {
             .capture_resp(&mut delegate, tx.clone())
             .build();
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
-        apply_ctx.write_to_db(&db);
+        apply_ctx.write_to_db(&engines.kv);
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
-        assert_eq!(db.get(&dk_k3).unwrap().unwrap(), b"v1");
+        assert_eq!(engines.kv.get(&dk_k3).unwrap().unwrap(), b"v1");
 
         let delete_range_entry = EntryBuilder::new(8, 3)
             .delete_range_cf(CF_DEFAULT, b"", b"k5")
@@ -2739,12 +2750,12 @@ mod tests {
             .capture_resp(&mut delegate, tx.clone())
             .build();
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
-        apply_ctx.write_to_db(&db);
+        apply_ctx.write_to_db(&engines.kv);
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
-        assert!(db.get(&dk_k1).unwrap().is_none());
-        assert!(db.get(&dk_k2).unwrap().is_none());
-        assert!(db.get(&dk_k3).unwrap().is_none());
+        assert!(engines.kv.get(&dk_k1).unwrap().is_none());
+        assert!(engines.kv.get(&dk_k2).unwrap().is_none());
+        assert!(engines.kv.get(&dk_k3).unwrap().is_none());
 
         // UploadSST
         let sst_path = import_dir.path().join("test.sst");
@@ -2780,12 +2791,12 @@ mod tests {
             .build();
         let entries = vec![put_ok, ingest_ok, ingest_stale_epoch];
         delegate.handle_raft_committed_entries(&mut apply_ctx, entries);
-        apply_ctx.write_to_db(&db);
+        apply_ctx.write_to_db(&engines.kv);
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
-        check_db_range(&db, sst_range);
+        check_db_range(&engines.kv, sst_range);
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().has_error());
         assert_eq!(delegate.applied_index_term, 3);
@@ -2801,7 +2812,7 @@ mod tests {
             entries.push(put_entry);
         }
         delegate.handle_raft_committed_entries(&mut apply_ctx, entries);
-        apply_ctx.write_to_db(&db);
+        apply_ctx.write_to_db(&engines.kv);
         for _ in 0..WRITE_BATCH_MAX_KEYS {
             rx.try_recv().unwrap();
         }
@@ -2857,19 +2868,17 @@ mod tests {
 
     #[test]
     fn test_stash() {
-        let (_path, db, raft_db) = create_tmp_engine("test-delegate");
+        let (_path, engines) = create_tmp_engine("test-delegate");
         let (_import_dir, importer) = create_tmp_importer("test-delegate");
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let mut delegate1 =
-            ApplyDelegate::from_registration(Arc::clone(&db), Arc::clone(&raft_db), reg);
+        let mut delegate1 = ApplyDelegate::from_registration(engines.clone(), reg);
         delegate1.apply_state.set_applied_index(3);
         reg = Registration::default();
         reg.region.set_start_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let mut delegate2 =
-            ApplyDelegate::from_registration(Arc::clone(&db), Arc::clone(&raft_db), reg);
+        let mut delegate2 = ApplyDelegate::from_registration(engines.clone(), reg);
         delegate2.apply_state.set_applied_index(1);
 
         let host = CoprocessorHost::default();
@@ -2919,7 +2928,7 @@ mod tests {
         );
         delegate1.apply_state = core.exec_ctx.take().unwrap().apply_state;
         core.finish_for(&mut delegate1, vec![]);
-        core.write_to_db(&db);
+        core.write_to_db(&engines.kv);
 
         assert_eq!(rx.recv_timeout(Duration::from_secs(1)).unwrap(), 1);
         assert_eq!(rx.recv_timeout(Duration::from_secs(1)).unwrap(), 2);
