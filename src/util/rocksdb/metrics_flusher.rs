@@ -41,8 +41,8 @@ impl MetricsFlusher {
     }
 
     pub fn start(&mut self) -> Result<(), io::Error> {
-        let db = Arc::clone(&self.engines.kv_engine);
-        let raft_db = Arc::clone(&self.engines.raft_engine);
+        let db = Arc::clone(&self.engines.kv);
+        let raft_db = Arc::clone(&self.engines.raft);
         let (tx, rx) = mpsc::channel();
         let interval = self.interval;
         self.sender = Some(tx);

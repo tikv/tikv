@@ -103,6 +103,8 @@ impl ScalarFunc {
             | ScalarFuncSig::BitAndSig
             | ScalarFuncSig::BitOrSig
             | ScalarFuncSig::BitXorSig
+            | ScalarFuncSig::RegexpSig
+            | ScalarFuncSig::RegexpBinarySig
             | ScalarFuncSig::DateFormatSig => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -384,8 +386,6 @@ impl ScalarFunc {
             | ScalarFuncSig::RandomBytes
             | ScalarFuncSig::RandWithSeed
             | ScalarFuncSig::RealAnyValue
-            | ScalarFuncSig::RegexpBinarySig
-            | ScalarFuncSig::RegexpSig
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
             | ScalarFuncSig::Replace
@@ -761,6 +761,8 @@ dispatch_call! {
         CaseWhenInt => case_when_int,
 
         LikeSig => like,
+        RegexpSig => regexp,
+        RegexpBinarySig => regexp_binary,
 
         BitAndSig => bit_and,
         BitNegSig => bit_neg,
@@ -1317,8 +1319,6 @@ mod test {
             ScalarFuncSig::RandomBytes,
             ScalarFuncSig::RandWithSeed,
             ScalarFuncSig::RealAnyValue,
-            ScalarFuncSig::RegexpBinarySig,
-            ScalarFuncSig::RegexpSig,
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,
             ScalarFuncSig::Replace,
