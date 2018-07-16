@@ -319,11 +319,12 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
         let debugger = self.debugger.clone();
         let f = self.pool.spawn_fn(move || {
             let mut resp = GetMetricsResponse::new();
+            resp.set_store_id(debugger.get_store_id()?);
             resp.set_prometheus(metrics::dump());
             if req.get_all() {
                 let engines = debugger.get_engine();
-                resp.set_rocksdb_kv(box_try!(rocksdb_stats::dump(&engines.kv_engine)));
-                resp.set_rocksdb_raft(box_try!(rocksdb_stats::dump(&engines.raft_engine)));
+                resp.set_rocksdb_kv(box_try!(rocksdb_stats::dump(&engines.kv)));
+                resp.set_rocksdb_raft(box_try!(rocksdb_stats::dump(&engines.raft)));
                 resp.set_jemalloc(jemalloc::dump_stats());
             }
             Ok(resp)
@@ -382,13 +383,11 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
         sink: UnarySink<GetRegionPropertiesResponse>,
     ) {
         const TAG: &str = "get_region_properties";
+        let debugger = self.debugger.clone();
 
         let f = self
             .pool
-            .spawn(
-                future::ok(self.debugger.clone())
-                    .and_then(move |debugger| debugger.get_region_properties(req.get_region_id())),
-            )
+            .spawn_fn(move || debugger.get_region_properties(req.get_region_id()))
             .map(|props| {
                 let mut resp = GetRegionPropertiesResponse::new();
                 for (name, value) in props {

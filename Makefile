@@ -1,3 +1,4 @@
+SHELL := /bin/bash
 ENABLE_FEATURES ?= default
 
 # Disable portable on MacOS to sidestep the compiler bug in clang 4.9
@@ -33,15 +34,16 @@ default: release
 all: format build test
 
 pre-clippy:
-	if [ "`cat clippy-version`" != "`cargo clippy --version || echo 0`" ]; then\
+	@if [ "`cat clippy-version`" != "`cargo clippy --version || echo 0`" ]; then\
 		cargo install clippy --version `cat clippy-version` --force;\
 	fi
 
 clippy: pre-clippy
-	cargo clippy -- -A module_inception -A needless_pass_by_value -A cyclomatic_complexity \
-	    -A unreadable_literal -A should_implement_trait -A verbose_bit_mask \
-	    -A implicit_hasher -A large_enum_variant -A new_without_default_derive \
-	    -A neg_cmp_op_on_partial_ord
+	@cargo clippy --bins --examples --tests --benches -- \
+		-A module_inception -A needless_pass_by_value -A cyclomatic_complexity \
+		-A unreadable_literal -A should_implement_trait -A verbose_bit_mask \
+		-A implicit_hasher -A large_enum_variant -A new_without_default_derive \
+		-A neg_cmp_op_on_partial_ord -A too_many_arguments -A excessive_precision
 
 dev: format clippy
 	@env FAIL_POINT=1 make test
@@ -70,7 +72,6 @@ fail_release:
 trace_test:
 	env CI=true SKIP_FORMAT_CHECK=true FAIL_POINT=1 ${PROJECT_DIR}/ci-build/test.sh
 
-test: SHELL=/bin/bash
 test:
 	# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
 	# again here. LOCAL_DIR is defined in .travis.yml.
@@ -90,12 +91,13 @@ bench:
 	RUST_BACKTRACE=1 cargo run --release --bin bench-tikv --features "${ENABLE_FEATURES}"
 
 pre-format:
-	# unset first in case of any previous overrides
-	rustup override unset && \
-	rustup component add rustfmt-preview
+	@# unset first in case of any previous overrides
+	@if rustup override list | grep `pwd` > /dev/null; then rustup override unset; fi
+	@rustup 2>/dev/null || true
+	@rustup component list | grep 'rustfmt-preview.*installed' &>/dev/null || rustup component add rustfmt-preview
 
 format: pre-format
-	@cargo fmt --all -- --write-mode diff >/dev/null || \
+	@cargo fmt --all -- --check >/dev/null || \
 	cargo fmt --all
 
 clean:
