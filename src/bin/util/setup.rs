@@ -13,7 +13,7 @@
 
 use slog::{Drain, Logger};
 use slog_async::{Async, OverflowStrategy};
-use slog_term::{FullFormat, PlainDecorator, TermDecorator};
+use slog_term::{PlainDecorator, TermDecorator};
 use std::env;
 use std::io::BufWriter;
 use std::process;
@@ -54,7 +54,7 @@ pub fn init_log(config: &TiKvConfig) {
     ).expect("config.log_rotation_timespan is an invalid duration.");
     if config.log_file.is_empty() {
         let decorator = TermDecorator::new().build();
-        let drain = FullFormat::new(decorator).build().fuse();
+        let drain = logger::TikvFormat::new(decorator).fuse();
         let drain = Async::new(drain)
             .chan_size(SLOG_CHANNEL_SIZE)
             .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
@@ -75,7 +75,7 @@ pub fn init_log(config: &TiKvConfig) {
             }),
         );
         let decorator = PlainDecorator::new(logger);
-        let drain = FullFormat::new(decorator).build().fuse();
+        let drain = logger::TikvFormat::new(decorator).fuse();
         let drain = Async::new(drain).build().fuse();
         let logger = Logger::root_typed(drain, slog_o!());
         logger::init_log(logger, config.log_level).unwrap_or_else(|e| {
