@@ -25,6 +25,7 @@ use kvproto::metapb::{self, RegionEpoch};
 use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
 use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
+use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
 use tikv::config::*;
@@ -32,7 +33,7 @@ use tikv::raftstore::store::Msg as StoreMsg;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::Config as ServerConfig;
-use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
+use tikv::storage::{Config as StorageConfig, CF_DEFAULT, CF_RAFT};
 use tikv::util::config::*;
 use tikv::util::escape;
 use tikv::util::rocksdb::{self, CompactionListener};
@@ -82,6 +83,22 @@ pub fn must_get_cf_equal(engine: &Arc<DB>, cf: &str, key: &[u8], value: &[u8]) {
 
 pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
     must_get(engine, cf, key, None);
+}
+
+pub fn must_region_state(engine: &Arc<DB>, region_id: u64, state: PeerState) {
+    let key = keys::region_state_key(region_id);
+    let mut cur_state = PeerState::default();
+    for _ in 1..300 {
+        thread::sleep(Duration::from_millis(20));
+        match engine.get_msg_cf::<RegionLocalState>(CF_RAFT, &key) {
+            Ok(Some(region_state)) => cur_state = region_state.get_state(),
+            _ => continue,
+        };
+        if cur_state == state {
+            return;
+        }
+    }
+    panic!("region state is still {:?}, not {:?}", cur_state, state);
 }
 
 pub fn new_store_cfg() -> Config {

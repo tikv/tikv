@@ -612,7 +612,9 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Remove learner (4, 10) from region 1.
     pd_client.must_remove_peer(r1, new_learner_peer(4, 10));
+    must_region_state(&engine_4, r1, PeerState::Tombstone);
     pd_client.must_add_peer(r1, new_learner_peer(4, 10));
+    must_region_state(&engine_4, r1, PeerState::Normal);
     must_get_equal(&engine_4, b"k2", b"v2");
 
     // Can't transfer leader to learner.
