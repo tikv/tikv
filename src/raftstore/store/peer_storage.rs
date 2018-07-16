@@ -1200,7 +1200,7 @@ pub fn do_snapshot(
     region_id: u64,
     snap_stale_notifier: Arc<SnapStaleNotifier>,
 ) -> raft::Result<Snapshot> {
-    debug!("[region {}] begin to generate a snapshot", region_id);
+    debug!("[region {}] begin to generate snap", region_id);
 
     let apply_state: RaftApplyState =
         match snap.get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))? {
@@ -1256,7 +1256,10 @@ pub fn do_snapshot(
             snap_data.write_to_vec(snapshot.mut_data())?;
             Ok(snapshot)
         }
-        Some(Err(e)) => Err(raft::Error::from(e)),
+        Some(Err(e)) => {
+            error!("[region {}] build snapshot fail: {}", region_id, e);
+            Err(raft::Error::from(e))
+        }
         None => Err(RaftError::Store(
             StorageError::SnapshotTemporarilyUnavailable,
         )),

@@ -2652,7 +2652,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_snap_mgr_gc(&mut self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = self.region_worker.scheduler().schedule(RegionTask::Gc) {
-            error!("{} failed to send gc snap manager task: {:?}", self.tag, e);
+            error!("{} failed to send gc snapshots task: {:?}", self.tag, e);
         }
         self.register_snap_mgr_gc_tick(event_loop);
     }

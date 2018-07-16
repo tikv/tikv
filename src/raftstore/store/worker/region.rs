@@ -555,7 +555,7 @@ impl Runnable<Task> for Runner {
                 let snap_mgr = self.ctx.mgr.clone();
                 self.pool.execute(move |_| {
                     if let Err(e) = snap_mgr.gc_snapshots() {
-                        error!("fail to gc snapshot manager: {}", e);
+                        error!("gc snapshots fail: {}", e);
                     }
                 });
             }

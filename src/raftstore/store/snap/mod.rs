@@ -41,6 +41,7 @@ use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::collections::HashMap;
 use util::file::delete_file_if_exist;
 use util::io_limiter::{IOLimiter, LimitWriter};
+use util::time::Instant;
 use util::transport::SendCh;
 
 const SNAPSHOT_VERSION: u64 = 2;
@@ -63,11 +64,11 @@ quick_error! {
         }
         Registry(exists: &'static str, new: &'static str) {
             description("registry conflict")
-            display("exists: {}, new: {}", exists, new)
+            display("SnapError::Registry, exists: {}, new: {}", exists, new)
         }
         NoSpace(size: u64, limit: u64) {
             description("disk space exceed")
-            display("total snapshot size: {}, limit: {}", size, limit)
+            display("SnapError::NoSpace, size: {}, limit: {}", size, limit)
         }
     }
 }
@@ -187,7 +188,7 @@ impl SnapManager {
                 Some(Ok(snapshot_data_from_meta(meta, region)))
             }
             Err(e) => {
-                error!("{} build_snapshot fail: {}", key, e);
+                error!("{} build snapshot fail: {}", key, e);
                 self.core.delete_snapshot(true, key, true);
                 Some(Err(e))
             }
@@ -334,13 +335,18 @@ impl SnapManager {
     }
 
     pub fn gc_snapshots(&self) -> Result<()> {
+        let snap_size = self.core.snap_size.load(Ordering::SeqCst);
+        info!("starting gc snapshots, total size: {}", snap_size);
+        let t = Instant::now_coarse();
+
+        let (mut removed_gen_snapshots, mut removed_rev_snapshots) = (0, 0);
         let mut snap_keys = Vec::<(bool, SnapKey)>::new();
         for p in fs::read_dir(&self.core.base)?
             .filter_map(|p| p.ok())
             .filter(|p| p.file_type().map(|ft| ft.is_file()).unwrap_or(false))
         {
             if let Some(s) = p.file_name().to_str() {
-                if s.ends_with(SST_FILE_SUFFIX) {
+                if s.ends_with(META_FILE_SUFFIX) {
                     if let Some((for_send, snap_key)) = get_snap_key_from_file_name(s) {
                         snap_keys.push((for_send, snap_key));
                     }
@@ -368,6 +374,7 @@ impl SnapManager {
                 }
                 self.core.delete_snapshot(for_send, key, false);
                 registry.remove(&key);
+                removed_gen_snapshots += 1;
             } else {
                 let mut registry = self.core.apply_registry.lock().unwrap();
                 if let Some(entry) = registry.get(&key) {
@@ -380,8 +387,17 @@ impl SnapManager {
                 }
                 self.core.delete_snapshot(for_send, key, false);
                 registry.remove(&key);
+                removed_rev_snapshots += 1;
             }
         }
+        let snap_size = self.core.snap_size.load(Ordering::SeqCst);
+        info!(
+            "gc snapshots success in {:?}, removed gen/rev: ({}/{}), total size: {}",
+            t.elapsed(),
+            removed_gen_snapshots,
+            removed_rev_snapshots,
+            snap_size
+        );
         Ok(())
     }
 
@@ -658,6 +674,8 @@ fn stale_for_apply(key: SnapKey, snap_stale_notifier: &SnapStaleNotifier) -> boo
 #[cfg(test)]
 mod tests {
     use std::fs::OpenOptions;
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+    use test::Bencher;
 
     use tempdir::TempDir;
 
@@ -986,5 +1004,27 @@ mod tests {
         File::create(temp_path2).unwrap();
         mgr = SnapManager::new(path2, None);
         assert!(mgr.init().is_err());
+    }
+
+    #[bench]
+    fn bench_stale_for_generate(b: &mut Bencher) {
+        let notifier = SnapStaleNotifier {
+            compacted_term: AtomicU64::new(0),
+            compacted_idx: AtomicU64::new(0),
+            apply_canceled: AtomicBool::new(false),
+        };
+        let key = SnapKey::new(10, 10, 10);
+        b.iter(|| stale_for_generate(key, &notifier));
+    }
+
+    #[bench]
+    fn bench_stale_for_apply(b: &mut Bencher) {
+        let notifier = Arc::new(SnapStaleNotifier {
+            compacted_term: AtomicU64::new(0),
+            compacted_idx: AtomicU64::new(0),
+            apply_canceled: AtomicBool::new(false),
+        });
+        let key = SnapKey::new(10, 10, 10);
+        b.iter(|| stale_for_apply(key, notifier.as_ref()));
     }
 }
