@@ -610,6 +610,14 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_4, b"k1", b"v1");
     must_get_equal(&engine_4, b"k2", b"v2");
 
+    // Can't add duplicate learner.
+    let epoch1 = pd_client.get_region_epoch(r1);
+    pd_client.add_peer(r1, new_learner_peer(4, 10));
+    pd_client.must_add_peer(r1, new_peer(5, 100)); // For ensure the last is proposed.
+    let epoch2 = pd_client.get_region_epoch(r1);
+    assert_eq!(epoch1.get_conf_ver() + 1, epoch2.get_conf_ver());
+    pd_client.must_remove_peer(r1, new_peer(5, 100));
+
     // Remove learner (4, 10) from region 1.
     pd_client.must_remove_peer(r1, new_learner_peer(4, 10));
     must_get_none(&engine_4, b"k2"); // Wait for the region is cleaned.

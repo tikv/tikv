@@ -975,10 +975,10 @@ impl ApplyDelegate {
                     .with_label_values(&["add_peer", "all"])
                     .inc();
 
-                let mut exists = false;
+                let mut promoted = false;
                 if let Some(p) = util::find_peer_mut(&mut region, store_id) {
-                    exists = true;
-                    if !p.get_is_learner() || p.get_id() != peer.get_id() {
+                    if p.get_id() == peer.get_id() && (!p.get_is_learner() || peer.get_is_learner())
+                    {
                         error!(
                             "{} can't add duplicated peer {:?} to region {:?}",
                             self.tag, peer, self.region
@@ -988,12 +988,12 @@ impl ApplyDelegate {
                             peer,
                             self.region
                         ));
-                    } else {
+                    } else if p.get_id() == peer.get_id() {
                         p.set_is_learner(false);
+                        promoted = true;
                     }
                 }
-                if !exists {
-                    // TODO: Do we allow adding peer in same node?
+                if !promoted {
                     region.mut_peers().push(peer.clone());
                 }
 
