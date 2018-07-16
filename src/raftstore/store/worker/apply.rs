@@ -295,11 +295,6 @@ impl<'a> ApplyContext<'a> {
         self
     }
 
-    pub fn apply_res_capacity(mut self, cap: usize) -> Self {
-        self.apply_res = Vec::with_capacity(cap);
-        self
-    }
-
     pub fn use_delete_range(mut self, use_delete_range: bool) -> Self {
         self.use_delete_range = use_delete_range;
         self
