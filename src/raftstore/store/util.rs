@@ -471,7 +471,11 @@ impl Lease {
     /// And the expired timestamp for that leader lease is `commit_ts + lease`,
     /// which is `send_ts + max_lease` in short.
     fn next_expired_time(&self, send_ts: Timespec) -> Timespec {
-        send_ts + self.max_lease
+        let mut bound = send_ts + self.max_lease;
+        // Round down to seconds, so whenever localreader expires
+        // raftstore expires too.
+        bound.nsec = 0;
+        bound
     }
 
     /// Renew the lease to the bound.
