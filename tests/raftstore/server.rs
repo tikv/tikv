@@ -146,13 +146,13 @@ impl Simulator for ServerCluster {
 
         // Create import service.
         let importer = {
-            let dir = Path::new(engines.kv_engine.path()).join("import-sst");
+            let dir = Path::new(engines.kv.path()).join("import-sst");
             Arc::new(SSTImporter::new(dir).unwrap())
         };
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
             sim_router.clone(),
-            Arc::clone(&engines.kv_engine),
+            Arc::clone(&engines.kv),
             Arc::clone(&importer),
         );
 

@@ -194,7 +194,7 @@ impl Simulator for NodeCluster {
         let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
 
         let importer = {
-            let dir = Path::new(engines.kv_engine.path()).join("import-sst");
+            let dir = Path::new(engines.kv.path()).join("import-sst");
             Arc::new(SSTImporter::new(dir).unwrap())
         };
 
@@ -210,7 +210,8 @@ impl Simulator for NodeCluster {
             importer,
         ).unwrap();
         assert!(
-            Arc::clone(&engines.kv_engine)
+            engines
+                .kv
                 .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
                 .unwrap()
                 .is_none()
