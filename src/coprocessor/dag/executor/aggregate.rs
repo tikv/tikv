@@ -53,7 +53,7 @@ struct AggBitAnd {
 }
 
 impl AggrFunc for AggBitAnd {
-    fn update(&mut self, _: &mut EvalContext, args: Vec<Datum>) -> Result<()> {
+    fn update(&mut self, ctx: &mut EvalContext, mut args: Vec<Datum>) -> Result<()> {
         if args.len() != 1 {
             return Err(box_err!(
                 "bit_and only support one column, but got {}",
@@ -63,7 +63,12 @@ impl AggrFunc for AggBitAnd {
         if args[0] == Datum::Null {
             return Ok(());
         }
-        self.c &= args[0].u64();
+        let val = if let Datum::U64(v) = args[0] {
+            v
+        } else {
+            args.pop().unwrap().into_i64(ctx)? as u64
+        };
+        self.c &= val;
         Ok(())
     }
 
@@ -78,7 +83,7 @@ struct AggBitOr {
 }
 
 impl AggrFunc for AggBitOr {
-    fn update(&mut self, _: &mut EvalContext, args: Vec<Datum>) -> Result<()> {
+    fn update(&mut self, ctx: &mut EvalContext, mut args: Vec<Datum>) -> Result<()> {
         if args.len() != 1 {
             return Err(box_err!(
                 "bit_or only support one column, but got {}",
@@ -88,7 +93,12 @@ impl AggrFunc for AggBitOr {
         if args[0] == Datum::Null {
             return Ok(());
         }
-        self.c |= args[0].u64();
+        let val = if let Datum::U64(v) = args[0] {
+            v
+        } else {
+            args.pop().unwrap().into_i64(ctx)? as u64
+        };
+        self.c |= val;
         Ok(())
     }
 
@@ -103,7 +113,7 @@ struct AggBitXor {
 }
 
 impl AggrFunc for AggBitXor {
-    fn update(&mut self, _: &mut EvalContext, args: Vec<Datum>) -> Result<()> {
+    fn update(&mut self, ctx: &mut EvalContext, mut args: Vec<Datum>) -> Result<()> {
         if args.len() != 1 {
             return Err(box_err!(
                 "bit_xor only support one column, but got {}",
@@ -113,7 +123,12 @@ impl AggrFunc for AggBitXor {
         if args[0] == Datum::Null {
             return Ok(());
         }
-        self.c ^= args[0].u64();
+        let val = if let Datum::U64(v) = args[0] {
+            v
+        } else {
+            args.pop().unwrap().into_i64(ctx)? as u64
+        };
+        self.c ^= val;
         Ok(())
     }
 
@@ -335,5 +350,77 @@ mod test {
         }
         let v = sum.res.take().unwrap();
         assert_eq!(v, Datum::F64(res));
+    }
+
+    #[test]
+    fn test_bit_add() {
+        let mut aggr = AggBitAnd {
+            c: 0xffffffffffffffff,
+        };
+        let cfg = EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+        assert_eq!(aggr.c, u64::MAX);
+
+        let data = vec![
+            Datum::U64(1),
+            Datum::Null,
+            Datum::U64(1),
+            Datum::I64(3),
+            Datum::I64(2),
+            Datum::Dec(Decimal::from_f64(1.234).unwrap()),
+            Datum::Dec(Decimal::from_f64(3.012).unwrap()),
+            Datum::Dec(Decimal::from_f64(2.12345678).unwrap()),
+        ];
+
+        for v in data {
+            aggr.update(&mut ctx, vec![v]).unwrap();
+        }
+        assert_eq!(aggr.c, 0);
+    }
+
+    #[test]
+    fn test_bit_or() {
+        let mut aggr = AggBitOr { c: 0 };
+        let cfg = EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let data = vec![
+            Datum::U64(1),
+            Datum::Null,
+            Datum::U64(1),
+            Datum::I64(3),
+            Datum::I64(2),
+            Datum::Dec(Decimal::from_f64(12.34).unwrap()),
+            Datum::Dec(Decimal::from_f64(1.012).unwrap()),
+            Datum::Dec(Decimal::from_f64(15.12345678).unwrap()),
+            Datum::Dec(Decimal::from_f64(16.000).unwrap()),
+        ];
+
+        for v in data {
+            aggr.update(&mut ctx, vec![v]).unwrap();
+        }
+        assert_eq!(aggr.c, 31);
+    }
+
+    #[test]
+    fn test_bit_xor() {
+        let mut aggr = AggBitXor { c: 0 };
+        let cfg = EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+
+        let data = vec![
+            Datum::U64(1),
+            Datum::Null,
+            Datum::U64(1),
+            Datum::I64(3),
+            Datum::I64(2),
+            Datum::Dec(Decimal::from_f64(1.234).unwrap()),
+            Datum::Dec(Decimal::from_f64(1.012).unwrap()),
+            Datum::Dec(Decimal::from_f64(2.12345678).unwrap()),
+        ];
+
+        for v in data {
+            aggr.update(&mut ctx, vec![v]).unwrap();
+        }
+        assert_eq!(aggr.c, 3);
     }
 }
