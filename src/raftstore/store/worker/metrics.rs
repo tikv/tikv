@@ -67,4 +67,14 @@ lazy_static! {
         "Total number of rejection of the local read thread.",
         &["reason"]
     ).unwrap();
+    pub static ref LOCAL_READ_WAIT_DURATION: Histogram = register_histogram!(
+        "tikv_raftstore_local_read_requests_wait_duration",
+        "Bucketed histogram of local read requests wait duration.",
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
+    ).unwrap();
+    pub static ref LOCAL_READ_HANDLE_DURATION: Histogram = register_histogram!(
+        "tikv_raftstore_local_read_requests_handle_duration",
+        "Bucketed histogram of local read requests handle duration.",
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
+    ).unwrap();
 }

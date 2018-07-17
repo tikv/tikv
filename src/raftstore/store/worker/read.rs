@@ -33,6 +33,7 @@ use raftstore::Result;
 use util::collections::HashMap;
 use util::transport::{NotifyError, Sender};
 use util::worker::Runnable;
+use util::time::duration_to_sec;
 
 use super::super::metrics::BATCH_SNAPSHOT_COMMANDS;
 use super::metrics::*;
@@ -352,6 +353,8 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         callback: Callback,
         send_time: Instant,
     ) {
+        self.metrics.requests_wait_duration.observe(duration_to_sec(send_time.elapsed()));
+        let _handle_timer = self.metrics.requests_handle_duration.start_timer();
         let region_id = req.get_header().get_region_id();
         match self.pre_propose_raft_command(&req) {
             Ok(true) => (),
@@ -518,12 +521,18 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
             acc
         });
         LOCAL_READ_LEADER.set(count);
+        self.metrics.requests_wait_duration.flush();
+        self.metrics.requests_handle_duration.flush();
     }
 }
 
 struct ReadMetrics {
     raft_cmd_handled: i64,
     raft_cmd_rejected: i64,
+
+    requests_wait_duration: LocalHistogram,
+    requests_handle_duration: LocalHistogram,
+    batch_snapshot_size: LocalHistogram,
 
     // TODO: record rejected_by_read_quorum.
     rejected_by_store_id_mismatch: i64,
@@ -535,8 +544,6 @@ struct ReadMetrics {
     rejected_by_epoch: i64,
     rejected_by_appiled_term: i64,
     rejected_by_channel_full: i64,
-
-    batch_snapshot_size: LocalHistogram,
 }
 
 impl Default for ReadMetrics {
@@ -544,6 +551,9 @@ impl Default for ReadMetrics {
         ReadMetrics {
             raft_cmd_handled: 0,
             raft_cmd_rejected: 0,
+            requests_wait_duration: LOCAL_READ_WAIT_DURATION.local(),
+            requests_handle_duration: LOCAL_READ_HANDLE_DURATION.local(),
+            batch_snapshot_size: BATCH_SNAPSHOT_COMMANDS.local(),
             rejected_by_store_id_mismatch: 0,
             rejected_by_peer_id_mismatch: 0,
             rejected_by_term_mismatch: 0,
@@ -553,7 +563,6 @@ impl Default for ReadMetrics {
             rejected_by_epoch: 0,
             rejected_by_appiled_term: 0,
             rejected_by_channel_full: 0,
-            batch_snapshot_size: BATCH_SNAPSHOT_COMMANDS.local(),
         }
     }
 }
