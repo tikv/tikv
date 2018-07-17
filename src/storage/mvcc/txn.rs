@@ -1104,8 +1104,8 @@ mod tests {
         let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
 
         let ret = reader
-        .get_txn_commit_info(&make_key(key), start_ts)
-        .unwrap();
+            .get_txn_commit_info(&make_key(key), start_ts)
+            .unwrap();
         assert_eq!(ret, None);
     }
 
