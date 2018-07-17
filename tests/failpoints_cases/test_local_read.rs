@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
 use fail;
@@ -31,9 +32,11 @@ fn stale_read_after_split(right_derive: bool) {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
-    let election_timeout = configure_for_lease_read(&mut cluster, None, None);
+    let election_timeout = configure_for_lease_read(&mut cluster, Some(50), Some(100));
 
     cluster.run();
+    // Wait for leader.
+    thread::sleep(election_timeout);
 
     // Write the initial values.
     let key1 = b"k1";

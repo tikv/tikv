@@ -71,7 +71,7 @@ use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTER
 use tikv::util::security::SecurityManager;
 use tikv::util::time::Monitor;
 use tikv::util::transport::SendCh;
-use tikv::util::worker::{FutureWorker, Worker};
+use tikv::util::worker::{Builder, FutureWorker};
 use tikv::util::{self as tikv_util, panic_hook, rocksdb as rocksdb_util};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
@@ -126,7 +126,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
 
     // Create Local Reader.
-    let local_reader = Worker::new("local-reader");
+    let local_reader = Builder::new("local-reader")
+        .batch_size(cfg.raft_store.local_read_batch_size as usize)
+        .create();
     let local_ch = local_reader.scheduler();
 
     // Create router.

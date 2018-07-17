@@ -716,7 +716,10 @@ mod tests {
 
         let now = monotonic_raw_now();
         let next_expired_time = lease.next_expired_time(now);
-        assert_eq!(next_expired_time, now + duration);
+        // Round down to seconds.
+        let mut expected = now + duration;
+        expected.nsec = 0;
+        assert_eq!(next_expired_time, expected);
 
         // Transit to the Valid state.
         lease.renew(now);

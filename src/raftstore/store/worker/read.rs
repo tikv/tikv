@@ -31,9 +31,9 @@ use raftstore::store::{
 };
 use raftstore::Result;
 use util::collections::HashMap;
+use util::time::duration_to_sec;
 use util::transport::{NotifyError, Sender};
 use util::worker::Runnable;
-use util::time::duration_to_sec;
 
 use super::super::metrics::BATCH_SNAPSHOT_COMMANDS;
 use super::metrics::*;
@@ -353,7 +353,9 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         callback: Callback,
         send_time: Instant,
     ) {
-        self.metrics.requests_wait_duration.observe(duration_to_sec(send_time.elapsed()));
+        self.metrics
+            .requests_wait_duration
+            .observe(duration_to_sec(send_time.elapsed()));
         let _handle_timer = self.metrics.requests_handle_duration.start_timer();
         let region_id = req.get_header().get_region_id();
         match self.pre_propose_raft_command(&req) {
@@ -473,39 +475,45 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
 }
 
 impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
-    fn run(&mut self, task: Task) {
+    fn run(&mut self, _: Task) {
+        unreachable!()
+    }
+
+    fn run_batch(&mut self, tasks: &mut Vec<Task>) {
         fail_point!("local_reader_on_run");
-        match task {
-            Task::Register(delegate) => {
-                debug!(
-                    "{} register ReadDelegate for {:?}",
-                    delegate.tag, delegate.peer
-                );
-                self.delegates.insert(delegate.region.get_id(), delegate);
-            }
-            Task::Read(StoreMsg::RaftCmd {
-                send_time,
-                request,
-                callback,
-            }) => self.propose_raft_command(request, callback, send_time),
-            Task::Read(StoreMsg::BatchRaftSnapCmds {
-                batch, on_finished, ..
-            }) => self.propose_batch_raft_snapshot_command(batch, on_finished),
-            Task::Read(other) => {
-                unimplemented!("unsupported Msg {:?}", other);
-            }
-            Task::Update((region_id, progress)) => {
-                if let Some(delegate) = self.delegates.get_mut(&region_id) {
-                    delegate.update(progress);
-                } else {
+        for task in tasks.drain(..) {
+            match task {
+                Task::Register(delegate) => {
                     debug!(
-                        "unregistered ReadDelegate, region_id: {}, {:?}",
-                        region_id, progress
+                        "{} register ReadDelegate for {:?}",
+                        delegate.tag, delegate.peer
                     );
+                    self.delegates.insert(delegate.region.get_id(), delegate);
                 }
-            }
-            Task::Destroy(region_id) => {
-                self.delegates.remove(&region_id);
+                Task::Read(StoreMsg::RaftCmd {
+                    send_time,
+                    request,
+                    callback,
+                }) => self.propose_raft_command(request, callback, send_time),
+                Task::Read(StoreMsg::BatchRaftSnapCmds {
+                    batch, on_finished, ..
+                }) => self.propose_batch_raft_snapshot_command(batch, on_finished),
+                Task::Read(other) => {
+                    unimplemented!("unsupported Msg {:?}", other);
+                }
+                Task::Update((region_id, progress)) => {
+                    if let Some(delegate) = self.delegates.get_mut(&region_id) {
+                        delegate.update(progress);
+                    } else {
+                        debug!(
+                            "unregistered ReadDelegate, region_id: {}, {:?}",
+                            region_id, progress
+                        );
+                    }
+                }
+                Task::Destroy(region_id) => {
+                    self.delegates.remove(&region_id);
+                }
             }
         }
     }
@@ -707,7 +715,7 @@ mod tests {
                 panic!("unexpected invoke, {:?}", resp);
             })),
         ));
-        reader.run(task);
+        reader.run_batch(&mut vec![task]);
         assert_eq!(
             must_extract_cmds(
                 rx.recv_timeout(Duration::seconds(5).to_std().unwrap())
@@ -770,7 +778,7 @@ mod tests {
             applied_index_term: term6 - 1,
             leader_lease: Some(remote),
         });
-        reader.run(register_region1);
+        reader.run_batch(&mut vec![register_region1]);
         assert!(reader.delegates.get(&1).is_some());
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
 
@@ -782,7 +790,7 @@ mod tests {
         let mut pg = Progress::new();
         pg.set_applied_index_term(term6);
         let update_region1 = Task::update(1, pg);
-        reader.run(update_region1);
+        reader.run_batch(&mut vec![update_region1]);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
 
         // Let's read.
@@ -794,7 +802,7 @@ mod tests {
                 assert_eq!(snap.get_region(), &region);
             })),
         ));
-        reader.run(task);
+        reader.run_batch(&mut vec![task]);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
 
         // Batch snapshot.
@@ -807,7 +815,7 @@ mod tests {
                 assert_eq!(snap.get_region(), &region);
             }),
         ));
-        reader.run(batch_task);
+        reader.run_batch(&mut vec![batch_task]);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
 
         // Store id mismatch.
@@ -824,7 +832,7 @@ mod tests {
                 assert!(resp.snapshot.is_none());
             })),
         ));
-        reader.run(task);
+        reader.run_batch(&mut vec![task]);
         assert_eq!(reader.metrics.rejected_by_store_id_mismatch, 1);
 
         // metapb::Peer id mismatch.
@@ -844,7 +852,7 @@ mod tests {
                 assert!(resp.snapshot.is_none());
             })),
         ));
-        reader.run(task);
+        reader.run_batch(&mut vec![task]);
         assert_eq!(reader.metrics.rejected_by_peer_id_mismatch, 1);
 
         // Read quorum.
@@ -863,7 +871,7 @@ mod tests {
                 assert!(resp.snapshot.is_none());
             })),
         ));
-        reader.run(task);
+        reader.run_batch(&mut vec![task]);
         assert_eq!(reader.metrics.rejected_by_term_mismatch, 1);
 
         // Stale epoch.
@@ -889,15 +897,15 @@ mod tests {
                 assert!(resp.snapshot.is_none());
             })),
         ));
-        reader.run(task1);
-        reader.run(task_full);
+        reader.run_batch(&mut vec![task1]);
+        reader.run_batch(&mut vec![task_full]);
         rx.try_recv().unwrap();
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
         assert_eq!(reader.metrics.rejected_by_channel_full, 1);
 
         // Destroy region 1.
         let destroy_region1 = Task::destroy(1);
-        reader.run(destroy_region1);
+        reader.run_batch(&mut vec![destroy_region1]);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
         assert!(reader.delegates.get(&1).is_none());
     }
