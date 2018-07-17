@@ -252,7 +252,13 @@ impl SnapManager {
         let dir = self.core.base.clone();
         let io_limiter = self.io_limiter.clone();
         let core = Arc::clone(&self.core);
-        SnapshotReceiver::new(dir, key, io_limiter, meta, core).map(Some)
+        SnapshotReceiver::new(dir, key, io_limiter, meta, core)
+            .map(Some)
+            .map_err(|e| {
+                let mut registry = self.core.apply_registry.lock().unwrap();
+                registry.remove(&key);
+                e
+            })
     }
 
     pub fn apply_snapshot(

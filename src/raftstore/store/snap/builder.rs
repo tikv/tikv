@@ -63,6 +63,7 @@ impl CfFile {
                 })?;
                 // use an empty byte array to indicate that cf reaches an end.
                 file.encode_compact_bytes(b"")?;
+                file.flush()?;
             }
             Either::Right(ref mut writer) => {
                 let mut bytes = 0;
@@ -123,7 +124,7 @@ struct Inner {
     tmp_meta_path: PathBuf,
     tmp_meta_file: File,
     tmp_cf_files: Vec<CfFile>,
-    hold_tmp_files: bool,
+    success: bool,
 }
 
 impl Inner {
@@ -144,11 +145,13 @@ impl Inner {
             io_limiter,
             tmp_meta_path,
             tmp_meta_file,
-            tmp_cf_files: Vec::new(),
-            hold_tmp_files: true,
+            tmp_cf_files: vec![],
+            success: false,
         })
     }
 
+    // Rename tmp files to cf files and meta file.
+    // Then collect meta infos into a `SnapshotMeta` and return it.
     fn save(&mut self) -> Result<SnapshotMeta> {
         let mut snapshot_meta = SnapshotMeta::new();
         for cf_builder in &self.tmp_cf_files {
@@ -165,14 +168,14 @@ impl Inner {
         snapshot_meta.write_to_writer(&mut self.tmp_meta_file)?;
         let meta_path = get_meta_file_path(&self.dir, self.for_send, self.key);
         fs::rename(&self.tmp_meta_path, &meta_path)?;
-        self.hold_tmp_files = false;
+        self.success = true;
         Ok(snapshot_meta)
     }
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
-        if !self.hold_tmp_files {
+        if self.success {
             return;
         }
         for cf_builder in &mut self.tmp_cf_files {
@@ -192,6 +195,8 @@ pub(super) struct SnapshotGenerator {
 }
 
 impl SnapshotGenerator {
+    /// Open a new SnapshotGenerator. It will lock a tmp meta file
+    /// so that there will be always 1 generator at most for a key.
     pub(super) fn new(
         dir: String,
         key: SnapKey,
@@ -205,6 +210,7 @@ impl SnapshotGenerator {
         })
     }
 
+    /// Build the snapshot with the given `db_snap` for `region`.
     pub(super) fn build(&mut self, region: &Region, db_snap: DbSnapshot) -> Result<SnapshotMeta> {
         let t = Instant::now();
         let (start_key, end_key) = (enc_start_key(region), enc_end_key(region));
@@ -213,6 +219,7 @@ impl SnapshotGenerator {
         let mut open_options = OpenOptions::new();
         open_options.write(true).create_new(true);
 
+        // Scan every cf, write data into the tmp file respectively.
         let inner = &mut self.inner;
         for cf in SNAPSHOT_CFS.iter() {
             let path = get_cf_tmp_file_path(&inner.dir, inner.for_send, inner.key, cf);
@@ -235,6 +242,7 @@ impl SnapshotGenerator {
             )?;
         }
 
+        // Rename all tmp files to cf files.
         let snapshot_meta = inner.save()?;
         let total_size = get_size_from_snapshot_meta(&snapshot_meta);
 
@@ -249,6 +257,7 @@ impl SnapshotGenerator {
             snap_key_count,
             t.elapsed(),
         );
+
         Ok(snapshot_meta)
     }
 }
@@ -257,13 +266,10 @@ pub struct SnapshotReceiver {
     inner: Inner,
     snapshot_meta: SnapshotMeta,
     core: Arc<SnapManagerCore>,
-    cf_index: usize,
-    success: bool,
+    cur_cf_pos: usize,
 }
 
 impl SnapshotReceiver {
-    /// Check the snapshot is on disk and correct first.
-    /// If not, open tmp files to receive it from network.
     pub(super) fn new(
         dir: String,
         key: SnapKey,
@@ -271,18 +277,12 @@ impl SnapshotReceiver {
         snapshot_meta: SnapshotMeta,
         core: Arc<SnapManagerCore>,
     ) -> Result<Self> {
-        let inner = Inner::new(dir, false, key, io_limiter).map_err(|e| {
-            let mut registry = core.apply_registry.lock().unwrap();
-            registry.remove(&key);
-            e
-        })?;
-
+        let inner = Inner::new(dir, false, key, io_limiter)?;
         Ok(SnapshotReceiver {
             inner,
             snapshot_meta,
             core,
-            cf_index: 0,
-            success: false,
+            cur_cf_pos: 0,
         })
     }
 
@@ -292,16 +292,17 @@ impl SnapshotReceiver {
             let expected = want_cf.get_size();
             let got = got_cf.get_size();
             if expected != got {
+                self.inner.success = false;
                 return Err(snapshot_size_corrupt(expected, got));
             }
 
             let expected = want_cf.get_checksum();
             let got = got_cf.get_checksum();
             if expected != got {
+                self.inner.success = false;
                 return Err(snapshot_checksum_corrupt(expected, got));
             }
         }
-        self.success = true;
         let size = get_size_from_snapshot_meta(&self.snapshot_meta);
         self.core.snap_size.fetch_add(size, Ordering::SeqCst);
 
@@ -315,7 +316,7 @@ impl SnapshotReceiver {
 impl Drop for SnapshotReceiver {
     fn drop(&mut self) {
         let mut registry = self.core.apply_registry.lock().unwrap();
-        if !self.success {
+        if !self.inner.success {
             info!("{} receive snapshot fail, deregister", self.inner.key);
             registry.remove(&self.inner.key);
         }
@@ -328,11 +329,11 @@ impl Write for SnapshotReceiver {
             return Ok(0);
         }
         let inner = &mut self.inner;
-        while self.cf_index < SNAPSHOT_CFS.len() {
-            let cf_meta = &self.snapshot_meta.get_cf_files()[self.cf_index];
+        while self.cur_cf_pos < SNAPSHOT_CFS.len() {
+            let cf_meta = &self.snapshot_meta.get_cf_files()[self.cur_cf_pos];
 
-            if self.cf_index >= inner.tmp_cf_files.len() {
-                let cf = &SNAPSHOT_CFS[self.cf_index];
+            if self.cur_cf_pos >= inner.tmp_cf_files.len() {
+                let cf = &SNAPSHOT_CFS[self.cur_cf_pos];
                 let (dir, for_send, key) = (&inner.dir, inner.for_send, inner.key);
                 let path = get_cf_tmp_file_path(dir, for_send, key, cf);
                 let file = OpenOptions::new().write(true).create_new(true).open(&path)?;
@@ -342,7 +343,7 @@ impl Write for SnapshotReceiver {
 
             let cf_file = inner.tmp_cf_files.last_mut().unwrap();
             if cf_file.written_bytes >= cf_meta.get_size() {
-                self.cf_index += 1;
+                self.cur_cf_pos += 1;
                 continue;
             }
 
