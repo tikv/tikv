@@ -1056,7 +1056,7 @@ impl ApplyDelegate {
                     .with_label_values(&["add_learner", "all"])
                     .inc();
 
-                if let Some(p) = util::find_peer(&region_id, store_id) {
+                if let Some(p) = util::find_peer(&region, store_id) {
                     if p.get_id() == peer.get_id() {
                         error!(
                             "{} can't add duplicated learner {:?} to region {:?}",
