@@ -132,6 +132,22 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // Remove peer (2, 2) from region 1.
     pd_client.must_remove_peer(r1, new_peer(2, 2));
 
+    // Can't add the peer back on the tombstone if epoch is stale.
+    let conf_change = new_change_peer_request(ConfChangeType::AddNode, new_peer(2, 4));
+    let mut epoch = cluster.pd_client.get_region_epoch(r1);
+    let conf_ver = epoch.get_conf_ver() - 1;
+    epoch.set_conf_ver(conf_ver);
+    let admin_req = new_admin_request(r1, &epoch, conf_change);
+    assert!(
+        cluster
+            .call_command_on_leader(admin_req, Duration::from_secs(3))
+            .unwrap()
+            .get_header()
+            .get_error()
+            .get_message()
+            .contains("region is stale")
+    );
+
     // add peer (2, 4) to region 1.
     pd_client.must_add_peer(r1, new_peer(2, 4));
 

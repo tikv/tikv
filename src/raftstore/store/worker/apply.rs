@@ -971,17 +971,14 @@ impl ApplyDelegate {
 
         match change_type {
             ConfChangeType::AddNode => {
-                // Only for add voter, not for add learner.
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["add_peer", "all"])
                     .inc();
 
-                let mut promoted = false;
+                let mut exists = false;
                 if let Some(p) = util::find_peer_mut(&mut region, store_id) {
-                    if p.get_id() == peer.get_id() && p.get_is_learner() {
-                        p.set_is_learner(false);
-                        promoted = true;
-                    } else if p.get_id() == peer.get_id() {
+                    exists = true;
+                    if !p.get_is_learner() || p.get_id() != peer.get_id() {
                         error!(
                             "{} can't add duplicated peer {:?} to region {:?}",
                             self.tag, peer, self.region
@@ -991,10 +988,12 @@ impl ApplyDelegate {
                             peer,
                             self.region
                         ));
+                    } else {
+                        p.set_is_learner(false);
                     }
                 }
-                if !promoted {
-                    // TODO: Do we allow adding peer/learner in same node?
+                if !exists {
+                    // TODO: Do we allow adding peer in same node?
                     region.mut_peers().push(peer.clone());
                 }
 
@@ -1056,20 +1055,17 @@ impl ApplyDelegate {
                     .with_label_values(&["add_learner", "all"])
                     .inc();
 
-                if let Some(p) = util::find_peer(&region, store_id) {
-                    if p.get_id() == peer.get_id() {
-                        error!(
-                            "{} can't add duplicated learner {:?} to region {:?}",
-                            self.tag, peer, self.region
-                        );
-                        return Err(box_err!(
-                            "can't add duplicated learner {:?} to region {:?}",
-                            peer,
-                            self.region
-                        ));
-                    }
+                if util::find_peer(&region, store_id).is_some() {
+                    error!(
+                        "{} can't add duplicated learner {:?} to region {:?}",
+                        self.tag, peer, self.region
+                    );
+                    return Err(box_err!(
+                        "can't add duplicated learner {:?} to region {:?}",
+                        peer,
+                        self.region
+                    ));
                 }
-                // TODO: Do we allow adding peer/learner in same node?
                 region.mut_peers().push(peer.clone());
 
                 PEER_ADMIN_CMD_COUNTER_VEC
