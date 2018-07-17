@@ -994,6 +994,7 @@ impl ApplyDelegate {
                     }
                 }
                 if !promoted {
+                    // TODO: Do we allow adding peer in same node?
                     region.mut_peers().push(peer.clone());
                 }
 
