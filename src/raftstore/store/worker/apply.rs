@@ -290,8 +290,8 @@ impl<'a> ApplyContext<'a> {
         self.exec_results.push(res);
     }
 
-    pub fn enable_sync_log(mut self, eanbled: bool) -> Self {
-        self.enable_sync_log = eanbled;
+    pub fn enable_sync_log(mut self, enabled: bool) -> Self {
+        self.enable_sync_log = enabled;
         self
     }
 
