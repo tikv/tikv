@@ -862,24 +862,24 @@ mod tests {
         let (key, value) = (b"key", b"value");
 
         // Add a Rollback whose start ts is 1.
-        must_prewrite_put(&engine, key, value, key, 1);
-        must_rollback(&engine, key, 1);
-        must_get_rollback_ts(&engine, key, 1);
+        must_prewrite_put(engine.as_ref(), key, value, key, 1);
+        must_rollback(engine.as_ref(), key, 1);
+        must_get_rollback_ts(engine.as_ref(), key, 1);
 
         // Add a Rollback whose start ts is 2, the previous Rollback whose
         // start ts is 1 will be collapsed.
-        must_prewrite_put(&engine, key, value, key, 2);
-        must_rollback(&engine, key, 2);
-        must_get_none(&engine, key, 2);
-        must_get_rollback_ts(&engine, key, 2);
-        must_get_rollback_ts_none(&engine, key, 1);
+        must_prewrite_put(engine.as_ref(), key, value, key, 2);
+        must_rollback(engine.as_ref(), key, 2);
+        must_get_none(engine.as_ref(), key, 2);
+        must_get_rollback_ts(engine.as_ref(), key, 2);
+        must_get_rollback_ts_none(engine.as_ref(), key, 1);
 
         // Rollback arrive before Prewrite, it will collapse the
         // previous rollback whose start ts is 2.
-        must_rollback(&engine, key, 3);
-        must_get_none(&engine, key, 3);
-        must_get_rollback_ts(&engine, key, 3);
-        must_get_rollback_ts_none(&engine, key, 2);
+        must_rollback(engine.as_ref(), key, 3);
+        must_get_none(engine.as_ref(), key, 3);
+        must_get_rollback_ts(engine.as_ref(), key, 3);
+        must_get_rollback_ts_none(engine.as_ref(), key, 2);
     }
 
     fn must_get(engine: &Engine, key: &[u8], ts: u64, expect: &[u8]) {
