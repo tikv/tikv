@@ -353,7 +353,7 @@ mod test {
     }
 
     #[test]
-    fn test_bit_add() {
+    fn test_bit_and() {
         let mut aggr = AggBitAnd {
             c: 0xffffffffffffffff,
         };
