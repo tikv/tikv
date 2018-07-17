@@ -34,6 +34,8 @@ pub struct MvccTxn {
     start_ts: u64,
     writes: Vec<Modify>,
     write_size: usize,
+    // collapse continuous rollbacks.
+    collapse_rollback: bool,
 }
 
 impl fmt::Debug for MvccTxn {
@@ -56,7 +58,12 @@ impl MvccTxn {
             start_ts,
             writes: vec![],
             write_size: 0,
+            collapse_rollback: true,
         }
+    }
+
+    pub fn collapse_rollback(&mut self, collapse: bool) {
+        self.collapse_rollback = collapse;
     }
 
     pub fn into_modifies(self) -> Vec<Modify> {
@@ -127,6 +134,9 @@ impl MvccTxn {
         if !options.skip_constraint_check {
             if let Some((commit, _)) = self.reader.seek_write(key, u64::max_value())? {
                 // Abort on writes after our start timestamp ...
+                // If exists a commit version whose commit timestamp is larger than or equal to
+                // current start timestamp, we should abort current prewrite, even if the commit
+                // type is Rollback.
                 if commit >= self.start_ts {
                     MVCC_CONFLICT_COUNTER
                         .with_label_values(&["prewrite_write_conflict"])
@@ -196,8 +206,8 @@ impl MvccTxn {
                         MVCC_CONFLICT_COUNTER
                             .with_label_values(&["commit_lock_not_found"])
                             .inc();
-                        // TODO:None should not appear
-                        // Rollbacked by concurrent transaction.
+                        // None: related Rollback has been collapsed.
+                        // Rollback: rollback by concurrent transaction.
                         info!(
                             "txn conflict (lock not found), key:{}, start_ts:{}, commit_ts:{}",
                             key, self.start_ts, commit_ts
@@ -260,6 +270,12 @@ impl MvccTxn {
                     }
                     None => {
                         let ts = self.start_ts;
+
+                        // collapse previous rollback if exist.
+                        if self.collapse_rollback {
+                            self.collapse_prev_rollback(key)?;
+                        }
+
                         // insert a Rollback to WriteCF when receives Rollback before Prewrite
                         let write = Write::new(WriteType::Rollback, ts, None);
                         self.put_write(key, ts, write.to_bytes());
@@ -272,6 +288,18 @@ impl MvccTxn {
         let ts = self.start_ts;
         self.put_write(key, ts, write.to_bytes());
         self.unlock_key(key.clone());
+        if self.collapse_rollback {
+            self.collapse_prev_rollback(key)?;
+        }
+        Ok(())
+    }
+
+    fn collapse_prev_rollback(&mut self, key: &Key) -> Result<()> {
+        if let Some((commit_ts, write)) = self.reader.seek_write(key, self.start_ts)? {
+            if write.write_type == WriteType::Rollback {
+                self.delete_write(key, commit_ts);
+            }
+        }
         Ok(())
     }
 
@@ -828,6 +856,32 @@ mod tests {
         must_get_rc(engine.as_ref(), key, 20, v1);
     }
 
+    #[test]
+    fn test_collapse_prev_rollback() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let (key, value) = (b"key", b"value");
+
+        // Add a Rollback whose start ts is 1.
+        must_prewrite_put(&engine, key, value, key, 1);
+        must_rollback(&engine, key, 1);
+        must_get_rollback_ts(&engine, key, 1);
+
+        // Add a Rollback whose start ts is 2, the previous Rollback whose
+        // start ts is 1 will be collapsed.
+        must_prewrite_put(&engine, key, value, key, 2);
+        must_rollback(&engine, key, 2);
+        must_get_none(&engine, key, 2);
+        must_get_rollback_ts(&engine, key, 2);
+        must_get_rollback_ts_none(&engine, key, 1);
+
+        // Rollback arrive before Prewrite, it will collapse the
+        // previous rollback whose start ts is 2.
+        must_rollback(&engine, key, 3);
+        must_get_none(&engine, key, 3);
+        must_get_rollback_ts(&engine, key, 3);
+        must_get_rollback_ts_none(&engine, key, 2);
+    }
+
     fn must_get(engine: &Engine, key: &[u8], ts: u64, expect: &[u8]) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
@@ -1031,6 +1085,28 @@ mod tests {
                 assert_eq!(write_type, WriteType::Rollback);
             }
         }
+    }
+
+    fn must_get_rollback_ts(engine: &Engine, key: &[u8], start_ts: u64) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
+
+        let (ts, write_type) = reader
+        .get_txn_commit_info(&make_key(key), start_ts)
+        .unwrap()
+        .unwrap();
+        assert_eq!(ts, start_ts);
+        assert_eq!(write_type, WriteType::Rollback);
+    }
+
+    fn must_get_rollback_ts_none(engine: &Engine, key: &[u8], start_ts: u64) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
+
+        let ret = reader
+        .get_txn_commit_info(&make_key(key), start_ts)
+        .unwrap();
+        assert_eq!(ret, None);
     }
 
     fn must_scan_keys(
