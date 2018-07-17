@@ -13,7 +13,7 @@
 
 use std::collections::Bound::Excluded;
 use std::option::Option;
-use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::{fmt, u64};
 
@@ -471,11 +471,7 @@ impl Lease {
     /// And the expired timestamp for that leader lease is `commit_ts + lease`,
     /// which is `send_ts + max_lease` in short.
     fn next_expired_time(&self, send_ts: Timespec) -> Timespec {
-        let mut bound = send_ts + self.max_lease;
-        // Round down to seconds, so whenever localreader expires
-        // raftstore expires too.
-        bound.nsec = 0;
-        bound
+        send_ts + self.max_lease
     }
 
     /// Renew the lease to the bound.
@@ -498,7 +494,9 @@ impl Lease {
         if let Some(bound) = ts {
             if bound - self.last_update > self.max_drift {
                 self.last_update = bound;
-                self.remote.as_ref().map(|r| r.renew(bound));
+                if let Some(ref r) = self.remote {
+                    r.renew(bound);
+                }
             }
         }
     }
@@ -540,11 +538,11 @@ impl Lease {
             return None;
         }
         let expired_time = match self.bound {
-            Some(Either::Right(ts)) => ts.sec,
+            Some(Either::Right(ts)) => timespec_to_u64(ts),
             _ => 0,
         };
         let remote = RemoteLease {
-            expired_time: Arc::new(AtomicI64::new(expired_time)),
+            expired_time: Arc::new(AtomicU64::new(expired_time)),
             term,
         };
         // Clone the remote.
@@ -571,16 +569,15 @@ impl fmt::Debug for Lease {
 /// A remote lease, it can only be derived by `Lease`. It will be sent
 /// to the local read thread, so name it remote. If Lease expires, the remote must
 /// expire too.
-#[derive(Debug)]
 pub struct RemoteLease {
-    expired_time: Arc<AtomicI64>,
+    expired_time: Arc<AtomicU64>,
     term: u64,
 }
 
 impl RemoteLease {
     pub fn inspect(&self, ts: Option<Timespec>) -> LeaseState {
-        let expired_time = Timespec::new(self.expired_time.load(AtomicOrdering::Acquire), 0);
-        if ts.unwrap_or_else(monotonic_raw_now) < expired_time {
+        let expired_time = self.expired_time.load(AtomicOrdering::Acquire);
+        if ts.unwrap_or_else(monotonic_raw_now) < u64_to_timespec(expired_time) {
             LeaseState::Valid
         } else {
             LeaseState::Expired
@@ -588,7 +585,8 @@ impl RemoteLease {
     }
 
     fn renew(&self, bound: Timespec) {
-        self.expired_time.store(bound.sec, AtomicOrdering::Release);
+        self.expired_time
+            .store(timespec_to_u64(bound), AtomicOrdering::Release);
     }
 
     fn expire(&self) {
@@ -598,6 +596,62 @@ impl RemoteLease {
     pub fn term(&self) -> u64 {
         self.term
     }
+}
+
+impl fmt::Debug for RemoteLease {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let expired_time = self.expired_time.load(AtomicOrdering::Relaxed);
+        f.debug_struct("RemoteLease")
+            .field("expired_time", &expired_time)
+            .field("term", &self.term)
+            .finish()
+    }
+}
+
+/// Convert Timespec to u64. It's millisecond precision and
+/// covers a range of about 571232829 years in total.
+///
+/// # Panics
+///
+/// If Timespecs have negative sec.
+#[inline]
+fn timespec_to_u64(ts: Timespec) -> u64 {
+    // > Darwin's and Linux's struct timespec functions handle pre-
+    // > epoch timestamps using a "two steps back, one step forward" representation,
+    // > though the man pages do not actually document this. For example, the time
+    // > -1.2 seconds before the epoch is represented by `Timespec { sec: -2_i64,
+    // > nsec: 800_000_000 }`.
+    //
+    // Quote from crate time,
+    //   https://github.com/rust-lang-deprecated/time/blob/
+    //   e313afbd9aad2ba7035a23754b5d47105988789d/src/lib.rs#L77
+    assert!(ts.sec >= 0 && ts.sec.leading_zeros() as usize >= TIMESPEC_SEC_SHIFT);
+    assert!(ts.nsec >= 0);
+
+    // Round down to millisecond precision.
+    let ms = ts.nsec >> TIMESPEC_NSEC_SHIFT;
+    let sec = ts.sec << TIMESPEC_SEC_SHIFT;
+    sec as u64 | ms as u64
+}
+
+const NSEC_PER_MSEC: i32 = 1_000_000;
+const TIMESPEC_NSEC_SHIFT: usize = 32 - NSEC_PER_MSEC.leading_zeros() as usize;
+
+const MSEC_PER_SEC: i64 = 1_000;
+const TIMESPEC_SEC_SHIFT: usize = 64 - MSEC_PER_SEC.leading_zeros() as usize;
+
+const TIMESPEC_NSEC_MASK: u64 = (1 << TIMESPEC_SEC_SHIFT) - 1;
+
+/// Convert Timespec to u64.
+///
+/// # Panics
+///
+/// If nsec is negative or GE than 1_000_000_000(nano seconds pre second).
+#[inline]
+fn u64_to_timespec(uint64: u64) -> Timespec {
+    let sec = uint64 >> TIMESPEC_SEC_SHIFT;
+    let nsec = (uint64 & TIMESPEC_NSEC_MASK) << TIMESPEC_NSEC_SHIFT;
+    Timespec::new(sec as i64, nsec as i32)
 }
 
 /// Parse data of entry `index`.
@@ -716,10 +770,7 @@ mod tests {
 
         let now = monotonic_raw_now();
         let next_expired_time = lease.next_expired_time(now);
-        // Round down to seconds.
-        let mut expected = now + duration;
-        expected.nsec = 0;
-        assert_eq!(next_expired_time, expected);
+        assert_eq!(next_expired_time, next_expired_time);
 
         // Transit to the Valid state.
         lease.renew(now);
@@ -744,6 +795,47 @@ mod tests {
         lease.expire();
         inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Expired);
         inspect_test(&lease, None, LeaseState::Expired);
+    }
+
+    #[test]
+    fn test_timespec_u64() {
+        let cases = vec![
+            (Timespec::new(0, 0), 0x0000_0000_0000_0000u64),
+            (Timespec::new(0, 1), 0x0000_0000_0000_0000u64), // 1ns is round down to 0ms.
+            (Timespec::new(0, 999_999), 0x0000_0000_0000_0000u64), // 999_999ns is round down to 0ms.
+            (Timespec::new(0, 1_048_575 /* 0x0FFFFF */), 0x0000_0000_0000_0000u64), // 1_048_575ns is round down to 0ms.
+            (Timespec::new(0, 1_048_576 /* 0x100000 */), 0x0000_0000_0000_0001u64), // 1_048_576ns is round down to 1ms.
+            (Timespec::new(1, 0), 1 << TIMESPEC_SEC_SHIFT),
+            (Timespec::new(1, 0x100000), 1 << TIMESPEC_SEC_SHIFT | 1),
+            (
+                // Max seconds.
+                Timespec::new((1i64 << (64 - TIMESPEC_SEC_SHIFT)) - 1, 0),
+                (-1i64 as u64) << TIMESPEC_SEC_SHIFT,
+            ),
+            (
+                // Max nano seconds.
+                Timespec::new(0, (999_999_999 >> TIMESPEC_NSEC_SHIFT) << TIMESPEC_NSEC_SHIFT),
+                999_999_999 >> TIMESPEC_NSEC_SHIFT,
+            ),
+            (
+                Timespec::new(
+                    (1i64 << (64 - TIMESPEC_SEC_SHIFT)) - 1,
+                    (999_999_999 >> TIMESPEC_NSEC_SHIFT) << TIMESPEC_NSEC_SHIFT,
+                ),
+                (-1i64 as u64) << TIMESPEC_SEC_SHIFT | (999_999_999 >> TIMESPEC_NSEC_SHIFT),
+            ),
+        ];
+
+        for (ts, uint64) in cases {
+            assert!(u64_to_timespec(timespec_to_u64(ts)) <= ts);
+            assert!(u64_to_timespec(uint64) <= ts);
+            assert_eq!(timespec_to_u64(u64_to_timespec(uint64)), uint64);
+            assert_eq!(timespec_to_u64(ts), uint64);
+        }
+        let ts = monotonic_raw_now();
+        let uint64 = timespec_to_u64(ts);
+        let round = u64_to_timespec(uint64);
+        assert!(round <= ts, "{:064b} = {:?} > {:?}", uint64, round, ts);
     }
 
     // Tests the util function `check_key_in_region`.

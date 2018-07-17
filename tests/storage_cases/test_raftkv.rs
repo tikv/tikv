@@ -4,7 +4,6 @@ use std::thread;
 use kvproto::kvrpcpb::Context;
 use raftstore::server::new_server_cluster;
 use raftstore::transport_simulate::IsolationFilterFactory;
-use raftstore::util::configure_for_lease_read;
 use tikv::raftstore::store::engine::IterOption;
 use tikv::storage::engine::*;
 use tikv::storage::{CFStatistics, CfName, Key, CF_DEFAULT};
@@ -77,9 +76,6 @@ fn test_read_leader_in_lease() {
 fn test_batch_snapshot() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
-    // We handle batch snapshot in the localread thread, so the leader lease
-    // has to be longer then 1s.
-    configure_for_lease_read(&mut cluster, Some(10), Some(150));
     cluster.run();
 
     let key = b"key";
