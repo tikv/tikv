@@ -178,6 +178,8 @@ impl Drop for Inner {
         for cf_builder in &mut self.tmp_cf_files {
             let p = get_cf_tmp_file_path(&self.dir, self.for_send, self.key, cf_builder.cf);
             delete_file_if_exist(&p);
+            let p = get_cf_file_path(&self.dir, self.for_send, self.key, cf_builder.cf);
+            delete_file_if_exist(&p);
         }
         let p = get_meta_tmp_file_path(&self.dir, self.for_send, self.key);
         delete_file_if_exist(&p);
@@ -427,7 +429,10 @@ fn get_sst_file_writer(
 
 #[cfg(test)]
 mod tests {
+    use tempdir::TempDir;
+
     use super::*;
+    use raftstore::store::snap::tests::*;
 
     #[test]
     fn test_get_meta_tmp_file_path() {
@@ -461,5 +466,43 @@ mod tests {
             let path = get_cf_tmp_file_path(dir, for_send, key, cf);
             assert_eq!(path.to_str().unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn test_snapshot_generator() {
+        let tmp_dir = TempDir::new("test-snapshot-generator").unwrap();
+        let tmp_path = tmp_dir.path().to_str().unwrap().to_owned();
+        let snap_mgr = SnapManager::new(tmp_path.clone(), None);
+
+        let dir = snap_mgr.core.base.clone();
+        let key = SnapKey::new(1, 1, 1);
+        let snap_stale_notifier = new_snap_stale_notifier();
+
+        // Can't init SnapshotGenerator because tmp meta file exists.
+        let notifier = Arc::clone(&snap_stale_notifier);
+        let p = get_meta_tmp_file_path(&dir, true, key);
+        OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&p)
+            .unwrap();
+        assert!(SnapshotGenerator::new(dir.clone(), key, None, notifier).is_err());
+        assert!(File::open(&p).is_ok()); // The tmp meta file shouldn't be deleted.
+
+        // Can't save the snapshot because some tmp files are removed.
+        let notifier = Arc::clone(&snap_stale_notifier);
+        delete_file_if_exist(&p);
+        let region = get_test_region(1, 1, 1);
+        let tmp_db_dir = TempDir::new("test-sanpshot-generator-db").unwrap();
+        let test_db = get_test_empty_db(&tmp_db_dir).unwrap();
+        let db_snap = DbSnapshot::new(Arc::clone(&test_db));
+
+        let mut generator = SnapshotGenerator::new(dir.clone(), key, None, notifier).unwrap();
+        assert!(delete_file_if_exist(&p));
+        assert!(generator.build(&region, db_snap).is_err());
+
+        // After the generator is dropped, there won't be any tmp files.
+        drop(generator);
+        assert_eq!(fs::read_dir(&tmp_path).unwrap().count(), 0);
     }
 }

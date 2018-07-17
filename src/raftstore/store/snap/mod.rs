@@ -692,7 +692,7 @@ mod tests {
     const TEST_STORE_ID: u64 = 1;
     const TEST_WRITE_BATCH_SIZE: usize = 10 * 1024 * 1024;
 
-    fn get_test_region(region_id: u64, store_id: u64, peer_id: u64) -> Region {
+    pub fn get_test_region(region_id: u64, store_id: u64, peer_id: u64) -> Region {
         let mut peer = Peer::new();
         peer.set_store_id(store_id);
         peer.set_id(peer_id);
@@ -725,13 +725,13 @@ mod tests {
         }
     }
 
-    fn get_test_empty_db(path: &TempDir) -> Result<Arc<DB>> {
+    pub fn get_test_empty_db(path: &TempDir) -> Result<Arc<DB>> {
         let p = path.path().to_str().unwrap();
         let db = rocksdb::new_engine(p, ALL_CFS, None)?;
         Ok(Arc::new(db))
     }
 
-    fn get_test_db(path: &TempDir) -> Result<Arc<DB>> {
+    pub fn get_test_db(path: &TempDir) -> Result<Arc<DB>> {
         let p = path.path().to_str().unwrap();
         let db = rocksdb::new_engine(p, ALL_CFS, None)?;
         let key = keys::data_key(TEST_KEY);
@@ -768,7 +768,7 @@ mod tests {
         assert_eq!(snap_size, total_size);
     }
 
-    fn new_snap_stale_notifier() -> Arc<SnapStaleNotifier> {
+    pub fn new_snap_stale_notifier() -> Arc<SnapStaleNotifier> {
         Arc::new(SnapStaleNotifier {
             compacted_term: AtomicU64::new(0),
             compacted_idx: AtomicU64::new(0),
@@ -825,10 +825,10 @@ mod tests {
 
     fn test_registry(get_db: fn(p: &TempDir) -> Result<Arc<DB>>) {
         let region = get_test_region(1, 1, 1);
-        let dir = TempDir::new("test-snap-file-db-src").unwrap();
+        let dir = TempDir::new("test-registry-db-src").unwrap();
         let db = get_db(&dir).unwrap();
 
-        let snap_dir = TempDir::new("test-snap-file-src").unwrap();
+        let snap_dir = TempDir::new("test-registry-src").unwrap();
         let snap_mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let key = SnapKey::new(1, 1, 1);
 
@@ -839,7 +839,7 @@ mod tests {
         };
 
         let do_apply = |should_success: bool| {
-            let dst_db_dir = TempDir::new("test-snap-file-db-dst").unwrap();
+            let dst_db_dir = TempDir::new("test-registry-db-dst").unwrap();
             let dst_db_path = dst_db_dir.path().to_str().unwrap();
             let dst_db = Arc::new(rocksdb::new_engine(dst_db_path, ALL_CFS, None).unwrap());
             let apply_options = ApplyOptions {
