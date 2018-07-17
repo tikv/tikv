@@ -22,6 +22,7 @@ use kvproto::metapb;
 use kvproto::raft_cmdpb::RaftResponseHeader;
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::{ConfChangeType, MessageType};
+use rocksdb::DB;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
@@ -131,27 +132,28 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Remove peer (2, 2) from region 1.
     pd_client.must_remove_peer(r1, new_peer(2, 2));
+    must_get_none(&engine_2, b"k1");
 
     // Can't add the peer back on the tombstone if epoch is stale.
-    let conf_change = new_change_peer_request(ConfChangeType::AddNode, new_peer(2, 4));
-    let mut epoch = cluster.pd_client.get_region_epoch(r1);
-    let conf_ver = epoch.get_conf_ver() - 1;
-    epoch.set_conf_ver(conf_ver);
-    let admin_req = new_admin_request(r1, &epoch, conf_change);
-    assert!(
-        cluster
-            .call_command_on_leader(admin_req, Duration::from_secs(3))
-            .unwrap()
-            .get_header()
-            .get_error()
-            .get_message()
-            .contains("region is stale")
-    );
+    let mut rs = get_region_state(engine_2.as_ref(), r1);
+    rs.mut_region().mut_region_epoch().conf_ver += 100;
+    put_region_state(engine_2.as_ref(), r1, &rs);
 
     // add peer (2, 4) to region 1.
     pd_client.must_add_peer(r1, new_peer(2, 4));
+    let mut peer_ok = false;
+    for _ in 0..30 {
+        thread::sleep(Duration::from_millis(20));
+        if get_region_state(&engine_2, r1).get_state() != PeerState::Normal {
+            continue;
+        }
+        peer_ok = true;
+    }
+    assert!(!peer_ok);
 
     // Remove peer (3, 3) from region 1.
+    rs.mut_region().mut_region_epoch().conf_ver -= 100;
+    put_region_state(&engine_2, r1, &rs);
     pd_client.must_remove_peer(r1, new_peer(3, 3));
 
     let (key, value) = (b"k4", b"v4");
@@ -803,4 +805,18 @@ fn test_learner_with_slow_snapshot() {
     pd_client.transfer_leader(r1, new_peer(3, 3));
     pd_client.region_leader_must_be(r1, new_peer(3, 3));
     assert!(count.load(Ordering::SeqCst) > 0);
+}
+
+fn get_region_state(engine: &DB, region_id: u64) -> RegionLocalState {
+    let key = keys::region_state_key(region_id);
+    engine
+        .get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
+        .unwrap()
+        .unwrap()
+}
+
+fn put_region_state(engine: &DB, region_id: u64, state: &RegionLocalState) {
+    let key = keys::region_state_key(region_id);
+    let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
+    engine.put_msg_cf(cf_raft, &key, state).unwrap();
 }

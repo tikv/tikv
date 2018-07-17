@@ -769,22 +769,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        // If there is a tombstone peer on the store, new peer's id should be larger.
-        let region_state_key = keys::region_state_key(region_id);
-        let kv = self.engines().kv;
-        if let Ok(Some(s)) = kv.get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key) {
-            assert_eq!(s.get_state(), PeerState::Tombstone);
-            if s.get_region().get_region_epoch().get_conf_ver()
-                > msg.get_region_epoch().get_conf_ver()
-            {
-                info!(
-                    "{} skip create new peer on tombstone for {} with less conf_ver",
-                    self.tag, region_id
-                );
-                return Ok(false);
-            }
-        }
-
         // New created peers should know it's learner or not.
         let peer = Peer::replicate(self, region_id, target.clone())?;
         // following snapshot may overlap, should insert into region_ranges after
