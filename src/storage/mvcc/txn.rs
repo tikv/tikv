@@ -1092,9 +1092,9 @@ mod tests {
         let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
 
         let (ts, write_type) = reader
-        .get_txn_commit_info(&make_key(key), start_ts)
-        .unwrap()
-        .unwrap();
+            .get_txn_commit_info(&make_key(key), start_ts)
+            .unwrap()
+            .unwrap();
         assert_eq!(ts, start_ts);
         assert_eq!(write_type, WriteType::Rollback);
     }
