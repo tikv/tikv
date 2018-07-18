@@ -646,7 +646,7 @@ impl ApplyDelegate {
                 }
             };
             apply_ctx.finish_for(&mut delegate);
-            box future::ok((delegate, apply_ctx))
+            future::ok((delegate, apply_ctx))
         })
     }
 
@@ -1483,7 +1483,7 @@ impl ApplyDelegate {
                             Err((delegate, ctx, _e)) => (delegate, ctx),
                         };
                         ctx.apply_res.last_mut().unwrap().merged = true;
-                        box future::ok((delegate, ctx))
+                        future::ok((delegate, ctx))
                     })
             }
             Err(e) => panic!(
