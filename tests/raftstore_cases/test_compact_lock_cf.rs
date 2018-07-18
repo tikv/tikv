@@ -21,8 +21,8 @@ use super::util::*;
 
 fn flush<T: Simulator>(cluster: &mut Cluster<T>) {
     for engines in cluster.engines.values() {
-        let lock_handle = engines.kv_engine.cf_handle(CF_LOCK).unwrap();
-        engines.kv_engine.flush_cf(lock_handle, true).unwrap();
+        let lock_handle = engines.kv.cf_handle(CF_LOCK).unwrap();
+        engines.kv.flush_cf(lock_handle, true).unwrap();
     }
 }
 
@@ -32,7 +32,7 @@ fn flush_then_check<T: Simulator>(cluster: &mut Cluster<T>, interval: u64, writt
     sleep_ms(interval * 2);
     for engines in cluster.engines.values() {
         let compact_write_bytes = engines
-            .kv_engine
+            .kv
             .get_statistics_ticker_count(DBStatisticsTickerType::CompactWriteBytes);
         if written {
             assert!(compact_write_bytes > 0);
