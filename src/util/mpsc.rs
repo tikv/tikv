@@ -21,7 +21,10 @@ supports closed detection and try operations.
 
 #![cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
 
+use crossbeam::sync::AtomicOption;
 use crossbeam_channel;
+use futures::task::{self, Task};
+use futures::{Async, Poll, Stream};
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError};
 use std::sync::Arc;
@@ -30,6 +33,9 @@ use std::time::Duration;
 struct State {
     sender_cnt: AtomicIsize,
     receiver_cnt: AtomicIsize,
+    // Because we don't support sending messages asychrounously, so
+    // only recv_task needs to be kept.
+    recv_task: AtomicOption<Task>,
 }
 
 impl State {
@@ -37,6 +43,7 @@ impl State {
         State {
             sender_cnt: AtomicIsize::new(1),
             receiver_cnt: AtomicIsize::new(1),
+            recv_task: AtomicOption::new(),
         }
     }
 
@@ -71,6 +78,9 @@ impl<T> Drop for Sender<T> {
     #[inline]
     fn drop(&mut self) {
         self.state.sender_cnt.fetch_add(-1, Ordering::AcqRel);
+        if self.state.is_sender_closed() {
+            self.notify();
+        }
     }
 }
 
@@ -81,9 +91,18 @@ pub struct Receiver<T> {
 
 impl<T> Sender<T> {
     #[inline]
+    fn notify(&self) {
+        let task = self.state.recv_task.take(Ordering::AcqRel);
+        if let Some(t) = task {
+            t.notify();
+        }
+    }
+
+    #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
         if !self.state.is_receiver_closed() {
             self.sender.send(t);
+            self.notify();
             return Ok(());
         }
         Err(SendError(t))
@@ -93,9 +112,11 @@ impl<T> Sender<T> {
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
         if !self.state.is_receiver_closed() {
             crossbeam_channel::select! {
-                send(self.sender, t) => Ok(()),
-                default => Err(TrySendError::Full(t)),
+                send(self.sender, t) => {},
+                default => return Err(TrySendError::Full(t)),
             }
+            self.notify();
+            Ok(())
         } else {
             Err(TrySendError::Disconnected(t))
         }
@@ -169,6 +190,27 @@ pub fn bounded<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
     )
 }
 
+impl<T> Stream for Receiver<T> {
+    type Error = ();
+    type Item = T;
+
+    fn poll(&mut self) -> Poll<Option<T>, ()> {
+        match self.try_recv() {
+            Ok(m) => Ok(Async::Ready(Some(m))),
+            Err(TryRecvError::Empty) => {
+                let t = self.state.recv_task.swap(task::current(), Ordering::AcqRel);
+                if t.is_some() {
+                    return Ok(Async::NotReady);
+                }
+                // Note: If there is a message or all the senders are dropped after
+                // polling but before task is set, `t` should be None.
+                self.poll()
+            }
+            Err(TryRecvError::Disconnected) => Ok(Async::Ready(None)),
+        }
+    }
+}
+
 const CHECK_INTERVAL: usize = 8;
 
 /// A sender of channel that limits the maximun pending messages count loosely.
@@ -226,6 +268,8 @@ pub fn loose_bounded<T>(cap: usize) -> (LooseBoundedSender<T>, Receiver<T>) {
 
 #[cfg(test)]
 mod tests {
+    use futures::sync::mpsc;
+    use futures::{Future, Sink, Stream};
     use std::sync::mpsc::*;
     use std::thread;
     use std::time::*;
@@ -326,6 +370,37 @@ mod tests {
         assert_eq!(rx.recv(), Ok(10));
         let elapsed = timer.elapsed();
         assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
+    }
+
+    #[test]
+    fn test_notify() {
+        let (tx1, rx1) = super::unbounded();
+        let (tx2, rx2) = mpsc::unbounded();
+        let mut rx2 = rx2.wait();
+        let j = thread::spawn(move || {
+            rx1.map_err(|_| ())
+                .forward(tx2.sink_map_err(|_| ()))
+                .wait()
+                .unwrap();
+        });
+        tx1.send(2).unwrap();
+        assert_eq!(rx2.next().unwrap(), Ok(2));
+        for i in 0..100 {
+            tx1.send(i).unwrap();
+        }
+        for i in 0..100 {
+            assert_eq!(rx2.next().unwrap(), Ok(i));
+        }
+        thread::spawn(move || {
+            for i in 100..10000 {
+                tx1.send(i).unwrap();
+            }
+        });
+        for i in 100..10000 {
+            assert_eq!(rx2.next().unwrap(), Ok(i));
+        }
+        // j should automatically stop when tx1 is dropped.
+        j.join().unwrap();
     }
 
     #[test]

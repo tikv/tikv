@@ -28,7 +28,7 @@ use rocksdb::{CompactionJobInfo, WriteBatch, DB};
 
 use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb;
-use kvproto::pdpb::StoreStats;
+use kvproto::pdpb::{CheckPolicy, StoreStats};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse, StatusCmdType, StatusResponse,
 };
@@ -2328,7 +2328,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             {
                 continue;
             }
-            let task = SplitCheckTask::new(peer.region().clone(), true);
+            let task = SplitCheckTask::new(peer.region().clone(), true, CheckPolicy::SCAN);
             if let Err(e) = self.split_check_worker.schedule(task) {
                 error!("{} failed to schedule split check: {}", self.tag, e);
             }
@@ -2525,6 +2525,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         &mut self,
         region_id: u64,
         region_epoch: &metapb::RegionEpoch,
+        policy: CheckPolicy,
     ) {
         let peer = match self.region_peers.get(&region_id) {
             Some(peer) => peer,
@@ -2550,7 +2551,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return;
         }
 
-        let task = SplitCheckTask::new(region.clone(), false);
+        let task = SplitCheckTask::new(region.clone(), false, policy);
         if let Err(e) = self.split_check_worker.schedule(task) {
             error!("{} failed to schedule split check: {}", self.tag, e);
         }
@@ -3200,7 +3201,8 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::HalfSplitRegion {
                 region_id,
                 region_epoch,
-            } => self.on_schedule_half_split_region(region_id, &region_epoch),
+                policy,
+            } => self.on_schedule_half_split_region(region_id, &region_epoch, policy),
             Msg::MergeFail { region_id } => self.on_merge_fail(region_id),
             Msg::ValidateSSTResult { invalid_ssts } => self.on_validate_sst_result(invalid_ssts),
         }
