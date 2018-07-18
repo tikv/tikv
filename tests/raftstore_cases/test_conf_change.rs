@@ -19,7 +19,7 @@ use std::thread;
 use std::time::Duration;
 
 use kvproto::metapb;
-use kvproto::raft_cmdpb::RaftResponseHeader;
+use kvproto::raft_cmdpb::{RaftCmdResponse, RaftResponseHeader};
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use rocksdb::DB;
@@ -113,12 +113,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(b"k4"), Some(b"v4".to_vec()));
     must_get_equal(&engine_2, b"k4", b"v4");
 
-    let conf_change = new_change_peer_request(ConfChangeType::AddNode, new_peer(2, 2));
-    let epoch = cluster.pd_client.get_region_epoch(r1);
-    let admin_req = new_admin_request(r1, &epoch, conf_change);
-    let resp = cluster
-        .call_command_on_leader(admin_req, Duration::from_secs(3))
-        .unwrap();
+    let resp = run_conf_change(cluster, r1, ConfChangeType::AddNode, new_peer(2, 2)).unwrap();
     let exec_res = resp
         .get_header()
         .get_error()
@@ -135,23 +130,22 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_2, b"k1");
 
     // Can't add the peer back on the tombstone if epoch is stale.
-    let mut rs = get_region_state(engine_2.as_ref(), r1);
+    let mut rs = get_region_state(&engine_2, r1);
     rs.mut_region().mut_region_epoch().conf_ver += 100;
-    put_region_state(engine_2.as_ref(), r1, &rs);
+    put_region_state(&engine_2, r1, &rs);
 
     // add peer (2, 4) to region 1.
     pd_client.must_add_peer(r1, new_peer(2, 4));
-    let mut peer_ok = false;
     for _ in 0..30 {
         thread::sleep(Duration::from_millis(20));
-        if get_region_state(&engine_2, r1).get_state() != PeerState::Normal {
+        if get_region_state(&engine_2, r1).get_state() == PeerState::Tombstone {
             continue;
         }
-        peer_ok = true;
+        panic!("the peer state should be still tombstone");
     }
-    assert!(!peer_ok);
 
     // Remove peer (3, 3) from region 1.
+    assert_eq!(rs, get_region_state(&engine_2, r1));
     rs.mut_region().mut_region_epoch().conf_ver -= 100;
     put_region_state(&engine_2, r1, &rs);
     pd_client.must_remove_peer(r1, new_peer(3, 3));
@@ -629,12 +623,18 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_4, b"k2", b"v2");
 
     // Can't add duplicate learner.
-    let epoch1 = pd_client.get_region_epoch(r1);
-    pd_client.add_peer(r1, new_learner_peer(4, 10));
-    pd_client.must_add_peer(r1, new_peer(5, 100)); // For ensure the last is proposed.
-    let epoch2 = pd_client.get_region_epoch(r1);
-    assert_eq!(epoch1.get_conf_ver() + 1, epoch2.get_conf_ver());
-    pd_client.must_remove_peer(r1, new_peer(5, 100));
+    let resp = run_conf_change(
+        cluster,
+        r1,
+        ConfChangeType::AddLearnerNode,
+        new_learner_peer(4, 10),
+    ).unwrap();
+    assert!(
+        resp.get_header()
+            .get_error()
+            .get_message()
+            .contains("duplicated")
+    );
 
     // Remove learner (4, 10) from region 1.
     pd_client.must_remove_peer(r1, new_learner_peer(4, 10));
@@ -659,8 +659,12 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.region_leader_must_be(r1, new_peer(4, 10));
 
     // Add learner on store which already has peer.
-    pd_client.add_peer(r1, new_learner_peer(4, 10));
-    pd_client.must_add_peer(r1, new_peer(5, 100)); // For ensure the last is proposed.
+    run_conf_change(
+        cluster,
+        r1,
+        ConfChangeType::AddLearnerNode,
+        new_learner_peer(4, 10),
+    ).unwrap();
     pd_client.must_have_peer(r1, new_peer(4, 10));
 
     // Add peer with different id on store which already has learner.
@@ -700,15 +704,8 @@ fn test_conf_change_remove_leader() {
     cluster.must_transfer_leader(r1, new_peer(1, 1));
 
     // Try to remove leader, which should be ignored.
-    let epoch = cluster.get_region_epoch(r1);
-    let req = new_admin_request(
-        r1,
-        &epoch,
-        new_change_peer_request(ConfChangeType::RemoveNode, new_peer(1, 1)),
-    );
-    let res = cluster
-        .call_command_on_leader(req, Duration::from_secs(5))
-        .unwrap();
+    let res =
+        run_conf_change(&mut cluster, r1, ConfChangeType::RemoveNode, new_peer(1, 1)).unwrap();
     assert!(
         res.get_header()
             .get_error()
@@ -819,4 +816,19 @@ fn put_region_state(engine: &DB, region_id: u64, state: &RegionLocalState) {
     let key = keys::region_state_key(region_id);
     let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
     engine.put_msg_cf(cf_raft, &key, state).unwrap();
+}
+
+fn run_conf_change<T>(
+    cluster: &mut Cluster<T>,
+    region_id: u64,
+    conf_change_type: ConfChangeType,
+    peer: metapb::Peer,
+) -> Result<RaftCmdResponse>
+where
+    T: Simulator,
+{
+    let conf_change = new_change_peer_request(conf_change_type, peer);
+    let epoch = cluster.pd_client.get_region_epoch(region_id);
+    let admin_req = new_admin_request(region_id, &epoch, conf_change);
+    cluster.call_command_on_leader(admin_req, Duration::from_secs(3))
 }
