@@ -28,8 +28,7 @@ use tikv::util::worker::FutureWorker;
 #[test]
 fn test_storage_1gc() {
     let _guard = ::setup();
-    let snapshot_fp = "raftkv_async_snapshot_finish";
-    let batch_snapshot_fp = "raftkv_async_batch_snapshot_finish";
+    let gc_before_read_fp = "txn_before_process_read";
     let (_cluster, engine, ctx) = new_raft_engine(3, "");
     let pd_worker = FutureWorker::new("test future worker");
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
@@ -38,8 +37,7 @@ fn test_storage_1gc() {
     let config = Config::default();
     let mut storage = Storage::from_engine(engine.clone(), &config, read_pool).unwrap();
     storage.start(&config).unwrap();
-    fail::cfg(snapshot_fp, "pause").unwrap();
-    fail::cfg(batch_snapshot_fp, "pause").unwrap();
+    fail::cfg(gc_before_read_fp, "pause").unwrap();
     let (tx1, rx1) = channel();
     storage
         .async_gc(ctx.clone(), 1, box move |res: storage::Result<()>| {
@@ -62,8 +60,7 @@ fn test_storage_1gc() {
         .unwrap();
 
     rx2.recv().unwrap();
-    fail::remove(snapshot_fp);
-    fail::remove(batch_snapshot_fp);
+    fail::remove(gc_before_read_fp);
     rx1.recv().unwrap();
 }
 
