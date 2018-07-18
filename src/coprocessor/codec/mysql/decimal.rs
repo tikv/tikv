@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use byteorder::WriteBytesExt;
+use num;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
@@ -778,15 +779,13 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
     }
 
     let mut start_to = int_word_to + frac_word_to;
-    let r_start = cmp::max(r_int_word_cnt + r_frac_word_cnt, 0) as usize;
-    let left_stop = cmp::max(l_int_word_cnt + l_frac_word_cnt, 0) as usize;
-    let r_start = cmp::min(r_start, WORD_BUF_LEN as usize);
-    let left_stop = cmp::min(left_stop, WORD_BUF_LEN as usize);
+    let (offset_min, offset_max) = (0, i32::from(WORD_BUF_LEN));
+    let r_start = num::clamp(r_int_word_cnt + r_frac_word_cnt, offset_min, offset_max) as usize;
+    let left_stop = num::clamp(l_int_word_cnt + l_frac_word_cnt, offset_min, offset_max) as usize;
     for l_idx in (0..left_stop).rev() {
         if start_to < r_start {
             break;
         }
-        //assert!(start_to >= r_start);
         let (mut carry, mut idx_to) = (0, start_to);
         start_to -= 1;
         for r_idx in (0..r_start).rev() {

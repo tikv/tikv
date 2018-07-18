@@ -79,6 +79,7 @@ raft = "0.3"
 crossbeam-channel = "0.2"
 fxhash = "0.2"
 derive_more = "0.11.0"
+num = "0.2.0"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.4"

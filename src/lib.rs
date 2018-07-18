@@ -54,6 +54,7 @@ extern crate libc;
 extern crate log;
 extern crate mio;
 extern crate murmur3;
+extern crate num;
 #[macro_use]
 extern crate prometheus;
 extern crate prometheus_static_metric;
