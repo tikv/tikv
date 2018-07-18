@@ -244,7 +244,10 @@ fn get_cf_clone_file_path(dir: &str, for_send: bool, key: SnapKey, cf: &str) -> 
 
 #[cfg(test)]
 mod tests {
+    use tempdir::TempDir;
+
     use super::*;
+    use raftstore::store::snap::tests::*;
 
     #[test]
     fn test_get_cf_clone_file_path() {
@@ -270,5 +273,59 @@ mod tests {
             let path = get_cf_clone_file_path(dir, for_send, key, cf);
             assert_eq!(path.to_str().unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn test_snapshot_sender() {
+        let tmp_dir = TempDir::new("test-snapshot-sender").unwrap();
+        let tmp_path = tmp_dir.path().to_str().unwrap().to_owned();
+        let snap_mgr = SnapManager::new(tmp_path.clone(), None);
+
+        let dir = snap_mgr.core.base.clone();
+        let key = SnapKey::new(1, 1, 1);
+        let notifier = new_snap_stale_notifier();
+
+        let mut generator =
+            SnapshotGenerator::new(dir.clone(), key, None, Arc::clone(&notifier)).unwrap();
+
+        let region = get_test_region(1, 1, 1);
+        let tmp_db_dir = TempDir::new("test-sanpshot-sender-db").unwrap();
+        let test_db = get_test_empty_db(&tmp_db_dir).unwrap();
+        let db_snap = DbSnapshot::new(Arc::clone(&test_db));
+        let meta = generator.build(&region, db_snap).unwrap();
+
+        let ref_count = Arc::new(AtomicUsize::new(0));
+        let sent_times = Arc::new(AtomicUsize::new(0));
+
+        let get_sender = || {
+            SnapshotSender::new(
+                dir.clone(),
+                key,
+                meta.clone(),
+                Arc::clone(&notifier),
+                Arc::clone(&ref_count),
+                Arc::clone(&sent_times),
+            )
+        };
+
+        let mut s1 = get_sender();
+        assert_eq!(ref_count.load(Ordering::SeqCst), 1);
+        let mut s2 = get_sender();
+        assert_eq!(ref_count.load(Ordering::SeqCst), 2);
+
+        let mut buf = Vec::with_capacity(10);
+        assert_eq!(s1.read_to_end(&mut buf).unwrap(), 1);
+        assert_eq!(s2.read_to_end(&mut buf).unwrap(), 1);
+        assert_eq!(&buf[0], &buf[1]);
+
+        drop(s1);
+        assert_eq!(sent_times.load(Ordering::SeqCst), 1);
+        drop(s2);
+        assert_eq!(sent_times.load(Ordering::SeqCst), 2);
+
+        let mut s3 = get_sender();
+        let p = get_cf_file_path(&dir, true, key, CF_LOCK);
+        assert!(delete_file_if_exist(&p));
+        assert!(s3.read_to_end(&mut buf).is_err());
     }
 }

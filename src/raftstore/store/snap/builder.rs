@@ -186,6 +186,8 @@ impl Drop for Inner {
         }
         let p = get_meta_tmp_file_path(&self.dir, self.for_send, self.key);
         delete_file_if_exist(&p);
+        let p = get_meta_file_path(&self.dir, self.for_send, self.key);
+        delete_file_if_exist(&p);
     }
 }
 
@@ -287,7 +289,15 @@ impl SnapshotReceiver {
     }
 
     pub fn save(&mut self) -> Result<()> {
-        let cf_files = self.inner.save()?.take_cf_files().into_iter();
+        let mut got_meta = self.inner.save()?;
+        let got_total_size = get_size_from_snapshot_meta(&got_meta);
+        let exp_total_size = get_size_from_snapshot_meta(&self.snapshot_meta);
+        if got_total_size != exp_total_size {
+            self.inner.success = false;
+            return Err(snapshot_size_corrupt(exp_total_size, got_total_size));
+        }
+
+        let cf_files = got_meta.take_cf_files().into_iter();
         for (got_cf, want_cf) in cf_files.zip(self.snapshot_meta.get_cf_files()) {
             let expected = want_cf.get_size();
             let got = got_cf.get_size();
@@ -505,5 +515,73 @@ mod tests {
         // After the generator is dropped, there won't be any tmp files.
         drop(generator);
         assert_eq!(fs::read_dir(&tmp_path).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn test_snapshot_receiver() {
+        let tmp_dir = TempDir::new("test-snapshot-generator").unwrap();
+        let tmp_path = tmp_dir.path().to_str().unwrap().to_owned();
+        let snap_mgr = SnapManager::new(tmp_path.clone(), None);
+
+        let dir = snap_mgr.core.base.clone();
+        let key = SnapKey::new(1, 1, 1);
+        let notifier = new_snap_stale_notifier();
+
+        let mut generator =
+            SnapshotGenerator::new(dir.clone(), key, None, Arc::clone(&notifier)).unwrap();
+
+        let region = get_test_region(1, 1, 1);
+        let tmp_db_dir = TempDir::new("test-sanpshot-sender-db").unwrap();
+        let test_db = get_test_empty_db(&tmp_db_dir).unwrap();
+        let db_snap = DbSnapshot::new(Arc::clone(&test_db));
+        let meta = generator.build(&region, db_snap).unwrap();
+
+        let data = snapshot_data_from_meta(meta, region.clone());
+        let data = data.write_to_bytes().unwrap();
+
+        let mut receiver = snap_mgr.get_snapshot_receiver(key, &data).unwrap().unwrap();
+        assert!(snap_mgr.get_snapshot_receiver(key, &data).is_err());
+
+        // Can't save because finished cfs is less than SNAPSHOT_CFS.
+        assert!(receiver.save().is_err());
+
+        // Can't save because the bad checksum.
+        assert!(receiver.write(&[0u8]).is_ok());
+        assert!(receiver.save().is_err());
+
+        // After the receiver is droped, no garbage should exist.
+        drop(receiver);
+        let rev_files = fs::read_dir(&tmp_path)
+            .unwrap()
+            .filter(|p| match p {
+                Ok(ref p) => p
+                    .file_name()
+                    .into_string()
+                    .unwrap()
+                    .starts_with(SNAP_REV_PREFIX),
+
+                Err(_) => false,
+            })
+            .map(|p| {
+                println!("rev file: {:?}", p);
+            });
+        assert_eq!(rev_files.count(), 0);
+
+        let mut receiver = snap_mgr.get_snapshot_receiver(key, &data).unwrap().unwrap();
+
+        // Write correct data into the receiver.
+        let p = get_cf_file_path(&dir, true, key, CF_LOCK);
+        let mut buf = Vec::with_capacity(10);
+        assert_eq!(File::open(p).unwrap().read_to_end(&mut buf).unwrap(), 1);
+
+        // Can't write extra bytes to snapshot.
+        assert!(receiver.write_all(&buf).is_ok());
+        assert!(receiver.write(&[0u8]).is_err());
+
+        // Don't need to receive it any more.
+        assert!(receiver.save().is_ok());
+        drop(receiver);
+        let receiver = snap_mgr.get_snapshot_receiver(key, &data).unwrap();
+        assert!(receiver.is_none());
     }
 }

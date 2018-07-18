@@ -151,7 +151,7 @@ impl SnapManager {
     }
 
     /// Build a snapshot with metadata in `RaftSnapshotData`.
-    /// To get the readable snapshot, call `get_snapshot_reader`.
+    /// To get the readable snapshot, call `get_snapshot_sender`.
     pub fn build_snapshot(
         &self,
         key: SnapKey,
