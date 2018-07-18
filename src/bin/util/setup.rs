@@ -159,14 +159,30 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
     }
 }
 
-// Set gRPC event engine to epollsig.
-// See more: https://github.com/grpc/grpc/blob/486761d04e03a9183d8013eddd86c3134d52d459\
-//           /src/core/lib/iomgr/ev_posix.cc#L149
-pub fn configure_grpc_poll_strategy() {
-    const GRPC_POLL_STRATEGY: &str = "GRPC_POLL_STRATEGY";
-    const DEFAULT_ENGINE: &str = "epollsig";
-    if cfg!(target_os = "linux") && env::var(GRPC_POLL_STRATEGY).is_err() {
-        // Set to epollsig if it is not specified.
-        env::set_var(GRPC_POLL_STRATEGY, DEFAULT_ENGINE);
+/// Check environment variables that affect TiKV.
+pub fn check_environment_variables() {
+    if cfg!(unix) && env::var("TZ").is_err() {
+        env::set_var("TZ", ":/etc/localtime");
+        warn!("environment variable `TZ` is missing, using `/etc/localtime`");
+    }
+
+    if let Ok(var) = env::var("GRPC_POLL_STRATEGY") {
+        warn!(
+            "environment variable `GRPC_POLL_STRATEGY` is present, {}",
+            var
+        );
+    } else if cfg!(target_os = "linux") {
+        // Set gRPC event engine to epollsig if it is missing.
+        // See more: https://github.com/grpc/grpc/blob/486761d04e03a9183d8013eddd86c3134d52d459\
+        //           /src/core/lib/iomgr/ev_posix.cc#L149
+        env::set_var("GRPC_POLL_STRATEGY", "epollsig");
+    }
+
+    if cfg!(unix) {
+        for proxy in &["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"] {
+            if let Ok(var) = env::var(proxy) {
+                warn!("environment variable `{}` is present, `{}`", proxy, var);
+            }
+        }
     }
 }
