@@ -2119,25 +2119,36 @@ pub struct AppliesRes {
     apply_res: Vec<ApplyRes>,
 }
 
+/// When an existing region receive an registration message, it
+/// should stop current running future by send it a suicide message,
+/// and then spawn a new future use the latest registration message.
 pub struct Suicide {
     pub region_id: u64,
     pub term: u64,
 }
 
-pub struct RegionDestroy {
-    pub region_id: u64,
-}
-
+/// Borrow region only happens when two regions are going to merge.
+/// At commit_merge stage, the target region will send a message to
+/// the source region to ask for the source region, when the source
+/// region receive a `BorrowDelegate` message, it will send itself
+/// back to the target region and exit the future pool.
 pub struct BorrowDelegate {
-    pub target: u64,
+    // Which region to borrow
+    pub wanted_region: u64,
+
+    // The wanted region delegate will be send back to the target region
+    // throw this sender.
     pub tx: oneshot::Sender<ApplyDelegate>,
 }
 
+/// RegionTask represents tasks received by region. They are send from
+/// the apply scheduler thread.
 pub enum RegionTask {
     Apply((Apply, Instant)),
-    Destroy(RegionDestroy),
-    Suicide(Suicide),
+    Destroy(u64),
     Proposal(RegionProposal),
+
+    Suicide(Suicide),
     Borrow(BorrowDelegate),
     Stop((u64, Sender<()>)),
 }
@@ -2152,7 +2163,7 @@ impl RegionTask {
     }
 
     pub fn destroy(region_id: u64) -> RegionTask {
-        RegionTask::Destroy(RegionDestroy { region_id })
+        RegionTask::Destroy(region_id)
     }
 
     pub fn suicide(region_id: u64, term: u64) -> RegionTask {
@@ -2164,11 +2175,18 @@ pub struct Destroy {
     pub region_id: u64,
 }
 
+/// Task represents tasks received by the apply scheduler thread. These
+/// tasks are mainly send from RaftStore thread.
 pub enum Task {
+    // Applies, Registration, Proposals and Destroy are tasks send
+    // from the RaftStore thread.
     Applies(ApplyBatch),
     Registration(Registration),
     Proposals(Vec<RegionProposal>),
     Destroy(Destroy),
+
+    // Borrow task is send from the apply pool(the target region)
+    // when execute commit_merge.
     Borrow(BorrowDelegate),
 }
 
@@ -2188,8 +2206,8 @@ impl Task {
         Task::Destroy(Destroy { region_id })
     }
 
-    pub fn borrow(target: u64, tx: oneshot::Sender<ApplyDelegate>) -> Task {
-        Task::Borrow(BorrowDelegate { target, tx })
+    pub fn borrow(wanted_region: u64, tx: oneshot::Sender<ApplyDelegate>) -> Task {
+        Task::Borrow(BorrowDelegate { wanted_region, tx })
     }
 }
 
@@ -2202,7 +2220,7 @@ impl Display for Task {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
             Task::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
-            Task::Borrow(ref b) => write!(f, "borrow [reigon {}]", b.target),
+            Task::Borrow(ref b) => write!(f, "borrow [reigon {}]", b.wanted_region),
         }
     }
 }
@@ -2264,6 +2282,7 @@ impl Runner {
         apply_pool_size: usize,
         apply_scheduler: Scheduler<Task>,
     ) -> Runner {
+        // All apply tasks will execute in this FuturePool.
         let apply_pool = FuturePool::new(
             apply_pool_size,
             STACK_SIZE,
@@ -2272,6 +2291,9 @@ impl Runner {
             move || PoolContext {},
         );
 
+        // Each region has a channel to receive apply tasks.
+        // Apply tasks will send to scheduler thread first, and then the scheduler
+        // thread dispatch these tasks to related regions throw `region_task_senders`.
         let mut region_task_senders =
             HashMap::with_capacity_and_hasher(store.get_peers().len(), Default::default());
         for (&region_id, p) in store.get_peers() {
@@ -2286,6 +2308,8 @@ impl Runner {
                 Arc::clone(&store.importer),
                 use_delete_range,
             );
+
+            // Spawn an endless future in the pool for each region.
             Self::spawn_region(&apply_pool, delegate, rx);
         }
 
@@ -2311,10 +2335,13 @@ impl Runner {
 
             let mut removed = false;
             let mut stale_proposal = None;
-            match self.region_task_senders.get(&region_proposal.region_id) {
+            let region_id = region_proposal.region_id;
+            match self.region_task_senders.get(&region_id) {
+                // Try to dispatch the proposal message to related region.
                 Some(tx) => {
                     tx.unbounded_send(RegionTask::proposal(region_proposal))
                         .unwrap_or_else(|e| {
+                            warn!("Send proposal task to {} failed, err {:?}, it is a stale proposal.", region_id, e);
                             removed = true;
                             let task = e.into_inner();
                             if let RegionTask::Proposal(p) = task {
@@ -2324,11 +2351,15 @@ impl Runner {
                             }
                         });
                 }
+                // These is no related sender, must be a stale proposal.
                 None => {
+                    info!("Receive a stale proposal message for {}", region_id);
                     removed = true;
                     stale_proposal = Some(region_proposal);
                 }
             }
+
+            // For stale proposal message, notify the caller.
             if removed {
                 let stale_proposal = stale_proposal.unwrap();
                 for p in stale_proposal.props {
@@ -2342,6 +2373,7 @@ impl Runner {
         APPLY_PROPOSAL.observe(propose_num as f64);
     }
 
+    // Spawn an endless future on the apply pool for the given region.
     fn spawn_region(
         apply_pool: &FuturePool<PoolContext>,
         delegate: ApplyDelegate,
@@ -2405,8 +2437,8 @@ impl Runner {
                                 })
                                 as Box<Future<Item = ApplyDelegate, Error = ()> + Send>
                         }
-                        RegionTask::Destroy(d) => {
-                            assert_eq!(delegate.region_id(), d.region_id);
+                        RegionTask::Destroy(region_id) => {
+                            assert_eq!(delegate.region_id(), region_id);
                             info!("{} remove from apply pool", delegate.tag);
                             delegate.destroy();
                             let notifier = delegate.notifier.clone();
@@ -2432,7 +2464,7 @@ impl Runner {
                             box future::err(())
                         }
                         RegionTask::Borrow(borrow) => {
-                            assert_eq!(delegate.region_id(), borrow.target);
+                            assert_eq!(delegate.region_id(), borrow.wanted_region);
                             borrow.tx.send(delegate).unwrap();
 
                             // Exit current task
@@ -2485,12 +2517,15 @@ impl Runner {
 
         let (tx, rx) = unbounded();
         if let Some(tx) = self.region_task_senders.insert(region_id, tx) {
+            // There already exist an sender for this region, this only happen when the registration
+            // message send for several times, use the latest message.
             tx.unbounded_send(RegionTask::suicide(region_id, term))
                 .unwrap_or_else(|_| {
                     error!("Dangling message sender for region {}", region_id);
                 });
         }
 
+        // Register to apply pool.
         Self::spawn_region(&self.apply_pool, delegate, rx);
     }
 
@@ -2509,23 +2544,29 @@ impl Runner {
     }
 
     fn handle_borrow(&mut self, borrow: BorrowDelegate) {
-        let target = borrow.target;
-        let tx = self.region_task_senders.remove(&target).unwrap_or_else(|| {
-            panic!(
-                "Can't borrow region {} 's delegate, no related message channel",
-                target
-            );
-        });
+        // Dispatch the borrow message to the `wanted_region`, and remove the related
+        // task sender.
+        let wanted_region = borrow.wanted_region;
+        let tx = self
+            .region_task_senders
+            .remove(&wanted_region)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Can't borrow region {} 's delegate, no related message channel",
+                    wanted_region
+                );
+            });
         tx.unbounded_send(RegionTask::Borrow(borrow))
             .unwrap_or_else(|e| {
                 panic!(
                     "Can't borrow region {} 's delegate, caused by err: {:?}",
-                    target, e
+                    wanted_region, e
                 );
             });
     }
 
     fn handle_shutdown(&mut self) {
+        // Send stop message to each region.
         let mut total: u64 = 0;
         let (stop_tx, stop_rx) = mpsc::channel();
         for (region_id, tx) in self.region_task_senders.drain() {
@@ -2533,6 +2574,8 @@ impl Runner {
                 total += 1;
             }
         }
+
+        // Wait all regions have stopped.
         for _ in 0..total {
             let _ = stop_rx.recv();
         }
@@ -2545,6 +2588,8 @@ impl Runner {
             if apply.entries.is_empty() {
                 continue;
             }
+
+            // Dispatch the apply task to related region.
             let region_id = apply.region_id;
             let mut removed = false;
             if let Some(tx) = self.region_task_senders.get(&region_id) {
@@ -2557,6 +2602,7 @@ impl Runner {
                 error!("[region {}] is missing", region_id);
                 continue;
             }
+
             if removed {
                 self.region_task_senders.remove(&region_id).unwrap();
             }
@@ -2577,10 +2623,6 @@ impl Runnable<Task> for Runner {
 
     fn shutdown(&mut self) {
         self.handle_shutdown();
-
-        // if let Err(e) = self.apply_pool.stop() {
-        //     error!("Stop apply pool failed, error : {:?}", e);
-        // }
     }
 }
 
