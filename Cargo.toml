@@ -91,8 +91,7 @@ git = "https://github.com/pingcap/murmur3.git"
 git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
-git = "https://github.com/nolouch/kvproto.git"
-branch = "version-introduce"
+git = "https://github.com/pingcap/kvproto.git"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
