@@ -17,9 +17,9 @@ use std::cmp;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::mem;
-use std::sync::Arc;
 use std::sync::mpsc;
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
@@ -32,10 +32,13 @@ use uuid::Uuid;
 
 use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region};
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType,
-                          CommitMergeRequest, RaftCmdRequest, RaftCmdResponse, Request, Response};
-use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState,
-                             RegionLocalState};
+use kvproto::raft_cmdpb::{
+    AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
+    RaftCmdRequest, RaftCmdResponse, Request, Response,
+};
+use kvproto::raft_serverpb::{
+    MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
+};
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
 
 use import::SSTImporter;
@@ -44,9 +47,11 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::engine::{Mutable, Peekable, Snapshot};
 use raftstore::store::metrics::*;
 use raftstore::store::msg::Callback;
-use raftstore::store::peer::{check_epoch, Peer};
-use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply_state,
-                                     write_peer_state};
+use raftstore::store::peer::Peer;
+use raftstore::store::peer_storage::{
+    self, compact_raft_log, write_initial_apply_state, write_peer_state,
+};
+use raftstore::store::util::check_region_epoch;
 use raftstore::store::{cmd_resp, keys, util, Store};
 use raftstore::{Error, Result};
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -60,6 +65,7 @@ use super::metrics::*;
 
 const WRITE_BATCH_MAX_KEYS: usize = 128;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
+const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
 const STACK_SIZE: usize = 10 * 1024 * 1024;
 
@@ -111,6 +117,11 @@ pub struct PendingCmdQueue {
 impl PendingCmdQueue {
     fn pop_normal(&mut self, term: u64) -> Option<PendingCmd> {
         self.normals.pop_front().and_then(|cmd| {
+            if self.normals.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP
+                && self.normals.len() < SHRINK_PENDING_CMD_QUEUE_CAP
+            {
+                self.normals.shrink_to_fit();
+            }
             if cmd.term > term {
                 self.normals.push_front(cmd);
                 return None;
@@ -214,7 +225,9 @@ impl ApplyCallback {
     fn invoke_all(&mut self, host: &CoprocessorHost) {
         for (cb, mut resp) in self.cbs.drain(..) {
             host.post_apply(&self.region, &mut resp);
-            cb.map(|cb| cb.invoke_with_response(resp));
+            if let Some(cb) = cb {
+                cb.invoke_with_response(resp)
+            };
         }
     }
 
@@ -537,7 +550,6 @@ impl ApplyDelegate {
         )
     }
 
-    #[allow(too_many_arguments)]
     fn from_registration(
         db: Arc<DB>,
         raft_db: Arc<DB>,
@@ -803,7 +815,8 @@ impl ApplyDelegate {
         ctx.exec_ctx = Some(self.new_ctx(index, term, req));
         ctx.wb_mut().set_save_point();
 
-        box self.exec_raft_cmd(ctx)
+        box self
+            .exec_raft_cmd(ctx)
             .then(move |res| match res {
                 Ok((delegate, ctx, resp, exec_result)) => {
                     future::ok((delegate, ctx, resp, exec_result))
@@ -951,7 +964,7 @@ impl ApplyDelegate {
         // Include region for stale epoch after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
-        if let Err(e) = check_epoch(&self.region, &req, include_region) {
+        if let Err(e) = check_region_epoch(&req, &self.region, include_region) {
             return box future::err((self, ctx, e));
         }
 
@@ -966,7 +979,7 @@ impl ApplyDelegate {
         self,
         ctx: ApplyContext,
         request: AdminRequest,
-    ) -> Box<Future<Item = RaftCmdFutureItem, Error = FutureError> + Send> {
+    ) -> impl Future<Item = RaftCmdFutureItem, Error = FutureError> {
         let cmd_type = request.get_cmd_type();
         info!(
             "{} execute admin command {:?} at [term: {}, index: {}]",
@@ -976,27 +989,30 @@ impl ApplyDelegate {
             ctx.exec_ctx.as_ref().unwrap().index
         );
 
-        box match cmd_type {
-            AdminCmdType::ChangePeer => self.exec_change_peer(ctx, &request),
-            AdminCmdType::Split => self.exec_split(ctx, &request),
-            AdminCmdType::CompactLog => self.exec_compact_log(ctx, &request),
-            AdminCmdType::TransferLeader => {
-                box future::err((self, ctx, box_err!("transfer leader won't exec")))
-            }
-            AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, &request),
-            AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, &request),
-            // TODO: is it backward compatible to add new cmd_type?
-            AdminCmdType::PrepareMerge => self.exec_prepare_merge(ctx, &request),
-            AdminCmdType::CommitMerge => self.exec_commit_merge(ctx, &request),
-            AdminCmdType::RollbackMerge => self.exec_rollback_merge(ctx, &request),
-            AdminCmdType::InvalidAdmin => {
-                box future::err((self, ctx, box_err!("unsupported admin command type")))
-            }
-        }.then(move |res| match res {
+        let exec_res: Box<Future<Item = AdminCmdFutureItem, Error = FutureError> + Send> =
+            match cmd_type {
+                AdminCmdType::ChangePeer => box self.exec_change_peer(ctx, &request),
+                AdminCmdType::Split => box self.exec_split(ctx, &request),
+                AdminCmdType::CompactLog => box self.exec_compact_log(ctx, &request),
+                AdminCmdType::TransferLeader => {
+                    box future::err((self, ctx, box_err!("transfer leader won't exec")))
+                }
+                AdminCmdType::ComputeHash => box self.exec_compute_hash(ctx, &request),
+                AdminCmdType::VerifyHash => box self.exec_verify_hash(ctx, &request),
+                // TODO: is it backward compatible to add new cmd_type?
+                AdminCmdType::PrepareMerge => box self.exec_prepare_merge(ctx, &request),
+                AdminCmdType::CommitMerge => box self.exec_commit_merge(ctx, &request),
+                AdminCmdType::RollbackMerge => box self.exec_rollback_merge(ctx, &request),
+                AdminCmdType::InvalidAdmin => {
+                    box future::err((self, ctx, box_err!("unsupported admin command type")))
+                }
+            };
+        box exec_res.then(move |res| match res {
             Ok((delegate, ctx, mut response, exec_result)) => {
                 response.set_cmd_type(cmd_type);
                 let mut resp = RaftCmdResponse::new();
-                let uuid = ctx.exec_ctx
+                let uuid = ctx
+                    .exec_ctx
                     .as_ref()
                     .unwrap()
                     .req
@@ -1015,7 +1031,7 @@ impl ApplyDelegate {
         mut self,
         mut ctx: ApplyContext,
         request: &AdminRequest,
-    ) -> Box<Future<Item = AdminCmdFutureItem, Error = FutureError> + Send> {
+    ) -> future::FutureResult<AdminCmdFutureItem, FutureError> {
         let request = request.get_change_peer();
         let peer = request.get_peer();
         let store_id = peer.get_store_id();
@@ -1048,7 +1064,7 @@ impl ApplyDelegate {
                             self.tag, peer, self.region
                         );
                         let region = self.region.clone();
-                        return box future::err((
+                        return future::err((
                             self,
                             ctx,
                             box_err!(
@@ -1086,7 +1102,7 @@ impl ApplyDelegate {
                             "{} remove unmatched peer: expect: {:?}, get {:?}, ignore",
                             self.tag, peer, p
                         );
-                        return box future::err((
+                        return future::err((
                             self,
                             ctx,
                             box_err!(
@@ -1107,7 +1123,7 @@ impl ApplyDelegate {
                         self.tag, peer, self.region
                     );
                     let region = self.region.clone();
-                    return box future::err((
+                    return future::err((
                         self,
                         ctx,
                         box_err!("remove missing peer {:?} from region {:?}", peer, region),
@@ -1135,7 +1151,7 @@ impl ApplyDelegate {
                         self.tag, peer, self.region
                     );
                     let region = self.region.clone();
-                    return box future::err((
+                    return future::err((
                         self,
                         ctx,
                         box_err!(
@@ -1169,7 +1185,7 @@ impl ApplyDelegate {
         let mut resp = AdminResponse::new();
         resp.mut_change_peer().set_region(region.clone());
 
-        box future::ok((
+        future::ok((
             self,
             ctx,
             resp,
@@ -1185,7 +1201,7 @@ impl ApplyDelegate {
         self,
         mut ctx: ApplyContext,
         req: &AdminRequest,
-    ) -> Box<Future<Item = AdminCmdFutureItem, Error = FutureError> + Send> {
+    ) -> future::FutureResult<AdminCmdFutureItem, FutureError> {
         let _id = self.id;
         let _region_id = self.region_id();
         let apply_before_split = || {
@@ -1204,13 +1220,13 @@ impl ApplyDelegate {
         let split_req = req.get_split();
         let right_derive = split_req.get_right_derive();
         if split_req.get_split_key().is_empty() {
-            return box future::err((self, ctx, box_err!("missing split key")));
+            return future::err((self, ctx, box_err!("missing split key")));
         }
 
         let split_key = split_req.get_split_key();
         let mut region = self.region.clone();
         if split_key <= region.get_start_key() {
-            return box future::err((
+            return future::err((
                 self,
                 ctx,
                 box_err!("invalid split request: {:?}", split_req),
@@ -1218,7 +1234,7 @@ impl ApplyDelegate {
         }
 
         if let Err(e) = util::check_key_in_region(split_key, &region) {
-            return box future::err((self, ctx, e));
+            return future::err((self, ctx, e));
         }
 
         info!(
@@ -1246,7 +1262,7 @@ impl ApplyDelegate {
         // Update new region peer ids.
         let new_peer_ids = split_req.get_new_peer_ids();
         if new_peer_ids.len() != new_region.get_peers().len() {
-            return box future::err((
+            return future::err((
                 self,
                 ctx,
                 box_err!(
@@ -1299,7 +1315,7 @@ impl ApplyDelegate {
             .inc();
 
         if right_derive {
-            box future::ok((
+            future::ok((
                 self,
                 ctx,
                 resp,
@@ -1310,7 +1326,7 @@ impl ApplyDelegate {
                 }),
             ))
         } else {
-            box future::ok((
+            future::ok((
                 self,
                 ctx,
                 resp,
@@ -1327,7 +1343,7 @@ impl ApplyDelegate {
         self,
         ctx: ApplyContext,
         req: &AdminRequest,
-    ) -> Box<Future<Item = AdminCmdFutureItem, Error = FutureError> + Send> {
+    ) -> future::FutureResult<AdminCmdFutureItem, FutureError> {
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["prepare_merge", "all"])
             .inc();
@@ -1379,7 +1395,7 @@ impl ApplyDelegate {
             .with_label_values(&["prepare_merge", "success"])
             .inc();
 
-        box future::ok((
+        future::ok((
             self,
             ctx,
             AdminResponse::new(),
@@ -1432,15 +1448,19 @@ impl ApplyDelegate {
         mut ctx: ApplyContext,
         merge: CommitMergeRequest,
         exist_region: Region,
-    ) -> Box<Future<Item = CatchUpLogItem, Error = (Self, ApplyContext, Error)> + Send> {
+    ) -> impl Future<Item = CatchUpLogItem, Error = (Self, ApplyContext, Error)> {
         let region_id = exist_region.get_id();
         let stash = ctx.stash(&mut self);
         let tag = self.tag.clone();
         let (tx, rx) = oneshot::channel();
+
+        // Send a borrow message to the source region first.
         self.scheduler
             .schedule(Task::borrow(region_id, tx))
             .unwrap();
-        box rx.then(move |res| match res {
+
+        // Continue after received the source region.
+        rx.then(move |res| match res {
             Ok(delegate) => {
                 let apply_index = delegate.apply_state.get_applied_index();
                 if apply_index >= merge.get_commit() {
@@ -1453,6 +1473,8 @@ impl ApplyDelegate {
                     return box future::ok((delegate, ctx))
                         as Box<Future<Item = (Self, ApplyContext), Error = FutureError> + Send>;
                 }
+
+                // Catch up log for the source region.
                 box delegate
                     .handle_raft_committed_entries(ctx, entries)
                     .then(move |res| {
@@ -1480,7 +1502,18 @@ impl ApplyDelegate {
         self,
         ctx: ApplyContext,
         req: &AdminRequest,
-    ) -> Box<Future<Item = AdminCmdFutureItem, Error = FutureError> + Send> {
+    ) -> impl Future<Item = AdminCmdFutureItem, Error = FutureError> {
+        {
+            let apply_before_commit_merge = || {
+                fail_point!(
+                    "apply_before_commit_merge_except_1_4",
+                    { self.region_id() == 1 && self.id != 4 },
+                    |_| {}
+                );
+            };
+            apply_before_commit_merge();
+        }
+
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["commit_merge", "all"])
             .inc();
@@ -1503,7 +1536,7 @@ impl ApplyDelegate {
             ),
         }
         let exist_region = state.get_region().to_owned();
-        box self.catch_up_log_for_merge(ctx, merge, exist_region)
+        self.catch_up_log_for_merge(ctx, merge, exist_region)
             .and_then(move |(delegate, ctx, exist_region)| {
                 if source_region != exist_region {
                     panic!(
@@ -1566,7 +1599,7 @@ impl ApplyDelegate {
         self,
         ctx: ApplyContext,
         req: &AdminRequest,
-    ) -> Box<Future<Item = AdminCmdFutureItem, Error = FutureError> + Send> {
+    ) -> future::FutureResult<AdminCmdFutureItem, FutureError> {
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["rollback_merge", "all"])
             .inc();
@@ -1600,7 +1633,7 @@ impl ApplyDelegate {
             .with_label_values(&["rollback_merge", "success"])
             .inc();
         let resp = AdminResponse::new();
-        box future::ok((
+        future::ok((
             self,
             ctx,
             resp,
@@ -1615,7 +1648,7 @@ impl ApplyDelegate {
         self,
         mut ctx: ApplyContext,
         req: &AdminRequest,
-    ) -> Box<Future<Item = AdminCmdFutureItem, Error = FutureError> + Send> {
+    ) -> future::FutureResult<AdminCmdFutureItem, FutureError> {
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["compact", "all"])
             .inc();
@@ -1632,14 +1665,14 @@ impl ApplyDelegate {
                 "{} compact index {} <= first index {}, no need to compact",
                 self.tag, compact_index, first_index
             );
-            return box future::ok((self, ctx, resp, None));
+            return future::ok((self, ctx, resp, None));
         }
         if self.is_merging {
             info!(
                 "{} is in merging mode, skip compact {}",
                 self.tag, compact_index
             );
-            return box future::ok((self, ctx, resp, None));
+            return future::ok((self, ctx, resp, None));
         }
 
         let compact_term = req.get_compact_log().get_compact_term();
@@ -1651,7 +1684,7 @@ impl ApplyDelegate {
                 req.get_compact_log()
             );
             // old format compact log command, safe to ignore.
-            return box future::err((
+            return future::err((
                 self,
                 ctx,
                 box_err!("command format is outdated, please upgrade leader."),
@@ -1664,7 +1697,7 @@ impl ApplyDelegate {
             compact_raft_log(&self.tag, apply_state, compact_index, compact_term)
         };
         if let Err(e) = compact_raft_log_res {
-            return box future::err((self, ctx, e));
+            return future::err((self, ctx, e));
         }
 
         PEER_ADMIN_CMD_COUNTER_VEC
@@ -1675,7 +1708,7 @@ impl ApplyDelegate {
             let apply_state = &ctx.exec_ctx.as_mut().unwrap().apply_state;
             apply_state.get_truncated_state().clone()
         };
-        box future::ok((
+        future::ok((
             self,
             ctx,
             resp,
@@ -1722,7 +1755,8 @@ impl ApplyDelegate {
         }
 
         let mut resp = RaftCmdResponse::new();
-        let uuid = ctx.exec_ctx
+        let uuid = ctx
+            .exec_ctx
             .as_ref()
             .unwrap()
             .req
@@ -1746,7 +1780,8 @@ impl ApplyDelegate {
 
     fn handle_put(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
-        check_data_key(key, &self.region)?;
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(key, &self.region)?;
 
         let resp = Response::new();
         let key = keys::data_key(key);
@@ -1788,7 +1823,8 @@ impl ApplyDelegate {
 
     fn handle_delete(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
         let key = req.get_delete().get_key();
-        check_data_key(key, &self.region)?;
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(key, &self.region)?;
 
         let key = keys::data_key(key);
         // since size_diff_hint is not accurate, so we just skip calculate the value size.
@@ -1829,7 +1865,8 @@ impl ApplyDelegate {
                 e_key
             ));
         }
-        check_data_key(s_key, &self.region)?;
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(s_key, &self.region)?;
         let end_key = keys::data_end_key(e_key);
         let region_end_key = keys::data_end_key(self.region.get_end_key());
         if end_key > region_end_key {
@@ -1923,13 +1960,6 @@ pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
     Some(req.get_change_peer())
 }
 
-fn check_data_key(key: &[u8], region: &Region) -> Result<()> {
-    // region key range has no data prefix, so we must use origin key to check.
-    util::check_key_in_region(key, region)?;
-
-    Ok(())
-}
-
 fn check_sst_for_ingestion(sst: &SSTMeta, region: &Region) -> Result<()> {
     let uuid = sst.get_uuid();
     if let Err(e) = Uuid::from_bytes(uuid) {
@@ -1962,48 +1992,18 @@ fn check_sst_for_ingestion(sst: &SSTMeta, region: &Region) -> Result<()> {
     Ok(())
 }
 
-pub fn do_get(tag: &str, region: &Region, snap: &Snapshot, req: &Request) -> Result<Response> {
-    // TODO: the get_get looks wried, maybe we should figure out a better name later.
-    let key = req.get_get().get_key();
-    check_data_key(key, region)?;
-
-    let mut resp = Response::new();
-    let res = if !req.get_get().get_cf().is_empty() {
-        let cf = req.get_get().get_cf();
-        // TODO: check whether cf exists or not.
-        snap.get_value_cf(cf, &keys::data_key(key))
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to get {} with cf {}: {:?}",
-                    tag,
-                    escape(key),
-                    cf,
-                    e
-                )
-            })
-    } else {
-        snap.get_value(&keys::data_key(key))
-            .unwrap_or_else(|e| panic!("{} failed to get {}: {:?}", tag, escape(key), e))
-    };
-    if let Some(res) = res {
-        resp.mut_get().set_value(res.to_vec());
-    }
-
-    Ok(resp)
-}
-
 // Consistency Check
 impl ApplyDelegate {
     fn exec_compute_hash(
         self,
         ctx: ApplyContext,
         _: &AdminRequest,
-    ) -> Box<Future<Item = AdminCmdFutureItem, Error = FutureError> + Send> {
+    ) -> future::FutureResult<AdminCmdFutureItem, FutureError> {
         let resp = AdminResponse::new();
         let region = self.region.clone();
         let engine = Arc::clone(&self.engine);
         let index = ctx.exec_ctx.as_ref().unwrap().index;
-        box future::ok((
+        future::ok((
             self,
             ctx,
             resp,
@@ -2023,12 +2023,12 @@ impl ApplyDelegate {
         self,
         ctx: ApplyContext,
         req: &AdminRequest,
-    ) -> Box<Future<Item = AdminCmdFutureItem, Error = FutureError> + Send> {
+    ) -> future::FutureResult<AdminCmdFutureItem, FutureError> {
         let verify_req = req.get_verify_hash();
         let index = verify_req.get_index();
         let hash = verify_req.get_hash().to_vec();
         let resp = AdminResponse::new();
-        box future::ok((
+        future::ok((
             self,
             ctx,
             resp,
@@ -2702,7 +2702,9 @@ mod tests {
         let mut e = Entry::new();
         e.set_index(index);
         e.set_term(term);
-        req.map(|r| e.set_data(r.write_to_bytes().unwrap()));
+        if let Some(r) = req {
+            e.set_data(r.write_to_bytes().unwrap())
+        };
         e
     }
 
@@ -2853,13 +2855,11 @@ mod tests {
         assert!(cc_resp.get_header().get_error().has_stale_command());
 
         apply_worker
-            .schedule(Task::applies(vec![
-                Apply::new(
-                    1, /* region id */
-                    1, /* term */
-                    vec![new_entry(2, 3, None)],
-                ),
-            ]))
+            .schedule(Task::applies(vec![Apply::new(
+                1, /* region id */
+                1, /* term */
+                vec![new_entry(2, 3, None)],
+            )]))
             .unwrap();
         // non registered region should be ignored.
         assert!(rx.try_recv().is_err());
@@ -2877,13 +2877,11 @@ mod tests {
         let apply_state_key = keys::apply_state_key(2);
         assert!(db.get(&apply_state_key).unwrap().is_none());
         apply_worker
-            .schedule(Task::applies(vec![
-                Apply::new(
-                    2,  /* region id */
-                    11, /* term */
-                    vec![new_entry(5 /* term */, 4 /* index */, None)],
-                ),
-            ]))
+            .schedule(Task::applies(vec![Apply::new(
+                2,  /* region id */
+                11, /* term */
+                vec![new_entry(5 /* term */, 4 /* index */, None)],
+            )]))
             .unwrap();
         let res = match rx.recv().unwrap() {
             TaskRes::Applys(res) => res,
