@@ -179,9 +179,9 @@ pub fn check_environment_variables() {
     }
 
     if cfg!(unix) {
-        for proxy in &["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"] {
+        for proxy in &["http_proxy", "https_proxy"] {
             if let Ok(var) = env::var(proxy) {
-                warn!("environment variable `{}` is present, `{}`", proxy, var);
+                info!("environment variable `{}` is present, `{}`", proxy, var);
             }
         }
     }
