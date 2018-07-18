@@ -19,10 +19,10 @@ use self::reader::{SnapshotApplyer, SnapshotLoader};
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicPtr, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
-use std::{fmt, io};
+use std::{fmt, io, ptr};
 
 use protobuf::stream::CodedInputStream;
 use protobuf::Message;
@@ -117,6 +117,7 @@ impl SnapKey {
 #[derive(Clone)]
 pub struct SnapManager {
     core: Arc<SnapManagerCore>,
+    snap_size: Arc<AtomicU64>,
     max_total_size: u64,
     io_limiter: Option<Arc<IOLimiter>>,
     ch: Option<SendCh<Msg>>,
@@ -128,7 +129,7 @@ impl SnapManager {
     }
 
     pub fn get_total_snap_size(&self) -> u64 {
-        self.core.snap_size.load(Ordering::SeqCst)
+        self.snap_size.load(Ordering::SeqCst)
     }
 
     pub fn stats(&self) -> SnapStats {
@@ -162,34 +163,26 @@ impl SnapManager {
         let mut registry = self.core.gen_registry.lock().unwrap();
         if let Some(entry) = registry.get(&key) {
             return entry
-                .meta
-                .as_ref()
+                .get_meta()
                 .map(|m| Ok(snapshot_data_from_meta(m.clone(), region)));
         }
-        let notifier = Arc::clone(&snap_stale_notifier);
-        registry.insert(key, SnapGenEntry::new(notifier));
+
+        let entry = SnapEntry::new(Some(snap_stale_notifier));
+        registry.insert(key, entry.clone());
         drop(registry);
 
         match snapshot_load(&self.core.base, true, key).unwrap_or_else(|| {
             self.gc_snapshots_if_need()?;
             let dir = self.core.base.to_owned();
             let io_limiter = self.io_limiter.clone();
-            SnapshotGenerator::new(dir, key, io_limiter, snap_stale_notifier)
+            let snap_size = Arc::clone(&self.snap_size);
+            SnapshotGenerator::new(dir, key, io_limiter, entry, snap_size)
                 .and_then(|mut gen| gen.build(&region, db_snap))
-                .map(|meta| {
-                    let size = get_size_from_snapshot_meta(&meta);
-                    self.core.snap_size.fetch_add(size, Ordering::SeqCst);
-                    meta
-                })
         }) {
-            Ok(meta) => {
-                let mut registry = self.core.gen_registry.lock().unwrap();
-                registry.get_mut(&key).unwrap().meta = Some(meta.clone());
-                Some(Ok(snapshot_data_from_meta(meta, region)))
-            }
+            Ok(meta) => Some(Ok(snapshot_data_from_meta(meta, region))),
             Err(e) => {
                 error!("{} build snapshot fail: {}", key, e);
-                self.core.delete_snapshot(true, key, true);
+                self.delete_snapshot(true, key, true);
                 Some(Err(e))
             }
         }
@@ -197,8 +190,8 @@ impl SnapManager {
 
     pub fn get_snapshot_sender(&self, key: SnapKey) -> Result<SnapshotSender> {
         let registry = self.core.gen_registry.lock().unwrap();
-        if let Some(gen_entry) = registry.get(&key) {
-            match gen_entry.meta {
+        if let Some(entry) = registry.get(&key) {
+            match entry.get_meta() {
                 None => {
                     error!("{} get_snapshot_sender while building", key);
                     Err(Error::Snapshot(SnapError::Registry("generate", "send")))
@@ -206,12 +199,7 @@ impl SnapManager {
                 Some(ref m) => {
                     let dir = self.core.base.clone();
                     let meta = m.clone();
-                    let notifier = Arc::clone(&gen_entry.snap_stale_notifier);
-                    let ref_count = Arc::clone(&gen_entry.ref_count);
-                    let sent_times = Arc::clone(&gen_entry.sent_times);
-                    Ok(SnapshotSender::new(
-                        dir, key, meta, notifier, ref_count, sent_times,
-                    ))
+                    Ok(SnapshotSender::new(dir, key, meta, entry.clone()))
                 }
             }
         } else {
@@ -230,35 +218,31 @@ impl SnapManager {
 
         let mut registry = self.core.apply_registry.lock().unwrap();
         if let Some(entry) = registry.get(&key) {
-            if entry.meta.is_some() {
+            if entry.get_meta().is_some() {
                 return Ok(None);
             }
             error!("{} get_snapshot_receiver multi times", key);
             return Err(Error::Snapshot(SnapError::Registry("receive", "receive")));
         }
 
-        registry.insert(key, SnapApplyEntry::new());
+        let entry = SnapEntry::new(None);
+        registry.insert(key, entry.clone());
         drop(registry);
 
         match snapshot_load(&self.core.base, false, key) {
             Some(Ok(_)) => return Ok(None),
             Some(Err(e)) => {
                 error!("{} get_snapshot_receiver fail when load: {}", key, e);
-                self.core.delete_snapshot(false, key, false);
+                // Don't deregister because we can re-receive it.
+                self.delete_snapshot(false, key, false);
             }
             None => {}
         };
 
         let dir = self.core.base.clone();
         let io_limiter = self.io_limiter.clone();
-        let core = Arc::clone(&self.core);
-        SnapshotReceiver::new(dir, key, io_limiter, meta, core)
-            .map(Some)
-            .map_err(|e| {
-                let mut registry = self.core.apply_registry.lock().unwrap();
-                registry.remove(&key);
-                e
-            })
+        let snap_size = Arc::clone(&self.snap_size);
+        SnapshotReceiver::new(dir, key, io_limiter, meta, entry, snap_size).map(Some)
     }
 
     pub fn apply_snapshot(
@@ -267,16 +251,16 @@ impl SnapManager {
         options: ApplyOptions,
         notifier: Arc<SnapStaleNotifier>,
     ) -> Result<()> {
-        let registry = self.core.apply_registry.lock().unwrap();
-        if let Some(entry) = registry.get(&key) {
-            if entry.applied.load(Ordering::SeqCst) {
+        let mut registry = self.core.apply_registry.lock().unwrap();
+        if let Some(entry) = registry.get_mut(&key) {
+            if entry.used_times.load(Ordering::SeqCst) > 0 {
                 error!("{} apply_snapshot already applied", key);
                 return Err(Error::Snapshot(SnapError::Registry("apply", "apply")));
             }
-            if let Some(ref m) = entry.meta {
+            if let Some(ref m) = entry.get_meta() {
                 let dir = self.core.base.clone();
-                let applied = Arc::clone(&entry.applied);
-                let applyer = SnapshotApplyer::new(dir, key, m.clone(), notifier, applied);
+                entry.snap_stale_notifier = Some(notifier);
+                let applyer = SnapshotApplyer::new(dir, key, m.clone(), entry.clone());
                 return applyer.apply(options);
             }
             error!("{} apply_snapshot while receiving", key);
@@ -311,7 +295,7 @@ impl SnapManager {
                         }
                     };
                     let size = get_size_from_snapshot_meta(&snap_meta);
-                    self.core.snap_size.fetch_add(size, Ordering::SeqCst);
+                    self.snap_size.fetch_add(size, Ordering::SeqCst);
                 }
             }
         }
@@ -341,11 +325,11 @@ impl SnapManager {
     }
 
     pub fn gc_snapshots(&self) -> Result<()> {
-        let snap_size = self.core.snap_size.load(Ordering::SeqCst);
+        let snap_size = self.snap_size.load(Ordering::SeqCst);
         info!("starting gc snapshots, total size: {}", snap_size);
         let t = Instant::now_coarse();
 
-        let (mut removed_gen_snapshots, mut removed_rev_snapshots) = (0, 0);
+        let mut removed = 0;
         let mut snap_keys = Vec::<(bool, SnapKey)>::new();
         for p in fs::read_dir(&self.core.base)?
             .filter_map(|p| p.ok())
@@ -368,57 +352,59 @@ impl SnapManager {
         });
 
         for (for_send, key) in snap_keys {
-            if for_send {
-                let mut registry = self.core.gen_registry.lock().unwrap();
-                if let Some(entry) = registry.get(&key) {
-                    if entry.is_busy()
-                        || (!entry.has_been_used()
-                            && !self.core.snapshot_is_stale(for_send, key).unwrap_or(true))
-                    {
-                        continue;
-                    }
+            let mut registry = self.core.get_registry(for_send);
+            if let Some(entry) = registry.get(&key) {
+                if entry.is_busy()
+                    || (!entry.has_been_used()
+                        && !self.core.snapshot_is_stale(for_send, key).unwrap_or(true))
+                {
+                    continue;
                 }
-                self.core.delete_snapshot(for_send, key, false);
-                registry.remove(&key);
-                removed_gen_snapshots += 1;
-            } else {
-                let mut registry = self.core.apply_registry.lock().unwrap();
-                if let Some(entry) = registry.get(&key) {
-                    if entry.is_busy()
-                        || (!entry.has_been_used()
-                            && !self.core.snapshot_is_stale(for_send, key).unwrap_or(true))
-                    {
-                        continue;
-                    }
-                }
-                self.core.delete_snapshot(for_send, key, false);
-                registry.remove(&key);
-                removed_rev_snapshots += 1;
             }
+            self.delete_snapshot(for_send, key, false);
+            registry.remove(&key);
+            removed += 1;
         }
-        let snap_size = self.core.snap_size.load(Ordering::SeqCst);
+
+        let snap_size = self.snap_size.load(Ordering::SeqCst);
         info!(
-            "gc snapshots success in {:?}, removed gen/rev: ({}/{}), total size: {}",
+            "gc snapshots success in {:?}, removed: {}, total size: {}",
             t.elapsed(),
-            removed_gen_snapshots,
-            removed_rev_snapshots,
+            removed,
             snap_size
         );
         Ok(())
     }
 
     fn gc_snapshots_if_need(&self) -> Result<()> {
-        if self.max_total_size > 0
-            && self.core.snap_size.load(Ordering::SeqCst) > self.max_total_size
-        {
+        if self.max_total_size > 0 && self.snap_size.load(Ordering::SeqCst) > self.max_total_size {
             self.gc_snapshots()?;
-            let size = self.core.snap_size.load(Ordering::SeqCst);
+            let size = self.snap_size.load(Ordering::SeqCst);
             let limit = self.max_total_size;
             if size > limit {
                 return Err(Error::Snapshot(SnapError::NoSpace(size, limit)));
             }
         }
         Ok(())
+    }
+
+    fn delete_snapshot(&self, for_send: bool, key: SnapKey, deregister: bool) {
+        match read_snapshot_meta(&get_meta_file_path(&self.core.base, for_send, key)) {
+            Ok(meta) => {
+                let size = get_size_from_snapshot_meta(&meta);
+                self.snap_size.fetch_sub(size, Ordering::SeqCst);
+            }
+            Err(_) => return,
+        }
+
+        delete_file_if_exist(&get_meta_file_path(&self.core.base, for_send, key));
+        for cf in SNAPSHOT_CFS {
+            delete_file_if_exist(&get_cf_file_path(&self.core.base, for_send, key, cf));
+        }
+
+        if deregister {
+            self.core.get_registry(for_send).remove(&key);
+        }
     }
 }
 
@@ -456,9 +442,9 @@ impl SnapManagerBuilder {
                 base: path.into(),
                 gen_registry: Mutex::new(map![]),
                 apply_registry: Mutex::new(map![]),
-                snap_size: AtomicU64::new(0),
                 gc_timeout: self.gc_timeout,
             }),
+            snap_size: Arc::new(AtomicU64::new(0)),
             max_total_size: self.max_total_size,
             io_limiter,
             ch,
@@ -479,60 +465,43 @@ pub struct ApplyOptions {
     pub write_batch_size: usize,
 }
 
-struct SnapGenEntry {
-    snap_stale_notifier: Arc<SnapStaleNotifier>,
-    meta: Option<SnapshotMeta>,
-    ref_count: Arc<AtomicUsize>,
-    sent_times: Arc<AtomicUsize>,
-}
-
-impl SnapGenEntry {
-    fn new(snap_stale_notifier: Arc<SnapStaleNotifier>) -> Self {
-        SnapGenEntry {
-            snap_stale_notifier,
-            meta: None,
-            ref_count: Arc::new(AtomicUsize::new(0)),
-            sent_times: Arc::new(AtomicUsize::new(0)),
-        }
-    }
-
-    fn is_busy(&self) -> bool {
-        self.meta.is_none() || self.ref_count.load(Ordering::SeqCst) > 0
-    }
-
-    fn has_been_used(&self) -> bool {
-        self.sent_times.load(Ordering::SeqCst) > 0
-    }
-}
-
 #[derive(Clone)]
-struct SnapApplyEntry {
-    meta: Option<SnapshotMeta>,
-    applied: Arc<AtomicBool>,
+struct SnapEntry {
+    snap_stale_notifier: Option<Arc<SnapStaleNotifier>>,
+    meta: Arc<AtomicPtr<SnapshotMeta>>,
+    // ref_count and used_times are used for gc.
+    ref_count: Arc<AtomicUsize>,
+    used_times: Arc<AtomicUsize>,
 }
 
-impl SnapApplyEntry {
-    fn new() -> Self {
-        SnapApplyEntry {
-            meta: None,
-            applied: Arc::new(AtomicBool::new(false)),
+impl SnapEntry {
+    fn new(snap_stale_notifier: Option<Arc<SnapStaleNotifier>>) -> Self {
+        SnapEntry {
+            snap_stale_notifier,
+            meta: Arc::new(AtomicPtr::new(ptr::null_mut())),
+            ref_count: Arc::new(AtomicUsize::new(0)),
+            used_times: Arc::new(AtomicUsize::new(0)),
         }
     }
 
+    fn get_meta(&self) -> Option<SnapshotMeta> {
+        let p = self.meta.load(Ordering::SeqCst);
+        unsafe { p.as_ref().map(|m| m.clone()) }
+    }
+
     fn is_busy(&self) -> bool {
-        self.meta.is_none()
+        self.ref_count.load(Ordering::SeqCst) > 0
     }
 
     fn has_been_used(&self) -> bool {
-        self.applied.load(Ordering::SeqCst)
+        self.used_times.load(Ordering::SeqCst) > 0
     }
 }
 
 struct SnapManagerCore {
     base: String,
-    gen_registry: Mutex<HashMap<SnapKey, SnapGenEntry>>,
-    apply_registry: Mutex<HashMap<SnapKey, SnapApplyEntry>>,
-    snap_size: AtomicU64,
+    gen_registry: Mutex<HashMap<SnapKey, SnapEntry>>,
+    apply_registry: Mutex<HashMap<SnapKey, SnapEntry>>,
     gc_timeout: Duration,
 }
 
@@ -546,28 +515,11 @@ impl SnapManagerCore {
             .map_err(|e| box_err!("get modified time fail: {}", e))
     }
 
-    fn delete_snapshot(&self, for_send: bool, key: SnapKey, deregister: bool) {
-        match read_snapshot_meta(&get_meta_file_path(&self.base, for_send, key)) {
-            Ok(meta) => {
-                let size = get_size_from_snapshot_meta(&meta);
-                self.snap_size.fetch_sub(size, Ordering::SeqCst);
-            }
-            Err(_) => return,
-        }
-
-        delete_file_if_exist(&get_meta_file_path(&self.base, for_send, key));
-        for cf in SNAPSHOT_CFS {
-            delete_file_if_exist(&get_cf_file_path(&self.base, for_send, key, cf));
-        }
-
-        if deregister {
-            if for_send {
-                let mut r = self.gen_registry.lock().unwrap();
-                r.remove(&key);
-            } else {
-                let mut r = self.apply_registry.lock().unwrap();
-                r.remove(&key);
-            }
+    fn get_registry(&self, for_send: bool) -> MutexGuard<HashMap<SnapKey, SnapEntry>> {
+        if for_send {
+            self.gen_registry.lock().unwrap()
+        } else {
+            self.apply_registry.lock().unwrap()
         }
     }
 }
@@ -769,7 +721,7 @@ mod tests {
     }
 
     fn check_snap_size(snap_mgr: &SnapManager) {
-        let snap_size = snap_mgr.core.snap_size.load(Ordering::SeqCst);
+        let snap_size = snap_mgr.snap_size.load(Ordering::SeqCst);
         let total_size = sst_files_size(PathBuf::from(&snap_mgr.core.base)).unwrap();
         assert_eq!(snap_size, total_size);
     }
@@ -879,7 +831,7 @@ mod tests {
         corrupt_file(&get_cf_file_path(&snap_mgr.core.base, true, key, CF_LOCK));
         assert!(do_build().unwrap().is_err());
         // The corrupted snapshot is deleted so that snap_size is 0.
-        snap_mgr.core.snap_size.store(0, Ordering::SeqCst);
+        snap_mgr.snap_size.store(0, Ordering::SeqCst);
         check_snap_size(&snap_mgr);
 
         // Rebuild it should success.
@@ -897,7 +849,7 @@ mod tests {
             .remove(&key)
             .unwrap();
         let ref_count = Arc::clone(&entry.ref_count);
-        let sent_times = Arc::clone(&entry.sent_times);
+        let sent_times = Arc::clone(&entry.used_times);
 
         // Get sender before build should fail.
         assert!(snap_mgr.get_snapshot_sender(key).is_err());
@@ -961,18 +913,18 @@ mod tests {
         do_apply(false);
 
         // Apply snapshot should fail because it's still receiving.
-        let mut entry1 = entry.clone();
-        entry1.meta = None;
+        let meta_ptr = entry.meta.swap(ptr::null_mut(), Ordering::SeqCst);
         snap_mgr
             .core
             .apply_registry
             .lock()
             .unwrap()
-            .insert(key, entry1);
+            .insert(key, entry.clone());
         do_apply(false);
 
         // Apply snapshot should success now.
-        entry.applied.store(false, Ordering::SeqCst);
+        entry.used_times.store(0, Ordering::SeqCst);
+        entry.meta.store(meta_ptr, Ordering::SeqCst);
         snap_mgr
             .core
             .apply_registry
@@ -980,7 +932,7 @@ mod tests {
             .unwrap()
             .insert(key, entry.clone());
         do_apply(true);
-        assert!(entry.applied.load(Ordering::SeqCst));
+        assert!(entry.used_times.load(Ordering::SeqCst) > 0);
     }
 
     #[test]

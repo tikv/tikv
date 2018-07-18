@@ -194,6 +194,9 @@ impl Drop for Inner {
 pub(super) struct SnapshotGenerator {
     inner: Inner,
     snap_stale_notifier: Arc<SnapStaleNotifier>,
+    ref_count: Arc<AtomicUsize>,
+    meta: Arc<AtomicPtr<SnapshotMeta>>,
+    snap_size_tracker: Arc<AtomicU64>,
 }
 
 impl SnapshotGenerator {
@@ -203,12 +206,17 @@ impl SnapshotGenerator {
         dir: String,
         key: SnapKey,
         io_limiter: Option<Arc<IOLimiter>>,
-        snap_stale_notifier: Arc<SnapStaleNotifier>,
+        entry: SnapEntry,
+        snap_size_tracker: Arc<AtomicU64>,
     ) -> Result<SnapshotGenerator> {
         let inner = Inner::new(dir, true, key, io_limiter)?;
+        entry.ref_count.fetch_add(1, Ordering::SeqCst);
         Ok(SnapshotGenerator {
             inner,
-            snap_stale_notifier,
+            snap_stale_notifier: entry.snap_stale_notifier.unwrap(),
+            ref_count: entry.ref_count,
+            meta: entry.meta,
+            snap_size_tracker,
         })
     }
 
@@ -260,14 +268,27 @@ impl SnapshotGenerator {
             t.elapsed(),
         );
 
+        self.snap_size_tracker
+            .fetch_add(total_size, Ordering::SeqCst);
+        let meta = Box::into_raw(box snapshot_meta.clone());
+        self.meta.store(meta, Ordering::SeqCst);
+
         Ok(snapshot_meta)
+    }
+}
+
+impl Drop for SnapshotGenerator {
+    fn drop(&mut self) {
+        self.ref_count.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
 pub struct SnapshotReceiver {
     inner: Inner,
     snapshot_meta: SnapshotMeta,
-    core: Arc<SnapManagerCore>,
+    ref_count: Arc<AtomicUsize>,
+    meta: Arc<AtomicPtr<SnapshotMeta>>,
+    snap_size_tracker: Arc<AtomicU64>,
     cur_cf_pos: usize,
 }
 
@@ -277,13 +298,17 @@ impl SnapshotReceiver {
         key: SnapKey,
         io_limiter: Option<Arc<IOLimiter>>,
         snapshot_meta: SnapshotMeta,
-        core: Arc<SnapManagerCore>,
+        entry: SnapEntry,
+        snap_size_tracker: Arc<AtomicU64>,
     ) -> Result<Self> {
         let inner = Inner::new(dir, false, key, io_limiter)?;
+        entry.ref_count.fetch_add(1, Ordering::SeqCst);
         Ok(SnapshotReceiver {
             inner,
             snapshot_meta,
-            core,
+            ref_count: entry.ref_count,
+            meta: entry.meta,
+            snap_size_tracker,
             cur_cf_pos: 0,
         })
     }
@@ -313,23 +338,18 @@ impl SnapshotReceiver {
                 return Err(snapshot_checksum_corrupt(expected, got));
             }
         }
-        let size = get_size_from_snapshot_meta(&self.snapshot_meta);
-        self.core.snap_size.fetch_add(size, Ordering::SeqCst);
 
-        let mut registry = self.core.apply_registry.lock().unwrap();
-        let entry = registry.get_mut(&self.inner.key).unwrap();
-        entry.meta = Some(self.snapshot_meta.clone());
+        self.snap_size_tracker
+            .fetch_add(exp_total_size, Ordering::SeqCst);
+        let meta = Box::into_raw(box self.snapshot_meta.clone());
+        self.meta.store(meta, Ordering::SeqCst);
         Ok(())
     }
 }
 
 impl Drop for SnapshotReceiver {
     fn drop(&mut self) {
-        let mut registry = self.core.apply_registry.lock().unwrap();
-        if !self.inner.success {
-            info!("{} receive snapshot fail, deregister", self.inner.key);
-            registry.remove(&self.inner.key);
-        }
+        self.ref_count.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -490,25 +510,28 @@ mod tests {
         let snap_stale_notifier = new_snap_stale_notifier();
 
         // Can't init SnapshotGenerator because tmp meta file exists.
-        let notifier = Arc::clone(&snap_stale_notifier);
+        let entry = SnapEntry::new(Some(Arc::clone(&snap_stale_notifier)));
+        let size_tracker = Arc::new(AtomicU64::new(0));
         let p = get_meta_tmp_file_path(&dir, true, key);
         OpenOptions::new()
             .create_new(true)
             .write(true)
             .open(&p)
             .unwrap();
-        assert!(SnapshotGenerator::new(dir.clone(), key, None, notifier).is_err());
+        let r = SnapshotGenerator::new(dir.clone(), key, None, entry.clone(), size_tracker);
+        assert!(r.is_err());
         assert!(File::open(&p).is_ok()); // The tmp meta file shouldn't be deleted.
 
         // Can't save the snapshot because some tmp files are removed.
-        let notifier = Arc::clone(&snap_stale_notifier);
         delete_file_if_exist(&p);
         let region = get_test_region(1, 1, 1);
         let tmp_db_dir = TempDir::new("test-sanpshot-generator-db").unwrap();
         let test_db = get_test_empty_db(&tmp_db_dir).unwrap();
         let db_snap = DbSnapshot::new(Arc::clone(&test_db));
 
-        let mut generator = SnapshotGenerator::new(dir.clone(), key, None, notifier).unwrap();
+        let size_tracker = Arc::new(AtomicU64::new(0));
+        let mut generator =
+            SnapshotGenerator::new(dir.clone(), key, None, entry, size_tracker).unwrap();
         assert!(delete_file_if_exist(&p));
         assert!(generator.build(&region, db_snap).is_err());
 
@@ -525,10 +548,10 @@ mod tests {
 
         let dir = snap_mgr.core.base.clone();
         let key = SnapKey::new(1, 1, 1);
-        let notifier = new_snap_stale_notifier();
-
+        let entry = SnapEntry::new(Some(new_snap_stale_notifier()));
+        let size_tracker = Arc::new(AtomicU64::new(0));
         let mut generator =
-            SnapshotGenerator::new(dir.clone(), key, None, Arc::clone(&notifier)).unwrap();
+            SnapshotGenerator::new(dir.clone(), key, None, entry, size_tracker).unwrap();
 
         let region = get_test_region(1, 1, 1);
         let tmp_db_dir = TempDir::new("test-sanpshot-sender-db").unwrap();

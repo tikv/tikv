@@ -37,8 +37,8 @@ pub struct SnapshotSender {
     ref_count: Arc<AtomicUsize>,
     sent_times: Arc<AtomicUsize>,
 
-    cf_file: Option<File>,
-    cf_index: usize,
+    cur_cf_file: Option<File>,
+    cur_cf_pos: usize,
 }
 
 impl SnapshotSender {
@@ -46,19 +46,17 @@ impl SnapshotSender {
         dir: String,
         key: SnapKey,
         snapshot_meta: SnapshotMeta,
-        snap_stale_notifier: Arc<SnapStaleNotifier>,
-        ref_count: Arc<AtomicUsize>,
-        sent_times: Arc<AtomicUsize>,
+        entry: SnapEntry,
     ) -> Self {
         let inner = Inner::new(dir, true, key, snapshot_meta);
-        ref_count.fetch_add(1, Ordering::SeqCst);
+        entry.ref_count.fetch_add(1, Ordering::SeqCst);
         SnapshotSender {
             inner,
-            snap_stale_notifier,
-            ref_count,
-            sent_times,
-            cf_file: None,
-            cf_index: 0,
+            snap_stale_notifier: entry.snap_stale_notifier.unwrap(),
+            ref_count: entry.ref_count,
+            sent_times: entry.used_times,
+            cur_cf_file: None,
+            cur_cf_pos: 0,
         }
     }
 
@@ -80,27 +78,27 @@ impl Read for SnapshotSender {
             return Ok(0);
         }
         let inner = &mut self.inner;
-        while self.cf_index < inner.snapshot_meta.get_cf_files().len() {
+        while self.cur_cf_pos < inner.snapshot_meta.get_cf_files().len() {
             if stale_for_generate(inner.key, self.snap_stale_notifier.as_ref()) {
                 let err = io::Error::new(io::ErrorKind::Other, "stale snapshot".to_owned());
                 return Err(err);
             }
 
-            let cf = &inner.snapshot_meta.get_cf_files()[self.cf_index];
+            let cf = &inner.snapshot_meta.get_cf_files()[self.cur_cf_pos];
             if cf.get_size() > 0 {
-                if self.cf_file.is_none() {
+                if self.cur_cf_file.is_none() {
                     let (dir, for_send, key) = (&inner.dir, inner.for_send, inner.key);
                     let cf_file_path = get_cf_file_path(dir, for_send, key, cf.get_cf());
-                    self.cf_file = Some(File::open(&cf_file_path)?);
+                    self.cur_cf_file = Some(File::open(&cf_file_path)?);
                 }
-                match self.cf_file.as_mut().unwrap().read(buf) {
+                match self.cur_cf_file.as_mut().unwrap().read(buf) {
                     Ok(0) => {}
                     Ok(n) => return Ok(n),
                     e => return e,
                 }
             }
-            self.cf_index += 1;
-            self.cf_file = None;
+            self.cur_cf_pos += 1;
+            self.cur_cf_file = None;
         }
         Ok(0)
     }
@@ -144,7 +142,8 @@ impl SnapshotLoader {
 pub(super) struct SnapshotApplyer {
     inner: Inner,
     snap_stale_notifier: Arc<SnapStaleNotifier>,
-    applied: Arc<AtomicBool>,
+    ref_count: Arc<AtomicUsize>,
+    applied_times: Arc<AtomicUsize>,
 }
 
 impl SnapshotApplyer {
@@ -152,14 +151,15 @@ impl SnapshotApplyer {
         dir: String,
         key: SnapKey,
         snapshot_meta: SnapshotMeta,
-        snap_stale_notifier: Arc<SnapStaleNotifier>,
-        applied: Arc<AtomicBool>,
+        entry: SnapEntry,
     ) -> Self {
         let inner = Inner::new(dir, false, key, snapshot_meta);
+        entry.ref_count.fetch_add(1, Ordering::SeqCst);
         SnapshotApplyer {
             inner,
-            snap_stale_notifier,
-            applied,
+            snap_stale_notifier: entry.snap_stale_notifier.unwrap(),
+            ref_count: entry.ref_count,
+            applied_times: entry.used_times,
         }
     }
 
@@ -219,7 +219,9 @@ impl SnapshotApplyer {
 
 impl Drop for SnapshotApplyer {
     fn drop(&mut self) {
-        self.applied.store(true, Ordering::SeqCst);
+        self.applied_times.fetch_add(1, Ordering::SeqCst);
+        self.ref_count.fetch_sub(1, Ordering::SeqCst);
+
         for cf in self.inner.snapshot_meta.get_cf_files() {
             if cf.get_size() == 0 || plain_file_used(cf.get_cf()) {
                 continue;
@@ -283,35 +285,24 @@ mod tests {
 
         let dir = snap_mgr.core.base.clone();
         let key = SnapKey::new(1, 1, 1);
-        let notifier = new_snap_stale_notifier();
-
+        let entry = SnapEntry::new(Some(new_snap_stale_notifier()));
+        let size_tracker = Arc::new(AtomicU64::new(0));
         let mut generator =
-            SnapshotGenerator::new(dir.clone(), key, None, Arc::clone(&notifier)).unwrap();
+            SnapshotGenerator::new(dir.clone(), key, None, entry.clone(), size_tracker).unwrap();
 
         let region = get_test_region(1, 1, 1);
         let tmp_db_dir = TempDir::new("test-sanpshot-sender-db").unwrap();
         let test_db = get_test_empty_db(&tmp_db_dir).unwrap();
         let db_snap = DbSnapshot::new(Arc::clone(&test_db));
         let meta = generator.build(&region, db_snap).unwrap();
+        drop(generator); // Set the ref_count to 0.
 
-        let ref_count = Arc::new(AtomicUsize::new(0));
-        let sent_times = Arc::new(AtomicUsize::new(0));
-
-        let get_sender = || {
-            SnapshotSender::new(
-                dir.clone(),
-                key,
-                meta.clone(),
-                Arc::clone(&notifier),
-                Arc::clone(&ref_count),
-                Arc::clone(&sent_times),
-            )
-        };
+        let get_sender = || SnapshotSender::new(dir.clone(), key, meta.clone(), entry.clone());
 
         let mut s1 = get_sender();
-        assert_eq!(ref_count.load(Ordering::SeqCst), 1);
+        assert_eq!(entry.ref_count.load(Ordering::SeqCst), 1);
         let mut s2 = get_sender();
-        assert_eq!(ref_count.load(Ordering::SeqCst), 2);
+        assert_eq!(entry.ref_count.load(Ordering::SeqCst), 2);
 
         let mut buf = Vec::with_capacity(10);
         assert_eq!(s1.read_to_end(&mut buf).unwrap(), 1);
@@ -319,9 +310,9 @@ mod tests {
         assert_eq!(&buf[0], &buf[1]);
 
         drop(s1);
-        assert_eq!(sent_times.load(Ordering::SeqCst), 1);
+        assert_eq!(entry.used_times.load(Ordering::SeqCst), 1);
         drop(s2);
-        assert_eq!(sent_times.load(Ordering::SeqCst), 2);
+        assert_eq!(entry.used_times.load(Ordering::SeqCst), 2);
 
         let mut s3 = get_sender();
         let p = get_cf_file_path(&dir, true, key, CF_LOCK);
