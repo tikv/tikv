@@ -479,12 +479,6 @@ impl DecodeProperties for UserCollectedProperties {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct IndexHandlesMap {
-    pub handles: BTreeMap<Vec<u8>, Vec<IndexHandle>>,
-    size: usize,
-}
-
 pub struct IndexHandlesIterator<'a> {
     iter: Iter<'a, Vec<u8>, Vec<IndexHandle>>,
     idx: usize,
@@ -504,6 +498,12 @@ impl<'a> Iterator for IndexHandlesIterator<'a> {
             Some((k, handles)) => Some((k, &handles[self.idx])),
         }
     }
+}
+
+#[derive(Debug, Default)]
+pub struct IndexHandlesMap {
+    pub handles: BTreeMap<Vec<u8>, Vec<IndexHandle>>,
+    size: usize,
 }
 
 impl IndexHandlesMap {
