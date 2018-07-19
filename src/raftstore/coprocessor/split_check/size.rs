@@ -141,6 +141,7 @@ mod tests {
 
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
+    use kvproto::pdpb::CheckPolicy;
     use rocksdb::Writable;
     use rocksdb::{ColumnFamilyOptions, DBOptions};
     use tempdir::TempDir;
@@ -196,7 +197,7 @@ mod tests {
             engine.put(&s, &s).unwrap();
         }
 
-        runnable.run(SplitCheckTask::new(region.clone(), true));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         // size has not reached the max_size 100 yet.
         match rx.try_recv() {
             Ok(Msg::RegionApproximateSize { region_id, .. }) => {
@@ -214,7 +215,7 @@ mod tests {
         // we flush it to SST so we can use the size properties instead.
         engine.flush(true).unwrap();
 
-        runnable.run(SplitCheckTask::new(region.clone(), true));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         match rx.try_recv() {
             Ok(Msg::RegionApproximateSize { region_id, .. }) => {
                 assert_eq!(region_id, region.get_id());
@@ -248,7 +249,7 @@ mod tests {
             engine.flush_cf(handle, true).unwrap();
         }
 
-        runnable.run(SplitCheckTask::new(region.clone(), true));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         match rx.try_recv() {
             Ok(Msg::RegionApproximateSize { region_id, .. }) => {
                 assert_eq!(region_id, region.get_id());
@@ -271,7 +272,7 @@ mod tests {
 
         drop(rx);
         // It should be safe even the result can't be sent back.
-        runnable.run(SplitCheckTask::new(region, true));
+        runnable.run(SplitCheckTask::new(region, true, CheckPolicy::SCAN));
     }
 
     #[test]
