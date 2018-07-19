@@ -21,7 +21,7 @@ use kvproto::metapb::*;
 
 use pd::RegionInfo;
 use util::escape;
-use util::rocksdb::properties::RangeProperties;
+use util::rocksdb::properties::SizeProperties;
 
 use super::client::*;
 use super::common::*;
@@ -91,13 +91,13 @@ impl<Client: ImportClient> PrepareJob<Client> {
         ))
     }
 
-    fn prepare(&self, props: &RangeProperties) -> usize {
+    fn prepare(&self, props: &SizeProperties) -> usize {
         let split_size = self.cfg.region_split_size.0 as usize;
         let mut ctx = RangeContext::new(Arc::clone(&self.client), split_size);
 
         let mut num_prepares = 0;
         let mut start = Vec::new();
-        for (k, v) in props.size_idx_iter() {
+        for (k, v) in props.index_handles.iter() {
             ctx.add(v.size as usize);
             if !ctx.should_stop_before(k) {
                 continue;

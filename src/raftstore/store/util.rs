@@ -370,7 +370,7 @@ pub fn get_region_approximate_middle_cf(
         keys.extend(
             props
                 .index_handles
-                .handles
+                .offsets
                 .range::<[u8], _>((Excluded(start.as_slice()), Excluded(end.as_slice())))
                 .map(|(k, _)| k.to_owned()),
         );
@@ -400,13 +400,13 @@ pub fn get_region_approximate_keys(db: &DB, region: &metapb::Region) -> Result<u
         Ok(v) => if v > 0 {
             return Ok(v);
         },
-        Err(e) => warn!(
+        Err(e) => debug!(
             "old_version:get keys from RangeProperties failed with err:{:?}",
             e
         ),
     }
 
-    warn!("old_version:get keys from RangeProperties failed,get from MvccProperties");
+    debug!("old_version:get keys from RangeProperties failed,get from MvccProperties");
 
     let cf = rocksdb_util::get_cf_handle(db, CF_WRITE)?;
     let start = keys::enc_start_key(region);

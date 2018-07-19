@@ -34,7 +34,7 @@ use storage::mvcc::{Write, WriteType};
 use storage::types::{split_encoded_key_on_ts, Key};
 use storage::{is_short_value, CF_DEFAULT, CF_WRITE};
 use util::config::MB;
-use util::rocksdb::properties::{RangeProperties, RangePropertiesCollectorFactory};
+use util::rocksdb::properties::{SizeProperties, SizePropertiesCollectorFactory};
 use util::rocksdb::{new_engine_opt, CFOptions};
 
 use super::common::*;
@@ -96,12 +96,13 @@ impl Engine {
         SSTWriter::new(&self.opts)
     }
 
-    pub fn get_size_properties(&self) -> Result<RangeProperties> {
-        let mut res = RangeProperties::default();
+    pub fn get_size_properties(&self) -> Result<SizeProperties> {
+        let mut res = SizeProperties::default();
         let collection = self.get_properties_of_all_tables()?;
         for (_, v) in &*collection {
-            let props = RangeProperties::try_decode(v.user_collected_properties())?;
-            res.merge(props);
+            let props = SizeProperties::decode(v.user_collected_properties())?;
+            res.total_size += props.total_size;
+            res.index_handles.extend(props.index_handles.clone());
         }
         Ok(res)
     }
@@ -214,7 +215,7 @@ impl SSTWriter {
 }
 
 pub fn get_approximate_ranges(
-    props: &RangeProperties,
+    props: &SizeProperties,
     max_ranges: usize,
     min_range_size: usize,
 ) -> Vec<RangeInfo> {
@@ -224,16 +225,16 @@ pub fn get_approximate_ranges(
     let mut size = 0;
     let mut start = RANGE_MIN;
     let mut ranges = Vec::new();
-    for (i, (k, v)) in props.size_idx_iter().enumerate() {
+    for (i, (k, v)) in props.index_handles.iter().enumerate() {
         size += v.size as usize;
-        let end = if i == (props.index_handles.handles.len() - 1) {
+        let end = if i == (props.index_handles.len() - 1) {
             // Index range end is inclusive, so we need to use RANGE_MAX as
             // the last range end.
             RANGE_MAX
         } else {
             k
         };
-        if size >= range_size || i == (props.index_handles.handles.len() - 1) {
+        if size >= range_size || i == (props.index_handles.len() - 1) {
             let range = RangeInfo::new(start, end, size);
             ranges.push(range);
             size = 0;
@@ -272,9 +273,9 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions) {
     cf_opts.set_hard_pending_compaction_bytes_limit(0);
     cf_opts.set_level_zero_stop_writes_trigger(DISABLED);
     cf_opts.set_level_zero_slowdown_writes_trigger(DISABLED);
-    // Add range properties to get approximate ranges wihout scan.
-    let f = Box::new(RangePropertiesCollectorFactory::default());
-    cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+    // Add size properties to get approximate ranges wihout scan.
+    let f = Box::new(SizePropertiesCollectorFactory::default());
+    cf_opts.add_table_properties_collector_factory("tikv.size-properties-collector", f);
     (db_opts, CFOptions::new(CF_DEFAULT, cf_opts))
 }
 

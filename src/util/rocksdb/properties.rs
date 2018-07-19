@@ -228,8 +228,8 @@ impl IndexHandles {
     pub fn into_index_handles_map(self, idx: usize, size: usize) -> IndexHandlesMap {
         let mut res = IndexHandlesMap::new(size);
         for (k, handle) in self.0 {
-            let mut handles = vec![IndexHandle::default(); size];
-            handles[idx] = handle;
+            let mut handles = vec![0; size];
+            handles[idx] = handle.offset;
             res.insert(k, handles);
         }
         res
@@ -480,52 +480,53 @@ impl DecodeProperties for UserCollectedProperties {
 }
 
 pub struct IndexHandlesIterator<'a> {
-    iter: Iter<'a, Vec<u8>, Vec<IndexHandle>>,
+    iter: Iter<'a, Vec<u8>, Vec<u64>>,
     idx: usize,
 }
 
 impl<'a> IndexHandlesIterator<'a> {
-    fn new(iter: Iter<'a, Vec<u8>, Vec<IndexHandle>>, idx: usize) -> IndexHandlesIterator<'a> {
+    fn new(iter: Iter<'a, Vec<u8>, Vec<u64>>, idx: usize) -> IndexHandlesIterator<'a> {
         IndexHandlesIterator { iter, idx }
     }
 }
 
 impl<'a> Iterator for IndexHandlesIterator<'a> {
-    type Item = (&'a [u8], &'a IndexHandle);
-    fn next(&mut self) -> Option<(&'a [u8], &'a IndexHandle)> {
+    // type Item = (&'a [u8], &'a IndexHandle);
+    type Item = (&'a [u8], u64);
+
+    fn next(&mut self) -> Option<(&'a [u8], u64)> {
         match self.iter.next() {
             None => None,
-            Some((k, handles)) => Some((k, &handles[self.idx])),
+            Some((k, handles)) => Some((k, handles[self.idx])),
         }
     }
 }
 
 #[derive(Debug, Default)]
 pub struct IndexHandlesMap {
-    pub handles: BTreeMap<Vec<u8>, Vec<IndexHandle>>,
+    pub offsets: BTreeMap<Vec<u8>, Vec<u64>>,
     size: usize,
 }
 
 impl IndexHandlesMap {
     fn new(size: usize) -> IndexHandlesMap {
         IndexHandlesMap {
-            handles: BTreeMap::new(),
+            offsets: BTreeMap::new(),
             size,
         }
     }
 
-    fn insert(&mut self, key: Vec<u8>, handles: Vec<IndexHandle>) {
-        self.handles.insert(key, handles);
+    fn insert(&mut self, key: Vec<u8>, offsets: Vec<u64>) {
+        self.offsets.insert(key, offsets);
     }
 
     fn encode(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(1024);
-        for (k, handles) in &self.handles {
+        for (k, offsets) in &self.offsets {
             buf.encode_u64(k.len() as u64).unwrap();
             buf.extend(k);
-            for v in handles {
-                buf.encode_u64(v.size).unwrap();
-                buf.encode_u64(v.offset).unwrap();
+            for offset in offsets {
+                buf.encode_u64(*offset).unwrap();
             }
         }
         buf
@@ -537,14 +538,11 @@ impl IndexHandlesMap {
             let klen = number::decode_u64(&mut buf)?;
             let mut k = vec![0; klen as usize];
             buf.read_exact(&mut k)?;
-            let mut handles = Vec::with_capacity(size);
+            let mut offsets = Vec::with_capacity(size);
             for _ in 0..size {
-                let mut v = IndexHandle::default();
-                v.size = number::decode_u64(&mut buf)?;
-                v.offset = number::decode_u64(&mut buf)?;
-                handles.push(v);
+                offsets.push(number::decode_u64(&mut buf)?);
             }
-            res.handles.insert(k, handles);
+            res.offsets.insert(k, offsets);
         }
         Ok(res)
     }
@@ -555,15 +553,16 @@ impl IndexHandlesMap {
         if start == end {
             return 0;
         }
-        let range = self.handles.range::<[u8], _>((Unbounded, Included(start)));
+
+        let range = self.offsets.range::<[u8], _>((Unbounded, Included(start)));
         let start_offset = match range.last() {
-            Some((_, v)) => v[idx].offset,
+            Some((_, v)) => v[idx],
             None => 0,
         };
-        let mut range = self.handles.range::<[u8], _>((Included(end), Unbounded));
+        let mut range = self.offsets.range::<[u8], _>((Included(end), Unbounded));
         let end_offset = match range.next() {
-            Some((_, v)) => v[idx].offset,
-            None => self.handles.iter().last().map_or(0, |(_, v)| v[idx].offset),
+            Some((_, v)) => v[idx],
+            None => self.offsets.iter().last().map_or(0, |(_, v)| v[idx]),
         };
         if end_offset < start_offset {
             panic!(
@@ -575,15 +574,15 @@ impl IndexHandlesMap {
     }
 
     pub fn smallest_key(&self) -> Option<Vec<u8>> {
-        self.handles.iter().next().map(|(key, _)| key.clone())
+        self.offsets.iter().next().map(|(key, _)| key.clone())
     }
 
     pub fn largest_key(&self) -> Option<Vec<u8>> {
-        self.handles.iter().last().map(|(key, _)| key.clone())
+        self.offsets.iter().last().map(|(key, _)| key.clone())
     }
 
     pub fn iter(&self, idx: usize) -> IndexHandlesIterator {
-        IndexHandlesIterator::new(self.handles.iter(), idx)
+        IndexHandlesIterator::new(self.offsets.iter(), idx)
     }
 }
 
@@ -593,6 +592,9 @@ pub struct RangeProperties {
     pub total_keys: u64,
     pub index_handles: IndexHandlesMap,
 }
+
+const RANGE_SIZE_OFFSET: usize = 0;
+const RANGE_KEYS_OFFSET: usize = 1;
 
 impl RangeProperties {
     pub fn encode(&self) -> UserProperties {
@@ -627,7 +629,7 @@ impl RangeProperties {
 
     pub fn get_approximate_keys_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
         self.index_handles
-            .get_approximate_distance_in_range(1, start, end)
+            .get_approximate_distance_in_range(RANGE_KEYS_OFFSET, start, end)
     }
 
     pub fn smallest_key(&self) -> Option<Vec<u8>> {
@@ -642,12 +644,12 @@ impl RangeProperties {
         self.total_keys += other.total_keys;
         self.total_size += other.total_size;
         self.index_handles
-            .handles
-            .extend(other.index_handles.handles);
+            .offsets
+            .extend(other.index_handles.offsets);
     }
 
     pub fn size_idx_iter(&self) -> IndexHandlesIterator {
-        self.index_handles.iter(0)
+        self.index_handles.iter(RANGE_SIZE_OFFSET)
     }
 }
 
@@ -665,8 +667,18 @@ impl Into<RangeProperties> for SizeProperties {
 pub struct RangePropertiesCollector {
     props: RangeProperties,
     last_key: Vec<u8>,
-    size_index_handle: IndexHandle,
-    keys_index_handle: IndexHandle,
+    last_keys_offset: u64,
+    last_size_offset: u64,
+}
+
+impl RangePropertiesCollector {
+    fn size_in_last_range(&self) -> u64 {
+        self.props.total_size - self.last_size_offset
+    }
+
+    fn keys_in_last_range(&self) -> u64 {
+        self.props.total_keys - self.last_keys_offset
+    }
 }
 
 impl TablePropertiesCollector for RangePropertiesCollector {
@@ -677,38 +689,27 @@ impl TablePropertiesCollector for RangePropertiesCollector {
 
         // keys
         self.props.total_keys += 1;
-        self.keys_index_handle.size += 1;
-        self.keys_index_handle.offset += 1;
         // size
         let size = key.len() + value.len();
-        self.size_index_handle.size += size as u64;
-        self.size_index_handle.offset += size as u64;
+        self.props.total_size += size as u64;
         // Add the start key for convenience.
-        if self.last_key.is_empty() || self.size_index_handle.size >= PROP_SIZE_INDEX_DISTANCE {
+        if self.last_key.is_empty() || self.size_in_last_range() >= PROP_SIZE_INDEX_DISTANCE {
+            self.last_keys_offset = self.props.total_keys;
+            self.last_size_offset = self.props.total_size;
             self.props.index_handles.insert(
                 key.to_owned(),
-                vec![
-                    self.size_index_handle.clone(),
-                    self.keys_index_handle.clone(),
-                ],
+                vec![self.last_size_offset, self.last_keys_offset],
             );
-            self.size_index_handle.size = 0;
-            self.keys_index_handle.size = 0;
         }
         self.last_key.clear();
         self.last_key.extend_from_slice(key);
     }
 
     fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
-        self.props.total_size = self.size_index_handle.offset;
-        self.props.total_keys = self.keys_index_handle.offset;
-        if self.size_index_handle.size > 0 || self.keys_index_handle.size > 0 {
+        if self.size_in_last_range() > 0 || self.keys_in_last_range() > 0 {
             self.props.index_handles.insert(
                 self.last_key.clone(),
-                vec![
-                    self.size_index_handle.clone(),
-                    self.keys_index_handle.clone(),
-                ],
+                vec![self.props.total_size, self.props.total_keys],
             );
         }
         self.props.encode().0
@@ -958,21 +959,17 @@ mod tests {
         );
         assert_eq!(props.total_size, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11);
         assert_eq!(props.total_keys, cases.len() as u64);
-        let handles = &props.index_handles.handles;
+        let handles = &props.index_handles.offsets;
         assert_eq!(handles.len(), 4);
         let a = &handles[b"a".as_ref()];
-        assert_eq!(a[0].size, 1);
-        assert_eq!(a[0].offset, 1);
+        assert_eq!(a[RANGE_SIZE_OFFSET], 1);
         let e = &handles[b"e".as_ref()];
-        assert_eq!(e[0].size, PROP_SIZE_INDEX_DISTANCE + 4);
-        assert_eq!(e[0].offset, PROP_SIZE_INDEX_DISTANCE + 5);
+        assert_eq!(e[RANGE_SIZE_OFFSET], PROP_SIZE_INDEX_DISTANCE + 5);
         let i = &handles[b"i".as_ref()];
-        assert_eq!(i[0].size, PROP_SIZE_INDEX_DISTANCE / 8 * 9 + 4);
-        assert_eq!(i[0].offset, PROP_SIZE_INDEX_DISTANCE / 8 * 17 + 9);
+        assert_eq!(i[RANGE_SIZE_OFFSET], PROP_SIZE_INDEX_DISTANCE / 8 * 17 + 9);
         let k = &handles[b"k".as_ref()];
-        assert_eq!(k[0].size, PROP_SIZE_INDEX_DISTANCE / 8 * 12 + 2);
-        assert_eq!(k[0].offset, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11);
-        let empty_handles = vec![IndexHandle::default(); 2];
+        assert_eq!(k[RANGE_SIZE_OFFSET], PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11);
+        let empty_handles = vec![0; 2];
         let cases = [
             (" ", "z", k, &empty_handles),
             (" ", " ", k, k),
@@ -984,12 +981,12 @@ mod tests {
             ("g", "g", i, i),
         ];
         for &(start, end, end_idx, start_idx) in &cases {
-            let size = end_idx[0].offset - start_idx[0].offset;
+            let size = end_idx[RANGE_SIZE_OFFSET] - start_idx[RANGE_SIZE_OFFSET];
             assert_eq!(
                 props.get_approximate_size_in_range(start.as_bytes(), end.as_bytes()),
                 size
             );
-            let keys = end_idx[1].offset - start_idx[1].offset;
+            let keys = end_idx[RANGE_KEYS_OFFSET] - start_idx[RANGE_KEYS_OFFSET];
             assert_eq!(
                 props.get_approximate_keys_in_range(start.as_bytes(), end.as_bytes()),
                 keys
