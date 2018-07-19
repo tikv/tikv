@@ -46,15 +46,17 @@ impl SnapshotSender {
         dir: String,
         key: SnapKey,
         snapshot_meta: SnapshotMeta,
-        entry: SnapEntry,
+        snap_stale_notifier: Arc<SnapStaleNotifier>,
+        ref_count: Arc<AtomicUsize>,
+        sent_times: Arc<AtomicUsize>,
     ) -> Self {
         let inner = Inner::new(dir, true, key, snapshot_meta);
-        entry.ref_count.fetch_add(1, Ordering::SeqCst);
+        ref_count.fetch_add(1, Ordering::SeqCst);
         SnapshotSender {
             inner,
-            snap_stale_notifier: entry.snap_stale_notifier.unwrap(),
-            ref_count: entry.ref_count,
-            sent_times: entry.used_times,
+            snap_stale_notifier,
+            ref_count,
+            sent_times,
             cur_cf_file: None,
             cur_cf_pos: 0,
         }
@@ -151,15 +153,17 @@ impl SnapshotApplyer {
         dir: String,
         key: SnapKey,
         snapshot_meta: SnapshotMeta,
-        entry: SnapEntry,
+        snap_stale_notifier: Arc<SnapStaleNotifier>,
+        ref_count: Arc<AtomicUsize>,
+        applied_times: Arc<AtomicUsize>,
     ) -> Self {
         let inner = Inner::new(dir, false, key, snapshot_meta);
-        entry.ref_count.fetch_add(1, Ordering::SeqCst);
+        ref_count.fetch_add(1, Ordering::SeqCst);
         SnapshotApplyer {
             inner,
-            snap_stale_notifier: entry.snap_stale_notifier.unwrap(),
-            ref_count: entry.ref_count,
-            applied_times: entry.used_times,
+            snap_stale_notifier,
+            ref_count,
+            applied_times,
         }
     }
 
@@ -285,10 +289,13 @@ mod tests {
 
         let dir = snap_mgr.core.base.clone();
         let key = SnapKey::new(1, 1, 1);
-        let entry = SnapEntry::new(Some(new_snap_stale_notifier()));
+        let snap_stale_notifier = new_snap_stale_notifier();
+
+        let notifier = Arc::clone(&snap_stale_notifier);
+        let (tx, _) = sync_channel(1);
         let size_tracker = Arc::new(AtomicU64::new(0));
         let mut generator =
-            SnapshotGenerator::new(dir.clone(), key, None, entry.clone(), size_tracker).unwrap();
+            SnapshotGenerator::new(dir.clone(), key, None, notifier, tx, size_tracker).unwrap();
 
         let region = get_test_region(1, 1, 1);
         let tmp_db_dir = TempDir::new("test-sanpshot-sender-db").unwrap();
@@ -297,12 +304,20 @@ mod tests {
         let meta = generator.build(&region, db_snap).unwrap();
         drop(generator); // Set the ref_count to 0.
 
-        let get_sender = || SnapshotSender::new(dir.clone(), key, meta.clone(), entry.clone());
+        let ref_count = Arc::new(AtomicUsize::new(0));
+        let used_times = Arc::new(AtomicUsize::new(0));
+
+        let get_sender = || {
+            let notifier = Arc::clone(&snap_stale_notifier);
+            let rc = Arc::clone(&ref_count);
+            let ut = Arc::clone(&used_times);
+            SnapshotSender::new(dir.clone(), key, meta.clone(), notifier, rc, ut)
+        };
 
         let mut s1 = get_sender();
-        assert_eq!(entry.ref_count.load(Ordering::SeqCst), 1);
+        assert_eq!(ref_count.load(Ordering::SeqCst), 1);
         let mut s2 = get_sender();
-        assert_eq!(entry.ref_count.load(Ordering::SeqCst), 2);
+        assert_eq!(ref_count.load(Ordering::SeqCst), 2);
 
         let mut buf = Vec::with_capacity(10);
         assert_eq!(s1.read_to_end(&mut buf).unwrap(), 1);
@@ -310,9 +325,9 @@ mod tests {
         assert_eq!(&buf[0], &buf[1]);
 
         drop(s1);
-        assert_eq!(entry.used_times.load(Ordering::SeqCst), 1);
+        assert_eq!(used_times.load(Ordering::SeqCst), 1);
         drop(s2);
-        assert_eq!(entry.used_times.load(Ordering::SeqCst), 2);
+        assert_eq!(used_times.load(Ordering::SeqCst), 2);
 
         let mut s3 = get_sender();
         let p = get_cf_file_path(&dir, true, key, CF_LOCK);

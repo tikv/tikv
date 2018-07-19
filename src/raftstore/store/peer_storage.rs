@@ -1252,17 +1252,17 @@ pub fn do_snapshot(
     let key = SnapKey::new(region_id, term, idx);
 
     match mgr.build_snapshot(key, state.take_region(), snap, snap_stale_notifier) {
-        Some(Ok(snap_data)) => {
+        Ok(Some(snap_data)) => {
             snap_data.write_to_vec(snapshot.mut_data())?;
             Ok(snapshot)
         }
-        Some(Err(e)) => {
+        Ok(None) => Err(RaftError::Store(
+            StorageError::SnapshotTemporarilyUnavailable,
+        )),
+        Err(e) => {
             error!("[region {}] build snapshot fail: {}", region_id, e);
             Err(raft::Error::from(e))
         }
-        None => Err(RaftError::Store(
-            StorageError::SnapshotTemporarilyUnavailable,
-        )),
     }
 }
 
