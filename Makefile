@@ -59,6 +59,11 @@ release:
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-fail ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
 
+perf_release:
+	@cargo rustc --bin tikv-server --release --features "${ENABLE_FEATURES}" -- -C no-prepopulate-passes -C force-frame-pointers=y
+	@mkdir -p ${BIN_PATH}
+	@cp -f ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
+
 unportable_release:
 	ROCKSDB_SYS_PORTABLE=0 make release
 
