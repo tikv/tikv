@@ -17,11 +17,11 @@ use std::time::Instant;
 
 use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::RegionEpoch;
+use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 
 use raft::SnapshotStatus;
-use raftstore::store::util::RegionApproximateStat;
 use util::escape;
 use util::rocksdb::CompactedEvent;
 
@@ -170,10 +170,16 @@ pub enum Msg {
         hash: Vec<u8>,
     },
 
-    // For region stat
-    RegionApproximateStat {
+    // For region size
+    RegionApproximateSize {
         region_id: u64,
-        stat: RegionApproximateStat,
+        size: u64,
+    },
+
+    // For region keys
+    RegionApproximateKeys {
+        region_id: u64,
+        keys: u64,
     },
 
     // Compaction finished event
@@ -181,6 +187,7 @@ pub enum Msg {
     HalfSplitRegion {
         region_id: u64,
         region_epoch: RegionEpoch,
+        policy: CheckPolicy,
     },
     MergeFail {
         region_id: u64,
@@ -215,13 +222,15 @@ impl fmt::Debug for Msg {
                 ref split_key,
                 ..
             } => write!(fmt, "Split region {} at key {:?}", region_id, split_key),
-            Msg::RegionApproximateStat {
-                region_id,
-                ref stat,
-            } => write!(
+            Msg::RegionApproximateSize { region_id, size } => write!(
                 fmt,
-                "Region's approximate stat [region_id: {}, stat: {:?}]",
-                region_id, stat
+                "Region's approximate size [region_id: {}, size: {:?}]",
+                region_id, size
+            ),
+            Msg::RegionApproximateKeys { region_id, keys } => write!(
+                fmt,
+                "Region's approximate keys [region_id: {}, keys: {:?}]",
+                region_id, keys
             ),
             Msg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),
             Msg::HalfSplitRegion { ref region_id, .. } => {
@@ -253,10 +262,15 @@ impl Msg {
         }
     }
 
-    pub fn new_half_split_region(region_id: u64, region_epoch: RegionEpoch) -> Msg {
+    pub fn new_half_split_region(
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        policy: CheckPolicy,
+    ) -> Msg {
         Msg::HalfSplitRegion {
             region_id,
             region_epoch,
+            policy,
         }
     }
 }

@@ -66,7 +66,7 @@ pub mod json;
 pub mod time;
 pub mod types;
 
-pub use self::decimal::{dec_encoded_len, Decimal, DecimalEncoder, Res};
+pub use self::decimal::{dec_encoded_len, Decimal, DecimalEncoder, Res, RoundMode};
 pub use self::duration::{Duration, DurationEncoder};
 pub use self::json::{parse_json_path_expr, Json, JsonEncoder, ModifyType, PathExpression};
 pub use self::time::{Time, TimeEncoder};
