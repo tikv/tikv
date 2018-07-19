@@ -22,7 +22,6 @@ use kvproto::metapb;
 use kvproto::raft_cmdpb::{RaftCmdResponse, RaftResponseHeader};
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::{ConfChangeType, MessageType};
-use rocksdb::DB;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
@@ -113,7 +112,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(b"k4"), Some(b"v4".to_vec()));
     must_get_equal(&engine_2, b"k4", b"v4");
 
-    let resp = run_conf_change(cluster, r1, ConfChangeType::AddNode, new_peer(2, 2)).unwrap();
+    let resp = call_conf_change(cluster, r1, ConfChangeType::AddNode, new_peer(2, 2)).unwrap();
     let exec_res = resp
         .get_header()
         .get_error()
@@ -127,27 +126,11 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Remove peer (2, 2) from region 1.
     pd_client.must_remove_peer(r1, new_peer(2, 2));
-    must_get_none(&engine_2, b"k1");
-
-    // Can't add the peer back on the tombstone if epoch is stale.
-    let mut rs = get_region_state(&engine_2, r1);
-    rs.mut_region().mut_region_epoch().conf_ver += 100;
-    put_region_state(&engine_2, r1, &rs);
 
     // add peer (2, 4) to region 1.
     pd_client.must_add_peer(r1, new_peer(2, 4));
-    for _ in 0..30 {
-        thread::sleep(Duration::from_millis(20));
-        if get_region_state(&engine_2, r1).get_state() == PeerState::Tombstone {
-            continue;
-        }
-        panic!("the peer state should be still tombstone");
-    }
 
     // Remove peer (3, 3) from region 1.
-    assert_eq!(rs, get_region_state(&engine_2, r1));
-    rs.mut_region().mut_region_epoch().conf_ver -= 100;
-    put_region_state(&engine_2, r1, &rs);
     pd_client.must_remove_peer(r1, new_peer(3, 3));
 
     let (key, value) = (b"k4", b"v4");
@@ -623,11 +606,11 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_4, b"k2", b"v2");
 
     // Can't add duplicate learner.
-    let resp = run_conf_change(
+    let resp = call_conf_change(
         cluster,
         r1,
         ConfChangeType::AddLearnerNode,
-        new_learner_peer(4, 10),
+        new_learner_peer(4, 11),
     ).unwrap();
     assert!(
         resp.get_header()
@@ -639,41 +622,41 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // Remove learner (4, 10) from region 1.
     pd_client.must_remove_peer(r1, new_learner_peer(4, 10));
     must_get_none(&engine_4, b"k2"); // Wait for the region is cleaned.
-    pd_client.must_add_peer(r1, new_learner_peer(4, 10));
+    pd_client.must_add_peer(r1, new_learner_peer(4, 12));
     must_get_equal(&engine_4, b"k2", b"v2");
 
     // Can't transfer leader to learner.
-    pd_client.transfer_leader(r1, new_learner_peer(4, 10));
+    pd_client.transfer_leader(r1, new_learner_peer(4, 12));
     cluster.must_put(b"k3", b"v3");
     must_get_equal(&cluster.get_engine(4), b"k3", b"v3");
     pd_client.region_leader_must_be(r1, new_peer(1, 1));
 
-    // Promote learner (4 ,10) to voter.
-    pd_client.must_add_peer(r1, new_peer(4, 10));
-    pd_client.must_none_pending_peer(new_peer(4, 10));
+    // Promote learner (4, 12) to voter.
+    pd_client.must_add_peer(r1, new_peer(4, 12));
+    pd_client.must_none_pending_peer(new_peer(4, 12));
     cluster.must_put(b"k3", b"v3");
     must_get_equal(&engine_4, b"k3", b"v3");
 
-    // Transfer leader to (4, 10) and check pd heartbeats from it.
-    pd_client.transfer_leader(r1, new_peer(4, 10));
-    pd_client.region_leader_must_be(r1, new_peer(4, 10));
+    // Transfer leader to (4, 12) and check pd heartbeats from it.
+    pd_client.transfer_leader(r1, new_peer(4, 12));
+    pd_client.region_leader_must_be(r1, new_peer(4, 12));
 
     // Add learner on store which already has peer.
-    run_conf_change(
+    call_conf_change(
         cluster,
         r1,
         ConfChangeType::AddLearnerNode,
-        new_learner_peer(4, 10),
+        new_learner_peer(4, 13),
     ).unwrap();
-    pd_client.must_have_peer(r1, new_peer(4, 10));
+    pd_client.must_have_peer(r1, new_peer(4, 12));
 
     // Add peer with different id on store which already has learner.
-    pd_client.must_remove_peer(r1, new_peer(4, 10));
-    pd_client.must_add_peer(r1, new_learner_peer(4, 11));
-    pd_client.add_peer(r1, new_learner_peer(4, 12));
-    pd_client.must_none_peer(r1, new_learner_peer(4, 12));
-    pd_client.add_peer(r1, new_peer(4, 13));
-    pd_client.must_none_peer(r1, new_peer(4, 13));
+    pd_client.must_remove_peer(r1, new_peer(4, 12));
+    pd_client.must_add_peer(r1, new_learner_peer(4, 13));
+    pd_client.add_peer(r1, new_learner_peer(4, 14));
+    pd_client.must_none_peer(r1, new_learner_peer(4, 14));
+    pd_client.add_peer(r1, new_peer(4, 15));
+    pd_client.must_none_peer(r1, new_peer(4, 15));
 }
 
 #[test]
@@ -705,7 +688,7 @@ fn test_conf_change_remove_leader() {
 
     // Try to remove leader, which should be ignored.
     let res =
-        run_conf_change(&mut cluster, r1, ConfChangeType::RemoveNode, new_peer(1, 1)).unwrap();
+        call_conf_change(&mut cluster, r1, ConfChangeType::RemoveNode, new_peer(1, 1)).unwrap();
     assert!(
         res.get_header()
             .get_error()
@@ -804,21 +787,7 @@ fn test_learner_with_slow_snapshot() {
     assert!(count.load(Ordering::SeqCst) > 0);
 }
 
-fn get_region_state(engine: &DB, region_id: u64) -> RegionLocalState {
-    let key = keys::region_state_key(region_id);
-    engine
-        .get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
-        .unwrap()
-        .unwrap()
-}
-
-fn put_region_state(engine: &DB, region_id: u64, state: &RegionLocalState) {
-    let key = keys::region_state_key(region_id);
-    let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
-    engine.put_msg_cf(cf_raft, &key, state).unwrap();
-}
-
-fn run_conf_change<T>(
+fn call_conf_change<T>(
     cluster: &mut Cluster<T>,
     region_id: u64,
     conf_change_type: ConfChangeType,
