@@ -34,9 +34,7 @@ default: release
 all: format build test
 
 pre-clippy:
-	@if [ "`cat clippy-version`" != "`cargo clippy --version || echo 0`" ]; then\
-		cargo install clippy --version `cat clippy-version` --force;\
-	fi
+	@rustup component add clippy-preview
 
 clippy: pre-clippy
 	@cargo clippy --bins --examples --tests --benches -- \
