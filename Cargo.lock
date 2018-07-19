@@ -439,7 +439,7 @@ dependencies = [
  "futures 0.1.17 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "raft 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "raft 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -861,7 +861,7 @@ dependencies = [
 
 [[package]]
 name = "raft"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "fxhash 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1245,7 +1245,7 @@ dependencies = [
  "prometheus-static-metric 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "raft 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "raft 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex 0.1.80 (registry+https://github.com/rust-lang/crates.io-index)",
  "rocksdb 0.3.0 (git+https://github.com/pingcap/rust-rocksdb.git)",
@@ -1612,7 +1612,7 @@ dependencies = [
 "checksum quick-error 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "eda5fe9b71976e62bc81b781206aaa076401769b2143379d3eb2118388babac4"
 "checksum quote 0.3.12 (registry+https://github.com/rust-lang/crates.io-index)" = "e7b44fd83db28b83c1c58187159934906e5e955c812e211df413b76b03c909a5"
 "checksum quote 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)" = "9949cfe66888ffe1d53e6ec9d9f3b70714083854be20fd5e271b232a017401e8"
-"checksum raft 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "c7339281aa635113db31b06305e6b4ddd9fbe15b75eb1b084bc0caa1639bbbf2"
+"checksum raft 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)" = "27c39f5f16d12860761c64f564b7ddb0bd257a490cf2267bb5e58b4ae886e10f"
 "checksum rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)" = "2791d88c6defac799c3f20d74f094ca33b9332612d9aef9078519c82e4fe04a5"
 "checksum rand 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)" = "eba5f8cb59cc50ed56be8880a5c7b496bfd9bd26394e176bc67884094145c2c5"
 "checksum redox_syscall 0.1.27 (registry+https://github.com/rust-lang/crates.io-index)" = "80dcf663dc552529b9bfc7bdb30ea12e5fa5d3545137d850a91ad410053f68e9"
