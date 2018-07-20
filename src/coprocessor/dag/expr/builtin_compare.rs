@@ -215,11 +215,7 @@ impl ScalarFunc {
         let mut right = self.children.len();
         while left < right {
             let mid = left + (right - left) / 2;
-            let m = match self.children[mid].eval_int(ctx, row) {
-                Err(e) => return Err(e),
-                Ok(None) => target,
-                Ok(Some(v)) => v,
-            };
+            let m = self.children[mid].eval_int(ctx, row)?.unwrap_or(target);
 
             let mus = mysql::has_unsigned_flag(self.children[mid].get_tp().get_flag());
 
@@ -250,11 +246,7 @@ impl ScalarFunc {
         let mut right = self.children.len();
         while left < right {
             let mid = left + (right - left) / 2;
-            let m = match self.children[mid].eval_real(ctx, row) {
-                Err(e) => return Err(e),
-                Ok(None) => target,
-                Ok(Some(v)) => v,
-            };
+            let m = self.children[mid].eval_real(ctx, row)?.unwrap_or(target);
 
             if target >= m {
                 left = mid + 1
