@@ -52,7 +52,7 @@ use raft::eraftpb::{ConfChange, Entry, EntryType};
 use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::raftstore::store::{keys, Engines};
-use tikv::server::debug::{Debugger, RegionInfo, BottommostLevelCompaction};
+use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::util::rocksdb as rocksdb_util;
 use tikv::util::security::{SecurityConfig, SecurityManager};

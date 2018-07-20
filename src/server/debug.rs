@@ -113,7 +113,9 @@ impl From<debugpb::BottommostLevelCompaction> for BottommostLevelCompaction {
         let b = match v {
             debugpb::BottommostLevelCompaction::Skip => DBBottommostLevelCompaction::Skip,
             debugpb::BottommostLevelCompaction::Force => DBBottommostLevelCompaction::Force,
-            debugpb::BottommostLevelCompaction::IfHaveCompactionFilter => DBBottommostLevelCompaction::IfHaveCompactionFilter,
+            debugpb::BottommostLevelCompaction::IfHaveCompactionFilter => {
+                DBBottommostLevelCompaction::IfHaveCompactionFilter
+            }
         };
         BottommostLevelCompaction(b)
     }
@@ -124,7 +126,9 @@ impl Into<debugpb::BottommostLevelCompaction> for BottommostLevelCompaction {
         match self.0 {
             DBBottommostLevelCompaction::Skip => debugpb::BottommostLevelCompaction::Skip,
             DBBottommostLevelCompaction::Force => debugpb::BottommostLevelCompaction::Force,
-            DBBottommostLevelCompaction::IfHaveCompactionFilter => debugpb::BottommostLevelCompaction::IfHaveCompactionFilter,
+            DBBottommostLevelCompaction::IfHaveCompactionFilter => {
+                debugpb::BottommostLevelCompaction::IfHaveCompactionFilter
+            }
         }
     }
 }
