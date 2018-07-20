@@ -120,7 +120,7 @@ fn main() {
 
     tikv_util::print_tikv_info();
     panic_hook::set_exit_hook(false);
-    configure_grpc_poll_strategy();
+    check_environment_variables();
 
     run_import_server(&config);
 }
