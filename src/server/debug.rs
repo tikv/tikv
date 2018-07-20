@@ -21,7 +21,7 @@ use std::{error, result};
 
 use protobuf::{self, Message, RepeatedField};
 
-use kvproto::debugpb::{DB as DBType, *};
+use kvproto::debugpb::{self, DB as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
@@ -90,6 +90,41 @@ impl RegionInfo {
             raft_local_state: raft_local,
             raft_apply_state: raft_apply,
             region_local_state: region_local,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct BottommostLevelCompaction(pub DBBottommostLevelCompaction);
+
+impl<'a> From<Option<&'a str>> for BottommostLevelCompaction {
+    fn from(v: Option<&'a str>) -> Self {
+        let b = match v {
+            Some("skip") => DBBottommostLevelCompaction::Skip,
+            Some("force") => DBBottommostLevelCompaction::Force,
+            _ => DBBottommostLevelCompaction::IfHaveCompactionFilter,
+        };
+        BottommostLevelCompaction(b)
+    }
+}
+
+impl From<debugpb::BottommostLevelCompaction> for BottommostLevelCompaction {
+    fn from(v: debugpb::BottommostLevelCompaction) -> Self {
+        let b = match v {
+            debugpb::BottommostLevelCompaction::Skip => DBBottommostLevelCompaction::Skip,
+            debugpb::BottommostLevelCompaction::Force => DBBottommostLevelCompaction::Force,
+            debugpb::BottommostLevelCompaction::IfHaveCompactionFilter => DBBottommostLevelCompaction::IfHaveCompactionFilter,
+        };
+        BottommostLevelCompaction(b)
+    }
+}
+
+impl Into<debugpb::BottommostLevelCompaction> for BottommostLevelCompaction {
+    fn into(self) -> debugpb::BottommostLevelCompaction {
+        match self.0 {
+            DBBottommostLevelCompaction::Skip => debugpb::BottommostLevelCompaction::Skip,
+            DBBottommostLevelCompaction::Force => debugpb::BottommostLevelCompaction::Force,
+            DBBottommostLevelCompaction::IfHaveCompactionFilter => debugpb::BottommostLevelCompaction::IfHaveCompactionFilter,
         }
     }
 }
@@ -243,7 +278,7 @@ impl Debugger {
         start: &[u8],
         end: &[u8],
         threads: u32,
-        bottommost: DBBottommostLevelCompaction,
+        bottommost: BottommostLevelCompaction,
     ) -> Result<()> {
         validate_db_and_cf(db, cf)?;
         let db = self.get_db_from_type(db)?;
@@ -254,7 +289,7 @@ impl Debugger {
         let mut opts = CompactOptions::new();
         opts.set_max_subcompactions(threads as i32);
         opts.set_exclusive_manual_compaction(false);
-        opts.set_bottommost_level_compaction(bottommost);
+        opts.set_bottommost_level_compaction(bottommost.0);
         db.compact_range_cf_opt(handle, &opts, start, end);
         info!("Debugger finishs manual comapct on {:?}.{}", db, cf);
         Ok(())

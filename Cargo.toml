@@ -89,12 +89,10 @@ signal = "0.4"
 git = "https://github.com/pingcap/murmur3.git"
 
 [dependencies.rocksdb]
-git = "https://github.com/huachaohuang/rust-rocksdb.git"
-branch = "bottommost-level-compaction"
+git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
-git = "https://github.com/huachaohuang/kvproto.git"
-branch = "bottommost-level-compaction"
+git = "https://github.com/pingcap/kvproto.git"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"

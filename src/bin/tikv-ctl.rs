@@ -48,12 +48,11 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb_grpc::TikvClient;
 use raft::eraftpb::{ConfChange, Entry, EntryType};
-use rocksdb::DBBottommostLevelCompaction;
 
 use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::raftstore::store::{keys, Engines};
-use tikv::server::debug::{Debugger, RegionInfo};
+use tikv::server::debug::{Debugger, RegionInfo, BottommostLevelCompaction};
 use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::util::rocksdb as rocksdb_util;
 use tikv::util::security::{SecurityConfig, SecurityManager};
@@ -388,7 +387,7 @@ trait DebugExecutor {
         from: Option<Vec<u8>>,
         to: Option<Vec<u8>>,
         threads: u32,
-        bottommost: DBBottommostLevelCompaction,
+        bottommost: BottommostLevelCompaction,
     ) {
         let from = from.unwrap_or_default();
         let to = to.unwrap_or_default();
@@ -410,7 +409,7 @@ trait DebugExecutor {
         cf: &str,
         region_id: u64,
         threads: u32,
-        bottommost: DBBottommostLevelCompaction,
+        bottommost: BottommostLevelCompaction,
     ) {
         let region_local = self.get_region_info(region_id).region_local_state.unwrap();
         let r = region_local.get_region();
@@ -517,7 +516,7 @@ trait DebugExecutor {
         from: &[u8],
         to: &[u8],
         threads: u32,
-        bottommost: DBBottommostLevelCompaction,
+        bottommost: BottommostLevelCompaction,
     );
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
@@ -618,23 +617,15 @@ impl DebugExecutor for DebugClient {
         from: &[u8],
         to: &[u8],
         threads: u32,
-        bottommost: DBBottommostLevelCompaction,
+        bottommost: BottommostLevelCompaction,
     ) {
-        let bottommost = match bottommost {
-            DBBottommostLevelCompaction::Skip => BottommostLevelCompaction::Skip,
-            DBBottommostLevelCompaction::Force => BottommostLevelCompaction::Force,
-            DBBottommostLevelCompaction::IfHaveCompactionFilter => {
-                BottommostLevelCompaction::IfHaveCompactionFilter
-            }
-        };
-
         let mut req = CompactRequest::new();
         req.set_db(db);
         req.set_cf(cf.to_owned());
         req.set_from_key(from.to_owned());
         req.set_to_key(to.to_owned());
         req.set_threads(threads);
-        req.set_bottommost_level_compaction(bottommost);
+        req.set_bottommost_level_compaction(bottommost.into());
         self.compact(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::compact", e));
     }
@@ -765,7 +756,7 @@ impl DebugExecutor for Debugger {
         from: &[u8],
         to: &[u8],
         threads: u32,
-        bottommost: DBBottommostLevelCompaction,
+        bottommost: BottommostLevelCompaction,
     ) {
         self.compact(db, cf, from, to, threads, bottommost)
             .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
@@ -1525,7 +1516,7 @@ fn main() {
             let from_key = matches.value_of("from").map(|k| unescape(k));
             let to_key = matches.value_of("to").map(|k| unescape(k));
             let threads = value_t_or_exit!(matches.value_of("threads"), u32);
-            let bottommost = parse_bottommost_level_compaction(matches.value_of("bottommost"));
+            let bottommost = BottommostLevelCompaction::from(matches.value_of("bottommost"));
             return compact_whole_cluster(
                 pd, mgr, db_type, cfs, from_key, to_key, threads, bottommost,
             );
@@ -1613,7 +1604,7 @@ fn main() {
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
         let threads = value_t_or_exit!(matches.value_of("threads"), u32);
-        let bottommost = parse_bottommost_level_compaction(matches.value_of("bottommost"));
+        let bottommost = BottommostLevelCompaction::from(matches.value_of("bottommost"));
         if let Some(region) = matches.value_of("region") {
             debug_executor.compact_region(
                 host,
@@ -1835,7 +1826,7 @@ fn compact_whole_cluster(
     from: Option<Vec<u8>>,
     to: Option<Vec<u8>>,
     threads: u32,
-    bottommost: DBBottommostLevelCompaction,
+    bottommost: BottommostLevelCompaction,
 ) {
     let mut cfg = PdConfig::default();
     cfg.endpoints.push(pd.to_owned());
@@ -1875,13 +1866,5 @@ fn compact_whole_cluster(
 
     for h in handles {
         h.join().unwrap();
-    }
-}
-
-fn parse_bottommost_level_compaction(v: Option<&str>) -> DBBottommostLevelCompaction {
-    match v {
-        Some("skip") => DBBottommostLevelCompaction::Skip,
-        Some("force") => DBBottommostLevelCompaction::Force,
-        _ => DBBottommostLevelCompaction::IfHaveCompactionFilter,
     }
 }
