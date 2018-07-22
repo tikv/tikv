@@ -557,7 +557,7 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
-    #[allow(type_complexity)]
+    #[cfg_attr(feature = "cargo-clippy", allow(type_complexity))]
     pub fn scan_lock<F>(
         &mut self,
         start: Option<Key>,
@@ -769,6 +769,7 @@ mod tests {
             let k = make_key(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true);
+            txn.collapse_rollback(false);
             txn.rollback(&k).unwrap();
             self.write(txn.into_modifies());
         }

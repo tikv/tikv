@@ -82,6 +82,7 @@ impl ScalarFunc {
             | ScalarFuncSig::MultiplyReal
             | ScalarFuncSig::MultiplyDecimal
             | ScalarFuncSig::MultiplyInt
+            | ScalarFuncSig::MultiplyIntUnsigned
             | ScalarFuncSig::IfNullInt
             | ScalarFuncSig::IfNullReal
             | ScalarFuncSig::IfNullString
@@ -102,6 +103,8 @@ impl ScalarFunc {
             | ScalarFuncSig::BitAndSig
             | ScalarFuncSig::BitOrSig
             | ScalarFuncSig::BitXorSig
+            | ScalarFuncSig::RegexpSig
+            | ScalarFuncSig::RegexpBinarySig
             | ScalarFuncSig::DateFormatSig => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -365,7 +368,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Minute
             | ScalarFuncSig::Month
             | ScalarFuncSig::MonthName
-            | ScalarFuncSig::MultiplyIntUnsigned
             | ScalarFuncSig::NowWithArg
             | ScalarFuncSig::NowWithoutArg
             | ScalarFuncSig::NullTimeDiff
@@ -384,8 +386,6 @@ impl ScalarFunc {
             | ScalarFuncSig::RandomBytes
             | ScalarFuncSig::RandWithSeed
             | ScalarFuncSig::RealAnyValue
-            | ScalarFuncSig::RegexpBinarySig
-            | ScalarFuncSig::RegexpSig
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
             | ScalarFuncSig::Replace
@@ -722,6 +722,7 @@ dispatch_call! {
         PlusInt => plus_int,
         MinusInt => minus_int,
         MultiplyInt => multiply_int,
+        MultiplyIntUnsigned => multiply_int_unsigned,
         IntDivideInt => int_divide_int,
         IntDivideDecimal => int_divide_decimal,
         ModInt => mod_int,
@@ -760,6 +761,8 @@ dispatch_call! {
         CaseWhenInt => case_when_int,
 
         LikeSig => like,
+        RegexpSig => regexp,
+        RegexpBinarySig => regexp_binary,
 
         BitAndSig => bit_and,
         BitNegSig => bit_neg,
@@ -964,6 +967,7 @@ mod test {
                     ScalarFuncSig::MultiplyReal,
                     ScalarFuncSig::MultiplyDecimal,
                     ScalarFuncSig::MultiplyInt,
+                    ScalarFuncSig::MultiplyIntUnsigned,
                     ScalarFuncSig::IfNullInt,
                     ScalarFuncSig::IfNullReal,
                     ScalarFuncSig::IfNullString,
@@ -1297,7 +1301,6 @@ mod test {
             ScalarFuncSig::Minute,
             ScalarFuncSig::Month,
             ScalarFuncSig::MonthName,
-            ScalarFuncSig::MultiplyIntUnsigned,
             ScalarFuncSig::NowWithArg,
             ScalarFuncSig::NowWithoutArg,
             ScalarFuncSig::NullTimeDiff,
@@ -1316,8 +1319,6 @@ mod test {
             ScalarFuncSig::RandomBytes,
             ScalarFuncSig::RandWithSeed,
             ScalarFuncSig::RealAnyValue,
-            ScalarFuncSig::RegexpBinarySig,
-            ScalarFuncSig::RegexpSig,
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,
             ScalarFuncSig::Replace,

@@ -40,19 +40,20 @@ use grpcio::{ChannelBuilder, Environment};
 use protobuf::Message;
 use protobuf::RepeatedField;
 
-use kvproto::debugpb::DB as DBType;
-use kvproto::debugpb::*;
+use kvproto::debugpb::{DB as DBType, *};
 use kvproto::debugpb_grpc::DebugClient;
-use kvproto::kvrpcpb::MvccInfo;
+use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
+use kvproto::tikvpb_grpc::TikvClient;
 use raft::eraftpb::{ConfChange, Entry, EntryType};
+
 use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::raftstore::store::{keys, Engines};
-use tikv::server::debug::{Debugger, RegionInfo};
-use tikv::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
+use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::util::rocksdb as rocksdb_util;
 use tikv::util::security::{SecurityConfig, SecurityManager};
 use tikv::util::{escape, unescape};
@@ -105,7 +106,10 @@ fn new_debug_executor(
         }
         (Some(remote), None) => {
             let env = Arc::new(Environment::new(1));
-            let cb = ChannelBuilder::new(env);
+            let cb = ChannelBuilder::new(env)
+                .max_receive_message_len(1 << 30) // 1G.
+                .max_send_message_len(1 << 30);
+
             let channel = mgr.connect(cb, remote);
             let client = DebugClient::new(channel);
             Box::new(client) as Box<DebugExecutor>
@@ -383,10 +387,11 @@ trait DebugExecutor {
         from: Option<Vec<u8>>,
         to: Option<Vec<u8>>,
         threads: u32,
+        bottommost: BottommostLevelCompaction,
     ) {
         let from = from.unwrap_or_default();
         let to = to.unwrap_or_default();
-        self.do_compaction(db, cf, &from, &to, threads);
+        self.do_compaction(db, cf, &from, &to, threads, bottommost);
         println!(
             "store:{:?} compact db:{:?} cf:{} range:[{:?}, {:?}) success!",
             address.unwrap_or("local"),
@@ -404,12 +409,13 @@ trait DebugExecutor {
         cf: &str,
         region_id: u64,
         threads: u32,
+        bottommost: BottommostLevelCompaction,
     ) {
         let region_local = self.get_region_info(region_id).region_local_state.unwrap();
         let r = region_local.get_region();
         let from = keys::data_key(r.get_start_key());
         let to = keys::data_end_key(r.get_end_key());
-        self.do_compaction(db, cf, &from, &to, threads);
+        self.do_compaction(db, cf, &from, &to, threads, bottommost);
         println!(
             "store:{:?} compact_region db:{:?} cf:{} range:[{:?}, {:?}) success!",
             address.unwrap_or("local"),
@@ -503,7 +509,15 @@ trait DebugExecutor {
         limit: u64,
     ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
 
-    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8], threads: u32);
+    fn do_compaction(
+        &self,
+        db: DBType,
+        cf: &str,
+        from: &[u8],
+        to: &[u8],
+        threads: u32,
+        bottommost: BottommostLevelCompaction,
+    );
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
 
@@ -596,13 +610,22 @@ impl DebugExecutor for DebugClient {
         ) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
-    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8], threads: u32) {
+    fn do_compaction(
+        &self,
+        db: DBType,
+        cf: &str,
+        from: &[u8],
+        to: &[u8],
+        threads: u32,
+        bottommost: BottommostLevelCompaction,
+    ) {
         let mut req = CompactRequest::new();
         req.set_db(db);
         req.set_cf(cf.to_owned());
         req.set_from_key(from.to_owned());
         req.set_to_key(to.to_owned());
         req.set_threads(threads);
+        req.set_bottommost_level_compaction(bottommost.into());
         self.compact(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::compact", e));
     }
@@ -726,8 +749,16 @@ impl DebugExecutor for Debugger {
         Box::new(stream) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
-    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8], threads: u32) {
-        self.compact(db, cf, from, to, threads)
+    fn do_compaction(
+        &self,
+        db: DBType,
+        cf: &str,
+        from: &[u8],
+        to: &[u8],
+        threads: u32,
+        bottommost: BottommostLevelCompaction,
+    ) {
+        self.compact(db, cf, from, to, threads, bottommost)
             .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
     }
 
@@ -851,30 +882,24 @@ fn main() {
         .about("Distributed transactional key value database powered by Rust and Raft")
         .arg(
             Arg::with_name("db")
-                .required(true)
-                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex"])
                 .long("db")
                 .takes_value(true)
                 .help("set rocksdb path"),
         )
         .arg(
             Arg::with_name("raftdb")
-                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex"])
                 .long("raftdb")
                 .takes_value(true)
                 .help("set raft rocksdb path"),
         )
         .arg(
             Arg::with_name("config")
-                .conflicts_with_all(&["host", "pd", "hex-to-escaped", "escaped-to-hex"])
                 .long("config")
                 .takes_value(true)
                 .help("set config for rocksdb"),
         )
         .arg(
             Arg::with_name("host")
-                .required(true)
-                .conflicts_with_all(&["db", "pd", "raftdb", "hex-to-escaped", "escaped-to-hex", "config"])
                 .long("host")
                 .takes_value(true)
                 .help("set remote host"),
@@ -915,10 +940,22 @@ fn main() {
                 .help("convert escaped key to hex key"),
         )
         .arg(
+            Arg::with_name("decode")
+                .conflicts_with_all(&["hex-to-escaped", "escaped-to-hex"])
+                .long("decode")
+                .takes_value(true)
+                .help("decode a key in escaped format"),
+        )
+        .arg(
+            Arg::with_name("encode")
+                .conflicts_with_all(&["hex-to-escaped", "escaped-to-hex"])
+                .long("encode")
+                .takes_value(true)
+                .help("encode a key in escaped format"),
+            )
+        .arg(
             Arg::with_name("pd")
-                .required(true)
                 .long("pd")
-                .conflicts_with_all(&["db", "raftdb", "host", "hex-to-escaped", "escaped-to-hex", "config"])
                 .takes_value(true)
                 .help("pd address"),
         )
@@ -1164,6 +1201,15 @@ fn main() {
                     .long("region")
                     .takes_value(true)
                     .help("set the region id"),
+                )
+                .arg(
+                    Arg::with_name("bottommost")
+                        .short("b")
+                        .long("bottommost")
+                        .takes_value(true)
+                        .default_value("default")
+                        .possible_values(&["skip", "force", "default"])
+                        .help("how to compact the bottommost level"),
                 ),
         )
         .subcommand(
@@ -1223,26 +1269,36 @@ fn main() {
                 .about("unsafe recover the cluster when majority replicas are failed")
                 .subcommand(
                     SubCommand::with_name("remove-fail-stores")
-                    .arg(
-                        Arg::with_name("stores")
-                            .required(true)
-                            .short("s")
-                            .takes_value(true)
-                            .multiple(true)
-                            .use_delimiter(true)
-                            .require_delimiter(true)
-                            .value_delimiter(",")
-                            .help("failed store id list"),
-                    )
-                    .arg(
-                        Arg::with_name("regions")
-                            .takes_value(true)
-                            .short("r")
-                            .multiple(true)
-                            .use_delimiter(true)
-                            .require_delimiter(true)
-                            .value_delimiter(",")
-                            .help("only for these regions"),
+                        .arg(
+                            Arg::with_name("stores")
+                                .required(true)
+                                .short("s")
+                                .takes_value(true)
+                                .multiple(true)
+                                .use_delimiter(true)
+                                .require_delimiter(true)
+                                .value_delimiter(",")
+                                .help("stores to be removed"),
+                        )
+                        .arg(
+                            Arg::with_name("regions")
+                                .required_unless("all-regions")
+                                .conflicts_with("all-regions")
+                                .takes_value(true)
+                                .short("r")
+                                .multiple(true)
+                                .use_delimiter(true)
+                                .require_delimiter(true)
+                                .value_delimiter(",")
+                                .help("only for these regions"),
+                        )
+                        .arg(
+                            Arg::with_name("all-regions")
+                                .required_unless("regions")
+                                .conflicts_with("regions")
+                                .long("all-regions")
+                                .takes_value(false)
+                                .help("do the command for all regions"),
                         )
                 ),
         )
@@ -1382,6 +1438,15 @@ fn main() {
                         .takes_value(true)
                         .default_value("8")
                         .help("number of threads in one compaction")
+                )
+                .arg(
+                    Arg::with_name("bottommost")
+                        .short("b")
+                        .long("bottommost")
+                        .takes_value(true)
+                        .default_value("default")
+                        .possible_values(&["skip", "force", "default"])
+                        .help("how to compact the bottommost level"),
                 ),
         )
         .subcommand(
@@ -1394,41 +1459,79 @@ fn main() {
                         .takes_value(true)
                         .help("the target region id"),
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("split-region")
+                .about("split the region")
+                .arg(
+                    Arg::with_name("region")
+                        .short("r")
+                        .required(true)
+                        .takes_value(true)
+                        .help("the target region id")
+                )
+                .arg(
+                    Arg::with_name("key")
+                        .short("k")
+                        .required(true)
+                        .takes_value(true)
+                        .help("the key to split it, in unecoded escaped format")
+                ),
         );
 
     let matches = app.clone().get_matches();
 
-    let hex_key = matches.value_of("hex-to-escaped");
-    let escaped_key = matches.value_of("escaped-to-hex");
-    match (hex_key, escaped_key) {
-        (Some(hex), None) => {
-            println!("{}", escape(&from_hex(hex).unwrap()));
-            return;
-        }
-        (None, Some(escaped)) => {
-            println!("{}", &unescape(escaped).to_hex().to_uppercase());
-            return;
-        }
-        (None, None) => {}
-        _ => unreachable!(),
-    };
+    // Deal with arguments about key utils.
+    if let Some(hex) = matches.value_of("hex-to-escaped") {
+        println!("{}", escape(&from_hex(hex).unwrap()));
+        return;
+    } else if let Some(escaped) = matches.value_of("escaped-to-hex") {
+        println!("{}", &unescape(escaped).to_hex().to_uppercase());
+        return;
+    } else if let Some(encoded) = matches.value_of("decode") {
+        match Key::from_encoded(unescape(encoded)).raw() {
+            Ok(k) => println!("{}", escape(&k)),
+            Err(e) => eprintln!("decode meets error: {}", e),
+        };
+        return;
+    } else if let Some(decoded) = matches.value_of("encode") {
+        println!("{}", Key::from_raw(&unescape(decoded)));
+        return;
+    }
 
     let mgr = new_security_mgr(&matches);
 
+    // Deal with subcommand dump-snap-meta.
     if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
         let path = matches.value_of("file").unwrap();
         return dump_snap_meta_file(path);
-    } else if let Some(sub_cmd) = matches.subcommand_matches("compact-cluster") {
-        let pd = matches.value_of("pd").unwrap();
-        let db = sub_cmd.value_of("db").unwrap();
-        let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
-        let cfs = Vec::from_iter(sub_cmd.values_of("cf").unwrap());
-        let from_key = sub_cmd.value_of("from").map(|k| unescape(k));
-        let to_key = sub_cmd.value_of("to").map(|k| unescape(k));
-        let threads = value_t_or_exit!(sub_cmd.value_of("threads"), u32);
-        return compact_whole_cluster(pd, db_type, cfs, from_key, to_key, threads, mgr);
     }
 
+    // Deal with all subcommands needs PD.
+    if let Some(pd) = matches.value_of("pd") {
+        if let Some(matches) = matches.subcommand_matches("compact-cluster") {
+            let db = matches.value_of("db").unwrap();
+            let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
+            let cfs = Vec::from_iter(matches.values_of("cf").unwrap());
+            let from_key = matches.value_of("from").map(|k| unescape(k));
+            let to_key = matches.value_of("to").map(|k| unescape(k));
+            let threads = value_t_or_exit!(matches.value_of("threads"), u32);
+            let bottommost = BottommostLevelCompaction::from(matches.value_of("bottommost"));
+            return compact_whole_cluster(
+                pd, mgr, db_type, cfs, from_key, to_key, threads, bottommost,
+            );
+        }
+        if let Some(matches) = matches.subcommand_matches("split-region") {
+            let region_id = value_t_or_exit!(matches.value_of("region"), u64);
+            let key = unescape(matches.value_of("key").unwrap());
+            return split_region(pd, region_id, key, mgr);
+        }
+
+        let _ = app.print_help();
+        return;
+    }
+
+    // Deal with all subcommands about db or host.
     let db = matches.value_of("db");
     let raft_db = matches.value_of("raftdb");
     let host = matches.value_of("host");
@@ -1501,10 +1604,18 @@ fn main() {
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
         let threads = value_t_or_exit!(matches.value_of("threads"), u32);
+        let bottommost = BottommostLevelCompaction::from(matches.value_of("bottommost"));
         if let Some(region) = matches.value_of("region") {
-            debug_executor.compact_region(host, db_type, cf, region.parse().unwrap(), threads);
+            debug_executor.compact_region(
+                host,
+                db_type,
+                cf,
+                region.parse().unwrap(),
+                threads,
+                bottommost,
+            );
         } else {
-            debug_executor.compact(host, db_type, cf, from_key, to_key, threads);
+            debug_executor.compact(host, db_type, cf, from_key, to_key, threads, bottommost);
         }
     } else if let Some(matches) = matches.subcommand_matches("tombstone") {
         let regions = matches
@@ -1536,17 +1647,13 @@ fn main() {
         debug_executor.recover_regions_mvcc(mgr, &cfg, regions);
     } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
         if let Some(matches) = matches.subcommand_matches("remove-fail-stores") {
+            let store_ids = values_t!(matches, "stores", u64).expect("parse stores fail");
             let region_ids = matches.values_of("regions").map(|ids| {
                 ids.map(|r| r.parse())
                     .collect::<Result<Vec<_>, _>>()
                     .expect("parse regions fail")
             });
-            let stores = matches.values_of("stores").unwrap();
-
-            match stores.map(|s| s.parse()).collect::<Result<Vec<u64>, _>>() {
-                Ok(store_ids) => debug_executor.remove_fail_stores(store_ids, region_ids),
-                Err(e) => perror_and_exit("parse store id list", e),
-            }
+            debug_executor.remove_fail_stores(store_ids, region_ids);
         } else {
             eprintln!("{}", matches.usage());
         }
@@ -1657,14 +1764,69 @@ fn dump_snap_meta_file(path: &str) {
     }
 }
 
+fn get_pd_rpc_client(pd: &str, mgr: Arc<SecurityManager>) -> RpcClient {
+    let mut cfg = PdConfig::default();
+    cfg.endpoints.push(pd.to_owned());
+    cfg.validate().unwrap();
+    RpcClient::new(&cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
+}
+
+fn split_region(pd: &str, region_id: u64, key: Vec<u8>, mgr: Arc<SecurityManager>) {
+    let pd_client = get_pd_rpc_client(pd, Arc::clone(&mgr));
+
+    let region = pd_client
+        .get_region_by_id(region_id)
+        .wait()
+        .expect("get_region_by_id should success")
+        .expect("must have the region");
+
+    let leader = pd_client
+        .get_region_info(region.get_start_key())
+        .expect("get_region_info should success")
+        .leader
+        .expect("region must have leader");
+
+    let store = pd_client
+        .get_store(leader.get_store_id())
+        .expect("get_store should success");
+
+    let tikv_client = {
+        let cb = ChannelBuilder::new(Arc::new(Environment::new(1)));
+        let channel = mgr.connect(cb, store.get_address());
+        TikvClient::new(channel)
+    };
+
+    let mut req = SplitRegionRequest::new();
+    req.mut_context().set_region_id(region_id);
+    req.mut_context()
+        .set_region_epoch(region.get_region_epoch().clone());
+    req.set_split_key(key.clone());
+
+    let resp = tikv_client
+        .split_region(&req)
+        .expect("split_region should success");
+    if resp.has_region_error() {
+        eprintln!("split_region internal error: {:?}", resp.get_region_error());
+        return;
+    }
+
+    println!(
+        "split region {} success, left: {}, right: {}",
+        region_id,
+        resp.get_left().get_id(),
+        resp.get_right().get_id(),
+    );
+}
+
 fn compact_whole_cluster(
     pd: &str,
+    mgr: Arc<SecurityManager>,
     db_type: DBType,
     cfs: Vec<&str>,
     from: Option<Vec<u8>>,
     to: Option<Vec<u8>>,
     threads: u32,
-    mgr: Arc<SecurityManager>,
+    bottommost: BottommostLevelCompaction,
 ) {
     let mut cfg = PdConfig::default();
     cfg.endpoints.push(pd.to_owned());
@@ -1695,6 +1857,7 @@ fn compact_whole_cluster(
                     from.clone(),
                     to.clone(),
                     threads,
+                    bottommost,
                 );
             }
         });

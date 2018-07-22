@@ -22,7 +22,7 @@ use std::{i64, str};
 
 use super::mysql::{
     self, parse_json_path_expr, Decimal, DecimalEncoder, Duration, Json, JsonEncoder,
-    PathExpression, Time, DEFAULT_FSP, MAX_FSP,
+    PathExpression, RoundMode, Time, DEFAULT_FSP, MAX_FSP,
 };
 use super::{convert, Error, Result};
 use coprocessor::dag::expr::EvalContext;
@@ -196,7 +196,7 @@ impl Datum {
             }
             Datum::Time(ref t) => {
                 let s = str::from_utf8(bs)?;
-                let t2 = Time::parse_datetime(s, DEFAULT_FSP, &ctx.cfg.tz)?;
+                let t2 = Time::parse_datetime(s, DEFAULT_FSP, ctx.cfg.tz)?;
                 Ok(t.cmp(&t2))
             }
             Datum::Dur(ref d) => {
@@ -240,7 +240,7 @@ impl Datum {
         match *self {
             Datum::Bytes(ref bs) => {
                 let s = str::from_utf8(bs)?;
-                let t = Time::parse_datetime(s, DEFAULT_FSP, &ctx.cfg.tz)?;
+                let t = Time::parse_datetime(s, DEFAULT_FSP, ctx.cfg.tz)?;
                 Ok(t.cmp(time))
             }
             Datum::Time(ref t) => Ok(t.cmp(time)),
@@ -335,6 +335,40 @@ impl Datum {
             Datum::Dec(d) => d.as_f64(),
             Datum::Json(j) => j.cast_to_real(ctx),
             _ => Err(box_err!("failed to convert {} to f64", self)),
+        }
+    }
+
+    /// `into_i64` converts self into f64.
+    /// source function name is `ToInt64`.
+    pub fn into_i64(self, ctx: &mut EvalContext) -> Result<i64> {
+        let (lower_bound, upper_bound) = (i64::MIN, i64::MAX);
+        let tp = mysql::types::LONG_LONG;
+        match self {
+            Datum::I64(i) => Ok(i),
+            Datum::U64(u) => convert::convert_uint_to_int(u, upper_bound, tp),
+
+            Datum::F64(f) => convert::convert_float_to_int(f, lower_bound, upper_bound, tp),
+            Datum::Bytes(bs) => convert::bytes_to_int(ctx, &bs),
+            Datum::Time(mut t) => {
+                t.round_frac(mysql::DEFAULT_FSP)?;
+                let d = t.to_decimal()?;
+                d.as_i64().into()
+            }
+            Datum::Dur(mut d) => {
+                d.round_frac(mysql::DEFAULT_FSP)?;
+                let d = d.to_decimal()?;
+                d.as_i64().into()
+            }
+            Datum::Dec(d) => {
+                let res: Result<Decimal> = d.round(mysql::DEFAULT_FSP, RoundMode::HalfEven).into();
+                if let Err(e) = res {
+                    Err(e)
+                } else {
+                    res.unwrap().as_i64().into()
+                }
+            }
+            Datum::Json(j) => Ok(j.cast_to_int()),
+            _ => Err(box_err!("failed to convert {} to i64", self)),
         }
     }
 
@@ -870,7 +904,6 @@ impl<T: Write> DatumEncoder for T {}
 /// Get the approximate needed buffer size of values.
 ///
 /// This function ensures that encoded values must fit in the given buffer size.
-#[allow(match_same_arms)]
 pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
     values
         .iter()
@@ -925,7 +958,7 @@ pub fn encode_to(buf: &mut Vec<u8>, values: &[Datum], comparable: bool) -> Resul
 
 /// Split bytes array into two part: first one is a whole datum's encoded data,
 /// and the second part is the remaining data.
-#[allow(match_same_arms)]
+#[cfg_attr(feature = "cargo-clippy", allow(match_same_arms))]
 pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
     if buf.is_empty() {
         return Err(box_err!("{} is too short", escape(buf)));
@@ -1813,7 +1846,7 @@ mod test {
         let tests = vec![
             (Datum::I64(1), f64::from(1)),
             (Datum::U64(1), f64::from(1)),
-            (Datum::F64(3.3), f64::from(3.3)),
+            (Datum::F64(3.3), 3.3),
             (Datum::Bytes(b"Hello,world".to_vec()), f64::from(0)),
             (Datum::Bytes(b"123".to_vec()), f64::from(123)),
             (
@@ -1830,7 +1863,7 @@ mod test {
             ),
             (
                 Datum::Dec(Decimal::from_bytes(b"11.2").unwrap().unwrap()),
-                f64::from(11.2),
+                11.2,
             ),
             (
                 Datum::Json(Json::from_str(r#"false"#).unwrap()),
@@ -1843,6 +1876,37 @@ mod test {
         for (d, exp) in tests {
             let got = d.into_f64(&mut ctx).unwrap();
             assert_eq!(Datum::F64(got), Datum::F64(exp));
+        }
+    }
+
+    #[test]
+    fn test_into_i64() {
+        let tests = vec![
+            (Datum::Bytes(b"0".to_vec()), 0),
+            (Datum::I64(1), 1),
+            (Datum::U64(1), 1),
+            (Datum::F64(3.3), 3),
+            (Datum::Bytes(b"100".to_vec()), 100),
+            (
+                Datum::Time(Time::parse_utc_datetime("2012-12-31 11:30:45.9999", 0).unwrap()),
+                20121231113046,
+            ),
+            (
+                Datum::Dur(Duration::parse(b"11:30:45.999", 0).unwrap()),
+                113046,
+            ),
+            (
+                Datum::Dec(Decimal::from_bytes(b"11.2").unwrap().unwrap()),
+                11,
+            ),
+            (Datum::Json(Json::from_str(r#"false"#).unwrap()), 0),
+        ];
+
+        let cfg = EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+        for (d, exp) in tests {
+            let got = d.into_i64(&mut ctx).unwrap();
+            assert_eq!(got, exp);
         }
     }
 }

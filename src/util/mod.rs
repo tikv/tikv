@@ -25,7 +25,6 @@ use rand::{self, ThreadRng};
 
 #[macro_use]
 pub mod macros;
-pub mod buf;
 pub mod codec;
 pub mod collections;
 pub mod config;
@@ -37,6 +36,7 @@ pub mod io_limiter;
 pub mod jemalloc;
 pub mod logger;
 pub mod metrics;
+pub mod mpsc;
 pub mod panic_hook;
 pub mod rocksdb;
 pub mod security;
@@ -526,7 +526,7 @@ mod tests {
             }
         }
 
-        #[allow(clone_on_copy)]
+        #[cfg_attr(feature = "cargo-clippy", allow(clone_on_copy))]
         fn foo(a: &Option<usize>) -> Option<usize> {
             a.clone()
         }

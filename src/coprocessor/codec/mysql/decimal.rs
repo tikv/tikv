@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use byteorder::WriteBytesExt;
+use num;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
@@ -120,7 +121,15 @@ macro_rules! word_cnt {
         word_cnt!($len, u8)
     };
     ($len:expr, $t:ty) => {{
-        (($len) + DIGITS_PER_WORD as $t - 1) / DIGITS_PER_WORD as $t
+        if $len > 0 && $len as usize > (DIGITS_PER_WORD * WORD_BUF_LEN) as usize {
+            // process overflow
+            (WORD_BUF_LEN + 1) as $t
+        } else if $len <= 0 && ($len as $t) > 0 {
+            // when $len is negative and $t is unsigned
+            0 as $t
+        } else {
+            ($len as $t + DIGITS_PER_WORD as $t - 1) / (DIGITS_PER_WORD as $t)
+        }
     }};
 }
 
@@ -534,7 +543,7 @@ fn do_add<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
 }
 
 // TODO: remove following attribute
-#[allow(needless_range_loop)]
+#[cfg_attr(feature = "cargo-clippy", allow(needless_range_loop))]
 fn do_div_mod(
     mut lhs: Decimal,
     rhs: Decimal,
@@ -560,7 +569,7 @@ fn do_div_mod(
     if lhs.word_buf[l_idx] >= rhs.word_buf[r_idx] {
         int_cnt_to += 1;
     }
-    let int_word_to = if int_cnt_to < 0 {
+    let mut int_word_to = if int_cnt_to < 0 {
         int_cnt_to /= DIGITS_PER_WORD as i8;
         0
     } else {
@@ -572,9 +581,13 @@ fn do_div_mod(
         let frac_cnt = cmp::max(lhs.frac_cnt, rhs.frac_cnt);
         Res::Ok(Decimal::new(0, frac_cnt, lhs.negative))
     } else {
-        frac_word_to = word_cnt!(l_frac_cnt + r_frac_cnt + frac_incr);
+        frac_word_to = word_cnt!(
+            l_frac_cnt
+                .saturating_add(r_frac_cnt)
+                .saturating_add(frac_incr)
+        );
         let res = fix_word_cnt_err(int_word_to, frac_word_to, WORD_BUF_LEN);
-        let int_word_to = res.0;
+        int_word_to = res.0;
         frac_word_to = res.1;
         res.map(|_| {
             Decimal::new(
@@ -592,7 +605,12 @@ fn do_div_mod(
     let i = word_cnt!(l_prec as usize, usize);
     let l_len = cmp::max(
         3,
-        i + word_cnt!(2 * r_frac_cnt + frac_incr + 1) as usize + 1,
+        i + word_cnt!(
+            r_frac_cnt
+                .saturating_mul(2)
+                .saturating_add(frac_incr)
+                .saturating_add(1)
+        ) as usize + 1,
     );
     let mut buf = vec![0; l_len];
     (&mut buf[0..i]).copy_from_slice(&lhs.word_buf[l_idx..l_idx + i]);
@@ -761,10 +779,13 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
     }
 
     let mut start_to = int_word_to + frac_word_to;
-    let r_start = cmp::max(r_int_word_cnt + r_frac_word_cnt, 0) as usize;
-    let left_stop = cmp::max(l_int_word_cnt + l_frac_word_cnt, 0) as usize;
+    let (offset_min, offset_max) = (0, i32::from(WORD_BUF_LEN));
+    let r_start = num::clamp(r_int_word_cnt + r_frac_word_cnt, offset_min, offset_max) as usize;
+    let left_stop = num::clamp(l_int_word_cnt + l_frac_word_cnt, offset_min, offset_max) as usize;
     for l_idx in (0..left_stop).rev() {
-        assert!(start_to >= r_start);
+        if start_to < r_start {
+            break;
+        }
         let (mut carry, mut idx_to) = (0, start_to);
         start_to -= 1;
         for r_idx in (0..r_start).rev() {
@@ -1536,7 +1557,9 @@ impl Decimal {
     }
 
     fn from_bytes_with_word_buf(s: &[u8], word_buf_len: u8) -> Result<Res<Decimal>> {
+        // trim whitespace
         let mut bs = match s.iter().position(|c| !c.is_ascii_whitespace()) {
+            //TODO: return badnumber
             None => return Err(box_err!("\"{}\" is empty", escape(s))),
             Some(pos) => &s[pos..],
         };
@@ -1550,15 +1573,16 @@ impl Decimal {
             _ => {}
         }
         let int_idx = first_non_digit(bs, 0);
-        let mut int_cnt = int_idx as u8;
+        let mut int_cnt = int_idx;
         let mut end_idx = int_idx;
         let mut frac_cnt = if int_idx < bs.len() && bs[int_idx] == b'.' {
             end_idx = first_non_digit(bs, int_idx + 1);
-            (end_idx - int_idx - 1) as u8
+            (end_idx - int_idx - 1)
         } else {
             0
         };
         if int_cnt + frac_cnt == 0 {
+            // TODO: bad number
             return Err(box_err!("\"{}\" is invalid number", escape(s)));
         }
         let int_word_cnt = word_cnt!(int_cnt);
@@ -1566,12 +1590,12 @@ impl Decimal {
         let res = fix_word_cnt_err(int_word_cnt, frac_word_cnt, word_buf_len);
         let (int_word_cnt, frac_word_cnt) = (res.0, res.1);
         if !res.is_ok() {
-            frac_cnt = frac_word_cnt * DIGITS_PER_WORD;
+            frac_cnt = (frac_word_cnt * DIGITS_PER_WORD) as usize;
             if res.is_overflow() {
-                int_cnt = int_word_cnt * DIGITS_PER_WORD;
+                int_cnt = (int_word_cnt * DIGITS_PER_WORD) as usize;
             }
         }
-        let mut d = res.map(|_| Decimal::new(int_cnt, frac_cnt, negative));
+        let mut d = res.map(|_| Decimal::new(int_cnt as u8, frac_cnt as u8, negative));
         let mut inner_idx = 0;
         let mut word_idx = int_word_cnt as usize;
         let mut word = 0;
@@ -1579,6 +1603,7 @@ impl Decimal {
             word += u32::from(c - b'0') * TEN_POW[inner_idx];
             inner_idx += 1;
             if inner_idx == DIGITS_PER_WORD as usize {
+                //TODO overflow
                 word_idx -= 1;
                 d.word_buf[word_idx] = word;
                 word = 0;
@@ -1606,19 +1631,34 @@ impl Decimal {
         if inner_idx != 0 {
             d.word_buf[word_idx] = word * TEN_POW[DIGITS_PER_WORD as usize - inner_idx];
         }
-
-        if end_idx + 1 < bs.len() && (bs[end_idx] == b'e' || bs[end_idx] == b'E') {
+        if end_idx < bs.len() && (bs[end_idx] == b'e' || bs[end_idx] == b'E') {
             let exp = convert::bytes_to_int_without_context(&bs[end_idx + 1..])?;
             if exp > i64::from(i32::MAX) / 2 {
-                d.reset_to_zero();
-                return Ok(Res::Overflow(d.unwrap()));
+                return Ok(Res::Overflow(max_or_min_dec(
+                    d.negative,
+                    WORD_BUF_LEN * DIGITS_PER_WORD,
+                    0,
+                )));
             }
             if exp < i64::from(i32::MIN) / 2 && !d.is_overflow() {
                 d.reset_to_zero();
                 return Ok(Res::Truncated(d.unwrap()));
             }
             if !d.is_overflow() {
-                d = d.unwrap().shift(exp as isize);
+                let is_truncated = d.is_truncated();
+                d = match d.unwrap().shift(exp as isize) {
+                    Res::Overflow(v) => Res::Overflow(max_or_min_dec(
+                        v.negative,
+                        WORD_BUF_LEN * DIGITS_PER_WORD,
+                        0,
+                    )),
+                    Res::Ok(v) => if is_truncated {
+                        Res::Truncated(v)
+                    } else {
+                        Res::Ok(v)
+                    },
+                    res => res,
+                };
             }
         }
         if d.word_buf.iter().all(|c| *c == 0) {
@@ -1656,7 +1696,7 @@ macro_rules! enable_conv_for_int {
     ($s:ty, $t:ty) => {
         impl From<$s> for Decimal {
             fn from(t: $s) -> Decimal {
-                #[allow(cast_lossless)]
+                #[cfg_attr(feature = "cargo-clippy", allow(cast_lossless))]
                 (t as $t).into()
             }
         }
@@ -2238,7 +2278,7 @@ mod test {
     }
 
     #[test]
-    #[allow(approx_constant)]
+    #[cfg_attr(feature = "cargo-clippy", allow(approx_constant))]
     fn test_f64() {
         let cases = vec![
             ("12345", 12345f64),
@@ -2684,12 +2724,37 @@ mod test {
             (WORD_BUF_LEN, b"2.23E2abc", Res::Ok("223")),
             (WORD_BUF_LEN, b"2.23a2", Res::Ok("2.23")),
             (WORD_BUF_LEN, b"223\xE0\x80\x80", Res::Ok("223")),
+            (WORD_BUF_LEN, b"1e -1",Res::Ok("0.1")),
+            (WORD_BUF_LEN, b"1e001",Res::Ok("10")),
+            (WORD_BUF_LEN, b"1e00", Res::Ok("1")),
+            (WORD_BUF_LEN, b"1e1073741823",
+            Res::Overflow("999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
+            (WORD_BUF_LEN, b"-1e1073741823",
+            Res::Overflow("-999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
+            (WORD_BUF_LEN,b"135999696916777530000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+             Res::Overflow("0")),
+            (WORD_BUF_LEN,b"-0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002932935661422768",
+            Res::Truncated("0.000000000000000000000000000000000000000000000000000000000000000000000000")),
+            // The following case return truncated in tidb, need to fix it in bytes_to_int_without_context
+            (WORD_BUF_LEN,b"1eabc",Res::Ok("1")),
+            (WORD_BUF_LEN,b"1e",Res::Ok("1")),
+            (WORD_BUF_LEN,b"1e 1ddd",Res::Ok("10")),
+            (WORD_BUF_LEN,b"1e - 1",Res::Ok("1")),
+            // with word_buf_len 1
+            (1,b"123450000098765",Res::Overflow("98765")),
+            (1,b"123450.000098765", Res::Truncated("123450")),
         ];
 
         for (word_buf_len, dec, exp) in cases {
             let d = Decimal::from_bytes_with_word_buf(dec, word_buf_len).unwrap();
             let res = d.map(|d| d.to_string());
             assert_eq!(res, exp.map(|s| s.to_owned()));
+        }
+
+        // error cases
+        let cases = vec![b"1e18446744073709551620"];
+        for case in cases {
+            assert!(Decimal::from_bytes(case).is_err());
         }
     }
 
@@ -3106,6 +3171,20 @@ mod test {
                 "0.003430",
                 Some("14868.804664723"),
                 Some("0.002760"),
+            ),
+            (
+                5,
+                "3428138243708624600000000000000000000000000000000000",
+                "0.000000000000000000000000000000000000000000010962196522059515",
+                Some("312723662343590746587750435944686855597018456899102054479447138416084646758822"),
+                Some("0.000000000000000000000000000000000003564345362392880000000000")
+            ),
+            (
+                0,
+                "-0.000000000000000000000000000000000000000000004078816115216077",
+                "770994069125765500000000000000000000000000000",
+                Some("-0.000000000000000000000000000000000000000000000000000000000000000"),
+                Some("-0.000000000000000000000000000000000000000000004078816115216077")
             ),
         ];
 

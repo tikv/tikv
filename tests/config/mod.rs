@@ -107,6 +107,7 @@ fn test_serde_custom_tikv_config() {
     };
     value.raft_store = RaftstoreConfig {
         sync_log: false,
+        prevote: false,
         raftdb_path: "/var".to_owned(),
         capacity: ReadableSize(123),
         raft_base_tick_interval: ReadableDuration::secs(12),
@@ -171,6 +172,7 @@ fn test_serde_custom_tikv_config() {
         compaction_readahead_size: ReadableSize::kb(1),
         info_log_max_size: ReadableSize::kb(1),
         info_log_roll_time: ReadableDuration::secs(12),
+        info_log_keep_log_file_num: 1000,
         info_log_dir: "/var".to_owned(),
         rate_bytes_per_sec: ReadableSize::kb(1),
         bytes_per_sync: ReadableSize::mb(1),
@@ -346,6 +348,7 @@ fn test_serde_custom_tikv_config() {
         compaction_readahead_size: ReadableSize::kb(1),
         info_log_max_size: ReadableSize::kb(1),
         info_log_roll_time: ReadableDuration::secs(1),
+        info_log_keep_log_file_num: 1000,
         info_log_dir: "/var".to_owned(),
         max_sub_compactions: 12,
         writable_file_max_buffer_size: ReadableSize::mb(12),

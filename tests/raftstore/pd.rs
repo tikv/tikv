@@ -29,7 +29,7 @@ use kvproto::pdpb;
 use raft::eraftpb;
 use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
-use tikv::raftstore::store::util::{check_key_in_region, RegionApproximateStat};
+use tikv::raftstore::store::util::check_key_in_region;
 use tikv::util::collections::{HashMap, HashSet};
 use tikv::util::{escape, Either, HandyRwLock};
 
@@ -211,7 +211,8 @@ struct Cluster {
     stores: HashMap<u64, Store>,
     regions: BTreeMap<Key, metapb::Region>,
     region_id_keys: HashMap<u64, Key>,
-    region_approximate_stat: HashMap<u64, RegionApproximateStat>,
+    region_approximate_size: HashMap<u64, u64>,
+    region_approximate_keys: HashMap<u64, u64>,
     base_id: AtomicUsize,
 
     store_stats: HashMap<u64, pdpb::StoreStats>,
@@ -239,7 +240,8 @@ impl Cluster {
             stores: HashMap::default(),
             regions: BTreeMap::new(),
             region_id_keys: HashMap::default(),
-            region_approximate_stat: HashMap::default(),
+            region_approximate_size: HashMap::default(),
+            region_approximate_keys: HashMap::default(),
             base_id: AtomicUsize::new(1000),
             store_stats: HashMap::default(),
             split_count: 0,
@@ -308,8 +310,8 @@ impl Cluster {
             .and_then(|k| self.regions.get(k).cloned()))
     }
 
-    fn get_region_approximate_stat(&self, region_id: u64) -> Option<RegionApproximateStat> {
-        self.region_approximate_stat.get(&region_id).cloned()
+    fn get_region_approximate_size(&self, region_id: u64) -> Option<u64> {
+        self.region_approximate_size.get(&region_id).cloned()
     }
 
     fn get_stores(&self) -> Vec<metapb::Store> {
@@ -570,8 +572,10 @@ impl Cluster {
         }
         self.leaders.insert(region.get_id(), leader.clone());
 
-        self.region_approximate_stat
-            .insert(region.get_id(), region_stat.approximate_stat);
+        self.region_approximate_size
+            .insert(region.get_id(), region_stat.approximate_size);
+        self.region_approximate_keys
+            .insert(region.get_id(), region_stat.approximate_keys);
 
         self.handle_heartbeat_version(region.clone())?;
         self.handle_heartbeat_conf_ver(region, leader)
@@ -877,8 +881,8 @@ impl TestPdClient {
         self.cluster.wl().set_bootstrap(is_bootstraped);
     }
 
-    pub fn get_region_approximate_stat(&self, region_id: u64) -> Option<RegionApproximateStat> {
-        self.cluster.rl().get_region_approximate_stat(region_id)
+    pub fn get_region_approximate_size(&self, region_id: u64) -> Option<u64> {
+        self.cluster.rl().get_region_approximate_size(region_id)
     }
 }
 

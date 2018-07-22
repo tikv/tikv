@@ -415,7 +415,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let mut val = Time::from_duration(&ctx.cfg.tz, self.tp.get_tp() as u8, val.as_ref())?;
+        let mut val = Time::from_duration(ctx.cfg.tz, self.tp.get_tp() as u8, val.as_ref())?;
         val.round_frac(self.tp.get_decimal() as i8)?;
         Ok(Some(Cow::Owned(val)))
     }
@@ -676,7 +676,7 @@ impl ScalarFunc {
     }
 
     fn produce_time_with_str(&self, ctx: &mut EvalContext, s: String) -> Result<Cow<Time>> {
-        let mut t = Time::parse_datetime(s.as_ref(), self.tp.get_decimal() as i8, &ctx.cfg.tz)?;
+        let mut t = Time::parse_datetime(s.as_ref(), self.tp.get_decimal() as i8, ctx.cfg.tz)?;
         t.set_tp(self.tp.get_tp() as u8)?;
         Ok(Cow::Owned(t))
     }
@@ -728,7 +728,7 @@ mod test {
     fn test_cast_as_int() {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
-        #[allow(inconsistent_digit_grouping)]
+        #[cfg_attr(feature = "cargo-clippy", allow(inconsistent_digit_grouping))]
         let time_int = 2012_12_12_12_00_23i64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
@@ -824,7 +824,7 @@ mod test {
     fn test_cast_as_real() {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
-        #[allow(inconsistent_digit_grouping)]
+        #[cfg_attr(feature = "cargo-clippy", allow(inconsistent_digit_grouping))]
         let int_t = 2012_12_12_12_00_23u64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
@@ -1725,7 +1725,7 @@ mod test {
         let time = Time::parse_utc_datetime(time_str, mysql::DEFAULT_FSP).unwrap();
         let time_stamp = {
             let t = time.to_packed_u64();
-            Time::from_packed_u64(t, types::TIMESTAMP, mysql::DEFAULT_FSP, &tz).unwrap()
+            Time::from_packed_u64(t, types::TIMESTAMP, mysql::DEFAULT_FSP, tz).unwrap()
         };
         let date = {
             let mut t = time.clone();

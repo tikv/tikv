@@ -105,6 +105,7 @@ where
         } else {
             store.set_address(cfg.advertise_addr.clone())
         }
+        store.set_version(env!("CARGO_PKG_VERSION").to_string());
 
         let mut labels = Vec::new();
         for (k, v) in &cfg.labels {
@@ -126,7 +127,7 @@ where
         }
     }
 
-    #[allow(too_many_arguments)]
+    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     pub fn start<T>(
         &mut self,
         event_loop: EventLoop<Store<T, C>>,
@@ -192,9 +193,7 @@ where
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
     fn check_store(&self, engines: &Engines) -> Result<u64> {
-        let res = engines
-            .kv_engine
-            .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
+        let res = engines.kv.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
         if res.is_none() {
             return Ok(INVALID_ID);
         }
@@ -254,7 +253,7 @@ where
 
     fn check_prepare_bootstrap_cluster(&self, engines: &Engines) -> Result<()> {
         let res = engines
-            .kv_engine
+            .kv
             .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)?;
         if res.is_none() {
             return Ok(());
@@ -317,7 +316,7 @@ where
         Err(box_err!("check cluster bootstrapped failed"))
     }
 
-    #[allow(too_many_arguments)]
+    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     fn start_store<T>(
         &mut self,
         mut event_loop: EventLoop<Store<T, C>>,

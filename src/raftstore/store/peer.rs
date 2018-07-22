@@ -38,11 +38,10 @@ use raft::{
 };
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::engine::{Peekable, Snapshot};
-use raftstore::store::util::RegionApproximateStat;
 use raftstore::store::worker::apply::ApplyMetrics;
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
 use raftstore::store::worker::{Apply, ApplyTask};
-use raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
+use raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
 use util::collections::{HashMap, HashSet};
 use util::time::{duration_to_sec, monotonic_raw_now};
@@ -185,7 +184,7 @@ bitflags! {
 }
 
 impl ProposalContext {
-    pub fn to_vec(&self) -> Vec<u8> {
+    pub fn to_vec(self) -> Vec<u8> {
         if self.is_empty() {
             return vec![];
         }
@@ -218,8 +217,7 @@ pub struct PeerStat {
 }
 
 pub struct Peer {
-    kv_engine: Arc<DB>,
-    raft_engine: Arc<DB>,
+    engines: Engines,
     cfg: Rc<Config>,
     peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
     pub peer: metapb::Peer,
@@ -240,8 +238,10 @@ pub struct Peer {
     pub size_diff_hint: u64,
     /// delete keys' count since last reset.
     delete_keys_hint: u64,
-    /// approximate stat of the region.
-    pub approximate_stat: Option<RegionApproximateStat>,
+    /// approximate size of the region.
+    pub approximate_size: Option<u64>,
+    /// approximate keys of the region.
+    pub approximate_keys: Option<u64>,
     pub compaction_declined_bytes: u64,
 
     pub consistency_state: ConsistencyState,
@@ -339,8 +339,7 @@ impl Peer {
         let tag = format!("[region {}] {}", region.get_id(), peer.get_id());
 
         let ps = PeerStorage::new(
-            store.kv_engine(),
-            store.raft_engine(),
+            store.engines(),
             region,
             sched,
             tag.clone(),
@@ -362,13 +361,13 @@ impl Peer {
             check_quorum: true,
             tag: tag.clone(),
             skip_bcast_commit: true,
+            pre_vote: cfg.prevote,
             ..Default::default()
         };
 
         let raft_group = RawNode::new(&raft_cfg, ps, vec![])?;
         let mut peer = Peer {
-            kv_engine: store.kv_engine(),
-            raft_engine: store.raft_engine(),
+            engines: store.engines(),
             peer,
             region_id: region.get_id(),
             raft_group,
@@ -381,7 +380,8 @@ impl Peer {
             coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
             delete_keys_hint: 0,
-            approximate_stat: None,
+            approximate_size: None,
+            approximate_keys: None,
             compaction_declined_bytes: 0,
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
@@ -468,7 +468,7 @@ impl Peer {
         let raft_wb = WriteBatch::new();
         self.mut_store().clear_meta(&kv_wb, &raft_wb)?;
         write_peer_state(
-            &self.kv_engine,
+            &self.engines.kv,
             &kv_wb,
             &region,
             PeerState::Tombstone,
@@ -477,8 +477,8 @@ impl Peer {
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(self.cfg.sync_log);
-        self.kv_engine.write_opt(kv_wb, &write_opts)?;
-        self.raft_engine.write_opt(raft_wb, &write_opts)?;
+        self.engines.kv.write_opt(kv_wb, &write_opts)?;
+        self.engines.raft.write_opt(raft_wb, &write_opts)?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
@@ -507,12 +507,8 @@ impl Peer {
         self.get_store().is_initialized()
     }
 
-    pub fn kv_engine(&self) -> Arc<DB> {
-        Arc::clone(&self.kv_engine)
-    }
-
-    pub fn raft_engine(&self) -> Arc<DB> {
-        Arc::clone(&self.raft_engine)
+    pub fn engines(&self) -> Engines {
+        self.engines.clone()
     }
 
     #[inline]
@@ -589,6 +585,8 @@ impl Peer {
             match msg_type {
                 MessageType::MsgAppend => metrics.append += 1,
                 MessageType::MsgAppendResponse => metrics.append_resp += 1,
+                MessageType::MsgRequestPreVote => metrics.prevote += 1,
+                MessageType::MsgRequestPreVoteResponse => metrics.prevote_resp += 1,
                 MessageType::MsgRequestVote => metrics.vote += 1,
                 MessageType::MsgRequestVoteResponse => metrics.vote_resp += 1,
                 MessageType::MsgSnapshot => metrics.snapshot += 1,
@@ -606,7 +604,17 @@ impl Peer {
 
                     metrics.timeout_now += 1;
                 }
-                _ => {}
+                // We do not care about these message types for metrics.
+                // Explicitly declare them so when we add new message types we are forced to
+                // decide.
+                MessageType::MsgHup
+                | MessageType::MsgBeat
+                | MessageType::MsgPropose
+                | MessageType::MsgUnreachable
+                | MessageType::MsgSnapStatus
+                | MessageType::MsgCheckQuorum
+                | MessageType::MsgReadIndex
+                | MessageType::MsgReadIndexResp => {}
             }
         }
         Ok(())
@@ -620,6 +628,11 @@ impl Peer {
         );
         if self.is_leader() && m.get_from() != INVALID_ID {
             self.peer_heartbeats.insert(m.get_from(), Instant::now());
+            // As the leader we know we are not missing.
+            self.leader_missing_time.take();
+        } else if m.get_from() == self.leader_id() {
+            // As another role know we're not missing.
+            self.leader_missing_time.take();
         }
         self.raft_group.step(m)?;
         Ok(())
@@ -721,35 +734,31 @@ impl Peer {
     pub fn check_stale_state(&mut self) -> StaleState {
         let naive_peer = !self.is_initialized() || self.raft_group.raft.is_learner;
         // Updates the `leader_missing_time` according to the current state.
-        if self.leader_id() == raft::INVALID_ID {
-            if self.leader_missing_time.is_none() {
-                self.leader_missing_time = Some(Instant::now())
+        //
+        // If we are checking this it means we suspect the leader might be missing.
+        // Mark down the time when we are called, so we can check later if it's been longer than it
+        // should be.
+        match self.leader_missing_time {
+            None => {
+                self.leader_missing_time = Instant::now().into();
+                StaleState::Valid
             }
-        } else if !naive_peer {
-            // Reset leader_missing_time, if the peer has a leader and it is initialized.
-            // For an uninitialized peer and learner, the leader id is unreliable.
-            self.leader_missing_time = None
-        }
-
-        if self.leader_missing_time.is_none() {
-            // The peer has a leader.
-            return StaleState::Valid;
-        }
-
-        // The peer does not have a leader, checks whether it is stale.
-        let duration = self.leader_missing_time.unwrap().elapsed();
-        if duration >= self.cfg.max_leader_missing_duration.0 {
-            // Resets the `leader_missing_time` to avoid sending the same tasks to
-            // PD worker continuously during the leader missing timeout.
-            self.leader_missing_time = Some(Instant::now());
-            StaleState::ToValidate
-        } else if !naive_peer && duration >= self.cfg.abnormal_leader_missing_duration.0 {
-            // A peer is considered as in the leader missing state
-            // if it's initialized but is isolated from its leader or
-            // something bad happens that the raft group can not elect a leader.
-            StaleState::LeaderMissing
-        } else {
-            StaleState::Valid
+            Some(instant) if instant.elapsed() >= self.cfg.max_leader_missing_duration.0 => {
+                // Resets the `leader_missing_time` to avoid sending the same tasks to
+                // PD worker continuously during the leader missing timeout.
+                self.leader_missing_time = Instant::now().into();
+                StaleState::ToValidate
+            }
+            Some(instant)
+                if instant.elapsed() >= self.cfg.abnormal_leader_missing_duration.0
+                    && !naive_peer =>
+            {
+                // A peer is considered as in the leader missing state
+                // if it's initialized but is isolated from its leader or
+                // something bad happens that the raft group can not elect a leader.
+                StaleState::LeaderMissing
+            }
+            _ => StaleState::Valid,
         }
     }
 
@@ -1713,7 +1722,7 @@ impl Peer {
     }
 
     fn handle_read(&mut self, req: RaftCmdRequest) -> ReadResponse {
-        let mut resp = ReadExecutor::new(self.region(), &self.kv_engine, &self.tag)
+        let mut resp = ReadExecutor::new(self.region(), &self.engines.kv, &self.tag)
             .execute(&req)
             .unwrap_or_else(|e| {
                 match e {
@@ -1775,7 +1784,8 @@ impl Peer {
             pending_peers: self.collect_pending_peers(),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
-            approximate_stat: self.approximate_stat.clone(),
+            approximate_size: self.approximate_size,
+            approximate_keys: self.approximate_keys,
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
@@ -2131,7 +2141,7 @@ mod tests {
         }
     }
 
-    #[allow(useless_vec)]
+    #[cfg_attr(feature = "cargo-clippy", allow(useless_vec))]
     #[test]
     fn test_request_inspector() {
         struct DummyInspector {
@@ -2143,7 +2153,7 @@ mod tests {
                 self.applied_to_index_term
             }
             fn inspect_lease(&mut self) -> LeaseState {
-                self.lease_state.clone()
+                self.lease_state
             }
         }
 
