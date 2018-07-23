@@ -121,6 +121,7 @@ pub struct SnapManager {
     core: Arc<SnapManagerCore>,
     snap_size: Arc<AtomicU64>,
     max_total_size: u64,
+    gc_timeout: Duration,
     io_limiter: Option<Arc<IOLimiter>>,
     ch: Option<SendCh<Msg>>,
 }
@@ -201,10 +202,9 @@ impl SnapManager {
     }
 
     pub fn get_snapshot_sender(&self, key: SnapKey) -> Result<SnapshotSender> {
-        let mut registry = self.core.get_registry(true);
+        let mut registry = self.get_registry(true);
         if let Some(entry) = registry.get_mut(&key) {
-            let mut need_retry = false;
-            if let Some(meta) = entry.fetch_meta(&mut need_retry) {
+            if let Some(meta) = entry.fetch_meta(&mut false) {
                 let dir = self.core.base.clone();
                 let notifier = entry.snap_stale_notifier.clone().unwrap();
                 let ref_count = Arc::clone(&entry.ref_count);
@@ -255,10 +255,9 @@ impl SnapManager {
         options: ApplyOptions,
         notifier: Arc<SnapStaleNotifier>,
     ) -> Result<()> {
-        let mut registry = self.core.get_registry(false);
+        let mut registry = self.get_registry(false);
         if let Some(entry) = registry.get_mut(&key) {
-            let mut need_retry = false;
-            if let Some(meta) = entry.fetch_meta(&mut need_retry) {
+            if let Some(meta) = entry.fetch_meta(&mut false) {
                 let dir = self.core.base.clone();
                 let ref_count = Arc::clone(&entry.ref_count);
                 let used_times = Arc::clone(&entry.used_times);
@@ -302,32 +301,6 @@ impl SnapManager {
         Ok(all_meta_files)
     }
 
-    fn register_for_build(
-        &self,
-        for_send: bool,
-        key: SnapKey,
-        snap_stale_notifier: Option<Arc<SnapStaleNotifier>>,
-    ) -> Either<SyncSender<SnapshotMeta>, Option<SnapshotMeta>> {
-        let mut registry = self.core.get_registry(for_send);
-        if let Some(entry) = registry.get_mut(&key) {
-            let mut need_retry = false;
-            match entry.fetch_meta(&mut need_retry) {
-                Some(meta) => return Either::Right(Some(meta)),
-                None => if need_retry {
-                    let (tx, rx) = sync_channel(1);
-                    entry.meta = Either::Left(rx);
-                    return Either::Left(tx);
-                } else {
-                    return Either::Right(None);
-                },
-            }
-        }
-        let (tx, rx) = sync_channel(1);
-        let entry = SnapEntry::new(snap_stale_notifier, rx);
-        registry.insert(key, entry);
-        Either::Left(tx)
-    }
-
     fn scan_and_delete_orphan_files(
         &self,
         path: &Path,
@@ -350,6 +323,43 @@ impl SnapManager {
         Ok(())
     }
 
+    fn get_registry(&self, for_send: bool) -> MutexGuard<HashMap<SnapKey, SnapEntry>> {
+        if for_send {
+            self.core.gen_registry.lock().unwrap()
+        } else {
+            self.core.apply_registry.lock().unwrap()
+        }
+    }
+
+    fn register_for_build(
+        &self,
+        for_send: bool,
+        key: SnapKey,
+        snap_stale_notifier: Option<Arc<SnapStaleNotifier>>,
+    ) -> Either<SyncSender<SnapshotMeta>, Option<SnapshotMeta>> {
+        let mut registry = self.get_registry(for_send);
+        if let Some(entry) = registry.get_mut(&key) {
+            let mut could_retry = false;
+            match entry.fetch_meta(&mut could_retry) {
+                Some(meta) => return Either::Right(Some(meta)),
+                None => if could_retry {
+                    let (tx, rx) = sync_channel(1);
+                    entry.meta = Either::Left(rx);
+                    return Either::Left(tx);
+                } else {
+                    return Either::Right(None);
+                },
+            }
+        }
+        let (tx, rx) = sync_channel(1);
+        let entry = SnapEntry::new(snap_stale_notifier, rx);
+        registry.insert(key, entry);
+        Either::Left(tx)
+    }
+
+    /// Gc snapshots which meet the following conditions:
+    /// 1) Not in the register, which means it's not genearted in the current start up.
+    /// 2) Generated and have been used, and is not busy.
     pub fn gc_snapshots(&self) -> Result<()> {
         let snap_size = self.snap_size.load(Ordering::SeqCst);
         info!("starting gc snapshots, total size: {}", snap_size);
@@ -378,11 +388,11 @@ impl SnapManager {
         });
 
         for (for_send, key) in snap_keys {
-            let mut registry = self.core.get_registry(for_send);
+            let mut registry = self.get_registry(for_send);
             if let Some(entry) = registry.get_mut(&key) {
-                if entry.is_busy()
+                if entry.check_is_busy()
                     || (!entry.has_been_used()
-                        && !self.core.snapshot_is_stale(for_send, key).unwrap_or(true))
+                        && !self.snapshot_is_stale(for_send, key).unwrap_or(true))
                 {
                     continue;
                 }
@@ -414,6 +424,15 @@ impl SnapManager {
         Ok(())
     }
 
+    fn snapshot_is_stale(&self, for_send: bool, key: SnapKey) -> Result<bool> {
+        let meta_path = get_meta_file_path(&self.core.base, for_send, key);
+        let modified = fs::metadata(&meta_path)?.modified()?;
+        SystemTime::now()
+            .duration_since(modified)
+            .map(|dur| dur > self.gc_timeout)
+            .map_err(|e| box_err!("get modified time fail: {}", e))
+    }
+
     fn delete_snapshot(&self, for_send: bool, key: SnapKey, deregister: bool) {
         let meta_path = get_meta_file_path(&self.core.base, for_send, key);
         if let Ok(meta) = read_snapshot_meta(&meta_path) {
@@ -428,7 +447,7 @@ impl SnapManager {
         }
 
         if deregister {
-            self.core.get_registry(for_send).remove(&key);
+            self.get_registry(for_send).remove(&key);
         }
     }
 }
@@ -467,10 +486,10 @@ impl SnapManagerBuilder {
                 base: path.into(),
                 gen_registry: Mutex::new(map![]),
                 apply_registry: Mutex::new(map![]),
-                gc_timeout: self.gc_timeout,
             }),
             snap_size: Arc::new(AtomicU64::new(0)),
             max_total_size: self.max_total_size,
+            gc_timeout: self.gc_timeout,
             io_limiter,
             ch,
         }
@@ -508,13 +527,13 @@ impl SnapEntry {
         }
     }
 
-    fn fetch_meta(&mut self, need_retry: &mut bool) -> Option<SnapshotMeta> {
+    fn fetch_meta(&mut self, could_retry: &mut bool) -> Option<SnapshotMeta> {
         let meta = match self.meta {
             Either::Left(ref r) => match r.try_recv() {
                 Ok(meta) => meta,
                 Err(TryRecvError::Empty) => return None,
                 Err(TryRecvError::Disconnected) => {
-                    *need_retry = true;
+                    *could_retry = true;
                     return None;
                 }
             },
@@ -524,10 +543,10 @@ impl SnapEntry {
         Some(meta)
     }
 
-    fn is_busy(&mut self) -> bool {
-        let mut need_retry = false;
+    fn check_is_busy(&mut self) -> bool {
+        let mut could_retry = false;
         // It's still in building.
-        self.fetch_meta(&mut need_retry).is_none() && !need_retry
+        (self.fetch_meta(&mut could_retry).is_none() && !could_retry)
             // Or it's currently used for sending or applying.
             || self.ref_count.load(Ordering::SeqCst) > 0
     }
@@ -541,26 +560,6 @@ struct SnapManagerCore {
     base: String,
     gen_registry: Mutex<HashMap<SnapKey, SnapEntry>>,
     apply_registry: Mutex<HashMap<SnapKey, SnapEntry>>,
-    gc_timeout: Duration,
-}
-
-impl SnapManagerCore {
-    fn snapshot_is_stale(&self, for_send: bool, key: SnapKey) -> Result<bool> {
-        let meta_path = get_meta_file_path(&self.base, for_send, key);
-        let modified = fs::metadata(&meta_path)?.modified()?;
-        SystemTime::now()
-            .duration_since(modified)
-            .map(|dur| dur > self.gc_timeout)
-            .map_err(|e| box_err!("get modified time fail: {}", e))
-    }
-
-    fn get_registry(&self, for_send: bool) -> MutexGuard<HashMap<SnapKey, SnapEntry>> {
-        if for_send {
-            self.gen_registry.lock().unwrap()
-        } else {
-            self.apply_registry.lock().unwrap()
-        }
-    }
 }
 
 // Read SnapshotMeta from meta file on disk.
@@ -825,10 +824,10 @@ mod tests {
 
     fn test_registry(get_db: fn(p: &TempDir) -> Result<Arc<DB>>) {
         let region = get_test_region(1, 1, 1);
-        let dir = TempDir::new("test-registry-db-src").unwrap();
+        let dir = TempDir::new("test-snap-mgr-registry-db-src").unwrap();
         let db = get_db(&dir).unwrap();
 
-        let snap_dir = TempDir::new("test-registry-src").unwrap();
+        let snap_dir = TempDir::new("test-snap-mgr-registry-src").unwrap();
         let snap_mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let key = SnapKey::new(1, 1, 1);
 
@@ -839,7 +838,7 @@ mod tests {
         };
 
         let do_apply = |should_success: bool| {
-            let dst_db_dir = TempDir::new("test-registry-db-dst").unwrap();
+            let dst_db_dir = TempDir::new("test-snap-mgr-registry-db-dst").unwrap();
             let dst_db_path = dst_db_dir.path().to_str().unwrap();
             let dst_db = Arc::new(rocksdb::new_engine(dst_db_path, ALL_CFS, None).unwrap());
             let apply_options = ApplyOptions {
@@ -869,7 +868,7 @@ mod tests {
         check_snap_size(&snap_mgr);
 
         // If the disk file is corrupted, the snapshot will be rebuilt after load fail.
-        snap_mgr.core.get_registry(true).remove(&key);
+        snap_mgr.get_registry(true).remove(&key);
         corrupt_file(&get_cf_file_path(&snap_mgr.core.base, true, key, CF_LOCK));
         assert!(do_build().unwrap().is_some());
         check_snap_size(&snap_mgr);
@@ -882,9 +881,9 @@ mod tests {
         let mut sender = snap_mgr.get_snapshot_sender(key).unwrap();
 
         // Get sender before build should fail.
-        let entry = snap_mgr.core.get_registry(true).remove(&key).unwrap();
+        let entry = snap_mgr.get_registry(true).remove(&key).unwrap();
         assert!(snap_mgr.get_snapshot_sender(key).is_err());
-        snap_mgr.core.get_registry(true).insert(key, entry);
+        snap_mgr.get_registry(true).insert(key, entry);
 
         let data = snap.write_to_bytes().unwrap();
         let mut receiver = snap_mgr.get_snapshot_receiver(key, &data).unwrap().unwrap();
@@ -897,8 +896,8 @@ mod tests {
         receiver.save().unwrap();
         check_snap_size(&snap_mgr);
 
-        let ref_count = Arc::clone(&snap_mgr.core.get_registry(true)[&key].ref_count);
-        let used_times = Arc::clone(&snap_mgr.core.get_registry(true)[&key].used_times);
+        let ref_count = Arc::clone(&snap_mgr.get_registry(true)[&key].ref_count);
+        let used_times = Arc::clone(&snap_mgr.get_registry(true)[&key].used_times);
         assert_eq!(ref_count.load(Ordering::SeqCst), 1);
         drop(sender);
         assert_eq!(ref_count.load(Ordering::SeqCst), 0);
@@ -922,7 +921,7 @@ mod tests {
         check_snap_size(&snap_mgr);
 
         // Apply snapshot should fail because no such entry in registry.
-        let entry = snap_mgr.core.get_registry(false).remove(&key).unwrap();
+        let entry = snap_mgr.get_registry(false).remove(&key).unwrap();
         do_apply(false);
 
         // Apply snapshot should fail because it's still receiving.
@@ -933,12 +932,12 @@ mod tests {
             ref_count: Arc::clone(&entry.ref_count),
             used_times: Arc::clone(&entry.used_times),
         };
-        snap_mgr.core.get_registry(false).insert(key, bad_entry);
+        snap_mgr.get_registry(false).insert(key, bad_entry);
         do_apply(false);
 
         // Apply snapshot should success now.
         let used_times = Arc::clone(&entry.used_times);
-        snap_mgr.core.get_registry(false).insert(key, entry);
+        snap_mgr.get_registry(false).insert(key, entry);
         do_apply(true);
         assert!(used_times.load(Ordering::SeqCst) > 0);
     }
@@ -970,6 +969,81 @@ mod tests {
         File::create(temp_path2).unwrap();
         mgr = SnapManager::new(path2, None);
         assert!(mgr.init().is_err());
+    }
+
+    #[test]
+    fn test_snap_mgr_disk_usage() {
+        let snap_dir = TempDir::new("test-snap-mgr-disk-usage-src").unwrap();
+        let mut snap_mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        // Set it to 1000 so that we can only keep 1 snapshot at most on disk.
+        snap_mgr.max_total_size = 1000;
+        snap_mgr.gc_timeout = Duration::from_secs(4 * 60 * 60); // default 4 hours.
+
+        let dir = TempDir::new("test-snap-mgr-disk-usage-db-src").unwrap();
+        let db = get_test_db(&dir).unwrap();
+        let region = get_test_region(1, 1, 1);
+        let key = SnapKey::new(1, 1, 1);
+
+        let db_snap = DbSnapshot::new(Arc::clone(&db));
+        let snap_data = snap_mgr
+            .build_snapshot(key, region.clone(), db_snap, new_snap_stale_notifier())
+            .unwrap()
+            .unwrap();
+        // The snapshot size should be 1918.
+        assert_eq!(get_size_from_snapshot_meta(snap_data.get_meta()), 1918);
+        assert_eq!(snap_mgr.snap_size.load(Ordering::SeqCst), 1918);
+
+        let data = snap_data.write_to_bytes().unwrap();
+        match snap_mgr.get_snapshot_receiver(key, &data) {
+            Ok(_) => panic!("should fail"),
+            // Can't receive it because can't gc snapshots generated but not sent.
+            Err(e) => assert!(format!("{}", e).contains("NoSpace")),
+        }
+
+        let meta_path = get_meta_file_path(&snap_mgr.core.base, true, key);
+        let ensure_meta_file_exists = || {
+            let mut f = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&meta_path)
+                .unwrap();
+            snap_data.get_meta().write_to_writer(&mut f).unwrap();
+        };
+
+        let mut entry = snap_mgr.get_registry(true).remove(&key).unwrap();
+        let entry_meta = entry.fetch_meta(&mut false).unwrap();
+        let clone_entry = || SnapEntry {
+            snap_stale_notifier: None,
+            meta: Either::Right(entry_meta.clone()),
+            ref_count: Arc::clone(&entry.ref_count),
+            used_times: Arc::clone(&entry.used_times),
+        };
+
+        // Can gc it if it's not registered.
+        ensure_meta_file_exists();
+        snap_mgr.snap_size.store(1918, Ordering::SeqCst);
+        assert!(snap_mgr.get_snapshot_receiver(key, &data).is_ok());
+        assert!(File::open(&meta_path).is_err());
+
+        // Can gc it if it's used.
+        ensure_meta_file_exists();
+        snap_mgr.snap_size.store(1918, Ordering::SeqCst);
+        let new_entry = clone_entry();
+        new_entry.used_times.store(1, Ordering::SeqCst);
+        snap_mgr.get_registry(true).insert(key, new_entry);
+        assert!(snap_mgr.get_snapshot_receiver(key, &data).is_ok());
+        assert!(File::open(&meta_path).is_err());
+
+        // Can gc it if it's stale.
+        ensure_meta_file_exists();
+        snap_mgr.snap_size.store(1918, Ordering::SeqCst);
+        snap_mgr.gc_timeout = Duration::default();
+        let new_entry = clone_entry();
+        new_entry.used_times.store(1918, Ordering::SeqCst);
+        snap_mgr.get_registry(true).insert(key, new_entry);
+        assert!(snap_mgr.get_snapshot_receiver(key, &data).is_ok());
+        assert!(File::open(&meta_path).is_err());
     }
 
     #[bench]
