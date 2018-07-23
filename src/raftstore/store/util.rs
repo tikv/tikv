@@ -810,8 +810,16 @@ mod tests {
             (Timespec::new(0, 0), 0x0000_0000_0000_0000u64),
             (Timespec::new(0, 1), 0x0000_0000_0000_0000u64), // 1ns is round down to 0ms.
             (Timespec::new(0, 999_999), 0x0000_0000_0000_0000u64), // 999_999ns is round down to 0ms.
-            (Timespec::new(0, 1_048_575 /* 0x0FFFFF */), 0x0000_0000_0000_0000u64), // 1_048_575ns is round down to 0ms.
-            (Timespec::new(0, 1_048_576 /* 0x100000 */), 0x0000_0000_0000_0001u64), // 1_048_576ns is round down to 1ms.
+            (
+                // 1_048_575ns is round down to 0ms.
+                Timespec::new(0, 1_048_575 /* 0x0FFFFF */),
+                0x0000_0000_0000_0000u64,
+            ),
+            (
+                // 1_048_576ns is round down to 1ms.
+                Timespec::new(0, 1_048_576 /* 0x100000 */),
+                0x0000_0000_0000_0001u64,
+            ),
             (Timespec::new(1, 0), 1 << TIMESPEC_SEC_SHIFT),
             (Timespec::new(1, 0x100000), 1 << TIMESPEC_SEC_SHIFT | 1),
             (
@@ -821,7 +829,10 @@ mod tests {
             ),
             (
                 // Max nano seconds.
-                Timespec::new(0, (999_999_999 >> TIMESPEC_NSEC_SHIFT) << TIMESPEC_NSEC_SHIFT),
+                Timespec::new(
+                    0,
+                    (999_999_999 >> TIMESPEC_NSEC_SHIFT) << TIMESPEC_NSEC_SHIFT,
+                ),
                 999_999_999 >> TIMESPEC_NSEC_SHIFT,
             ),
             (
