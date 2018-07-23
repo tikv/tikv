@@ -44,7 +44,6 @@ mod util;
 use util::setup::*;
 use util::signal_handler;
 
-use std::env;
 use std::fs::File;
 use std::path::Path;
 use std::process;
@@ -85,11 +84,6 @@ fn check_system_config(config: &TiKvConfig) {
 
     for e in tikv_util::config::check_kernel() {
         warn!("{:?}", e);
-    }
-
-    if cfg!(unix) && env::var("TZ").is_err() {
-        env::set_var("TZ", ":/etc/localtime");
-        warn!("environment variable `TZ` is missing, using `/etc/localtime`");
     }
 
     // check rocksdb data dir
@@ -418,7 +412,7 @@ fn main() {
     // Before any startup, check system configuration.
     check_system_config(&config);
 
-    configure_grpc_poll_strategy();
+    check_environment_variables();
 
     let security_mgr = Arc::new(
         SecurityManager::new(&config.security)
