@@ -585,6 +585,7 @@ impl fmt::Debug for Lease {
 /// A remote lease, it can only be derived by `Lease`. It will be sent
 /// to the local read thread, so name it remote. If Lease expires, the remote must
 /// expire too.
+#[derive(Debug)]
 pub struct RemoteLease {
     expired_time: Arc<AtomicU64>,
     term: u64,
@@ -614,16 +615,6 @@ impl RemoteLease {
     }
 }
 
-impl fmt::Debug for RemoteLease {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let expired_time = self.expired_time.load(AtomicOrdering::Relaxed);
-        f.debug_struct("RemoteLease")
-            .field("expired_time", &expired_time)
-            .field("term", &self.term)
-            .finish()
-    }
-}
-
 /// Convert Timespec to u64. It's millisecond precision and
 /// covers a range of about 571232829 years in total.
 ///
@@ -641,7 +632,7 @@ fn timespec_to_u64(ts: Timespec) -> u64 {
     // Quote from crate time,
     //   https://github.com/rust-lang-deprecated/time/blob/
     //   e313afbd9aad2ba7035a23754b5d47105988789d/src/lib.rs#L77
-    assert!(ts.sec >= 0 && ts.sec.leading_zeros() as usize >= TIMESPEC_SEC_SHIFT);
+    assert!(ts.sec >= 0 && ts.sec < 1i64 << (64 - TIMESPEC_SEC_SHIFT));
     assert!(ts.nsec >= 0);
 
     // Round down to millisecond precision.
@@ -664,9 +655,9 @@ const TIMESPEC_NSEC_MASK: u64 = (1 << TIMESPEC_SEC_SHIFT) - 1;
 ///
 /// If nsec is negative or GE than 1_000_000_000(nano seconds pre second).
 #[inline]
-fn u64_to_timespec(uint64: u64) -> Timespec {
-    let sec = uint64 >> TIMESPEC_SEC_SHIFT;
-    let nsec = (uint64 & TIMESPEC_NSEC_MASK) << TIMESPEC_NSEC_SHIFT;
+fn u64_to_timespec(u: u64) -> Timespec {
+    let sec = u >> TIMESPEC_SEC_SHIFT;
+    let nsec = (u & TIMESPEC_NSEC_MASK) << TIMESPEC_NSEC_SHIFT;
     Timespec::new(sec as i64, nsec as i32)
 }
 
@@ -842,16 +833,21 @@ mod tests {
             ),
         ];
 
-        for (ts, uint64) in cases {
+        for (ts, u) in cases {
             assert!(u64_to_timespec(timespec_to_u64(ts)) <= ts);
-            assert!(u64_to_timespec(uint64) <= ts);
-            assert_eq!(timespec_to_u64(u64_to_timespec(uint64)), uint64);
-            assert_eq!(timespec_to_u64(ts), uint64);
+            assert!(u64_to_timespec(u) <= ts);
+            assert_eq!(timespec_to_u64(u64_to_timespec(u)), u);
+            assert_eq!(timespec_to_u64(ts), u);
         }
-        let ts = monotonic_raw_now();
-        let uint64 = timespec_to_u64(ts);
-        let round = u64_to_timespec(uint64);
-        assert!(round <= ts, "{:064b} = {:?} > {:?}", uint64, round, ts);
+
+        let start = monotonic_raw_now();
+        let mut now = monotonic_raw_now();
+        while now - start < Duration::seconds(1) {
+            let u = timespec_to_u64(now);
+            let round = u64_to_timespec(u);
+            assert!(round <= now, "{:064b} = {:?} > {:?}", u, round, now);
+            now = monotonic_raw_now();
+        }
     }
 
     // Tests the util function `check_key_in_region`.

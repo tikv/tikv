@@ -237,7 +237,7 @@ fn handle_busy(cmd: StoreMsg) {
         StoreMsg::RaftCmd { callback, .. } => callback.invoke_read(read_resp),
         StoreMsg::BatchRaftSnapCmds {
             batch, on_finished, ..
-        } => on_finished.invoke_batch_read(vec![Some(read_resp.clone()); batch.len()]),
+        } => on_finished.invoke_batch_read(vec![Some(read_resp); batch.len()]),
         other => panic!("unexpected cmd {:?}", other),
     }
 }
@@ -280,7 +280,6 @@ impl LocalReader<mio::Sender<StoreMsg>> {
 impl<C: Sender<StoreMsg>> LocalReader<C> {
     fn redirect(&mut self, cmd: StoreMsg) {
         debug!("{} localreader redirect {:?}", self.tag, cmd);
-        self.metrics.raft_cmd_rejected += 1;
         match self.ch.send(cmd) {
             Ok(()) => (),
             Err(NotifyError::Full(cmd)) => {
@@ -383,7 +382,6 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         }
 
         if let Some(resp) = self.delegates[&region_id].handle_read(&req, &self.kv_engine) {
-            self.metrics.raft_cmd_handled += 1;
             callback.invoke_read(resp)
         } else {
             self.metrics.rejected_by_lease_expire += 1;
@@ -430,7 +428,6 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         }
 
         self.metrics.batch_snapshot_size.observe(size as _);
-        self.metrics.raft_cmd_handled += 1;
         on_finished.invoke_batch_read(ret);
     }
 }
@@ -481,6 +478,7 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
 
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
         fail_point!("local_reader_on_run");
+        self.metrics.batch_requests_size.observe(tasks.len() as _);
         for task in tasks.drain(..) {
             match task {
                 Task::Register(delegate) => {
@@ -529,18 +527,14 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
             acc
         });
         LOCAL_READ_LEADER.set(count);
-        self.metrics.requests_wait_duration.flush();
-        self.metrics.requests_handle_duration.flush();
     }
 }
 
 struct ReadMetrics {
-    raft_cmd_handled: i64,
-    raft_cmd_rejected: i64,
-
     requests_wait_duration: LocalHistogram,
     requests_handle_duration: LocalHistogram,
     batch_snapshot_size: LocalHistogram,
+    batch_requests_size: LocalHistogram,
 
     // TODO: record rejected_by_read_quorum.
     rejected_by_store_id_mismatch: i64,
@@ -557,11 +551,10 @@ struct ReadMetrics {
 impl Default for ReadMetrics {
     fn default() -> ReadMetrics {
         ReadMetrics {
-            raft_cmd_handled: 0,
-            raft_cmd_rejected: 0,
             requests_wait_duration: LOCAL_READ_WAIT_DURATION.local(),
             requests_handle_duration: LOCAL_READ_HANDLE_DURATION.local(),
             batch_snapshot_size: BATCH_SNAPSHOT_COMMANDS.local(),
+            batch_requests_size: LOCAL_READ_BATCH_REQUESTS.local(),
             rejected_by_store_id_mismatch: 0,
             rejected_by_peer_id_mismatch: 0,
             rejected_by_term_mismatch: 0,
@@ -577,18 +570,9 @@ impl Default for ReadMetrics {
 
 impl ReadMetrics {
     fn flush(&mut self) {
-        if self.raft_cmd_handled > 0 {
-            LOCAL_READ
-                .with_label_values(&["handled"])
-                .inc_by(self.raft_cmd_handled);
-            self.raft_cmd_handled = 0;
-        }
-        if self.raft_cmd_rejected > 0 {
-            LOCAL_READ
-                .with_label_values(&["rejected"])
-                .inc_by(self.raft_cmd_rejected);
-            self.raft_cmd_rejected = 0;
-        }
+        self.requests_wait_duration.flush();
+        self.requests_handle_duration.flush();
+        self.batch_requests_size.flush();
         if self.rejected_by_store_id_mismatch > 0 {
             LOCAL_READ_REJECT
                 .with_label_values(&["store_id_mismatch"])

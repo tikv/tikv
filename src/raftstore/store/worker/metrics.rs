@@ -53,11 +53,6 @@ lazy_static! {
         "tikv_pending_delete_ranges_of_stale_peer",
         "Total number of tikv pending delete range of stale peer"
     ).unwrap();
-    pub static ref LOCAL_READ: IntCounterVec = register_int_counter_vec!(
-        "tikv_raftstore_local_read_total",
-        "Total number of requests that routed to the local read thread.",
-        &["result"]
-    ).unwrap();
     pub static ref LOCAL_READ_LEADER: IntGauge = register_int_gauge!(
         "tikv_raftstore_local_read_leader_total",
         "Total number of leaders that can local read."
@@ -76,5 +71,10 @@ lazy_static! {
         "tikv_raftstore_local_read_requests_handle_duration",
         "Bucketed histogram of local read requests handle duration.",
         exponential_buckets(0.0005, 2.0, 20).unwrap()
+    ).unwrap();
+    pub static ref LOCAL_READ_BATCH_REQUESTS: Histogram = register_histogram!(
+        "tikv_raftstore_local_read_batch_requests_total",
+        "Bucketed histogram of local read batch requests size.",
+        exponential_buckets(1.0, 2.0, 15).unwrap()
     ).unwrap();
 }
