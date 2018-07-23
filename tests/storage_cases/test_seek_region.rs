@@ -60,7 +60,7 @@ fn test_seek_region() {
 
         // Test traverse all regions
         let mut sought_regions = Vec::new();
-        let mut key = b"\x00".to_vec();
+        let mut key = b"".to_vec();
         loop {
             let res = engine.seek_region(&key, box |_| true, 100).unwrap();
             match res {
@@ -68,6 +68,10 @@ fn test_seek_region() {
                     assert_eq!(local_peer.get_store_id(), node_id);
                     key = region.get_end_key().to_vec();
                     sought_regions.push(region);
+                    // Break on the last region
+                    if key.is_empty() {
+                        break;
+                    }
                 }
                 SeekRegionResult::Ended => break,
                 r => panic!("expect getting a region or Ended, but got {:?}", r),
@@ -87,7 +91,7 @@ fn test_seek_region() {
 
         // Test exactly reaches limit
         let res = engine
-            .seek_region(b"\x00", box |p| p.region().get_end_key() == b"k9", 5)
+            .seek_region(b"", box |p| p.region().get_end_key() == b"k9", 5)
             .unwrap();
         match res {
             SeekRegionResult::Found { local_peer, region } => {
@@ -99,7 +103,7 @@ fn test_seek_region() {
 
         // Test exactly exceeds limit
         let res = engine
-            .seek_region(b"\x00", box |p| p.region().get_end_key() == b"k9", 4)
+            .seek_region(b"", box |p| p.region().get_end_key() == b"k9", 4)
             .unwrap();
         match res {
             SeekRegionResult::LimitExceeded { next_key } => {
@@ -109,14 +113,7 @@ fn test_seek_region() {
         }
 
         // Test seek to the end
-        let res = engine.seek_region(b"\x00", box |_| false, 100).unwrap();
-        match res {
-            SeekRegionResult::Ended => {}
-            r => panic!("expect getting Ended, but got {:?}", r),
-        }
-
-        // Test seek from end
-        let res = engine.seek_region(b"", box |_| true, 1).unwrap();
+        let res = engine.seek_region(b"", box |_| false, 100).unwrap();
         match res {
             SeekRegionResult::Ended => {}
             r => panic!("expect getting Ended, but got {:?}", r),
@@ -124,7 +121,7 @@ fn test_seek_region() {
 
         // Test exactly to the end
         let res = engine
-            .seek_region(b"\x00", box |p| p.region().get_end_key().is_empty(), 6)
+            .seek_region(b"", box |p| p.region().get_end_key().is_empty(), 6)
             .unwrap();
         match res {
             SeekRegionResult::Found { local_peer, region } => {
@@ -135,10 +132,32 @@ fn test_seek_region() {
         }
 
         // Test limit exactly reaches end
-        let res = engine.seek_region(b"\x00", box |_| false, 6).unwrap();
+        let res = engine.seek_region(b"", box |_| false, 6).unwrap();
         match res {
             SeekRegionResult::Ended => {}
             r => panic!("expect getting Ended, but got {:?}", r),
+        }
+
+        // Test seek from non-starting key
+        let res = engine
+            .seek_region(b"k6\xff\xff\xff\xff\xff", box |_| true, 1)
+            .unwrap();
+        match res {
+            SeekRegionResult::Found { local_peer, region } => {
+                assert_eq!(local_peer.get_store_id(), node_id);
+                assert_eq!(region, regions[3]);
+            }
+            r => panic!("expect getting a region, but got {:?}", r),
+        }
+        let res = engine
+            .seek_region(b"\xff\xff\xff\xff\xff\xff\xff\xff", box |_| true, 1)
+            .unwrap();
+        match res {
+            SeekRegionResult::Found { local_peer, region } => {
+                assert_eq!(local_peer.get_store_id(), node_id);
+                assert_eq!(region, regions[5]);
+            }
+            r => panic!("expect getting a region, but got {:?}", r),
         }
     }
 }

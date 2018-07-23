@@ -3134,8 +3134,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    /// Find the first region `r` that satisfies `r.end_key` > `from_key` and the peer on this TiKV
-    /// satisfies `filter(peer)` returns true.
+    /// Find the first region `r` whose range contains or greater than `from_key` and the peer on
+    /// this TiKV satisfies `filter(peer)` returns true.
     fn seek_region(
         &self,
         from_key: &[u8],
@@ -3148,7 +3148,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             limit = 1;
         }
 
-        let from_key = data_end_key(from_key);
+        let from_key = data_key(from_key);
         for (end_key, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
             let peer = &self.region_peers[region_id];
             if filter(peer) {
