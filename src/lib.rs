@@ -35,6 +35,7 @@ extern crate bitflags;
 extern crate byteorder;
 extern crate chrono;
 extern crate crc;
+extern crate crossbeam;
 #[macro_use]
 extern crate crossbeam_channel;
 #[macro_use]
@@ -54,6 +55,7 @@ extern crate libc;
 extern crate log;
 extern crate mio;
 extern crate murmur3;
+extern crate num;
 #[macro_use]
 extern crate prometheus;
 extern crate prometheus_static_metric;
@@ -68,7 +70,19 @@ extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
-#[macro_use(slog_o, slog_kv)]
+#[cfg_attr(not(test), macro_use(slog_o, slog_kv))]
+#[cfg_attr(
+    test,
+    macro_use(
+        slog_o,
+        slog_kv,
+        slog_crit,
+        slog_log,
+        slog_record,
+        slog_b,
+        slog_record_static
+    )
+)]
 extern crate slog;
 extern crate slog_async;
 extern crate slog_scope;
