@@ -172,6 +172,7 @@ impl SnapManager {
                 return Ok(None);
             }
         };
+        self.notify_stats();
 
         let mut meta = None;
         match snapshot_load(&self.core.base, true, key) {
@@ -233,6 +234,7 @@ impl SnapManager {
                 return Err(Error::Snapshot(SnapError::Registry("receive", "receive")));
             }
         };
+        self.notify_stats();
 
         match snapshot_load(&self.core.base, false, key) {
             Ok(Some(_)) => return Ok(None),
@@ -255,18 +257,22 @@ impl SnapManager {
         options: ApplyOptions,
         notifier: Arc<SnapStaleNotifier>,
     ) -> Result<()> {
-        let mut registry = self.get_registry(false);
-        if let Some(entry) = registry.get_mut(&key) {
+        let mut applyer = None;
+        if let Some(entry) = self.get_registry(false).get_mut(&key) {
             if let Some(meta) = entry.fetch_meta(&mut false) {
                 let dir = self.core.base.clone();
-                let ref_count = Arc::clone(&entry.ref_count);
-                let used_times = Arc::clone(&entry.used_times);
-                return SnapshotApplyer::new(dir, key, meta, notifier, ref_count, used_times)
-                    .apply(options);
+                let rc = Arc::clone(&entry.ref_count);
+                let ut = Arc::clone(&entry.used_times);
+                applyer = Some(SnapshotApplyer::new(dir, key, meta, notifier, rc, ut))
             }
         }
-        error!("{} apply_snapshot without avaliable snapshot", key);
-        Err(Error::Snapshot(SnapError::Registry("none", "apply")))
+        match applyer {
+            Some(applyer) => applyer.apply(options),
+            None => {
+                error!("{} apply_snapshot without avaliable snapshot", key);
+                Err(Error::Snapshot(SnapError::Registry("none", "apply")))
+            }
+        }
     }
 
     fn scan_meta_files(&self, path: &Path) -> io::Result<Vec<(bool, SnapKey)>> {
@@ -448,6 +454,14 @@ impl SnapManager {
 
         if deregister {
             self.get_registry(for_send).remove(&key);
+        }
+    }
+
+    fn notify_stats(&self) {
+        if let Some(ch) = self.ch.as_ref() {
+            if let Err(e) = ch.try_send(Msg::SnapshotStats) {
+                error!("notify snapshot stats failed {:?}", e)
+            }
         }
     }
 }
