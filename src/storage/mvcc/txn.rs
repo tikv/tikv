@@ -13,7 +13,7 @@
 
 use super::lock::{Lock, LockType};
 use super::metrics::*;
-use super::reader::MvccReader;
+use super::reader::{CFReader, CFReaderBuilder, MvccReader};
 use super::write::{Write, WriteType};
 use super::{Error, Result};
 use kvproto::kvrpcpb::IsolationLevel;
@@ -33,6 +33,7 @@ pub struct GcInfo {
 
 pub struct MvccTxn<S: Snapshot> {
     reader: MvccReader<S>,
+    cf_reader: CFReader<S>,
     start_ts: u64,
     writes: Vec<Modify>,
     write_size: usize,
@@ -54,7 +55,17 @@ impl<S: Snapshot> MvccTxn<S> {
     ) -> Self {
         Self {
             // Todo: use session variable to indicate fill cache or not
-            reader: MvccReader::new(snapshot, mode, fill_cache, None, None, isolation_level),
+            reader: MvccReader::new(
+                snapshot.clone(),
+                mode,
+                fill_cache,
+                None,
+                None,
+                isolation_level,
+            ),
+            cf_reader: CFReaderBuilder::new(snapshot.clone())
+                .fill_cache(fill_cache)
+                .build(),
             start_ts,
             writes: vec![],
             write_size: 0,
@@ -141,7 +152,7 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         }
         // ... or locks at any timestamp.
-        if let Some(lock) = self.reader.load_lock(key)? {
+        if let Some(lock) = self.cf_reader.load_lock(key)? {
             if lock.ts != self.start_ts {
                 return Err(Error::KeyIsLocked {
                     key: key.raw()?,
@@ -184,7 +195,7 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub fn commit(&mut self, key: &Key, commit_ts: u64) -> Result<()> {
-        let (lock_type, short_value) = match self.reader.load_lock(key)? {
+        let (lock_type, short_value) = match self.cf_reader.load_lock(key)? {
             Some(ref mut lock) if lock.ts == self.start_ts => {
                 (lock.lock_type, lock.short_value.take())
             }
@@ -225,7 +236,7 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub fn rollback(&mut self, key: &Key) -> Result<()> {
-        match self.reader.load_lock(key)? {
+        match self.cf_reader.load_lock(key)? {
             Some(ref lock) if lock.ts == self.start_ts => {
                 // If prewrite type is DEL or LOCK, it is no need to delete value.
                 if lock.short_value.is_none() && lock.lock_type == LockType::Put {
@@ -336,7 +347,7 @@ impl<S: Snapshot> MvccTxn<S> {
 #[cfg(test)]
 mod tests {
     use super::super::write::{Write, WriteType};
-    use super::super::MvccReader;
+    use super::super::{CFReaderBuilder, MvccReader};
     use super::MvccTxn;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use storage::engine::{self, Engine, Modify, Snapshot, TEMP_DIR};
@@ -893,15 +904,15 @@ mod tests {
 
     fn must_locked<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-        let lock = reader.load_lock(&make_key(key)).unwrap().unwrap();
+        let mut cf_reader = CFReaderBuilder::new(snapshot).build();
+        let lock = cf_reader.load_lock(&make_key(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts);
     }
 
     fn must_unlocked<E: Engine>(engine: &E, key: &[u8]) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-        assert!(reader.load_lock(&make_key(key)).unwrap().is_none());
+        let mut cf_reader = CFReaderBuilder::new(snapshot).build();
+        assert!(cf_reader.load_lock(&make_key(key)).unwrap().is_none());
     }
 
     fn must_written<E: Engine>(

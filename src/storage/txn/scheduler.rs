@@ -47,7 +47,8 @@ use storage::engine::{
     Result as EngineResult,
 };
 use storage::mvcc::{
-    Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, MAX_TXN_WRITE_SIZE,
+    CFReader, CFReaderBuilder, Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write,
+    MAX_TXN_WRITE_SIZE,
 };
 use storage::{
     Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
@@ -369,14 +370,16 @@ pub struct Scheduler<E: Engine> {
 // Make clippy happy.
 type MultipleReturnValue = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, Value)>);
 
+// TODO: Move to Mvcc mod.
 fn find_mvcc_infos_by_key<S: Snapshot>(
     reader: &mut MvccReader<S>,
+    cf_reader: &mut CFReader<S>,
     key: &Key,
     mut ts: u64,
 ) -> Result<MultipleReturnValue> {
     let mut writes = vec![];
     let mut values = vec![];
-    let lock = reader.load_lock(key)?;
+    let lock = cf_reader.load_lock(key)?;
     loop {
         let opt = reader.seek_write(key, ts)?;
         match opt {
@@ -442,14 +445,17 @@ fn process_read<E: Engine>(
     let pr = match cmd {
         Command::MvccByKey { ref ctx, ref key } => {
             let mut reader = MvccReader::new(
-                snapshot,
+                snapshot.clone(),
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
                 None,
                 None,
                 ctx.get_isolation_level(),
             );
-            let res = match find_mvcc_infos_by_key(&mut reader, key, u64::MAX) {
+            let mut cf_reader = CFReaderBuilder::new(snapshot)
+                .fill_cache(!ctx.get_not_fill_cache())
+                .build();
+            let res = match find_mvcc_infos_by_key(&mut reader, &mut cf_reader, key, u64::MAX) {
                 Ok((lock, writes, values)) => ProcessResult::MvccKey {
                     mvcc: MvccInfo {
                         lock,
@@ -464,29 +470,34 @@ fn process_read<E: Engine>(
         }
         Command::MvccByStartTs { ref ctx, start_ts } => {
             let mut reader = MvccReader::new(
-                snapshot,
+                snapshot.clone(),
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
                 None,
                 None,
                 ctx.get_isolation_level(),
             );
+            let mut cf_reader = CFReaderBuilder::new(snapshot)
+                .fill_cache(!ctx.get_not_fill_cache())
+                .build();
             let res = match reader.seek_ts(start_ts).map_err(StorageError::from) {
                 Err(e) => ProcessResult::Failed { err: e },
                 Ok(opt) => match opt {
-                    Some(key) => match find_mvcc_infos_by_key(&mut reader, &key, u64::MAX) {
-                        Ok((lock, writes, values)) => ProcessResult::MvccStartTs {
-                            mvcc: Some((
-                                key,
-                                MvccInfo {
-                                    lock,
-                                    writes,
-                                    values,
-                                },
-                            )),
-                        },
-                        Err(e) => ProcessResult::Failed { err: e.into() },
-                    },
+                    Some(key) => {
+                        match find_mvcc_infos_by_key(&mut reader, &mut cf_reader, &key, u64::MAX) {
+                            Ok((lock, writes, values)) => ProcessResult::MvccStartTs {
+                                mvcc: Some((
+                                    key,
+                                    MvccInfo {
+                                        lock,
+                                        writes,
+                                        values,
+                                    },
+                                )),
+                            },
+                            Err(e) => ProcessResult::Failed { err: e.into() },
+                        }
+                    }
                     None => ProcessResult::MvccStartTs { mvcc: None },
                 },
             };
@@ -501,16 +512,11 @@ fn process_read<E: Engine>(
             limit,
             ..
         } => {
-            let mut reader = MvccReader::new(
-                snapshot,
-                Some(ScanMode::Forward),
-                !ctx.get_not_fill_cache(),
-                None,
-                None,
-                ctx.get_isolation_level(),
-            );
-            let res = reader
-                .scan_lock(start_key.take(), |lock| lock.ts <= max_ts, limit)
+            let mut cf_reader = CFReaderBuilder::new(snapshot)
+                .fill_cache(!ctx.get_not_fill_cache())
+                .build();
+            let res = cf_reader
+                .scan_lock(|lock| lock.ts <= max_ts, start_key.take(), limit)
                 .map_err(Error::from)
                 .and_then(|(v, _)| {
                     let mut locks = vec![];
@@ -527,7 +533,7 @@ fn process_read<E: Engine>(
                         .observe(locks.len() as f64);
                     Ok(locks)
                 });
-            statistics.add(reader.get_statistics());
+            statistics.add(&cf_reader.take_statistics());
             match res {
                 Ok(locks) => ProcessResult::Locks { locks },
                 Err(e) => ProcessResult::Failed { err: e.into() },
@@ -539,18 +545,13 @@ fn process_read<E: Engine>(
             ref mut scan_key,
             ..
         } => {
-            let mut reader = MvccReader::new(
-                snapshot,
-                Some(ScanMode::Forward),
-                !ctx.get_not_fill_cache(),
-                None,
-                None,
-                ctx.get_isolation_level(),
-            );
-            let res = reader
+            let mut cf_reader = CFReaderBuilder::new(snapshot)
+                .fill_cache(!ctx.get_not_fill_cache())
+                .build();
+            let res = cf_reader
                 .scan_lock(
-                    scan_key.take(),
                     |lock| txn_status.contains_key(&lock.ts),
+                    scan_key.take(),
                     RESOLVE_LOCK_BATCH_SIZE,
                 )
                 .map_err(Error::from)
@@ -571,7 +572,7 @@ fn process_read<E: Engine>(
                         }))
                     }
                 });
-            statistics.add(reader.get_statistics());
+            statistics.add(&cf_reader.take_statistics());
             match res {
                 Ok(Some(cmd)) => ProcessResult::NextCommand { cmd },
                 Ok(None) => ProcessResult::Res,

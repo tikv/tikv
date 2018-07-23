@@ -11,15 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::lock::{Lock, LockType};
+mod cf_reader;
+mod util;
+
+use super::lock::Lock;
 use super::write::{Write, WriteType};
-use super::{Error, Result};
+use super::Result;
 use kvproto::kvrpcpb::IsolationLevel;
 use raftstore::store::engine::IterOption;
 use std::u64;
 use storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
 use storage::{Key, Value, CF_LOCK, CF_WRITE};
 use util::properties::MvccProperties;
+
+pub use self::cf_reader::{CFReader, CFReaderBuilder};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
@@ -114,35 +119,6 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(res)
     }
 
-    pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
-        if self.scan_mode.is_some() && self.lock_cursor.is_none() {
-            let iter_opt = IterOption::new(None, None, true);
-            let iter = self
-                .snapshot
-                .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
-            self.lock_cursor = Some(iter);
-        }
-
-        let res = if let Some(ref mut cursor) = self.lock_cursor {
-            match cursor.get(key, &mut self.statistics.lock)? {
-                Some(v) => Some(Lock::parse(v)?),
-                None => None,
-            }
-        } else {
-            self.statistics.lock.get += 1;
-            match self.snapshot.get_cf(CF_LOCK, key)? {
-                Some(v) => Some(Lock::parse(&v)?),
-                None => None,
-            }
-        };
-
-        if res.is_some() {
-            self.statistics.lock.processed += 1;
-        }
-
-        Ok(res)
-    }
-
     fn get_scan_mode(&self, allow_backward: bool) -> ScanMode {
         match self.scan_mode {
             Some(ScanMode::Forward) => ScanMode::Forward,
@@ -204,39 +180,12 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(Some((commit_ts, write)))
     }
 
-    fn check_lock(&mut self, key: &Key, ts: u64) -> Result<u64> {
-        if let Some(lock) = self.load_lock(key)? {
-            return self.check_lock_impl(key, ts, lock);
-        }
-        Ok(ts)
-    }
-
-    fn check_lock_impl(&self, key: &Key, ts: u64, lock: Lock) -> Result<u64> {
-        if lock.ts > ts || lock.lock_type == LockType::Lock {
-            // ignore lock when lock.ts > ts or lock's type is Lock
-            return Ok(ts);
-        }
-
-        if ts == u64::MAX && key.raw()? == lock.primary {
-            // when ts==u64::MAX(which means to get latest committed version for
-            // primary key),and current key is the primary key, returns the latest
-            // commit version's value
-            return Ok(lock.ts - 1);
-        }
-
-        // There is a pending lock. Client should wait or clean it.
-        Err(Error::KeyIsLocked {
-            key: key.raw()?,
-            primary: lock.primary,
-            ts: lock.ts,
-            ttl: lock.ttl,
-        })
-    }
-
     pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
         // Check for locks that signal concurrent writes.
         match self.isolation_level {
-            IsolationLevel::SI => ts = self.check_lock(key, ts)?,
+            IsolationLevel::SI => {
+                ts = self::util::load_and_check_lock(&self.snapshot, key, ts, &mut self.statistics)?
+            }
             IsolationLevel::RC => {}
         }
         loop {
@@ -441,7 +390,7 @@ impl<S: Snapshot> MvccReader<S> {
                 let l_cur = self.lock_cursor.as_ref().unwrap();
                 if l_cur.valid() && l_cur.key() == user_key.encoded().as_slice() {
                     self.statistics.lock.processed += 1;
-                    self.check_lock_impl(user_key, ts, Lock::parse(l_cur.value())?)?;
+                    self::util::check_lock(user_key, ts, Lock::parse(l_cur.value())?)?;
                 }
             }
             IsolationLevel::RC => {}
@@ -555,41 +504,6 @@ impl<S: Snapshot> MvccReader<S> {
         } else {
             Ok(short_value)
         }
-    }
-
-    #[cfg_attr(feature = "cargo-clippy", allow(type_complexity))]
-    pub fn scan_lock<F>(
-        &mut self,
-        start: Option<Key>,
-        filter: F,
-        limit: usize,
-    ) -> Result<(Vec<(Key, Lock)>, Option<Key>)>
-    where
-        F: Fn(&Lock) -> bool,
-    {
-        self.create_lock_cursor()?;
-        let cursor = self.lock_cursor.as_mut().unwrap();
-        let ok = match start {
-            Some(ref x) => cursor.seek(x, &mut self.statistics.lock)?,
-            None => cursor.seek_to_first(&mut self.statistics.lock),
-        };
-        if !ok {
-            return Ok((vec![], None));
-        }
-        let mut locks = vec![];
-        while cursor.valid() {
-            let key = Key::from_encoded(cursor.key().to_vec());
-            let lock = Lock::parse(cursor.value())?;
-            if filter(&lock) {
-                locks.push((key.clone(), lock));
-                if limit > 0 && locks.len() >= limit {
-                    return Ok((locks, Some(key)));
-                }
-            }
-            cursor.next(&mut self.statistics.lock);
-        }
-        self.statistics.lock.processed += locks.len();
-        Ok((locks, None))
     }
 
     pub fn scan_keys(
