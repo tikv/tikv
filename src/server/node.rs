@@ -105,6 +105,7 @@ where
         } else {
             store.set_address(cfg.advertise_addr.clone())
         }
+        store.set_version(env!("CARGO_PKG_VERSION").to_string());
 
         let mut labels = Vec::new();
         for (k, v) in &cfg.labels {
