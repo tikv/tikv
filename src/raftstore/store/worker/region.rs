@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
@@ -211,7 +211,7 @@ struct SnapContext {
     mgr: SnapManager,
     use_delete_range: bool,
     clean_stale_peer_delay: Duration,
-    pending_delete_ranges: Arc<Mutex<PendingDeleteRanges>>,
+    pending_delete_ranges: PendingDeleteRanges,
 }
 
 impl SnapContext {
@@ -270,7 +270,7 @@ impl SnapContext {
     }
 
     fn apply_snap(
-        &self,
+        &mut self,
         region_id: u64,
         snap_stale_notifier: Arc<SnapStaleNotifier>,
     ) -> Result<()> {
@@ -345,7 +345,7 @@ impl SnapContext {
     }
 
     fn handle_apply(
-        &self,
+        &mut self,
         region_id: u64,
         snap_stale_notifier: Arc<SnapStaleNotifier>,
         snap_applying_state: Arc<AtomicUsize>,
@@ -428,11 +428,9 @@ impl SnapContext {
         }
     }
 
-    fn cleanup_overlap_ranges(&self, start_key: &[u8], end_key: &[u8]) {
+    fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) {
         let overlap_ranges = self
             .pending_delete_ranges
-            .lock()
-            .unwrap()
             .drain_overlap_ranges(start_key, end_key);
         for (region_id, s_key, e_key) in overlap_ranges {
             self.cleanup_range(region_id, s_key, e_key, false /* use_delete_files */);
@@ -459,20 +457,15 @@ impl SnapContext {
         );
         let timeout = time::Instant::now() + self.clean_stale_peer_delay;
         self.pending_delete_ranges
-            .lock()
-            .unwrap()
             .insert(region_id, start_key, end_key, timeout);
         true
     }
 
     fn clean_timeout_ranges(&mut self) {
-        let mut pending_delete_ranges = self.pending_delete_ranges.lock().unwrap();
-        STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(pending_delete_ranges.len() as f64);
+        STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
 
         let now = time::Instant::now();
-        let mut timeout_ranges = pending_delete_ranges.drain_timeout_ranges(now);
-        drop(pending_delete_ranges);
-
+        let mut timeout_ranges = self.pending_delete_ranges.drain_timeout_ranges(now);
         for (region_id, start_key, end_key) in timeout_ranges.drain(..) {
             self.cleanup_range(
                 region_id, start_key, end_key, true, /* use_delete_files */
@@ -504,7 +497,7 @@ impl Runner {
                 batch_size,
                 use_delete_range,
                 clean_stale_peer_delay,
-                pending_delete_ranges: Arc::new(Mutex::new(PendingDeleteRanges::default())),
+                pending_delete_ranges: PendingDeleteRanges::default(),
             },
         }
     }
@@ -528,12 +521,9 @@ impl Runnable<Task> for Runner {
                 region_id,
                 snap_stale_notifier,
                 snap_applying_state,
-            } => {
-                let ctx = self.ctx.clone();
-                self.pool.execute(move |_| {
-                    ctx.handle_apply(region_id, snap_stale_notifier, snap_applying_state)
-                });
-            }
+            } => self
+                .ctx
+                .handle_apply(region_id, snap_stale_notifier, snap_applying_state),
             Task::Destroy {
                 region_id,
                 start_key,
