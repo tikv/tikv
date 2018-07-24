@@ -612,12 +612,8 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
         ConfChangeType::AddLearnerNode,
         new_learner_peer(4, 11),
     ).unwrap();
-    assert!(
-        resp.get_header()
-            .get_error()
-            .get_message()
-            .contains("duplicated")
-    );
+    let err_msg = resp.get_header().get_error().get_message();
+    assert!(err_msg.contains("duplicated"));
 
     // Remove learner (4, 10) from region 1.
     pd_client.must_remove_peer(r1, new_learner_peer(4, 10));
@@ -641,21 +637,37 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.transfer_leader(r1, new_peer(4, 12));
     pd_client.region_leader_must_be(r1, new_peer(4, 12));
 
+    let mut add_peer = |peer: metapb::Peer| {
+        let conf_type = if peer.get_is_learner() {
+            ConfChangeType::AddLearnerNode
+        } else {
+            ConfChangeType::AddNode
+        };
+        call_conf_change(cluster, r1, conf_type, peer).unwrap()
+    };
+
     // Add learner on store which already has peer.
-    call_conf_change(
-        cluster,
-        r1,
-        ConfChangeType::AddLearnerNode,
-        new_learner_peer(4, 13),
-    ).unwrap();
+    let resp = add_peer(new_learner_peer(4, 13));
+    let err_msg = resp.get_header().get_error().get_message();
+    assert!(err_msg.contains("duplicated"));
     pd_client.must_have_peer(r1, new_peer(4, 12));
 
     // Add peer with different id on store which already has learner.
     pd_client.must_remove_peer(r1, new_peer(4, 12));
     pd_client.must_add_peer(r1, new_learner_peer(4, 13));
-    pd_client.add_peer(r1, new_learner_peer(4, 14));
+
+    // Transfer leader to (1, 1) to avoid "region not found".
+    pd_client.transfer_leader(r1, new_peer(1, 1));
+    pd_client.region_leader_must_be(r1, new_peer(1, 1));
+
+    let resp = add_peer(new_learner_peer(4, 14));
+    let err_msg = resp.get_header().get_error().get_message();
+    assert!(err_msg.contains("duplicated"));
     pd_client.must_none_peer(r1, new_learner_peer(4, 14));
-    pd_client.add_peer(r1, new_peer(4, 15));
+
+    let resp = add_peer(new_peer(4, 15));
+    let err_msg = resp.get_header().get_error().get_message();
+    assert!(err_msg.contains("duplicated"));
     pd_client.must_none_peer(r1, new_peer(4, 15));
 }
 
