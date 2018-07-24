@@ -122,6 +122,8 @@ pub struct SnapManager {
     snap_size: Arc<AtomicU64>,
     max_total_size: u64,
     gc_timeout: Duration,
+    sending_count: Arc<AtomicUsize>,
+    receiving_count: Arc<AtomicUsize>,
     io_limiter: Option<Arc<IOLimiter>>,
     ch: Option<SendCh<Msg>>,
 }
@@ -137,8 +139,8 @@ impl SnapManager {
 
     pub fn stats(&self) -> SnapStats {
         SnapStats {
-            sending_count: self.core.gen_registry.lock().unwrap().len(),
-            receiving_count: self.core.apply_registry.lock().unwrap().len(),
+            sending_count: self.sending_count.load(Ordering::SeqCst),
+            receiving_count: self.receiving_count.load(Ordering::SeqCst),
         }
     }
 
@@ -179,7 +181,7 @@ impl SnapManager {
             Ok(m) => meta = m,
             Err(e) => {
                 error!("{} build_sanpshot fail when load: {}", key, e);
-                self.delete_snapshot(true, key, false);
+                self.delete_snapshot(true, key);
             }
         };
 
@@ -241,7 +243,7 @@ impl SnapManager {
             Ok(None) => {}
             Err(e) => {
                 error!("{} get_snapshot_receiver fail when load: {}", key, e);
-                self.delete_snapshot(false, key, false);
+                self.delete_snapshot(false, key);
             }
         };
 
@@ -360,7 +362,25 @@ impl SnapManager {
         let (tx, rx) = sync_channel(1);
         let entry = SnapEntry::new(snap_stale_notifier, rx);
         registry.insert(key, entry);
+
+        if for_send {
+            self.sending_count.fetch_add(1, Ordering::SeqCst);
+        } else {
+            self.receiving_count.fetch_add(1, Ordering::SeqCst);
+        }
         Either::Left(tx)
+    }
+
+    fn deregister(&self, for_send: bool, key: SnapKey) -> Option<SnapEntry> {
+        let res = self.get_registry(for_send).remove(&key);
+        if res.is_some() {
+            if for_send {
+                self.sending_count.fetch_sub(1, Ordering::SeqCst);
+            } else {
+                self.receiving_count.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        res
     }
 
     /// Gc snapshots which meet the following conditions:
@@ -394,8 +414,7 @@ impl SnapManager {
         });
 
         for (for_send, key) in snap_keys {
-            let mut registry = self.get_registry(for_send);
-            if let Some(entry) = registry.get_mut(&key) {
+            if let Some(entry) = self.get_registry(for_send).get_mut(&key) {
                 if entry.check_is_busy()
                     || (!entry.has_been_used()
                         && !self.snapshot_is_stale(for_send, key).unwrap_or(true))
@@ -403,8 +422,8 @@ impl SnapManager {
                     continue;
                 }
             }
-            self.delete_snapshot(for_send, key, false);
-            registry.remove(&key);
+            self.delete_snapshot(for_send, key);
+            self.deregister(for_send, key);
             removed += 1;
         }
 
@@ -439,7 +458,7 @@ impl SnapManager {
             .map_err(|e| box_err!("get modified time fail: {}", e))
     }
 
-    fn delete_snapshot(&self, for_send: bool, key: SnapKey, deregister: bool) {
+    fn delete_snapshot(&self, for_send: bool, key: SnapKey) {
         let meta_path = get_meta_file_path(&self.core.base, for_send, key);
         if let Ok(meta) = read_snapshot_meta(&meta_path) {
             let size = get_size_from_snapshot_meta(&meta);
@@ -450,10 +469,6 @@ impl SnapManager {
         for cf in SNAPSHOT_CFS {
             let cf_path = get_cf_file_path(&self.core.base, for_send, key, cf);
             delete_file_if_exist(&cf_path);
-        }
-
-        if deregister {
-            self.get_registry(for_send).remove(&key);
         }
     }
 
@@ -504,6 +519,8 @@ impl SnapManagerBuilder {
             snap_size: Arc::new(AtomicU64::new(0)),
             max_total_size: self.max_total_size,
             gc_timeout: self.gc_timeout,
+            sending_count: Arc::new(AtomicUsize::new(0)),
+            receiving_count: Arc::new(AtomicUsize::new(0)),
             io_limiter,
             ch,
         }
@@ -877,12 +894,12 @@ mod tests {
         check_snap_size(&snap_mgr);
 
         // Load the snapshot from disk should success.
-        snap_mgr.core.gen_registry.lock().unwrap().remove(&key);
+        snap_mgr.deregister(true, key);
         do_build().unwrap().unwrap();
         check_snap_size(&snap_mgr);
 
         // If the disk file is corrupted, the snapshot will be rebuilt after load fail.
-        snap_mgr.get_registry(true).remove(&key);
+        snap_mgr.deregister(true, key);
         corrupt_file(&get_cf_file_path(&snap_mgr.core.base, true, key, CF_LOCK));
         assert!(do_build().unwrap().is_some());
         check_snap_size(&snap_mgr);
@@ -895,7 +912,7 @@ mod tests {
         let mut sender = snap_mgr.get_snapshot_sender(key).unwrap();
 
         // Get sender before build should fail.
-        let entry = snap_mgr.get_registry(true).remove(&key).unwrap();
+        let entry = snap_mgr.deregister(true, key).unwrap();
         assert!(snap_mgr.get_snapshot_sender(key).is_err());
         snap_mgr.get_registry(true).insert(key, entry);
 
@@ -922,7 +939,7 @@ mod tests {
         assert!(r.unwrap().is_none());
 
         // Get receiver should success because disk files are corrupted.
-        snap_mgr.core.apply_registry.lock().unwrap().remove(&key);
+        snap_mgr.deregister(false, key);
         corrupt_file(&get_cf_file_path(&snap_mgr.core.base, false, key, CF_LOCK));
         let mut receiver = snap_mgr.get_snapshot_receiver(key, &data).unwrap().unwrap();
         check_snap_size(&snap_mgr);
@@ -935,7 +952,7 @@ mod tests {
         check_snap_size(&snap_mgr);
 
         // Apply snapshot should fail because no such entry in registry.
-        let entry = snap_mgr.get_registry(false).remove(&key).unwrap();
+        let entry = snap_mgr.deregister(false, key).unwrap();
         do_apply(false);
 
         // Apply snapshot should fail because it's still receiving.
@@ -1025,7 +1042,7 @@ mod tests {
             snap_data.get_meta().write_to_writer(&mut f).unwrap();
         };
 
-        let mut entry = snap_mgr.get_registry(true).remove(&key).unwrap();
+        let mut entry = snap_mgr.deregister(true, key).unwrap();
         let entry_meta = entry.fetch_meta(&mut false).unwrap();
         let clone_entry = || SnapEntry {
             snap_stale_notifier: None,
