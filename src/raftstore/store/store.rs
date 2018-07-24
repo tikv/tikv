@@ -584,7 +584,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         box_try!(self.apply_worker.start(apply_runner));
 
         let local_reader = LocalReader::new(self);
-        box_try!(self.local_reader.start(local_reader));
+        box_try!(local_reader.start(&mut self.local_reader));
 
         if let Err(e) = util_sys::pri::set_priority(util_sys::HIGH_PRI) {
             warn!("set priority for raftstore failed, error: {:?}", e);

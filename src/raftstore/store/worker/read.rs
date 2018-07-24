@@ -12,8 +12,10 @@
 // limitations under the License.
 
 use std::fmt::{self, Display, Formatter};
+use std::io;
+use std::result::Result as StdResult;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use kvproto::errorpb;
 use kvproto::metapb;
@@ -32,8 +34,9 @@ use raftstore::store::{
 use raftstore::Result;
 use util::collections::HashMap;
 use util::time::duration_to_sec;
+use util::timer::Timer;
 use util::transport::{NotifyError, Sender};
-use util::worker::Runnable;
+use util::worker::{Runnable, RunnableWithTimer, Worker};
 
 use super::super::metrics::BATCH_SNAPSHOT_COMMANDS;
 use super::metrics::*;
@@ -275,10 +278,16 @@ impl LocalReader<mio::Sender<StoreMsg>> {
             tag: format!("[store {}]", store_id),
         }
     }
+
+    pub fn start(self, worker: &mut Worker<Task>) -> StdResult<(), io::Error> {
+        let mut timer = Timer::new(1);
+        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
+        worker.start_with_timer(self, timer)
+    }
 }
 
 impl<C: Sender<StoreMsg>> LocalReader<C> {
-    fn redirect(&mut self, cmd: StoreMsg) {
+   fn redirect(&mut self, cmd: StoreMsg) {
         debug!("{} localreader redirect {:?}", self.tag, cmd);
         match self.ch.send(cmd) {
             Ok(()) => (),
@@ -514,8 +523,12 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
             }
         }
     }
+}
 
-    fn on_tick(&mut self) {
+const METRICS_FLUSH_INTERVAL: u64 = 15; // 15s
+
+impl<C: Sender<StoreMsg>> RunnableWithTimer<Task, ()> for LocalReader<C> {
+    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         self.metrics.flush();
         let count = self.delegates.values().fold(0i64, |mut acc, delegate| {
             if let Some(ref lease) = delegate.leader_lease {
@@ -526,6 +539,7 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
             acc
         });
         LOCAL_READ_LEADER.set(count);
+        timer.add_task(Duration::from_secs(METRICS_FLUSH_INTERVAL), ());
     }
 }
 
@@ -571,6 +585,7 @@ impl ReadMetrics {
     fn flush(&mut self) {
         self.requests_wait_duration.flush();
         self.requests_handle_duration.flush();
+        self.batch_snapshot_size.flush();
         self.batch_requests_size.flush();
         if self.rejected_by_store_id_mismatch > 0 {
             LOCAL_READ_REJECT
