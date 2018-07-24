@@ -565,15 +565,15 @@ fn do_div_mod(
 
     frac_incr = frac_incr.saturating_sub(l_frac_cnt - lhs.frac_cnt + r_frac_cnt - rhs.frac_cnt);
     let mut int_cnt_to =
-        l_prec.wrapping_sub(l_frac_cnt) as i8 - r_prec.wrapping_sub(r_frac_cnt) as i8;
+        (i32::from(l_prec) - i32::from(l_frac_cnt)) - (i32::from(r_prec) - i32::from(r_frac_cnt));
     if lhs.word_buf[l_idx] >= rhs.word_buf[r_idx] {
         int_cnt_to += 1;
     }
     let mut int_word_to = if int_cnt_to < 0 {
-        int_cnt_to /= DIGITS_PER_WORD as i8;
+        int_cnt_to /= i32::from(DIGITS_PER_WORD);
         0
     } else {
-        word_cnt!(int_cnt_to as u8)
+        word_cnt!(int_cnt_to)
     };
     let mut frac_word_to;
     let mut res = if do_mod {
@@ -1349,6 +1349,16 @@ impl Decimal {
             return Res::Ok(self);
         }
 
+        let upper = (DIGITS_PER_WORD * word_buf_len * 2) as isize;
+        if shift > upper {
+            // process overflow by shift.
+            return Res::Overflow(self);
+        } else if shift < -upper {
+            // processor truncated by shift.
+            self.reset_to_zero();
+            return Res::Truncated(self);
+        }
+
         let point = word_cnt!(self.int_cnt) * DIGITS_PER_WORD;
         let mut new_point = point as isize + shift;
         let int_cnt = if new_point < beg as isize {
@@ -1676,7 +1686,7 @@ impl Decimal {
         dec_encoded_len(&[prec, frac]).unwrap_or(3)
     }
 
-    pub fn div(self, rhs: Decimal, frac_incr: u8) -> Option<Res<Decimal>> {
+    fn div(self, rhs: Decimal, frac_incr: u8) -> Option<Res<Decimal>> {
         let result_frac_cnt =
             cmp::min(self.result_frac_cnt.saturating_add(frac_incr), MAX_FRACTION);
         let mut res = do_div_mod(self, rhs, frac_incr, false);
@@ -2595,6 +2605,18 @@ mod test {
                 Res::Overflow("123456789.987654321"),
             ),
             (2, b"123456789.987654321", 0, Res::Ok("123456789.987654321")),
+            (
+                WORD_BUF_LEN,
+                b"0.0000000070415291131966574",
+                -9223372036854775808,
+                Res::Truncated("0"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"0.0000000070415291131966574",
+                9223372036854775807,
+                Res::Overflow("0.0000000070415291131966574"),
+            ),
         ];
 
         for (word_buf_len, dec, shift, exp) in cases {
@@ -3197,6 +3219,20 @@ mod test {
 
             let res = super::do_div_mod(lhs, rhs, frac_incr, true).map(|d| d.unwrap().to_string());
             assert_eq!(res, rem_exp.map(|s| s.to_owned()));
+        }
+
+        let div_cases = vec![(
+            "-43791957044243810000000000000000000000000000000000000000000000000000000000000",
+            "-0.0000000000000000000000000000000000000000000000000012867433602814482",
+            Res::Overflow(
+                "34033171179267041433424155279291553259014210153022524070386565694757521640",
+            ),
+        )];
+        for (lhs_str, rhs_str, rem_exp) in div_cases {
+            let lhs: Decimal = lhs_str.parse().unwrap();
+            let rhs: Decimal = rhs_str.parse().unwrap();
+            let res = (lhs / rhs).unwrap().map(|d| d.to_string());
+            assert_eq!(res, rem_exp.map(|s| s.to_owned()))
         }
     }
 

@@ -43,9 +43,6 @@ where
     let _ = lhs.is_zero();
     let _ = lhs.approximate_encoded_size();
 
-    let frac_inc = iter.next().unwrap();
-    lhs.clone().div(rhs.clone(), frac_inc);
-
     let _ = lhs > rhs;
 
     let _ = lhs + rhs;
