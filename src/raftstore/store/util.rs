@@ -551,6 +551,7 @@ impl Lease {
 
     pub fn remote(&mut self, term: u64) -> Option<RemoteLease> {
         if self.remote.is_some() {
+            // At most one connected RemoteLease.
             return None;
         }
         let expired_time = match self.bound {
