@@ -344,11 +344,12 @@ impl SnapManager {
     fn deregister(&self, for_send: bool, key: SnapKey) -> Option<SnapEntry> {
         let res = self.get_registry(for_send).remove(&key);
         if res.is_some() {
-            if for_send {
-                self.sending_count.fetch_sub(1, Ordering::SeqCst);
+            let old_value = if for_send {
+                self.sending_count.fetch_sub(1, Ordering::SeqCst)
             } else {
-                self.receiving_count.fetch_sub(1, Ordering::SeqCst);
-            }
+                self.receiving_count.fetch_sub(1, Ordering::SeqCst)
+            };
+            assert!(old_value > 1);
         }
         res
     }
@@ -426,7 +427,8 @@ impl SnapManager {
         if let Ok(meta) = read_snapshot_meta(&meta_path) {
             let size = get_size_from_snapshot_meta(&meta);
             if delete_file_if_exist(&meta_path) {
-                self.snap_size.fetch_sub(size, Ordering::SeqCst);
+                let old_size = self.snap_size.fetch_sub(size, Ordering::SeqCst);
+                assert!(old_size > size);
             }
         }
 

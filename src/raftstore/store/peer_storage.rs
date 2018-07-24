@@ -927,7 +927,8 @@ impl PeerStorage {
     /// Check whether the storage has finished applying snapshot.
     #[inline]
     pub fn is_applying_snapshot(&self) -> bool {
-        self.snap_applying_state.load(Ordering::SeqCst) != APPLY_STATUS_RELAX
+        let state = self.snap_applying_state.load(Ordering::SeqCst);
+        state != APPLY_STATUS_RELAX && state != APPLY_STATUS_CANCELED
     }
 
     /// Cancel applying snapshot, return true if the job can be considered not be run again.
