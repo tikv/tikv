@@ -65,7 +65,7 @@ impl fmt::Debug for Tz {
         match *self {
             Tz::Offset(ref offset) => fmt::Debug::fmt(offset, f),
             Tz::Name(ref offset) => fmt::Debug::fmt(offset, f),
-            Tz::Local(ref offset) => fmt::Debug::fmt(offset, f),
+            Tz::Local(_) => write!(f, "Local"),
         }
     }
 }

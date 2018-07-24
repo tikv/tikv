@@ -13,6 +13,7 @@
 
 use std::collections::Bound::Excluded;
 use std::option::Option;
+use std::sync::Arc;
 use std::{fmt, u64};
 
 use kvproto::metapb;
@@ -25,7 +26,7 @@ use raftstore::{Error, Result};
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
-use storage::{Key, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
+use storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
 use util::properties::SizeProperties;
 use util::rocksdb::stats::get_range_entries_and_versions;
 use util::time::monotonic_raw_now;
@@ -382,6 +383,22 @@ pub fn get_region_approximate_keys(db: &DB, region: &metapb::Region) -> Result<u
     Ok(keys)
 }
 
+/// Get region approximate middle key based on default and write cf size.
+pub fn get_region_approximate_middle(db: &DB, region: &metapb::Region) -> Result<Option<Vec<u8>>> {
+    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region);
+
+    let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
+    let write_cf_size = box_try!(get_cf_size(CF_WRITE));
+
+    let middle_by_cf = if default_cf_size >= write_cf_size {
+        CF_DEFAULT
+    } else {
+        CF_WRITE
+    };
+
+    get_region_approximate_middle_cf(db, middle_by_cf, &region)
+}
+
 /// Check if replicas of two regions are on the same stores.
 pub fn region_on_same_stores(lhs: &metapb::Region, rhs: &metapb::Region) -> bool {
     if lhs.get_peers().len() != rhs.get_peers().len() {
@@ -557,6 +574,21 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
         }
     }
     conf_state
+}
+
+#[derive(Clone, Debug)]
+pub struct Engines {
+    pub kv: Arc<DB>,
+    pub raft: Arc<DB>,
+}
+
+impl Engines {
+    pub fn new(kv_engine: Arc<DB>, raft_engine: Arc<DB>) -> Engines {
+        Engines {
+            kv: kv_engine,
+            raft: raft_engine,
+        }
+    }
 }
 
 #[cfg(test)]

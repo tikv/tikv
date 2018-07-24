@@ -236,6 +236,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
                     req.get_from_key(),
                     req.get_to_key(),
                     req.get_threads(),
+                    req.get_bottommost_level_compaction().into(),
                 )
                 .map(|_| CompactResponse::default())
         });
@@ -323,8 +324,8 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
             resp.set_prometheus(metrics::dump());
             if req.get_all() {
                 let engines = debugger.get_engine();
-                resp.set_rocksdb_kv(box_try!(rocksdb_stats::dump(&engines.kv_engine)));
-                resp.set_rocksdb_raft(box_try!(rocksdb_stats::dump(&engines.raft_engine)));
+                resp.set_rocksdb_kv(box_try!(rocksdb_stats::dump(&engines.kv)));
+                resp.set_rocksdb_raft(box_try!(rocksdb_stats::dump(&engines.raft)));
                 resp.set_jemalloc(jemalloc::dump_stats());
             }
             Ok(resp)

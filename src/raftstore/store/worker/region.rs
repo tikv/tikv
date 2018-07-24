@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use rocksdb::{Writable, WriteBatch, DB};
+use rocksdb::{Writable, WriteBatch};
 
 use raftstore::store::engine::{Mutable, Snapshot};
 use raftstore::store::peer_storage::{
@@ -28,6 +28,7 @@ use raftstore::store::peer_storage::{
     JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
 };
 use raftstore::store::snap::{Error, Result};
+use raftstore::store::util::Engines;
 use raftstore::store::{
     self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey, SnapManager,
 };
@@ -205,8 +206,7 @@ impl PendingDeleteRanges {
 
 #[derive(Clone)]
 struct SnapContext {
-    kv_db: Arc<DB>,
-    raft_db: Arc<DB>,
+    engines: Engines,
     batch_size: usize,
     mgr: SnapManager,
     use_delete_range: bool,
@@ -217,12 +217,12 @@ struct SnapContext {
 impl SnapContext {
     fn generate_snap(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) -> Result<()> {
         // do we need to check leader here?
-        let raft_db = Arc::clone(&self.raft_db);
-        let raw_snap = Snapshot::new(Arc::clone(&self.kv_db));
+        let raft_engine = Arc::clone(&self.engines.raft);
+        let raw_snap = Snapshot::new(Arc::clone(&self.engines.kv));
 
         let snap = box_try!(store::do_snapshot(
             self.mgr.clone(),
-            &raft_db,
+            &raft_engine,
             &raw_snap,
             region_id
         ));
@@ -263,7 +263,7 @@ impl SnapContext {
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState =
-            match box_try!(self.kv_db.get_msg_cf(CF_RAFT, &region_key)) {
+            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &region_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -280,7 +280,7 @@ impl SnapContext {
         check_abort(&abort)?;
         self.cleanup_overlap_ranges(&start_key, &end_key);
         box_try!(util::delete_all_in_range(
-            &self.kv_db,
+            &self.engines.kv,
             &start_key,
             &end_key,
             self.use_delete_range
@@ -288,16 +288,16 @@ impl SnapContext {
         check_abort(&abort)?;
 
         let state_key = keys::apply_state_key(region_id);
-        let apply_state: RaftApplyState = match box_try!(self.kv_db.get_msg_cf(CF_RAFT, &state_key))
-        {
-            Some(state) => state,
-            None => {
-                return Err(box_err!(
-                    "failed to get raftstate from {}",
-                    escape(&state_key)
-                ))
-            }
-        };
+        let apply_state: RaftApplyState =
+            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &state_key)) {
+                Some(state) => state,
+                None => {
+                    return Err(box_err!(
+                        "failed to get raftstate from {}",
+                        escape(&state_key)
+                    ))
+                }
+            };
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
@@ -312,7 +312,7 @@ impl SnapContext {
         check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
-            db: Arc::clone(&self.kv_db),
+            db: Arc::clone(&self.engines.kv),
             region: region.clone(),
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
@@ -321,10 +321,10 @@ impl SnapContext {
 
         let wb = WriteBatch::new();
         region_state.set_state(PeerState::Normal);
-        let handle = box_try!(rocksdb::get_cf_handle(&self.kv_db, CF_RAFT));
+        let handle = box_try!(rocksdb::get_cf_handle(&self.engines.kv, CF_RAFT));
         box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
         box_try!(wb.delete_cf(handle, &keys::snapshot_raft_state_key(region_id)));
-        self.kv_db.write(wb).unwrap_or_else(|e| {
+        self.engines.kv.write(wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
@@ -376,7 +376,8 @@ impl SnapContext {
         use_delete_files: bool,
     ) {
         if use_delete_files {
-            if let Err(e) = util::delete_all_files_in_range(&self.kv_db, &start_key, &end_key) {
+            if let Err(e) = util::delete_all_files_in_range(&self.engines.kv, &start_key, &end_key)
+            {
                 error!(
                     "[region {}] failed to delete files in [{}, {}): {:?}",
                     region_id,
@@ -387,9 +388,12 @@ impl SnapContext {
                 return;
             }
         }
-        if let Err(e) =
-            util::delete_all_in_range(&self.kv_db, &start_key, &end_key, self.use_delete_range)
-        {
+        if let Err(e) = util::delete_all_in_range(
+            &self.engines.kv,
+            &start_key,
+            &end_key,
+            self.use_delete_range,
+        ) {
             error!(
                 "[region {}] failed to delete data in [{}, {}): {:?}",
                 region_id,
@@ -460,8 +464,7 @@ pub struct Runner {
 
 impl Runner {
     pub fn new(
-        kv_db: Arc<DB>,
-        raft_db: Arc<DB>,
+        engines: Engines,
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
@@ -472,8 +475,7 @@ impl Runner {
                 .thread_count(GENERATE_POOL_SIZE)
                 .build(),
             ctx: SnapContext {
-                kv_db,
-                raft_db,
+                engines,
                 mgr,
                 batch_size,
                 use_delete_range,
