@@ -221,7 +221,7 @@ mod test {
                     None,
                     IsolationLevel::SI,
                     true,
-                );
+                ).unwrap();
                 for key in &self.keys {
                     let key = key.as_bytes();
                     txn.prewrite(
@@ -241,7 +241,7 @@ mod test {
                     None,
                     IsolationLevel::SI,
                     true,
-                );
+                ).unwrap();
                 for key in &self.keys {
                     let key = key.as_bytes();
                     txn.commit(&make_key(key), COMMIT_TS).unwrap();

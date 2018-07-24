@@ -34,20 +34,21 @@ impl<S: Snapshot> CFReaderBuilder<S> {
     /// Set whether or not read operations should fill the cache.
     ///
     /// Defaults to `true`.
+    #[inline]
     pub fn fill_cache(mut self, fill_cache: bool) -> Self {
         self.fill_cache = fill_cache;
         self
     }
 
     /// Build `CFReader` from the current configuration.
-    pub fn build(self) -> CFReader<S> {
-        CFReader {
+    pub fn build(self) -> Result<CFReader<S>> {
+        Ok(CFReader {
             snapshot: self.snapshot,
             fill_cache: self.fill_cache,
             statistics: Statistics::default(),
 
             lock_cursor: None,
-        }
+        })
     }
 }
 
@@ -77,6 +78,7 @@ impl<S: Snapshot> CFReader<S> {
     /// Internally, a db get will be performed.
     #[inline]
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
+        // TODO: `load_lock` should respect `fill_cache` options as well.
         super::util::load_lock(&self.snapshot, key, &mut self.statistics)
     }
 
@@ -88,17 +90,6 @@ impl<S: Snapshot> CFReader<S> {
     #[inline]
     pub fn load_and_check_lock(&mut self, key: &Key, ts: u64) -> Result<u64> {
         super::util::load_and_check_lock(&self.snapshot, key, ts, &mut self.statistics)
-    }
-
-    /// Create the lock cursor if it doesn't exist.
-    fn ensure_lock_cursor(&mut self) -> Result<()> {
-        if self.lock_cursor.is_some() {
-            return Ok(());
-        }
-        let iter_opt = IterOption::new(None, None, self.fill_cache);
-        let iter = self.snapshot.iter_cf(CF_LOCK, iter_opt, ScanMode::Forward)?;
-        self.lock_cursor = Some(iter);
-        Ok(())
     }
 
     /// Iterate and get all locks in the lock CF that `predicate` returns `true` within the given
@@ -123,5 +114,16 @@ impl<S: Snapshot> CFReader<S> {
             limit,
             &mut self.statistics,
         )
+    }
+
+    /// Create the lock cursor if it doesn't exist.
+    fn ensure_lock_cursor(&mut self) -> Result<()> {
+        if self.lock_cursor.is_some() {
+            return Ok(());
+        }
+        let iter_opt = IterOption::new(None, None, self.fill_cache);
+        let iter = self.snapshot.iter_cf(CF_LOCK, iter_opt, ScanMode::Forward)?;
+        self.lock_cursor = Some(iter);
+        Ok(())
     }
 }

@@ -286,7 +286,7 @@ pub mod test {
                     None,
                     IsolationLevel::SI,
                     true,
-                );
+                ).unwrap();
                 let mut pk = vec![];
                 for &(ref key, ref value) in kv_data {
                     if pk.is_empty() {
@@ -310,7 +310,7 @@ pub mod test {
                     None,
                     IsolationLevel::SI,
                     true,
-                );
+                ).unwrap();
                 for &(ref key, _) in kv_data {
                     txn.commit(&make_key(key), COMMIT_TS).unwrap();
                 }

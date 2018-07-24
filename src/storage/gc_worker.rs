@@ -144,7 +144,7 @@ impl<E: Engine> GCRunner<E> {
             Some(ScanMode::Forward),
             ctx.get_isolation_level(),
             !ctx.get_not_fill_cache(),
-        );
+        )?;
         for k in keys {
             // TODO: Duplicated code in scheduler.rs
             let gc_info = txn.gc(&k, safe_point)?;

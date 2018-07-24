@@ -88,7 +88,7 @@ pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<u64> {
 ///
 /// TODO: Eliminate key clone.
 pub fn scan_lock<I, F>(
-    lock_cursor: &mut Cursor<I>,
+    lock_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
     predicate: F,
     start_key: Option<&Key>,
     limit: usize,
@@ -134,7 +134,7 @@ where
 ///
 /// Panics if key in default CF does not exist. This means there is a data corruption.
 pub fn load_data_from_write<I>(
-    default_cursor: &mut Cursor<I>,
+    default_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
     key: &Key,
     write: Write,
     statistics: &mut Statistics,

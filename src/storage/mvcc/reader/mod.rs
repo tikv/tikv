@@ -668,7 +668,7 @@ mod tests {
 
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: u64) {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true);
+            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true).unwrap();
             txn.prewrite(m, pk, &Options::default()).unwrap();
             self.write(txn.into_modifies());
         }
@@ -676,7 +676,7 @@ mod tests {
         fn commit(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
             let k = make_key(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true);
+            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true).unwrap();
             txn.commit(&k, commit_ts).unwrap();
             self.write(txn.into_modifies());
         }
@@ -684,7 +684,7 @@ mod tests {
         fn rollback(&mut self, pk: &[u8], start_ts: u64) {
             let k = make_key(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true);
+            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true).unwrap();
             txn.rollback(&k).unwrap();
             self.write(txn.into_modifies());
         }
@@ -693,7 +693,8 @@ mod tests {
             let k = make_key(pk);
             loop {
                 let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-                let mut txn = MvccTxn::new(snap, safe_point, None, IsolationLevel::SI, true);
+                let mut txn =
+                    MvccTxn::new(snap, safe_point, None, IsolationLevel::SI, true).unwrap();
                 txn.gc(&k, safe_point).unwrap();
                 let modifies = txn.into_modifies();
                 if modifies.is_empty() {
