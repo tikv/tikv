@@ -85,8 +85,6 @@ pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<u64> {
 /// Iterate and get all locks in the lock CF that `predicate` returns `true` within the given
 /// key space (specified by `start_key` and `limit`). If `limit` is `0`, the key space only
 /// has left bound.
-///
-/// TODO: Eliminate key clone.
 pub fn scan_lock<I, F>(
     lock_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
     predicate: F,

@@ -26,7 +26,7 @@ use storage::{Key, Value, CF_LOCK, CF_WRITE};
 use util::properties::MvccProperties;
 
 pub use self::cf_reader::{CFReader, CFReaderBuilder};
-pub use self::point_getter::PointGetter;
+pub use self::point_getter::{PointGetter, PointGetterBuilder};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
@@ -182,7 +182,7 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(Some((commit_ts, write)))
     }
 
-    pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
+    fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
         // Check for locks that signal concurrent writes.
         match self.isolation_level {
             IsolationLevel::SI => {

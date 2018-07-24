@@ -13,7 +13,7 @@
 
 use super::{Error, Result};
 use kvproto::kvrpcpb::IsolationLevel;
-use storage::mvcc::{Error as MvccError, MvccReader};
+use storage::mvcc::{Error as MvccError, MvccReader, PointGetterBuilder};
 use storage::{Key, KvPair, ScanMode, Snapshot, Statistics, Value};
 
 pub struct SnapshotStore<S: Snapshot> {
@@ -39,16 +39,13 @@ impl<S: Snapshot> SnapshotStore<S> {
     }
 
     pub fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
-        let mut reader = MvccReader::new(
-            self.snapshot.clone(),
-            None,
-            self.fill_cache,
-            None,
-            None,
-            self.isolation_level,
-        );
-        let v = reader.get(key, self.start_ts)?;
-        statistics.add(reader.get_statistics());
+        let mut point_getter = PointGetterBuilder::new(self.snapshot.clone())
+            .fill_cache(self.fill_cache)
+            .isolation_level(self.isolation_level)
+            .multi(false)
+            .build()?;
+        let v = point_getter.read_next(key, self.start_ts)?;
+        statistics.add(&point_getter.take_statistics());
         Ok(v)
     }
 
@@ -57,20 +54,21 @@ impl<S: Snapshot> SnapshotStore<S> {
         keys: &[Key],
         statistics: &mut Statistics,
     ) -> Result<Vec<Result<Option<Value>>>> {
-        // TODO: sort the keys and use ScanMode::Forward
-        let mut reader = MvccReader::new(
-            self.snapshot.clone(),
-            None,
-            self.fill_cache,
-            None,
-            None,
-            self.isolation_level,
-        );
+        // TODO: sort the keys
+        let mut point_getter = PointGetterBuilder::new(self.snapshot.clone())
+            .fill_cache(self.fill_cache)
+            .isolation_level(self.isolation_level)
+            .multi(true)
+            .build()?;
         let mut results = Vec::with_capacity(keys.len());
         for k in keys {
-            results.push(reader.get(k, self.start_ts).map_err(Error::from));
+            results.push(
+                point_getter
+                    .read_next(k, self.start_ts)
+                    .map_err(Error::from),
+            );
         }
-        statistics.add(reader.get_statistics());
+        statistics.add(&point_getter.take_statistics());
         Ok(results)
     }
 

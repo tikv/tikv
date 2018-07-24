@@ -473,6 +473,7 @@ fn process_read_impl<E: Engine>(
             let (lock, writes, values) =
                 find_mvcc_infos_by_key(&mut reader, &mut cf_reader, key, u64::MAX)?;
             statistics.add(reader.get_statistics());
+            statistics.add(&cf_reader.take_statistics());
             Ok(ProcessResult::MvccKey {
                 mvcc: MvccInfo {
                     lock,
@@ -498,6 +499,7 @@ fn process_read_impl<E: Engine>(
                     let (lock, writes, values) =
                         find_mvcc_infos_by_key(&mut reader, &mut cf_reader, &key, u64::MAX)?;
                     statistics.add(reader.get_statistics());
+                    statistics.add(&cf_reader.take_statistics());
                     Ok(ProcessResult::MvccStartTs {
                         mvcc: Some((
                             key,

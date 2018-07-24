@@ -126,10 +126,6 @@ impl<S: Snapshot> MvccTxn<S> {
         self.writes.push(Modify::Delete(CF_WRITE, key));
     }
 
-    pub fn get(&mut self, key: &Key) -> Result<Option<Value>> {
-        self.reader.get(key, self.start_ts)
-    }
-
     pub fn prewrite(
         &mut self,
         mutation: Mutation,
@@ -347,7 +343,7 @@ impl<S: Snapshot> MvccTxn<S> {
 #[cfg(test)]
 mod tests {
     use super::super::write::{Write, WriteType};
-    use super::super::{CFReaderBuilder, MvccReader};
+    use super::super::{CFReaderBuilder, MvccReader, PointGetterBuilder};
     use super::MvccTxn;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use storage::engine::{self, Engine, Modify, Snapshot, TEMP_DIR};
@@ -723,11 +719,12 @@ mod tests {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, 10, None, IsolationLevel::SI, true).unwrap();
+        let mut txn = MvccTxn::new(snapshot.clone(), 10, None, IsolationLevel::SI, true).unwrap();
+        let mut point_getter = PointGetterBuilder::new(snapshot.clone()).build().unwrap();
         let key = make_key(k);
         assert_eq!(txn.write_size, 0);
 
-        assert!(txn.get(&key).unwrap().is_none());
+        assert!(point_getter.read_next(&key, 10).unwrap().is_none());
         assert_eq!(txn.write_size, 0);
 
         txn.prewrite(
@@ -799,29 +796,43 @@ mod tests {
     fn must_get<E: Engine>(engine: &E, key: &[u8], ts: u64, expect: &[u8]) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true).unwrap();
-        assert_eq!(txn.get(&make_key(key)).unwrap().unwrap(), expect);
+        let mut point_getter = PointGetterBuilder::new(snapshot).build().unwrap();
+        assert_eq!(
+            point_getter.read_next(&make_key(key), ts).unwrap().unwrap(),
+            expect
+        );
     }
 
     fn must_get_rc<E: Engine>(engine: &E, key: &[u8], ts: u64, expect: &[u8]) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::RC, true).unwrap();
-        assert_eq!(txn.get(&make_key(key)).unwrap().unwrap(), expect)
+        let mut point_getter = PointGetterBuilder::new(snapshot.clone())
+            .isolation_level(IsolationLevel::RC)
+            .build()
+            .unwrap();
+        assert_eq!(
+            point_getter.read_next(&make_key(key), ts).unwrap().unwrap(),
+            expect
+        )
     }
 
     fn must_get_none<E: Engine>(engine: &E, key: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true).unwrap();
-        assert!(txn.get(&make_key(key)).unwrap().is_none());
+        let mut point_getter = PointGetterBuilder::new(snapshot).build().unwrap();
+        assert!(
+            point_getter
+                .read_next(&make_key(key), ts)
+                .unwrap()
+                .is_none()
+        );
     }
 
     fn must_get_err<E: Engine>(engine: &E, key: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true).unwrap();
-        assert!(txn.get(&make_key(key)).is_err());
+        let mut point_getter = PointGetterBuilder::new(snapshot).build().unwrap();
+        assert!(point_getter.read_next(&make_key(key), ts).is_err());
     }
 
     fn must_prewrite_put<E: Engine>(engine: &E, key: &[u8], value: &[u8], pk: &[u8], ts: u64) {

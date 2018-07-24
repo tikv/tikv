@@ -84,7 +84,6 @@ impl<S: Snapshot> PointGetterBuilder<S> {
         Ok(PointGetter {
             snapshot: self.snapshot.clone(),
             multi: self.multi,
-            fill_cache: self.fill_cache,
             omit_value: self.omit_value,
             isolation_level: self.isolation_level,
 
@@ -130,7 +129,6 @@ impl<S: Snapshot> PointGetterBuilder<S> {
 pub struct PointGetter<S: Snapshot> {
     snapshot: S,
     multi: bool,
-    fill_cache: bool,
     omit_value: bool,
     isolation_level: IsolationLevel,
 
@@ -157,6 +155,8 @@ impl<S: Snapshot> PointGetter<S> {
         if !self.multi && self.read_once {
             panic!("PointGetter(multi=false) must not call `read_next` multiple times.");
         }
+
+        self.read_once = true;
 
         // Check for locks that signal concurrent writes in SI.
         if self.isolation_level == IsolationLevel::SI {

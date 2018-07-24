@@ -291,7 +291,7 @@ mod tests {
     use tempdir::TempDir;
 
     use raftstore::store::RegionSnapshot;
-    use storage::mvcc::MvccReader;
+    use storage::mvcc::{MvccReader, PointGetterBuilder};
     use util::rocksdb::new_engine_opt;
 
     fn new_engine() -> (TempDir, Engine) {
@@ -387,11 +387,12 @@ mod tests {
         region.mut_peers().push(Peer::new());
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region);
 
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
+        let mut reader = MvccReader::new(snap.clone(), None, false, None, None, IsolationLevel::SI);
+        let mut point_getter = PointGetterBuilder::new(snap.clone()).build().unwrap();
         // Make sure that all kvs are right.
         for i in 0..n {
             let k = Key::from_raw(&[i]);
-            let v = reader.get(&k, commit_ts).unwrap().unwrap();
+            let v = point_getter.read_next(&k, commit_ts).unwrap().unwrap();
             assert_eq!(&v, &value);
         }
         // Make sure that no extra keys are added.
