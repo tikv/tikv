@@ -204,10 +204,9 @@ impl ScalarFunc {
     }
 
     pub fn interval_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let target = match self.children[0].eval_int(ctx, row) {
-            Err(e) => return Err(e),
-            Ok(None) => return Ok(Some(-1)),
-            Ok(Some(v)) => v,
+        let target = match self.children[0].eval_int(ctx, row)? {
+            None => return Ok(Some(-1)),
+            Some(v) => v,
         };
         let tus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
 
@@ -236,10 +235,9 @@ impl ScalarFunc {
     }
 
     pub fn interval_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let target = match self.children[0].eval_real(ctx, row) {
-            Err(e) => return Err(e),
-            Ok(None) => return Ok(Some(-1)),
-            Ok(Some(v)) => v,
+        let target = match self.children[0].eval_real(ctx, row)? {
+            None => return Ok(Some(-1)),
+            Some(v) => v,
         };
 
         let mut left = 1;
