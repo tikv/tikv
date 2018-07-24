@@ -236,6 +236,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
                     req.get_from_key(),
                     req.get_to_key(),
                     req.get_threads(),
+                    req.get_bottommost_level_compaction().into(),
                 )
                 .map(|_| CompactResponse::default())
         });

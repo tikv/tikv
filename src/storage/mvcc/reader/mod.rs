@@ -685,6 +685,7 @@ mod tests {
             let k = make_key(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true).unwrap();
+            txn.collapse_rollback(false);
             txn.rollback(&k).unwrap();
             self.write(txn.into_modifies());
         }

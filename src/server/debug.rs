@@ -21,12 +21,15 @@ use std::{error, result};
 
 use protobuf::{self, Message, RepeatedField};
 
-use kvproto::debugpb::{DB as DBType, *};
+use kvproto::debugpb::{self, DB as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::Entry;
-use rocksdb::{Kv, SeekKey, Writable, WriteBatch, WriteOptions, DB};
+use rocksdb::{
+    CompactOptions, DBBottommostLevelCompaction, Kv, SeekKey, Writable, WriteBatch, WriteOptions,
+    DB,
+};
 
 use raft::{self, RawNode};
 use raftstore::store::engine::{IterOption, Mutable};
@@ -44,7 +47,7 @@ use util::collections::HashSet;
 use util::config::ReadableSize;
 use util::escape;
 use util::properties::MvccProperties;
-use util::rocksdb::{compact_range, get_cf_handle};
+use util::rocksdb::get_cf_handle;
 use util::worker::Worker;
 
 pub type Result<T> = result::Result<T, Error>;
@@ -87,6 +90,45 @@ impl RegionInfo {
             raft_local_state: raft_local,
             raft_apply_state: raft_apply,
             region_local_state: region_local,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct BottommostLevelCompaction(pub DBBottommostLevelCompaction);
+
+impl<'a> From<Option<&'a str>> for BottommostLevelCompaction {
+    fn from(v: Option<&'a str>) -> Self {
+        let b = match v {
+            Some("skip") => DBBottommostLevelCompaction::Skip,
+            Some("force") => DBBottommostLevelCompaction::Force,
+            _ => DBBottommostLevelCompaction::IfHaveCompactionFilter,
+        };
+        BottommostLevelCompaction(b)
+    }
+}
+
+impl From<debugpb::BottommostLevelCompaction> for BottommostLevelCompaction {
+    fn from(v: debugpb::BottommostLevelCompaction) -> Self {
+        let b = match v {
+            debugpb::BottommostLevelCompaction::Skip => DBBottommostLevelCompaction::Skip,
+            debugpb::BottommostLevelCompaction::Force => DBBottommostLevelCompaction::Force,
+            debugpb::BottommostLevelCompaction::IfHaveCompactionFilter => {
+                DBBottommostLevelCompaction::IfHaveCompactionFilter
+            }
+        };
+        BottommostLevelCompaction(b)
+    }
+}
+
+impl Into<debugpb::BottommostLevelCompaction> for BottommostLevelCompaction {
+    fn into(self) -> debugpb::BottommostLevelCompaction {
+        match self.0 {
+            DBBottommostLevelCompaction::Skip => debugpb::BottommostLevelCompaction::Skip,
+            DBBottommostLevelCompaction::Force => debugpb::BottommostLevelCompaction::Force,
+            DBBottommostLevelCompaction::IfHaveCompactionFilter => {
+                debugpb::BottommostLevelCompaction::IfHaveCompactionFilter
+            }
         }
     }
 }
@@ -240,6 +282,7 @@ impl Debugger {
         start: &[u8],
         end: &[u8],
         threads: u32,
+        bottommost: BottommostLevelCompaction,
     ) -> Result<()> {
         validate_db_and_cf(db, cf)?;
         let db = self.get_db_from_type(db)?;
@@ -247,7 +290,11 @@ impl Debugger {
         let start = if start.is_empty() { None } else { Some(start) };
         let end = if end.is_empty() { None } else { Some(end) };
         info!("Debugger starts manual comapct on {:?}.{}", db, cf);
-        compact_range(db, handle, start, end, false, threads);
+        let mut opts = CompactOptions::new();
+        opts.set_max_subcompactions(threads as i32);
+        opts.set_exclusive_manual_compaction(false);
+        opts.set_bottommost_level_compaction(bottommost.0);
+        db.compact_range_cf_opt(handle, &opts, start, end);
         info!("Debugger finishs manual comapct on {:?}.{}", db, cf);
         Ok(())
     }
@@ -622,25 +669,8 @@ impl Debugger {
             mvcc_properties.add(&mvcc);
         }
 
-        // Calculate region middle key based on default and write cf size.
-        // It's in encoded format, no timestamp padding and escaped to string.
-        let get_cf_size =
-            |cf: &str| raftstore_util::get_region_approximate_size_cf(db, cf, &region);
-
-        let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
-        let write_cf_size = box_try!(get_cf_size(CF_WRITE));
-
-        let middle_by_cf = if default_cf_size >= write_cf_size {
-            CF_DEFAULT
-        } else {
-            CF_WRITE
-        };
-
-        let middle_key = match box_try!(raftstore_util::get_region_approximate_middle_cf(
-            db,
-            middle_by_cf,
-            &region
-        )) {
+        let middle_key = match box_try!(raftstore_util::get_region_approximate_middle(db, &region))
+        {
             Some(data_key) => {
                 let mut key = keys::origin_key(&data_key);
                 box_try!(bytes::decode_bytes(&mut key, false))

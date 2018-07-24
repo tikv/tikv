@@ -944,8 +944,8 @@ impl<E: Engine> Scheduler<E> {
     /// Event handler for new command.
     ///
     /// This method will try to acquire all the necessary latches. If all the necessary latches are
-    /// acquired,  the method initiates a get snapshot operation for furthur processing; otherwise,
-    /// the method adds the command to the waiting queue(s).   The command will be handled later in
+    /// acquired, the method initiates a get snapshot operation for furthur processing; otherwise,
+    /// the method adds the command to the waiting queue(s). The command will be handled later in
     /// `lock_and_register_get_snapshot` when its turn comes.
     ///
     /// Note that once a command is ready to execute, the snapshot is always up-to-date during the
