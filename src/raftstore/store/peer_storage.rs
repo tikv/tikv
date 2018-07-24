@@ -29,6 +29,7 @@ use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 use rocksdb::{Writable, WriteBatch, DB};
 
+use raftstore::store::snap::SnapError;
 use raftstore::store::util::{conf_state_from_region, Engines};
 use raftstore::store::ProposalContext;
 use raftstore::{Error, Result};
@@ -1256,7 +1257,7 @@ pub fn do_snapshot(
             snap_data.write_to_vec(snapshot.mut_data())?;
             Ok(snapshot)
         }
-        Ok(None) => Err(RaftError::Store(
+        Ok(None) | Err(Error::Snapshot(SnapError::NoSpace(..))) => Err(RaftError::Store(
             StorageError::SnapshotTemporarilyUnavailable,
         )),
         Err(e) => {

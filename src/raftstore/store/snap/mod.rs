@@ -17,6 +17,7 @@ pub use self::builder::SnapshotReceiver;
 pub use self::reader::SnapshotSender;
 use self::reader::{SnapshotApplyer, SnapshotLoader};
 
+use std::collections::HashSet;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -151,8 +152,7 @@ impl SnapManager {
             fs::create_dir_all(path)?;
             return Ok(());
         }
-        let all_meta_files = self.scan_meta_files(path)?;
-        self.scan_and_delete_orphan_files(path, all_meta_files)?;
+        self.scan_meta_files(path)?;
         Ok(())
     }
 
@@ -277,53 +277,23 @@ impl SnapManager {
         }
     }
 
-    fn scan_meta_files(&self, path: &Path) -> io::Result<Vec<(bool, SnapKey)>> {
-        let mut all_meta_files = Vec::new();
+    fn scan_meta_files(&self, path: &Path) -> io::Result<()> {
         for p in fs::read_dir(path)?
             .filter_map(|p| p.ok())
             .filter(|p| p.file_type().map(|ft| ft.is_file()).unwrap_or(false))
         {
             if let Some(s) = p.file_name().to_str() {
+                let path = p.path();
                 if s.ends_with(TMP_FILE_SUFFIX) || s.ends_with(CLONE_FILE_SUFFIX) {
-                    delete_file_if_exist(&p.path());
+                    delete_file_if_exist(&path);
                 } else if s.ends_with(META_FILE_SUFFIX) {
-                    if let Some((for_send, snap_key)) = get_snap_key_from_file_name(s) {
-                        all_meta_files.push((for_send, snap_key));
+                    if let Ok(snap_meta) = read_snapshot_meta(&path) {
+                        // The snapshot can be deleted during gc so that it's ok to add
+                        // it into snap_size even if the cf files could be corrupted.
+                        let size = get_size_from_snapshot_meta(&snap_meta);
+                        self.snap_size.fetch_add(size, Ordering::SeqCst);
                     } else {
-                        delete_file_if_exist(&p.path());
-                        continue;
-                    }
-
-                    let snap_meta = match read_snapshot_meta(p.path()) {
-                        Ok(meta) => meta,
-                        Err(e) => {
-                            warn!("SnapManager init meets {} for {:?}", e, p.path());
-                            continue;
-                        }
-                    };
-                    let size = get_size_from_snapshot_meta(&snap_meta);
-                    self.snap_size.fetch_add(size, Ordering::SeqCst);
-                }
-            }
-        }
-        Ok(all_meta_files)
-    }
-
-    fn scan_and_delete_orphan_files(
-        &self,
-        path: &Path,
-        meta_files: Vec<(bool, SnapKey)>,
-    ) -> Result<()> {
-        for p in fs::read_dir(path)?
-            .filter_map(|p| p.ok())
-            .filter(|p| p.file_type().map(|ft| ft.is_file()).unwrap_or(false))
-        {
-            if let Some(s) = p.file_name().to_str() {
-                if s.ends_with(SST_FILE_SUFFIX) {
-                    if let Some(t) = get_snap_key_from_file_name(s) {
-                        if !meta_files.contains(&t) {
-                            delete_file_if_exist(&p.path());
-                        }
+                        delete_file_if_exist(&path);
                     }
                 }
             }
@@ -392,26 +362,19 @@ impl SnapManager {
         let t = Instant::now_coarse();
 
         let mut removed = 0;
-        let mut snap_keys = Vec::<(bool, SnapKey)>::new();
+        let mut snap_keys = HashSet::<(bool, SnapKey)>::new();
         for p in fs::read_dir(&self.core.base)?
             .filter_map(|p| p.ok())
             .filter(|p| p.file_type().map(|ft| ft.is_file()).unwrap_or(false))
         {
             if let Some(s) = p.file_name().to_str() {
-                if s.ends_with(META_FILE_SUFFIX) {
+                if s.ends_with(META_FILE_SUFFIX) || s.ends_with(SST_FILE_SUFFIX) {
                     if let Some((for_send, snap_key)) = get_snap_key_from_file_name(s) {
-                        snap_keys.push((for_send, snap_key));
+                        snap_keys.insert((for_send, snap_key));
                     }
                 }
             }
         }
-
-        snap_keys.sort_by_key(|&(for_send, key)| {
-            let meta_path = get_meta_file_path(&self.core.base, for_send, key);
-            fs::metadata(&meta_path)
-                .and_then(|m| m.modified())
-                .unwrap_or(SystemTime::UNIX_EPOCH)
-        });
 
         for (for_send, key) in snap_keys {
             if let Some(entry) = self.get_registry(for_send).get_mut(&key) {
@@ -462,9 +425,10 @@ impl SnapManager {
         let meta_path = get_meta_file_path(&self.core.base, for_send, key);
         if let Ok(meta) = read_snapshot_meta(&meta_path) {
             let size = get_size_from_snapshot_meta(&meta);
-            self.snap_size.fetch_sub(size, Ordering::SeqCst);
+            if delete_file_if_exist(&meta_path) {
+                self.snap_size.fetch_sub(size, Ordering::SeqCst);
+            }
         }
-        delete_file_if_exist(&meta_path);
 
         for cf in SNAPSHOT_CFS {
             let cf_path = get_cf_file_path(&self.core.base, for_send, key, cf);
