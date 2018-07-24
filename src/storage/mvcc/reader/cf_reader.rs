@@ -58,6 +58,7 @@ impl<S: Snapshot> CFReaderBuilder<S> {
 pub struct CFReader<S: Snapshot> {
     snapshot: S,
     fill_cache: bool,
+
     statistics: Statistics,
 
     lock_cursor: Option<Cursor<S::Iter>>,
@@ -101,15 +102,15 @@ impl<S: Snapshot> CFReader<S> {
     }
 
     /// Iterate and get all locks in the lock CF that `predicate` returns `true` within the given
-    /// key space (specified by `start_key` and `limit`).
-    #[cfg_attr(feature = "cargo-clippy", allow(type_complexity))]
+    /// key space (specified by `start_key` and `limit`). If `limit` is `0`, the key space only
+    /// has left bound.
     #[inline]
     pub fn scan_lock<F>(
         &mut self,
         predicate: F,
-        start_key: Option<Key>,
+        start_key: Option<&Key>,
         limit: usize,
-    ) -> Result<(Vec<(Key, Lock)>, Option<Key>)>
+    ) -> Result<Vec<(Key, Lock)>>
     where
         F: Fn(&Lock) -> bool,
     {

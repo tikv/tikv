@@ -390,21 +390,24 @@ impl<I: Iterator> Cursor<I> {
         Ok(true)
     }
 
-    /// Get the value of specified key.
+    /// Get the value of specified key by using `near_seek`.
     ///
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should `seek` first.
-    pub fn get(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<Option<&[u8]>> {
-        if self.scan_mode != ScanMode::Backward {
-            if self.near_seek(key, statistics)? && self.iter.key() == &**key.encoded() {
-                return Ok(Some(self.iter.value()));
-            }
-            return Ok(None);
+    pub fn near_seek_get(
+        &mut self,
+        key: &Key,
+        statistics: &mut CFStatistics,
+    ) -> Result<Option<&[u8]>> {
+        let seek_result = match self.scan_mode {
+            ScanMode::Forward | ScanMode::Mixed => self.near_seek(key, statistics),
+            ScanMode::Backward => self.near_seek_for_prev(key, statistics),
+        };
+        if seek_result? && self.iter.key() == &**key.encoded() {
+            Ok(Some(self.iter.value()))
+        } else {
+            Ok(None)
         }
-        if self.near_seek_for_prev(key, statistics)? && self.iter.key() == &**key.encoded() {
-            return Ok(Some(self.iter.value()));
-        }
-        Ok(None)
     }
 
     fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {

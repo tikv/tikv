@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use storage::mvcc::{Error, Result};
-use storage::mvcc::{Lock, LockType};
-use storage::{Cursor, Iterator, Key, Snapshot, Statistics, CF_LOCK};
+use storage::mvcc::{Lock, LockType, Write};
+use storage::{Cursor, Iterator, Key, Snapshot, Statistics, Value, CF_LOCK};
 
 /// Get the lock of a user key in the lock CF.
 ///
@@ -51,20 +51,22 @@ where
     S: Snapshot,
 {
     if let Some(lock) = load_lock(snapshot, key, statistics)? {
-        return check_lock(key, ts, lock);
+        return check_lock(key, ts, &lock);
     }
     Ok(ts)
 }
 
 /// Checks whether the lock conflicts with the given `ts`. If there is no conflict, the safe `ts`
 /// will be returned.
-pub fn check_lock(key: &Key, ts: u64, lock: Lock) -> Result<u64> {
+pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<u64> {
     if lock.ts > ts || lock.lock_type == LockType::Lock {
         // Ignore lock when lock.ts > ts or lock's type is Lock
         return Ok(ts);
     }
 
-    if ts == ::std::u64::MAX && key.raw()? == lock.primary {
+    let raw_key = key.raw()?;
+
+    if ts == ::std::u64::MAX && raw_key == lock.primary {
         // When `ts == u64::MAX` (which means to get latest committed version for
         // primary key), and current key is the primary key, we return the latest
         // committed version.
@@ -73,23 +75,25 @@ pub fn check_lock(key: &Key, ts: u64, lock: Lock) -> Result<u64> {
 
     // There is a pending lock. Client should wait or clean it.
     Err(Error::KeyIsLocked {
-        key: key.raw()?,
-        primary: lock.primary,
+        key: raw_key,
+        primary: lock.primary.clone(),
         ts: lock.ts,
         ttl: lock.ttl,
     })
 }
 
 /// Iterate and get all locks in the lock CF that `predicate` returns `true` within the given
-/// key space (specified by `start_key` and `limit`).
-#[cfg_attr(feature = "cargo-clippy", allow(type_complexity))]
+/// key space (specified by `start_key` and `limit`). If `limit` is `0`, the key space only
+/// has left bound.
+///
+/// TODO: Eliminate key clone.
 pub fn scan_lock<I, F>(
     lock_cursor: &mut Cursor<I>,
     predicate: F,
-    start_key: Option<Key>,
+    start_key: Option<&Key>,
     limit: usize,
     statistics: &mut Statistics,
-) -> Result<(Vec<(Key, Lock)>, Option<Key>)>
+) -> Result<Vec<(Key, Lock)>>
 where
     I: Iterator,
     F: Fn(&Lock) -> bool,
@@ -99,20 +103,67 @@ where
         None => lock_cursor.seek_to_first(&mut statistics.lock),
     };
     if !ok {
-        return Ok((vec![], None));
+        return Ok(vec![]);
     }
-    let mut locks = vec![];
+    let mut locks = Vec::with_capacity(limit);
     while lock_cursor.valid() {
         let key = Key::from_encoded(lock_cursor.key().to_vec());
         let lock = Lock::parse(lock_cursor.value())?;
         if predicate(&lock) {
-            locks.push((key.clone(), lock));
-            if limit > 0 && locks.len() >= limit {
-                return Ok((locks, Some(key)));
+            locks.push((key, lock));
+            // We don't need to check if `limit == 0`, since in this case `limit` will be never
+            // equal to `locks.len()`, which is >= 1.
+            if locks.len() == limit {
+                return Ok(locks);
             }
         }
         lock_cursor.next(&mut statistics.lock);
     }
     statistics.lock.processed += locks.len();
-    Ok((locks, None))
+    Ok(locks)
+}
+
+/// Reads user key's value in default CF according to the given write CF value (`write`).
+///
+/// Internally, a near_seek will be performed.
+///
+/// If the value is already carried in the `write` (short value), it will be used and
+/// default CF will not be looked up.
+///
+/// # Panics
+///
+/// Panics if key in default CF does not exist. This means there is a data corruption.
+pub fn load_data_from_write<I>(
+    default_cursor: &mut Cursor<I>,
+    key: &Key,
+    write: Write,
+    statistics: &mut Statistics,
+) -> Result<Value>
+where
+    I: Iterator,
+{
+    match write.short_value {
+        Some(short_value) => {
+            // value is embedded in `write`.
+            Ok(short_value)
+        }
+        None => {
+            // value is in the default CF.
+            let key = key.append_ts(write.start_ts); // TODO: eliminate clone.
+            match default_cursor.near_seek_get(&key, &mut statistics.data)? {
+                None => panic!(
+                    "Mvcc data for key {} is not found, start_ts = {}",
+                    key, write.start_ts
+                ),
+                Some(v) => {
+                    statistics.data.processed += 1;
+                    // TODO: remove unnecessary key decode
+                    statistics.data.flow_stats.read_bytes +=
+                        key.raw().unwrap_or_default().len() + v.len();
+                    statistics.data.flow_stats.read_keys += 1;
+                    Ok(v.to_vec())
+                }
+            }
+        }
+    }
 }

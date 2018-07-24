@@ -12,6 +12,7 @@
 // limitations under the License.
 
 mod cf_reader;
+mod point_getter;
 mod util;
 
 use super::lock::Lock;
@@ -25,6 +26,7 @@ use storage::{Key, Value, CF_LOCK, CF_WRITE};
 use util::properties::MvccProperties;
 
 pub use self::cf_reader::{CFReader, CFReaderBuilder};
+pub use self::point_getter::PointGetter;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
@@ -101,7 +103,7 @@ impl<S: Snapshot> MvccReader<S> {
 
         let k = key.append_ts(ts);
         let res = if let Some(ref mut cursor) = self.data_cursor {
-            match cursor.get(&k, &mut self.statistics.data)? {
+            match cursor.near_seek_get(&k, &mut self.statistics.data)? {
                 None => panic!("key {} not found, ts {}", key, ts),
                 Some(v) => v.to_vec(),
             }
@@ -390,7 +392,7 @@ impl<S: Snapshot> MvccReader<S> {
                 let l_cur = self.lock_cursor.as_ref().unwrap();
                 if l_cur.valid() && l_cur.key() == user_key.encoded().as_slice() {
                     self.statistics.lock.processed += 1;
-                    self::util::check_lock(user_key, ts, Lock::parse(l_cur.value())?)?;
+                    self::util::check_lock(user_key, ts, &Lock::parse(l_cur.value())?)?;
                 }
             }
             IsolationLevel::RC => {}
