@@ -477,7 +477,6 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
     }
 
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
-        fail_point!("local_reader_on_run");
         self.metrics.batch_requests_size.observe(tasks.len() as _);
         for task in tasks.drain(..) {
             match task {
