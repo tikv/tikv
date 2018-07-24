@@ -286,7 +286,7 @@ impl LocalReader<mio::Sender<StoreMsg>> {
 }
 
 impl<C: Sender<StoreMsg>> LocalReader<C> {
-   fn redirect(&mut self, cmd: StoreMsg) {
+    fn redirect(&mut self, cmd: StoreMsg) {
         debug!("{} localreader redirect {:?}", self.tag, cmd);
         match self.ch.send(cmd) {
             Ok(()) => (),
