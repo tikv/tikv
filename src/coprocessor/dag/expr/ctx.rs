@@ -95,21 +95,23 @@ impl EvalConfig {
     }
 
     pub fn set_time_zone_by_name(&mut self, tz_name: &str) -> Result<()> {
-        let tz = Tz::from_tz_name(tz_name);
-        if tz.is_none() {
-            return Err(Error::invalid_timezone());
+        match Tz::from_tz_name(tz_name) {
+            Some(tz) => {
+                self.tz = tz.unwrap();
+                Ok(())
+            }
+            None => Err(Error::invalid_timezone()),
         }
-        self.tz = tz.unwrap();
-        Ok(())
     }
 
     pub fn set_time_zone_by_offset(&mut self, offset_sec: i64) -> Result<()> {
-        let tz = Tz::from_offset(offset_sec);
-        if tz.is_none() {
-            return Err(Error::invalid_timezone());
+        match Tz::from_offset(offset_sec) {
+            Some(tz) => {
+                self.tz = tz.unwrap();
+                Ok(())
+            }
+            None => Err(Error::invalid_timezone()),
         }
-        self.tz = tz.unwrap();
-        Ok(())
     }
 
     pub fn set_max_warning_cnt(&mut self, max_warning_cnt: usize) {
