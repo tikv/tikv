@@ -67,11 +67,6 @@ lazy_static! {
         "Bucketed histogram of local read requests wait duration.",
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     ).unwrap();
-    pub static ref LOCAL_READ_HANDLE_DURATION: Histogram = register_histogram!(
-        "tikv_raftstore_local_read_requests_handle_duration",
-        "Bucketed histogram of local read requests handle duration.",
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
-    ).unwrap();
     pub static ref LOCAL_READ_BATCH_REQUESTS: Histogram = register_histogram!(
         "tikv_raftstore_local_read_batch_requests_total",
         "Bucketed histogram of local read batch requests size.",

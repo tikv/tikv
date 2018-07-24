@@ -38,7 +38,6 @@ use util::timer::Timer;
 use util::transport::{NotifyError, Sender};
 use util::worker::{Runnable, RunnableWithTimer, Worker};
 
-use super::super::metrics::BATCH_SNAPSHOT_COMMANDS;
 use super::metrics::*;
 
 /// A read only delegate of `Peer`.
@@ -364,7 +363,6 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         self.metrics
             .requests_wait_duration
             .observe(duration_to_sec(send_time.elapsed()));
-        let _handle_timer = self.metrics.requests_handle_duration.start_timer();
         let region_id = req.get_header().get_region_id();
         match self.pre_propose_raft_command(&req) {
             Ok(true) => (),
@@ -436,7 +434,6 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
             }
         }
 
-        self.metrics.batch_snapshot_size.observe(size as _);
         on_finished.invoke_batch_read(ret);
     }
 }
@@ -545,8 +542,6 @@ impl<C: Sender<StoreMsg>> RunnableWithTimer<Task, ()> for LocalReader<C> {
 
 struct ReadMetrics {
     requests_wait_duration: LocalHistogram,
-    requests_handle_duration: LocalHistogram,
-    batch_snapshot_size: LocalHistogram,
     batch_requests_size: LocalHistogram,
 
     // TODO: record rejected_by_read_quorum.
@@ -565,8 +560,6 @@ impl Default for ReadMetrics {
     fn default() -> ReadMetrics {
         ReadMetrics {
             requests_wait_duration: LOCAL_READ_WAIT_DURATION.local(),
-            requests_handle_duration: LOCAL_READ_HANDLE_DURATION.local(),
-            batch_snapshot_size: BATCH_SNAPSHOT_COMMANDS.local(),
             batch_requests_size: LOCAL_READ_BATCH_REQUESTS.local(),
             rejected_by_store_id_mismatch: 0,
             rejected_by_peer_id_mismatch: 0,
@@ -584,8 +577,6 @@ impl Default for ReadMetrics {
 impl ReadMetrics {
     fn flush(&mut self) {
         self.requests_wait_duration.flush();
-        self.requests_handle_duration.flush();
-        self.batch_snapshot_size.flush();
         self.batch_requests_size.flush();
         if self.rejected_by_store_id_mismatch > 0 {
             LOCAL_READ_REJECT
