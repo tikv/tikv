@@ -534,11 +534,15 @@ impl Peer {
     /// This will update the region of the peer, caller must ensure the region
     /// has been preserved in a durable device.
     pub fn set_region(&mut self, region: metapb::Region) {
+        {
+            let new_epoch = region.get_region_epoch();
+            let epoch = self.raft_group.get_store().region().get_region_epoch();
+            if epoch.get_version() < new_epoch.get_version() {
+                // Epoch version changed, disable read on the localreader for this region.
+                self.leader_lease.disconnect();
+            }
+        }
         self.mut_store().set_region(region.clone());
-
-        // Disable read on the localreader for this region.
-        self.leader_lease.disconnect();
-
         let mut progress = ReadProgress::new();
         progress.set_region(region);
         self.maybe_update_read_progress(progress);
