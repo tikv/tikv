@@ -564,11 +564,18 @@ fn process_read_impl<E: Engine>(
             if kv_pairs.is_empty() {
                 Ok(ProcessResult::Res)
             } else {
+                let next_scan_key = if kv_pairs.len() == RESOLVE_LOCK_BATCH_SIZE {
+                    // We got this many locks (as we specified). There might be more locks.
+                    kv_pairs.last().map(|(k, _lock)| k.clone())
+                } else {
+                    // All locks are scanned
+                    None
+                };
                 Ok(ProcessResult::NextCommand {
                     cmd: Command::ResolveLock {
                         ctx: ctx.clone(),
                         txn_status: mem::replace(txn_status, Default::default()),
-                        scan_key: kv_pairs.last().map(|(k, _lock)| k.clone()),
+                        scan_key: next_scan_key,
                         key_locks: kv_pairs,
                     },
                 })
