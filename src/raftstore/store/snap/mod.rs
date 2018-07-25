@@ -349,7 +349,7 @@ impl SnapManager {
             } else {
                 self.receiving_count.fetch_sub(1, Ordering::SeqCst)
             };
-            assert!(old_value > 1);
+            assert!(old_value >= 1);
         }
         res
     }
@@ -428,7 +428,7 @@ impl SnapManager {
             let size = get_size_from_snapshot_meta(&meta);
             if delete_file_if_exist(&meta_path) {
                 let old_size = self.snap_size.fetch_sub(size, Ordering::SeqCst);
-                assert!(old_size > size);
+                assert!(old_size >= size);
             }
         }
 
@@ -1029,6 +1029,7 @@ mod tests {
         let new_entry = clone_entry();
         new_entry.used_times.store(1, Ordering::SeqCst);
         snap_mgr.get_registry(true).insert(key, new_entry);
+        snap_mgr.sending_count.fetch_add(1, Ordering::SeqCst);
         assert!(snap_mgr.get_snapshot_receiver(key, &data).is_ok());
         assert!(File::open(&meta_path).is_err());
 
@@ -1039,6 +1040,7 @@ mod tests {
         let new_entry = clone_entry();
         new_entry.used_times.store(1918, Ordering::SeqCst);
         snap_mgr.get_registry(true).insert(key, new_entry);
+        snap_mgr.sending_count.fetch_add(1, Ordering::SeqCst);
         assert!(snap_mgr.get_snapshot_receiver(key, &data).is_ok());
         assert!(File::open(&meta_path).is_err());
     }
