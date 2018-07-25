@@ -567,10 +567,10 @@ impl<S: Snapshot> MvccReader<S> {
     #[cfg_attr(feature = "cargo-clippy", allow(type_complexity))]
     pub fn scan_lock<F>(
         &mut self,
-        start: Option<Key>,
+        start: Option<&Key>,
         filter: F,
         limit: usize,
-    ) -> Result<(Vec<(Key, Lock)>, Option<Key>)>
+    ) -> Result<Vec<(Key, Lock)>>
     where
         F: Fn(&Lock) -> bool,
     {
@@ -581,22 +581,24 @@ impl<S: Snapshot> MvccReader<S> {
             None => cursor.seek_to_first(&mut self.statistics.lock),
         };
         if !ok {
-            return Ok((vec![], None));
+            return Ok(vec![]);
         }
-        let mut locks = vec![];
+        let mut locks = Vec::with_capacity(limit);
         while cursor.valid() {
             let key = Key::from_encoded(cursor.key().to_vec());
             let lock = Lock::parse(cursor.value())?;
             if filter(&lock) {
-                locks.push((key.clone(), lock));
-                if limit > 0 && locks.len() >= limit {
-                    return Ok((locks, Some(key)));
+                locks.push((key, lock));
+                // We don't need to check if `limit == 0`, since in this case `limit` will be never
+                // equal to `locks.len()`, which is >= 1.
+                if locks.len() == limit {
+                    return Ok(locks);
                 }
             }
             cursor.next(&mut self.statistics.lock);
         }
         self.statistics.lock.processed += locks.len();
-        Ok((locks, None))
+        Ok(locks)
     }
 
     pub fn scan_keys(
