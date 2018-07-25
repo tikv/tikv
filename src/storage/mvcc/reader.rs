@@ -564,7 +564,6 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(type_complexity))]
     pub fn scan_lock<F>(
         &mut self,
         start: Option<&Key>,
