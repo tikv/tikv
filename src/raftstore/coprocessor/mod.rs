@@ -102,6 +102,11 @@ pub trait SplitChecker {
 
     /// Get the desired split keys.
     fn split_key(&mut self) -> Option<Vec<u8>>;
+
+    /// Get approximate split keys without scan.
+    fn approximate_split_key(&self, _: &Region, _: &DB) -> Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
 }
 
 pub trait SplitCheckObserver: Coprocessor {
