@@ -519,7 +519,7 @@ impl Lease {
 
     /// Suspect the lease to the bound.
     pub fn suspect(&mut self, send_ts: Timespec) {
-        self.disconnect();
+        self.expire_remote_lease();
         let bound = self.next_expired_time(send_ts);
         self.bound = Some(Either::Left(bound));
     }
@@ -538,18 +538,18 @@ impl Lease {
     }
 
     pub fn expire(&mut self) {
-        self.disconnect();
+        self.expire_remote_lease();
         self.bound = None;
     }
 
-    pub fn disconnect(&mut self) {
+    pub fn expire_remote_lease(&mut self) {
         // Expire remote lease if there is any.
         if let Some(r) = self.remote.take() {
             r.expire();
         }
     }
 
-    pub fn remote(&mut self, term: u64) -> Option<RemoteLease> {
+    pub fn maybe_new_remote_lease(&mut self, term: u64) -> Option<RemoteLease> {
         if self.remote.is_some() {
             // At most one connected RemoteLease.
             return None;
@@ -766,7 +766,7 @@ mod tests {
 
         // Empty lease.
         let mut lease = Lease::new(duration);
-        let remote = lease.remote(1).unwrap();
+        let remote = lease.maybe_new_remote_lease(1).unwrap();
         let inspect_test = |lease: &Lease, ts: Option<Timespec>, state: LeaseState| {
             assert_eq!(lease.inspect(ts), state);
             if state == LeaseState::Expired || state == LeaseState::Suspect {

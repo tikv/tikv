@@ -539,7 +539,7 @@ impl Peer {
             let epoch = self.raft_group.get_store().region().get_region_epoch();
             if epoch.get_version() < new_epoch.get_version() {
                 // Epoch version changed, disable read on the localreader for this region.
-                self.leader_lease.disconnect();
+                self.leader_lease.expire_remote_lease();
             }
         }
         self.mut_store().set_region(region.clone());
@@ -1183,7 +1183,7 @@ impl Peer {
         }
         self.leader_lease.renew(ts);
         let term = self.term();
-        if let Some(remote_lease) = self.leader_lease.remote(term) {
+        if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
             let mut progress = ReadProgress::new();
             progress.set_leader_lease(remote_lease);
             self.maybe_update_read_progress(progress);

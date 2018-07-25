@@ -757,7 +757,7 @@ mod tests {
 
         // Register region 1
         lease.renew(monotonic_raw_now());
-        let remote = lease.remote(1).unwrap();
+        let remote = lease.maybe_new_remote_lease(1).unwrap();
         // But the applied_index_term is stale.
         let register_region1 = Task::Register(ReadDelegate {
             tag: String::new(),
