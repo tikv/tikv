@@ -334,7 +334,6 @@ impl Hash for HashableContext {
 
 impl Eq for HashableContext {}
 
-
 // Make clippy happy.
 type MultipleReturnValue = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, Value)>);
 
@@ -846,7 +845,7 @@ impl<E: Engine> Coordinator<E> {
             running_write_bytes: 0,
         }
     }
-    
+
     /// Generates the next command ID.
     fn gen_id(&mut self) -> u64 {
         self.id_alloc += 1;
