@@ -334,37 +334,6 @@ impl Hash for HashableContext {
 
 impl Eq for HashableContext {}
 
-/// Coordinator which coordinators the execution of `storage::Command`s.
-pub struct Coordinator<E: Engine> {
-    engine: E,
-
-    // cid -> RunningCtx
-    cmd_ctxs: HashMap<u64, RunningCtx>,
-    // Context -> cids
-    grouped_cmds: Option<HashMap<HashableContext, Vec<u64>>>,
-
-    // actual scheduler to schedule the execution of commands
-    command_scheduler: Scheduler<Msg<E>>,
-
-    // cmd id generator
-    id_alloc: u64,
-
-    // write concurrency control
-    latches: Latches,
-
-    // TODO: Dynamically calculate this value according to processing
-    // speed of recent write requests.
-    sched_pending_write_threshold: usize,
-
-    // worker pool
-    worker_pool: ThreadPool<SchedContext>,
-
-    // high priority commands will be delivered to this pool
-    high_priority_pool: ThreadPool<SchedContext>,
-
-    // used to control write flow
-    running_write_bytes: usize,
-}
 
 // Make clippy happy.
 type MultipleReturnValue = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, Value)>);
@@ -391,37 +360,6 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
         values.push((ts, v));
     }
     Ok((lock, writes, values))
-}
-
-impl<E: Engine> Coordinator<E> {
-    /// Creates a coordinator.
-    pub fn new(
-        engine: E,
-        command_scheduler: Scheduler<Msg<E>>,
-        concurrency: usize,
-        worker_pool_size: usize,
-        sched_pending_write_threshold: usize,
-    ) -> Self {
-        Coordinator {
-            engine,
-            cmd_ctxs: Default::default(),
-            grouped_cmds: Some(HashMap::with_capacity_and_hasher(
-                CMD_BATCH_SIZE,
-                Default::default(),
-            )),
-            command_scheduler,
-            id_alloc: 0,
-            latches: Latches::new(concurrency),
-            sched_pending_write_threshold,
-            worker_pool: ThreadPoolBuilder::with_default_factory(thd_name!("sched-worker-pool"))
-                .thread_count(worker_pool_size)
-                .build(),
-            high_priority_pool: ThreadPoolBuilder::with_default_factory(thd_name!(
-                "sched-high-pri-pool"
-            )).build(),
-            running_write_bytes: 0,
-        }
-    }
 }
 
 /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
@@ -847,7 +785,68 @@ impl ThreadContext for SchedContext {
     }
 }
 
+/// Coordinator which coordinators the execution of `storage::Command`s.
+pub struct Coordinator<E: Engine> {
+    engine: E,
+
+    // cid -> RunningCtx
+    cmd_ctxs: HashMap<u64, RunningCtx>,
+    // Context -> cids
+    grouped_cmds: Option<HashMap<HashableContext, Vec<u64>>>,
+
+    // actual scheduler to schedule the execution of commands
+    command_scheduler: Scheduler<Msg<E>>,
+
+    // cmd id generator
+    id_alloc: u64,
+
+    // write concurrency control
+    latches: Latches,
+
+    // TODO: Dynamically calculate this value according to processing
+    // speed of recent write requests.
+    sched_pending_write_threshold: usize,
+
+    // worker pool
+    worker_pool: ThreadPool<SchedContext>,
+
+    // high priority commands will be delivered to this pool
+    high_priority_pool: ThreadPool<SchedContext>,
+
+    // used to control write flow
+    running_write_bytes: usize,
+}
+
 impl<E: Engine> Coordinator<E> {
+    /// Creates a coordinator.
+    pub fn new(
+        engine: E,
+        command_scheduler: Scheduler<Msg<E>>,
+        concurrency: usize,
+        worker_pool_size: usize,
+        sched_pending_write_threshold: usize,
+    ) -> Self {
+        Coordinator {
+            engine,
+            cmd_ctxs: Default::default(),
+            grouped_cmds: Some(HashMap::with_capacity_and_hasher(
+                CMD_BATCH_SIZE,
+                Default::default(),
+            )),
+            command_scheduler,
+            id_alloc: 0,
+            latches: Latches::new(concurrency),
+            sched_pending_write_threshold,
+            worker_pool: ThreadPoolBuilder::with_default_factory(thd_name!("sched-worker-pool"))
+                .thread_count(worker_pool_size)
+                .build(),
+            high_priority_pool: ThreadPoolBuilder::with_default_factory(thd_name!(
+                "sched-high-pri-pool"
+            )).build(),
+            running_write_bytes: 0,
+        }
+    }
+    
     /// Generates the next command ID.
     fn gen_id(&mut self) -> u64 {
         self.id_alloc += 1;
