@@ -1136,7 +1136,7 @@ impl Decimal {
         self.round_with_word_buf_len(frac, WORD_BUF_LEN, round_mode)
     }
 
-    pub fn round_with_word_buf_len(
+    fn round_with_word_buf_len(
         mut self,
         mut frac: i8,
         word_buf_len: u8,
