@@ -588,9 +588,7 @@ impl<S: Snapshot> MvccReader<S> {
             let lock = Lock::parse(cursor.value())?;
             if filter(&lock) {
                 locks.push((key, lock));
-                // We don't need to check if `limit == 0`, since in this case `limit` will be never
-                // equal to `locks.len()`, which is >= 1.
-                if locks.len() == limit {
+                if limit > 0 && locks.len() == limit {
                     return Ok(locks);
                 }
             }
