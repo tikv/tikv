@@ -59,6 +59,7 @@ pub const APPLY_STATUS_RELAX: usize = 0;
 pub const APPLY_STATUS_PENDING: usize = 1;
 pub const APPLY_STATUS_RUNNING: usize = 2;
 pub const APPLY_STATUS_CANCELED: usize = 3;
+pub const APPLY_STATUS_FAILED: usize = 4;
 
 // Discard all log entries prior to compact_index. We must guarantee
 // that the compact_index is not greater than applied index.
@@ -928,22 +929,32 @@ impl PeerStorage {
     #[inline]
     pub fn is_applying_snapshot(&self) -> bool {
         let state = self.snap_applying_state.load(Ordering::SeqCst);
-        state != APPLY_STATUS_RELAX && state != APPLY_STATUS_CANCELED
+        state == APPLY_STATUS_PENDING
+            || state == APPLY_STATUS_RUNNING
+            // Failed should be treated as applying. But it can be canceled.
+            || state == APPLY_STATUS_FAILED
     }
 
     /// Cancel applying snapshot, return true if the job can be considered not be run again.
     pub fn cancel_applying_snap(&mut self) -> bool {
-        // The status may be PENDING, RUNNING or RELAX. Return true only
-        // when it's still PENDING.
-        let origin_state = self.snap_applying_state.compare_and_swap(
+        let mut origin_state = self.snap_applying_state.compare_and_swap(
             APPLY_STATUS_PENDING,
             APPLY_STATUS_CANCELED,
             Ordering::SeqCst,
         );
+        if origin_state != APPLY_STATUS_PENDING {
+            origin_state = self.snap_applying_state.compare_and_swap(
+                APPLY_STATUS_FAILED,
+                APPLY_STATUS_CANCELED,
+                Ordering::SeqCst,
+            );
+        }
         self.snap_stale_notifier
             .apply_canceled
             .store(true, Ordering::SeqCst);
-        origin_state == APPLY_STATUS_PENDING || origin_state == APPLY_STATUS_CANCELED
+        origin_state == APPLY_STATUS_PENDING
+            || origin_state == APPLY_STATUS_CANCELED
+            || origin_state == APPLY_STATUS_FAILED
     }
 
     pub fn get_region_id(&self) -> u64 {
@@ -1359,6 +1370,7 @@ mod test {
     use raft::{Error as RaftError, StorageError};
     use raftstore::store::bootstrap;
     use raftstore::store::local_metrics::RaftMetrics;
+    use raftstore::store::msg::Msg;
     use raftstore::store::util::Engines;
     use raftstore::store::worker::RegionRunner;
     use raftstore::store::worker::RegionTask;
@@ -1372,6 +1384,7 @@ mod test {
     use storage::{ALL_CFS, CF_DEFAULT};
     use tempdir::*;
     use util::rocksdb::new_engine;
+    use util::transport::SendCh;
     use util::worker::{Scheduler, Worker};
 
     use super::*;
@@ -1450,6 +1463,19 @@ mod test {
 
     fn size_of<T: protobuf::Message>(m: &T) -> u32 {
         m.compute_size()
+    }
+
+    fn get_test_sendch() -> SendCh<Msg> {
+        use mio::{EventLoop, Handler};
+        struct H;
+        impl Handler for H {
+            type Timeout = ();
+            type Message = Msg;
+            fn notify(&mut self, _: &mut EventLoop<Self>, _: Msg) {}
+        }
+
+        let event_loop = EventLoop::<H>::new().unwrap();
+        SendCh::new(event_loop.channel(), "test")
     }
 
     #[test]
@@ -1653,7 +1679,15 @@ mod test {
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched, &td, &ents);
-        let runner = RegionRunner::new(s.engines.clone(), mgr, 0, true, Duration::from_secs(0));
+        let runner = RegionRunner::new(
+            s.engines.clone(),
+            1,
+            get_test_sendch(),
+            mgr,
+            0,
+            true,
+            Duration::from_secs(0),
+        );
         worker.start(runner).unwrap();
         let snap = s.snapshot();
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
@@ -1947,6 +1981,8 @@ mod test {
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
         let runner = RegionRunner::new(
             s1.engines.clone(),
+            1,
+            get_test_sendch(),
             mgr.clone(),
             0,
             true,

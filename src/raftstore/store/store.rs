@@ -533,6 +533,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let region_runner = RegionRunner::new(
             self.engines.clone(),
+            self.store_id(),
+            self.sendch.clone(),
             self.snap_mgr.clone(),
             self.cfg.snap_apply_batch_size.0 as usize,
             self.cfg.use_delete_range,
@@ -783,6 +785,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         if msg.get_is_tombstone() {
+            println!("msg contains tombstone, gc itself");
             // we receive a message tells us to remove ourself.
             self.handle_gc_peer_msg(&msg);
             return Ok(());
@@ -1112,8 +1115,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let mut job = None;
         if let Some(peer) = self.region_peers.get_mut(&region_id) {
+            println!("region {} is in region peers", region_id);
             let from_epoch = msg.get_region_epoch();
+            println!("from epoch: {:?}", from_epoch);
+            println!("peer epoch: {:?}", peer.region().get_region_epoch());
             if util::is_epoch_stale(peer.region().get_region_epoch(), from_epoch) {
+                println!("epoch stale, skip");
                 if peer.peer != *msg.get_to_peer() {
                     info!("[region {}] receive stale gc message, ignore.", region_id);
                     self.raft_metrics.message_dropped.stale_msg += 1;
@@ -1131,6 +1138,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     return;
                 }
             }
+        } else {
+            println!("region {} is not in region peers", region_id);
         }
 
         if let Some(job) = job {

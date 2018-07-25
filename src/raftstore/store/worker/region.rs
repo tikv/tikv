@@ -18,19 +18,21 @@ use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
+use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftMessage, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use rocksdb::{Writable, WriteBatch};
 
 use raftstore::store::engine::{Mutable, Snapshot};
+use raftstore::store::msg::Msg;
 use raftstore::store::peer_storage::*;
 use raftstore::store::snap::{ApplyOptions, SnapError};
-use raftstore::store::util::Engines;
+use raftstore::store::util::{find_peer, Engines};
 use raftstore::store::{self, keys, Peekable, SnapKey, SnapManager};
 use raftstore::{Error as RaftStoreError, Result};
 use storage::CF_RAFT;
 use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use util::timer::Timer;
+use util::transport::SendCh;
 use util::worker::{Runnable, RunnableWithTimer};
 use util::{escape, rocksdb, time};
 
@@ -207,6 +209,8 @@ impl PendingDeleteRanges {
 #[derive(Clone)]
 struct SnapContext {
     engines: Engines,
+    store_id: u64,
+    sendch: SendCh<Msg>,
     batch_size: usize,
     mgr: SnapManager,
     use_delete_range: bool,
@@ -272,22 +276,12 @@ impl SnapContext {
     fn apply_snap(
         &mut self,
         region_id: u64,
+        region_key: &[u8],
+        mut region_state: RegionLocalState,
         snap_stale_notifier: Arc<SnapStaleNotifier>,
     ) -> Result<()> {
         info!("[region {}] begin apply snap data", region_id);
         fail_point!("region_apply_snap");
-
-        let region_key = keys::region_state_key(region_id);
-        let mut region_state: RegionLocalState =
-            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &region_key)) {
-                Some(state) => state,
-                None => {
-                    return Err(box_err!(
-                        "failed to get region_state from {}",
-                        escape(&region_key)
-                    ))
-                }
-            };
 
         // clear up origin data.
         let region = region_state.get_region().clone();
@@ -305,12 +299,7 @@ impl SnapContext {
         let apply_state: RaftApplyState =
             match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &state_key)) {
                 Some(state) => state,
-                None => {
-                    return Err(box_err!(
-                        "failed to get raftstate from {}",
-                        escape(&state_key)
-                    ))
-                }
+                None => panic!("failed to get apply state from {}", escape(&state_key)),
             };
 
         let timer = Instant::now();
@@ -332,9 +321,7 @@ impl SnapContext {
         let handle = box_try!(rocksdb::get_cf_handle(&self.engines.kv, CF_RAFT));
         box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
         box_try!(wb.delete_cf(handle, &keys::snapshot_raft_state_key(region_id)));
-        self.engines.kv.write(wb).unwrap_or_else(|e| {
-            panic!("{} failed to save apply_snap result: {:?}", region_id, e);
-        });
+        box_try!(self.engines.kv.write(wb));
 
         info!(
             "[region {}] apply new data takes {:?}",
@@ -369,20 +356,55 @@ impl SnapContext {
             .with_label_values(&["apply"])
             .start_coarse_timer();
 
-        let counter = match self.apply_snap(region_id, snap_stale_notifier) {
-            Ok(()) => SNAP_COUNTER_VEC.with_label_values(&["apply", "success"]),
+        let region_key = keys::region_state_key(region_id);
+        let region_state = match self
+            .engines
+            .kv
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
+        {
+            Ok(Some(state)) => state,
+            _ => panic!("failed to get region_state from {}", escape(&region_key)),
+        };
+
+        let counter = match self.apply_snap(
+            region_id,
+            &region_key,
+            region_state.clone(),
+            snap_stale_notifier,
+        ) {
+            Ok(()) => {
+                snap_applying_state.store(APPLY_STATUS_RELAX, Ordering::SeqCst);
+                SNAP_COUNTER_VEC.with_label_values(&["apply", "success"])
+            }
             Err(RaftStoreError::Snapshot(SnapError::Abort)) => {
+                // Abort normally is caused by raftstore canceled the apply.
+                snap_applying_state.store(APPLY_STATUS_FAILED, Ordering::SeqCst);
                 warn!("applying snapshot for region {} is aborted.", region_id);
                 SNAP_COUNTER_VEC.with_label_values(&["apply", "abort"])
             }
             Err(e) => {
+                snap_applying_state.store(APPLY_STATUS_FAILED, Ordering::SeqCst);
                 error!("failed to apply snap: {:?}!!!", e);
+                self.gc_peer_after_apply_fail(region_state, self.store_id);
                 SNAP_COUNTER_VEC.with_label_values(&["apply", "fail"])
             }
         };
         counter.inc();
-        snap_applying_state.store(APPLY_STATUS_RELAX, Ordering::SeqCst);
         timer.observe_duration();
+    }
+
+    fn gc_peer_after_apply_fail(&self, mut region_state: RegionLocalState, store_id: u64) {
+        let mut region = region_state.take_region();
+        let peer = find_peer(&region, store_id).unwrap().clone();
+        let mut epoch = region.take_region_epoch();
+        epoch.version += 1; // To ensure the peer can be gc.
+
+        let mut raft_message = RaftMessage::new();
+        raft_message.set_region_id(region.get_id());
+        raft_message.set_to_peer(peer);
+        raft_message.set_region_epoch(epoch);
+        raft_message.set_is_tombstone(true);
+        self.sendch.send(Msg::RaftMessage(raft_message)).unwrap();
     }
 
     fn cleanup_range(
@@ -482,6 +504,8 @@ pub struct Runner {
 impl Runner {
     pub fn new(
         engines: Engines,
+        store_id: u64,
+        sendch: SendCh<Msg>,
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
@@ -493,6 +517,8 @@ impl Runner {
                 .build(),
             ctx: SnapContext {
                 engines,
+                store_id,
+                sendch,
                 mgr,
                 batch_size,
                 use_delete_range,
