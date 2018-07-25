@@ -3143,10 +3143,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         mut limit: u32,
         callback: SeekRegionCallback,
     ) {
-        // `limit` should be at least 1
-        if limit == 0 {
-            limit = 1;
-        }
+        assert!(limit > 0);
 
         let from_key = data_key(from_key);
         for (end_key, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {

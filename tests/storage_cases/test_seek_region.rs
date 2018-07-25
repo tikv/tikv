@@ -15,7 +15,7 @@ use raftstore::server::new_server_cluster;
 use std::thread;
 use std::time::Duration;
 use tikv::raftstore::store::SeekRegionResult;
-use tikv::storage::engine::RegionInfoSource;
+use tikv::storage::engine::RegionInfoProvider;
 use tikv::util::HandyRwLock;
 
 #[test]
@@ -40,6 +40,15 @@ fn test_seek_region() {
         b"".to_vec(),
     ];
 
+    let start_keys = vec![
+        b"".to_vec(),
+        b"k1".to_vec(),
+        b"k3".to_vec(),
+        b"k5".to_vec(),
+        b"k7".to_vec(),
+        b"k9".to_vec(),
+    ];
+
     let mut regions = Vec::new();
 
     for mut key in end_keys.iter().take(end_keys.len() - 1).map(Vec::clone) {
@@ -51,6 +60,13 @@ fn test_seek_region() {
         regions.push(region);
     }
     regions.push(cluster.get_region(b"k9"));
+
+    assert_eq!(regions.len(), end_keys.len());
+    assert_eq!(regions.len(), start_keys.len());
+    for i in 0..regions.len() {
+        assert_eq!(regions[i].start_key, start_keys[i]);
+        assert_eq!(regions[i].end_key, end_keys[i]);
+    }
 
     // Wait for raftstore to update regions
     thread::sleep(Duration::from_secs(2));

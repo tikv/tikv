@@ -164,8 +164,9 @@ pub trait Iterator: Send + Sized {
     fn value(&self) -> &[u8];
 }
 
-pub trait RegionInfoSource: Send + Sized + Clone + 'static {
-    /// Find next local peer that satisfies the given predicate.
+pub trait RegionInfoProvider: Send + Sized + Clone + 'static {
+    /// Find the first region `r` whose range contains or greater than `from_key` and the peer on
+    /// this TiKV satisfies `filter(peer)` returns true.
     fn seek_region(
         &self,
         from: &[u8],
