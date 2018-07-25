@@ -21,7 +21,7 @@ use std::mem;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use util::time::{duration_to_sec, SlowTimer};
-use util::worker::{self, Builder, Runnable, ScheduleError, Worker};
+use util::worker::{Builder, Runnable, ScheduleError, Scheduler, Worker};
 
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
@@ -260,7 +260,7 @@ pub struct GCWorker<E: Engine> {
     engine: E,
     ratio_threshold: f64,
     worker: Arc<Mutex<Worker<GCTask>>>,
-    worker_scheduler: worker::Scheduler<GCTask>,
+    gc_scheduler: Scheduler<GCTask>,
 }
 
 impl<E: Engine> GCWorker<E> {
@@ -270,12 +270,12 @@ impl<E: Engine> GCWorker<E> {
                 .pending_capacity(GC_MAX_PENDING_TASKS)
                 .create(),
         ));
-        let worker_scheduler = worker.lock().unwrap().scheduler();
+        let gc_scheduler = worker.lock().unwrap().scheduler();
         GCWorker {
             engine,
             ratio_threshold,
             worker,
-            worker_scheduler,
+            gc_scheduler,
         }
     }
 
@@ -298,7 +298,7 @@ impl<E: Engine> GCWorker<E> {
     }
 
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
-        self.worker_scheduler
+        self.gc_scheduler
             .schedule(GCTask {
                 ctx,
                 safe_point,

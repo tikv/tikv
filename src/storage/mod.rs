@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex};
 use std::u64;
 use util;
 use util::collections::HashMap;
-use util::worker::{self, Builder, Worker};
+use util::worker::{Builder, Scheduler, Worker};
 
 pub mod config;
 pub mod engine;
@@ -47,7 +47,7 @@ pub use self::engine::{
     Modify, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary, TEMP_DIR,
 };
 pub use self::readpool_context::Context as ReadPoolContext;
-pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
+pub use self::txn::{Coordinator, Msg, SnapshotStore, StoreScanner};
 pub use self::types::{make_key, Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
@@ -395,7 +395,7 @@ pub struct Storage<E: Engine> {
 
     // to schedule the execution of storage commands
     worker: Arc<Mutex<Worker<Msg<E>>>>,
-    worker_scheduler: worker::Scheduler<Msg<E>>,
+    command_scheduler: Scheduler<Msg<E>>,
 
     read_pool: ReadPool<ReadPoolContext>,
     gc_worker: GCWorker<E>,
@@ -425,12 +425,12 @@ impl<E: Engine> Storage<E> {
                 .pending_capacity(config.scheduler_notify_capacity)
                 .create(),
         ));
-        let worker_scheduler = worker.lock().unwrap().scheduler();
+        let command_scheduler = worker.lock().unwrap().scheduler();
         let gc_worker = GCWorker::new(engine.clone(), config.gc_ratio_threshold);
         Ok(Storage {
             engine,
             worker,
-            worker_scheduler,
+            command_scheduler,
             read_pool,
             gc_worker,
             max_key_size: config.max_key_size,
@@ -442,14 +442,14 @@ impl<E: Engine> Storage<E> {
         let sched_worker_pool_size = config.scheduler_worker_pool_size;
         let sched_pending_write_threshold = config.scheduler_pending_write_threshold.0 as usize;
         let mut worker = self.worker.lock().unwrap();
-        let scheduler = Scheduler::new(
+        let coordinator = Coordinator::new(
             self.engine.clone(),
             worker.scheduler(),
             sched_concurrency,
             sched_worker_pool_size,
             sched_pending_write_threshold,
         );
-        worker.start(scheduler)?;
+        worker.start(coordinator)?;
         self.gc_worker.start()?;
         Ok(())
     }
@@ -478,7 +478,7 @@ impl<E: Engine> Storage<E> {
 
     fn schedule(&self, cmd: Command, cb: StorageCb) -> Result<()> {
         fail_point!("storage_drop_message", |_| Ok(()));
-        box_try!(self.worker_scheduler.schedule(Msg::RawCmd { cmd, cb }));
+        box_try!(self.command_scheduler.schedule(Msg::RawCmd { cmd, cb }));
         Ok(())
     }
 

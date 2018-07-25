@@ -11,25 +11,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Scheduler which schedules the execution of `storage::Command`s.
+//! Coordinator which schedules the execution of `storage::Command`s.
 //!
-//! There is one scheduler for each store. It receives commands from clients, executes them against
+//! There is one coordinator for each store. It receives commands from clients, executes them against
 //! the MVCC layer storage engine.
 //!
 //! Logically, the data organization hierarchy from bottom to top is row -> region -> store ->
 //! database. But each region is replicated onto N stores for reliability, the replicas form a Raft
 //! group, one of which acts as the leader. When the client read or write a row, the command is
-//! sent to the scheduler which is on the region leader's store.
+//! sent to the coordinator which is on the region leader's store.
 //!
-//! Scheduler runs in a single-thread event loop, but command executions are delegated to a pool of
+//! Coordinator runs in a single-thread event loop, but command executions are delegated to a pool of
 //! worker thread.
 //!
-//! Scheduler keeps track of all the running commands and uses latches to ensure serialized access
-//! to the overlapping rows involved in concurrent commands. But note that scheduler only ensures
+//! Coordinator keeps track of all the running commands and uses latches to ensure serialized access
+//! to the overlapping rows involved in concurrent commands. But note that coordinator only ensures
 //! serialized access to the overlapping rows at command level, but a transaction may consist of
 //! multiple commands, therefore conflicts may happen at transaction level. Transaction semantics
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
-//! to the scheduler.
+//! to the coordinator.
 
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -57,7 +57,7 @@ use storage::{Key, KvPair, MvccInfo, Value};
 use util::collections::HashMap;
 use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
 use util::time::SlowTimer;
-use util::worker::{self, Runnable, ScheduleError};
+use util::worker::{Runnable, ScheduleError, Scheduler};
 
 use super::super::metrics::*;
 use super::latch::{Latches, Lock};
@@ -85,7 +85,7 @@ pub enum ProcessResult {
 
 type SnapshotResult<T> = (Vec<u64>, CbContext, EngineResult<T>);
 
-/// Message types for the scheduler event loop.
+/// Message types for the coordinator event loop.
 pub enum Msg<E: Engine> {
     Quit,
     RawCmd {
@@ -280,11 +280,11 @@ fn make_engine_cb<E: Engine>(
     cmd: &'static str,
     cid: u64,
     pr: ProcessResult,
-    scheduler: worker::Scheduler<Msg<E>>,
+    command_scheduler: Scheduler<Msg<E>>,
     rows: usize,
 ) -> EngineCallback<()> {
     Box::new(move |(cb_ctx, result)| {
-        match scheduler.schedule(Msg::WriteFinished {
+        match command_scheduler.schedule(Msg::WriteFinished {
             cid,
             pr,
             cb_ctx,
@@ -334,8 +334,8 @@ impl Hash for HashableContext {
 
 impl Eq for HashableContext {}
 
-/// Scheduler which schedules the execution of `storage::Command`s.
-pub struct Scheduler<E: Engine> {
+/// Coordinator which coordinators the execution of `storage::Command`s.
+pub struct Coordinator<E: Engine> {
     engine: E,
 
     // cid -> RunningCtx
@@ -344,7 +344,7 @@ pub struct Scheduler<E: Engine> {
     grouped_cmds: Option<HashMap<HashableContext, Vec<u64>>>,
 
     // actual scheduler to schedule the execution of commands
-    scheduler: worker::Scheduler<Msg<E>>,
+    command_scheduler: Scheduler<Msg<E>>,
 
     // cmd id generator
     id_alloc: u64,
@@ -393,23 +393,23 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
     Ok((lock, writes, values))
 }
 
-impl<E: Engine> Scheduler<E> {
-    /// Creates a scheduler.
+impl<E: Engine> Coordinator<E> {
+    /// Creates a coordinator.
     pub fn new(
         engine: E,
-        scheduler: worker::Scheduler<Msg<E>>,
+        command_scheduler: Scheduler<Msg<E>>,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
     ) -> Self {
-        Scheduler {
+        Coordinator {
             engine,
             cmd_ctxs: Default::default(),
             grouped_cmds: Some(HashMap::with_capacity_and_hasher(
                 CMD_BATCH_SIZE,
                 Default::default(),
             )),
-            scheduler,
+            command_scheduler,
             id_alloc: 0,
             latches: Latches::new(concurrency),
             sched_pending_write_threshold,
@@ -430,7 +430,7 @@ fn process_read<E: Engine>(
     sched_ctx: &mut SchedContext,
     cid: u64,
     mut cmd: Command,
-    scheduler: worker::Scheduler<Msg<E>>,
+    command_scheduler: Scheduler<Msg<E>>,
     snapshot: E::Snap,
 ) -> Statistics {
     fail_point!("txn_before_process_read");
@@ -585,7 +585,7 @@ fn process_read<E: Engine>(
         _ => panic!("unsupported read command"),
     };
 
-    if let Err(e) = scheduler.schedule(Msg::ReadFinished { cid, pr }) {
+    if let Err(e) = command_scheduler.schedule(Msg::ReadFinished { cid, pr }) {
         // Todo: if this happens we need to clean up command's context
         panic!("schedule ReadFinished msg failed, cid={}, err={:?}", cid, e);
     }
@@ -597,13 +597,19 @@ fn process_read<E: Engine>(
 fn process_write<E: Engine>(
     cid: u64,
     cmd: Command,
-    scheduler: worker::Scheduler<Msg<E>>,
+    command_scheduler: Scheduler<Msg<E>>,
     snapshot: E::Snap,
 ) -> Statistics {
     fail_point!("txn_before_process_write");
     let mut statistics = Statistics::default();
-    if let Err(e) = process_write_impl(cid, cmd, scheduler.clone(), snapshot, &mut statistics) {
-        if let Err(err) = scheduler.schedule(Msg::WritePrepareFailed { cid, err: e }) {
+    if let Err(e) = process_write_impl(
+        cid,
+        cmd,
+        command_scheduler.clone(),
+        snapshot,
+        &mut statistics,
+    ) {
+        if let Err(err) = command_scheduler.schedule(Msg::WritePrepareFailed { cid, err: e }) {
             // Todo: if this happens, lock will hold for ever
             panic!(
                 "schedule WritePrepareFailed msg failed. cid={}, err={:?}",
@@ -617,7 +623,7 @@ fn process_write<E: Engine>(
 fn process_write_impl<E: Engine>(
     cid: u64,
     mut cmd: Command,
-    scheduler: worker::Scheduler<Msg<E>>,
+    command_scheduler: Scheduler<Msg<E>>,
     snapshot: E::Snap,
     statistics: &mut Statistics,
 ) -> Result<()> {
@@ -788,7 +794,7 @@ fn process_write_impl<E: Engine>(
         _ => panic!("unsupported write command"),
     };
 
-    box_try!(scheduler.schedule(Msg::WritePrepareFinished {
+    box_try!(command_scheduler.schedule(Msg::WritePrepareFinished {
         cid,
         cmd,
         pr,
@@ -841,7 +847,7 @@ impl ThreadContext for SchedContext {
     }
 }
 
-impl<E: Engine> Scheduler<E> {
+impl<E: Engine> Coordinator<E> {
     /// Generates the next command ID.
     fn gen_id(&mut self) -> u64 {
         self.id_alloc += 1;
@@ -903,7 +909,7 @@ impl<E: Engine> Scheduler<E> {
         let readcmd = cmd.readonly();
         let worker_pool = self.fetch_worker_pool(cmd.priority());
         let tag = cmd.tag();
-        let scheduler = self.scheduler.clone();
+        let scheduler = self.command_scheduler.clone();
         if readcmd {
             worker_pool.execute(move |ctx: &mut SchedContext| {
                 let _processing_read_timer = ctx
@@ -1021,7 +1027,7 @@ impl<E: Engine> Scheduler<E> {
                 .inc();
         }
         let cids1 = cids.clone();
-        let scheduler = self.scheduler.clone();
+        let scheduler = self.command_scheduler.clone();
         let cb = box move |(cb_ctx, snapshot)| match scheduler.schedule(Msg::SnapshotFinished {
             cids: cids1,
             cb_ctx,
@@ -1061,7 +1067,7 @@ impl<E: Engine> Scheduler<E> {
             all_cids.extend(cids);
         }
 
-        let scheduler = self.scheduler.clone();
+        let scheduler = self.command_scheduler.clone();
         let batch1 = batch.iter().map(|&(ref ctx, _)| ctx.clone()).collect();
         let on_finished: engine::BatchCallback<E::Snap> = box move |results: Vec<_>| {
             let mut ready = Vec::with_capacity(results.len());
@@ -1220,7 +1226,7 @@ impl<E: Engine> Scheduler<E> {
         if to_be_write.is_empty() {
             return self.on_write_finished(cid, pr, Ok(()));
         }
-        let engine_cb = make_engine_cb(cmd.tag(), cid, pr, self.scheduler.clone(), rows);
+        let engine_cb = make_engine_cb(cmd.tag(), cid, pr, self.command_scheduler.clone(), rows);
         if let Err(e) = self
             .engine
             .async_write(cmd.get_context(), to_be_write, engine_cb)
@@ -1282,7 +1288,7 @@ impl<E: Engine> Scheduler<E> {
     }
 }
 
-impl<E: Engine> Runnable<Msg<E>> for Scheduler<E> {
+impl<E: Engine> Runnable<Msg<E>> for Coordinator<E> {
     fn run(&mut self, msg: Msg<E>) {
         match msg {
             Msg::Quit => {
@@ -1342,12 +1348,12 @@ impl<E: Engine> Runnable<Msg<E>> for Scheduler<E> {
 
     fn shutdown(&mut self) {
         if let Err(e) = self.worker_pool.stop() {
-            error!("scheduler run err when worker pool stop:{:?}", e);
+            error!("coordinator run err when worker pool stop:{:?}", e);
         }
         if let Err(e) = self.high_priority_pool.stop() {
-            error!("scheduler run err when high priority pool stop:{:?}", e);
+            error!("coordinator run err when high priority pool stop:{:?}", e);
         }
-        info!("scheduler stopped");
+        info!("coordinator stopped");
     }
 }
 
