@@ -64,7 +64,13 @@ impl Display for Task {
             } => f
                 .debug_struct("CheckAndCompact")
                 .field("cf_names", cf_names)
-                .field("ranges", ranges)
+                .field(
+                    "ranges",
+                    &(
+                        ranges.first().as_ref().map(|k| escape(k)),
+                        ranges.last().as_ref().map(|k| escape(k)),
+                    ),
+                )
                 .field("tombstones_num_threshold", &tombstones_num_threshold)
                 .field(
                     "tombstones_percent_threshold",
