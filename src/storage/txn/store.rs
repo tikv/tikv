@@ -139,11 +139,19 @@ fn handle_mvcc_err(e: MvccError, result: &mut Vec<Result<KvPair>>) -> Result<Key
 
 impl<S: Snapshot> StoreScanner<S> {
     pub fn seek(&mut self, key: Key) -> Result<Option<(Key, Value)>> {
-        Ok(self.forward_seeker.as_mut().unwrap().read_next(key, self.start_ts)?)
+        Ok(self
+            .forward_seeker
+            .as_mut()
+            .unwrap()
+            .read_next(key, self.start_ts)?)
     }
 
     pub fn reverse_seek(&mut self, key: Key) -> Result<Option<(Key, Value)>> {
-        Ok(self.reader.as_mut().unwrap().reverse_seek(key, self.start_ts)?)
+        Ok(self
+            .reader
+            .as_mut()
+            .unwrap()
+            .reverse_seek(key, self.start_ts)?)
     }
 
     pub fn scan(&mut self, mut key: Key, limit: usize) -> Result<Vec<Result<KvPair>>> {

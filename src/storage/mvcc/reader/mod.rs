@@ -184,36 +184,6 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(Some((commit_ts, write)))
     }
 
-    // fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
-    //     // Check for locks that signal concurrent writes.
-    //     match self.isolation_level {
-    //         IsolationLevel::SI => {
-    //             ts = self::util::load_and_check_lock(&self.snapshot, key, ts, &mut self.statistics)?
-    //         }
-    //         IsolationLevel::RC => {}
-    //     }
-    //     loop {
-    //         match self.seek_write(key, ts)? {
-    //             Some((commit_ts, mut write)) => match write.write_type {
-    //                 WriteType::Put => {
-    //                     if write.short_value.is_some() {
-    //                         if self.key_only {
-    //                             return Ok(Some(vec![]));
-    //                         }
-    //                         return Ok(write.short_value.take());
-    //                     }
-    //                     return self.load_data(key, write.start_ts).map(Some);
-    //                 }
-    //                 WriteType::Delete => {
-    //                     return Ok(None);
-    //                 }
-    //                 WriteType::Lock | WriteType::Rollback => ts = commit_ts - 1,
-    //             },
-    //             None => return Ok(None),
-    //         }
-    //     }
-    // }
-
     pub fn get_txn_commit_info(
         &mut self,
         key: &Key,
@@ -294,52 +264,6 @@ impl<S: Snapshot> MvccReader<S> {
         }
         Ok(None)
     }
-
-    // fn seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
-    //     assert!(*self.scan_mode.as_ref().unwrap() == ScanMode::Forward);
-    //     self.create_write_cursor()?;
-    //     self.create_lock_cursor()?;
-    //
-    //     let (mut write_valid, mut lock_valid) = (true, true);
-    //
-    //     loop {
-    //         key = {
-    //             let w_cur = self.write_cursor.as_mut().unwrap();
-    //             let l_cur = self.lock_cursor.as_mut().unwrap();
-    //             let (mut w_key, mut l_key) = (None, None);
-    //             if write_valid {
-    //                 if w_cur.near_seek(&key, &mut self.statistics.write)? {
-    //                     w_key = Some(w_cur.key());
-    //                 } else {
-    //                     w_key = None;
-    //                     write_valid = false;
-    //                 }
-    //             }
-    //             if lock_valid {
-    //                 if l_cur.near_seek(&key, &mut self.statistics.lock)? {
-    //                     l_key = Some(l_cur.key());
-    //                 } else {
-    //                     l_key = None;
-    //                     lock_valid = false;
-    //                 }
-    //             }
-    //             match (w_key, l_key) {
-    //                 (None, None) => return Ok(None),
-    //                 (None, Some(k)) => Key::from_encoded(k.to_vec()),
-    //                 (Some(k), None) => Key::from_encoded(k.to_vec()).truncate_ts()?,
-    //                 (Some(wk), Some(lk)) => if wk < lk {
-    //                     Key::from_encoded(wk.to_vec()).truncate_ts()?
-    //                 } else {
-    //                     Key::from_encoded(lk.to_vec())
-    //                 },
-    //             }
-    //         };
-    //         if let Some(v) = self.get(&key, ts)? {
-    //             return Ok(Some((key, v)));
-    //         }
-    //         key = key.append_ts(0);
-    //     }
-    // }
 
     pub fn reverse_seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
         assert!(*self.scan_mode.as_ref().unwrap() == ScanMode::Backward);
