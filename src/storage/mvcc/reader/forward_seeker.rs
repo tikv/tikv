@@ -101,14 +101,11 @@ impl<S: Snapshot> ForwardSeekerBuilder<S> {
 
         Ok(ForwardSeeker {
             snapshot: self.snapshot,
-            fill_cache: self.fill_cache,
             omit_value: self.omit_value,
             isolation_level: self.isolation_level,
             lock_cursor,
             write_cursor,
             default_cursor,
-            lower_bound: self.lower_bound,
-            upper_bound: self.upper_bound,
             statistics: Statistics::default(),
         })
     }
@@ -116,16 +113,12 @@ impl<S: Snapshot> ForwardSeekerBuilder<S> {
 
 pub struct ForwardSeeker<S: Snapshot> {
     snapshot: S,
-    fill_cache: bool,
     omit_value: bool,
     isolation_level: IsolationLevel,
 
     lock_cursor: Cursor<S::Iter>,
     write_cursor: Cursor<S::Iter>,
     default_cursor: Option<Cursor<S::Iter>>,
-
-    lower_bound: Option<Vec<u8>>,
-    upper_bound: Option<Vec<u8>>,
 
     statistics: Statistics,
 }
@@ -136,10 +129,17 @@ impl<S: Snapshot> ForwardSeeker<S> {
         ::std::mem::replace(&mut self.statistics, Statistics::default())
     }
 
+    /// Get reference of the statics collected so far.
+    pub fn get_statistics(&self) -> &Statistics {
+        &self.statistics
+    }
+
     pub fn read_next(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
         //        assert!(*self.scan_mode.as_ref().unwrap() == ScanMode::Forward);
         //        self.ensure_write_cursor()?;
         //        self.ensure_lock_cursor()?;
+        // TODO: Panic if given key is less than current key
+        // (Maybe we can panic in cursor's code)
 
         let (mut write_valid, mut lock_valid) = (true, true);
 

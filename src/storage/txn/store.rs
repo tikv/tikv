@@ -13,7 +13,9 @@
 
 use super::{Error, Result};
 use kvproto::kvrpcpb::IsolationLevel;
-use storage::mvcc::{Error as MvccError, MvccReader, PointGetterBuilder};
+use storage::mvcc::{
+    Error as MvccError, ForwardSeeker, ForwardSeekerBuilder, MvccReader, PointGetterBuilder,
+};
 use storage::{Key, KvPair, ScanMode, Snapshot, Statistics, Value};
 
 pub struct SnapshotStore<S: Snapshot> {
@@ -81,16 +83,32 @@ impl<S: Snapshot> SnapshotStore<S> {
         lower_bound: Option<Vec<u8>>,
         upper_bound: Option<Vec<u8>>,
     ) -> Result<StoreScanner<S>> {
-        let mut reader = MvccReader::new(
-            self.snapshot.clone(),
-            Some(mode),
-            self.fill_cache,
-            lower_bound,
-            upper_bound,
-            self.isolation_level,
-        );
-        reader.set_key_only(key_only);
+        let (forward_seeker, reader) = match mode {
+            ScanMode::Forward => {
+                let forward_seeker = ForwardSeekerBuilder::new(self.snapshot.clone())
+                    .range(lower_bound, upper_bound)
+                    .omit_value(key_only)
+                    .fill_cache(self.fill_cache)
+                    .isolation_level(self.isolation_level)
+                    .build()?;
+                (Some(forward_seeker), None)
+            }
+            ScanMode::Backward => {
+                let mut reader = MvccReader::new(
+                    self.snapshot.clone(),
+                    Some(mode),
+                    self.fill_cache,
+                    lower_bound,
+                    upper_bound,
+                    self.isolation_level,
+                );
+                reader.set_key_only(key_only);
+                (None, Some(reader))
+            }
+            _ => unreachable!(),
+        };
         Ok(StoreScanner {
+            forward_seeker,
             reader,
             start_ts: self.start_ts,
         })
@@ -98,7 +116,8 @@ impl<S: Snapshot> SnapshotStore<S> {
 }
 
 pub struct StoreScanner<S: Snapshot> {
-    reader: MvccReader<S>,
+    forward_seeker: Option<ForwardSeeker<S>>,
+    reader: Option<MvccReader<S>>,
     start_ts: u64,
 }
 
@@ -120,11 +139,11 @@ fn handle_mvcc_err(e: MvccError, result: &mut Vec<Result<KvPair>>) -> Result<Key
 
 impl<S: Snapshot> StoreScanner<S> {
     pub fn seek(&mut self, key: Key) -> Result<Option<(Key, Value)>> {
-        Ok(self.reader.seek(key, self.start_ts)?)
+        Ok(self.forward_seeker.as_mut().unwrap().read_next(key, self.start_ts)?)
     }
 
     pub fn reverse_seek(&mut self, key: Key) -> Result<Option<(Key, Value)>> {
-        Ok(self.reader.reverse_seek(key, self.start_ts)?)
+        Ok(self.reader.as_mut().unwrap().reverse_seek(key, self.start_ts)?)
     }
 
     pub fn scan(&mut self, mut key: Key, limit: usize) -> Result<Vec<Result<KvPair>>> {
@@ -161,11 +180,19 @@ impl<S: Snapshot> StoreScanner<S> {
     }
 
     pub fn get_statistics(&self) -> &Statistics {
-        self.reader.get_statistics()
+        match (self.forward_seeker.as_ref(), self.reader.as_ref()) {
+            (Some(forward_seeker), None) => forward_seeker.get_statistics(),
+            (None, Some(reader)) => reader.get_statistics(),
+            _ => unreachable!(),
+        }
     }
 
     pub fn collect_statistics_into(&mut self, stats: &mut Statistics) {
-        self.reader.collect_statistics_into(stats);
+        match (self.forward_seeker.as_mut(), self.reader.as_mut()) {
+            (Some(forward_seeker), None) => stats.add(&forward_seeker.take_statistics()),
+            (None, Some(reader)) => reader.collect_statistics_into(stats),
+            _ => unreachable!(),
+        }
     }
 }
 
