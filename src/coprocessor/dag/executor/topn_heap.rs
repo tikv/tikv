@@ -19,14 +19,13 @@ use std::usize;
 use tipb::expression::ByItem;
 
 use coprocessor::codec::datum::Datum;
-use coprocessor::codec::table::RowColsDict;
+use coprocessor::dag::executor::OriginCols;
 use coprocessor::dag::expr::{EvalContext, Result};
 
 const HEAP_MAX_CAPACITY: usize = 1024;
 
 pub struct SortRow {
-    pub handle: i64,
-    pub data: RowColsDict,
+    pub data: OriginCols,
     pub key: Vec<Datum>,
     order_cols: Arc<Vec<ByItem>>,
     eval_ctx: Arc<RefCell<EvalContext>>,
@@ -35,15 +34,13 @@ pub struct SortRow {
 
 impl SortRow {
     fn new(
-        handle: i64,
-        data: RowColsDict,
+        data: OriginCols,
         key: Vec<Datum>,
         order_cols: Arc<Vec<ByItem>>,
         ctx: Arc<RefCell<EvalContext>>,
         err: Arc<RefCell<Option<String>>>,
     ) -> SortRow {
         SortRow {
-            handle,
             data,
             key,
             order_cols,
@@ -121,8 +118,7 @@ impl TopNHeap {
 
     pub fn try_add_row(
         &mut self,
-        handle: i64,
-        data: RowColsDict,
+        data: OriginCols,
         values: Vec<Datum>,
         order_cols: Arc<Vec<ByItem>>,
     ) -> Result<()> {
@@ -130,7 +126,6 @@ impl TopNHeap {
             return Ok(());
         }
         let row = SortRow::new(
-            handle,
             data,
             values,
             order_cols,
@@ -193,6 +188,7 @@ mod tests {
 
     use coprocessor::codec::table::RowColsDict;
     use coprocessor::codec::Datum;
+    use coprocessor::dag::executor::OriginCols;
     use coprocessor::dag::expr::EvalContext;
     use util::codec::number::*;
     use util::collections::HashMap;
@@ -307,8 +303,7 @@ mod tests {
             let row_data = RowColsDict::new(HashMap::default(), data.into_bytes());
             topn_heap
                 .try_add_row(
-                    i64::from(handle),
-                    row_data,
+                    OriginCols::new(i64::from(handle), row_data, Arc::default()),
                     cur_key,
                     Arc::clone(&order_cols),
                 )
@@ -318,7 +313,7 @@ mod tests {
         assert_eq!(result.len(), exp.len());
         for (row, (handle, _, name, count)) in result.iter().zip(exp) {
             let exp_keys: Vec<Datum> = vec![name, count];
-            assert_eq!(row.handle, handle);
+            assert_eq!(row.data.handle, handle);
             assert_eq!(row.key, exp_keys);
         }
     }
@@ -335,13 +330,21 @@ mod tests {
         let std_key: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2)];
         let row_data = RowColsDict::new(HashMap::default(), b"name:1".to_vec());
         topn_heap
-            .try_add_row(0 as i64, row_data, std_key, Arc::clone(&order_cols))
+            .try_add_row(
+                OriginCols::new(0 as i64, row_data, Arc::default()),
+                std_key,
+                Arc::clone(&order_cols),
+            )
             .unwrap();
 
         let std_key2: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(3)];
         let row_data2 = RowColsDict::new(HashMap::default(), b"name:2".to_vec());
         topn_heap
-            .try_add_row(0 as i64, row_data2, std_key2, Arc::clone(&order_cols))
+            .try_add_row(
+                OriginCols::new(0 as i64, row_data2, Arc::default()),
+                std_key2,
+                Arc::clone(&order_cols),
+            )
             .unwrap();
 
         let bad_key1: Vec<Datum> = vec![Datum::I64(2), Datum::Bytes(b"aaa".to_vec())];
@@ -349,7 +352,11 @@ mod tests {
 
         assert!(
             topn_heap
-                .try_add_row(0 as i64, row_data3, bad_key1, Arc::clone(&order_cols))
+                .try_add_row(
+                    OriginCols::new(0 as i64, row_data3, Arc::default()),
+                    bad_key1,
+                    Arc::clone(&order_cols)
+                )
                 .is_err()
         );
 
@@ -435,8 +442,7 @@ mod tests {
             let row_data = RowColsDict::new(HashMap::default(), data.into_bytes());
             topn_heap
                 .try_add_row(
-                    i64::from(handle),
-                    row_data,
+                    OriginCols::new(i64::from(handle), row_data, Arc::default()),
                     cur_key,
                     Arc::clone(&order_cols),
                 )
@@ -447,7 +453,7 @@ mod tests {
         assert_eq!(result.len(), exp.len());
         for (row, (handle, _, name, count)) in result.iter().zip(exp) {
             let exp_keys: Vec<Datum> = vec![name, count];
-            assert_eq!(row.handle, handle);
+            assert_eq!(row.data.handle, handle);
             assert_eq!(row.key, exp_keys);
         }
     }
@@ -470,7 +476,11 @@ mod tests {
         let cur_key: Vec<Datum> = vec![Datum::I64(1), Datum::I64(2)];
         let row_data = RowColsDict::new(HashMap::default(), b"ssss".to_vec());
         topn_heap
-            .try_add_row(i64::from(1), row_data, cur_key, Arc::new(Vec::default()))
+            .try_add_row(
+                OriginCols::new(i64::from(1), row_data, Arc::default()),
+                cur_key,
+                Arc::new(Vec::default()),
+            )
             .unwrap();
 
         assert!(topn_heap.into_sorted_vec().unwrap().is_empty());
