@@ -13,7 +13,6 @@
 
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
-#![feature(proc_macro)]
 #![feature(fnbox)]
 #![feature(alloc)]
 #![feature(slice_patterns)]
@@ -23,6 +22,7 @@
 #![feature(proc_macro_non_items)]
 #![feature(proc_macro_gen)]
 #![feature(ascii_ctype)]
+#![feature(use_extern_macros)]
 #![recursion_limit = "200"]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
@@ -55,6 +55,7 @@ extern crate libc;
 extern crate log;
 extern crate mio;
 extern crate murmur3;
+extern crate num;
 #[macro_use]
 extern crate prometheus;
 extern crate prometheus_static_metric;
