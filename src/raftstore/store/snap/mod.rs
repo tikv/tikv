@@ -227,7 +227,14 @@ impl SnapManager {
     ) -> Result<Option<SnapshotReceiver>> {
         let meta = snapshot_meta_from_data(data)?;
         self.gc_snapshots_if_need()?;
+        self.get_snapshot_receiver_with_meta(key, meta)
+    }
 
+    fn get_snapshot_receiver_with_meta(
+        &self,
+        key: SnapKey,
+        meta: SnapshotMeta,
+    ) -> Result<Option<SnapshotReceiver>> {
         let sender = match self.register_for_build(false, key, None) {
             Either::Left(tx) => tx,
             Either::Right(Some(_)) => return Ok(None),
@@ -239,7 +246,10 @@ impl SnapManager {
         self.notify_stats();
 
         match snapshot_load(&self.core.base, false, key) {
-            Ok(Some(_)) => return Ok(None),
+            Ok(Some(meta)) => {
+                sender.send(meta).unwrap();
+                return Ok(None);
+            }
             Ok(None) => {}
             Err(e) => {
                 error!("{} get_snapshot_receiver fail when load: {}", key, e);
@@ -259,22 +269,41 @@ impl SnapManager {
         options: ApplyOptions,
         notifier: Arc<SnapStaleNotifier>,
     ) -> Result<()> {
-        let mut applyer = None;
+        let get_meta_and_things = |entry: &mut SnapEntry| {
+            entry.fetch_meta(&mut false).map(|meta| {
+                let ref_count = Arc::clone(&entry.ref_count);
+                let used_times = Arc::clone(&entry.used_times);
+                (meta, ref_count, used_times)
+            })
+        };
+
+        let mut meta_and_things = None;
+        let mut just_received = false;
         if let Some(entry) = self.get_registry(false).get_mut(&key) {
-            if let Some(meta) = entry.fetch_meta(&mut false) {
-                let dir = self.core.base.clone();
-                let rc = Arc::clone(&entry.ref_count);
-                let ut = Arc::clone(&entry.used_times);
-                applyer = Some(SnapshotApplyer::new(dir, key, meta, notifier, rc, ut))
+            // The snapshot is just registered as receiving.
+            meta_and_things = get_meta_and_things(entry);
+            just_received = true;
+        }
+        if !just_received {
+            let meta_path = get_meta_file_path(&self.core.base, false, key);
+            if let Ok(meta) = read_snapshot_meta(&meta_path) {
+                if let Ok(None) = self.get_snapshot_receiver_with_meta(key, meta) {
+                    // Can't receive it again, which means it's already on disk.
+                    if let Some(entry) = self.get_registry(false).get_mut(&key) {
+                        meta_and_things = get_meta_and_things(entry);
+                    }
+                }
             }
         }
-        match applyer {
-            Some(applyer) => applyer.apply(options),
-            None => {
-                error!("{} apply_snapshot without avaliable snapshot", key);
-                Err(Error::Snapshot(SnapError::Registry("none", "apply")))
-            }
+
+        if let Some((meta, ref_count, used_times)) = meta_and_things {
+            let dir = self.core.base.clone();
+            let applyer = SnapshotApplyer::new(dir, key, meta, notifier, ref_count, used_times);
+            return applyer.apply(options);
         }
+
+        error!("{} apply_snapshot without avaliable snapshot", key);
+        Err(Error::Snapshot(SnapError::Registry("none", "apply")))
     }
 
     fn scan_meta_files(&self, path: &Path) -> io::Result<()> {
@@ -917,9 +946,9 @@ mod tests {
         receiver.save().unwrap();
         check_snap_size(&snap_mgr);
 
-        // Apply snapshot should fail because no such entry in registry.
+        // Apply can success even if it's not in registry.
         let entry = snap_mgr.deregister(false, key).unwrap();
-        do_apply(false);
+        do_apply(true);
 
         // Apply snapshot should fail because it's still receiving.
         let (_, rx) = sync_channel(1);
