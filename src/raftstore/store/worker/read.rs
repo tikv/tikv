@@ -360,9 +360,6 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         callback: Callback,
         send_time: Instant,
     ) {
-        self.metrics
-            .requests_wait_duration
-            .observe(duration_to_sec(send_time.elapsed()));
         let region_id = req.get_header().get_region_id();
         match self.pre_propose_raft_command(&req) {
             Ok(true) => (),
@@ -483,7 +480,9 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
     }
 
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
+        let mut sent = None;
         self.metrics.batch_requests_size.observe(tasks.len() as _);
+
         for task in tasks.drain(..) {
             match task {
                 Task::Register(delegate) => {
@@ -497,10 +496,22 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
                     send_time,
                     request,
                     callback,
-                }) => self.propose_raft_command(request, callback, send_time),
+                }) => {
+                    self.propose_raft_command(request, callback, send_time);
+                    if sent.is_none() {
+                        sent = Some(send_time);
+                    }
+                }
                 Task::Read(StoreMsg::BatchRaftSnapCmds {
-                    batch, on_finished, ..
-                }) => self.propose_batch_raft_snapshot_command(batch, on_finished),
+                    send_time,
+                    batch,
+                    on_finished,
+                }) => {
+                    self.propose_batch_raft_snapshot_command(batch, on_finished);
+                    if sent.is_none() {
+                        sent = Some(send_time);
+                    }
+                }
                 Task::Read(other) => {
                     unimplemented!("unsupported Msg {:?}", other);
                 }
@@ -518,6 +529,12 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
                     self.delegates.remove(&region_id);
                 }
             }
+        }
+
+        if let Some(send_time) = sent {
+            self.metrics
+                .requests_wait_duration
+                .observe(duration_to_sec(send_time.elapsed()));
         }
     }
 }
