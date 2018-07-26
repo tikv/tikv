@@ -12,6 +12,7 @@
 // limitations under the License.
 
 mod cf_reader;
+mod forward_seeker;
 mod point_getter;
 mod util;
 
