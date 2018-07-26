@@ -21,7 +21,7 @@ panic() {
 
 if [[ "$SKIP_FORMAT_CHECK" != "true" ]]; then
     make format
-    git diff-index --quiet HEAD -- || (git diff; panic "\e[35mplease make format before creating a pr!!!\e[0m")
+    git diff-index --quiet HEAD -- || (git diff; panic "\e[35mPlease make format before creating a PR!!!\e[0m")
 fi
 
 trap 'kill $(jobs -p) &> /dev/null || true' EXIT
@@ -32,7 +32,7 @@ if [[ "$TRAVIS" = "true" ]]; then
 fi
 export RUSTFLAGS=-Dwarnings
 
-make clippy || panic "\e[35mplease fix the errors!!!\e[0m"
+make clippy || panic "\e[35mPlease fix clippy errors!!!\e[0m"
 
 if [[ "$SKIP_TESTS" != "true" ]]; then
     make test 2>&1 | tee tests.out
@@ -41,7 +41,7 @@ else
     exit $?
 fi
 status=$?
-git diff-index --quiet HEAD -- || echo "\e[35mplease run tests before creating a pr!!!\e[0m"
+git diff-index --quiet HEAD -- || echo "\e[35mPlease run tests before creating a PR!!!\e[0m"
 for case in `cat tests.out | python -c "import sys
 import re
 p = re.compile(\"thread '([^']+)' panicked at\")

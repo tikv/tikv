@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate toml;
-
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -28,6 +26,7 @@ use rocksdb::{
 };
 use slog;
 use sys_info;
+use toml;
 
 use import::Config as ImportConfig;
 use pd::Config as PdConfig;

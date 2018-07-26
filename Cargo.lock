@@ -1229,14 +1229,68 @@ dependencies = [
 ]
 
 [[package]]
-name = "tikv"
+name = "tikv-bench"
+version = "0.0.1"
+dependencies = [
+ "clap 2.23.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam-channel 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git)",
+ "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mio 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "protobuf 2.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "raft 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rocksdb 0.3.0 (git+https://github.com/pingcap/rust-rocksdb.git)",
+ "serde_json 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tikv-lib 0.0.1",
+ "tikv-test 0.0.1",
+ "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)",
+]
+
+[[package]]
+name = "tikv-bin"
 version = "2.1.0-beta"
+dependencies = [
+ "chrono 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "clap 2.23.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "fs2 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "futures 0.1.17 (registry+https://github.com/rust-lang/crates.io-index)",
+ "grpcio 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "jemallocator 0.1.0 (git+https://github.com/busyjay/jemallocator.git?branch=dev)",
+ "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git)",
+ "libc 0.2.42 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "nix 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "protobuf 2.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "raft 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rustc-serialize 0.3.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde_json 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "signal 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "slog 2.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "slog-async 2.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "slog-term 2.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tikv-lib 0.0.1",
+ "time 0.1.38 (registry+https://github.com/rust-lang/crates.io-index)",
+ "toml 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "tikv-fuzz"
+version = "0.0.1"
+dependencies = [
+ "libfuzzer-sys 0.1.0 (git+https://github.com/rust-fuzz/libfuzzer-sys.git)",
+ "tikv-lib 0.0.1",
+]
+
+[[package]]
+name = "tikv-lib"
+version = "0.0.1"
 dependencies = [
  "backtrace 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "bitflags 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "byteorder 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "chrono 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "clap 2.23.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "crc 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "crossbeam 0.2.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "crossbeam-channel 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1249,14 +1303,12 @@ dependencies = [
  "fxhash 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "indexmap 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "jemallocator 0.1.0 (git+https://github.com/busyjay/jemallocator.git?branch=dev)",
  "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.42 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "mio 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "murmur3 0.4.0 (git+https://github.com/pingcap/murmur3.git)",
- "nix 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "num 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "prometheus 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "prometheus-static-metric 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1266,11 +1318,9 @@ dependencies = [
  "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex 0.1.80 (registry+https://github.com/rust-lang/crates.io-index)",
  "rocksdb 0.3.0 (git+https://github.com/pingcap/rust-rocksdb.git)",
- "rustc-serialize 0.3.24 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.52 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 1.0.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "signal 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog 2.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog-async 2.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog-scope 4.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1290,11 +1340,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "tikv-fuzz"
+name = "tikv-test"
 version = "0.0.1"
 dependencies = [
- "libfuzzer-sys 0.1.0 (git+https://github.com/rust-fuzz/libfuzzer-sys.git)",
- "tikv 2.1.0-beta",
+ "crc 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "fail 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "futures 0.1.17 (registry+https://github.com/rust-lang/crates.io-index)",
+ "futures-cpupool 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "grpcio 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git)",
+ "lazy_static 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "protobuf 2.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "raft 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rocksdb 0.3.0 (git+https://github.com/pingcap/rust-rocksdb.git)",
+ "slog 2.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tikv-lib 0.0.1",
+ "time 0.1.38 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)",
+ "tokio-timer 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "toml 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "uuid 0.6.3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
