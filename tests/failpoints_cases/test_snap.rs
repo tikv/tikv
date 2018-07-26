@@ -11,13 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc};
 use std::time::*;
 use std::*;
 
 use fail;
+use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
+use rocksdb::DB;
+use tikv::raftstore::store::{keys, Peekable};
+use tikv::storage::CF_RAFT;
 use tikv::util::config::*;
 
 use raftstore::cluster::Simulator;
@@ -145,4 +150,68 @@ fn test_server_snapshot_on_resolve_failure() {
 
     // Clean up.
     fail::remove(on_resolve_fp);
+}
+
+#[test]
+fn test_apply_fail() {
+    let _guard = ::setup();
+
+    let mut cluster = new_server_cluster(1, 3);
+    configure_for_snapshot(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+
+    cluster.must_put(b"k1", b"v1");
+
+    fail::cfg("region_apply_snap", "pause").unwrap();
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
+
+    let snap_dir = PathBuf::from(cluster.get_snap_dir(2));
+    dir_must_not_empty(&snap_dir);
+
+    for p in fs::read_dir(&snap_dir).unwrap() {
+        let p = p.unwrap();
+        if p.file_name().to_str().unwrap().ends_with(".sst") {
+            fs::remove_file(p.path()).unwrap();
+        }
+    }
+    fail::cfg("region_apply_snap", "off").unwrap();
+
+    // After apply snapshot fail, the peer should be tombstone.
+    let f = (0..500).skip_while(|_| {
+        thread::sleep(Duration::from_millis(10));
+        if let Some(state) = get_region_state(&cluster.get_engine(2), r1) {
+            return state.get_state() != PeerState::Tombstone;
+        }
+        true
+    });
+    assert!(f.count() > 0);
+
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    pd_client.must_remove_peer(r1, new_learner_peer(2, 2));
+    pd_client.must_add_peer(r1, new_learner_peer(2, 4));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+
+    fail::remove("region_apply_snap");
+}
+
+fn dir_must_not_empty<P: AsRef<Path>>(path: P) {
+    for _ in 0..500 {
+        thread::sleep(Duration::from_millis(10));
+        if fs::read_dir(&path).unwrap().count() > 0 {
+            return;
+        }
+    }
+    panic!("the directory {:?} is still empty", path.as_ref().to_str());
+}
+
+fn get_region_state(engine: &DB, region_id: u64) -> Option<RegionLocalState> {
+    let key = keys::region_state_key(region_id);
+    match engine.get_msg_cf::<RegionLocalState>(CF_RAFT, &key) {
+        Ok(Some(s)) => Some(s),
+        _ => None,
+    }
 }

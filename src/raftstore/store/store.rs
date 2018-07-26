@@ -533,6 +533,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let region_runner = RegionRunner::new(
             self.engines.clone(),
+            self.store_id(),
+            self.sendch.clone(),
             self.snap_mgr.clone(),
             self.cfg.snap_apply_batch_size.0 as usize,
             self.cfg.use_delete_range,

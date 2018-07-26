@@ -560,20 +560,15 @@ mod tests {
 
         // After the receiver is droped, no garbage should exist.
         drop(receiver);
-        let rev_files = fs::read_dir(&tmp_path)
-            .unwrap()
-            .filter(|p| match p {
-                Ok(ref p) => p
-                    .file_name()
-                    .into_string()
-                    .unwrap()
-                    .starts_with(SNAP_REV_PREFIX),
+        let rev_files = fs::read_dir(&tmp_path).unwrap().filter(|p| match p {
+            Ok(ref p) => p
+                .file_name()
+                .into_string()
+                .unwrap()
+                .starts_with(SNAP_REV_PREFIX),
 
-                Err(_) => false,
-            })
-            .map(|p| {
-                println!("rev file: {:?}", p);
-            });
+            Err(_) => false,
+        });
         assert_eq!(rev_files.count(), 0);
 
         let mut receiver = snap_mgr.get_snapshot_receiver(key, &data).unwrap().unwrap();
