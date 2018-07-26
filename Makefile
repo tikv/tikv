@@ -56,7 +56,7 @@ run:
 	cargo run --package tikv-bin --bin tikv-server --features "${ENABLE_FEATURES}"
 
 release:
-	@cargo build --package tikv-bin --release --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS}
+	@RUSTFLAGS="-C lto" cargo build --package tikv-bin --release --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS}
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-fail ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
 
@@ -91,7 +91,7 @@ bench:
 	@export LOG_LEVEL=ERROR
 	@export RUST_BACKTRACE=1
 	cargo bench --package tikv-lib --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture && \
-	cargo bench --package tikv-bench --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture && \
+	cargo bench --package tikv-bench --benches --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture && \
 	cargo run --package tikv-bench --bin tikv-bench --release --features "${ENABLE_FEATURES}"
 
 pre-format:
