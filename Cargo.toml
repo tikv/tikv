@@ -12,5 +12,10 @@ codegen-units = 4
 
 [profile.release]
 debug = true
+lto = true
 # TODO: remove this once rust-lang/rust#50199 is resolved.
 codegen-units = 2
+
+[profile.bench]
+debug = true
+lto = false
