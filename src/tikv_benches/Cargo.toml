@@ -7,7 +7,7 @@ publish = false
 name = "tikv-bench"
 path = "bin/bench-tikv.rs"
 
-[[test]]
+[[bench]]
 name = "benches"
 path = "benches.rs"
 
