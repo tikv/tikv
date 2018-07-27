@@ -123,7 +123,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Create pd client and pd worker
     let pd_client = Arc::new(pd_client);
-    let pd_worker = FutureWorker::new("pd-wkr");
+    let pd_worker = FutureWorker::new("pd-worker");
     let (mut worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
         .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
     let pd_sender = pd_worker.scheduler();

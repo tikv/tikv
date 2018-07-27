@@ -266,7 +266,7 @@ pub struct GCWorker<E: Engine> {
 impl<E: Engine> GCWorker<E> {
     pub fn new(engine: E, ratio_threshold: f64) -> GCWorker<E> {
         let worker = Arc::new(Mutex::new(
-            Builder::new("gc-wkr")
+            Builder::new("gc-worker")
                 .pending_capacity(GC_MAX_PENDING_TASKS)
                 .create(),
         ));
