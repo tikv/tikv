@@ -493,21 +493,18 @@ impl Lease {
     /// Renew the lease to the bound.
     pub fn renew(&mut self, send_ts: Timespec) {
         let bound = self.next_expired_time(send_ts);
-        let ts = match self.bound {
+        match self.bound {
             // Longer than suspect ts or longer than valid ts.
             Some(Either::Left(ts)) | Some(Either::Right(ts)) => if ts <= bound {
                 self.bound = Some(Either::Right(bound));
-                Some(bound)
-            } else {
-                None
             },
             // Or an empty lease
             None => {
                 self.bound = Some(Either::Right(bound));
-                Some(bound)
             }
-        };
-        if let Some(bound) = ts {
+        }
+        // Renew remote if it's valid.
+        if let Some(Either::Right(bound)) = self.bound {
             if bound - self.last_update > self.max_drift {
                 self.last_update = bound;
                 if let Some(ref r) = self.remote {
@@ -555,7 +552,10 @@ impl Lease {
             return None;
         }
         let expired_time = match self.bound {
-            Some(Either::Right(ts)) => timespec_to_u64(ts),
+            Some(Either::Right(ts)) => {
+                self.last_update = ts;
+                timespec_to_u64(ts)
+            }
             _ => 0,
         };
         let remote = RemoteLease {
@@ -633,7 +633,7 @@ fn timespec_to_u64(ts: Timespec) -> u64 {
     // Quote from crate time,
     //   https://github.com/rust-lang-deprecated/time/blob/
     //   e313afbd9aad2ba7035a23754b5d47105988789d/src/lib.rs#L77
-    assert!(ts.sec >= 0 && ts.sec < 1i64 << (64 - TIMESPEC_SEC_SHIFT));
+    assert!(ts.sec >= 0 && ts.sec < (1i64 << (64 - TIMESPEC_SEC_SHIFT)));
     assert!(ts.nsec >= 0);
 
     // Round down to millisecond precision.

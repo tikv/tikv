@@ -44,7 +44,7 @@ use super::metrics::*;
 #[derive(Debug)]
 pub struct ReadDelegate {
     region: metapb::Region,
-    peer: metapb::Peer,
+    peer_id: u64,
     term: u64,
     applied_index_term: u64,
     leader_lease: Option<RemoteLease>,
@@ -59,7 +59,7 @@ impl ReadDelegate {
         let peer_id = peer.peer.get_id();
         ReadDelegate {
             region,
-            peer: peer.peer.clone(),
+            peer_id,
             term: peer.term(),
             applied_index_term: peer.get_store().applied_index_term,
             leader_lease: None,
@@ -72,24 +72,10 @@ impl ReadDelegate {
             self.region = region;
         }
         if let Some(term) = progress.term {
-            if self.term <= term {
-                self.term = term;
-            } else {
-                warn!(
-                    "stale progress, registered term {}, update term {}",
-                    self.term, term
-                );
-            }
+            self.term = term;
         }
         if let Some(applied_index_term) = progress.applied_index_term {
-            if self.applied_index_term <= applied_index_term {
-                self.applied_index_term = applied_index_term;
-            } else {
-                warn!(
-                    "stale progress, registered applied_index_term {}, update applied_index_term {}",
-                    self.applied_index_term, applied_index_term
-                );
-            }
+            self.applied_index_term = applied_index_term;
         }
         if let Some(lease) = progress.leader_lease {
             self.leader_lease = Some(lease);
@@ -119,7 +105,7 @@ impl Display for ReadDelegate {
             "ReadDelegate for region {}, \
              leader {} at term {}, applied_index_term {}, has lease {}",
             self.region.get_id(),
-            self.peer.get_id(),
+            self.peer_id,
             self.term,
             self.applied_index_term,
             self.leader_lease.is_some(),
@@ -263,7 +249,7 @@ impl LocalReader<mio::Sender<StoreMsg>> {
             let delegate = ReadDelegate::from_peer(p);
             debug!(
                 "{} init ReadDelegate for peer {:?}",
-                delegate.tag, delegate.peer
+                delegate.tag, delegate.peer_id
             );
             delegates.insert(region_id, delegate);
         }
@@ -318,7 +304,7 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         };
 
         // Check peer id.
-        if let Err(e) = util::check_peer_id(req, delegate.peer.get_id()) {
+        if let Err(e) = util::check_peer_id(req, delegate.peer_id) {
             self.metrics.rejected_by_peer_id_mismatch += 1;
             return Err(e);
         }
@@ -488,7 +474,7 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
                 Task::Register(delegate) => {
                     debug!(
                         "{} register ReadDelegate for {:?}",
-                        delegate.tag, delegate.peer
+                        delegate.tag, delegate.peer_id
                     );
                     self.delegates.insert(delegate.region.get_id(), delegate);
                 }
@@ -779,7 +765,7 @@ mod tests {
         let register_region1 = Task::Register(ReadDelegate {
             tag: String::new(),
             region: region1.clone(),
-            peer: leader2.clone(),
+            peer_id: leader2.get_id(),
             term: term6,
             applied_index_term: term6 - 1,
             leader_lease: Some(remote),
