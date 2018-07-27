@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::cmp;
-use std::collections::btree_map::Iter;
 use std::collections::Bound::{Included, Unbounded};
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
@@ -38,7 +37,6 @@ const PROP_MAX_ROW_VERSIONS: &str = "tikv.max_row_versions";
 const PROP_ROWS_INDEX: &str = "tikv.rows_index";
 const PROP_ROWS_INDEX_DISTANCE: u64 = 10000;
 const PROP_TOTAL_SIZE: &str = "tikv.total_size";
-const PROP_TOTAL_KEYS: &str = "tikv.total_keys";
 const PROP_SIZE_INDEX: &str = "tikv.size_index";
 const PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
 const PROP_RANGE_INDEX: &str = "tikv.range_index";
@@ -469,29 +467,6 @@ impl DecodeProperties for UserCollectedProperties {
     }
 }
 
-pub struct IndexHandlesIterator<'a> {
-    iter: Iter<'a, Vec<u8>, Vec<u64>>,
-    idx: usize,
-}
-
-impl<'a> IndexHandlesIterator<'a> {
-    fn new(iter: Iter<'a, Vec<u8>, Vec<u64>>, idx: usize) -> IndexHandlesIterator<'a> {
-        IndexHandlesIterator { iter, idx }
-    }
-}
-
-impl<'a> Iterator for IndexHandlesIterator<'a> {
-    // type Item = (&'a [u8], &'a IndexHandle);
-    type Item = (&'a [u8], u64);
-
-    fn next(&mut self) -> Option<(&'a [u8], u64)> {
-        match self.iter.next() {
-            None => None,
-            Some((k, handles)) => Some((k, handles[self.idx])),
-        }
-    }
-}
-
 /// `OffsetHandles` manages the multiple properties's offsets of the block in the file.
 #[derive(Debug, Default)]
 pub struct OffsetHandles {
@@ -587,16 +562,10 @@ impl OffsetHandles {
     pub fn largest_key(&self) -> Option<Vec<u8>> {
         self.offsets.iter().last().map(|(key, _)| key.clone())
     }
-
-    pub fn iter(&self, idx: usize) -> IndexHandlesIterator {
-        IndexHandlesIterator::new(self.offsets.iter(), idx)
-    }
 }
 
 #[derive(Debug, Default)]
 pub struct RangeProperties {
-    pub total_size: u64,
-    pub total_keys: u64,
     pub offset_handles: OffsetHandles,
 }
 
@@ -606,8 +575,6 @@ const RANGE_KEYS_OFFSET: usize = 1;
 impl RangeProperties {
     pub fn encode(&self) -> UserProperties {
         let mut props = UserProperties::new();
-        props.encode_u64(PROP_TOTAL_SIZE, self.total_size);
-        props.encode_u64(PROP_TOTAL_KEYS, self.total_keys);
         props.encode(PROP_RANGE_INDEX, self.offset_handles.encode());
         props
     }
@@ -622,8 +589,6 @@ impl RangeProperties {
 
     pub fn decode<T: DecodeProperties>(props: &T) -> Result<RangeProperties> {
         let mut res = RangeProperties::default();
-        res.total_size = props.decode_u64(PROP_TOTAL_SIZE)?;
-        res.total_keys = props.decode_u64(PROP_TOTAL_KEYS)?;
         let v = props.decode(PROP_RANGE_INDEX)?;
         res.offset_handles = OffsetHandles::decode(v, 2)?;
         Ok(res)
@@ -651,8 +616,6 @@ impl RangeProperties {
 impl From<SizeProperties> for RangeProperties {
     fn from(p: SizeProperties) -> RangeProperties {
         RangeProperties {
-            total_size: p.total_size,
-            total_keys: 0,
             offset_handles: OffsetHandles::from_index_handles(
                 p.index_handles,
                 RANGE_SIZE_OFFSET,
@@ -668,15 +631,17 @@ pub struct RangePropertiesCollector {
     last_key: Vec<u8>,
     last_keys_offset: u64,
     last_size_offset: u64,
+    total_size: u64,
+    total_keys: u64,
 }
 
 impl RangePropertiesCollector {
     fn size_in_last_range(&self) -> u64 {
-        self.props.total_size - self.last_size_offset
+        self.total_size - self.last_size_offset
     }
 
     fn keys_in_last_range(&self) -> u64 {
-        self.props.total_keys - self.last_keys_offset
+        self.total_keys - self.last_keys_offset
     }
 }
 
@@ -687,14 +652,14 @@ impl TablePropertiesCollector for RangePropertiesCollector {
         }
 
         // keys
-        self.props.total_keys += 1;
+        self.total_keys += 1;
         // size
         let size = key.len() + value.len();
-        self.props.total_size += size as u64;
+        self.total_size += size as u64;
         // Add the start key for convenience.
         if self.last_key.is_empty() || self.size_in_last_range() >= PROP_SIZE_INDEX_DISTANCE {
-            self.last_keys_offset = self.props.total_keys;
-            self.last_size_offset = self.props.total_size;
+            self.last_keys_offset = self.total_keys;
+            self.last_size_offset = self.total_size;
             self.props.offset_handles.insert(
                 key.to_owned(),
                 vec![self.last_size_offset, self.last_keys_offset],
@@ -708,7 +673,7 @@ impl TablePropertiesCollector for RangePropertiesCollector {
         if self.size_in_last_range() > 0 || self.keys_in_last_range() > 0 {
             self.props.offset_handles.insert(
                 self.last_key.clone(),
-                vec![self.props.total_size, self.props.total_keys],
+                vec![self.total_size, self.total_keys],
             );
         }
         self.props.encode().0
@@ -956,8 +921,14 @@ mod tests {
             props.largest_key().unwrap(),
             cases[cases.len() - 1].0.as_bytes()
         );
-        assert_eq!(props.total_size, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11);
-        assert_eq!(props.total_keys, cases.len() as u64);
+        assert_eq!(
+            props.get_approximate_size_in_range(b"", b"z"),
+            PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11
+        );
+        assert_eq!(
+            props.get_approximate_keys_in_range(b"", b"z"),
+            cases.len() as u64
+        );
         let handles = &props.offset_handles.offsets;
         assert_eq!(handles.len(), 4);
         let a = &handles[b"a".as_ref()];
