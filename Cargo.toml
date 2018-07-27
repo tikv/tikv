@@ -1,128 +1,21 @@
-[package]
-name = "tikv"
-version = "2.1.0-beta"
-keywords = ["KV", "distributed-systems", "raft"]
-build = "build.rs"
-
-[build-dependencies]
-time = "0.1"
-
-[features]
-default = []
-portable = ["rocksdb/portable"]
-sse = ["rocksdb/sse"]
-mem-profiling = ["jemallocator"]
-no-fail = ["fail/no_fail"]
-
-[lib]
-name = "tikv"
-
-[[bin]]
-name = "tikv-server"
-
-[[bin]]
-name = "bench-tikv"
-path = "benches/bin/bench-tikv.rs"
-
-[[bin]]
-name = "tikv-ctl"
-
-[[bin]]
-name = "tikv-fail"
-
-[[bin]]
-name = "tikv-importer"
-
-[dependencies]
-log = "0.3.9"
-slog = "2.2"
-slog-async = "2.3"
-slog-scope = "4.0"
-slog-stdlog = "3.0"
-slog-term = "2.4"
-byteorder = "0.5"
-rand = "0.3"
-quick-error = "0.2"
-tempdir = "0.3"
-time = "0.1"
-toml = "0.4"
-libc = "0.2"
-crc = "1.2"
-fs2 = "0.4"
-protobuf = "~2.0"
-nix = "0.9.0"
-utime = "0.2"
-chrono = "0.4"
-lazy_static = "0.2.1"
-backtrace = "0.2.3"
-clap = "2"
-url = "1.5"
-regex = "0.1"
-fnv = "1.0"
-sys-info = "0.5.1"
-indexmap = { version = "1.0", features = ["serde-1"] }
-mio = "0.5"
-futures = "0.1"
-futures-cpupool = "0.1"
-tokio-core = "0.1"
-tokio-timer = "0.1"
-serde = "1.0"
-serde_json = "1.0"
-serde_derive = "1.0"
-rustc-serialize = "0.3"
-zipf = "0.2.0"
-bitflags = "1.0.1"
-fail = "0.2"
-uuid = { version = "0.6", features = [ "serde", "v4" ] }
-grpcio = { version = "0.3", features = [ "secure" ] }
-raft = "0.3"
-crossbeam-channel = "0.2"
-crossbeam = "0.2"
-fxhash = "0.2"
-derive_more = "0.11.0"
-num = "0.2.0"
-
-[target.'cfg(unix)'.dependencies]
-signal = "0.4"
-
-[dependencies.murmur3]
-git = "https://github.com/pingcap/murmur3.git"
-
-[dependencies.rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
-
-[dependencies.kvproto]
-git = "https://github.com/pingcap/kvproto.git"
-
-[dependencies.tipb]
-git = "https://github.com/pingcap/tipb.git"
-
-[dependencies.prometheus]
-version = "0.4.2"
-default-features = false
-features = ["nightly", "push", "process"]
-
-[dependencies.prometheus-static-metric]
-version = "0.1.4"
-
-[dependencies.jemallocator]
-git = "https://github.com/busyjay/jemallocator.git"
-branch = "dev"
-features = ["profiling"]
-optional = true
-
 [workspace]
-members = ["fuzz"]
+members = [
+  "src",
+  "src/tikv_bin",
+  "src/tikv_tests",
+  "src/tikv_benches",
+  "src/fuzz"
+]
 
 [profile.dev]
-opt-level = 0  # Controls the --opt-level the compiler builds with
-debug = true   # Controls whether the compiler passes `-g`
 codegen-units = 4
 
-# The release profile, used for `cargo build --release`
 [profile.release]
-lto = true
-opt-level = 3
 debug = true
+lto = true
 # TODO: remove this once rust-lang/rust#50199 is resolved.
 codegen-units = 2
+
+[profile.bench]
+debug = true
+lto = false

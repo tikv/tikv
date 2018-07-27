@@ -96,7 +96,6 @@ extern crate time;
 extern crate tipb;
 extern crate tokio_core;
 extern crate tokio_timer;
-#[cfg(test)]
 extern crate toml;
 extern crate url;
 #[cfg(test)]
@@ -115,5 +114,3 @@ pub mod pd;
 pub mod raftstore;
 pub mod server;
 pub mod storage;
-
-pub use storage::Storage;

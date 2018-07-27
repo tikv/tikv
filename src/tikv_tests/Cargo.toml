@@ -1,0 +1,50 @@
+[package]
+name = "tikv-test"
+version = "0.0.1"
+publish = false
+
+[lib]
+name = "tikv_test"
+path = "lib.rs"
+
+[features]
+default = []
+no-fail = ["fail/no_fail"]
+
+[[test]]
+name = "failpoints"
+path = "failpoints.rs"
+
+[[test]]
+name = "integrations"
+path = "integrations.rs"
+
+[dependencies.tikv-lib]
+path = ".."
+
+[dependencies]
+lazy_static = "1.0"
+fail = "0.2"
+tokio-timer = "0.1"
+futures = "0.1"
+futures-cpupool = "0.1"
+tempdir = "0.3"
+raft = "0.3"
+grpcio = { version = "0.3", features = [ "secure" ] }
+rand = "0.3"
+protobuf = "~2.0"
+log = "0.3.9"
+slog = "2.2"
+time = "0.1"
+uuid = { version = "0.6", features = [ "serde", "v4" ] }
+toml = "0.4"
+crc = "1.2"
+
+[dependencies.rocksdb]
+git = "https://github.com/pingcap/rust-rocksdb.git"
+
+[dependencies.kvproto]
+git = "https://github.com/pingcap/kvproto.git"
+
+[dependencies.tipb]
+git = "https://github.com/pingcap/tipb.git"

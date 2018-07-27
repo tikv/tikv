@@ -1,0 +1,21 @@
+[package]
+name = "tikv-fuzz"
+version = "0.0.1"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[[bin]]
+name = "codec_bytes"
+path = "fuzz_targets/codec_bytes.rs"
+
+[[bin]]
+name = "coprocessor_codec_mysql_decimal"
+path = "fuzz_targets/coprocessor/codec/mysql/decimal.rs"
+
+[dependencies.tikv-lib]
+path = ".."
+
+[dependencies.libfuzzer-sys]
+git = "https://github.com/rust-fuzz/libfuzzer-sys.git"
