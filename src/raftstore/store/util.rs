@@ -369,7 +369,7 @@ pub fn get_region_approximate_middle_cf(
         let props = RangeProperties::try_decode(v.user_collected_properties())?;
         keys.extend(
             props
-                .offsets_handle
+                .offset_handles
                 .offsets
                 .range::<[u8], _>((Excluded(start.as_slice()), Excluded(end.as_slice())))
                 .map(|(k, _)| k.to_owned()),
