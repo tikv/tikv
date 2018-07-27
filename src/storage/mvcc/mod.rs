@@ -59,12 +59,12 @@ quick_error! {
         }
         TxnLockNotFound {start_ts: u64, commit_ts: u64, key: Vec<u8> } {
             description("txn lock not found")
-            display("txn lock not found {}-{} key:{:?}", start_ts, commit_ts, key)
+            display("txn lock not found {}-{} key:{:?}", start_ts, commit_ts, escape(key))
         }
         WriteConflict { start_ts: u64, conflict_ts: u64, key: Vec<u8>, primary: Vec<u8> } {
             description("write conflict")
             display("write conflict {} with {}, key:{:?}, primary:{:?}",
-             start_ts, conflict_ts, key, primary)
+             start_ts, conflict_ts, escape(key), escape(primary))
         }
         KeyVersion {description("bad format key(version)")}
         Other(err: Box<error::Error + Sync + Send>) {
