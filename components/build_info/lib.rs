@@ -13,7 +13,6 @@
 
 /// A macro that evaluates to current branch, commit, UTC time and rustc version
 /// at compile time. These information is printed out when passing `--version`.
-
 extern crate proc_macro;
 extern crate proc_macro2;
 extern crate time;
