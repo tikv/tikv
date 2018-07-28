@@ -196,12 +196,13 @@ mod test {
 
     use futures::Future;
     use tokio_core::reactor::Handle;
-    use tokio_timer::Timer;
+    use tokio_timer::timer;
+    use util::timer::GLOBAL_TIMER_HANDLE;
 
     use super::*;
 
     struct StepRunner {
-        timer: Timer,
+        timer: timer::Handle,
         ch: Sender<u64>,
     }
 
@@ -210,7 +211,7 @@ mod test {
             self.ch.send(step).unwrap();
             let f = self
                 .timer
-                .sleep(Duration::from_millis(step))
+                .delay(Instant::now() + Duration::from_millis(step))
                 .map_err(|_| ());
             handle.spawn(f);
         }
@@ -226,7 +227,7 @@ mod test {
         let (tx, rx) = mpsc::channel();
         worker
             .start(StepRunner {
-                timer: Timer::default(),
+                timer: GLOBAL_TIMER_HANDLE.clone(),
                 ch: tx,
             })
             .unwrap();
