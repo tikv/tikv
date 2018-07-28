@@ -92,4 +92,8 @@ lazy_static! {
         "tikv_server_raft_message_flush_total",
         "Total number of raft messages flushed"
     ).unwrap();
+    pub static ref RAFT_MESSAGE_RECV_BYTES: IntCounter = register_int_counter!(
+        "tikv_server_raft_message_recv_bytes",
+        "Total bytes of raft messages received"
+    ).unwrap();
 }
