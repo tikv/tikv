@@ -52,7 +52,7 @@ fn commit_hash() -> String {
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim_right().to_owned())
-        .unwrap_or("None".to_owned())
+        .unwrap_or_else(|| "None".to_owned())
 }
 
 fn branch_info() -> String {
@@ -62,7 +62,7 @@ fn branch_info() -> String {
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim_right().to_owned())
-        .unwrap_or("None".to_owned())
+        .unwrap_or_else(|| "None".to_owned())
 }
 
 fn rustc_ver() -> String {
