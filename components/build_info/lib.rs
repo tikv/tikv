@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2018 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,34 +11,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate time;
+/// A macro that evaluates to current branch, commit, UTC time and rustc version
+/// at compile time. These information is printed out when passing `--version`.
 
-use std::env;
-use std::fs::File;
-use std::io::Write;
-use std::path::PathBuf;
+extern crate proc_macro;
+extern crate proc_macro2;
+extern crate time;
+#[macro_use]
+extern crate quote;
+extern crate rustc_version;
+
 use std::process::Command;
 
-fn main() {
-    let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+use proc_macro2::Literal;
 
-    File::create(out_dir.join("build-info.txt"))
-        .unwrap()
-        .write_all(build_info().as_bytes())
-        .unwrap();
-}
+#[proc_macro]
+pub fn build_info(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    // Input parameters are not allowed
+    assert!(input.to_string().is_empty());
 
-// build_info returns a string of commit hash and utc time.
-// TODO: use serde.
-fn build_info() -> String {
-    // explicit separates outputs by '\n'.
-    format!(
-        "{}\n{}\n{}\n{}",
-        commit_hash().trim_right(),
-        branch_info().trim_right(),
-        utc_time(),
-        rustc_version()
-    )
+    let commit_hash = Literal::string(&commit_hash());
+    let branch_info = Literal::string(&branch_info());
+    let utc_time = Literal::string(&utc_time());
+    let rustc_ver = Literal::string(&rustc_ver());
+
+    let output = quote! {
+        (#commit_hash, #branch_info, #utc_time, #rustc_ver)
+    };
+    output.into()
 }
 
 fn utc_time() -> String {
@@ -52,6 +52,7 @@ fn commit_hash() -> String {
     cmd.output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim_right().to_owned())
         .unwrap_or("None".to_owned())
 }
 
@@ -61,15 +62,11 @@ fn branch_info() -> String {
     cmd.output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim_right().to_owned())
         .unwrap_or("None".to_owned())
 }
 
-fn rustc_version() -> String {
-    let mut cmd = Command::new(env::var("RUSTC").unwrap());
-    cmd.args(&["--version"]);
-    cmd.output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|v| v.trim_left_matches("rustc").trim().to_owned())
-        .unwrap()
+fn rustc_ver() -> String {
+    let version = rustc_version::version_meta().unwrap();
+    version.short_version_string
 }
