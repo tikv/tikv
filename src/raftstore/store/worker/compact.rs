@@ -15,6 +15,7 @@ use std::collections::VecDeque;
 use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
+use std::time::Instant;
 
 use rocksdb::DB;
 use storage::CF_WRITE;
@@ -109,6 +110,7 @@ impl Runner {
         end_key: Option<Vec<u8>>,
     ) -> Result<(), Error> {
         let handle = box_try!(rocksdb::get_cf_handle(&self.engine, &cf_name));
+        let timer = Instant::now();
         let compact_range_timer = COMPACT_RANGE_CF
             .with_label_values(&[&cf_name])
             .start_coarse_timer();
@@ -123,6 +125,13 @@ impl Runner {
             1, /* threads */
         );
         compact_range_timer.observe_duration();
+        info!(
+            "compact range ({:?}, {:?}) for cf {:?} finished, takes: {:?}",
+            start,
+            end,
+            cf_name,
+            timer.elapsed()
+        );
         Ok(())
     }
 }
@@ -138,8 +147,6 @@ impl Runnable<Task> for Runner {
                 let cf = cf_name.clone();
                 if let Err(e) = self.compact_range_cf(cf_name, start_key, end_key) {
                     error!("execute compact range for cf {} failed, err {}", &cf, e);
-                } else {
-                    info!("compact range for cf {} finished", &cf);
                 }
             }
             Task::CheckAndCompact {
