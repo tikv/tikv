@@ -48,7 +48,6 @@ use super::{SnapKey, SnapManager};
 // so that we can force the follower peer to sync the snapshot first.
 pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 5;
-const MAX_SNAP_TRY_CNT: usize = 5;
 const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
 // One extra slot for VecDeque internal usage.
@@ -724,16 +723,6 @@ impl PeerStorage {
                     );
                 }
             }
-        }
-
-        // For the receiver is closed or the received snapshot is invalid.
-        if snap_generating_state.tried_count >= MAX_SNAP_TRY_CNT {
-            let count = snap_generating_state.tried_count;
-            snap_generating_state.tried_count = 0;
-            return Err(raft::Error::Store(box_err!(
-                "failed to get snapshot after {} times",
-                count
-            )));
         }
 
         info!("{} requesting snapshot...", self.tag);
@@ -1772,16 +1761,10 @@ mod test {
         assert_eq!(s.snapshot().unwrap_err(), unavailable);
         assert_eq!(s.snap_generating_state.borrow().tried_count, 2);
 
-        for cnt in 2..super::MAX_SNAP_TRY_CNT {
+        for cnt in 2..5 {
             // Scheduled job failed should trigger .
             assert_eq!(s.snapshot().unwrap_err(), unavailable);
             assert_eq!(s.snap_generating_state.borrow().tried_count, cnt + 1);
-        }
-
-        // When retry too many times, it should report a different error.
-        match s.snapshot() {
-            Err(RaftError::Store(StorageError::Other(_))) => {}
-            res => panic!("unexpected res: {:?}", res),
         }
     }
 
