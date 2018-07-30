@@ -23,7 +23,7 @@ const ENC_PADDING: [u8; ENC_GROUP_SIZE] = [0; ENC_GROUP_SIZE];
 
 // returns the maximum encoded bytes size.
 pub fn max_encoded_bytes_size(n: usize) -> usize {
-    (n / ENC_GROUP_SIZE + 1) * (ENC_GROUP_SIZE + 1)
+    (n / ENC_GROUP_SIZE + 1) * (ENC_GROUP_SIZE + 1) + number::U64_SIZE
 }
 
 pub trait BytesEncoder: NumberEncoder {
@@ -92,7 +92,6 @@ fn encode_order_bytes(bs: &[u8], desc: bool) -> Vec<u8> {
     let cap = max_encoded_bytes_size(bs.len());
     let mut encoded = Vec::with_capacity(cap);
     encoded.encode_bytes(bs, desc).unwrap();
-    encoded.shrink_to_fit();
     encoded
 }
 
