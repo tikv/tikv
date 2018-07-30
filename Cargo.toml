@@ -28,9 +28,6 @@ path = "benches/bin/bench-tikv.rs"
 name = "tikv-ctl"
 
 [[bin]]
-name = "tikv-fail"
-
-[[bin]]
 name = "tikv-importer"
 
 [dependencies]
