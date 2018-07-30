@@ -13,16 +13,16 @@ use util::codec::bytes::CompactBytesFromFileDecoder;
 use util::file::{calc_crc32, delete_file_if_exist, get_file_size};
 use util::rocksdb::{get_cf_handle, prepare_sst_for_ingestion};
 
-struct Inner {
+struct SnapshotBase {
     dir: String,
     for_send: bool,
     key: SnapKey,
     snapshot_meta: SnapshotMeta,
 }
 
-impl Inner {
+impl SnapshotBase {
     fn new(dir: String, for_send: bool, key: SnapKey, snapshot_meta: SnapshotMeta) -> Self {
-        Inner {
+        SnapshotBase {
             dir,
             for_send,
             key,
@@ -32,7 +32,7 @@ impl Inner {
 }
 
 pub struct SnapshotSender {
-    inner: Inner,
+    inner: SnapshotBase,
     snap_stale_notifier: Arc<SnapStaleNotifier>,
     ref_count: Arc<AtomicUsize>,
     sent_times: Arc<AtomicUsize>,
@@ -50,7 +50,7 @@ impl SnapshotSender {
         ref_count: Arc<AtomicUsize>,
         sent_times: Arc<AtomicUsize>,
     ) -> Self {
-        let inner = Inner::new(dir, true, key, snapshot_meta);
+        let inner = SnapshotBase::new(dir, true, key, snapshot_meta);
         ref_count.fetch_add(1, Ordering::SeqCst);
         SnapshotSender {
             inner,
@@ -90,7 +90,7 @@ impl Read for SnapshotSender {
             if cf.get_size() > 0 {
                 if self.cur_cf_file.is_none() {
                     let (dir, for_send, key) = (&inner.dir, inner.for_send, inner.key);
-                    let cf_file_path = get_cf_file_path(dir, for_send, key, cf.get_cf());
+                    let cf_file_path = gen_cf_file_path(dir, for_send, key, cf.get_cf());
                     self.cur_cf_file = Some(File::open(&cf_file_path)?);
                 }
                 match self.cur_cf_file.as_mut().unwrap().read(buf) {
@@ -106,43 +106,8 @@ impl Read for SnapshotSender {
     }
 }
 
-pub(super) struct SnapshotLoader(Inner);
-
-impl SnapshotLoader {
-    pub(super) fn new(
-        dir: String,
-        for_send: bool,
-        key: SnapKey,
-        snapshot_meta: SnapshotMeta,
-    ) -> Self {
-        let inner = Inner::new(dir, for_send, key, snapshot_meta);
-        SnapshotLoader(inner)
-    }
-
-    pub(super) fn load(mut self) -> Result<SnapshotMeta> {
-        for cf in self.0.snapshot_meta.get_cf_files() {
-            if cf.get_size() == 0 {
-                continue;
-            }
-            let (dir, for_send, key) = (&self.0.dir, self.0.for_send, self.0.key);
-            let cf_file_path = get_cf_file_path(dir, for_send, key, cf.get_cf());
-
-            let checksum = calc_crc32(&cf_file_path)?;
-            if checksum != cf.get_checksum() {
-                return Err(snapshot_checksum_corrupt(cf.get_checksum(), checksum));
-            }
-
-            let size = get_file_size(&cf_file_path)?;
-            if size != cf.get_size() {
-                return Err(snapshot_size_corrupt(cf.get_size(), size));
-            }
-        }
-        Ok(mem::replace(&mut self.0.snapshot_meta, SnapshotMeta::new()))
-    }
-}
-
 pub(super) struct SnapshotApplyer {
-    inner: Inner,
+    inner: SnapshotBase,
     snap_stale_notifier: Arc<SnapStaleNotifier>,
     ref_count: Arc<AtomicUsize>,
     applied_times: Arc<AtomicUsize>,
@@ -157,7 +122,7 @@ impl SnapshotApplyer {
         ref_count: Arc<AtomicUsize>,
         applied_times: Arc<AtomicUsize>,
     ) -> Self {
-        let inner = Inner::new(dir, false, key, snapshot_meta);
+        let inner = SnapshotBase::new(dir, false, key, snapshot_meta);
         ref_count.fetch_add(1, Ordering::SeqCst);
         SnapshotApplyer {
             inner,
@@ -177,8 +142,8 @@ impl SnapshotApplyer {
                 self.apply_plain_cf_file(cf, &options)?;
             } else {
                 let (dir, key) = (&self.inner.dir, self.inner.key);
-                let cf_path = get_cf_file_path(dir, false, key, cf);
-                let clone_path = get_cf_clone_file_path(dir, false, key, cf);
+                let cf_path = gen_cf_file_path(dir, false, key, cf);
+                let clone_path = gen_cf_clone_file_path(dir, false, key, cf);
                 prepare_sst_for_ingestion(&cf_path, &clone_path)?;
 
                 let db = options.db.as_ref();
@@ -193,7 +158,7 @@ impl SnapshotApplyer {
     }
 
     fn apply_plain_cf_file(&self, cf: &str, options: &ApplyOptions) -> Result<()> {
-        let path = get_cf_file_path(&self.inner.dir, false, self.inner.key, cf);
+        let path = gen_cf_file_path(&self.inner.dir, false, self.inner.key, cf);
         let mut reader = BufReader::new(File::open(path)?);
 
         let handle = box_try!(get_cf_handle(options.db.as_ref(), cf));
@@ -231,14 +196,14 @@ impl Drop for SnapshotApplyer {
                 continue;
             }
             let (dir, key) = (&self.inner.dir, self.inner.key);
-            let clone_path = get_cf_clone_file_path(dir, false, key, cf.get_cf());
+            let clone_path = gen_cf_clone_file_path(dir, false, key, cf.get_cf());
             delete_file_if_exist(&clone_path);
         }
     }
 }
 
-fn get_cf_clone_file_path(dir: &str, for_send: bool, key: SnapKey, cf: &str) -> PathBuf {
-    let mut cf_path = get_cf_file_path(dir, for_send, key, cf);
+fn gen_cf_clone_file_path(dir: &str, for_send: bool, key: SnapKey, cf: &str) -> PathBuf {
+    let mut cf_path = gen_cf_file_path(dir, for_send, key, cf);
     let file_name = format!(
         "{}{}",
         cf_path.file_name().and_then(|n| n.to_str()).unwrap(),
@@ -246,6 +211,37 @@ fn get_cf_clone_file_path(dir: &str, for_send: bool, key: SnapKey, cf: &str) -> 
     );
     cf_path.set_file_name(file_name);
     cf_path
+}
+
+pub(super) fn snapshot_load(
+    dir: &str,
+    for_send: bool,
+    key: SnapKey,
+) -> Result<Option<SnapshotMeta>> {
+    let meta_path = gen_meta_file_path(dir, for_send, key);
+    if let Ok(meta) = read_snapshot_meta(&meta_path) {
+        let mut inner = SnapshotBase::new(dir.to_owned(), for_send, key, meta);
+        for cf in inner.snapshot_meta.get_cf_files() {
+            if cf.get_size() == 0 {
+                continue;
+            }
+            let (dir, for_send, key) = (&inner.dir, inner.for_send, inner.key);
+            let cf_file_path = gen_cf_file_path(dir, for_send, key, cf.get_cf());
+
+            let checksum = calc_crc32(&cf_file_path)?;
+            if checksum != cf.get_checksum() {
+                return Err(snapshot_checksum_corrupt(cf.get_checksum(), checksum));
+            }
+
+            let size = get_file_size(&cf_file_path)?;
+            if size != cf.get_size() {
+                return Err(snapshot_size_corrupt(cf.get_size(), size));
+            }
+        }
+        let meta = mem::replace(&mut inner.snapshot_meta, SnapshotMeta::new());
+        return Ok(Some(meta));
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -256,7 +252,7 @@ mod tests {
     use raftstore::store::snap::tests::*;
 
     #[test]
-    fn test_get_cf_clone_file_path() {
+    fn test_gen_cf_clone_file_path() {
         let key = SnapKey::new(1, 2, 3);
         for &(dir, for_send, key, cf, expected) in &[
             ("abc", true, key, CF_LOCK, "abc/gen_1_2_3_lock.sst.clone"),
@@ -276,7 +272,7 @@ mod tests {
             ),
             ("", false, key, CF_LOCK, "rev_1_2_3_lock.sst.clone"),
         ] {
-            let path = get_cf_clone_file_path(dir, for_send, key, cf);
+            let path = gen_cf_clone_file_path(dir, for_send, key, cf);
             assert_eq!(path.to_str().unwrap(), expected);
         }
     }
@@ -287,7 +283,7 @@ mod tests {
         let tmp_path = tmp_dir.path().to_str().unwrap().to_owned();
         let snap_mgr = SnapManager::new(tmp_path.clone(), None);
 
-        let dir = snap_mgr.core.base.clone();
+        let dir = snap_mgr.core.dir.clone();
         let key = SnapKey::new(1, 1, 1);
         let snap_stale_notifier = new_snap_stale_notifier();
 
@@ -330,7 +326,7 @@ mod tests {
         assert_eq!(used_times.load(Ordering::SeqCst), 2);
 
         let mut s3 = get_sender();
-        let p = get_cf_file_path(&dir, true, key, CF_LOCK);
+        let p = gen_cf_file_path(&dir, true, key, CF_LOCK);
         assert!(delete_file_if_exist(&p));
         assert!(s3.read_to_end(&mut buf).is_err());
     }

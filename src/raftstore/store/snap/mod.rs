@@ -15,7 +15,7 @@ mod reader;
 use self::builder::SnapshotGenerator;
 pub use self::builder::SnapshotReceiver;
 pub use self::reader::SnapshotSender;
-use self::reader::{SnapshotApplyer, SnapshotLoader};
+use self::reader::{snapshot_load, SnapshotApplyer};
 
 use std::collections::HashSet;
 use std::fs::{self, File};
@@ -147,7 +147,7 @@ impl SnapManager {
 
     /// Inititalize the SnapManager, read snapshot metadatas from disk.
     pub fn init(&self) -> Result<()> {
-        let path = Path::new(&self.core.base);
+        let path = Path::new(&self.core.dir);
         if !path.exists() {
             fs::create_dir_all(path)?;
             return Ok(());
@@ -177,7 +177,7 @@ impl SnapManager {
         self.notify_stats();
 
         let mut meta = None;
-        match snapshot_load(&self.core.base, true, key) {
+        match snapshot_load(&self.core.dir, true, key) {
             Ok(m) => meta = m,
             Err(e) => {
                 error!("{} build_sanpshot fail when load: {}", key, e);
@@ -187,7 +187,7 @@ impl SnapManager {
 
         if meta.is_none() {
             self.gc_snapshots_if_need()?;
-            let dir = self.core.base.to_owned();
+            let dir = self.core.dir.to_owned();
             let io_limiter = self.io_limiter.clone();
             let size = Arc::clone(&self.snap_size);
             match SnapshotGenerator::new(dir, key, io_limiter, notifier, sender, size)
@@ -208,7 +208,7 @@ impl SnapManager {
         let mut registry = self.get_registry(true);
         if let Some(entry) = registry.get_mut(&key) {
             if let Some(meta) = entry.fetch_meta(&mut false) {
-                let dir = self.core.base.clone();
+                let dir = self.core.dir.clone();
                 let notifier = entry.snap_stale_notifier.clone().unwrap();
                 let ref_count = Arc::clone(&entry.ref_count);
                 let used_times = Arc::clone(&entry.used_times);
@@ -245,7 +245,7 @@ impl SnapManager {
         };
         self.notify_stats();
 
-        match snapshot_load(&self.core.base, false, key) {
+        match snapshot_load(&self.core.dir, false, key) {
             Ok(Some(meta)) => {
                 sender.send(meta).unwrap();
                 return Ok(None);
@@ -257,7 +257,7 @@ impl SnapManager {
             }
         };
 
-        let dir = self.core.base.clone();
+        let dir = self.core.dir.clone();
         let io_limiter = self.io_limiter.clone();
         let snap_size = Arc::clone(&self.snap_size);
         SnapshotReceiver::new(dir, key, io_limiter, meta, sender, snap_size).map(Some)
@@ -285,7 +285,7 @@ impl SnapManager {
             just_received = true;
         }
         if !just_received {
-            let meta_path = get_meta_file_path(&self.core.base, false, key);
+            let meta_path = gen_meta_file_path(&self.core.dir, false, key);
             if let Ok(meta) = read_snapshot_meta(&meta_path) {
                 if let Ok(None) = self.get_snapshot_receiver_with_meta(key, meta) {
                     // Can't receive it again, which means it's already on disk.
@@ -297,7 +297,7 @@ impl SnapManager {
         }
 
         if let Some((meta, ref_count, used_times)) = meta_and_things {
-            let dir = self.core.base.clone();
+            let dir = self.core.dir.clone();
             let applyer = SnapshotApplyer::new(dir, key, meta, notifier, ref_count, used_times);
             return applyer.apply(options);
         }
@@ -393,7 +393,7 @@ impl SnapManager {
 
         let mut removed = 0;
         let mut snap_keys = HashSet::<(bool, SnapKey)>::new();
-        for p in fs::read_dir(&self.core.base)?
+        for p in fs::read_dir(&self.core.dir)?
             .filter_map(|p| p.ok())
             .filter(|p| p.file_type().map(|ft| ft.is_file()).unwrap_or(false))
         {
@@ -443,7 +443,7 @@ impl SnapManager {
     }
 
     fn snapshot_is_stale(&self, for_send: bool, key: SnapKey) -> Result<bool> {
-        let meta_path = get_meta_file_path(&self.core.base, for_send, key);
+        let meta_path = gen_meta_file_path(&self.core.dir, for_send, key);
         let modified = fs::metadata(&meta_path)?.modified()?;
         SystemTime::now()
             .duration_since(modified)
@@ -452,7 +452,7 @@ impl SnapManager {
     }
 
     fn delete_snapshot(&self, for_send: bool, key: SnapKey) {
-        let meta_path = get_meta_file_path(&self.core.base, for_send, key);
+        let meta_path = gen_meta_file_path(&self.core.dir, for_send, key);
         if let Ok(meta) = read_snapshot_meta(&meta_path) {
             let size = get_size_from_snapshot_meta(&meta);
             if delete_file_if_exist(&meta_path) {
@@ -462,7 +462,7 @@ impl SnapManager {
         }
 
         for cf in SNAPSHOT_CFS {
-            let cf_path = get_cf_file_path(&self.core.base, for_send, key, cf);
+            let cf_path = gen_cf_file_path(&self.core.dir, for_send, key, cf);
             delete_file_if_exist(&cf_path);
         }
     }
@@ -507,7 +507,7 @@ impl SnapManagerBuilder {
         };
         SnapManager {
             core: Arc::new(SnapManagerCore {
-                base: path.into(),
+                dir: path.into(),
                 gen_registry: Mutex::new(map![]),
                 apply_registry: Mutex::new(map![]),
             }),
@@ -583,7 +583,7 @@ impl SnapEntry {
 }
 
 struct SnapManagerCore {
-    base: String,
+    dir: String,
     gen_registry: Mutex<HashMap<SnapKey, SnapEntry>>,
     apply_registry: Mutex<HashMap<SnapKey, SnapEntry>>,
 }
@@ -629,7 +629,7 @@ fn get_snap_key_from_file_name(s: &str) -> Option<(bool, SnapKey)> {
     Some((for_send, SnapKey::new(region_id, term, idx)))
 }
 
-fn get_meta_file_path(dir: &str, sending: bool, key: SnapKey) -> PathBuf {
+fn gen_meta_file_path(dir: &str, sending: bool, key: SnapKey) -> PathBuf {
     let dir_path = PathBuf::from(dir);
     let file_name = if sending {
         format!("{}_{}{}", SNAP_GEN_PREFIX, key, META_FILE_SUFFIX)
@@ -639,7 +639,7 @@ fn get_meta_file_path(dir: &str, sending: bool, key: SnapKey) -> PathBuf {
     dir_path.join(&file_name)
 }
 
-fn get_cf_file_path(dir: &str, sending: bool, key: SnapKey, cf: &str) -> PathBuf {
+fn gen_cf_file_path(dir: &str, sending: bool, key: SnapKey, cf: &str) -> PathBuf {
     let dir_path = PathBuf::from(dir);
     let file_name = if sending {
         format!("{}_{}_{}{}", SNAP_GEN_PREFIX, key, cf, SST_FILE_SUFFIX)
@@ -671,16 +671,6 @@ fn snapshot_checksum_corrupt(expected: u32, got: u32) -> Error {
             expected, got
         ),
     ))
-}
-
-fn snapshot_load(dir: &str, for_send: bool, key: SnapKey) -> Result<Option<SnapshotMeta>> {
-    let meta_path = get_meta_file_path(dir, for_send, key);
-    if let Ok(meta) = read_snapshot_meta(&meta_path) {
-        return SnapshotLoader::new(dir.to_owned(), for_send, key, meta)
-            .load()
-            .map(Some);
-    }
-    Ok(None)
 }
 
 fn stale_for_generate(key: SnapKey, snap_stale_notifier: &SnapStaleNotifier) -> bool {
@@ -789,7 +779,7 @@ mod tests {
 
     fn check_snap_size(snap_mgr: &SnapManager) {
         let snap_size = snap_mgr.snap_size.load(Ordering::SeqCst);
-        let total_size = sst_files_size(PathBuf::from(&snap_mgr.core.base)).unwrap();
+        let total_size = sst_files_size(PathBuf::from(&snap_mgr.core.dir)).unwrap();
         assert_eq!(snap_size, total_size);
     }
 
@@ -821,7 +811,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_meta_file_path() {
+    fn test_gen_meta_file_path() {
         let key = SnapKey::new(1, 2, 3);
         for &(dir, for_send, key, expected) in &[
             ("abc", true, key, "abc/gen_1_2_3.meta"),
@@ -829,13 +819,13 @@ mod tests {
             ("ab/c", false, key, "ab/c/rev_1_2_3.meta"),
             ("", false, key, "rev_1_2_3.meta"),
         ] {
-            let path = get_meta_file_path(dir, for_send, key);
+            let path = gen_meta_file_path(dir, for_send, key);
             assert_eq!(path.to_str().unwrap(), expected);
         }
     }
 
     #[test]
-    fn test_get_cf_file_path() {
+    fn test_gen_cf_file_path() {
         let key = SnapKey::new(1, 2, 3);
         for &(dir, for_send, key, cf, expected) in &[
             ("abc", true, key, CF_LOCK, "abc/gen_1_2_3_lock.sst"),
@@ -843,7 +833,7 @@ mod tests {
             ("ab/c", false, key, CF_DEFAULT, "ab/c/rev_1_2_3_default.sst"),
             ("", false, key, CF_LOCK, "rev_1_2_3_lock.sst"),
         ] {
-            let path = get_cf_file_path(dir, for_send, key, cf);
+            let path = gen_cf_file_path(dir, for_send, key, cf);
             assert_eq!(path.to_str().unwrap(), expected);
         }
     }
@@ -895,7 +885,7 @@ mod tests {
 
         // If the disk file is corrupted, the snapshot will be rebuilt after load fail.
         snap_mgr.deregister(true, key);
-        corrupt_file(&get_cf_file_path(&snap_mgr.core.base, true, key, CF_LOCK));
+        corrupt_file(&gen_cf_file_path(&snap_mgr.core.dir, true, key, CF_LOCK));
         assert!(do_build().unwrap().is_some());
         check_snap_size(&snap_mgr);
 
@@ -935,7 +925,7 @@ mod tests {
 
         // Get receiver should success because disk files are corrupted.
         snap_mgr.deregister(false, key);
-        corrupt_file(&get_cf_file_path(&snap_mgr.core.base, false, key, CF_LOCK));
+        corrupt_file(&gen_cf_file_path(&snap_mgr.core.dir, false, key, CF_LOCK));
         let mut receiver = snap_mgr.get_snapshot_receiver(key, &data).unwrap().unwrap();
         check_snap_size(&snap_mgr);
 
@@ -1026,7 +1016,7 @@ mod tests {
             Err(e) => assert!(format!("{}", e).contains("NoSpace")),
         }
 
-        let meta_path = get_meta_file_path(&snap_mgr.core.base, true, key);
+        let meta_path = gen_meta_file_path(&snap_mgr.core.dir, true, key);
         let ensure_meta_file_exists = || {
             let mut f = OpenOptions::new()
                 .create(true)

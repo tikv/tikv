@@ -68,15 +68,15 @@ impl CfFile {
             }
             Either::Right(ref mut writer) => {
                 let mut bytes = 0;
-                let base = io_limiter.map_or(0, |l| l.get_max_bytes_per_time());
+                let dir = io_limiter.map_or(0, |l| l.get_max_bytes_per_time());
                 db_snap.scan_cf(self.cf, &start_key, &end_key, false, |key, value| {
                     let l = key.len() + value.len();
                     cf_key_count += 1;
                     cf_size += l;
                     if let Some(ref limiter) = io_limiter {
-                        if bytes >= base {
+                        if bytes >= dir {
                             bytes = 0;
-                            limiter.request(base);
+                            limiter.request(dir);
                         }
                         bytes += l as i64;
                     }
@@ -116,7 +116,7 @@ impl CfFile {
     }
 }
 
-struct Inner {
+struct SnapshotBase {
     dir: String,
     for_send: bool,
     key: SnapKey,
@@ -128,18 +128,18 @@ struct Inner {
     success: bool,
 }
 
-impl Inner {
+impl SnapshotBase {
     fn new(
         dir: String,
         for_send: bool,
         key: SnapKey,
         io_limiter: Option<Arc<IOLimiter>>,
-    ) -> Result<Inner> {
+    ) -> Result<SnapshotBase> {
         let mut open_options = OpenOptions::new();
         open_options.write(true).create_new(true);
-        let tmp_meta_path = get_meta_tmp_file_path(&dir, for_send, key);
+        let tmp_meta_path = gen_meta_tmp_file_path(&dir, for_send, key);
         let tmp_meta_file = open_options.open(&tmp_meta_path)?;
-        Ok(Inner {
+        Ok(SnapshotBase {
             dir,
             for_send,
             key,
@@ -156,7 +156,7 @@ impl Inner {
     fn save(&mut self) -> Result<SnapshotMeta> {
         let mut snapshot_meta = SnapshotMeta::new();
         for cf_builder in &self.tmp_cf_files {
-            let to = get_cf_file_path(&self.dir, self.for_send, self.key, cf_builder.cf);
+            let to = gen_cf_file_path(&self.dir, self.for_send, self.key, cf_builder.cf);
             cf_builder.save(&to)?;
 
             let mut snap_cf_file = SnapshotCFFile::new();
@@ -167,33 +167,33 @@ impl Inner {
         }
 
         snapshot_meta.write_to_writer(&mut self.tmp_meta_file)?;
-        let meta_path = get_meta_file_path(&self.dir, self.for_send, self.key);
+        let meta_path = gen_meta_file_path(&self.dir, self.for_send, self.key);
         fs::rename(&self.tmp_meta_path, &meta_path)?;
         self.success = true;
         Ok(snapshot_meta)
     }
 }
 
-impl Drop for Inner {
+impl Drop for SnapshotBase {
     fn drop(&mut self) {
         if self.success {
             return;
         }
         for cf_builder in &mut self.tmp_cf_files {
-            let p = get_cf_tmp_file_path(&self.dir, self.for_send, self.key, cf_builder.cf);
+            let p = gen_cf_tmp_file_path(&self.dir, self.for_send, self.key, cf_builder.cf);
             delete_file_if_exist(&p);
-            let p = get_cf_file_path(&self.dir, self.for_send, self.key, cf_builder.cf);
+            let p = gen_cf_file_path(&self.dir, self.for_send, self.key, cf_builder.cf);
             delete_file_if_exist(&p);
         }
-        let p = get_meta_tmp_file_path(&self.dir, self.for_send, self.key);
+        let p = gen_meta_tmp_file_path(&self.dir, self.for_send, self.key);
         delete_file_if_exist(&p);
-        let p = get_meta_file_path(&self.dir, self.for_send, self.key);
+        let p = gen_meta_file_path(&self.dir, self.for_send, self.key);
         delete_file_if_exist(&p);
     }
 }
 
 pub(super) struct SnapshotGenerator {
-    inner: Inner,
+    inner: SnapshotBase,
     snap_stale_notifier: Arc<SnapStaleNotifier>,
     sender: SyncSender<SnapshotMeta>,
     size_tracker: Arc<AtomicU64>,
@@ -210,7 +210,7 @@ impl SnapshotGenerator {
         sender: SyncSender<SnapshotMeta>,
         size_tracker: Arc<AtomicU64>,
     ) -> Result<SnapshotGenerator> {
-        let inner = Inner::new(dir, true, key, io_limiter)?;
+        let inner = SnapshotBase::new(dir, true, key, io_limiter)?;
         Ok(SnapshotGenerator {
             inner,
             snap_stale_notifier,
@@ -231,7 +231,7 @@ impl SnapshotGenerator {
         // Scan every cf, write data into the tmp file respectively.
         let inner = &mut self.inner;
         for cf in SNAPSHOT_CFS.iter() {
-            let path = get_cf_tmp_file_path(&inner.dir, inner.for_send, inner.key, cf);
+            let path = gen_cf_tmp_file_path(&inner.dir, inner.for_send, inner.key, cf);
             let file = if plain_file_used(cf) {
                 Either::Left(open_options.open(&path)?)
             } else {
@@ -274,7 +274,7 @@ impl SnapshotGenerator {
 }
 
 pub struct SnapshotReceiver {
-    inner: Inner,
+    inner: SnapshotBase,
     snapshot_meta: SnapshotMeta,
     sender: SyncSender<SnapshotMeta>,
     size_tracker: Arc<AtomicU64>,
@@ -290,7 +290,7 @@ impl SnapshotReceiver {
         sender: SyncSender<SnapshotMeta>,
         size_tracker: Arc<AtomicU64>,
     ) -> Result<Self> {
-        let inner = Inner::new(dir, false, key, io_limiter)?;
+        let inner = SnapshotBase::new(dir, false, key, io_limiter)?;
         Ok(SnapshotReceiver {
             inner,
             snapshot_meta,
@@ -330,6 +330,14 @@ impl SnapshotReceiver {
         let _ = self.sender.send(self.snapshot_meta.clone());
         Ok(())
     }
+
+    // Flush the give cf file. Only used for receive snapshots.
+    fn flush_cf_file(cf_file: &mut CfFile) -> io::Result<()> {
+        match cf_file.tmp_cf_file {
+            Either::Left(ref mut f) => f.flush(),
+            _ => unreachable!(),
+        }
+    }
 }
 
 impl Write for SnapshotReceiver {
@@ -344,14 +352,15 @@ impl Write for SnapshotReceiver {
             if self.cur_cf_pos >= inner.tmp_cf_files.len() {
                 let cf = &SNAPSHOT_CFS[self.cur_cf_pos];
                 let (dir, for_send, key) = (&inner.dir, inner.for_send, inner.key);
-                let path = get_cf_tmp_file_path(dir, for_send, key, cf);
+                let path = gen_cf_tmp_file_path(dir, for_send, key, cf);
                 let file = OpenOptions::new().write(true).create_new(true).open(&path)?;
                 let cf_file = CfFile::new(cf, path, Either::Left(file));
                 inner.tmp_cf_files.push(cf_file);
             }
 
             let cf_file = inner.tmp_cf_files.last_mut().unwrap();
-            if cf_file.written_bytes >= cf_meta.get_size() {
+            if cf_file.written_bytes == cf_meta.get_size() {
+                Self::flush_cf_file(cf_file)?;
                 self.cur_cf_pos += 1;
                 continue;
             }
@@ -359,16 +368,17 @@ impl Write for SnapshotReceiver {
             let io_limiter = inner.io_limiter.clone();
             let mut limit_writer = match cf_file.tmp_cf_file {
                 Either::Left(ref mut f) => LimitWriter::new(io_limiter, f),
+                // For receiving snapshots, the tmp file must not be a `Writer`.
                 _ => unreachable!(),
             };
 
-            let mut bytes = (cf_meta.get_size() - cf_file.written_bytes) as usize;
-            bytes = cmp::min(buf.len(), bytes);
+            let mut left_bytes = (cf_meta.get_size() - cf_file.written_bytes) as usize;
+            left_bytes = cmp::min(buf.len(), left_bytes);
 
-            limit_writer.write_all(&buf[0..bytes])?;
-            cf_file.digest.write(&buf[0..bytes]);
-            cf_file.written_bytes += bytes as u64;
-            return Ok(bytes);
+            limit_writer.write_all(&buf[0..left_bytes])?;
+            cf_file.digest.write(&buf[0..left_bytes]);
+            cf_file.written_bytes += left_bytes as u64;
+            return Ok(left_bytes);
         }
         Err(io::Error::new(
             io::ErrorKind::Other,
@@ -378,17 +388,14 @@ impl Write for SnapshotReceiver {
 
     fn flush(&mut self) -> io::Result<()> {
         if let Some(cf_file) = self.inner.tmp_cf_files.last_mut() {
-            match cf_file.tmp_cf_file {
-                Either::Left(ref mut f) => f.flush()?,
-                _ => unreachable!(),
-            }
+            Self::flush_cf_file(cf_file)?;
         }
         Ok(())
     }
 }
 
-fn get_meta_tmp_file_path(dir: &str, for_send: bool, key: SnapKey) -> PathBuf {
-    let mut meta_path = get_meta_file_path(dir, for_send, key);
+fn gen_meta_tmp_file_path(dir: &str, for_send: bool, key: SnapKey) -> PathBuf {
+    let mut meta_path = gen_meta_file_path(dir, for_send, key);
     let file_name = format!(
         "{}{}",
         meta_path.file_name().and_then(|n| n.to_str()).unwrap(),
@@ -398,8 +405,8 @@ fn get_meta_tmp_file_path(dir: &str, for_send: bool, key: SnapKey) -> PathBuf {
     meta_path
 }
 
-fn get_cf_tmp_file_path(dir: &str, for_send: bool, key: SnapKey, cf: &str) -> PathBuf {
-    let mut cf_path = get_cf_file_path(dir, for_send, key, cf);
+fn gen_cf_tmp_file_path(dir: &str, for_send: bool, key: SnapKey, cf: &str) -> PathBuf {
+    let mut cf_path = gen_cf_file_path(dir, for_send, key, cf);
     let file_name = format!(
         "{}{}",
         cf_path.file_name().and_then(|n| n.to_str()).unwrap(),
@@ -445,7 +452,7 @@ mod tests {
     use raftstore::store::snap::tests::*;
 
     #[test]
-    fn test_get_meta_tmp_file_path() {
+    fn test_gen_meta_tmp_file_path() {
         let key = SnapKey::new(1, 2, 3);
         for &(dir, for_send, key, expected) in &[
             ("abc", true, key, "abc/gen_1_2_3.meta.tmp"),
@@ -453,13 +460,13 @@ mod tests {
             ("ab/c", false, key, "ab/c/rev_1_2_3.meta.tmp"),
             ("", false, key, "rev_1_2_3.meta.tmp"),
         ] {
-            let path = get_meta_tmp_file_path(dir, for_send, key);
+            let path = gen_meta_tmp_file_path(dir, for_send, key);
             assert_eq!(path.to_str().unwrap(), expected);
         }
     }
 
     #[test]
-    fn test_get_cf_tmp_file_path() {
+    fn test_gen_cf_tmp_file_path() {
         let key = SnapKey::new(1, 2, 3);
         for &(dir, for_send, key, cf, expected) in &[
             ("abc", true, key, CF_LOCK, "abc/gen_1_2_3_lock.sst.tmp"),
@@ -473,7 +480,7 @@ mod tests {
             ),
             ("", false, key, CF_LOCK, "rev_1_2_3_lock.sst.tmp"),
         ] {
-            let path = get_cf_tmp_file_path(dir, for_send, key, cf);
+            let path = gen_cf_tmp_file_path(dir, for_send, key, cf);
             assert_eq!(path.to_str().unwrap(), expected);
         }
     }
@@ -484,12 +491,12 @@ mod tests {
         let tmp_path = tmp_dir.path().to_str().unwrap().to_owned();
         let snap_mgr = SnapManager::new(tmp_path.clone(), None);
 
-        let dir = snap_mgr.core.base.clone();
+        let dir = snap_mgr.core.dir.clone();
         let key = SnapKey::new(1, 1, 1);
         let snap_stale_notifier = new_snap_stale_notifier();
 
         // Can't init SnapshotGenerator because tmp meta file exists.
-        let p = get_meta_tmp_file_path(&dir, true, key);
+        let p = gen_meta_tmp_file_path(&dir, true, key);
         OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -529,7 +536,7 @@ mod tests {
         let tmp_path = tmp_dir.path().to_str().unwrap().to_owned();
         let snap_mgr = SnapManager::new(tmp_path.clone(), None);
 
-        let dir = snap_mgr.core.base.clone();
+        let dir = snap_mgr.core.dir.clone();
         let key = SnapKey::new(1, 1, 1);
         let snap_stale_notifier = new_snap_stale_notifier();
 
@@ -574,7 +581,7 @@ mod tests {
         let mut receiver = snap_mgr.get_snapshot_receiver(key, &data).unwrap().unwrap();
 
         // Write correct data into the receiver.
-        let p = get_cf_file_path(&dir, true, key, CF_LOCK);
+        let p = gen_cf_file_path(&dir, true, key, CF_LOCK);
         let mut buf = Vec::with_capacity(10);
         assert_eq!(File::open(p).unwrap().read_to_end(&mut buf).unwrap(), 1);
 
