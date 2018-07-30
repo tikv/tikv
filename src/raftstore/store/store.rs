@@ -226,7 +226,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             raftlog_gc_worker: Worker::new("raft-gc-worker"),
             compact_worker: Worker::new("compact-worker"),
             pd_worker,
-            consistency_check_worker: Worker::new("consistency-chk"),
+            consistency_check_worker: Worker::new("consistency-check"),
             cleanup_sst_worker: Worker::new("cleanup-sst"),
             apply_worker: Worker::new("apply-worker"),
             apply_res_receiver: None,
