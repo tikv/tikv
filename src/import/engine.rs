@@ -283,7 +283,6 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions) {
 mod tests {
     use super::*;
 
-    use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
     use rocksdb::IngestExternalFileOptions;
     use std::fs::File;
@@ -291,7 +290,7 @@ mod tests {
     use tempdir::TempDir;
 
     use raftstore::store::RegionSnapshot;
-    use storage::mvcc::{MvccReader, PointGetterBuilder};
+    use storage::mvcc::{CFReaderBuilder, PointGetterBuilder};
     use util::rocksdb::new_engine_opt;
 
     fn new_engine() -> (TempDir, Engine) {
@@ -387,7 +386,7 @@ mod tests {
         region.mut_peers().push(Peer::new());
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region);
 
-        let mut reader = MvccReader::new(snap.clone(), None, false, None, None, IsolationLevel::SI);
+        let mut cf_reader = CFReaderBuilder::new(snap.clone()).build().unwrap();
         let mut point_getter = PointGetterBuilder::new(snap.clone()).build().unwrap();
         // Make sure that all kvs are right.
         for i in 0..n {
@@ -396,7 +395,7 @@ mod tests {
             assert_eq!(&v, &value);
         }
         // Make sure that no extra keys are added.
-        let (keys, _) = reader.scan_keys(None, (n + 1) as usize).unwrap();
+        let (keys, _) = cf_reader.scan_keys(None, (n + 1) as usize).unwrap();
         assert_eq!(keys.len(), n as usize);
         for (i, expected) in keys.iter().enumerate() {
             let k = Key::from_raw(&[i as u8]);

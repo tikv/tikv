@@ -1106,16 +1106,11 @@ mod tests {
             next_start.map(|x| make_key(x).append_ts(0)),
         );
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(
-            snapshot,
-            Some(ScanMode::Mixed),
-            false,
-            None,
-            None,
-            IsolationLevel::SI,
-        );
+        let mut cf_reader = CFReaderBuilder::new(snapshot).build().unwrap();
         assert_eq!(
-            reader.scan_keys(start.map(make_key), limit).unwrap(),
+            cf_reader
+                .scan_keys(start.map(make_key).as_ref(), limit)
+                .unwrap(),
             expect
         );
     }

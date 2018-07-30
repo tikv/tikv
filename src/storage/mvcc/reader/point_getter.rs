@@ -145,9 +145,7 @@ pub struct PointGetter<S: Snapshot> {
 impl<S: Snapshot> PointGetter<S> {
     /// Take out and reset the statistics collected so far.
     pub fn take_statistics(&mut self) -> Statistics {
-        let mut statistics = Statistics::default();
-        ::std::mem::swap(&mut statistics, &mut self.statistics);
-        statistics
+        ::std::mem::replace(&mut self.statistics, Statistics::default())
     }
 
     /// Get the value of a user key. See `PointGetter` for details.

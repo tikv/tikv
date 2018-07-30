@@ -531,34 +531,6 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
-    pub fn scan_keys(
-        &mut self,
-        mut start: Option<Key>,
-        limit: usize,
-    ) -> Result<(Vec<Key>, Option<Key>)> {
-        let iter_opt = IterOption::new(None, None, self.fill_cache);
-        let scan_mode = self.get_scan_mode(false);
-        let mut cursor = self.snapshot.iter_cf(CF_WRITE, iter_opt, scan_mode)?;
-        let mut keys = vec![];
-        loop {
-            let ok = match start {
-                Some(ref x) => cursor.near_seek(x, &mut self.statistics.write)?,
-                None => cursor.seek_to_first(&mut self.statistics.write),
-            };
-            if !ok {
-                return Ok((keys, None));
-            }
-            if keys.len() >= limit {
-                self.statistics.write.processed += keys.len();
-                return Ok((keys, start));
-            }
-            let key =
-                Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec()).truncate_ts()?;
-            start = Some(key.append_ts(0));
-            keys.push(key);
-        }
-    }
-
     // Get all Value of the given key in CF_DEFAULT
     pub fn scan_values_in_default(&mut self, key: &Key) -> Result<Vec<(u64, Value)>> {
         self.create_data_cursor()?;

@@ -111,7 +111,7 @@ where
         let lock = Lock::parse(lock_cursor.value(&mut statistics.lock))?;
         if predicate(&lock) {
             locks.push((key, lock));
-            if limit > 0 && locks.len() == limit {
+            if limit > 0 && locks.len() >= limit {
                 // Reach limit
                 break;
             }
@@ -164,4 +164,55 @@ where
             }
         }
     }
+}
+
+/// Iterate and get all user keys in the write CF within the given key space (specified by
+/// `start_key` and `limit`). `limit` must not be `0`.
+///
+/// The return type is `(keys, next_start_key)`. `next_start_key` is the `start_key` that
+/// can be used to continue scanning keys. If `next_start_key` is `None`, it means that
+/// there is no more keys.
+///
+/// # Panics
+///
+/// Panics if `limit` is `0`.
+pub fn scan_keys<I>(
+    write_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
+    start_key: Option<&Key>,
+    limit: usize,
+    statistics: &mut Statistics,
+) -> Result<(Vec<Key>, Option<Key>)>
+where
+    I: Iterator,
+{
+    assert!(limit > 0);
+
+    let ok = match start_key {
+        Some(ref x) => write_cursor.near_seek(x, &mut statistics.write)?,
+        None => write_cursor.seek_to_first(&mut statistics.write),
+    };
+    if !ok {
+        return Ok((vec![], None));
+    }
+    let mut keys = Vec::with_capacity(limit);
+    let mut next_start_key;
+    loop {
+        // TODO: Eliminate memory copy
+        let key =
+            Key::from_encoded(write_cursor.key(&mut statistics.write).to_vec()).truncate_ts()?;
+        // Jump to the last version of the key. We assumed that there is no key that ts == 0.
+        next_start_key = Some(key.append_ts(0)); // TODO: Eliminate clone (might not be possible?)
+        keys.push(key);
+        if !write_cursor.near_seek(next_start_key.as_ref().unwrap(), &mut statistics.write)? {
+            // No more keys found, we don't need to scan keys next time
+            next_start_key = None;
+            break;
+        }
+        if keys.len() >= limit {
+            // Reach limit
+            break;
+        }
+    }
+    statistics.write.processed += keys.len();
+    Ok((keys, next_start_key))
 }
