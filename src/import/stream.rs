@@ -423,7 +423,7 @@ mod tests {
         for i in keys {
             let k = Key::from_raw(&[i]).append_ts(0);
             client.add_region_range(&last, k.encoded());
-            last = k.encoded().clone();
+            last = k;
         }
         // Add an unrelated range.
         client.add_region_range(&last, b"abc");
@@ -481,10 +481,10 @@ mod tests {
         let mut stream = SSTFileStream::new(cfg, client, engine, sst_range, finished_ranges);
         for (start, end, range_end) in expected_ranges {
             let (range, ssts) = stream.next().unwrap().unwrap();
-            let start = Key::from_raw(&[start]).append_ts(0).encoded().clone();
-            let end = Key::from_raw(&[end]).append_ts(0).encoded().clone();
+            let start = Key::from_raw(&[start]).append_ts(0).take_encoded();
+            let end = Key::from_raw(&[end]).append_ts(0).take_encoded();
             let range_end = match range_end {
-                Some(v) => Key::from_raw(&[v]).append_ts(0).encoded().clone(),
+                Some(v) => Key::from_raw(&[v]).append_ts(0).take_encoded(),
                 None => RANGE_MAX.to_owned(),
             };
             assert_eq!(range.get_start(), start.as_slice());

@@ -312,16 +312,14 @@ mod test {
 
     fn mvcc_put(db: &DB, k: &[u8], v: &[u8], start_ts: u64, commit_ts: u64) {
         let cf = get_cf_handle(db, CF_WRITE).unwrap();
-        let k = MvccKey::from_encoded(data_key(k));
-        let k = k.append_ts(commit_ts);
+        let k = MvccKey::from_encoded(data_key(k)).append_ts(commit_ts);
         let w = Write::new(WriteType::Put, start_ts, Some(v.to_vec()));
         db.put_cf(cf, k.encoded(), &w.to_bytes()).unwrap();
     }
 
     fn delete(db: &DB, k: &[u8], commit_ts: u64) {
         let cf = get_cf_handle(db, CF_WRITE).unwrap();
-        let k = MvccKey::from_encoded(data_key(k));
-        let k = k.append_ts(commit_ts);
+        let k = MvccKey::from_encoded(data_key(k)).append_ts(commit_ts);
         db.delete_cf(cf, k.encoded()).unwrap();
     }
 
